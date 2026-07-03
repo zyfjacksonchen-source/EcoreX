@@ -1,0 +1,21 @@
+{
+  "status": "failed",
+  "filesScanned": 2,
+  "findingCount": 2,
+  "imageOcrScannedCount": 0,
+  "imageOcrUnavailableCount": 0,
+  "imageOcrErrorCount": 0,
+  "findings": [
+    {
+      "artifactHash": "hmac:91aacf54bf1ed67f",
+      "pattern": "credential_word",
+      "count": 5
+    },
+    {
+      "artifactHash": "hmac:d71a5e4f80aa15ad",
+      "pattern": "raw_file_name_key",
+      "count": 4
+    }
+  ],
+  "redacted": true
+}

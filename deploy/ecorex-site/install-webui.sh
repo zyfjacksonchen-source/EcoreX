@@ -52,26 +52,41 @@ download_file() {
   echo "Downloading $url"
   for attempt in 1 2 3 4 5; do
     local curl_args=(-fL --retry 5 --retry-delay 5 --retry-max-time 900 --connect-timeout 45 --speed-time 120 --speed-limit 512 --progress-bar)
+    local resume_args=()
     if [[ -n "$retry_all_errors_flag" ]]; then
       curl_args+=("$retry_all_errors_flag")
     fi
     if [[ -s "$partial" ]]; then
-      echo "Retrying download from a clean partial file, attempt $attempt/5..."
-      rm -f "$partial"
+      echo "Resuming download from existing partial file, attempt $attempt/5..."
+      resume_args=(-C -)
     else
       echo "Starting download, attempt $attempt/5..."
     fi
-    if curl "${curl_args[@]}" "$url" -o "$partial"; then
+    if curl "${curl_args[@]}" "${resume_args[@]}" "$url" -o "$partial"; then
       status=0
     else
       status=$?
     fi
     if [[ "$status" == "0" ]]; then
-      break
+      actual_sha="$(sha256_file "$partial")"
+      if [[ "$actual_sha" == "$expected_sha" ]]; then
+        mv "$partial" "$destination"
+        echo "Download verified: $destination"
+        return 0
+      fi
+      echo "Downloaded package SHA256 mismatch for $destination: $actual_sha" >&2
+      rm -f "$partial"
+      if [[ "$attempt" == "5" ]]; then
+        exit 1
+      fi
+      sleep $((attempt * 3))
+      continue
     fi
     if [[ -s "$partial" ]] && [[ "$(sha256_file "$partial")" == "$expected_sha" ]]; then
       echo "Partial package was already complete."
-      break
+      mv "$partial" "$destination"
+      echo "Download verified: $destination"
+      return 0
     fi
     if [[ "$attempt" == "5" ]]; then
       echo "Download failed after $attempt attempts. You can rerun this installer to retry." >&2
@@ -79,16 +94,6 @@ download_file() {
     fi
     sleep $((attempt * 3))
   done
-  mv "$partial" "$destination"
-
-  echo "Verifying SHA256..."
-  actual_sha="$(sha256_file "$destination")"
-  if [[ "$actual_sha" != "$expected_sha" ]]; then
-    rm -f "$destination"
-    echo "SHA256 mismatch for $destination: $actual_sha" >&2
-    exit 1
-  fi
-  echo "Download verified: $destination"
 }
 
 need_cmd curl
@@ -109,7 +114,7 @@ echo "Fetching EcoreX manifest: $MANIFEST_URL"
 curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 "$MANIFEST_URL" -o "$MANIFEST_JSON"
 
 VERSION="$(manifest_value "version")"
-echo "EcoreX WebUI installer script: 0.2.5"
+echo "EcoreX WebUI installer script: 0.2.7"
 echo "EcoreX WebUI manifest version: $VERSION"
 if [[ -n "$REQUESTED_VERSION" && "$REQUESTED_VERSION" != "$VERSION" ]]; then
   echo "Manifest version '$VERSION' does not match requested '$REQUESTED_VERSION'." >&2

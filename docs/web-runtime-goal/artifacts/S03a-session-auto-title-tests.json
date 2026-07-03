@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "web-runtime-goal-slice-test-summary-v1",
+  "slice": "S03a-session-auto-title-from-summary",
+  "status": "pass",
+  "commands": [
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_ecorex_web_parallel_backend.py -k \"session_auto_title_uses_session_summary_context or web_session_title_handler_accepts_empty_body or web_session_title_trigger_handles_attachment_only_first_message or manual_session_rename_locks_title\" -q",
+      "status": "pass",
+      "summary": "4 passed, 402 deselected, 2 warnings"
+    },
+    {
+      "command": "python -m py_compile agent/chat/session_service.py channel/web/web_channel.py",
+      "status": "pass",
+      "summary": "py_compile completed without errors"
+    },
+    {
+      "command": "node --check channel/web/static/js/console.js",
+      "status": "pass",
+      "summary": "JavaScript syntax check completed without errors"
+    }
+  ],
+  "coverage": [
+    "session title generation prompt uses recent stored conversation context",
+    "latest payload fallback is ignored when stored session context exists",
+    "Web generate_title route accepts a zero-byte empty body",
+    "attachment-only first Web messages trigger title generation",
+    "title generation logs record title hashes/lengths rather than title text",
+    "manual title locks still prevent generated title replacement"
+  ],
+  "redacted": true
+}

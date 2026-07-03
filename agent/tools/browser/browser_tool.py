@@ -20,7 +20,11 @@ import os
 from typing import Dict, Any, Optional
 
 from agent.tools.base_tool import BaseTool, ToolResult
-from agent.tools.browser.browser_automation_service import DEFAULT_CDP_ENDPOINT, DEFAULT_CDP_USER_DATA_DIR
+from agent.tools.browser.browser_automation_service import (
+    DEFAULT_CDP_ENDPOINT,
+    DEFAULT_CDP_USER_DATA_DIR,
+    cdp_is_reachable,
+)
 from agent.tools.browser.browser_service import BrowserService
 from common.log import logger
 
@@ -135,19 +139,64 @@ class BrowserTool(BaseTool):
     def _get_service(self) -> BrowserService:
         """Get or create the browser service, sharing across copies."""
         if self._service is not None:
-            self._service.cancel_event = getattr(self, "cancel_event", None)
-            return self._service
+            if (
+                getattr(self._service, "_ecorex_read_only_cdp_only", False)
+                and not getattr(self, "_read_only_existing_cdp_only", False)
+            ):
+                self._service = None
+            elif not getattr(self._service, "_alive", False) and getattr(self._service, "_thread", None) is not None:
+                if BrowserTool._shared_service is self._service:
+                    BrowserTool._shared_service = None
+                self._service = None
+            else:
+                self._service.cancel_event = getattr(self, "cancel_event", None)
+                return self._service
 
         # Reuse shared service across tool copies within the same session
         if BrowserTool._shared_service is not None:
-            self._service = BrowserTool._shared_service
-            self._service.cancel_event = getattr(self, "cancel_event", None)
-            return self._service
+            shared = BrowserTool._shared_service
+            if not getattr(shared, "_alive", False) and getattr(shared, "_thread", None) is not None:
+                BrowserTool._shared_service = None
+            else:
+                self._service = shared
+                self._service.cancel_event = getattr(self, "cancel_event", None)
+                return self._service
 
-        self._service = BrowserService(self.config)
+        service_config = dict(self.config)
+        read_only_cdp_only = bool(getattr(self, "_read_only_existing_cdp_only", False))
+        if read_only_cdp_only:
+            service_config["cdp_auto_launch"] = False
+            service_config["cdp_fallback"] = False
+        self._service = BrowserService(service_config)
+        if read_only_cdp_only:
+            setattr(self._service, "_ecorex_read_only_cdp_only", True)
         self._service.cancel_event = getattr(self, "cancel_event", None)
-        BrowserTool._shared_service = self._service
+        if not read_only_cdp_only:
+            BrowserTool._shared_service = self._service
         return self._service
+
+    def _read_only_start_blocker(self, action: str) -> str:
+        self._read_only_existing_cdp_only = False
+        try:
+            from common.ecorex_tool_permissions import get_tool_permission_broker
+
+            if not get_tool_permission_broker().is_read_only():
+                return ""
+        except Exception:
+            return ""
+        if action not in {"snapshot", "get_text"}:
+            return "Current read-only mode blocks browser actions that can navigate, interact, capture files, or start a browser."
+        shared = BrowserTool._shared_service
+        if shared is not None and getattr(shared, "_alive", False):
+            return ""
+        endpoint = str(self.config.get("cdp_endpoint") or DEFAULT_CDP_ENDPOINT)
+        if cdp_is_reachable(endpoint):
+            self._read_only_existing_cdp_only = True
+            return ""
+        return (
+            "Current read-only mode can only inspect an already-open browser/CDP session. "
+            "Switch to smart-ask or full-access before starting browser automation."
+        )
 
     def _snapshot_suffix(self, service: BrowserService, limit: int = 6000) -> str:
         """Return a compact page snapshot after state-changing actions."""
@@ -169,6 +218,9 @@ class BrowserTool(BaseTool):
         if not handler:
             valid = ", ".join(sorted(self._ACTION_MAP.keys()))
             return ToolResult.fail(f"Unknown action '{action}'. Valid actions: {valid}")
+        read_only_blocker = self._read_only_start_blocker(action)
+        if read_only_blocker:
+            return ToolResult.fail(f"Browser blocked ({action}): {read_only_blocker}")
 
         try:
             return handler(self, args)

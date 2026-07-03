@@ -10,7 +10,7 @@ import os
 import re
 import uuid
 from typing import Dict, Any, Optional, Set
-from urllib.parse import urlparse, unquote
+from urllib.parse import urlparse, unquote, urlunparse
 
 import requests
 
@@ -33,6 +33,7 @@ WORD_SUFFIXES: Set[str] = {".docx"}
 TEXT_SUFFIXES: Set[str] = {".txt", ".md", ".markdown", ".rst", ".csv", ".tsv", ".log"}
 SPREADSHEET_SUFFIXES: Set[str] = {".xls", ".xlsx"}
 PPT_SUFFIXES: Set[str] = {".ppt", ".pptx"}
+IMAGE_SUFFIXES: Set[str] = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
 
 ALL_DOC_SUFFIXES = PDF_SUFFIXES | WORD_SUFFIXES | TEXT_SUFFIXES | SPREADSHEET_SUFFIXES | PPT_SUFFIXES
 
@@ -73,6 +74,21 @@ def _is_document_url(url: str) -> bool:
     return suffix in ALL_DOC_SUFFIXES
 
 
+def _is_image_url(url: str) -> bool:
+    return _get_url_suffix(url) in IMAGE_SUFFIXES
+
+
+def _safe_url_for_report(url: str) -> str:
+    try:
+        parsed = urlparse(str(url or ""))
+        host = parsed.hostname or ""
+        if parsed.port:
+            host = f"{host}:{parsed.port}"
+        return urlunparse((parsed.scheme, host, parsed.path or "/", "", "", ""))
+    except Exception:
+        return "<redacted-url>"
+
+
 class WebFetch(BaseTool):
     """Tool for fetching web pages and remote document files"""
 
@@ -110,8 +126,13 @@ class WebFetch(BaseTool):
         try:
             from common.ecorex_tool_permissions import get_tool_permission_broker
 
-            if get_tool_permission_broker().is_read_only():
-                return ToolResult.fail("Error: Current read-only mode blocks internet fetch.")
+            broker = get_tool_permission_broker()
+            is_read_only = getattr(broker, "is_read_only", None)
+            if callable(is_read_only) and is_read_only():
+                return ToolResult.fail("Error: Current read-only mode blocks web fetch network access.")
+            decision = broker.authorize_noninteractive("web_fetch", {"url": url})
+            if not decision.get("allowed"):
+                return ToolResult.fail(f"Error: {decision.get('reason') or 'Internet fetch was blocked.'}")
         except Exception as exc:
             return ToolResult.fail(f"Error: Permission broker unavailable; internet fetch was blocked. {exc}")
 
@@ -136,14 +157,16 @@ class WebFetch(BaseTool):
         except requests.Timeout:
             return ToolResult.fail(f"Error: Request timed out after {DEFAULT_TIMEOUT}s")
         except requests.ConnectionError:
-            return ToolResult.fail(f"Error: Failed to connect to {parsed.netloc}")
+            return ToolResult.fail(f"Error: Failed to connect to {_safe_url_for_report(url)}")
         except requests.HTTPError as e:
-            return ToolResult.fail(f"Error: HTTP {e.response.status_code} for URL: {url}")
+            return ToolResult.fail(f"Error: HTTP {e.response.status_code} for URL: {_safe_url_for_report(url)}")
         except Exception as e:
-            return ToolResult.fail(f"Error: Failed to fetch URL: {e}")
+            return ToolResult.fail(
+                f"Error: Failed to fetch URL {_safe_url_for_report(url)} ({e.__class__.__name__})"
+            )
 
         content_type = response.headers.get("Content-Type", "")
-        if self._is_binary_content_type(content_type) and not _is_document_url(url):
+        if (self._is_binary_content_type(content_type) or _is_image_url(url)) and not _is_document_url(url):
             return self._handle_download_by_content_type(url, response, content_type)
 
         response.encoding = self._detect_encoding(response)
@@ -181,7 +204,7 @@ class WebFetch(BaseTool):
             )
 
         os.makedirs(tmp_dir, exist_ok=True)
-        logger.info(f"[WebFetch] Downloading document: {url} -> {local_path}")
+        logger.info(f"[WebFetch] Downloading document: {_safe_url_for_report(url)} -> {local_path}")
 
         try:
             response = requests.get(
@@ -214,12 +237,14 @@ class WebFetch(BaseTool):
         except requests.Timeout:
             return ToolResult.fail(f"Error: Download timed out after {DEFAULT_TIMEOUT}s")
         except requests.ConnectionError:
-            return ToolResult.fail(f"Error: Failed to connect to {parsed.netloc}")
+            return ToolResult.fail(f"Error: Failed to connect to {_safe_url_for_report(url)}")
         except requests.HTTPError as e:
-            return ToolResult.fail(f"Error: HTTP {e.response.status_code} for URL: {url}")
+            return ToolResult.fail(f"Error: HTTP {e.response.status_code} for URL: {_safe_url_for_report(url)}")
         except Exception as e:
             self._cleanup_file(local_path)
-            return ToolResult.fail(f"Error: Failed to download file: {e}")
+            return ToolResult.fail(
+                f"Error: Failed to download file from {_safe_url_for_report(url)} ({e.__class__.__name__})"
+            )
 
         try:
             text = self._parse_document(local_path, suffix)
@@ -415,6 +440,7 @@ class WebFetch(BaseTool):
             "application/vnd.ms-excel",
             "application/vnd.ms-powerpoint",
             "application/octet-stream",
+            "image/",
         ]
         ct_lower = content_type.lower()
         return any(bt in ct_lower for bt in binary_types)
@@ -429,18 +455,68 @@ class WebFetch(BaseTool):
             "application/vnd.openxmlformats-officedocument.spreadsheetml": ".xlsx",
             "application/vnd.ms-powerpoint": ".ppt",
             "application/vnd.openxmlformats-officedocument.presentationml": ".pptx",
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+            "image/jpg": ".jpg",
+            "image/webp": ".webp",
+            "image/gif": ".gif",
+            "image/bmp": ".bmp",
+            "image/tiff": ".tiff",
         }
         detected_suffix = None
         for ct_prefix, ext in suffix_map.items():
             if ct_prefix in ct_lower:
                 detected_suffix = ext
                 break
+        if not detected_suffix and _is_image_url(url):
+            detected_suffix = _get_url_suffix(url)
 
         if detected_suffix and detected_suffix in ALL_DOC_SUFFIXES:
             # Re-fetch as document
             return self._fetch_document(url if _get_url_suffix(url) in ALL_DOC_SUFFIXES
                                         else self._rewrite_url_with_suffix(url, detected_suffix))
+        if detected_suffix and detected_suffix in IMAGE_SUFFIXES:
+            return self._download_binary_asset(url, response, detected_suffix, content_type)
         return ToolResult.fail(f"Error: URL returned binary content ({content_type}), not a supported document type")
+
+    def _download_binary_asset(
+        self,
+        url: str,
+        response: requests.Response,
+        suffix: str,
+        content_type: str,
+    ) -> ToolResult:
+        tmp_dir = os.path.join(self.cwd, "tmp")
+        filename = self._extract_filename(url)
+        if not os.path.splitext(filename)[1]:
+            filename = f"web-fetch-{uuid.uuid4().hex[:12]}{suffix}"
+        local_path = os.path.join(tmp_dir, filename)
+        try:
+            from common.ecorex_tool_permissions import get_tool_permission_broker
+
+            decision = get_tool_permission_broker().authorize_file_access("write", local_path, cwd=self.cwd)
+            if not decision.get("allowed"):
+                return ToolResult.fail(f"Error: {decision.get('reason') or 'Remote asset download was blocked.'}")
+        except Exception as exc:
+            return ToolResult.fail(f"Error: Permission broker unavailable; remote asset download was blocked. {exc}")
+
+        try:
+            content = response.content
+            if len(content) > MAX_FILE_SIZE:
+                return ToolResult.fail(
+                    f"Error: File too large ({format_size(len(content))} > {format_size(MAX_FILE_SIZE)})"
+                )
+            os.makedirs(tmp_dir, exist_ok=True)
+            with open(local_path, "wb") as handle:
+                handle.write(content)
+            return ToolResult.success(
+                f"[Remote asset: {filename} | Content-Type: {content_type} | "
+                f"Size: {format_size(len(content))} | Saved to: {local_path}]\n\n"
+                f"Image URL fetched successfully. Use this local path for OCR, vision, or image editing: {local_path}"
+            )
+        except Exception as exc:
+            self._cleanup_file(local_path)
+            return ToolResult.fail(f"Error: Failed to save remote asset: {exc}")
 
     @staticmethod
     def _rewrite_url_with_suffix(url: str, suffix: str) -> str:

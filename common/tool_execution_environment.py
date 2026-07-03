@@ -132,6 +132,15 @@ def system_runtime_allowed(base_env: Optional[Dict[str, str]] = None) -> bool:
     except Exception:
         pass
 
+    try:
+        from common.ecorex_tool_permissions import get_tool_permission_broker
+
+        state = get_tool_permission_broker().get_state()
+        if str(state.get("mode") or "").strip().lower() == "full-access":
+            return True
+    except Exception:
+        pass
+
     if base_env is not None and not (
         base_env_keys
         & {
@@ -146,15 +155,6 @@ def system_runtime_allowed(base_env: Optional[Dict[str, str]] = None) -> bool:
         }
     ):
         return False
-
-    try:
-        from common.ecorex_tool_permissions import get_tool_permission_broker
-
-        state = get_tool_permission_broker().get_state()
-        if str(state.get("mode") or "").strip().lower() == "full-access":
-            return True
-    except Exception:
-        pass
     return False
 
 
@@ -265,7 +265,10 @@ class ToolExecutionEnvironment:
         if not clean_name:
             raise ImportError("missing_dependency: empty python module name")
         root_name = clean_name.split(".", 1)[0]
-        dependency = self.provider.resolve_python_package(root_name)
+        preloaded = sys.modules.get(clean_name) or sys.modules.get(root_name)
+        if preloaded is not None and (self.include_system_path or not getattr(preloaded, "__file__", None)):
+            return import_module(clean_name)
+        dependency = self.provider.resolve_python_package(root_name, allow_system_path=self.include_system_path)
         if not dependency.available:
             missing = self.provider.missing_dependency(dependency, required_by=self.tool_name)
             raise ImportError(f"missing_dependency: {missing}")
@@ -415,6 +418,8 @@ class ToolExecutionEnvironment:
                 continue
             if self.provider.classify_path(resolved) in {SOURCE_ECOREX_BUNDLED, SOURCE_ECOREX_STATE}:
                 add(resolved)
+            elif self.include_system_path:
+                add(resolved)
             elif self._is_stdlib_path(resolved):
                 add(resolved)
         return paths
@@ -454,6 +459,8 @@ class ToolExecutionEnvironment:
         return removed
 
     def _module_is_owned(self, module: ModuleType) -> bool:
+        if self.include_system_path:
+            return True
         module_file = getattr(module, "__file__", None)
         if module_file:
             return self.provider.classify_path(module_file) in {SOURCE_ECOREX_BUNDLED, SOURCE_ECOREX_STATE}
@@ -464,4 +471,8 @@ class ToolExecutionEnvironment:
         )
 
     def _module_is_allowed_cached(self, cache_key: str, module: ModuleType) -> bool:
+        if self.include_system_path:
+            return True
+        if not getattr(module, "__file__", None):
+            return True
         return _TRUSTED_CACHED_MODULES.get(cache_key) is module

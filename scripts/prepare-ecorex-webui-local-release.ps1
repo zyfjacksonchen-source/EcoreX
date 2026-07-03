@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.2.5",
+    [string]$Version = "0.2.7",
     [string]$RuntimeRoot = "desktop/runtime/ecorex-runtime",
     [string]$OutputDir = "release-artifacts",
     [switch]$KeepStaging
@@ -118,6 +118,7 @@ function Sync-CurrentRuntimeSources {
         "plugins",
         "scripts",
         "skills",
+        "tools",
         "translate",
         "voice",
         "app.py",
@@ -143,8 +144,8 @@ function Sync-CurrentRuntimeSources {
     }
 
     $runtimePackFiles = @(
-        @{ Source = "desktop/runtime-packs/capabilities.json"; Target = "capabilities.json" },
-        @{ Source = "desktop/runtime-packs/core-requirements.txt"; Target = "core-requirements.txt" }
+        @{ Source = "runtime-packs/capabilities.json"; Target = "capabilities.json" },
+        @{ Source = "runtime-packs/core-requirements.txt"; Target = "core-requirements.txt" }
     )
     foreach ($entry in $runtimePackFiles) {
         $source = Join-Path $repoRoot $entry.Source
@@ -163,6 +164,58 @@ function Copy-OptionalLarkCliWindows {
 function Copy-OptionalLarkCliMac {
     param([Parameter(Mandatory = $true)][string]$RuntimeDir)
     Write-Host "Skipping bundled lark-cli for macOS WebUI runtime; Feishu/Lark connector is discovery-only and installs through find-skill plus on-demand @larksuite/cli."
+}
+
+function Copy-DirectoryWithRobocopy {
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+    New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+    robocopy $Source $Destination /MIR /R:2 /W:1 /XD __pycache__ .pytest_cache .mypy_cache .ruff_cache /XF *.pyc *.pyo config.json | Out-Null
+    if ($LASTEXITCODE -gt 7) {
+        throw "Failed to copy $Source to $Destination; robocopy exit code $LASTEXITCODE"
+    }
+    $global:LASTEXITCODE = 0
+}
+
+function ConvertTo-WindowsLongPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $full = [System.IO.Path]::GetFullPath($Path)
+    if ($env:OS -ne "Windows_NT" -or $full.StartsWith("\\?\")) {
+        return $full
+    }
+    if ($full.StartsWith("\\")) {
+        return "\\?\UNC\" + $full.TrimStart("\")
+    }
+    return "\\?\" + $full
+}
+
+function Remove-PathRobust {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Base
+    )
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+    $full = [System.IO.Path]::GetFullPath($Path)
+    $baseFull = [System.IO.Path]::GetFullPath($Base).TrimEnd("\", "/")
+    if (-not ($full.Equals($baseFull, [System.StringComparison]::OrdinalIgnoreCase) -or $full.StartsWith($baseFull + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase))) {
+        throw "Refusing to remove path outside release output directory: $full"
+    }
+    try {
+        Remove-Item -LiteralPath $full -Recurse -Force
+    } catch {
+        $long = ConvertTo-WindowsLongPath $full
+        if ([System.IO.Directory]::Exists($long)) {
+            [System.IO.Directory]::Delete($long, $true)
+        } elseif ([System.IO.File]::Exists($long)) {
+            [System.IO.File]::Delete($long)
+        } else {
+            throw
+        }
+    }
 }
 
 function Save-Download {
@@ -260,10 +313,18 @@ mkdir -p "$STATE_DIR"
     xattr -dr com.apple.quarantine "$HOME/Library/Application Support/EcoreX WebUI" >/dev/null 2>&1 || true
   fi
   bash "$INSTALL_SCRIPT"
+  URL_FILE="$STATE_DIR/ecorex-webui.url"
+  if [[ "${OPEN_BROWSER:-1}" == "1" && -f "$URL_FILE" ]]; then
+    WEBUI_URL="$(cat "$URL_FILE" 2>/dev/null || true)"
+    if [[ -n "$WEBUI_URL" ]]; then
+      /usr/bin/open "$WEBUI_URL" >/dev/null 2>&1 || true
+    fi
+  fi
   /usr/bin/osascript -e 'display notification "EcoreX WebUI is running and the browser has been opened." with title "EcoreX WebUI"' >/dev/null 2>&1 || true
 ) >> "$LOG_FILE" 2>> "$ERR_FILE" || {
   /usr/bin/osascript -e "display dialog \"EcoreX WebUI installation failed. Check the log: $ERR_FILE\" buttons {\"OK\"} default button \"OK\" with icon caution" >/dev/null 2>&1 || true
-} &
+  exit 1
+}
 '@
     $packageRootCommand = if ($SelfContainedResources) {
         'cd "$APP_EXEC_DIR/../Resources/package" && pwd'
@@ -288,23 +349,36 @@ import sys
 import time
 import zipfile
 
+def fs_path(path):
+    resolved = os.path.abspath(path)
+    if os.name != "nt":
+        return resolved
+    if resolved.startswith("\\\\?\\"):
+        return resolved
+    if resolved.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + resolved.lstrip("\\")
+    return "\\\\?\\" + resolved
+
 source = os.path.abspath(sys.argv[1])
 destination = os.path.abspath(sys.argv[2])
+source_fs = fs_path(source)
+destination_fs = fs_path(destination)
 executable = {
     item.replace("\\", "/").strip("/")
     for item in sys.argv[3:]
     if item
 }
 base = os.path.dirname(source)
+base_fs = fs_path(base)
 
-with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-    for root, dirs, files in os.walk(source):
+with zipfile.ZipFile(destination_fs, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+    for root, dirs, files in os.walk(source_fs):
         dirs.sort()
         files.sort()
         for name in files:
             path = os.path.join(root, name)
-            rel = os.path.relpath(path, base).replace(os.sep, "/")
-            rel_in_source = os.path.relpath(path, source).replace(os.sep, "/")
+            rel = os.path.relpath(path, base_fs).replace(os.sep, "/")
+            rel_in_source = os.path.relpath(path, source_fs).replace(os.sep, "/")
             stat_result = os.stat(path)
             info = zipfile.ZipInfo(rel, time.localtime(stat_result.st_mtime)[:6])
             mode = 0o100755 if (
@@ -336,7 +410,7 @@ function Invoke-PipDownload {
     param(
         [string]$Platform,
         [string]$Destination,
-        [string]$RequirementsPath = "desktop/runtime-packs/core-requirements.txt"
+        [string]$RequirementsPath = "runtime-packs/core-requirements.txt"
     )
     $requirementsPath = Resolve-RequiredPath $RequirementsPath
     $requirementsHash = Get-EcoreXFileSha256 -Path $requirementsPath
@@ -419,7 +493,7 @@ function Install-WindowsRuntimeDependency {
 
 function New-LocalMacCoreRequirements {
     param([Parameter(Mandatory = $true)][string]$Destination)
-    $source = Resolve-RequiredPath "desktop/runtime-packs/core-requirements.txt"
+    $source = Resolve-RequiredPath "runtime-packs/core-requirements.txt"
     $lines = Get-Content -Encoding UTF8 -LiteralPath $source | Where-Object {
         $normalized = $_.Trim().ToLowerInvariant()
         $normalized -and
@@ -446,9 +520,7 @@ $combinedZip = Join-Path $outputResolved "EcoreX_${Version}-webui-win-mac.zip"
 
 New-Item -ItemType Directory -Force -Path $outputResolved, $cacheRoot | Out-Null
 foreach ($path in @($stagingRoot, $windowsZip, $macZip, $combinedZip)) {
-    if (Test-Path -LiteralPath $path) {
-        Remove-Item -LiteralPath $path -Recurse -Force
-    }
+    Remove-PathRobust -Path $path -Base $outputResolved
 }
 New-Item -ItemType Directory -Force -Path $windowsStage, $macStage, $combinedStage | Out-Null
 
@@ -480,12 +552,19 @@ if errorlevel 1 (
 $windowsPs1 = @'
 param(
     [int]$Port = 9909,
-    [switch]$NoBrowser
+    [switch]$NoBrowser,
+    [ValidateSet("manual", "background")]
+    [string]$UpdateMode = ""
 )
 
 $ErrorActionPreference = "Stop"
 
 Write-Host "EcoreX WebUI package installer: __ECOREX_VERSION__"
+
+if (-not $UpdateMode) {
+    $UpdateMode = if ($env:ECOREX_UPDATE_MODE) { [string]$env:ECOREX_UPDATE_MODE } else { "manual" }
+}
+$backgroundUpdate = $UpdateMode -ieq "background"
 
 function Test-PortAvailable {
     param([int]$Port)
@@ -522,6 +601,64 @@ function Wait-WebUi {
         }
     }
     throw "EcoreX WebUI did not become ready at $Url"
+}
+
+function Write-UpdateState {
+    param(
+        [Parameter(Mandatory = $true)][string]$StateDir,
+        [Parameter(Mandatory = $true)][string]$Status,
+        [string]$Reason = "",
+        [string]$Url = ""
+    )
+    try {
+        New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
+        $payload = [ordered]@{
+            product = "EcoreX WebUI"
+            version = "__ECOREX_VERSION__"
+            mode = $UpdateMode
+            status = $Status
+            reason = $Reason
+            url = $Url
+            browserAction = if ($backgroundUpdate) { "defer-to-existing-tab-soft-refresh" } elseif ($NoBrowser) { "none" } else { "open-default-browser" }
+            activationPolicy = if ($backgroundUpdate) { "prompt-soft-refresh-existing-tab" } else { "manual-open-browser" }
+            autoLaunchBrowser = if ($backgroundUpdate) { "never-in-background" } elseif ($NoBrowser) { "disabled-by-user" } else { "manual-install-only" }
+            healthCheck = [ordered]@{
+                endpoint = "/api/version"
+                status = if ($Status -eq "installed") { "pass" } elseif ($Status -eq "failed") { "failed" } else { "pending" }
+                passed = $Status -eq "installed"
+            }
+            generatedAt = [DateTime]::UtcNow.ToString("o")
+        }
+        [System.IO.File]::WriteAllText((Join-Path $StateDir "update-state.json"), (($payload | ConvertTo-Json -Depth 4) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
+    } catch {
+        Write-Warning "Could not write update state: $($_.Exception.Message)"
+    }
+}
+
+function Get-WebUiBaseUrl {
+    param([Parameter(Mandatory = $true)][string]$StateDir)
+    $urlFile = Join-Path $StateDir "ecorex-webui.url"
+    if (-not (Test-Path -LiteralPath $urlFile)) { return "" }
+    try {
+        $raw = (Get-Content -Raw -LiteralPath $urlFile).Trim()
+        if (-not $raw) { return "" }
+        $uri = [Uri]$raw
+        return $uri.GetLeftPart([System.UriPartial]::Authority)
+    } catch {
+        return ""
+    }
+}
+
+function Get-ActiveRequestCount {
+    param([Parameter(Mandatory = $true)][string]$StateDir)
+    $base = Get-WebUiBaseUrl -StateDir $StateDir
+    if (-not $base) { return 0 }
+    try {
+        $snapshot = Invoke-RestMethod -UseBasicParsing -Uri ($base.TrimEnd("/") + "/api/active-requests") -TimeoutSec 3
+        return @($snapshot.requests).Count
+    } catch {
+        return -1
+    }
 }
 
 function Ensure-LarkCli {
@@ -668,6 +805,20 @@ $errorLogPath = Join-Path $stateDir "ecorex-webui.err.log"
 $python = Join-Path $runtimeDir "python\python.exe"
 
 New-Item -ItemType Directory -Force -Path $installRoot, $stateDir, $workspaceRoot | Out-Null
+if ($backgroundUpdate) {
+    $existing = @(Get-WebUiPythonProcesses -RuntimeDir $runtimeDir)
+    $activeCount = Get-ActiveRequestCount -StateDir $stateDir
+    if ($activeCount -gt 0) {
+        Write-UpdateState -StateDir $stateDir -Status "deferred" -Reason "active_requests"
+        Write-Host "Background update deferred because EcoreX WebUI has $activeCount active request(s)."
+        exit 75
+    }
+    if ($activeCount -lt 0 -and $existing.Count -gt 0) {
+        Write-UpdateState -StateDir $stateDir -Status "deferred" -Reason "active_requests_unavailable"
+        Write-Host "Background update deferred because active request state is unavailable while the local service is running."
+        exit 75
+    }
+}
 Stop-ExistingWebUi -RuntimeDir $runtimeDir
 
 Write-Host "Copying EcoreX WebUI runtime..."
@@ -704,12 +855,13 @@ $config = [ordered]@{
         feishu_cli = [ordered]@{
             package = "@larksuite/cli@1.0.56"
             auto_install = $false
-            allow_system_node = $true
+            allow_system_node = $false
             install_root = (Join-Path $stateDir "tools\lark-cli")
         }
         tongxin_cli = [ordered]@{
             script_path = ""
             python_path = $python
+            database_path = (Join-Path $stateDir "tongxin.sqlite3")
             read_only = $true
             auth_url = "https://mvdcm.ecoremedia.net/ecorex-agent/client/tongxin/auth"
             bootstrap_manifest_url = ""
@@ -760,12 +912,17 @@ foreach ($shortcut in $shortcuts) {
     Write-Host "Desktop shortcut updated: $shortcut"
 }
 
-if (-not $NoBrowser) {
+if ((-not $NoBrowser) -and (-not $backgroundUpdate)) {
     Start-Process $url
 }
 
+Write-UpdateState -StateDir $stateDir -Status "installed" -Url $url
 Write-Host "EcoreX WebUI is ready: $url"
-Write-Host "If the browser did not open, double-click a desktop EcoreX WebUI.url shortcut above or open $url manually."
+if ($backgroundUpdate) {
+    Write-Host "Background update installed. Existing browser tabs should soft-refresh after they observe the new runtime version."
+} else {
+    Write-Host "If the browser did not open, double-click a desktop EcoreX WebUI.url shortcut above or open $url manually."
+}
 exit 0
 '@
 
@@ -822,7 +979,13 @@ STATE_DIR="$INSTALL_ROOT/state"
 WORKSPACE_ROOT="${ECOREX_WORKSPACE_ROOT:-$HOME/EcoreX}"
 PORT="${ECOREX_WEB_PORT:-9909}"
 OPEN_BROWSER="${OPEN_BROWSER:-1}"
+UPDATE_MODE="${ECOREX_UPDATE_MODE:-manual}"
 PYTHON_HOME="$INSTALL_ROOT/python"
+BACKGROUND_UPDATE=0
+if [[ "$UPDATE_MODE" == "background" ]]; then
+  BACKGROUND_UPDATE=1
+  OPEN_BROWSER=0
+fi
 
 echo "EcoreX WebUI package installer: $VERSION"
 
@@ -843,22 +1006,126 @@ wait_for_pid_exit() {
   return 1
 }
 
+write_update_state() {
+  status="$1"
+  reason="${2:-}"
+  url="${3:-}"
+  browser_action="open-default-browser"
+  if [[ "$BACKGROUND_UPDATE" == "1" ]]; then
+    browser_action="defer-to-existing-tab-soft-refresh"
+  elif [[ "$OPEN_BROWSER" != "1" ]]; then
+    browser_action="none"
+  fi
+  mkdir -p "$STATE_DIR"
+  "$PYTHON_HOME/bin/python3" - "$STATE_DIR/update-state.json" "$VERSION" "$UPDATE_MODE" "$status" "$reason" "$url" "$browser_action" <<'PY' || true
+import json
+import pathlib
+import sys
+from datetime import datetime, timezone
+
+target = pathlib.Path(sys.argv[1])
+payload = {
+    "product": "EcoreX WebUI",
+    "version": sys.argv[2],
+    "mode": sys.argv[3],
+    "status": sys.argv[4],
+    "reason": sys.argv[5],
+    "url": sys.argv[6],
+    "browserAction": sys.argv[7],
+    "activationPolicy": "prompt-soft-refresh-existing-tab" if sys.argv[3] == "background" else "manual-open-browser",
+    "autoLaunchBrowser": "never-in-background" if sys.argv[3] == "background" else ("disabled-by-user" if sys.argv[7] == "none" else "manual-install-only"),
+    "healthCheck": {
+        "endpoint": "/api/version",
+        "status": "pass" if sys.argv[4] == "installed" else ("failed" if sys.argv[4] == "failed" else "pending"),
+        "passed": sys.argv[4] == "installed",
+    },
+    "generatedAt": datetime.now(timezone.utc).isoformat(),
+}
+target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+PY
+}
+
+webui_base_url() {
+  url_file="$STATE_DIR/ecorex-webui.url"
+  [[ -f "$url_file" ]] || return 0
+  raw_url="$(cat "$url_file" 2>/dev/null || true)"
+  [[ -n "$raw_url" ]] || return 0
+  python3 - "$raw_url" <<'PY' 2>/dev/null || true
+import sys
+from urllib.parse import urlparse
+
+parsed = urlparse(sys.argv[1])
+if parsed.scheme and parsed.netloc:
+    print(f"{parsed.scheme}://{parsed.netloc}")
+PY
+}
+
+active_request_count() {
+  base_url="$(webui_base_url)"
+  if [[ -z "$base_url" ]]; then
+    echo 0
+    return 0
+  fi
+  if ! payload="$(curl -fsSL --connect-timeout 2 --max-time 3 "$base_url/api/active-requests" 2>/dev/null)"; then
+    echo -1
+    return 0
+  fi
+  python3 - "$payload" <<'PY' 2>/dev/null || echo -1
+import json
+import sys
+
+try:
+    payload = json.loads(sys.argv[1])
+    print(len(payload.get("requests") or []))
+except Exception:
+    print(-1)
+PY
+}
+
+command_for_pid() {
+  ps -p "$1" -o command= 2>/dev/null || true
+}
+
+pid_matches_ecorex_webui() {
+  pid="$1"
+  cmd="$(command_for_pid "$pid")"
+  [[ -n "$cmd" ]] || return 1
+  [[ "$cmd" == *"$RUNTIME_DIR/app.py"* ]] || return 1
+  case "$cmd" in
+    *"$PYTHON_HOME/bin/python3"*|*"$PYTHON_HOME/bin/python"*|*"python"*"app.py"*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+append_ecorex_webui_pid() {
+  pid="$1"
+  [[ -n "$pid" ]] || return 0
+  if kill -0 "$pid" >/dev/null 2>&1 && pid_matches_ecorex_webui "$pid"; then
+    pids="$pids $pid"
+  fi
+}
+
 stop_existing_webui() {
   pids=""
   if [[ -f "$STATE_DIR/ecorex-webui.pid" ]]; then
     old_pid="$(cat "$STATE_DIR/ecorex-webui.pid" 2>/dev/null || true)"
-    if [[ -n "$old_pid" ]] && kill -0 "$old_pid" >/dev/null 2>&1; then
-      pids="$pids $old_pid"
-    fi
+    append_ecorex_webui_pid "$old_pid"
   fi
 
-  runtime_pids="$(pgrep -f "$RUNTIME_DIR/app.py" 2>/dev/null || true)"
-  if [[ -n "$runtime_pids" ]]; then
-    pids="$pids $runtime_pids"
-  fi
-  python_app_pids="$(pgrep -f "$PYTHON_HOME/bin/python3.*app.py" 2>/dev/null || true)"
-  if [[ -n "$python_app_pids" ]]; then
-    pids="$pids $python_app_pids"
+  runtime_pids="$(pgrep -f -- "$RUNTIME_DIR/app.py" 2>/dev/null || true)"
+  for runtime_pid in $runtime_pids; do
+    append_ecorex_webui_pid "$runtime_pid"
+  done
+  python_app_pids="$(pgrep -f -- "$PYTHON_HOME/bin/python.*$RUNTIME_DIR/app.py" 2>/dev/null || true)"
+  for python_app_pid in $python_app_pids; do
+    append_ecorex_webui_pid "$python_app_pid"
+  done
+  if command -v lsof >/dev/null 2>&1; then
+    for port_pid in $(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true); do
+      append_ecorex_webui_pid "$port_pid"
+    done
   fi
 
   pids="$(printf '%s\n' $pids | awk 'NF && !seen[$1]++ { print $1 }' || true)"
@@ -949,6 +1216,26 @@ mkdir -p "$INSTALL_ROOT" "$STATE_DIR" "$WORKSPACE_ROOT"
 
 clear_quarantine "$PACKAGE_ROOT"
 clear_quarantine "$INSTALL_ROOT"
+if [[ "$BACKGROUND_UPDATE" == "1" ]]; then
+  existing_pid_count=0
+  if [[ -f "$STATE_DIR/ecorex-webui.pid" ]]; then
+    old_pid="$(cat "$STATE_DIR/ecorex-webui.pid" 2>/dev/null || true)"
+    if [[ -n "$old_pid" ]] && kill -0 "$old_pid" >/dev/null 2>&1; then
+      existing_pid_count=1
+    fi
+  fi
+  active_count="$(active_request_count)"
+  if [[ "$active_count" =~ ^[0-9]+$ ]] && [[ "$active_count" -gt 0 ]]; then
+    write_update_state "deferred" "active_requests"
+    echo "Background update deferred because EcoreX WebUI has $active_count active request(s)."
+    exit 75
+  fi
+  if [[ "$active_count" == "-1" && "$existing_pid_count" == "1" ]]; then
+    write_update_state "deferred" "active_requests_unavailable"
+    echo "Background update deferred because active request state is unavailable while the local service is running."
+    exit 75
+  fi
+fi
 stop_existing_webui
 
 echo "Copying EcoreX WebUI runtime..."
@@ -1046,12 +1333,13 @@ payload = {
         "feishu_cli": {
             "package": "@larksuite/cli@1.0.56",
             "auto_install": False,
-            "allow_system_node": True,
+            "allow_system_node": False,
             "install_root": str(state / "tools" / "lark-cli"),
         },
         "tongxin_cli": {
             "script_path": "",
             "python_path": str(python),
+            "database_path": str(state / "tongxin.sqlite3"),
             "read_only": True,
             "auth_url": "https://mvdcm.ecoremedia.net/ecorex-agent/client/tongxin/auth",
             "bootstrap_manifest_url": "",
@@ -1074,6 +1362,7 @@ config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
 PY
 
 URL="http://127.0.0.1:$EFFECTIVE_PORT/app/"
+echo "$URL" > "$STATE_DIR/ecorex-webui.url"
 echo "Starting EcoreX WebUI local service: $URL"
 (
   cd "$RUNTIME_DIR"
@@ -1117,18 +1406,24 @@ open_browser() {
 
 write_desktop_shortcuts "$URL"
 
-if [[ "$OPEN_BROWSER" == "1" ]]; then
+if [[ "$OPEN_BROWSER" == "1" && "$BACKGROUND_UPDATE" != "1" ]]; then
   open_browser "$URL"
 fi
 
+write_update_state "installed" "" "$URL"
 echo "EcoreX WebUI is ready: $URL"
-echo "If the browser did not open, double-click a desktop EcoreX WebUI.webloc shortcut above or open $URL manually."
+if [[ "$BACKGROUND_UPDATE" == "1" ]]; then
+  echo "Background update installed. Existing browser tabs should soft-refresh after they observe the new runtime version."
+else
+  echo "If the browser did not open, double-click a desktop EcoreX WebUI.webloc shortcut above or open $URL manually."
+fi
 '@
 
 New-Item -ItemType Directory -Force -Path (Join-Path $macStage "scripts") | Out-Null
 $macInstall = $macInstall.Replace('__ECOREX_VERSION__', $Version)
 foreach ($requiredMacMarker in @(
     'EcoreX WebUI package installer:',
+    'ecorex-webui.url',
     'write_desktop_shortcuts "$URL"',
     'open_browser "$URL"'
 )) {
@@ -1151,7 +1446,7 @@ $macStandalonePackage = Join-Path $macStandaloneApp "Contents/Resources/package"
 New-MacInstallerApp -AppRoot $macStandaloneApp -InstallScriptRelative "scripts/install-ecorex-webui-mac.sh" -SelfContainedResources
 New-Item -ItemType Directory -Force -Path $macStandalonePackage | Out-Null
 foreach ($entry in @("runtime", "python", "wheelhouse", "scripts")) {
-    Copy-Item -LiteralPath (Join-Path $macStage $entry) -Destination (Join-Path $macStandalonePackage $entry) -Recurse -Force
+    Copy-DirectoryWithRobocopy -Source (Join-Path $macStage $entry) -Destination (Join-Path $macStandalonePackage $entry)
 }
 Copy-Item -LiteralPath (Join-Path $macStage "release.json") -Destination (Join-Path $macStandalonePackage "release.json") -Force
 Copy-Item -LiteralPath (Join-Path $macStage "README.txt") -Destination (Join-Path $macStandalonePackage "README.txt") -Force
@@ -1167,8 +1462,8 @@ Compress-ZipWithUnixPermissions `
 $combinedWindows = Join-Path $combinedStage "windows"
 $combinedMac = Join-Path $combinedStage "macos"
 New-Item -ItemType Directory -Force -Path $combinedWindows, $combinedMac | Out-Null
-Copy-Item -Path (Join-Path $windowsStage "*") -Destination $combinedWindows -Recurse -Force
-Copy-Item -Path (Join-Path $macStage "*") -Destination $combinedMac -Recurse -Force
+Copy-DirectoryWithRobocopy -Source $windowsStage -Destination $combinedWindows
+Copy-DirectoryWithRobocopy -Source $macStage -Destination $combinedMac
 
 $combinedCmd = @'
 @echo off
@@ -1226,7 +1521,7 @@ foreach ($entry in @(
 }
 
 if (-not $KeepStaging) {
-    Remove-Item -LiteralPath $stagingRoot -Recurse -Force
+    Remove-PathRobust -Path $stagingRoot -Base $outputResolved
 }
 
 [ordered]@{

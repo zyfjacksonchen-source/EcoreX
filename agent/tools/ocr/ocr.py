@@ -6,6 +6,7 @@ import base64
 import hashlib
 import os
 import re
+import sys
 import tempfile
 import time
 from functools import wraps
@@ -18,7 +19,15 @@ from common.tool_execution_environment import ToolExecutionEnvironment
 from common.utils import expand_path
 
 
-_URL_RE = re.compile(r"https?://[^\s<>'\"`，。；、（）()\[\]{}]+", re.IGNORECASE)
+_URL_BOUNDARY_CHARS = r"\s<>'\"`，。；、（）()\[\]{}"
+_URL_RE = re.compile(rf"https?://[^{_URL_BOUNDARY_CHARS}]+", re.IGNORECASE)
+_BARE_URL_RE = re.compile(
+    rf"(?<![@\w:/.-])"
+    rf"((?:[a-z0-9](?:[a-z0-9-]{{0,61}}[a-z0-9])?\.)+"
+    rf"(?:com|net|org|io|ai|cn|co|me|dev|app|xyz|top|link|site|cloud|tech|edu|gov|info|biz)"
+    rf"(?::\d{{2,5}})?(?:/[^{_URL_BOUNDARY_CHARS}]*)?)",
+    re.IGNORECASE,
+)
 _CACHE: Dict[str, Dict[str, Any]] = {}
 _CACHE_MAX = 128
 _DEFAULT_TIMEOUT_SECONDS = 2.0
@@ -27,10 +36,14 @@ _RAPIDOCR_DET_LIMIT_SIDE_LEN = 736
 _RAPIDOCR_ENGINES: Dict[str, Any] = {}
 
 
+def _ocr_executor() -> ToolExecutionEnvironment:
+    return ToolExecutionEnvironment(tool_name="ocr", include_system_path=True)
+
+
 def _owned_python_runtime(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
-        with ToolExecutionEnvironment(tool_name="ocr").owned_python_import_context():
+        with _ocr_executor().owned_python_import_context():
             return func(*args, **kwargs)
 
     return wrapper
@@ -40,15 +53,39 @@ def _trim_url(value: str) -> str:
     return str(value or "").strip().rstrip(".,;:!?，。；：！？")
 
 
+def _normalize_ocr_url_text(text: str) -> str:
+    return re.sub(
+        r"\b(https?)\s*[:：/\\|]+\s*(?=[a-z0-9])",
+        r"\1://",
+        text or "",
+        flags=re.IGNORECASE,
+    )
+
+
 def extract_urls_from_text(text: str) -> List[str]:
+    normalized_text = _normalize_ocr_url_text(text or "")
     urls: List[str] = []
     seen = set()
-    for match in _URL_RE.finditer(text or ""):
+    explicit_spans: List[Tuple[int, int]] = []
+    for match in _URL_RE.finditer(normalized_text):
         url = _trim_url(match.group(0))
         key = url.lower()
         if url and key not in seen:
             seen.add(key)
             urls.append(url)
+        explicit_spans.append(match.span())
+    for match in _BARE_URL_RE.finditer(normalized_text):
+        start, end = match.span(1)
+        if any(start >= span_start and end <= span_end for span_start, span_end in explicit_spans):
+            continue
+        url = _trim_url(match.group(1))
+        if not url:
+            continue
+        normalized = f"https://{url}"
+        key = normalized.lower()
+        if key not in seen:
+            seen.add(key)
+            urls.append(normalized)
     return urls
 
 
@@ -110,7 +147,7 @@ def _public_error_summary(exc: BaseException) -> Dict[str, Any]:
 
 
 def _preprocess_image(image_bytes: bytes) -> Tuple[str, str]:
-    executor = ToolExecutionEnvironment(tool_name="ocr")
+    executor = _ocr_executor()
     Image = executor.import_python_module("PIL.Image")
     ImageOps = executor.import_python_module("PIL.ImageOps")
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as handle:
@@ -156,16 +193,22 @@ def _preprocess_image(image_bytes: bytes) -> Tuple[str, str]:
 
 
 def _pytesseract_available() -> bool:
-    return ToolExecutionEnvironment(tool_name="ocr").provider.resolve_python_package("pytesseract").available
+    if "pytesseract" in sys.modules:
+        return True
+    return _ocr_executor().provider.resolve_python_package("pytesseract", allow_system_path=True).available
 
 
 def _pillow_available() -> bool:
-    return ToolExecutionEnvironment(tool_name="ocr").provider.resolve_python_package("PIL").available
+    if "PIL" in sys.modules or "PIL.Image" in sys.modules:
+        return True
+    return _ocr_executor().provider.resolve_python_package("PIL", allow_system_path=True).available
 
 
 def _rapidocr_module_name() -> str:
     for name in ("rapidocr_onnxruntime", "rapidocr"):
-        if ToolExecutionEnvironment(tool_name="ocr").provider.resolve_python_package(name).available:
+        if name in sys.modules:
+            return name
+        if _ocr_executor().provider.resolve_python_package(name, allow_system_path=True).available:
             return name
     return ""
 
@@ -216,7 +259,7 @@ def _run_rapidocr(image_path: str, timeout: float) -> str:
         raise RuntimeError("rapidocr executable module not found")
     engine = _RAPIDOCR_ENGINES.get(module_name)
     if engine is None:
-        module = ToolExecutionEnvironment(tool_name="ocr").import_python_module(module_name)
+        module = _ocr_executor().import_python_module(module_name)
         rapidocr_cls = getattr(module, "RapidOCR")
         try:
             engine = rapidocr_cls(
@@ -232,15 +275,15 @@ def _run_rapidocr(image_path: str, timeout: float) -> str:
 
 @_owned_python_runtime
 def _run_pytesseract(image_path: str, timeout: float) -> str:
-    pytesseract = ToolExecutionEnvironment(tool_name="ocr").import_python_module("pytesseract")
-    Image = ToolExecutionEnvironment(tool_name="ocr").import_python_module("PIL.Image")
+    pytesseract = _ocr_executor().import_python_module("pytesseract")
+    Image = _ocr_executor().import_python_module("PIL.Image")
 
     with Image.open(image_path) as image:
         return str(pytesseract.image_to_string(image, timeout=timeout) or "")
 
 
 def _run_tesseract_cli(image_path: str, timeout: float) -> str:
-    executor = ToolExecutionEnvironment(tool_name="ocr")
+    executor = _ocr_executor()
     dependency = executor.resolve_executable("tesseract", native=True)
     if not dependency.available:
         raise RuntimeError("tesseract executable not found")
@@ -278,7 +321,7 @@ def _local_ocr(image_bytes: bytes, timeout: float) -> Dict[str, Any]:
         elif _pytesseract_available():
             provider = "pytesseract"
             text = _run_pytesseract(processed, timeout)
-        elif ToolExecutionEnvironment(tool_name="ocr").resolve_executable("tesseract", native=True).available:
+        elif _ocr_executor().resolve_executable("tesseract", native=True).available:
             provider = "tesseract-cli"
             text = _run_tesseract_cli(processed, timeout)
         else:
@@ -409,7 +452,7 @@ class OcrTool(BaseTool):
                 "rapidocr": _rapidocr_available(),
                 "rapidocrModule": _rapidocr_module_name(),
                 "pytesseract": _pytesseract_available(),
-                "tesseractCli": ToolExecutionEnvironment(tool_name="ocr").resolve_executable("tesseract", native=True).available,
+                "tesseractCli": _ocr_executor().resolve_executable("tesseract", native=True).available,
             },
             "cacheEntries": len(_CACHE),
             "rapidocrEngineCached": bool(_RAPIDOCR_ENGINES),

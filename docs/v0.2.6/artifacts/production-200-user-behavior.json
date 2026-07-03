@@ -1,0 +1,1442 @@
+{
+  "status": "PASS",
+  "version": "0.2.6",
+  "scope": "production-server-200-user-behavior",
+  "generatedAt": "2026-07-01T23:54:45.959993+00:00",
+  "durationSeconds": 647.82,
+  "checkCount": 200,
+  "passCount": 200,
+  "failCount": 0,
+  "target": {
+    "domainHash": "A753D877497CBE35",
+    "sshHostHash": "CDF1CF905198CA97",
+    "sshUserHash": "4813494D137E1631",
+    "rawTargetPersisted": false
+  },
+  "checks": [
+    {
+      "index": 1,
+      "group": "deployment",
+      "name": "current release directory exists",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 2,
+      "group": "deployment",
+      "name": "release.json exists",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 3,
+      "group": "deployment",
+      "name": "release version is v0.2.6",
+      "status": "PASS",
+      "detail": {
+        "version": "0.2.6"
+      }
+    },
+    {
+      "index": 4,
+      "group": "deployment",
+      "name": "release artifact is web-linux-service",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 5,
+      "group": "deployment",
+      "name": "runtime app.py exists",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 6,
+      "group": "deployment",
+      "name": "runtime web_channel.py exists",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 7,
+      "group": "deployment",
+      "name": "runtime auth.py exists",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 8,
+      "group": "deployment",
+      "name": "runtime static app index exists",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 9,
+      "group": "deployment",
+      "name": "state config exists",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 10,
+      "group": "deployment",
+      "name": "runtime manifest exists",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 11,
+      "group": "deployment",
+      "name": "capability state exists",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 12,
+      "group": "deployment",
+      "name": "permission matrix exists",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 13,
+      "group": "deployment",
+      "name": "review consensus exists",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 14,
+      "group": "deployment",
+      "name": "web release gate exists",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 15,
+      "group": "deployment",
+      "name": "bundled node exists",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 16,
+      "group": "deployment",
+      "name": "bundled npm exists",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 17,
+      "group": "deployment",
+      "name": "bundled npx exists",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 18,
+      "group": "deployment",
+      "name": "systemd service active",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 19,
+      "group": "deployment",
+      "name": "systemd service enabled",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 20,
+      "group": "deployment",
+      "name": "workspace directory exists",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 21,
+      "group": "deployment",
+      "name": "installed OpenAI logo exists",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 22,
+      "group": "public-http",
+      "name": "public index returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 23,
+      "group": "public-http",
+      "name": "public manifest returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 24,
+      "group": "public-http",
+      "name": "public app returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 25,
+      "group": "public-http",
+      "name": "public app references bundled script",
+      "status": "PASS",
+      "detail": {
+        "asset": "index-BzwyUdU8.js"
+      }
+    },
+    {
+      "index": 26,
+      "group": "public-http",
+      "name": "public api version returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 27,
+      "group": "public-http",
+      "name": "public api version is v0.2.6",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 28,
+      "group": "public-http",
+      "name": "public auth check returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 29,
+      "group": "public-http",
+      "name": "public admin requires auth",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 30,
+      "group": "public-http",
+      "name": "public client model config rejects anonymous",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 31,
+      "group": "public-http",
+      "name": "public icon asset returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 32,
+      "group": "public-http",
+      "name": "public app js returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 33,
+      "group": "public-http",
+      "name": "public app css returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 34,
+      "group": "public-http",
+      "name": "openai logo returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 35,
+      "group": "public-http",
+      "name": "deepseek logo returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 36,
+      "group": "public-http",
+      "name": "gemini logo returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 37,
+      "group": "public-http",
+      "name": "doubao logo returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 38,
+      "group": "public-http",
+      "name": "webui-windows-x64 download HEAD returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 39,
+      "group": "public-http",
+      "name": "webui-windows-x64 download content-length matches manifest",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 40,
+      "group": "public-http",
+      "name": "webui-macos-universal download HEAD returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 41,
+      "group": "public-http",
+      "name": "webui-macos-universal download content-length matches manifest",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 42,
+      "group": "public-http",
+      "name": "web-linux-service download HEAD returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 43,
+      "group": "public-http",
+      "name": "web-linux-service download content-length matches manifest",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 44,
+      "group": "public-http",
+      "name": "web service range download works",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 45,
+      "group": "public-http",
+      "name": "windows package range download works",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 46,
+      "group": "public-http",
+      "name": "public index names EcoreX",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 47,
+      "group": "manifest",
+      "name": "manifest product is EcoreX",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 48,
+      "group": "manifest",
+      "name": "manifest version is v0.2.6",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 49,
+      "group": "manifest",
+      "name": "manifest notes mention WebUI",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 50,
+      "group": "manifest",
+      "name": "win recommended download is WebUI",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 51,
+      "group": "manifest",
+      "name": "mac recommended download is WebUI",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 52,
+      "group": "manifest",
+      "name": "web recommended Windows package exists",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 53,
+      "group": "manifest",
+      "name": "update channel includes Windows WebUI",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 54,
+      "group": "manifest",
+      "name": "update channel includes macOS WebUI",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 55,
+      "group": "manifest",
+      "name": "webui-windows-x64 status ready",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 56,
+      "group": "manifest",
+      "name": "webui-windows-x64 version v0.2.6",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 57,
+      "group": "manifest",
+      "name": "webui-windows-x64 size matches HTTP",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 58,
+      "group": "manifest",
+      "name": "webui-windows-x64 sha256 uppercase",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 59,
+      "group": "manifest",
+      "name": "webui-windows-x64 href is downloads path",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 60,
+      "group": "manifest",
+      "name": "webui-windows-x64 file name contains version",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 61,
+      "group": "manifest",
+      "name": "webui-windows-x64 updated at manifest release date",
+      "status": "PASS",
+      "detail": {
+        "manifestUpdatedAt": "2026-07-02"
+      }
+    },
+    {
+      "index": 62,
+      "group": "manifest",
+      "name": "webui-windows-x64 platform expected",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 63,
+      "group": "manifest",
+      "name": "webui-windows-x64 id resolves uniquely",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 64,
+      "group": "manifest",
+      "name": "webui-macos-universal status ready",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 65,
+      "group": "manifest",
+      "name": "webui-macos-universal version v0.2.6",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 66,
+      "group": "manifest",
+      "name": "webui-macos-universal size matches HTTP",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 67,
+      "group": "manifest",
+      "name": "webui-macos-universal sha256 uppercase",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 68,
+      "group": "manifest",
+      "name": "webui-macos-universal href is downloads path",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 69,
+      "group": "manifest",
+      "name": "webui-macos-universal file name contains version",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 70,
+      "group": "manifest",
+      "name": "webui-macos-universal updated at manifest release date",
+      "status": "PASS",
+      "detail": {
+        "manifestUpdatedAt": "2026-07-02"
+      }
+    },
+    {
+      "index": 71,
+      "group": "manifest",
+      "name": "webui-macos-universal platform expected",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 72,
+      "group": "manifest",
+      "name": "webui-macos-universal id resolves uniquely",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 73,
+      "group": "manifest",
+      "name": "web-linux-service status ready",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 74,
+      "group": "manifest",
+      "name": "web-linux-service version v0.2.6",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 75,
+      "group": "manifest",
+      "name": "web-linux-service size matches HTTP",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 76,
+      "group": "manifest",
+      "name": "web-linux-service sha256 uppercase",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 77,
+      "group": "manifest",
+      "name": "web-linux-service href is downloads path",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 78,
+      "group": "manifest",
+      "name": "web-linux-service file name contains version",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 79,
+      "group": "manifest",
+      "name": "web-linux-service updated at manifest release date",
+      "status": "PASS",
+      "detail": {
+        "manifestUpdatedAt": "2026-07-02"
+      }
+    },
+    {
+      "index": 80,
+      "group": "manifest",
+      "name": "web-linux-service platform expected",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 81,
+      "group": "manifest",
+      "name": "web-linux-service id resolves uniquely",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 82,
+      "group": "runtime-api",
+      "name": "pre-login auth check returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 83,
+      "group": "runtime-api",
+      "name": "pre-login auth is required",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 84,
+      "group": "runtime-api",
+      "name": "pre-login is unauthenticated",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 85,
+      "group": "runtime-api",
+      "name": "login returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 86,
+      "group": "runtime-api",
+      "name": "login status success",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 87,
+      "group": "runtime-api",
+      "name": "login session authenticated",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 88,
+      "group": "runtime-api",
+      "name": "login session is not local fallback",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 89,
+      "group": "runtime-api",
+      "name": "login auth provider web-password",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 90,
+      "group": "runtime-api",
+      "name": "login user is smoke email",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 91,
+      "group": "runtime-api",
+      "name": "login cookie persisted",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 92,
+      "group": "runtime-api",
+      "name": "set full-access returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 93,
+      "group": "runtime-api",
+      "name": "set full-access mode accepted",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 94,
+      "group": "runtime-api",
+      "name": "permission state returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 95,
+      "group": "runtime-api",
+      "name": "permission mode is full-access",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 96,
+      "group": "runtime-api",
+      "name": "permission audit path present",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 97,
+      "group": "runtime-api",
+      "name": "version endpoint returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 98,
+      "group": "runtime-api",
+      "name": "models endpoint returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 99,
+      "group": "runtime-api",
+      "name": "model providers count at least four",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 100,
+      "group": "runtime-api",
+      "name": "models expose capabilities",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 101,
+      "group": "runtime-api",
+      "name": "provider openai present",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 102,
+      "group": "runtime-api",
+      "name": "provider deepseek present",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 103,
+      "group": "runtime-api",
+      "name": "provider gemini present",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 104,
+      "group": "runtime-api",
+      "name": "provider doubao present",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 105,
+      "group": "runtime-api",
+      "name": "doubao uses seed 2.0 route",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 106,
+      "group": "runtime-api",
+      "name": "tools endpoint returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 107,
+      "group": "runtime-api",
+      "name": "tools use runtime capability service",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 108,
+      "group": "runtime-api",
+      "name": "tools expose browser",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 109,
+      "group": "runtime-api",
+      "name": "tools expose imagegen",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 110,
+      "group": "runtime-api",
+      "name": "tools expose ocr",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 111,
+      "group": "runtime-api",
+      "name": "skills endpoint returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 112,
+      "group": "runtime-api",
+      "name": "skills payload has count",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 113,
+      "group": "runtime-api",
+      "name": "extensions endpoint returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 114,
+      "group": "runtime-api",
+      "name": "capabilities endpoint returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 115,
+      "group": "runtime-api",
+      "name": "capabilities use runtime capability service",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 116,
+      "group": "runtime-api",
+      "name": "external connections endpoint returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 117,
+      "group": "runtime-api",
+      "name": "channels endpoint returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 118,
+      "group": "runtime-api",
+      "name": "feishu channel present",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 119,
+      "group": "runtime-api",
+      "name": "scheduler endpoint returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 120,
+      "group": "runtime-api",
+      "name": "active requests endpoint returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 121,
+      "group": "runtime-api",
+      "name": "installations endpoint returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 122,
+      "group": "v026-markers",
+      "name": "bridge purges generic local session",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 123,
+      "group": "v026-markers",
+      "name": "bridge gates local fallback explicitly",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 124,
+      "group": "v026-markers",
+      "name": "bridge local fallback flag is opt-in",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 125,
+      "group": "v026-markers",
+      "name": "bridge sends bearer authorization",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 126,
+      "group": "v026-markers",
+      "name": "bridge exposes enterprise model config fallback",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 127,
+      "group": "v026-markers",
+      "name": "bridge no longer returns anonymous local session",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 128,
+      "group": "v026-markers",
+      "name": "bridge rejects login without real runtime session",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 129,
+      "group": "v026-markers",
+      "name": "auth payload tracks local fallback explicitly",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 130,
+      "group": "v026-markers",
+      "name": "renderer calls enterprise model config fallback",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 131,
+      "group": "v026-markers",
+      "name": "model switch is a normal message class",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 132,
+      "group": "v026-markers",
+      "name": "model switch no longer has sticky divider element",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 133,
+      "group": "v026-markers",
+      "name": "model switch CSS uses message body",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 134,
+      "group": "v026-markers",
+      "name": "openai provider logo is bundled",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 135,
+      "group": "v026-markers",
+      "name": "deepseek provider logo is bundled",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 136,
+      "group": "v026-markers",
+      "name": "gemini provider logo is bundled",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 137,
+      "group": "v026-markers",
+      "name": "doubao provider logo is bundled",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 138,
+      "group": "v026-markers",
+      "name": "browser screenshot has native CDP fallback",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 139,
+      "group": "v026-markers",
+      "name": "browser screenshot decodes CDP image data",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 140,
+      "group": "v026-markers",
+      "name": "imagegen accepts native batch tasks",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 141,
+      "group": "v026-markers",
+      "name": "imagegen batch reports native route",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 142,
+      "group": "v026-markers",
+      "name": "imagegen reports credential-needed accurately",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 143,
+      "group": "v026-markers",
+      "name": "imagegen ignores legacy skill model unless opted in",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 144,
+      "group": "v026-markers",
+      "name": "agent blocks shell python image fallback",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 145,
+      "group": "v026-markers",
+      "name": "agent detects raw shell image generation",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 146,
+      "group": "v026-markers",
+      "name": "prompt prefers native imagegen",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 147,
+      "group": "v026-markers",
+      "name": "image skill forbids shell fallback",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 148,
+      "group": "v026-markers",
+      "name": "bundled Tongxin CLI exists",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 149,
+      "group": "v026-markers",
+      "name": "bundled Tongxin models package exists",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 150,
+      "group": "v026-markers",
+      "name": "Tongxin models exports DATABASE",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 151,
+      "group": "v026-markers",
+      "name": "Tongxin database module exports database",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 152,
+      "group": "v026-markers",
+      "name": "root models compatibility exports database",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 153,
+      "group": "v026-markers",
+      "name": "token estimator is bundled",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 154,
+      "group": "v026-markers",
+      "name": "model capabilities include context guidance",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 155,
+      "group": "v026-markers",
+      "name": "static app bundles provider logos",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 156,
+      "group": "downloads",
+      "name": "webui-windows-x64 full download returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 157,
+      "group": "downloads",
+      "name": "webui-windows-x64 full download size matches",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 158,
+      "group": "downloads",
+      "name": "webui-windows-x64 full download sha256 matches",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 159,
+      "group": "downloads",
+      "name": "webui-windows-x64 archive opens",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 160,
+      "group": "downloads",
+      "name": "webui-windows-x64 archive has runtime manifest",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 161,
+      "group": "downloads",
+      "name": "webui-windows-x64 archive has Web app index",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 162,
+      "group": "downloads",
+      "name": "webui-macos-universal full download returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 163,
+      "group": "downloads",
+      "name": "webui-macos-universal full download size matches",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 164,
+      "group": "downloads",
+      "name": "webui-macos-universal full download sha256 matches",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 165,
+      "group": "downloads",
+      "name": "webui-macos-universal archive opens",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 166,
+      "group": "downloads",
+      "name": "webui-macos-universal archive has runtime manifest",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 167,
+      "group": "downloads",
+      "name": "webui-macos-universal archive has Web app index",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 168,
+      "group": "downloads",
+      "name": "web-linux-service full download returns 200",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 169,
+      "group": "downloads",
+      "name": "web-linux-service full download size matches",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 170,
+      "group": "downloads",
+      "name": "web-linux-service full download sha256 matches",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 171,
+      "group": "downloads",
+      "name": "web-linux-service archive opens",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 172,
+      "group": "downloads",
+      "name": "web-linux-service archive has runtime manifest",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 173,
+      "group": "downloads",
+      "name": "web-linux-service archive has Web app index",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 174,
+      "group": "archive-contents",
+      "name": "webui-windows-x64 archive path captured",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 175,
+      "group": "archive-contents",
+      "name": "webui-windows-x64 contains local-session purge bridge",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 176,
+      "group": "archive-contents",
+      "name": "webui-windows-x64 contains CDP screenshot fallback",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 177,
+      "group": "archive-contents",
+      "name": "webui-windows-x64 contains native imagegen batch",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 178,
+      "group": "archive-contents",
+      "name": "webui-windows-x64 contains compiled renderer JS",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 179,
+      "group": "archive-contents",
+      "name": "webui-macos-universal archive path captured",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 180,
+      "group": "archive-contents",
+      "name": "webui-macos-universal contains local-session purge bridge",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 181,
+      "group": "archive-contents",
+      "name": "webui-macos-universal contains CDP screenshot fallback",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 182,
+      "group": "archive-contents",
+      "name": "webui-macos-universal contains native imagegen batch",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 183,
+      "group": "archive-contents",
+      "name": "webui-macos-universal contains compiled renderer JS",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 184,
+      "group": "archive-contents",
+      "name": "web-linux-service archive path captured",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 185,
+      "group": "archive-contents",
+      "name": "web-linux-service contains local-session purge bridge",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 186,
+      "group": "archive-contents",
+      "name": "web-linux-service contains CDP screenshot fallback",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 187,
+      "group": "archive-contents",
+      "name": "web-linux-service contains native imagegen batch",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 188,
+      "group": "archive-contents",
+      "name": "web-linux-service contains compiled renderer JS",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 189,
+      "group": "browser-toolchain",
+      "name": "BrowserTool imports and navigates",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 190,
+      "group": "browser-toolchain",
+      "name": "BrowserTool snapshot reads page",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 191,
+      "group": "browser-toolchain",
+      "name": "BrowserTool screenshot writes file",
+      "status": "PASS",
+      "detail": {
+        "bytes": 9561
+      }
+    },
+    {
+      "index": 192,
+      "group": "browser-toolchain",
+      "name": "browser diagnostics mode is cdp-first",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 193,
+      "group": "browser-toolchain",
+      "name": "browser diagnostics auto launch enabled",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 194,
+      "group": "browser-toolchain",
+      "name": "browser diagnostics fallback enabled",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 195,
+      "group": "browser-toolchain",
+      "name": "python playwright import works",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 196,
+      "group": "browser-toolchain",
+      "name": "python rapidocr import works",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 197,
+      "group": "browser-toolchain",
+      "name": "python PIL import works",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 198,
+      "group": "browser-toolchain",
+      "name": "node command works",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 199,
+      "group": "browser-toolchain",
+      "name": "npm command works",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 200,
+      "group": "browser-toolchain",
+      "name": "npx command works",
+      "status": "PASS",
+      "detail": {}
+    }
+  ],
+  "failurePreview": [],
+  "redaction": {
+    "rawUrlPersisted": false,
+    "rawPasswordPersisted": false,
+    "rawSecretPersisted": false
+  },
+  "remoteExitCode": 0,
+  "remoteStdoutHash": "BAFA9EC83973572AC4BAF6E23EA2A5E73517FAD49250A5FF433E31BF4B2952A3",
+  "remoteStderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+  "remoteStderrExcerptRedacted": "",
+  "generatedLocallyAt": "2026-07-01T23:54:45.762869+00:00",
+  "durationSecondsLocal": 649.61
+}

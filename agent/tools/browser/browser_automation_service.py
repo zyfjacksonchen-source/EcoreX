@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
 import urllib.request
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from common.tool_execution_environment import ToolExecutionEnvironment
@@ -94,6 +96,66 @@ def find_chrome_executable(config: Optional[Dict[str, Any]] = None) -> str:
             dependency = ToolExecutionEnvironment(tool_name="browser", include_system_path=True).resolve_executable(candidate)
             if dependency.available:
                 return dependency.path
+    playwright_chromium = find_playwright_chromium_executable()
+    if playwright_chromium:
+        return playwright_chromium
+    return ""
+
+
+def _playwright_browser_roots() -> List[Path]:
+    roots: List[Path] = []
+    configured = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or os.environ.get("ECOREX_PLAYWRIGHT_BROWSERS_DIR")
+    if configured:
+        roots.append(Path(expand_path(configured)))
+    state_dir = os.environ.get("ECOREX_STATE_DIR")
+    if not configured and state_dir:
+        roots.append(Path(expand_path(state_dir)) / "playwright-browsers")
+    if state_dir or os.environ.get("ECOREX_INSTALL_ROOT"):
+        return roots
+    roots.append(Path(expand_path("~/.cache/ms-playwright")))
+    if sys.platform.startswith("win"):
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            roots.append(Path(local) / "ms-playwright")
+    elif sys.platform == "darwin":
+        roots.append(Path(expand_path("~/Library/Caches/ms-playwright")))
+    seen = set()
+    unique: List[Path] = []
+    for root in roots:
+        key = str(root)
+        if key not in seen:
+            seen.add(key)
+            unique.append(root)
+    return unique
+
+
+def find_playwright_chromium_executable() -> str:
+    patterns = {
+        "win32": [
+            "chromium-*/chrome-win/chrome.exe",
+            "chromium-*/chrome-win*/chrome.exe",
+            "chromium_headless_shell-*/chrome-headless-shell-win*/chrome-headless-shell.exe",
+        ],
+        "darwin": [
+            "chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium",
+            "chromium-*/chrome-mac*/Chromium.app/Contents/MacOS/Chromium",
+            "chromium_headless_shell-*/chrome-headless-shell-mac*/chrome-headless-shell",
+        ],
+        "linux": [
+            "chromium-*/chrome-linux/chrome",
+            "chromium-*/chrome-linux*/chrome",
+            "chromium_headless_shell-*/chrome-linux/headless_shell",
+            "chromium_headless_shell-*/chrome-headless-shell-linux*/chrome-headless-shell",
+        ],
+    }
+    platform_key = "win32" if sys.platform.startswith("win") else ("darwin" if sys.platform == "darwin" else "linux")
+    for root in _playwright_browser_roots():
+        if not root.exists():
+            continue
+        for pattern in patterns[platform_key]:
+            for candidate in sorted(root.glob(pattern), reverse=True):
+                if candidate.is_file():
+                    return str(candidate)
     return ""
 
 
@@ -115,17 +177,23 @@ def launch_cdp_browser(config: Optional[Dict[str, Any]], endpoint: str) -> subpr
     config = config or {}
     chrome = find_chrome_executable(config)
     if not chrome:
-        raise RuntimeError("No Chrome/Edge executable found for CDP auto-launch")
+        raise RuntimeError("No Chrome/Edge/Playwright Chromium executable found for CDP auto-launch")
     user_data_dir = cdp_user_data_dir(config)
     os.makedirs(user_data_dir, exist_ok=True)
+    headless_cfg = config.get("headless")
+    headless = bool(headless_cfg) if headless_cfg is not None else (not sys.platform.startswith("win") and sys.platform != "darwin" and not os.environ.get("DISPLAY"))
     args = [
         chrome,
         f"--remote-debugging-port={cdp_port(endpoint)}",
         f"--user-data-dir={user_data_dir}",
         "--no-first-run",
         "--no-default-browser-check",
+        "--disable-dev-shm-usage",
         "about:blank",
     ]
+    if headless:
+        args.insert(-1, "--headless=new")
+        args.insert(-1, "--no-sandbox")
     executor = ToolExecutionEnvironment(tool_name="browser")
     return executor.popen(
         args,
@@ -167,6 +235,10 @@ def browser_automation_diagnostics(config: Optional[Dict[str, Any]] = None) -> D
     status = cdp_status(endpoint)
     chrome = find_chrome_executable(config)
     fallback = config.get("cdp_fallback", True) is not False
+    source = "missing"
+    if chrome:
+        normalized = chrome.replace("\\", "/").lower()
+        source = "playwright-chromium" if "ms-playwright" in normalized or "playwright-browsers" in normalized else "external-browser"
     return {
         "mode": "cdp-first",
         "endpoint": endpoint,
@@ -177,7 +249,7 @@ def browser_automation_diagnostics(config: Optional[Dict[str, Any]] = None) -> D
         "persistent": config.get("persistent", True) is not False,
         "chromeExecutable": chrome,
         "chromeExecutableFound": bool(chrome),
-        "chromeExecutableSource": "external-browser" if chrome else "missing",
+        "chromeExecutableSource": source,
         "cdpUserDataDir": cdp_user_data_dir(config),
         "openAtFirstUse": True,
     }

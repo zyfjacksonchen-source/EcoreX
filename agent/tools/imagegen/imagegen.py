@@ -162,6 +162,16 @@ def _safe_image_result_row(item: Dict[str, Any]) -> Dict[str, Any]:
     return safe
 
 
+def _image_result_path(item: Dict[str, Any]) -> str:
+    if not isinstance(item, dict):
+        return ""
+    for key in ("path", "file_path", "filePath", "url", "output", "output_path", "outputPath"):
+        value = str(item.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def _with_image_quality_evidence(
     images: Any,
     *,
@@ -256,12 +266,33 @@ def _authorize_file_access(operation: str, path: Path, cwd: Path) -> tuple[bool,
     return bool(decision.get("allowed")), str(decision.get("reason") or "")
 
 
+def _imagegen_route(input_route: str = "text_to_image", runner_mode: str = "in_process") -> Dict[str, Any]:
+    provider_api_route = "images.edits" if input_route == "image_edit_reference" else "images.generations"
+    if input_route == "batch":
+        provider_api_route = "native.batch.imagegen"
+    return {
+        "schemaVersion": "imagegen-route-v1",
+        "routeKind": "ecorex-native-facade",
+        "executionMode": "in_process_provider_runner",
+        "runnerMode": runner_mode or "in_process",
+        "shellInvocation": False,
+        "pythonSubprocess": False,
+        "compatibilityCliFallbackUsed": False,
+        "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+        "providerRuntimeModuleRole": "in_process_provider_module",
+        "inputRoute": input_route,
+        "providerApiRoute": provider_api_route,
+    }
+
+
 class ImageGenTool(BaseTool):
     name: str = "imagegen"
     description: str = (
         "Generate or edit images through the native EcoreX image route. "
         "Use this tool for text-to-image, image edits, reference-image generation, "
-        "multi-image fusion, and visual asset requests. The default GPT Image route "
+        "multi-image fusion, batch/multi-image requests, and visual asset requests. "
+        "For batches, the model may call this tool multiple times or use the optional "
+        "tasks field when the visible schema fits the requested ordering. The default GPT Image route "
         "starts with gpt-image-2-pro; do not replace image edits or reference-image "
         "generation with Python/PIL/HTML/SVG scripts."
     )
@@ -288,13 +319,23 @@ class ImageGenTool(BaseTool):
                     "generation. These are normalized to the edit route and should not be ignored."
                 ),
             },
+            "tasks": {
+                "type": "array",
+                "items": {"type": "object"},
+                "description": (
+                    "Optional native batch generation tasks. Each task may contain prompt, image_url(s), "
+                    "size, aspect_ratio, quality, and output_format. This is optional; multiple regular "
+                    "imagegen calls are also valid for ordered one-by-one generation. Never use shell/Python loops "
+                    "as the semantic image-generation substitute."
+                ),
+            },
             "model": {
                 "type": "string",
-                "description": "Optional image model override.",
+                "description": "Optional image model override. When omitted, image generation stays on gpt-image-2-pro regardless of the active chat model.",
             },
             "provider": {
                 "type": "string",
-                "description": "Optional provider override, such as OpenAI, Gemini, Seedream, Qwen, MiniMax, or LinkAI.",
+                "description": "Optional image provider override. Chat model switching does not change this image route.",
             },
             "size": {
                 "type": "string",
@@ -342,19 +383,31 @@ class ImageGenTool(BaseTool):
                 "error": "unsupported imagegen action",
                 "action": action,
                 "allowedActions": ["generate", "probe", "status"],
+                "route": _imagegen_route(),
                 "redacted": True,
             })
 
+        tasks = args.get("tasks")
+        if isinstance(tasks, list) and tasks:
+            return self._execute_batch(args, tasks)
+
         prompt = str(args.get("prompt") or "").strip()
         if not prompt:
-            return ToolResult.fail("prompt is required")
+            return ToolResult.fail({
+                "error": "prompt is required",
+                "route": _imagegen_route(),
+                "redacted": True,
+            })
 
         root = _runtime_root()
         script = root / "skills" / "image-generation" / "scripts" / "generate.py"
         if not script.exists():
             return ToolResult.fail({
-                "error": "image-generation script not found",
-                "script": str(script),
+                "error": "image provider runtime module not found",
+                "routeStatus": "provider_runtime_module_missing",
+                "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+                "route": _imagegen_route(),
+                "redacted": True,
             })
 
         payload: Dict[str, Any] = {"prompt": prompt}
@@ -381,6 +434,8 @@ class ImageGenTool(BaseTool):
             normalized_sources = [str(item) for item in image_urls if str(item or "").strip()]
         elif args.get("image_url"):
             normalized_sources = [str(args.get("image_url"))]
+        input_route = "image_edit_reference" if normalized_sources else "text_to_image"
+        route = _imagegen_route(input_route)
 
         authorized_sources: list[str] = []
         for source in normalized_sources:
@@ -393,6 +448,7 @@ class ImageGenTool(BaseTool):
                 return ToolResult.fail({
                     "error": "image input read blocked by permissions",
                     "reason": reason,
+                    "route": route,
                     "redacted": True,
                 })
             authorized_sources.append(str(source_path))
@@ -410,6 +466,7 @@ class ImageGenTool(BaseTool):
             return ToolResult.fail({
                 "error": "image output directory blocked by permissions",
                 "reason": reason,
+                "route": route,
                 "redacted": True,
             })
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -444,6 +501,7 @@ class ImageGenTool(BaseTool):
                 return ToolResult.fail({
                     "error": "image generation invocation failed",
                     "errorType": exc.__class__.__name__,
+                    "route": route,
                     "redacted": True,
                 })
 
@@ -451,14 +509,21 @@ class ImageGenTool(BaseTool):
             stdout_json = provider_result.get("payload") if isinstance(provider_result.get("payload"), dict) else {}
             returncode = int(provider_result.get("returncode") or 0)
             stderr_text = str(provider_result.get("stderr") or "")
+            route = _imagegen_route(input_route, str(provider_result.get("runnerMode") or "in_process"))
 
             if returncode != 0 or stdout_json.get("error"):
                 return ToolResult.fail({
                     "error": "image generation failed",
+                    "code": stdout_json.get("code") or stdout_json.get("error_code") or "",
+                    "errorType": stdout_json.get("errorType") or stdout_json.get("error_type") or "",
+                    "nextAction": stdout_json.get("nextAction") or stdout_json.get("next_action") or "",
                     "payload": _safe_imagegen_failure_payload(stdout_json),
                     "returncode": returncode,
                     "durationMs": elapsed_ms,
                     "stderr": _safe_text_presence(stderr_text),
+                    "route": route,
+                    "fallbackUsed": False,
+                    "pythonFallbackUsed": False,
                     "redacted": True,
                 })
 
@@ -487,6 +552,12 @@ class ImageGenTool(BaseTool):
                 "model": _safe_token(stdout_json.get("model")),
                 "images": images,
                 "model_fallback": _safe_token(stdout_json.get("model_fallback")),
+                "route": route,
+                "fallbackUsed": bool(
+                    stdout_json.get("model_fallback")
+                    and str(stdout_json.get("model_fallback")).lower() not in {"", "none", "null"}
+                ),
+                "pythonFallbackUsed": False,
                 "attempted_provider_count": _safe_int(stdout_json.get("attempted_provider_count")),
                 "durationMs": duration_ms,
                 "timing": {
@@ -505,6 +576,134 @@ class ImageGenTool(BaseTool):
             if quality_evidence:
                 result["qualityEvidence"] = quality_evidence
             return ToolResult.success(result)
+
+    def _execute_batch(self, args: Dict[str, Any], tasks: list[Any]) -> ToolResult:
+        max_tasks = _safe_int(args.get("max_tasks")) or 20
+        max_tasks = max(1, min(max_tasks, 50))
+        if len(tasks) > max_tasks:
+            return ToolResult.fail({
+                "error": "too many imagegen batch tasks",
+                "code": "imagegen_batch_limit",
+                "maxTasks": max_tasks,
+                "taskCount": len(tasks),
+                "route": _imagegen_route("batch", "native_batch_loop"),
+                "pythonFallbackUsed": False,
+                "redacted": True,
+            })
+
+        inherited_keys = (
+            "model",
+            "provider",
+            "quality",
+            "size",
+            "aspect_ratio",
+            "output_format",
+            "output_compression",
+            "background",
+            "moderation",
+            "output_dir",
+            "quality_retry_max",
+        )
+        inherited = {key: args[key] for key in inherited_keys if args.get(key) not in (None, "")}
+        task_results: list[Dict[str, Any]] = []
+        images: list[Dict[str, Any]] = []
+        started = time.monotonic()
+
+        for index, raw_task in enumerate(tasks):
+            cancel_event = getattr(self, "cancel_event", None)
+            if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
+                task_results.append({
+                    "index": index,
+                    "status": "cancelled",
+                    "error": "batch image generation cancelled",
+                    "redacted": True,
+                })
+                break
+            if not isinstance(raw_task, dict):
+                task_results.append({
+                    "index": index,
+                    "status": "error",
+                    "error": "imagegen batch task must be an object",
+                    "redacted": True,
+                })
+                continue
+            child_args = {**inherited, **raw_task, "action": "generate"}
+            child_args.pop("tasks", None)
+            child = self.execute(child_args)
+            payload = child.result if isinstance(child.result, dict) else {"output": child.result}
+            projected = {
+                "index": index,
+                "status": child.status,
+                "provider": _safe_token(payload.get("provider")) if isinstance(payload, dict) else None,
+                "model": _safe_token(payload.get("model")) if isinstance(payload, dict) else None,
+                "model_fallback": payload.get("model_fallback") if isinstance(payload, dict) else None,
+                "route": payload.get("route") if isinstance(payload, dict) else None,
+                "durationMs": payload.get("durationMs") if isinstance(payload, dict) else None,
+                "error": payload.get("error") if isinstance(payload, dict) and child.status != "success" else None,
+                "code": payload.get("code") if isinstance(payload, dict) and child.status != "success" else None,
+                "nextAction": payload.get("nextAction") if isinstance(payload, dict) and child.status != "success" else None,
+                "imageCount": len(payload.get("images") or []) if isinstance(payload.get("images") if isinstance(payload, dict) else None, list) else 0,
+                "redacted": True,
+            }
+            task_results.append({key: value for key, value in projected.items() if value not in (None, "", [])})
+            child_images = payload.get("images") if isinstance(payload, dict) else []
+            for image in child_images or []:
+                if isinstance(image, dict):
+                    projected_image = {"taskIndex": index, **image}
+                    images.append(projected_image)
+                    self._emit_batch_image_ready(projected_image, task_index=index)
+
+        success_count = sum(1 for item in task_results if item.get("status") == "success")
+        failed_count = sum(1 for item in task_results if item.get("status") not in {"success", "cancelled"})
+        duration_ms = round((time.monotonic() - started) * 1000)
+        result = {
+            "schemaVersion": "imagegen-batch-v1",
+            "batchMode": "native_imagegen_tool_loop",
+            "taskCount": len(tasks),
+            "successCount": success_count,
+            "failedCount": failed_count,
+            "images": images,
+            "taskResults": task_results,
+            "route": _imagegen_route("batch", "native_batch_loop"),
+            "durationMs": duration_ms,
+            "pythonFallbackUsed": False,
+            "shellFallbackUsed": False,
+            "webFallbackUsed": False,
+            "redacted": True,
+        }
+        if success_count:
+            return ToolResult.success(result)
+        return ToolResult.fail({
+            **result,
+            "error": "all imagegen batch tasks failed",
+            "code": "imagegen_batch_failed",
+            "nextAction": "configure_model_provider" if any(item.get("nextAction") == "configure_model_provider" for item in task_results) else "inspect_task_results",
+        })
+
+    def _emit_batch_image_ready(self, image: Dict[str, Any], *, task_index: int) -> None:
+        emit_event = getattr(self, "emit_event", None)
+        if not callable(emit_event):
+            return
+        path = _image_result_path(image)
+        if not path or path.lower().startswith(("data:image/", "http://", "https://")):
+            return
+        payload = {
+            "type": "file_to_send",
+            "path": path,
+            "file_path": path,
+            "file_name": Path(path).name or f"image-{task_index + 1}.png",
+            "file_type": "image",
+            "tool_name": self.name,
+            "tool_call_id": str(getattr(self, "tool_call_id", "") or ""),
+            "status": str(image.get("status") or "ready"),
+            "task_index": task_index,
+            "batchMode": "native_imagegen_tool_loop",
+            "redacted": True,
+        }
+        try:
+            emit_event("file_to_send", payload)
+        except Exception as exc:
+            logger.debug("[ImageGen] incremental artifact event skipped: %s", exc)
 
     def _probe(self) -> Dict[str, Any]:
         root = _runtime_root()
@@ -535,6 +734,13 @@ class ImageGenTool(BaseTool):
             "schemaVersion": "v0.2.5",
             "status": "ready" if not missing else "missing",
             "tool": self.name,
+            "route": _imagegen_route(),
+            "routeStatus": "ready" if not missing else "provider_runtime_module_missing",
+            "nativeFacade": True,
+            "providerRuntimeModulePresent": checks["script"],
+            "providerRuntimeModuleRole": "in_process_provider_module",
+            "localPythonCliRequired": False,
+            "pythonSubprocess": False,
             "scriptPresent": checks["script"],
             "qualityRuntimePresent": checks["qualityRuntime"],
             "providerConfigured": bool(configured_env),

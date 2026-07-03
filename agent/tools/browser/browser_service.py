@@ -7,11 +7,14 @@ automatically shuts down the browser (and its thread) after a configurable
 period of inactivity to free resources.
 """
 
+from __future__ import annotations
+
 import os
 import sys
 import uuid
 import queue
 import json
+import base64
 import subprocess
 import threading
 import time
@@ -495,8 +498,9 @@ class BrowserService:
                 if not self._cdp_fallback:
                     raise
                 logger.warning(f"[Browser] CDP unavailable ({e}); falling back to Playwright persistent browser")
-                self._launch_mode = "persistent" if self._user_data_dir else "fresh"
+                fallback_launch_mode = "persistent" if self._user_data_dir else "fresh"
                 self._shutdown_browser()
+                self._launch_mode = fallback_launch_mode
                 self._playwright = sync_playwright().start()
                 if self._launch_mode == "persistent":
                     self._launch_persistent(launch_args, viewport, user_agent)
@@ -826,9 +830,41 @@ class BrowserService:
         save_dir = self._get_screenshot_dir(cwd)
         filename = f"screenshot_{uuid.uuid4().hex[:8]}.png"
         filepath = os.path.join(save_dir, filename)
-        page.screenshot(path=filepath, full_page=full_page)
+        try:
+            page.screenshot(path=filepath, full_page=full_page, animations="disabled")
+        except Exception as exc:
+            if self._launch_mode != "cdp":
+                raise
+            logger.warning(f"[Browser] Playwright screenshot failed in CDP mode, falling back to native CDP capture: {exc}")
+            self._capture_screenshot_via_cdp(page, filepath, full_page=full_page)
         logger.info(f"[Browser] Screenshot saved: {filepath}")
         return filepath
+
+    def _capture_screenshot_via_cdp(self, page: Page, filepath: str, *, full_page: bool = False) -> None:
+        session = page.context.new_cdp_session(page)
+        try:
+            params: Dict[str, Any] = {
+                "format": "png",
+                "fromSurface": True,
+                "captureBeyondViewport": bool(full_page),
+            }
+            if full_page:
+                metrics = session.send("Page.getLayoutMetrics")
+                content = metrics.get("contentSize") or {}
+                width = max(1, int(float(content.get("width") or 1)))
+                height = max(1, int(float(content.get("height") or 1)))
+                params["clip"] = {"x": 0, "y": 0, "width": width, "height": height, "scale": 1}
+            payload = session.send("Page.captureScreenshot", params)
+            image_data = payload.get("data")
+            if not image_data:
+                raise RuntimeError("CDP Page.captureScreenshot returned no image data")
+            with open(filepath, "wb") as handle:
+                handle.write(base64.b64decode(image_data))
+        finally:
+            try:
+                session.detach()
+            except Exception:
+                pass
 
     def click(self, ref: Optional[int] = None, selector: Optional[str] = None,
               timeout: int = 5000) -> Dict[str, Any]:

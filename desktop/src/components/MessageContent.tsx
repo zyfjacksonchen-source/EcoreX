@@ -81,8 +81,7 @@ export type LocalFilePayload = {
   preview_url?: string;
 };
 
-const REASONING_RENDER_CAP = 4 * 1024;
-const TOOL_DETAIL_RENDER_CAP = 6 * 1024;
+const REASONING_MARKDOWN_RENDER_CAP = 64 * 1024;
 const LONG_REPLY_COLLAPSE_CHARS = 1400;
 const LONG_REPLY_PREVIEW_CHARS = 1400;
 const STREAM_RENDER_THROTTLE_CHARS = 1200;
@@ -1232,13 +1231,7 @@ function renderMarkdown(markdown: string, localFilePreviewUrl?: (filePath: strin
 }
 
 function truncateReasoning(text: string) {
-  if (text.length <= REASONING_RENDER_CAP) return { text, truncated: false };
-  const half = Math.floor(REASONING_RENDER_CAP / 2);
-  const omitted = text.length - REASONING_RENDER_CAP;
-  return {
-    text: `${text.slice(0, half)}\n\n... [${omitted} chars omitted] ...\n\n${text.slice(-half)}`,
-    truncated: true
-  };
+  return { text, truncated: text.length > REASONING_MARKDOWN_RENDER_CAP };
 }
 
 function formatToolValue(value: unknown) {
@@ -1255,10 +1248,7 @@ function formatToolValue(value: unknown) {
     }
   }
   text = redactInternalPromptText(text);
-  if (text.length <= TOOL_DETAIL_RENDER_CAP) return text;
-  const head = text.slice(0, Math.floor(TOOL_DETAIL_RENDER_CAP * 0.65));
-  const tail = text.slice(-Math.floor(TOOL_DETAIL_RENDER_CAP * 0.2));
-  return `${head}\n\n... [tool output truncated for display, ${text.length - head.length - tail.length} chars omitted] ...\n\n${tail}`;
+  return text;
 }
 
 const QUALITY_EVIDENCE_ALLOWED_GATES = new Set([
@@ -1887,6 +1877,7 @@ function ThinkingStep({ content = "", running }: { content?: string; running?: b
 }
 
 function ToolStep({ step }: { step: ToolCallDisclosure }) {
+  const [open, setOpen] = useState(false);
   const isInterrupted = toolStepIsInterrupted(step);
   const isError = !isInterrupted && (step.is_error === true || step.status === "error" || step.status === "failed" || step.status === "timeout");
   const running = step.running === true || step.status === "running";
@@ -1894,26 +1885,32 @@ function ToolStep({ step }: { step: ToolCallDisclosure }) {
   const statusClass = running ? " is-running" : isInterrupted ? " is-cancelled" : isError ? " is-error" : " is-done";
   const qualityEvidence = step.qualityEvidence || qualityEvidenceFromUnknown(step.result);
   return (
-    <details className={`agent-step agent-tool-step${isError ? " tool-failed" : ""}${isInterrupted ? " tool-cancelled" : ""}`}>
+    <details
+      className={`agent-step agent-tool-step${isError ? " tool-failed" : ""}${isInterrupted ? " tool-cancelled" : ""}`}
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
       <summary title={running ? "工具正在执行，完成后可查看输入和结果" : isInterrupted ? "工具调用已中止，可展开查看已返回的信息" : "展开查看工具输入和结果"}>
         <span className={`tool-status-dot${statusClass}`} aria-hidden="true" />
         <span className="tool-name">{step.name || "工具调用"}</span>
         {typeof step.execution_time === "number" && <span className="tool-time">{step.execution_time}s</span>}
         {running && extensionCount > 0 && <span className="tool-time">lease x{extensionCount}</span>}
       </summary>
-      <div className="tool-detail">
-        <div className="tool-detail-section">
-          <div className="tool-detail-label">Input</div>
-          <pre className="tool-detail-content">{formatToolValue(step.arguments)}</pre>
-        </div>
-        <QualityEvidencePanel evidence={qualityEvidence} />
-        {step.result !== undefined && step.result !== "" && (
-          <div className="tool-detail-section tool-output-section">
-            <div className="tool-detail-label">{isError ? "Error" : "Output"}</div>
-            <pre className={`tool-detail-content${isError ? " tool-error-text" : ""}`}>{formatToolValue(step.result)}</pre>
+      {open && (
+        <div className="tool-detail">
+          <div className="tool-detail-section">
+            <div className="tool-detail-label">Input</div>
+            <pre className="tool-detail-content">{formatToolValue(step.arguments)}</pre>
           </div>
-        )}
-      </div>
+          <QualityEvidencePanel evidence={qualityEvidence} />
+          {step.result !== undefined && step.result !== "" && (
+            <div className="tool-detail-section tool-output-section">
+              <div className="tool-detail-label">{isError ? "Error" : "Output"}</div>
+              <pre className={`tool-detail-content${isError ? " tool-error-text" : ""}`}>{formatToolValue(step.result)}</pre>
+            </div>
+          )}
+        </div>
+      )}
     </details>
   );
 }

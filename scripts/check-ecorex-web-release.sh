@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${VERSION:-0.2.5}"
+VERSION="${VERSION:-0.2.6}"
 SERVICE_NAME="${SERVICE_NAME:-ecorex-web}"
 INSTALL_ROOT="${INSTALL_ROOT:-/opt/ecorex-web}"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/srv/ecorex-agent-workspace}"
@@ -102,6 +102,8 @@ check_package() {
     "/runtime/requirements.txt"
     "/runtime/core-requirements.txt"
     "/runtime/runtime-manifest.json"
+    "/runtime/scripts/check-web-core-runtime-baseline.py"
+    "/runtime/scripts/generate-web-runtime-release-gate.py"
     "/runtime/channel/web/chat.html"
     "/runtime/channel/web/static/app/index.html"
     "/scripts/install-ecorex-web.sh"
@@ -243,6 +245,81 @@ PY
   fi
 }
 
+check_runtime_baseline() {
+  local baseline="$INSTALL_ROOT/state/runtime-baseline.json"
+  if [[ ! -f "$baseline" ]]; then
+    fail "missing runtime baseline $baseline"
+    return
+  fi
+  if python3 - "$baseline" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8-sig"))
+summary = payload.get("summary") or {}
+if summary.get("releaseReady") is not True:
+    raise SystemExit(f"releaseReady={summary.get('releaseReady')}")
+if int(summary.get("blocking") or 0) != 0:
+    raise SystemExit(f"blocking={summary.get('blocking')}")
+print("runtime-baseline-ok")
+PY
+  then
+    pass "runtime baseline releaseReady"
+  else
+    fail "runtime baseline not releaseReady $baseline"
+  fi
+}
+
+check_release_gate_artifacts() {
+  local baseline="$INSTALL_ROOT/state/runtime-baseline.json"
+  local capability_state="$INSTALL_ROOT/state/capability-state.json"
+  local permission_matrix="$INSTALL_ROOT/state/permission-matrix.json"
+  local review_consensus="$INSTALL_ROOT/state/review-consensus.md"
+  local release_gate="$INSTALL_ROOT/state/web-release-gate.json"
+
+  check_file "$capability_state"
+  check_file "$permission_matrix"
+  check_file "$review_consensus"
+  check_file "$release_gate"
+  if [[ ! -f "$baseline" || ! -f "$capability_state" || ! -f "$permission_matrix" || ! -f "$release_gate" ]]; then
+    return
+  fi
+  if python3 - "$release_gate" "$capability_state" "$permission_matrix" <<'PY'
+import json
+import pathlib
+import sys
+
+gate = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8-sig"))
+capability_state = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8-sig"))
+permission_matrix = json.loads(pathlib.Path(sys.argv[3]).read_text(encoding="utf-8-sig"))
+
+summary = gate.get("summary") or {}
+if summary.get("releaseReady") is not True:
+    raise SystemExit(f"releaseReady={summary.get('releaseReady')}")
+if int(summary.get("blocking") or 0) != 0:
+    raise SystemExit(f"blocking={summary.get('blocking')}")
+if gate.get("schemaVersion") != "web-release-gate-v1":
+    raise SystemExit(f"schemaVersion={gate.get('schemaVersion')}")
+checks = gate.get("checks") or {}
+for name in ("runtimeBaseline", "capabilityManifest", "capabilityState", "permissionMatrix"):
+    if (checks.get(name) or {}).get("status") != "pass":
+        raise SystemExit(f"{name} status={(checks.get(name) or {}).get('status')}")
+if capability_state.get("schemaVersion") != "web-capability-state-snapshot-v1":
+    raise SystemExit(f"capability-state schemaVersion={capability_state.get('schemaVersion')}")
+if permission_matrix.get("schemaVersion") != "web-permission-matrix-v1":
+    raise SystemExit(f"permission-matrix schemaVersion={permission_matrix.get('schemaVersion')}")
+if int((permission_matrix.get("summary") or {}).get("blockers") or 0) != 0:
+    raise SystemExit("permission matrix blockers present")
+print("release-gate-ok")
+PY
+  then
+    pass "web release gate artifacts"
+  else
+    fail "web release gate artifacts invalid"
+  fi
+}
+
 check_package "$PACKAGE_PATH"
 
 if [[ "$CHECK_INSTALLED" == "1" ]]; then
@@ -252,9 +329,16 @@ if [[ "$CHECK_INSTALLED" == "1" ]]; then
   check_file "$INSTALL_ROOT/current/runtime/requirements.txt"
   check_file "$INSTALL_ROOT/current/runtime/core-requirements.txt"
   check_file "$INSTALL_ROOT/current/runtime/runtime-manifest.json"
+  check_file "$INSTALL_ROOT/current/runtime/scripts/check-web-core-runtime-baseline.py"
+  check_file "$INSTALL_ROOT/current/runtime/scripts/generate-web-runtime-release-gate.py"
   check_file "$INSTALL_ROOT/current/runtime/channel/web/chat.html"
   check_file "$INSTALL_ROOT/current/runtime/channel/web/static/app/index.html"
+  check_file "$INSTALL_ROOT/node/bin/node"
+  check_file "$INSTALL_ROOT/node/bin/npm"
+  check_file "$INSTALL_ROOT/node/bin/npx"
   check_file "$INSTALL_ROOT/state/config.json"
+  check_runtime_baseline
+  check_release_gate_artifacts
   check_file "$ENV_FILE"
   check_dir "$WORKSPACE_ROOT"
   check_installation_manifest

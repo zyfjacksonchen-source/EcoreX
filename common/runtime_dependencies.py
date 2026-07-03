@@ -47,6 +47,22 @@ def _is_relative_to(path: Path | None, root: Path | None) -> bool:
         return False
 
 
+def _is_lexically_relative_to(path: Path | None, root: Path | None) -> bool:
+    if not path or not root:
+        return False
+    try:
+        raw_path = Path(path).expanduser()
+        raw_root = Path(root).expanduser()
+        if not raw_path.is_absolute():
+            raw_path = raw_path.absolute()
+        if not raw_root.is_absolute():
+            raw_root = raw_root.absolute()
+        raw_path.relative_to(raw_root)
+        return True
+    except Exception:
+        return False
+
+
 def _dedupe_paths(paths: Iterable[Path | None]) -> List[Path]:
     result: List[Path] = []
     seen: set[str] = set()
@@ -79,6 +95,11 @@ def runtime_root_from_here() -> Path:
 
 
 def _state_root_from_config(runtime_root: Path) -> Optional[Path]:
+    env_state = os.environ.get("ECOREX_STATE_DIR") or os.environ.get("ECOREX_RUNTIME_STATE_DIR")
+    if env_state:
+        resolved = _safe_resolve(env_state)
+        if resolved:
+            return resolved
     try:
         from config import conf
 
@@ -120,9 +141,15 @@ class RuntimeDependencyProvider:
         *,
         env: Optional[Dict[str, str]] = None,
     ) -> None:
-        self.runtime_root = _safe_resolve(runtime_root) or runtime_root_from_here()
-        self.state_root = _safe_resolve(state_root) or _state_root_from_config(self.runtime_root) or (self.runtime_root / "state")
         self.env = dict(env or os.environ)
+        self.runtime_root = _safe_resolve(runtime_root) or runtime_root_from_here()
+        env_state = self.env.get("ECOREX_STATE_DIR") or self.env.get("ECOREX_RUNTIME_STATE_DIR")
+        self.state_root = (
+            _safe_resolve(state_root)
+            or _safe_resolve(env_state)
+            or _state_root_from_config(self.runtime_root)
+            or (self.runtime_root / "state")
+        )
 
     def _install_roots(self) -> List[Path]:
         candidates: List[Path | None] = []
@@ -172,6 +199,38 @@ class RuntimeDependencyProvider:
     def _is_owned_path(self, path: Path | str | None) -> bool:
         return self.classify_path(path) in {SOURCE_ECOREX_BUNDLED, SOURCE_ECOREX_STATE}
 
+    def _lexical_owned_source(self, path: Path | str | None) -> str:
+        candidate = Path(path).expanduser() if path else None
+        if not candidate:
+            return SOURCE_MISSING
+        if _is_lexically_relative_to(candidate, self.state_root):
+            return SOURCE_ECOREX_STATE
+        if _is_lexically_relative_to(candidate, self.runtime_root):
+            return SOURCE_ECOREX_BUNDLED
+        for root in self._install_roots():
+            if _is_lexically_relative_to(candidate, root):
+                return SOURCE_ECOREX_STATE
+        return SOURCE_MISSING
+
+    def _python_launcher_source(self, path: Path | str | None) -> str:
+        candidate = Path(path).expanduser() if path else None
+        if not candidate:
+            return SOURCE_MISSING
+        name = candidate.name.lower()
+        if os.name == "nt":
+            valid_name = name in {"python.exe", "pythonw.exe"}
+        else:
+            valid_name = name == "python" or name.startswith("python3")
+        if not valid_name:
+            return SOURCE_MISSING
+        lexical_source = self._lexical_owned_source(candidate)
+        if lexical_source not in {SOURCE_ECOREX_BUNDLED, SOURCE_ECOREX_STATE}:
+            return SOURCE_MISSING
+        normalized = _norm(candidate).lower()
+        if "/venv/" not in normalized and "/python/" not in normalized and "\\venv\\" not in str(candidate).lower():
+            return SOURCE_MISSING
+        return lexical_source
+
     def _owned_existing_paths(self, paths: Iterable[Path | None]) -> List[Path]:
         return [path for path in _dedupe_paths(paths) if path.exists() and self._is_owned_path(path)]
 
@@ -190,6 +249,12 @@ class RuntimeDependencyProvider:
             self.state_root / "node",
             self.state_root / "tools" / "node",
         ]
+        for root in self._install_roots():
+            roots.extend([
+                root / "node",
+                root / "tools" / "node",
+                root / "current" / "node",
+            ])
         return [path for path in _dedupe_paths(roots) if self._is_owned_path(path)]
 
     def native_bin_dirs(self) -> List[Path]:
@@ -234,6 +299,15 @@ class RuntimeDependencyProvider:
         ]
         for root in self._node_roots():
             dirs.append(root / "node_modules")
+        return self._owned_existing_paths(dirs)
+
+    def playwright_browser_dirs(self) -> List[Path]:
+        env_value = self.env.get("PLAYWRIGHT_BROWSERS_PATH") or self.env.get("ECOREX_PLAYWRIGHT_BROWSERS_DIR")
+        dirs: List[Path | None] = [
+            _safe_resolve(env_value),
+            self.runtime_root / "playwright-browsers",
+            self.state_root / "playwright-browsers",
+        ]
         return self._owned_existing_paths(dirs)
 
     def python_package_dirs(self) -> List[Path]:
@@ -317,9 +391,21 @@ class RuntimeDependencyProvider:
                 root / "venv" / "bin" / "python3",
                 root / "venv" / "Scripts" / "python.exe",
             ])
-        for candidate in _dedupe_paths(_safe_resolve(item) for item in candidates):
+        seen: set[str] = set()
+        for item in candidates:
+            if not item:
+                continue
+            candidate = Path(item).expanduser()
+            if not candidate.is_absolute():
+                candidate = candidate.absolute()
+            key = os.path.normcase(str(candidate))
+            if key in seen:
+                continue
+            seen.add(key)
             if self._is_runnable_file(candidate):
                 source = self.classify_path(candidate)
+                if source not in {SOURCE_ECOREX_BUNDLED, SOURCE_ECOREX_STATE}:
+                    source = self._python_launcher_source(candidate)
                 if source in {SOURCE_ECOREX_BUNDLED, SOURCE_ECOREX_STATE}:
                     return RuntimeDependency("python", str(candidate), source, True, "python")
         dependency = self.resolve_executable("python", allow_system_path=allow_system_path)
@@ -388,6 +474,10 @@ class RuntimeDependencyProvider:
             env["PYTHONPATH"] = os.pathsep.join(python_paths)
         elif not include_system_path:
             env.pop("PYTHONPATH", None)
+        browser_dirs = self.playwright_browser_dirs()
+        if browser_dirs:
+            env.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(browser_dirs[0]))
+            env.setdefault("ECOREX_PLAYWRIGHT_BROWSERS_DIR", str(browser_dirs[0]))
         env.setdefault("PYTHONIOENCODING", "utf-8")
         return env
 
@@ -410,6 +500,7 @@ class RuntimeDependencyProvider:
             "binDirs": [path_value(path) for path in self.bin_dirs()],
             "nativeBinDirs": [path_value(path) for path in self.native_bin_dirs()],
             "nodeModulesDirs": [path_value(path) for path in self.node_modules_dirs()],
+            "playwrightBrowserDirs": [path_value(path) for path in self.playwright_browser_dirs()],
             "pythonPackageDirs": [path_value(path) for path in self.python_package_dirs()],
             "dependencies": dependencies,
             "systemPathIncluded": bool(include_system_path),

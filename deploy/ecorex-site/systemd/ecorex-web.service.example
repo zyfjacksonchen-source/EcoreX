@@ -11,6 +11,13 @@ WorkingDirectory=/opt/ecorex-web/current/runtime
 EnvironmentFile=/etc/ecorex-web/ecorex-web.env
 Environment=PYTHONPATH=/opt/ecorex-web/current/runtime
 Environment=ECOREX_INSTALL_ROOT=/opt/ecorex-web
+Environment=ECOREX_STATE_DIR=/opt/ecorex-web/state
+Environment=ECOREX_NODE_ROOT=/opt/ecorex-web/node
+Environment=ECOREX_PYTHON_PATH=/opt/ecorex-web/venv/bin/python
+Environment=ECOREX_CAPABILITY_STATE_DIR=/opt/ecorex-web/state/capability-state
+Environment=ECOREX_CAPABILITY_TARGET_DIR=/opt/ecorex-web/state/capability-packages
+Environment=ECOREX_PLAYWRIGHT_BROWSERS_DIR=/opt/ecorex-web/state/playwright-browsers
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/ecorex-web/state/playwright-browsers
 ExecStart=/opt/ecorex-web/venv/bin/python /opt/ecorex-web/current/runtime/app.py
 Restart=on-failure
 RestartSec=3

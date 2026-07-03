@@ -3,11 +3,14 @@ param(
     [string]$RuntimeDir = "",
     [string]$PythonHome = "",
     [string]$PythonEmbedVersion = "3.11.9",
+    [string]$NodeVersion = "22.22.0",
     [ValidateSet("x64", "ia32")][string]$WinArch = "x64",
     [string]$RuntimeCacheDir = "",
     [string[]]$PreinstallPacks = @(),
     [switch]$UseLocalPython,
-    [switch]$SkipDependencyInstall
+    [switch]$SkipDependencyInstall,
+    [switch]$SkipNodeInstall,
+    [switch]$SkipPlaywrightBrowserInstall
 )
 
 $ErrorActionPreference = "Stop"
@@ -78,6 +81,47 @@ function Enable-EmbeddedPythonSite {
         $updated = $before + ".." + $after
     }
     Set-Content -LiteralPath $pth.FullName -Value $updated -Encoding ASCII
+}
+
+function Install-NodeRuntime {
+    param(
+        [Parameter(Mandatory = $true)][string]$TargetRuntime,
+        [Parameter(Mandatory = $true)][string]$Version,
+        [Parameter(Mandatory = $true)][string]$CacheDir,
+        [Parameter(Mandatory = $true)][string]$Architecture
+    )
+
+    $nodeArch = if ($Architecture -eq "ia32") { "x86" } else { "x64" }
+    $archiveName = "node-v$Version-win-$nodeArch.zip"
+    $archivePath = Join-Path $CacheDir $archiveName
+    $archiveUrl = "https://nodejs.org/dist/v$Version/$archiveName"
+    Save-Download -Uri $archiveUrl -Destination $archivePath
+
+    $extractRoot = Join-Path $CacheDir "node-v$Version-win-$nodeArch-extract"
+    if (Test-Path -LiteralPath $extractRoot) {
+        Remove-Item -LiteralPath $extractRoot -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
+    Expand-Archive -LiteralPath $archivePath -DestinationPath $extractRoot -Force
+
+    $expanded = Join-Path $extractRoot "node-v$Version-win-$nodeArch"
+    if (-not (Test-Path -LiteralPath (Join-Path $expanded "node.exe"))) {
+        throw "Node archive did not contain node.exe at $expanded"
+    }
+
+    $targetNode = Join-Path $TargetRuntime "node"
+    if (Test-Path -LiteralPath $targetNode) {
+        Remove-Item -LiteralPath $targetNode -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $targetNode | Out-Null
+    Copy-Item -Path (Join-Path $expanded "*") -Destination $targetNode -Recurse -Force
+
+    foreach ($required in @("node.exe", "npm.cmd", "npx.cmd")) {
+        if (-not (Test-Path -LiteralPath (Join-Path $targetNode $required))) {
+            throw "Staged Node runtime missing $required"
+        }
+    }
+    Write-Host "Node runtime staged at $targetNode"
 }
 
 function Copy-OptionalLarkCli {
@@ -178,7 +222,16 @@ if (Test-Path -LiteralPath (Join-Path $desktopDist "index.html")) {
 
 Copy-OptionalLarkCli -TargetRuntime $runtimeResolved
 
-$runtimePackRoot = Join-Path $desktopRoot "runtime-packs"
+$tongxinSource = Join-Path $repoRootResolved "tools\tongxin"
+if (Test-Path -LiteralPath (Join-Path $tongxinSource "xin_agent_cli.py")) {
+    $tongxinTarget = Join-Path $runtimeResolved "tools\tongxin"
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $tongxinTarget) | Out-Null
+    Copy-Item -LiteralPath $tongxinSource -Destination $tongxinTarget -Recurse -Force
+    Get-ChildItem -LiteralPath $tongxinTarget -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+$runtimePackRoot = Join-Path $repoRootResolved "runtime-packs"
 $coreRequirementsPath = Join-Path $runtimeResolved "core-requirements.txt"
 Copy-Item -LiteralPath (Join-Path $runtimePackRoot "core-requirements.txt") -Destination $coreRequirementsPath -Force
 if ($WinArch -eq "ia32") {
@@ -203,7 +256,7 @@ Copy-Item -LiteralPath (Join-Path $runtimePackRoot "capabilities.json") -Destina
 
 $runtimeScripts = Join-Path $runtimeResolved "scripts"
 New-Item -ItemType Directory -Force -Path $runtimeScripts | Out-Null
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot "install-capability.py") -Destination (Join-Path $runtimeScripts "install-capability.py") -Force
+Copy-Item -LiteralPath (Join-Path $repoRootResolved "scripts\install-capability.py") -Destination (Join-Path $runtimeScripts "install-capability.py") -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot "install-capability-win.ps1") -Destination (Join-Path $runtimeScripts "install-capability-win.ps1") -Force
 
 if ($env:ECOREX_DISABLE_ENTERPRISE_POLICY -ne "1") {
@@ -312,6 +365,24 @@ if (-not $SkipDependencyInstall) {
     }
 }
 
+if (-not $SkipNodeInstall) {
+    Install-NodeRuntime -TargetRuntime $runtimeResolved -Version $NodeVersion -CacheDir $RuntimeCacheDir -Architecture $WinArch
+}
+
+if ((-not $SkipPlaywrightBrowserInstall) -and ($WinArch -ne "ia32")) {
+    $previousBrowsersPath = $env:PLAYWRIGHT_BROWSERS_PATH
+    $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $runtimeResolved "playwright-browsers"
+    try {
+        & $runtimePython -m playwright install chromium
+        if ($LASTEXITCODE -ne 0) {
+            throw "Playwright Chromium install failed"
+        }
+    }
+    finally {
+        $env:PLAYWRIGHT_BROWSERS_PATH = $previousBrowsersPath
+    }
+}
+
 foreach ($packId in $PreinstallPacks) {
     if (-not $packId) {
         continue
@@ -332,7 +403,9 @@ $manifest = [ordered]@{
     stagedAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
     winArch = $WinArch
     pythonDistribution = $pythonDistribution
+    nodeVersion = if ($SkipNodeInstall) { $null } else { $NodeVersion }
     dependencyInstall = -not $SkipDependencyInstall
+    playwrightBrowserInstall = (-not $SkipPlaywrightBrowserInstall) -and ($WinArch -ne "ia32")
     preinstalledPacks = $PreinstallPacks
     skippedCoreRequirements = $skippedCoreRequirements
     runtimeLimitations = if ($WinArch -eq "ia32" -and $skippedCoreRequirements.Count -gt 0) { @("playwright-unavailable-win32") } else { @() }

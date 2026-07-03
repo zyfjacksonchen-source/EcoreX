@@ -29,7 +29,7 @@ DENYLIST: Tuple[Tuple[str, re.Pattern[str]], ...] = (
     ("user_home_path", re.compile(r"(/Users/|/home/|\\\\Users\\\\)", re.IGNORECASE)),
     ("temp_path", re.compile(r"(/tmp/|\\\\Temp\\\\|\\\\RWTemp\\\\)", re.IGNORECASE)),
     ("email", re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)),
-    ("api_token", re.compile(r"(sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,}|xox[baprs]-[A-Za-z0-9-]{12,})")),
+    ("api_token", re.compile(r"(?<![A-Za-z0-9_])(sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,}|xox[baprs]-[A-Za-z0-9-]{12,})")),
     ("credential_word", re.compile(r"\b(authorization|cookie|credential|secret|token)\b", re.IGNORECASE)),
     ("feishu_app_id", re.compile(r"\bcli_[A-Za-z0-9_-]{8,}\b")),
     ("feishu_open_id", re.compile(r"\bou_[A-Za-z0-9_-]{8,}\b")),

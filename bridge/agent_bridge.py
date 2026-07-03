@@ -4,6 +4,8 @@ Agent Bridge - Integrates Agent system with existing COW bridge
 
 import os
 import hashlib
+import json
+import traceback
 from typing import Any, Dict, Optional, List
 
 from agent.protocol import Agent, LLMModel, LLMRequest, get_cancel_registry
@@ -49,6 +51,45 @@ def _public_exception_message(prefix: str, value: Any) -> str:
         f"(type={summary['type']}, hash={summary['hash']}, "
         f"chars={summary['chars']}, bytes={summary['bytes']})."
     )
+
+
+def _exception_diagnostic_snapshot(value: BaseException, *, session_id: str = "", request_id: str = "") -> Dict[str, Any]:
+    frames = []
+    try:
+        extracted = traceback.extract_tb(value.__traceback__)
+        for frame in extracted[-12:]:
+            frames.append({
+                "file": os.path.basename(frame.filename or ""),
+                "line": int(frame.lineno or 0),
+                "name": frame.name or "",
+            })
+    except Exception:
+        frames = []
+    model = ""
+    provider = ""
+    try:
+        model = str(conf().get("model") or "")
+        from models.model_capabilities import infer_provider_id
+
+        provider = infer_provider_id(
+            model,
+            configured_bot_type=str(conf().get("bot_type") or ""),
+            use_linkai=bool(conf().get("use_linkai", False)),
+            has_linkai_key=bool(conf().get("linkai_api_key")),
+            use_azure_chatgpt=bool(conf().get("use_azure_chatgpt", False)),
+            gemini_api_base=conf().get("gemini_api_base") or "",
+            has_gemini_key=bool(conf().get("gemini_api_key")),
+        )
+    except Exception:
+        provider = str(conf().get("bot_type") or "")
+    return {
+        **_exception_log_summary(value),
+        "session_id": session_id or "",
+        "request_id": request_id or "",
+        "model": model,
+        "provider": provider,
+        "tracebackFrames": frames,
+    }
 
 
 def _clear_responses_state_for_session(session_id: str) -> None:
@@ -186,6 +227,7 @@ class AgentLLMModel(LLMModel):
         self._bot = None
         self._bot_model = None
         self._bot_cache = {}
+        self._bot_type = None
 
     @property
     def model(self):
@@ -205,6 +247,8 @@ class AgentLLMModel(LLMModel):
             use_linkai=bool(conf().get("use_linkai", False)),
             has_linkai_key=bool(conf().get("linkai_api_key")),
             use_azure_chatgpt=bool(conf().get("use_azure_chatgpt", False)),
+            gemini_api_base=conf().get("gemini_api_base") or "",
+            has_gemini_key=bool(conf().get("gemini_api_key")),
         )
 
     @property
@@ -217,6 +261,13 @@ class AgentLLMModel(LLMModel):
             self._bot_model = cur_model
             self._bot_type = cur_bot_type
         return self._bot
+
+    def reset_route_cache(self):
+        """Drop cached bot instances while preserving the owning Agent memory."""
+        self._bot = None
+        self._bot_model = None
+        self._bot_type = None
+        self._bot_cache = {}
 
     @staticmethod
     def _create_bot(bot_type: str):
@@ -671,6 +722,25 @@ class AgentBridge:
         agent = self.initializer.initialize_agent(session_id=session_id)
         self.agents[session_id] = agent
 
+    def reset_model_routes(self) -> int:
+        """Reset LLM route caches for existing agents without clearing messages."""
+        seen_ids = set()
+        reset_count = 0
+        for agent in [self.default_agent, *self.agents.values()]:
+            if agent is None:
+                continue
+            identity = id(agent)
+            if identity in seen_ids:
+                continue
+            seen_ids.add(identity)
+            model = getattr(agent, "model", None)
+            reset = getattr(model, "reset_route_cache", None)
+            if callable(reset):
+                reset()
+                reset_count += 1
+        logger.info(f"[AgentBridge] Reset model route caches for {reset_count} agents")
+        return reset_count
+
     def sync_session_messages_from_store(self, session_id: str) -> int:
         """Reload an agent's in-memory ``messages`` list from the persistent
         conversation store.
@@ -908,7 +978,11 @@ class AgentBridge:
                 if files_to_send:
                     # Send the first file (for now, handle one file at a time)
                     file_info = files_to_send[0]
-                    logger.info(f"[AgentBridge] Sending file: {file_info.get('path')}")
+                    logger.info(
+                        "[AgentBridge] Sending file attachment: "
+                        f"name={file_info.get('file_name') or os.path.basename(str(file_info.get('path') or ''))}, "
+                        f"type={file_info.get('file_type') or 'file'}"
+                    )
                     
                     # Clear files_to_send for next request
                     agent.stream_executor.files_to_send = []
@@ -920,7 +994,14 @@ class AgentBridge:
             
         except Exception as e:
             public_error = _public_exception_message("Agent error.", e)
-            logger.error(f"Agent reply error: {_exception_log_summary(e)}")
+            logger.error(
+                "Agent reply error diagnostics: "
+                + json.dumps(
+                    _exception_diagnostic_snapshot(e, session_id=session_id or "", request_id=request_id or ""),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
             # If the agent cleared its messages due to format error / overflow,
             # also purge the DB so the next request starts clean.
             if session_id and agent:

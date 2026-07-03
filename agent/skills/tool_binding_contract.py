@@ -173,7 +173,7 @@ TOOL_BINDING_CONTRACTS: dict[str, dict[str, Any]] = {
         aliases=("image-generation", "imagegen", "image"),
         purpose_group="image_media",
         dependencies=(
-            _dependency("script", "skills/image-generation/scripts/generate.py"),
+            _dependency("provider-runtime-module", "skills/image-generation/scripts/generate.py"),
             _dependency("python-module", "requests"),
             _dependency("python-module", "PIL"),
             _dependency("python-module", "common.image_quality_runtime"),
@@ -181,7 +181,10 @@ TOOL_BINDING_CONTRACTS: dict[str, dict[str, Any]] = {
         ),
         failure_prompt=(
             "Image generation capability is not ready. Run imagegen action=probe and repair "
-            "the built-in script, provider configuration, or quality-check runtime."
+            "the in-process provider runtime module, provider configuration, or quality-check runtime. "
+            "Do not substitute shell/Python/PIL/SVG/canvas scripts, direct provider HTTP scripts, web search, "
+            "or network image scraping for final image generation. For batches, call imagegen one or more times "
+            "according to the visible schema and requested ordering."
         ),
     ),
     "feishu_cli": _contract(

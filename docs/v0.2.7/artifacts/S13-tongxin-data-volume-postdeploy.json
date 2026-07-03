@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "v0.2.7-tongxin-data-volume-postdeploy-v1",
+  "status": "BLOCKED",
+  "generatedAt": "2026-07-02T21:22:05.355614+00:00",
+  "diagnose": {
+    "configurationState": "configured",
+    "databaseConfigured": true,
+    "databaseFileExists": false,
+    "databasePathRef": {
+      "present": true,
+      "name": "tongxin.sqlite3",
+      "pathHash": "a65819dcfc9b2d50"
+    },
+    "scriptHealthState": null
+  },
+  "sqliteCandidates": [
+    {
+      "name": "run-ledger-s14-smoke.db",
+      "size": 20480,
+      "pathHash": "f6a15bffc11361c7"
+    },
+    {
+      "name": "cache.db",
+      "size": 4096,
+      "pathHash": "fbfa1fa2828f152f"
+    }
+  ],
+  "mpiAccuracy": {
+    "toolStatus": "error",
+    "payloadStatus": "error",
+    "errorType": "tongxin_mpi_accuracy_zero_project_samples",
+    "dataVolume": {
+      "accountCount": 0,
+      "projectCount": 0
+    }
+  },
+  "interpretation": "The v0.2.7 runtime now supports a configured Tongxin data-volume database path and injects it into the bundled CLI subprocess, but the production server does not currently have the Tongxin SQLite data volume mounted at the configured path. MPI account reads are available, but the project/sub-account source of record remains empty, so S7 must stay fail-closed."
+}

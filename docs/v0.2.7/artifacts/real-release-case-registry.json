@@ -1,0 +1,4990 @@
+{
+  "version": "0.2.7",
+  "targetNewChecks": 305,
+  "targetTotalChecks": 537,
+  "minimumEnabledChecks": 377,
+  "newCaseCount": 305,
+  "groups": [
+    {
+      "group": "fresh-env",
+      "count": 18,
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ]
+    },
+    {
+      "group": "auth-first-use",
+      "count": 16,
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ]
+    },
+    {
+      "group": "runtime-api",
+      "count": 30,
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ]
+    },
+    {
+      "group": "ui-ux",
+      "count": 24,
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ]
+    },
+    {
+      "group": "stream-state-machine",
+      "count": 28,
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ]
+    },
+    {
+      "group": "context-session",
+      "count": 20,
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "context",
+        "session"
+      ]
+    },
+    {
+      "group": "tool-skill",
+      "count": 26,
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ]
+    },
+    {
+      "group": "multi-model-image-route",
+      "count": 32,
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ]
+    },
+    {
+      "group": "concurrency-pressure",
+      "count": 18,
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ]
+    },
+    {
+      "group": "v027-integrated-capabilities",
+      "count": 87,
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ]
+    },
+    {
+      "group": "security-observability",
+      "count": 6,
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "security",
+        "observability",
+        "redaction"
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "id": "v027-agent-fresh-env-001",
+      "group": "fresh-env",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-fresh-env-002",
+      "group": "fresh-env",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-fresh-env-003",
+      "group": "fresh-env",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-fresh-env-004",
+      "group": "fresh-env",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-fresh-env-005",
+      "group": "fresh-env",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-fresh-env-006",
+      "group": "fresh-env",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-fresh-env-007",
+      "group": "fresh-env",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-fresh-env-008",
+      "group": "fresh-env",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-fresh-env-009",
+      "group": "fresh-env",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-fresh-env-010",
+      "group": "fresh-env",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-fresh-env-011",
+      "group": "fresh-env",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-fresh-env-012",
+      "group": "fresh-env",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-fresh-env-013",
+      "group": "fresh-env",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-fresh-env-014",
+      "group": "fresh-env",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-fresh-env-015",
+      "group": "fresh-env",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-fresh-env-016",
+      "group": "fresh-env",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-fresh-env-017",
+      "group": "fresh-env",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-fresh-env-018",
+      "group": "fresh-env",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-auth-first-use-001",
+      "group": "auth-first-use",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-auth-first-use-002",
+      "group": "auth-first-use",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-auth-first-use-003",
+      "group": "auth-first-use",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-auth-first-use-004",
+      "group": "auth-first-use",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-auth-first-use-005",
+      "group": "auth-first-use",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-auth-first-use-006",
+      "group": "auth-first-use",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-auth-first-use-007",
+      "group": "auth-first-use",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-auth-first-use-008",
+      "group": "auth-first-use",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-auth-first-use-009",
+      "group": "auth-first-use",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-auth-first-use-010",
+      "group": "auth-first-use",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-auth-first-use-011",
+      "group": "auth-first-use",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-auth-first-use-012",
+      "group": "auth-first-use",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-auth-first-use-013",
+      "group": "auth-first-use",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-auth-first-use-014",
+      "group": "auth-first-use",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-auth-first-use-015",
+      "group": "auth-first-use",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-auth-first-use-016",
+      "group": "auth-first-use",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-001",
+      "group": "runtime-api",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-002",
+      "group": "runtime-api",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-003",
+      "group": "runtime-api",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-004",
+      "group": "runtime-api",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-005",
+      "group": "runtime-api",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-006",
+      "group": "runtime-api",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-007",
+      "group": "runtime-api",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-008",
+      "group": "runtime-api",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-009",
+      "group": "runtime-api",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-010",
+      "group": "runtime-api",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-011",
+      "group": "runtime-api",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-012",
+      "group": "runtime-api",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-013",
+      "group": "runtime-api",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-014",
+      "group": "runtime-api",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-015",
+      "group": "runtime-api",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-016",
+      "group": "runtime-api",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-017",
+      "group": "runtime-api",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-018",
+      "group": "runtime-api",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-019",
+      "group": "runtime-api",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-020",
+      "group": "runtime-api",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-021",
+      "group": "runtime-api",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-022",
+      "group": "runtime-api",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-023",
+      "group": "runtime-api",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-024",
+      "group": "runtime-api",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-025",
+      "group": "runtime-api",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-026",
+      "group": "runtime-api",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-027",
+      "group": "runtime-api",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-028",
+      "group": "runtime-api",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-029",
+      "group": "runtime-api",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-runtime-api-030",
+      "group": "runtime-api",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-ui-ux-001",
+      "group": "ui-ux",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-ui-ux-002",
+      "group": "ui-ux",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-ui-ux-003",
+      "group": "ui-ux",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-ui-ux-004",
+      "group": "ui-ux",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-ui-ux-005",
+      "group": "ui-ux",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-ui-ux-006",
+      "group": "ui-ux",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-ui-ux-007",
+      "group": "ui-ux",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-ui-ux-008",
+      "group": "ui-ux",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-ui-ux-009",
+      "group": "ui-ux",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-ui-ux-010",
+      "group": "ui-ux",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-ui-ux-011",
+      "group": "ui-ux",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-ui-ux-012",
+      "group": "ui-ux",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-ui-ux-013",
+      "group": "ui-ux",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-ui-ux-014",
+      "group": "ui-ux",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-ui-ux-015",
+      "group": "ui-ux",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-ui-ux-016",
+      "group": "ui-ux",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-ui-ux-017",
+      "group": "ui-ux",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-ui-ux-018",
+      "group": "ui-ux",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-ui-ux-019",
+      "group": "ui-ux",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-ui-ux-020",
+      "group": "ui-ux",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-ui-ux-021",
+      "group": "ui-ux",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-ui-ux-022",
+      "group": "ui-ux",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-ui-ux-023",
+      "group": "ui-ux",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-ui-ux-024",
+      "group": "ui-ux",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-001",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-002",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-003",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-004",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-005",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-006",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-007",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-008",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-009",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-010",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-011",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-012",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-013",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-014",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-015",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-016",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-017",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-018",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-019",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-020",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-021",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-022",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-023",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-024",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-025",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-026",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-027",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-stream-state-machine-028",
+      "group": "stream-state-machine",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-context-session-001",
+      "group": "context-session",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "context",
+        "session"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-context-session-002",
+      "group": "context-session",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "context",
+        "session"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-context-session-003",
+      "group": "context-session",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "context",
+        "session"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-context-session-004",
+      "group": "context-session",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "context",
+        "session"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-context-session-005",
+      "group": "context-session",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "context",
+        "session"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-context-session-006",
+      "group": "context-session",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "context",
+        "session"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-context-session-007",
+      "group": "context-session",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "context",
+        "session"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-context-session-008",
+      "group": "context-session",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "context",
+        "session"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-context-session-009",
+      "group": "context-session",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "context",
+        "session"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-context-session-010",
+      "group": "context-session",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "context",
+        "session"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-context-session-011",
+      "group": "context-session",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "context",
+        "session"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-context-session-012",
+      "group": "context-session",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "context",
+        "session"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-context-session-013",
+      "group": "context-session",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "context",
+        "session"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-context-session-014",
+      "group": "context-session",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "context",
+        "session"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-context-session-015",
+      "group": "context-session",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "context",
+        "session"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-context-session-016",
+      "group": "context-session",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "context",
+        "session"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-context-session-017",
+      "group": "context-session",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "context",
+        "session"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-context-session-018",
+      "group": "context-session",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "context",
+        "session"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-context-session-019",
+      "group": "context-session",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "context",
+        "session"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-context-session-020",
+      "group": "context-session",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "context",
+        "session"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-001",
+      "group": "tool-skill",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-002",
+      "group": "tool-skill",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-003",
+      "group": "tool-skill",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-004",
+      "group": "tool-skill",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-005",
+      "group": "tool-skill",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-006",
+      "group": "tool-skill",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-007",
+      "group": "tool-skill",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-008",
+      "group": "tool-skill",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-009",
+      "group": "tool-skill",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-010",
+      "group": "tool-skill",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-011",
+      "group": "tool-skill",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-012",
+      "group": "tool-skill",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-013",
+      "group": "tool-skill",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-014",
+      "group": "tool-skill",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-015",
+      "group": "tool-skill",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-016",
+      "group": "tool-skill",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-017",
+      "group": "tool-skill",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-018",
+      "group": "tool-skill",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-019",
+      "group": "tool-skill",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-020",
+      "group": "tool-skill",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-021",
+      "group": "tool-skill",
+      "priority": "P2",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-022",
+      "group": "tool-skill",
+      "priority": "P2",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-023",
+      "group": "tool-skill",
+      "priority": "P2",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-024",
+      "group": "tool-skill",
+      "priority": "P2",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-025",
+      "group": "tool-skill",
+      "priority": "P2",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-tool-skill-026",
+      "group": "tool-skill",
+      "priority": "P2",
+      "cost": "model",
+      "tags": [
+        "tools",
+        "skills",
+        "toolchain"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-001",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-002",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-003",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-004",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-005",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-006",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-007",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-008",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-009",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-010",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-011",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-012",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-013",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-014",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-015",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-016",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-017",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-018",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-019",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-020",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-021",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-022",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-023",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-024",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-025",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-026",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-027",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-028",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-029",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-030",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-031",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-multi-model-image-route-032",
+      "group": "multi-model-image-route",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-concurrency-pressure-001",
+      "group": "concurrency-pressure",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-concurrency-pressure-002",
+      "group": "concurrency-pressure",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-concurrency-pressure-003",
+      "group": "concurrency-pressure",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-concurrency-pressure-004",
+      "group": "concurrency-pressure",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-concurrency-pressure-005",
+      "group": "concurrency-pressure",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-concurrency-pressure-006",
+      "group": "concurrency-pressure",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-concurrency-pressure-007",
+      "group": "concurrency-pressure",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-concurrency-pressure-008",
+      "group": "concurrency-pressure",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-concurrency-pressure-009",
+      "group": "concurrency-pressure",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-concurrency-pressure-010",
+      "group": "concurrency-pressure",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-concurrency-pressure-011",
+      "group": "concurrency-pressure",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-concurrency-pressure-012",
+      "group": "concurrency-pressure",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-concurrency-pressure-013",
+      "group": "concurrency-pressure",
+      "priority": "P2",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-concurrency-pressure-014",
+      "group": "concurrency-pressure",
+      "priority": "P2",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-concurrency-pressure-015",
+      "group": "concurrency-pressure",
+      "priority": "P2",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-concurrency-pressure-016",
+      "group": "concurrency-pressure",
+      "priority": "P2",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-concurrency-pressure-017",
+      "group": "concurrency-pressure",
+      "priority": "P2",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-concurrency-pressure-018",
+      "group": "concurrency-pressure",
+      "priority": "P2",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-001",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-002",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-003",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-004",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-005",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-006",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-007",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-008",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-009",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-010",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-011",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-012",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-013",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-014",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-015",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-016",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-017",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-018",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-019",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-020",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-021",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-022",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-023",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-024",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-025",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-026",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-027",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-028",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-029",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-030",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-031",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-032",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-033",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-034",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-035",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-036",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-037",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-038",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-039",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-040",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-041",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-042",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-043",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-044",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-045",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-046",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-047",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-048",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-049",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-050",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-051",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-052",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-053",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-054",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-055",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-056",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-057",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-058",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-059",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-060",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-061",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-062",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-063",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-064",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-065",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-066",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-067",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-068",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-069",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-070",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-071",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-072",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-073",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-074",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-075",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-076",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-077",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-078",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-079",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-080",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-081",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-082",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-083",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-084",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-085",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-086",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-v027-integrated-capabilities-087",
+      "group": "v027-integrated-capabilities",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-security-observability-001",
+      "group": "security-observability",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "security",
+        "observability",
+        "redaction"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-security-observability-002",
+      "group": "security-observability",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "security",
+        "observability",
+        "redaction"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-security-observability-003",
+      "group": "security-observability",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "security",
+        "observability",
+        "redaction"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-security-observability-004",
+      "group": "security-observability",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "security",
+        "observability",
+        "redaction"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-security-observability-005",
+      "group": "security-observability",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "security",
+        "observability",
+        "redaction"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    },
+    {
+      "id": "v027-agent-security-observability-006",
+      "group": "security-observability",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "security",
+        "observability",
+        "redaction"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": ""
+    }
+  ]
+}

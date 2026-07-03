@@ -39,14 +39,15 @@ Codex built-in image path unless the user explicitly asks for that host tool.
 
 Generate and edit images using AI models. The default route uses `gpt-image-2-pro` final image generation, preferring OpenAI and using LinkAI only as a GPT Image compatible route when OpenAI is not configured. If `gpt-image-2-pro` is unavailable, the runtime may visibly retry the same GPT Image compatible route with `gpt-image-2`. **Do not create final images by coding HTML/canvas/SVG/Pillow layouts; use the native image model API route for real image generation.**
 
-In EcoreX Web, the native `imagegen` tool is the primary runtime route. Use it
-for text-to-image, image edits, reference-image generation, and multi-image
-fusion. Pass existing images as `image_url` or `image_urls`; the runtime
-normalizes them into the GPT Image edit/reference route and starts with
-`gpt-image-2-pro`. Do not replace edit/reference requests with custom Python,
-PIL, HTML, SVG, or local drawing scripts. The `scripts/generate.py` command
-below is a compatibility fallback and implementation detail for environments
-where the native tool facade is unavailable.
+In EcoreX Web, the native `imagegen` tool is the only final image generation
+route. Use it for text-to-image, image edits, reference-image generation,
+multi-image fusion, and batch generation. Pass existing images as `image_url`
+or `image_urls`; the runtime normalizes them into the GPT Image edit/reference
+route and starts with `gpt-image-2-pro`. Do not replace generation or edits
+with shell/Python/PIL/HTML/SVG/canvas scripts, direct provider HTTP scripts,
+web search, or network image scraping. `scripts/generate.py` is an in-process
+provider runtime module behind the native facade, not a user-facing Python CLI
+route.
 
 Supported models (passed via `model` only when the user asks for a specific one):
 
@@ -74,14 +75,22 @@ For edits or reference-image generation, always include image inputs:
 {"prompt": "Combine these characters into a group photo", "image_urls": ["/path/a.png", "/path/b.png"]}
 ```
 
-Only when the native `imagegen` tool is unavailable, run `scripts/generate.py`
-with a JSON argument. The path is relative to this skill's `base_dir`.
+For batch generation, call `imagegen` once with a `tasks` array. Do not write a
+shell/Python loop:
 
-```bash
-python <base_dir>/scripts/generate.py '<json_args>'
+```json
+{
+  "tasks": [
+    {"prompt": "A product hero image, white background", "aspect_ratio": "1:1"},
+    {"prompt": "A social banner version", "aspect_ratio": "16:9"}
+  ]
+}
 ```
 
-**Set bash timeout to at least 600 seconds**, as image generation can take 30–200s per provider, and the script may try multiple providers sequentially.
+For offline diagnostics outside EcoreX Web, the provider runtime module may be
+invoked by maintainers directly. In Web runtime, always call the native
+`imagegen` tool so route telemetry reports `in_process_provider_runner` and no
+Python CLI fallback is used.
 
 ### Parameters
 
@@ -98,14 +107,14 @@ python <base_dir>/scripts/generate.py '<json_args>'
 
 ### Example — generate
 
-```bash
-python <base_dir>/scripts/generate.py '{"prompt": "A corgi astronaut floating in space"}'
+```json
+{"prompt": "A corgi astronaut floating in space"}
 ```
 
 With aspect ratio:
 
-```bash
-python <base_dir>/scripts/generate.py '{"prompt": "Isometric miniature city of Shanghai at sunset", "size": "2K", "aspect_ratio": "16:9"}'
+```json
+{"prompt": "Isometric miniature city of Shanghai at sunset", "size": "2K", "aspect_ratio": "16:9"}
 ```
 
 ### Important: Editing vs Generating
@@ -126,14 +135,14 @@ supports it.
 
 ### Example — edit (image-to-image)
 
-```bash
-python <base_dir>/scripts/generate.py '{"prompt": "Add a Santa hat to the dog", "image_url": "/path/to/dog.png"}'
+```json
+{"prompt": "Add a Santa hat to the dog", "image_url": "/path/to/dog.png"}
 ```
 
 Multi-image fusion — pass a list:
 
-```bash
-python <base_dir>/scripts/generate.py '{"prompt": "Combine these characters into a group photo", "image_url": ["/path/a.png", "/path/b.png"]}'
+```json
+{"prompt": "Combine these characters into a group photo", "image_url": ["/path/a.png", "/path/b.png"]}
 ```
 
 ### Output

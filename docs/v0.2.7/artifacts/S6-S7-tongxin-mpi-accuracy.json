@@ -1,0 +1,50 @@
+{
+  "schema": "ecorex.v0.2.7.tongxin_mpi_accuracy.v1",
+  "generatedAt": "2026-07-02T00:00:00+08:00",
+  "sourceSafety": {
+    "publicArtifactContainsSecrets": false,
+    "publicArtifactContainsRawApiBase": false,
+    "publicArtifactContainsRawLocalPaths": false,
+    "publicArtifactContainsRawProjectNames": false,
+    "publicArtifactContainsRawAccountNames": false,
+    "diagnosticPolicy": "hash-count-category-only"
+  },
+  "slices": {
+    "S6TongxinSourcePath": {
+      "status": "review_passed",
+      "projectAccountSource": "tongxin-data-volume",
+      "wrapperProjectListMpiFlagsCompleted": true,
+      "chengfengEmptyResultBugFixed": true,
+      "cacheFallbackNoLongerLabeledAsMpi": true
+    },
+    "S7TongxinMpiAccuracy": {
+      "status": "review_passed",
+      "factSource": "mpi",
+      "cacheFallbackAllowedForMpi": false,
+      "zeroSamplesBlockGate": true,
+      "zeroProjectSamplesBlockGate": true,
+      "mpiUnavailableBlocksGate": true,
+      "publicResultShape": [
+        "hash",
+        "count",
+        "driftBucket",
+        "tolerance"
+      ]
+    }
+  },
+  "localVerification": {
+    "focusedPytest": "32 passed",
+    "pythonCompile": "passed"
+  },
+  "reviewGate": {
+    "status": "PASS",
+    "rolePassCount": 5,
+    "roles": [
+      "runtime-config",
+      "frontend-api",
+      "toolchain-cdp-ocr-tongxin",
+      "qa-release",
+      "privacy-data"
+    ]
+  }
+}

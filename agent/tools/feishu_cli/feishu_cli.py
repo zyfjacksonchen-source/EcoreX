@@ -413,6 +413,8 @@ def _register_auth_login_session(
     cwd: str,
     scope: str = "",
     domain: str = "",
+    web_session_id: str = "",
+    trace_id: str = "",
 ) -> str:
     digest = hashlib.sha256(
         f"{device_code}\n{verification_url}\n{time.time()}".encode("utf-8", errors="replace")
@@ -423,6 +425,8 @@ def _register_auth_login_session(
         "kind": "auth_login",
         "authFlow": "auth_login_start",
         "sessionId": session_id,
+        "webSessionId": web_session_id,
+        "traceId": trace_id,
         "deviceCode": device_code,
         "verificationUrl": verification_url,
         "scope": scope,
@@ -585,6 +589,8 @@ def _auth_session_snapshot(session_id: str, *, kill_expired: bool = True) -> Dic
     payload: Dict[str, Any] = {
         "status": status,
         "sessionId": clean_id,
+        "webSessionId": session.get("webSessionId") or "",
+        "traceId": session.get("traceId") or "",
         "exitCode": exit_code,
         "pid": session.get("pid"),
         "authFlow": "config_init_status",
@@ -631,6 +637,8 @@ def _run_process_until_auth_url(
     cwd: Optional[str] = None,
     cancel_event=None,
     url_wait_seconds: int = DEFAULT_AUTH_URL_WAIT_SECONDS,
+    web_session_id: str = "",
+    trace_id: str = "",
 ) -> Dict[str, Any]:
     """Start a blocking auth/config command and return once its URL appears."""
     workdir = Path(cwd or os.getcwd()).expanduser()
@@ -668,6 +676,8 @@ def _run_process_until_auth_url(
     timeout_seconds = max(1, int(timeout))
     session = {
         "sessionId": session_id,
+        "webSessionId": web_session_id,
+        "traceId": trace_id,
         "process": process,
         "pid": process.pid,
         "lock": lock,
@@ -742,6 +752,8 @@ def _run_process_until_auth_url(
             return {
                 "status": "cancelled",
                 "sessionId": session_id,
+                "webSessionId": web_session_id,
+                "traceId": trace_id,
                 "exitCode": None,
                 "pid": process.pid,
                 "output": output or "(no output)",
@@ -760,6 +772,8 @@ def _run_process_until_auth_url(
             return {
                 "status": "auth_pending" if exit_code is None else ("success" if exit_code == 0 else "error"),
                 "sessionId": session_id,
+                "webSessionId": web_session_id,
+                "traceId": trace_id,
                 "exitCode": exit_code,
                 "pid": process.pid,
                 "backgroundProcess": exit_code is None,
@@ -778,6 +792,8 @@ def _run_process_until_auth_url(
             return {
                 "status": "success" if exit_code == 0 else "error",
                 "sessionId": session_id,
+                "webSessionId": web_session_id,
+                "traceId": trace_id,
                 "exitCode": exit_code,
                 "pid": process.pid,
                 "backgroundProcess": False,
@@ -796,6 +812,8 @@ def _run_process_until_auth_url(
             return {
                 "status": "timeout",
                 "sessionId": session_id,
+                "webSessionId": web_session_id,
+                "traceId": trace_id,
                 "exitCode": None,
                 "pid": process.pid,
                 "backgroundProcess": False,
@@ -1470,6 +1488,8 @@ class FeishuCli(BaseTool):
             env=env,
             cwd=self.cwd,
             cancel_event=getattr(self, "cancel_event", None),
+            web_session_id=_clean_cli_value(args.get("web_session_id") or args.get("webSessionId")),
+            trace_id=_clean_cli_value(args.get("trace_id") or args.get("traceId")),
         )
         result["command"] = self._display_command(command + cli_args)
         url = str(result.get("verificationUrl") or _auth_url_from_result(result))
@@ -1486,6 +1506,10 @@ class FeishuCli(BaseTool):
                 next_action = {"tool": "feishu_cli", "action": "config_init_status"}
                 if result.get("sessionId"):
                     next_action["session_id"] = result.get("sessionId")
+                if result.get("webSessionId"):
+                    next_action["webSessionId"] = result.get("webSessionId")
+                if result.get("traceId"):
+                    next_action["traceId"] = result.get("traceId")
                 result["nextAction"] = next_action
             elif result.get("exitCode") == 0:
                 result["authRequired"] = False
@@ -1545,10 +1569,14 @@ class FeishuCli(BaseTool):
             return ToolResult.fail({
                 "status": "not_found",
                 "sessionId": session_id,
+                "webSessionId": _clean_cli_value(args.get("web_session_id") or args.get("webSessionId")),
+                "traceId": _clean_cli_value(args.get("trace_id") or args.get("traceId")),
                 "authFlow": "auth_login_status",
                 "writebackPending": False,
                 "message": "Feishu CLI auth login session was not found or already expired.",
             })
+        web_session_id = str(session.get("webSessionId") or args.get("web_session_id") or args.get("webSessionId") or "").strip()
+        trace_id = str(session.get("traceId") or args.get("trace_id") or args.get("traceId") or "").strip()
         if session.get("kind") != "auth_login":
             return self._config_init_status(args, env, timeout)
 
@@ -1560,6 +1588,8 @@ class FeishuCli(BaseTool):
             return ToolResult.fail({
                 "status": "error",
                 "sessionId": session_id,
+                "webSessionId": web_session_id,
+                "traceId": trace_id,
                 "authFlow": "auth_login_status",
                 "verificationUrl": url,
                 "writebackPending": False,
@@ -1569,6 +1599,8 @@ class FeishuCli(BaseTool):
             payload = {
                 "status": "timeout",
                 "sessionId": session_id,
+                "webSessionId": web_session_id,
+                "traceId": trace_id,
                 "authFlow": "auth_login_status",
                 "verificationUrl": url,
                 "writebackPending": False,
@@ -1594,6 +1626,8 @@ class FeishuCli(BaseTool):
             return ToolResult.success({
                 "status": "auth_pending",
                 "sessionId": session_id,
+                "webSessionId": web_session_id,
+                "traceId": trace_id,
                 "authFlow": "auth_login_status",
                 "verificationUrl": url,
                 "writebackPending": True,
@@ -1636,6 +1670,8 @@ class FeishuCli(BaseTool):
 
         payload: Dict[str, Any] = {
             "sessionId": session_id,
+            "webSessionId": web_session_id,
+            "traceId": trace_id,
             "authFlow": "auth_login_status",
             "verificationUrl": url,
             "startedAt": session.get("startedAt"),
@@ -1761,8 +1797,12 @@ class FeishuCli(BaseTool):
                     cwd=self.cwd,
                     scope=scope,
                     domain=domain,
+                    web_session_id=_clean_cli_value(args.get("web_session_id") or args.get("webSessionId")),
+                    trace_id=_clean_cli_value(args.get("trace_id") or args.get("traceId")),
                 )
                 result["sessionId"] = session_id
+                result["webSessionId"] = _clean_cli_value(args.get("web_session_id") or args.get("webSessionId"))
+                result["traceId"] = _clean_cli_value(args.get("trace_id") or args.get("traceId"))
                 result["writebackPending"] = True
                 result["backgroundProcess"] = False
                 result["cliWritebackTimeoutSeconds"] = max(1, int(timeout or DEFAULT_TIMEOUT_SECONDS))
@@ -1775,6 +1815,10 @@ class FeishuCli(BaseTool):
                 "action": "auth_login_status",
                 "session_id": result.get("sessionId"),
             }
+            if result.get("webSessionId"):
+                result["nextAction"]["webSessionId"] = result.get("webSessionId")
+            if result.get("traceId"):
+                result["nextAction"]["traceId"] = result.get("traceId")
             if device_code:
                 result["nextAction"]["device_code"] = device_code
         if result.get("exitCode") != 0:

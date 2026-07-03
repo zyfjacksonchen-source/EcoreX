@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
+from config import conf
 from common.image_quality_runtime import (
     aggregate_image_finalization_decisions,
     attach_image_finalization_evidence,
@@ -31,6 +32,7 @@ ImageJobRunner = Callable[
     Any,
 ]
 ImageJobOcrProvider = Callable[[Dict[str, Any]], Any]
+IMAGE_JOB_PRODUCTION_HARD_MAX_PARALLEL = 8
 
 
 class ImageJobCancelled(RuntimeError):
@@ -863,6 +865,63 @@ def _bounded_parallelism(value: Any, task_count: int) -> int:
     except (TypeError, ValueError):
         requested = 1
     return max(1, min(requested, max(1, int(task_count or 1))))
+
+
+def _positive_int(value: Any) -> Optional[int]:
+    try:
+        parsed = int(value or 0)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def resolve_image_job_parallelism_policy(
+    request: Dict[str, Any],
+    task_count: int,
+    *,
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    cfg = config if isinstance(config, dict) else conf()
+    safe_task_count = max(1, int(task_count or 1))
+    requested = _positive_int((request or {}).get("max_parallel") or (request or {}).get("maxParallel")) or 1
+    configured = _positive_int(cfg.get("image_job_max_parallel"))
+    provider = _positive_int(cfg.get("image_provider_concurrency"))
+    configured_hard = _positive_int(
+        cfg.get("image_job_hard_max_parallel") or os.environ.get("ECOREX_IMAGE_JOB_HARD_MAX_PARALLEL")
+    )
+    hard = min(configured_hard or IMAGE_JOB_PRODUCTION_HARD_MAX_PARALLEL, IMAGE_JOB_PRODUCTION_HARD_MAX_PARALLEL)
+    limits = {
+        "task_count": safe_task_count,
+        "requested_max_parallel": requested,
+        "hard_max_parallel": hard,
+    }
+    if configured is not None:
+        limits["configured_max_parallel"] = configured
+    if provider is not None:
+        limits["provider_max_parallel"] = provider
+    effective = max(1, min(limits.values()))
+    clamp_reason = "none"
+    if effective < requested:
+        for key in ("task_count", "configured_max_parallel", "provider_max_parallel", "hard_max_parallel"):
+            if limits.get(key) == effective:
+                clamp_reason = key
+                break
+        if clamp_reason == "none":
+            clamp_reason = "policy"
+    policy: Dict[str, Any] = {
+        "parallelism_policy_version": "v1",
+        "task_count": safe_task_count,
+        "requested_max_parallel": requested,
+        "hard_max_parallel": hard,
+        "effective_max_parallel": effective,
+        "parallelism_clamped": effective < requested,
+        "parallelism_clamp_reason": clamp_reason,
+    }
+    if configured is not None:
+        policy["configured_max_parallel"] = configured
+    if provider is not None:
+        policy["provider_max_parallel"] = provider
+    return policy
 
 
 def _prepare_task_list(tasks: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:

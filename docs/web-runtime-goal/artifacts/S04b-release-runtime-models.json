@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "ecorex.release-runtime-models-smoke.v1",
+  "generatedAt": "2026-07-01T00:13:31+08:00",
+  "target": "http://127.0.0.1:9899/api/models",
+  "runtime": "desktop/release-local/win-unpacked/resources/ecorex-runtime",
+  "packagedConfigSecretClean": true,
+  "adminPolicyApplied": true,
+  "chat": {
+    "currentProvider": "openai",
+    "currentModel": "gpt-5.5",
+    "capabilityProvider": "openai",
+    "maxTokensParam": "max_completion_tokens",
+    "optionCount": 1,
+    "optionModels": [
+      {
+        "provider": "openai",
+        "model": "gpt-5.5",
+        "configured": true,
+        "hint": "current"
+      }
+    ],
+    "contextWindowTokens": 1000000,
+    "autoCompactTokenLimit": 800000,
+    "tokenizerStatus": "local_tokenizer"
+  },
+  "image": {
+    "currentProvider": "openai",
+    "currentModel": "gpt-image-2-pro",
+    "coupledToChatSwitcher": false
+  }
+}

@@ -46,7 +46,9 @@
   "image_background": "auto",
   "image_moderation": "auto",
   "agent_workspace": "~/EcoreX",
-  "agent_max_context_tokens": 258000,
+  "model_context_window": 1000000,
+  "model_auto_compact_token_limit": 800000,
+  "agent_max_context_tokens": 800000,
   "agent_max_context_turns": 20,
   "agent_max_steps": 20,
   "agent_context_budget_warn_ratio": 0.85,
@@ -68,11 +70,12 @@
     "feishu_cli": {
       "package": "@larksuite/cli@1.0.56",
       "auto_install": false,
-      "allow_system_node": true
+      "allow_system_node": false
     },
     "tongxin_cli": {
       "script_path": "",
       "python_path": "",
+      "database_path": "",
       "read_only": true,
       "auth_url": "https://mvdcm.ecoremedia.net/ecorex-agent/client/tongxin/auth",
       "bootstrap_manifest_url": "",

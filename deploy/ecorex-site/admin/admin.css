@@ -148,6 +148,13 @@ nav {
   gap: 20px;
 }
 
+.section-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .workspace-header { margin-bottom: 18px; }
 
 .admin-notice {
@@ -270,6 +277,7 @@ select {
 .table,
 .log-list,
 .release-list,
+.release-summary,
 .capability-list,
 .capability-policy {
   display: grid;
@@ -279,6 +287,7 @@ select {
 .row,
 .log-item,
 .release-item,
+.release-summary article,
 .capability-item,
 .model-summary,
 .model-empty,
@@ -596,7 +605,22 @@ select {
   padding: 13px;
 }
 
-.release-item { grid-template-columns: 1.4fr 1fr 0.7fr; }
+.release-summary {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 10px;
+}
+
+.release-summary article {
+  display: grid;
+  gap: 6px;
+  padding: 13px;
+}
+
+.release-item { grid-template-columns: 1.2fr 0.7fr 0.7fr 1fr; }
+
+.release-item.is-current {
+  border-color: color-mix(in srgb, var(--good) 38%, var(--rule));
+}
 
 .empty {
   margin: 0;

@@ -2998,6 +2998,7 @@ class TestV022RunEventLedger(unittest.TestCase):
         self.assertIn("image_job.completed", [event["event_type"] for event in events])
 
     def test_v022_image_jobs_api_projects_auditable_parallelism_policy(self):
+        from agent.protocol import image_job_service
         from agent.protocol import get_run_event_ledger, reset_image_job_service_for_tests
         from channel.web import web_channel
 
@@ -3020,7 +3021,7 @@ class TestV022RunEventLedger(unittest.TestCase):
             }
             with patch.object(web_channel, "_require_auth", return_value=None), \
                 patch.object(web_channel, "_get_workspace_root", return_value=tempfile.gettempdir()), \
-                patch.object(web_channel, "conf", return_value={
+                patch.object(image_job_service, "conf", return_value={
                     "image_job_max_parallel": 3,
                     "image_provider_concurrency": 2,
                     "image_job_hard_max_parallel": 4,
@@ -3046,6 +3047,8 @@ class TestV022RunEventLedger(unittest.TestCase):
             self.assertEqual(payload["parallelism_clamp_reason"], "provider_max_parallel")
         self.assertEqual(started_payload["max_parallel"], 2)
         self.assertEqual(projected_job["max_parallel"], 2)
+        self.assertNotIn("def _image_job_parallelism_policy", Path(web_channel.__file__).read_text(encoding="utf-8"))
+        self.assertTrue(hasattr(image_job_service, "resolve_image_job_parallelism_policy"))
 
     def test_v022_image_job_service_reuses_ocr_brief_by_input_hash_without_public_leak(self):
         from agent.protocol import ImageJobService, RuntimeProjectionService, get_run_event_ledger
@@ -3183,6 +3186,10 @@ class TestV022RunEventLedger(unittest.TestCase):
 
             def authorize_noninteractive(self, tool_name, arguments=None):
                 self.calls.append((tool_name, dict(arguments or {})))
+                return {"allowed": self.allowed, "reason": "test"}
+
+            def authorize_capability(self, capability, action="", arguments=None, **_kwargs):
+                self.calls.append((capability, dict(arguments or {})))
                 return {"allowed": self.allowed, "reason": "test"}
 
         denied_broker = FakeBroker(False)
@@ -4000,7 +4007,8 @@ class TestProjectSessionSourceContracts(unittest.TestCase):
         self.assertIn("pinnedGeneralSessions: general.filter((row) => row.pinned),", source)
         self.assertIn("regularGeneralSessions: general.filter((row) => !row.pinned),", source)
         self.assertIn('renderGeneralSessionGroup("置顶任务", pinnedGeneralSessions, "pinned")', source)
-        self.assertIn('renderGeneralSessionGroup("任务", regularGeneralSessions, "regular")', source)
+        self.assertIn('renderGeneralSessionGroup("通用会话", regularGeneralSessions, "regular")', source)
+        self.assertIn('kind === "pinned" ? (', source)
         self.assertIn('data-session-ownership={rowProjectId ? "project" : "general"}', source)
         self.assertIn('data-session-pinned={row.pinned ? "true" : undefined}', source)
         self.assertIn("if (!row.projectId) {\n        general.push(row);\n        continue;\n      }", source)
@@ -4343,6 +4351,83 @@ class TestEcoreXWorkspaceState(unittest.TestCase):
         self.assertEqual(sessions[0]["title"], "Manual title")
         self.assertTrue(sessions[0]["title_locked"])
         self.assertTrue(sessions[0]["titleLocked"])
+
+    def test_session_auto_title_uses_session_summary_context_not_latest_payload(self):
+        from agent.chat.session_service import SessionService
+        from agent.memory.conversation_store import ConversationStore
+
+        captured = {}
+
+        class FakeBot:
+            def reply_text(self, session):
+                captured["prompt"] = session.messages[0]["content"]
+                return {"completion_tokens": 8, "content": "Web Runtime 治理"}
+
+        with tempfile.TemporaryDirectory() as workspace:
+            store = ConversationStore(Path(workspace) / "conversation.sqlite3")
+            store.append_messages("session_summary_title", [
+                {"role": "user", "content": "继续"},
+                {"role": "assistant", "content": "可以，继续。"},
+                {"role": "user", "content": "请从架构、安全、运行时依赖角度治理 EcoreX Web runtime packs 和 installer。"},
+                {"role": "assistant", "content": "总结：本会话聚焦 Web runtime packs 公共化、installer 统一和发布门禁。"},
+            ], channel_type="web")
+
+            with patch.object(SessionService, "_get_store", return_value=store), \
+                    patch("bridge.bridge.Bridge") as bridge_cls:
+                bridge_cls.return_value.get_bot.return_value = FakeBot()
+                with self.assertLogs("log", level="INFO") as logs:
+                    title = SessionService().gen_title("session_summary_title", user_message="LAST_MESSAGE_ONLY")
+
+            sessions = store.list_sessions(channel_type="web")["sessions"]
+
+        self.assertEqual(title, "Web Runtime 治理")
+        self.assertEqual(sessions[0]["title"], "Web Runtime 治理")
+        self.assertIn("Recent conversation", captured["prompt"])
+        self.assertIn("runtime packs", captured["prompt"])
+        self.assertIn("installer", captured["prompt"])
+        self.assertNotIn("LAST_MESSAGE_ONLY", captured["prompt"])
+        serialized_logs = "\n".join(logs.output)
+        self.assertIn("hash=", serialized_logs)
+        self.assertNotIn("Web Runtime 治理", serialized_logs)
+
+    def test_web_session_title_handler_accepts_empty_body_and_uses_store_history(self):
+        from agent.memory.conversation_store import ConversationStore
+        from channel.web import web_channel
+
+        class FakeBot:
+            def reply_text(self, session):
+                return {"completion_tokens": 5, "content": "图像 OCR 闭环"}
+
+        with tempfile.TemporaryDirectory() as workspace:
+            store = ConversationStore(Path(workspace) / "conversation.sqlite3")
+            store.append_messages("session-web-title", [
+                {"role": "user", "content": "先确认截图里的卡点"},
+                {"role": "assistant", "content": "总结：当前会话聚焦图片上传、OCR、vision fallback 和 imagegen 凭证状态闭环。"},
+            ], channel_type="web")
+
+            handler = web_channel.SessionTitleHandler()
+            with patch.object(web_channel, "_require_auth", return_value=None), \
+                    patch("agent.memory.get_conversation_store", return_value=store), \
+                    patch.object(web_channel.web, "data", return_value=b""), \
+                    patch("bridge.bridge.Bridge") as bridge_cls:
+                bridge_cls.return_value.get_bot.return_value = FakeBot()
+                with self.assertLogs("log", level="INFO") as logs:
+                    result = json.loads(handler.POST("session-web-title"))
+
+            sessions = store.list_sessions(channel_type="web")["sessions"]
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["title"], "图像 OCR 闭环")
+        self.assertEqual(sessions[0]["title"], "图像 OCR 闭环")
+        serialized_logs = "\n".join(logs.output)
+        self.assertIn("title_summary", serialized_logs)
+        self.assertNotIn("图像 OCR 闭环", serialized_logs)
+
+    def test_web_session_title_trigger_handles_attachment_only_first_message(self):
+        console_js = (Path(__file__).resolve().parents[1] / "channel" / "web" / "static" / "js" / "console.js").read_text(encoding="utf-8")
+
+        self.assertIn("const titleInfo = isFirstMessage ? { sid: sessionId } : null;", console_js)
+        self.assertNotIn("const titleInfo = (isFirstMessage && text) ? { sid: sessionId } : null;", console_js)
 
     def test_history_page_returns_context_boundary_after_clear(self):
         from agent.memory.conversation_store import ConversationStore
@@ -5501,40 +5586,51 @@ class TestAgentCapabilityPermissions(unittest.TestCase):
         self.assertNotIn("ghp", serialized)
 
     def test_v022_web_capabilities_api_flattens_policy_capability_packs_for_frontend_contract(self):
-        from agent.tools.agent_capability import agent_capability
-        from agent.tools.base_tool import ToolResult
         from channel.web import web_channel
 
-        nested_payload = {
-            "status": "success",
-            "abilities": {
-                "status": "success",
-                "abilities": [
-                    {
-                        "id": "office-pdf",
-                        "packId": "office-pdf",
-                        "kind": "capability-pack",
-                        "label": "Office PDF",
-                        "agentCanInstall": False,
-                        "policyMode": "disabled",
-                        "installAllowed": False,
-                        "disabledReason": "Administrator disabled self-service installation for Office PDF.",
-                        "policySource": "admin-cache",
-                    }
-                ],
-            },
-            "skills": [],
-            "mcpStatus": {},
-        }
+        class FakeRegistry:
+            def __init__(self, workspace_root=None):
+                self.workspace_root = workspace_root or "workspace"
+
+            def optional_abilities_payload(self):
+                return {
+                    "status": "success",
+                    "abilities": [
+                        {
+                            "id": "office-pdf",
+                            "packId": "office-pdf",
+                            "kind": "capability-pack",
+                            "label": "Office PDF",
+                            "agentCanInstall": False,
+                            "policyMode": "disabled",
+                            "installAllowed": False,
+                            "disabledReason": "Administrator disabled self-service installation for Office PDF.",
+                            "policySource": "admin-cache",
+                        }
+                    ],
+                }
+
+            def tools_payload(self):
+                return {"status": "success", "source": "runtime-capability-service", "tools": []}
+
+            def skills_payload(self):
+                return {"status": "success", "source": "runtime-capability-service", "skills": []}
+
+            def extensions_payload(self, action_plans=None):
+                return {"status": "success", "source": "runtime-capability-service", "extensions": []}
+
         with patch.object(web_channel, "_require_auth", return_value=None), \
-                patch.object(agent_capability.AgentCapabilityTool, "execute", return_value=ToolResult.success(nested_payload)):
+                patch("agent.runtime_capabilities.RuntimeCapabilityRegistry", FakeRegistry):
             payload = json.loads(web_channel.CapabilitiesHandler().GET())
 
         self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["source"], "runtime-capability-service")
         self.assertIsInstance(payload["abilities"], list)
         self.assertEqual(payload["abilities"][0]["packId"], "office-pdf")
         self.assertEqual(payload["abilities"][0]["policyMode"], "disabled")
         self.assertFalse(payload["abilities"][0]["installAllowed"])
+        self.assertEqual(payload["abilities"][0]["state"], "disabled")
+        self.assertEqual(payload["abilities"][0]["nextAction"], "blocked")
         self.assertIsInstance(payload["abilityDiagnostics"], dict)
         self.assertNotIn("abilities", payload["abilityDiagnostics"])
 
@@ -5721,7 +5817,7 @@ class TestAgentCapabilityPermissions(unittest.TestCase):
         self.assertIn("policyMode: item.policyMode || state.policyMode || \"ask\"", web_source)
         self.assertIn("Array.isArray(abilityPayload.abilities)", web_source)
         self.assertIn("installAllowed: item.installAllowed !== false", web_source)
-        self.assertIn("_flatten_capability_payload(_tool_result_to_payload(result))", web_source)
+        self.assertIn("CapabilityService(RuntimeCapabilityRegistry(_get_workspace_root())).capabilities_payload()", web_source)
         self.assertIn("normalize_capability_pack_id(pack_id)", web_source)
         self.assertIn("blocked_install_payload(policy_lookup_id, pack_name=pack_name, action=\"agent_install_request\")", web_source)
         self.assertIn("packIdRedacted", web_source)
@@ -5732,6 +5828,7 @@ class TestAgentCapabilityPermissions(unittest.TestCase):
         self.assertIn("apply_policy_to_capability(item)", optional_source)
         self.assertIn("blocked_install_payload(pack_id, action=\"install\")", optional_source)
         self.assertIn("blocked_install_payload(policy_pack_id, action=\"install_pack\")", agent_capability_source)
+        self.assertIn("CapabilityService(workspace_root=workspace).diagnose_payload()", agent_capability_source)
         self.assertIn("capability.policy_blocked", agent_capability_source)
         self.assertIn("\"policyMode\": policy_mode", registry_source)
         self.assertIn("\"installAllowed\": bool(install_allowed)", registry_source)
@@ -5822,6 +5919,22 @@ class TestReleaseRuntimeSanitizer(unittest.TestCase):
             self.assertFalse(launcher.exists())
             self.assertFalse(state.exists())
             self.assertTrue(readme.exists())
+
+    def test_sanitizer_removes_non_portable_release_paths(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            portable = root / "scripts" / "release-smoke.py"
+            portable.parent.mkdir(parents=True)
+            portable.write_text("print('ok')\n", encoding="utf-8")
+            non_portable = root / "scripts" / "真实发布校验.py"
+            non_portable.write_text("print('dev only')\n", encoding="utf-8")
+
+            script = Path(__file__).resolve().parents[1] / "scripts" / "sanitize-ecorex-release-runtime.py"
+            subprocess.run([sys.executable, str(script), str(root)], check=True, capture_output=True, text=True)
+            subprocess.run([sys.executable, str(script), str(root), "--check"], check=True, capture_output=True, text=True)
+
+            self.assertTrue(portable.exists())
+            self.assertFalse(non_portable.exists())
 
 
 class TestWebParallelHandlers(unittest.TestCase):
@@ -5960,6 +6073,7 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertEqual(payload["version"], __version__)
         notes = payload["releaseNotes"]
         self.assertEqual(notes["version"], __version__)
+        self.assertIn("revision", notes)
         self.assertIn("highlights", notes)
         self.assertIn("fixes", notes)
         self.assertIn("howTo", notes)
@@ -6265,6 +6379,129 @@ class TestWebParallelHandlers(unittest.TestCase):
             host = web_channel._effective_web_host()
             web_channel._validate_web_bind_auth(host)
             self.assertFalse(web_channel._check_auth())
+
+    def test_enterprise_user_token_allows_password_protected_runtime_api(self):
+        from channel.web import web_channel
+        import web
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, *_args):
+                return b'{"ok": true, "configured": true}'
+
+        env = {
+            "HTTP_X_ECOREX_USER_TOKEN": "enterprise-token",
+            "HTTP_X_ECOREX_DEVICE_ID": "device-1",
+            "HTTP_X_ECOREX_CLIENT_KEY": "ecorex-web-v0.2.6-web.1",
+        }
+        previous_ctx = getattr(web, "ctx", None)
+        web.ctx = types.SimpleNamespace(env=env)
+        web_channel._enterprise_auth_cache.clear()
+        try:
+            with patch.object(web_channel, "conf", return_value={"web_host": "0.0.0.0", "web_password": "secret"}), \
+                    patch.object(web_channel.urllib.request, "urlopen", return_value=FakeResponse()) as urlopen:
+                self.assertTrue(web_channel._check_auth())
+                request = urlopen.call_args.args[0]
+                self.assertTrue(request.full_url.endswith("/model-config"))
+                self.assertEqual(request.get_header("X-ecorex-user-token"), "enterprise-token")
+                self.assertEqual(request.get_header("X-ecorex-device-id"), "device-1")
+        finally:
+            web_channel._enterprise_auth_cache.clear()
+            if previous_ctx is None:
+                delattr(web, "ctx")
+            else:
+                web.ctx = previous_ctx
+
+    def test_client_model_config_proxy_404_returns_local_fallback(self):
+        from channel.web import web_channel
+        import io
+        import urllib.error
+        import web
+
+        previous_ctx = getattr(web, "ctx", None)
+        web.ctx = types.SimpleNamespace(method="GET", env={"QUERY_STRING": ""}, status="")
+
+        def fake_urlopen(request, timeout=0):
+            raise urllib.error.HTTPError(
+                request.full_url,
+                404,
+                "Not Found",
+                {},
+                io.BytesIO(b'{"ok": false, "error": "not found"}'),
+            )
+
+        try:
+            with patch.object(web_channel, "conf", return_value={"web_client_base": "https://example.invalid/client"}), \
+                    patch.object(web_channel.urllib.request, "urlopen", side_effect=fake_urlopen):
+                payload = web_channel.ClientProxyHandler().GET("model-config")
+                data = json.loads(payload)
+                self.assertEqual(web.ctx.status, "200 OK")
+                self.assertFalse(data["configured"])
+                self.assertEqual(data["code"], "enterprise_model_config_bridge_unavailable")
+        finally:
+            if previous_ctx is None:
+                delattr(web, "ctx")
+            else:
+                web.ctx = previous_ctx
+
+    def test_enterprise_user_token_retries_compatible_client_key(self):
+        from channel.web import web_channel
+        import io
+        import urllib.error
+        import web
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, *_args):
+                return b'{"ok": true, "configured": true}'
+
+        def fake_urlopen(request, timeout=0):
+            key = request.get_header("X-ecorex-client-key")
+            calls.append(key)
+            if key == "ecorex-web-v0.2.6-web.1":
+                raise urllib.error.HTTPError(
+                    request.full_url,
+                    403,
+                    "Forbidden",
+                    {},
+                    io.BytesIO(b'{"ok": false, "error": "invalid client key"}'),
+                )
+            return FakeResponse()
+
+        calls = []
+        env = {
+            "HTTP_X_ECOREX_USER_TOKEN": "enterprise-token",
+            "HTTP_X_ECOREX_DEVICE_ID": "device-1",
+            "HTTP_X_ECOREX_CLIENT_KEY": "ecorex-web-v0.2.6-web.1",
+        }
+        previous_ctx = getattr(web, "ctx", None)
+        web.ctx = types.SimpleNamespace(env=env)
+        web_channel._enterprise_auth_cache.clear()
+        try:
+            with patch.object(web_channel, "conf", return_value={"web_host": "0.0.0.0", "web_password": "secret"}), \
+                    patch.object(web_channel.urllib.request, "urlopen", side_effect=fake_urlopen):
+                self.assertTrue(web_channel._check_auth())
+                self.assertEqual(calls[:2], ["ecorex-web-v0.2.6-web.1", "ecorex-web-v0.2.2-web.1"])
+        finally:
+            web_channel._enterprise_auth_cache.clear()
+            if previous_ctx is None:
+                delattr(web, "ctx")
+            else:
+                web.ctx = previous_ctx
 
     def test_v020_channel_catalog_matches_factory_and_normalizes_aliases(self):
         from channel.channel_catalog import CHANNEL_CATALOG, normalize_channel_name, parse_channel_list
@@ -6750,24 +6987,31 @@ class TestWebParallelHandlers(unittest.TestCase):
     def test_v022_hotfix_auth_identity_feishu_and_artifact_contracts(self):
         root = Path(__file__).resolve().parents[1]
         web_source = (root / "channel" / "web" / "web_channel.py").read_text(encoding="utf-8")
+        auth_source = (root / "channel" / "web" / "auth.py").read_text(encoding="utf-8")
         app_source = (root / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
         console_source = (root / "channel" / "web" / "static" / "js" / "console.js").read_text(encoding="utf-8")
         message_source = (root / "desktop" / "src" / "components" / "MessageContent.tsx").read_text(encoding="utf-8")
         release_script = (root / "scripts" / "prepare-ecorex-webui-local-release.ps1").read_text(encoding="utf-8")
-        core_requirements = (root / "desktop" / "runtime-packs" / "core-requirements.txt").read_text(encoding="utf-8")
+        core_requirements = (root / "runtime-packs" / "core-requirements.txt").read_text(encoding="utf-8")
         runtime_core_requirements = (root / "desktop" / "runtime" / "ecorex-runtime" / "core-requirements.txt").read_text(encoding="utf-8")
 
-        self.assertIn("localFallback: !hasProvidedIdentity", web_source)
-        self.assertIn('authProvider: hasProvidedIdentity ? "web-password" : "local-fallback"', web_source)
-        self.assertIn('identitySource: hasProvidedIdentity ? "login-email" : "local-fallback"', web_source)
+        self.assertIn('"localFallback": not has_provided_identity', auth_source)
+        self.assertIn('"authProvider": "web-password" if has_provided_identity else "local-fallback"', auth_source)
+        self.assertIn('"identitySource": "login-email" if has_provided_identity else "local-fallback"', auth_source)
+        self.assertIn("function purgeGenericLocalSession()", web_source)
+        self.assertIn("function allowLocalSessionFallback()", web_source)
+        self.assertIn("window.ECOREX_ALLOW_LOCAL_SESSION_FALLBACK === true", web_source)
+        self.assertIn("headers[\"Authorization\"] = \"Bearer \" + session.token;", web_source)
         self.assertIn("if (authRequired && !(identity && identity.email)) return null;", web_source)
         self.assertIn('body: { email: input.email, password: input.password }', web_source)
-        self.assertIn('"localFallback": not has_provided_identity', web_source)
-        self.assertIn('"identitySource": "login-email" if has_provided_identity else "local-fallback"', web_source)
         self.assertIn("def _create_auth_token(email: str = \"\")", web_source)
         self.assertIn("def _auth_token_email(token: str) -> str:", web_source)
-        self.assertIn('payload["session"] = AuthLoginHandler._session_payload(email)', web_source)
-        self.assertIn("writeLocalSession(auth.session);", web_source)
+        self.assertIn('payload["session"] = AuthLoginHandler._session_payload(email)', auth_source)
+        self.assertIn("!isGenericLocalSession(auth.session)", web_source)
+        self.assertIn("throw new Error(\"登录成功但运行时未返回有效会话，请重新登录。\");", web_source)
+        self.assertIn("getEnterpriseModelConfig: async function ()", web_source)
+        self.assertNotIn("return webSession(false, true, null, true);", web_source)
+        self.assertNotIn("return webSession(true, true, { email: input.email }, true);", web_source)
 
         self.assertIn("def _connect_registered_app(app_id: str, app_secret: str)", web_source)
         self.assertIn('ChannelsHandler()._handle_connect("feishu"', web_source)
@@ -6806,7 +7050,9 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertIn("messagesRef.current = emptyMessages", app_source)
         self.assertIn("messagesRef.current = nextMessages", app_source)
         self.assertIn('const isNewSessionView = visibleMessages.length === 0 && !hasPendingAssistantMessage;', app_source)
-        self.assertIn('generalSessions.some((row) => sessionRowNeedsReveal(row, { includeActive: false }))', app_source)
+        self.assertIn("const generalSessionsCollapsed = sidebarCollapse.generalSessions && !sessionSearchActive;", app_source)
+        self.assertIn("onClick={() => setSidebarCollapse((current) => ({ ...current, generalSessions: !current.generalSessions }))}", app_source)
+        self.assertIn("projectGroups: { ...current.projectGroups, [project.id]: !current.projectGroups[project.id] }", app_source)
         self.assertIn("function createCodexLikeWelcomeScreen()", console_source)
         self.assertIn("和EcoreX一起开始工作", console_source)
 
@@ -8382,12 +8628,22 @@ process.stdout.write(JSON.stringify(payload));
         self.assertNotIn("resume_args", mac_installer)
         self.assertIn("local curl_args=", mac_installer)
         self.assertIn('curl "${curl_args[@]}" "$url" -o "$partial"', mac_installer)
-        self.assertIn("EcoreX WebUI installer script: 0.2.5", mac_installer)
+        self.assertIn("EcoreX WebUI installer script: 0.2.6", mac_installer)
         self.assertIn("EcoreX WebUI manifest version:", mac_installer)
-        self.assertIn("EcoreX WebUI installer script: 0.2.5", win_installer)
+        self.assertIn("EcoreX WebUI installer script: 0.2.6", win_installer)
         self.assertIn("EcoreX WebUI manifest version:", win_installer)
         self.assertIn("EcoreX WebUI package installer:", package_source)
         self.assertIn("Generated macOS WebUI installer still contains retired resume_args code", package_source)
+        self.assertIn("ecorex-webui.url", package_source)
+        self.assertIn("pid_matches_ecorex_webui()", package_source)
+        self.assertIn('[[ "$cmd" == *"$RUNTIME_DIR/app.py"* ]] || return 1', package_source)
+        self.assertIn('append_ecorex_webui_pid "$old_pid"', package_source)
+        self.assertIn('lsof -tiTCP:"$PORT" -sTCP:LISTEN', package_source)
+        self.assertNotIn('*"EcoreX WebUI"*|*"app.py"*)', package_source)
+        self.assertIn('/usr/bin/open "$WEBUI_URL"', package_source)
+        self.assertNotIn('} &\n\'@', package_source)
+        self.assertIn("function releaseNotesSeenId", (root / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8"))
+        self.assertIn('notes.revision || "initial"', (root / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8"))
         self.assertLess(
             package_source.index('write_desktop_shortcuts "$URL"'),
             package_source.index('open_browser "$URL"')
@@ -8402,12 +8658,12 @@ process.stdout.write(JSON.stringify(payload));
         installer_source = (root / "scripts" / "install-ecorex-web.sh").read_text(encoding="utf-8")
         site_source = (root / "deploy" / "ecorex-site" / "site.js").read_text(encoding="utf-8")
 
-        self.assertIn('var DEFAULT_WEB_CLIENT_KEY = "ecorex-web-v0.2.2-web.1"', web_source)
+        self.assertIn('var DEFAULT_WEB_CLIENT_KEY = "ecorex-web-v0.2.6-web.1"', web_source)
         self.assertIn("ecorex-web-v0.2.1-web.1", web_source)
         self.assertIn("https://mvdcm.ecoremedia.net/ecorex-agent/manifest.json", web_source)
         self.assertIn("public_base = str(os.environ.get(\"ECOREX_WEB_PUBLIC_BASE_URL\")", web_source)
         self.assertIn("or (f\"{public_base}/client\" if public_base else \"\")", web_source)
-        self.assertIn("EcoreX-WebUI/0.2.2", web_source)
+        self.assertIn("EcoreX-WebUI/0.2.6", web_source)
         self.assertIn("function runtimePath(path)", web_source)
         self.assertIn('fetch(runtimePath("/api/knowledge/read?path=" + encodeURIComponent(relPath))', web_source)
         self.assertIn("location ^~ /ecorex-agent/assets/", nginx_source)
@@ -8421,9 +8677,9 @@ process.stdout.write(JSON.stringify(payload));
         self.assertIn("handle /ecorex-agent/client/*", web_caddy_source)
         self.assertIn("read_timeout 1200s", web_caddy_source)
         self.assertIn("write_timeout 1200s", web_caddy_source)
-        self.assertIn('VERSION="${VERSION:-0.2.5}"', installer_source)
-        self.assertIn("<strong data-version>0.2.5</strong>", (root / "deploy" / "ecorex-site" / "index.html").read_text(encoding="utf-8"))
-        self.assertIn("site.js?v=0.2.5-webui-0001", (root / "deploy" / "ecorex-site" / "index.html").read_text(encoding="utf-8"))
+        self.assertIn('VERSION="${VERSION:-0.2.6}"', installer_source)
+        self.assertIn("<strong data-version>0.2.6</strong>", (root / "deploy" / "ecorex-site" / "index.html").read_text(encoding="utf-8"))
+        self.assertIn("site.js?v=0.2.6-webui-0001", (root / "deploy" / "ecorex-site" / "index.html").read_text(encoding="utf-8"))
         self.assertIn("https://mvdcm.ecoremedia.net/ecorex-agent/downloads", installer_source)
         self.assertIn("ECOREX_WEB_CLIENT_BASE=$client_base", installer_source)
         self.assertIn("ECOREX_TOOL_EXECUTION_LEASE_SECONDS=900", installer_source)
@@ -8445,6 +8701,27 @@ process.stdout.write(JSON.stringify(payload));
         self.assertIn("EcoreX v$Version WebUI-first release", script_source)
         self.assertIn("-PromoteVersion -WebUiWindowsPath", package_source)
 
+    def test_v027_update_check_prefers_webui_artifacts_for_windows_and_macos(self):
+        from channel.web.web_channel import UpdateCheckHandler
+
+        handler = UpdateCheckHandler()
+        manifest = {
+            "recommendedDownloads": {
+                "win32": {"primary": "webui-windows-x64", "webui": "webui-windows-x64"},
+                "darwin": {"primary": "webui-macos-universal", "webui": "webui-macos-universal"},
+            },
+            "artifacts": [
+                {"id": "windows-x64", "status": "ready", "href": "downloads/old-desktop.exe"},
+                {"id": "macos-arm64-dmg", "status": "ready", "href": "downloads/old-desktop.dmg"},
+                {"id": "webui-windows-x64", "status": "ready", "href": "downloads/EcoreX_0.2.7-webui-windows-x64.zip"},
+                {"id": "webui-macos-universal", "status": "ready", "href": "downloads/EcoreX_0.2.7-webui-macos-universal.zip"},
+            ],
+        }
+
+        self.assertEqual(handler._pick_artifact(manifest, "win32")["id"], "webui-windows-x64")
+        self.assertEqual(handler._pick_artifact(manifest, "darwin")["id"], "webui-macos-universal")
+        self.assertEqual(handler._pick_artifact(manifest, "web")["id"], "webui-windows-x64")
+
     def test_v020_webui_local_auth_falls_back_without_admin_client(self):
         root = Path(__file__).resolve().parents[1]
         web_source = (root / "channel" / "web" / "web_channel.py").read_text(encoding="utf-8")
@@ -8453,7 +8730,9 @@ process.stdout.write(JSON.stringify(payload));
 
         self.assertIn("function enterpriseClientConfigured()", web_source)
         self.assertIn('if (!auth.auth_required) {', web_source)
-        self.assertIn("if (enterpriseClientConfigured()) return null;", web_source)
+        self.assertIn("if (!enterpriseClientConfigured()) {", web_source)
+        self.assertIn("return isGenericLocalSession(auth.session) ? null : (auth.session || null);", web_source)
+        self.assertIn("enterprise_model_config_bridge_unavailable", web_source)
         self.assertIn("invalid client key|client key", web_source)
         self.assertIn("if (isMissingClientBridge(error)) {", web_source)
         self.assertIn('throw adminError || new Error("Enterprise login bridge is unavailable");', web_source)
@@ -8698,6 +8977,69 @@ process.stdout.write(JSON.stringify(payload));
             self.assertEqual(final["terminal_reason"], "worker_exception")
             self.assertEqual(final["error_code"], "WORKER_EXCEPTION")
             self.assertEqual(ledger.active_snapshot(), [])
+
+    def test_run_ledger_records_message_model_route(self):
+        from agent.protocol import reset_run_ledger_for_tests
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger-model.db")
+            ledger.create_run(
+                "req-ledger-model",
+                "session-ledger-model",
+                phase="accepted",
+                model="deepseek-v4-pro",
+                provider="deepseek",
+                metadata={"model": "deepseek-v4-pro", "provider": "deepseek"},
+            )
+
+            row = ledger.get_run("req-ledger-model")
+            self.assertEqual(row["model"], "deepseek-v4-pro")
+            self.assertEqual(row["provider"], "deepseek")
+            self.assertEqual(row["metadata"]["model"], "deepseek-v4-pro")
+            self.assertEqual(row["metadata"]["provider"], "deepseek")
+
+    def test_run_ledger_migrates_existing_table_for_model_route(self):
+        import sqlite3
+        from agent.protocol.run_ledger import RunLedger
+
+        with tempfile.TemporaryDirectory() as workspace:
+            db_path = Path(workspace) / "legacy-run-ledger.db"
+            conn = sqlite3.connect(str(db_path))
+            try:
+                conn.execute(
+                    """
+                    CREATE TABLE agent_runs (
+                        request_id TEXT PRIMARY KEY,
+                        session_id TEXT NOT NULL,
+                        parent_id TEXT,
+                        run_type TEXT NOT NULL DEFAULT 'message',
+                        status TEXT NOT NULL,
+                        phase TEXT NOT NULL DEFAULT '',
+                        terminal_reason TEXT,
+                        error_code TEXT,
+                        error_message TEXT,
+                        created_at REAL NOT NULL,
+                        started_at REAL,
+                        updated_at REAL NOT NULL,
+                        terminal_at REAL,
+                        metadata_json TEXT NOT NULL DEFAULT '{}'
+                    )
+                    """
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            ledger = RunLedger(db_path)
+            self.assertTrue(ledger.create_run(
+                "req-legacy-model",
+                "session-legacy-model",
+                model="gpt-5.5",
+                provider="openai",
+            ))
+            row = ledger.get_run("req-legacy-model")
+            self.assertEqual(row["model"], "gpt-5.5")
+            self.assertEqual(row["provider"], "openai")
 
     def test_run_ledger_terminal_snapshot_reports_recent_terminal_states(self):
         from agent.protocol import reset_run_ledger_for_tests
@@ -11422,6 +11764,8 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertIn("Use `host_diagnostics` when a task appears stuck", prompt)
         self.assertIn("call `feishu_cli` first", prompt)
         self.assertIn("prefer the configured CDP/chrome-devtools path first", prompt)
+        self.assertIn("call the native `imagegen` tool one or more times", prompt)
+        self.assertNotIn("Use `imagegen.tasks` for batches", prompt)
         self.assertIn("stop repeating it", prompt)
         self.assertIn("交付型任务，最终回复保持紧凑", prompt)
 
@@ -11508,6 +11852,202 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertNotIn("feishu_cli", selected)
         self.assertEqual(set(selected), {"mcp__server__tool"})
         self.assertEqual(budget["selection_reasons"]["mcp__server__tool"], "fallback_first_tool")
+
+    def test_tool_schema_budget_prioritizes_imagegen_for_multi_image_requests(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        def tool(name):
+            return types.SimpleNamespace(
+                name=name,
+                description=f"{name} tool",
+                params={"type": "object", "properties": {}},
+            )
+
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=types.SimpleNamespace(),
+            system_prompt="",
+            tools=[tool("read"), tool("bash"), tool("browser"), tool("host_diagnostics"), tool("imagegen")],
+            messages=[{"role": "user", "content": [{"type": "text", "text": "请逐张生成 6 张产品轮播图"}]}],
+        )
+
+        selected, budget = executor._select_tools_for_schema()
+
+        self.assertEqual(set(selected), {"imagegen"})
+        self.assertNotIn("bash", selected)
+        self.assertTrue(budget["imagegen_intent"])
+        self.assertTrue(budget["imagegen_available"])
+        self.assertEqual(budget["selection_reasons"]["imagegen"], "imagegen_primary_route")
+
+    def test_tool_schema_budget_does_not_restore_recent_bash_for_imagegen_intent(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        def tool(name):
+            return types.SimpleNamespace(
+                name=name,
+                description=f"{name} tool",
+                params={"type": "object", "properties": {}},
+            )
+
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=types.SimpleNamespace(),
+            system_prompt="",
+            tools=[tool("read"), tool("bash"), tool("host_diagnostics"), tool("imagegen")],
+            messages=[{"role": "user", "content": [{"type": "text", "text": "请一张张生成 7 张海报"}]}],
+        )
+        executor._record_tool_result(
+            "bash",
+            {"command": "python -c \"from PIL import Image; print('old path')\""},
+            True,
+        )
+
+        selected, budget = executor._select_tools_for_schema()
+
+        self.assertEqual(set(selected), {"imagegen"})
+        self.assertNotIn("bash", selected)
+        self.assertNotIn("recent_tool_chain", budget["selection_reasons"].values())
+
+    def test_tool_schema_budget_does_not_restore_other_tools_for_imagegen_intent(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        def tool(name):
+            return types.SimpleNamespace(
+                name=name,
+                description=f"{name} tool",
+                params={"type": "object", "properties": {}},
+            )
+
+        with_imagegen = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=types.SimpleNamespace(),
+            system_prompt="",
+            tools=[tool("read"), tool("bash"), tool("browser"), tool("custom_renderer"), tool("imagegen")],
+            messages=[{"role": "user", "content": [{"type": "text", "text": "生成 6 张轮播图"}]}],
+        )
+
+        selected, budget = with_imagegen._select_tools_for_schema()
+
+        self.assertEqual(set(selected), {"imagegen"})
+        self.assertNotIn("custom_renderer", selected)
+        self.assertEqual(budget["reason"], "imagegen_intent_primary_route")
+
+        without_imagegen = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=types.SimpleNamespace(),
+            system_prompt="",
+            tools=[tool("bash"), tool("host_diagnostics"), tool("optional_abilities"), tool("custom_renderer")],
+            messages=[{"role": "user", "content": [{"type": "text", "text": "生成 6 张轮播图"}]}],
+        )
+
+        selected_missing, budget_missing = without_imagegen._select_tools_for_schema()
+
+        self.assertEqual(set(selected_missing), {"host_diagnostics", "optional_abilities"})
+        self.assertNotIn("custom_renderer", selected_missing)
+        self.assertEqual(budget_missing["reason"], "imagegen_intent_primary_route")
+        self.assertFalse(budget_missing["imagegen_available"])
+
+    def test_tool_schema_budget_ignores_explicit_non_imagegen_tool_for_imagegen_intent(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        def tool(name):
+            return types.SimpleNamespace(
+                name=name,
+                description=f"{name} tool",
+                params={"type": "object", "properties": {}},
+            )
+
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=types.SimpleNamespace(),
+            system_prompt="",
+            tools=[tool("read"), tool("bash"), tool("custom_renderer"), tool("host_diagnostics"), tool("imagegen")],
+            messages=[{"role": "user", "content": [{"type": "text", "text": "请用 custom_renderer 一张张生成 7 张海报"}]}],
+        )
+
+        selected, budget = executor._select_tools_for_schema()
+
+        self.assertEqual(set(selected), {"imagegen"})
+        self.assertNotIn("read", selected)
+        self.assertNotIn("bash", selected)
+        self.assertNotIn("custom_renderer", selected)
+        self.assertNotIn("explicit_tool_name", budget["selection_reasons"].values())
+        self.assertEqual(budget["reason"], "imagegen_intent_primary_route")
+
+    def test_tool_schema_budget_excludes_env_config_when_imagegen_is_missing(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        def tool(name):
+            return types.SimpleNamespace(
+                name=name,
+                description=f"{name} tool",
+                params={"type": "object", "properties": {}},
+            )
+
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=types.SimpleNamespace(),
+            system_prompt="",
+            tools=[tool("bash"), tool("host_diagnostics"), tool("optional_abilities"), tool("agent_capability"), tool("env_config")],
+            messages=[{"role": "user", "content": [{"type": "text", "text": "生成 8 张图片"}]}],
+        )
+
+        selected, budget = executor._select_tools_for_schema()
+
+        self.assertEqual(set(selected), {"host_diagnostics", "optional_abilities", "agent_capability"})
+        self.assertNotIn("bash", selected)
+        self.assertNotIn("env_config", selected)
+        self.assertFalse(budget["imagegen_available"])
+
+    def test_tool_schema_budget_excludes_vision_for_pure_imagegen_intent(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        def tool(name):
+            return types.SimpleNamespace(
+                name=name,
+                description=f"{name} tool",
+                params={"type": "object", "properties": {}},
+            )
+
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=types.SimpleNamespace(),
+            system_prompt="",
+            tools=[tool("bash"), tool("vision"), tool("ocr"), tool("imagegen")],
+            messages=[{"role": "user", "content": [{"type": "text", "text": "生成 8 张图片"}]}],
+        )
+
+        selected, budget = executor._select_tools_for_schema()
+
+        self.assertEqual(set(selected), {"imagegen"})
+        self.assertNotIn("vision", selected)
+        self.assertNotIn("ocr", selected)
+        self.assertTrue(budget["imagegen_available"])
+
+    def test_tool_schema_budget_uses_diagnostics_when_imagegen_is_missing_not_bash(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        def tool(name):
+            return types.SimpleNamespace(
+                name=name,
+                description=f"{name} tool",
+                params={"type": "object", "properties": {}},
+            )
+
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=types.SimpleNamespace(),
+            system_prompt="",
+            tools=[tool("bash"), tool("host_diagnostics"), tool("optional_abilities"), tool("agent_capability")],
+            messages=[{"role": "user", "content": [{"type": "text", "text": "生成 8 张图片"}]}],
+        )
+
+        selected, budget = executor._select_tools_for_schema()
+
+        self.assertEqual(set(selected), {"host_diagnostics", "optional_abilities", "agent_capability"})
+        self.assertNotIn("bash", selected)
+        self.assertTrue(budget["imagegen_intent"])
+        self.assertFalse(budget["imagegen_available"])
 
     def test_feishu_im_message_reads_are_keyed_by_chat_target(self):
         from agent.protocol.agent_stream import AgentStreamExecutor
@@ -11864,6 +12404,44 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertEqual(tool_calls, [])
         self.assertIsNone(model.requests[0].tools)
         self.assertFalse(executor._force_text_response_next_turn)
+
+    def test_custom_openai_compatible_message_chunk_is_not_treated_as_empty(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        class FakeModel:
+            model = "gemini-custom-proxy"
+
+            def call_stream(self, request):
+                yield {
+                    "choices": [{
+                        "message": {
+                            "content": [
+                                {"type": "text", "text": "custom "},
+                                {"type": "text", "text": "gemini ok"},
+                            ],
+                        },
+                        "finish_reason": "stop",
+                    }]
+                }
+
+        events = []
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=FakeModel(),
+            system_prompt="",
+            tools=[],
+            on_event=lambda event: events.append(event),
+            messages=[{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+        )
+
+        content, tool_calls = executor._call_llm_stream(retry_on_empty=False)
+
+        self.assertEqual(content, "custom gemini ok")
+        self.assertEqual(tool_calls, [])
+        self.assertIn(
+            "custom gemini ok",
+            "".join(event["data"].get("delta", "") for event in events if event["type"] == "message_update"),
+        )
 
     def test_forced_text_retry_keeps_tool_schema_disabled(self):
         from agent.protocol.agent_stream import AgentStreamExecutor
@@ -12420,6 +12998,98 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertTrue(recovery["schema_only_recovery"])
         self.assertTrue(recovery["tool_schema_disabled"])
 
+    def test_context_overflow_schema_recovery_keeps_imagegen_for_generation_intent(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        class FakeAgent:
+            memory_manager = None
+            last_usage = {}
+            max_context_tokens = 10000
+
+            @staticmethod
+            def _get_model_context_window():
+                return 6000
+
+            @staticmethod
+            def _get_context_reserve_tokens():
+                return 500
+
+            @staticmethod
+            def _estimate_text_tokens(text):
+                return max(1, len(str(text or "")) // 4)
+
+        class FakeModel:
+            model = "imagegen-schema-heavy-model"
+
+            def __init__(self):
+                self.requests = []
+
+            def call_stream(self, request):
+                self.requests.append(request)
+                if len(self.requests) == 1:
+                    yield {
+                        "error": {
+                            "message": "request_too_large",
+                            "code": "context_length_exceeded",
+                            "type": "invalid_request_error",
+                        },
+                        "error_taxonomy": "context_overflow",
+                        "status_code": 400,
+                    }
+                    return
+                yield {
+                    "choices": [{
+                        "delta": {
+                            "tool_calls": [{
+                                "index": 0,
+                                "id": "tool-call-imagegen-recovery",
+                                "function": {
+                                    "name": "imagegen",
+                                    "arguments": json.dumps({"prompt": "生成第一张产品轮播图"}),
+                                },
+                            }]
+                        },
+                        "finish_reason": "tool_calls",
+                    }]
+                }
+
+        def tool(name):
+            return types.SimpleNamespace(
+                name=name,
+                description=f"{name} " + ("schema " * 2000),
+                params={"type": "object", "properties": {"value": {"type": "string"}}},
+            )
+
+        events = []
+        model = FakeModel()
+        executor = AgentStreamExecutor(
+            agent=FakeAgent(),
+            model=model,
+            system_prompt="system",
+            tools=[tool("read"), tool("bash"), tool("imagegen")],
+            on_event=lambda event: events.append(event),
+            messages=[{"role": "user", "content": [{"type": "text", "text": "请逐张生成 5 张轮播图"}]}],
+        )
+
+        with patch("config.conf", return_value={
+            "agent_context_budget_clamp_to_window": True,
+            "agent_context_budget_response_reserve_tokens": 500,
+        }):
+            content, tool_calls = executor._call_llm_stream(retry_on_empty=False, max_retries=0)
+
+        self.assertEqual(content, "")
+        self.assertEqual(tool_calls[0]["name"], "imagegen")
+        self.assertEqual(len(model.requests), 2)
+        self.assertEqual({entry["name"] for entry in model.requests[0].tools}, {"imagegen"})
+        self.assertEqual({entry["name"] for entry in model.requests[1].tools}, {"imagegen"})
+        recovery = [event["data"] for event in events if event["type"] == "context_overflow_recovery"][0]
+        self.assertTrue(recovery["applied"])
+        self.assertFalse(recovery["trim_applied"])
+        self.assertFalse(recovery["schema_only_recovery"])
+        self.assertTrue(recovery["imagegen_schema_recovery"])
+        self.assertFalse(recovery["force_text_response"])
+        self.assertFalse(recovery["tool_schema_disabled"])
+
     def test_context_overflow_after_partial_output_does_not_retry_or_clear_history(self):
         from agent.protocol.agent_stream import AgentStreamExecutor
 
@@ -12901,6 +13571,82 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertIn("Use the `browser` tool directly", reason)
         self.assertIn("Do not read", reason)
         self.assertNotIn("Call `host_diagnostics` first", reason)
+
+    def test_image_generation_raw_bash_is_blocked_in_favor_of_imagegen(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        def tool(name):
+            return types.SimpleNamespace(name=name)
+
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=types.SimpleNamespace(),
+            system_prompt="",
+            tools=[tool("bash"), tool("imagegen"), tool("host_diagnostics")],
+        )
+
+        command = "python skills/image-generation/scripts/generate.py '{\"prompt\":\"batch image\"}'"
+        reason = executor._external_capability_reroute("bash", {"command": command})
+
+        self.assertIn("native `imagegen` route is visible", reason)
+        self.assertIn("one or more `imagegen` tool calls", reason)
+        self.assertIn("current tool table", reason)
+        self.assertNotIn("tasks", reason)
+        self.assertEqual(executor._tool_chain_key("bash", {"command": command}), "imagegen:bash")
+
+        blocker = executor._tool_result_user_action_blocker(
+            "imagegen",
+            {
+                "error": "image generation failed",
+                "code": "needs_provider_credentials",
+                "nextAction": "configure_model_provider",
+            },
+        )
+        self.assertIn("Stop calling tools now", blocker)
+        self.assertIn("Do not fall back to shell/Python", blocker)
+        self.assertIn("configure_model_provider", blocker)
+
+    def test_image_generation_reroute_allows_deterministic_pil_postprocessing(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        def tool(name):
+            return types.SimpleNamespace(name=name)
+
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=types.SimpleNamespace(),
+            system_prompt="",
+            tools=[tool("bash"), tool("imagegen"), tool("host_diagnostics")],
+        )
+
+        postprocess = (
+            "python -c \"from PIL import Image, ImageDraw; "
+            "canvas=Image.new('RGB',(400,400),'white'); "
+            "draw=ImageDraw.Draw(canvas); draw.text((10,10),'A'); "
+            "canvas.save('contact-sheet.png')\""
+        )
+        resize_generated_output = (
+            "python -c \"from PIL import Image; "
+            "img=Image.open('generated.png'); "
+            "img.resize((200,200)).save('thumb.png')\""
+        )
+        semantic_generation = (
+            "python -c \"from PIL import Image, ImageDraw; "
+            "prompt='generate a product poster'; "
+            "canvas=Image.new('RGB',(400,400),'white'); "
+            "ImageDraw.Draw(canvas).text((10,10), prompt); "
+            "canvas.save('poster.png')\""
+        )
+
+        self.assertFalse(executor._looks_like_image_generation_shell_command(postprocess))
+        self.assertEqual(executor._external_capability_reroute("bash", {"command": postprocess}), "")
+        self.assertFalse(executor._looks_like_image_generation_shell_command(resize_generated_output))
+        self.assertEqual(executor._external_capability_reroute("bash", {"command": resize_generated_output}), "")
+        self.assertTrue(executor._looks_like_image_generation_shell_command(semantic_generation))
+        self.assertIn(
+            "native `imagegen` route is visible",
+            executor._external_capability_reroute("bash", {"command": semantic_generation}),
+        )
 
     def test_simple_raw_lark_cli_bash_autoroutes_to_feishu_tool(self):
         from agent.protocol.agent_stream import AgentStreamExecutor
@@ -13778,7 +14524,8 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertFalse(env_decision["allowed"])
         self.assertFalse(scheduler_decision["allowed"])
         self.assertFalse(rollback_decision["allowed"])
-        self.assertFalse(web_fetch_decision["allowed"])
+        self.assertTrue(web_fetch_decision["allowed"])
+        self.assertEqual(web_fetch_decision["reason"], "default-low-risk-web-fetch")
         self.assertFalse(web_search_decision["allowed"])
         self.assertFalse(vision_decision["allowed"])
         self.assertFalse(imagegen_decision["allowed"])
@@ -14899,6 +15646,80 @@ class TestAgentHostBoundary(unittest.TestCase):
             "诊断信息",
         ]:
             self.assertIn(marker, recovery_source)
+
+    def test_v026_live_thinking_disclosure_is_not_truncated_or_replaced_by_history(self):
+        root = Path(__file__).resolve().parents[1]
+        app_source = (root / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
+        message_source = (root / "desktop" / "src" / "components" / "MessageContent.tsx").read_text(encoding="utf-8")
+        legacy_console_source = (root / "channel" / "web" / "static" / "js" / "console.js").read_text(encoding="utf-8")
+        merge_start = app_source.index("function mergeHistoryAndLocalRequestMessage")
+        merge_end = app_source.index("function mergeHistoryWithLocalMessages", merge_start)
+        merge_source = app_source[merge_start:merge_end]
+
+        self.assertIn("const SESSION_UI_THINKING_STEP_CHARS = 12_000;", app_source)
+        self.assertIn("function assistantDisclosureWeight", app_source)
+        self.assertIn("function mergeLocalLiveAssistantDisclosure", app_source)
+        self.assertIn("localIsLiveOrSettled", app_source)
+        self.assertIn("historyHasVisibleAnswer", app_source)
+        self.assertIn("id: localMessage.id || historyMessage.id", app_source)
+        self.assertIn("mergeLocalLiveAssistantDisclosure(", merge_source)
+        self.assertIn("if (historyWithLiveLocalDisclosure !== historyWithLocalArtifacts)", merge_source)
+        self.assertIn("REASONING_MARKDOWN_RENDER_CAP = 64 * 1024", message_source)
+        self.assertIn("return { text, truncated: text.length > REASONING_MARKDOWN_RENDER_CAP };", message_source)
+        self.assertNotIn("chars omitted", message_source.split("function truncateReasoning", 1)[1].split("function formatToolValue", 1)[0])
+        self.assertIn("const REASONING_RENDER_CAP = 256 * 1024;", legacy_console_source)
+        self.assertIn("return { text: full, truncated: full.length > REASONING_RENDER_CAP, omitted: 0 };", legacy_console_source)
+        self.assertNotIn("reasoning truncated for display", legacy_console_source)
+        self.assertNotIn("String(result).slice(0, 2000)", legacy_console_source)
+
+    def test_v026_history_projection_infers_completed_run_timing(self):
+        root = Path(__file__).resolve().parents[1]
+        app_source = (root / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
+        map_start = app_source.index("function mapRuntimeHistory")
+        map_end = app_source.index("function toolEnabled", map_start)
+        map_source = app_source[map_start:map_end]
+
+        self.assertIn("let currentTurnStartedAtMs", map_source)
+        self.assertIn("if (item.role === \"user\" && typeof item.created_at === \"number\")", map_source)
+        self.assertIn("if (mapped.role !== \"assistant\" || mapped.runTiming?.startedAtMs) return mapped;", map_source)
+        self.assertIn("const startedAtMs = currentTurnStartedAtMs || assistantAtMs || Date.now();", map_source)
+        self.assertIn("state: mapped.pending ? \"running\" : \"completed\"", map_source)
+        self.assertIn("terminalAtMs", map_source)
+
+    def test_v026_model_menu_uses_enterprise_fallback_without_sticky_divider(self):
+        root = Path(__file__).resolve().parents[1]
+        app_source = (root / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
+        api_source = (root / "desktop" / "src" / "services" / "ecorexApi.ts").read_text(encoding="utf-8")
+        types_source = (root / "desktop" / "src" / "vite-env.d.ts").read_text(encoding="utf-8")
+        web_source = (root / "channel" / "web" / "web_channel.py").read_text(encoding="utf-8")
+
+        self.assertIn("function normalizeEnterpriseModelConfigOptions", api_source)
+        self.assertIn("async function loadEnterpriseChatModelOptionsFallback", api_source)
+        self.assertIn("window.ecorexDesktop?.getEnterpriseModelConfig", api_source)
+        self.assertIn("const fallback = await loadEnterpriseChatModelOptionsFallback();", api_source)
+        self.assertIn("getEnterpriseModelConfig?:", types_source)
+        self.assertIn("return logo ? `./assets/logos/${logo}.svg` : \"\";", app_source)
+        self.assertNotIn("return logo ? `/assets/logos/${logo}.svg` : \"\";", app_source)
+        self.assertIn('kind?: "model-switch-divider";', app_source)
+        self.assertIn('if (message.kind === "model-switch-divider")', app_source)
+        self.assertIn('className="model-switch-divider"', app_source)
+        self.assertIn('className="message system model-switch-message"', app_source)
+        self.assertNotIn('message.kind === "model-switch-divider" ? " is-model-switch" : ""', app_source)
+        self.assertNotIn(".message.system.is-model-switch", (root / "desktop" / "src" / "styles" / "app.css").read_text(encoding="utf-8"))
+        send_start = api_source.index("export async function sendChatMessage")
+        send_end = api_source.index("export async function prepareRequestRetry", send_start)
+        self.assertNotIn("refreshEnterprisePolicy", api_source[send_start:send_end])
+        ensure_start = web_source.index("async function ensureModelReady()")
+        ensure_source = web_source[ensure_start:web_source.index("var updateStatus", ensure_start)]
+        self.assertLess(
+            ensure_source.index("if (await localModelReady())"),
+            ensure_source.index("var result = await refreshModelPolicy()"),
+        )
+        render_start = app_source.index("visibleMessages.map((message) =>")
+        render_end = app_source.index("const messageSessionId = activeSessionId;", render_start)
+        self.assertIn('className="message system model-switch-message"', app_source[render_start:render_end])
+        self.assertIn('className="model-switch-divider"', app_source[render_start:render_end])
+        self.assertNotIn("message-copy-button", app_source[render_start:render_end])
 
     def test_v019_retry_prepare_returns_safe_manual_draft(self):
         with isolated_run_ledger():

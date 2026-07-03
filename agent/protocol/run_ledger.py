@@ -66,6 +66,8 @@ class RunLedger:
         parent_id: str = "",
         phase: str = "accepted",
         status: str = "running",
+        model: str = "",
+        provider: str = "",
         metadata: Optional[Dict[str, Any]] = None,
     ) -> bool:
         if not request_id or not session_id:
@@ -94,7 +96,9 @@ class RunLedger:
                            status=?,
                            phase=?,
                            updated_at=?,
-                           metadata_json=?
+                           metadata_json=?,
+                           model=?,
+                           provider=?
                      WHERE request_id=?
                     """,
                     (
@@ -104,6 +108,8 @@ class RunLedger:
                         phase or "",
                         now,
                         payload,
+                        model or None,
+                        provider or None,
                         request_id,
                     ),
                 )
@@ -112,8 +118,8 @@ class RunLedger:
                     """
                     INSERT INTO agent_runs (
                         request_id, session_id, parent_id, run_type, status, phase,
-                        created_at, started_at, updated_at, metadata_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        created_at, started_at, updated_at, metadata_json, model, provider
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         request_id,
@@ -126,6 +132,8 @@ class RunLedger:
                         now,
                         now,
                         payload,
+                        model or None,
+                        provider or None,
                     ),
                 )
             conn.commit()
@@ -257,7 +265,23 @@ class RunLedger:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connection() as conn:
             conn.executescript(_DDL)
+            self._migrate_schema(conn)
             conn.commit()
+
+    @staticmethod
+    def _migrate_schema(conn: sqlite3.Connection) -> None:
+        columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(agent_runs)").fetchall()
+            if row["name"]
+        }
+        migrations = {
+            "model": "ALTER TABLE agent_runs ADD COLUMN model TEXT",
+            "provider": "ALTER TABLE agent_runs ADD COLUMN provider TEXT",
+        }
+        for column, statement in migrations.items():
+            if column not in columns:
+                conn.execute(statement)
 
     @contextmanager
     def _connection(self):

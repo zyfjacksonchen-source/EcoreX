@@ -146,6 +146,39 @@ class TestModelTelemetry(unittest.TestCase):
         self.assertEqual(event["reasoning_tokens"], 4)
         self.assertEqual(event["cached_tokens"], 1)
 
+    def test_openai_http_stream_normalizes_non_sse_json_chat_response(self):
+        from unittest.mock import patch
+        from models.openai.openai_http_client import OpenAIHTTPClient
+
+        response = self._fake_response(
+            200,
+            {
+                "choices": [{
+                    "message": {
+                        "content": [
+                            {"type": "text", "text": "custom "},
+                            {"type": "text", "text": "gemini ok"},
+                        ],
+                    },
+                    "finish_reason": "stop",
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+            },
+            headers={"Content-Type": "application/json"},
+        )
+
+        with patch("models.openai.openai_http_client.requests.post", return_value=response):
+            chunks = list(OpenAIHTTPClient().chat_completions(
+                api_key="test-key",
+                api_base="https://custom-gemini.test/v1",
+                model="gemini-custom-proxy",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+            ))
+
+        self.assertEqual(chunks[0]["choices"][0]["delta"]["content"], "custom gemini ok")
+        self.assertEqual(chunks[0]["choices"][0]["finish_reason"], "stop")
+
     def test_openai_compatible_stream_error_records_taxonomy(self):
         from models.model_telemetry import get_recent_model_calls
 
@@ -958,6 +991,7 @@ class TestModelTelemetry(unittest.TestCase):
                 self.assertEqual(len(posts), 2)
                 events = get_recent_model_calls()
                 self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+
                 self.assertEqual(events[0]["provider"], spec["provider"])
                 self.assertEqual(events[0]["error_taxonomy"], "rate_limit")
                 self.assertEqual(events[0]["error_code"], "rate_limit_exceeded")
@@ -1074,6 +1108,38 @@ class TestModelTelemetry(unittest.TestCase):
                 events = get_recent_model_calls()
                 self.assertEqual([event["status"] for event in events], ["failed", "completed"])
                 self.assertEqual(events[0]["error_taxonomy"], "network_error")
+
+    def test_gemini_rest_uses_camel_case_system_instruction(self):
+        from agent.protocol.models import LLMRequest
+
+        spec = self._special_native_http_provider_bot_for_tests("gemini")
+        posts = []
+
+        def fake_post(url, headers=None, json=None, timeout=None, **kwargs):
+            posts.append({"url": url, "headers": headers, "json": json, "timeout": timeout, **kwargs})
+            return self._FakeHTTPResponse(200, spec["success_payload"])
+
+        model = self._native_agent_model(
+            spec["bot"],
+            model_name=spec["model"],
+            provider=spec["provider"],
+        )
+
+        with self._with_provider_patches(spec, fake_post):
+            result = model.call(LLMRequest(
+                messages=[
+                    {"role": "system", "content": "follow the system"},
+                    {"role": "user", "content": "hi"},
+                ],
+            ))
+
+        self.assertEqual(result["choices"][0]["message"]["content"], "ok")
+        self.assertEqual(len(posts), 1)
+        payload = posts[0]["json"]
+        self.assertIn("systemInstruction", payload)
+        self.assertNotIn("system_instruction", payload)
+        self.assertEqual(payload["systemInstruction"]["parts"][0]["text"], "follow the system")
+        self.assertEqual([item["role"] for item in payload["contents"]], ["user"])
 
     def test_special_native_http_providers_stream_retry_and_suppression(self):
         from agent.protocol.models import LLMRequest

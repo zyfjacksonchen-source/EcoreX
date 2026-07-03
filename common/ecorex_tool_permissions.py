@@ -17,6 +17,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
+from urllib.parse import urlparse
 
 from common.log import logger
 
@@ -48,6 +49,7 @@ _DANGEROUS_TOOLS = {
     "vision",
     "ocr",
     "imagegen",
+    "image_jobs",
 }
 _ALLOWED_MODES = {"full-access", "smart-ask", "always-ask", "read-only", "custom"}
 _DEFAULT_TIMEOUT_SECONDS = 300
@@ -80,6 +82,13 @@ def _write_json(path: Path, payload: Dict[str, Any]) -> None:
 
 def _mask_sensitive(value: str) -> str:
     text = value or ""
+    text = re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[A-Za-z0-9._~+/\-=]{8,}", r"\1***", text)
+    text = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._~+/\-=]{8,}", r"\1***", text)
+    text = re.sub(
+        r'(?i)("?(?:api[_-]?key|token|password|secret|authorization)"?\s*:\s*")([^"]*)(")',
+        r"\1***\3",
+        text,
+    )
     text = re.sub(r"sk-[A-Za-z0-9_\-]{12,}", "sk-***", text)
     text = re.sub(r"gh[pousr]_[A-Za-z0-9_]{12,}", "ghp_***", text)
     text = re.sub(r"(?i)(api[_-]?key|token|password|secret)(=|:)\s*[^\s,&]+", r"\1=***", text)
@@ -187,6 +196,13 @@ def _summarize_args(tool_name: str, arguments: Dict[str, Any]) -> str:
             if part
         )
         return _mask_sensitive(detail).strip()[:500] or "image generation"
+    if normalized == "image_jobs":
+        action = str(arguments.get("action") or "")
+        job_id = str(arguments.get("job_id") or arguments.get("jobId") or "")
+        operation = str(arguments.get("operation") or "")
+        task_count = str(arguments.get("task_count") or arguments.get("taskCount") or "")
+        detail = " ".join(part for part in [action, operation, job_id, f"tasks={task_count}" if task_count else ""] if part)
+        return _mask_sensitive(detail).strip()[:500] or "image job"
     return _mask_sensitive(json.dumps(arguments, ensure_ascii=False, default=str))[:500]
 
 
@@ -233,6 +249,11 @@ def _is_trusted_default_chrome_devtools_start(args: Dict[str, Any]) -> bool:
         and flags.issubset(trusted_flags)
         and bool(args.get("trusted_default_chrome_devtools"))
     )
+
+
+def _is_low_risk_web_fetch_request(args: Dict[str, Any]) -> bool:
+    parsed = urlparse(str((args or {}).get("url") or "").strip())
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
 def _is_read_only_tongxin_cli_request(args: Dict[str, Any]) -> bool:
@@ -318,27 +339,201 @@ def _is_tongxin_config_driven_auth_request(args: Dict[str, Any]) -> bool:
 
 def _is_read_only_feishu_cli_request(args: Dict[str, Any]) -> bool:
     action = str((args or {}).get("action") or "").strip().lower()
+    if action == "run":
+        return _classify_feishu_cli_run(args) == "read" and not _feishu_cli_run_needs_output_write_check(args)
     return action in {"status", "diagnose", "ensure", "config_init_status", "agent_auth_status", "auth_login_status", "auth_status"}
 
 
 def _is_default_feishu_cli_request(args: Dict[str, Any]) -> bool:
     action = str((args or {}).get("action") or "").strip().lower().replace("-", "_")
+    if action == "run":
+        return _classify_feishu_cli_run(args) == "read" and not _feishu_cli_run_needs_output_write_check(args)
     return action in {
         "status",
         "diagnose",
         "ensure",
-        "install",
-        "agent_auth",
-        "agent_authorize",
-        "authorize_agent",
-        "config_init",
         "config_init_status",
         "agent_auth_status",
         "auth_login_status",
         "auth_status",
-        "auth_login",
-        "run",
     }
+
+
+_FEISHU_CLI_STRUCTURED_READ_ACTIONS = {
+    "status",
+    "diagnose",
+    "ensure",
+    "config_init_status",
+    "agent_auth_status",
+    "auth_login_status",
+    "auth_status",
+}
+
+_FEISHU_CLI_STRUCTURED_CONFIG_ACTIONS = {
+    "install",
+    "agent_auth",
+    "agent_authorize",
+    "authorize_agent",
+    "config_init",
+    "auth_login",
+}
+
+
+_FEISHU_CLI_RUN_READ_WORDS = {
+    "check",
+    "count",
+    "describe",
+    "download",
+    "export",
+    "find",
+    "get",
+    "help",
+    "info",
+    "inspect",
+    "list",
+    "metadata",
+    "preview",
+    "query",
+    "read",
+    "schema",
+    "search",
+    "show",
+    "status",
+    "version",
+}
+_FEISHU_CLI_RUN_WRITE_WORDS = {
+    "add",
+    "append",
+    "approve",
+    "batch",
+    "clear",
+    "copy",
+    "create",
+    "delete",
+    "forward",
+    "import",
+    "insert",
+    "move",
+    "patch",
+    "publish",
+    "reject",
+    "remove",
+    "reply",
+    "replace",
+    "send",
+    "set",
+    "submit",
+    "sync",
+    "update",
+    "upload",
+    "write",
+}
+_FEISHU_CLI_RUN_ADMIN_WORDS = {
+    "admin",
+    "auth",
+    "authorize",
+    "bot",
+    "config",
+    "grant",
+    "invite",
+    "login",
+    "member",
+    "owner",
+    "permission",
+    "permissions",
+    "role",
+    "secret",
+    "share",
+    "subscribe",
+    "tenant",
+    "token",
+    "webhook",
+}
+
+
+def _feishu_cli_run_tokens(args: Dict[str, Any]) -> list:
+    raw = (args or {}).get("args")
+    if isinstance(raw, str):
+        tokens = raw.split()
+    elif isinstance(raw, (list, tuple)):
+        tokens = [str(item) for item in raw]
+    else:
+        tokens = []
+    tokens = [token.strip() for token in tokens if str(token).strip()]
+    if tokens and Path(tokens[0]).name.lower() in {"lark-cli", "lark-cli.cmd", "feishu-cli", "feishu-cli.cmd"}:
+        tokens = tokens[1:]
+    return tokens
+
+
+def _feishu_cli_semantic_words(args: Dict[str, Any]) -> list:
+    words = []
+    skip_next = False
+    for token in _feishu_cli_run_tokens(args):
+        if skip_next:
+            skip_next = False
+            continue
+        normalized = token.strip().lower()
+        if not normalized:
+            continue
+        if normalized in {"--as", "--tenant", "--user", "--app", "--page-token", "--page-size", "--limit", "--output", "-o"}:
+            skip_next = True
+            continue
+        if normalized.startswith("--") or normalized.startswith("-"):
+            continue
+        normalized = normalized.lstrip("+")
+        parts = [part for part in re.split(r"[^a-z0-9]+", normalized) if part]
+        words.extend(parts)
+    return words
+
+
+def _feishu_cli_output_paths(args: Dict[str, Any]) -> list:
+    tokens = _feishu_cli_run_tokens(args)
+    paths = []
+    output_flags = {"--output", "-o", "--out", "--output-file", "--output_path", "--output-path", "--dir", "--output-dir"}
+    for index, token in enumerate(tokens):
+        normalized = str(token or "").strip()
+        if not normalized:
+            continue
+        lowered = normalized.lower()
+        if lowered in output_flags and index + 1 < len(tokens):
+            paths.append(tokens[index + 1])
+            continue
+        for prefix in ("--output=", "-o=", "--out=", "--output-file=", "--output_path=", "--output-path=", "--dir=", "--output-dir="):
+            if lowered.startswith(prefix):
+                paths.append(normalized.split("=", 1)[1])
+                break
+    return [str(path).strip() for path in paths if str(path).strip()]
+
+
+def _feishu_cli_run_needs_output_write_check(args: Dict[str, Any]) -> bool:
+    words = set(_feishu_cli_semantic_words(args))
+    return bool(words.intersection({"download", "export"}))
+
+
+def _classify_feishu_cli_run(args: Dict[str, Any]) -> str:
+    """Classify lark-cli business commands as read/write/admin/unknown.
+
+    The official CLI exposes many domain commands behind action=run. This
+    intentionally stays conservative: read-only verbs pass by default; write,
+    send, delete, sharing, auth, config, member, and role verbs require a
+    stronger permission path.
+    """
+    words = _feishu_cli_semantic_words(args)
+    if not words:
+        return "unknown"
+    if words[0] in {"help", "version", "status"}:
+        return "read"
+    if len(words) >= 2 and words[0] == "auth" and words[1] == "status":
+        return "read"
+    if len(words) >= 2 and words[0] == "config" and words[1] in {"get", "list", "show", "status"}:
+        return "read"
+    if any(word in _FEISHU_CLI_RUN_ADMIN_WORDS for word in words):
+        return "admin"
+    if any(word in _FEISHU_CLI_RUN_WRITE_WORDS for word in words):
+        return "write"
+    if any(word in _FEISHU_CLI_RUN_READ_WORDS for word in words):
+        return "read"
+    return "unknown"
 
 
 def _is_tongxin_capability_configure_request(tool_name: str, args: Dict[str, Any]) -> bool:
@@ -503,6 +698,72 @@ def _allowed_for_operation(access: str, operation: str) -> bool:
     return _ACCESS_RANK.get(access, 0) >= required
 
 
+_LOW_RISK_CAPABILITY_ACTIONS = {
+    "diagnose",
+    "get",
+    "inspect",
+    "list",
+    "probe",
+    "read",
+    "snapshot",
+    "status",
+}
+_SCHEDULER_READ_ACTIONS = {"diagnose", "get", "list", "projection", "read", "refresh", "status"}
+_SCHEDULER_MUTATION_ACTIONS = {"create", "delete", "disable", "enable", "execute", "start", "stop", "update"}
+_IMAGE_JOB_READ_ACTIONS = {"collect", "get", "list", "projection", "read", "status"}
+_IMAGE_JOB_SAFE_CONTROL_ACTIONS = {"cancel"}
+_BASH_WORKSPACE_READ_ACTIONS = {"read", "workspace_read", "workspace-list", "workspace_list"}
+_BASH_WORKSPACE_WRITE_ACTIONS = {"auditable_write", "workspace_write", "workspace-write"}
+
+
+def _normalize_capability_id(value: Any) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    aliases = {
+        "agent_capabilities": "agent_capability",
+        "artifact_read": "artifact",
+        "artifacts": "artifact",
+        "browser_snapshot": "browser",
+        "feishu": "feishu_cli",
+        "feishu_lark": "feishu_cli",
+        "image_job": "image_jobs",
+        "imagejob": "image_jobs",
+        "image_job_status": "image_jobs",
+        "image_status": "image_jobs",
+        "lark": "feishu_cli",
+        "lark_cli": "feishu_cli",
+        "optional_ability": "optional_abilities",
+        "scheduler_task": "scheduler",
+        "workspace_read": "workspace",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _normalize_capability_action(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_")
+
+
+def _capability_tool_name(capability: str) -> str:
+    if capability in {
+        "agent_capability",
+        "bash",
+        "browser",
+        "feishu_cli",
+        "imagegen",
+        "image_jobs",
+        "ocr",
+        "optional_abilities",
+        "scheduler",
+        "tongxin_cli",
+        "vision",
+    }:
+        return capability
+    if capability == "workspace":
+        return "read"
+    if capability == "artifact":
+        return "read"
+    return capability
+
+
 class ToolPermissionBroker:
     def __init__(self) -> None:
         self._condition = threading.Condition()
@@ -524,6 +785,9 @@ class ToolPermissionBroker:
             return {"allowed": True, "reason": "read-only-optional-ability-status"}
         if normalized_tool == "agent_capability" and str(args.get("action") or "").strip().lower() in {"list_packs", "diagnose"}:
             return {"allowed": True, "reason": "read-only-agent-capability-status"}
+        if normalized_tool == "web_fetch" and _is_low_risk_web_fetch_request(args):
+            self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "default-low-risk-web-fetch"})
+            return {"allowed": True, "reason": "default-low-risk-web-fetch"}
         if normalized_tool == "tongxin_cli" and _is_tongxin_auto_configure_request(args):
             self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "default-tongxin-cli-auto-config"})
             return {"allowed": True, "reason": "default-tongxin-cli-auto-config"}
@@ -659,6 +923,64 @@ class ToolPermissionBroker:
             profile = _default_filesystem_profile(cwd)
         return _workspace_roots(profile, cwd)
 
+    def authorize_capability(
+        self,
+        capability: str,
+        action: str = "",
+        *,
+        resource: str = "",
+        arguments: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        cwd: Optional[str] = None,
+        tool_call_id: str = "",
+        emit_event: Optional[Emitter] = None,
+        cancel_event: Any = None,
+        timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS,
+    ) -> Decision:
+        """Authorize a capability-level action through the same broker.
+
+        This is the public boundary for Web APIs, AgentStream, scheduler, image
+        jobs, and future connectors. Low-risk observability actions are decided
+        directly. High-risk actions fall back to the existing tool prompt/full
+        access path so there is still one permission source of truth.
+        """
+        cap = _normalize_capability_id(capability)
+        args = arguments if isinstance(arguments, dict) else {}
+        meta = metadata if isinstance(metadata, dict) else {}
+        act = _normalize_capability_action(action or args.get("action") or meta.get("action"))
+        res = str(resource or args.get("path") or args.get("file") or args.get("image") or meta.get("resource") or "")
+
+        decision = self._authorize_capability_default(cap, act, args, res, cwd, meta)
+        if decision is not None:
+            self._audit_capability(cap, act, decision, resource=res, metadata=meta)
+            return decision
+
+        tool_name = _capability_tool_name(cap)
+        tool_args = dict(args)
+        if act and not tool_args.get("action"):
+            tool_args["action"] = act
+        if res and not any(tool_args.get(key) for key in ("path", "file", "image", "resource")):
+            tool_args["resource"] = res
+
+        if not self._requires_permission(tool_name):
+            decision = {"allowed": True, "reason": "not-required"}
+            self._audit_capability(cap, act, decision, resource=res, metadata=meta)
+            return decision
+
+        if emit_event:
+            decision = self.authorize(
+                tool_name=tool_name,
+                tool_call_id=tool_call_id or f"capability-{uuid.uuid4().hex}",
+                arguments=tool_args,
+                emit_event=emit_event,
+                cancel_event=cancel_event,
+                timeout_seconds=timeout_seconds,
+            )
+        else:
+            decision = self.authorize_noninteractive(tool_name, tool_args)
+        self._audit_capability(cap, act, decision, resource=res, metadata=meta)
+        return decision
+
     def authorize_noninteractive(self, tool_name: str, arguments: Optional[Dict[str, Any]] = None) -> Decision:
         """Authorize background startup work that cannot surface a UI prompt."""
         normalized_tool = (tool_name or "").strip().lower()
@@ -667,6 +989,9 @@ class ToolPermissionBroker:
             return {"allowed": True, "reason": "read-only-optional-ability-status"}
         if normalized_tool == "agent_capability" and str(args.get("action") or "").strip().lower() in {"list_packs", "diagnose"}:
             return {"allowed": True, "reason": "read-only-agent-capability-status"}
+        if normalized_tool == "web_fetch" and _is_low_risk_web_fetch_request(args):
+            self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "default-low-risk-web-fetch"})
+            return {"allowed": True, "reason": "default-low-risk-web-fetch"}
         if normalized_tool == "tongxin_cli" and _is_tongxin_auto_configure_request(args):
             self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "default-tongxin-cli-auto-config"})
             return {"allowed": True, "reason": "default-tongxin-cli-auto-config"}
@@ -781,16 +1106,16 @@ class ToolPermissionBroker:
                 "reason": "read-only",
             })
             return {"allowed": False, "reason": "Current read-only mode blocks local file writes."}
+        if mode == "full-access":
+            self._audit("filesystem-access", "allow", {
+                "operation": op,
+                "path": _mask_sensitive(path),
+                "reason": "full-access",
+            })
+            return {"allowed": True, "reason": "full-access"}
 
         profile = settings.get("filesystem")
         if not isinstance(profile, dict):
-            if mode == "full-access":
-                self._audit("filesystem-access", "allow", {
-                    "operation": op,
-                    "path": _mask_sensitive(path),
-                    "reason": "full-access-no-filesystem-profile",
-                })
-                return {"allowed": True, "reason": "full-access"}
             if mode == "custom":
                 self._audit("filesystem-access", "deny", {
                     "operation": op,
@@ -883,6 +1208,161 @@ class ToolPermissionBroker:
             self._decisions[request_id] = payload
             self._condition.notify_all()
         return {"status": "success", "request_id": request_id, "allowed": payload["allowed"]}
+
+    def _authorize_capability_default(
+        self,
+        capability: str,
+        action: str,
+        args: Dict[str, Any],
+        resource: str,
+        cwd: Optional[str],
+        metadata: Dict[str, Any],
+    ) -> Optional[Decision]:
+        settings = self._load_settings()
+        mode = str(settings.get("mode") or "smart-ask")
+
+        if capability == "optional_abilities" and action in {"list", "status"}:
+            return {"allowed": True, "reason": "default-low-risk-optional-ability-status"}
+        if capability == "agent_capability" and action in {"diagnose", "list", "list_packs", "status"}:
+            return {"allowed": True, "reason": "default-low-risk-agent-capability-status"}
+
+        if capability == "scheduler":
+            if action in _SCHEDULER_READ_ACTIONS:
+                return {"allowed": True, "reason": "default-low-risk-scheduler-read"}
+            if action in _SCHEDULER_MUTATION_ACTIONS and mode == "read-only":
+                return {"allowed": False, "reason": "Current read-only mode blocks scheduled task changes."}
+            return None
+
+        if capability == "image_jobs":
+            if action in _IMAGE_JOB_READ_ACTIONS:
+                return {"allowed": True, "reason": "default-low-risk-image-job-status"}
+            if action in _IMAGE_JOB_SAFE_CONTROL_ACTIONS:
+                return {"allowed": True, "reason": "default-safe-image-job-control"}
+            if action in {"start", "generate", "edit"} and mode == "read-only":
+                return {"allowed": False, "reason": "Current read-only mode blocks image job creation."}
+            if action in {"start", "generate", "edit"} and bool(metadata.get("user_initiated")):
+                return {"allowed": True, "reason": "foreground-user-initiated-image-job-start"}
+            return None
+
+        if capability == "browser" and action in {"snapshot", "status", "list", "get"}:
+            return {"allowed": True, "reason": "default-low-risk-browser-snapshot"}
+
+        if capability == "web_fetch":
+            if _is_low_risk_web_fetch_request(args):
+                return {"allowed": True, "reason": "default-low-risk-web-fetch"}
+            return None
+
+        if capability in {"workspace", "artifact"}:
+            if action in _LOW_RISK_CAPABILITY_ACTIONS:
+                if resource:
+                    return self.authorize_file_access("read", _resolve_profile_path(resource, cwd), cwd=cwd)
+                return {"allowed": True, "reason": f"default-low-risk-{capability}-read"}
+            return None
+
+        if capability == "bash":
+            if action in _BASH_WORKSPACE_READ_ACTIONS:
+                if args.get("command") or args.get("cmd"):
+                    return {"allowed": False, "reason": "Bash workspace read cannot carry a shell command."}
+                if not resource:
+                    return {"allowed": False, "reason": "Workspace read requires a target path."}
+                return self.authorize_file_access("read", _resolve_profile_path(resource, cwd), cwd=cwd)
+            if action in _BASH_WORKSPACE_WRITE_ACTIONS:
+                if args.get("command") or args.get("cmd"):
+                    return {"allowed": False, "reason": "Bash workspace write cannot carry a shell command."}
+                if not resource:
+                    return {"allowed": False, "reason": "Workspace write requires a target path."}
+                return self.authorize_file_access("write", _resolve_profile_path(resource, cwd), cwd=cwd)
+            if action in {"execute", "run", "shell", "system_shell"}:
+                if mode == "read-only":
+                    return {"allowed": False, "reason": "Current read-only mode blocks local tool execution."}
+                if mode == "full-access":
+                    return {"allowed": True, "reason": "full-access"}
+                if settings.get("alwaysAllow", {}).get(self._grant_key("bash")):
+                    return {"allowed": True, "reason": "remembered-grant"}
+                return None
+            return None
+
+        if capability == "feishu_cli":
+            tool_action = str(args.get("action") or action or "").strip().lower().replace("-", "_")
+            if tool_action == "run":
+                classification = _classify_feishu_cli_run(args)
+                if classification == "read":
+                    if _feishu_cli_run_needs_output_write_check(args):
+                        output_paths = _feishu_cli_output_paths(args)
+                        if not output_paths:
+                            return {
+                                "allowed": False,
+                                "reason": "Feishu download/export commands require an explicit output path inside the authorized workspace.",
+                                "classification": "write",
+                            }
+                        for output_path in output_paths:
+                            file_decision = self.authorize_file_access("write", _resolve_profile_path(output_path, cwd), cwd=cwd)
+                            if not bool(file_decision.get("allowed")):
+                                return {
+                                    "allowed": False,
+                                    "reason": file_decision.get("reason") or "Feishu output path is not authorized for write.",
+                                    "classification": "write",
+                                }
+                    return {"allowed": True, "reason": "default-read-only-feishu-cli-run", "classification": classification}
+                if mode == "read-only":
+                    return {
+                        "allowed": False,
+                        "reason": "Current read-only mode blocks Feishu write/admin CLI commands.",
+                        "classification": classification,
+                    }
+                if mode == "full-access":
+                    return {"allowed": True, "reason": "full-access", "classification": classification}
+                if settings.get("alwaysAllow", {}).get(self._grant_key("feishu_cli")):
+                    return {"allowed": True, "reason": "remembered-grant", "classification": classification}
+                return None
+            if _is_read_only_feishu_cli_request(args):
+                return {"allowed": True, "reason": "default-read-only-feishu-cli"}
+            if tool_action in _FEISHU_CLI_STRUCTURED_READ_ACTIONS:
+                return {"allowed": True, "reason": "default-read-only-feishu-cli", "classification": "read"}
+            if tool_action in _FEISHU_CLI_STRUCTURED_CONFIG_ACTIONS:
+                if mode == "read-only":
+                    return {
+                        "allowed": False,
+                        "reason": "Current read-only mode blocks Feishu install/config/auth actions.",
+                        "classification": "configure",
+                    }
+                if mode == "full-access":
+                    return {"allowed": True, "reason": "full-access", "classification": "configure"}
+                if settings.get("alwaysAllow", {}).get(self._grant_key("feishu_cli")):
+                    return {"allowed": True, "reason": "remembered-grant", "classification": "configure"}
+                return None
+            return None
+
+        if capability in {"ocr", "vision", "imagegen"} and action in {"diagnose", "probe", "status"}:
+            return {"allowed": True, "reason": f"default-low-risk-{capability}-status"}
+
+        return None
+
+    def _audit_capability(
+        self,
+        capability: str,
+        action: str,
+        decision: Decision,
+        *,
+        resource: str = "",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        detail = {
+            "capability": capability,
+            "action": action,
+            "reason": decision.get("reason", ""),
+        }
+        if resource:
+            detail["resource"] = _mask_sensitive(resource)
+        if decision.get("classification"):
+            detail["classification"] = decision.get("classification")
+        if isinstance(metadata, dict):
+            source = metadata.get("source") or metadata.get("surface")
+            if source:
+                detail["source"] = str(source)
+            if "user_initiated" in metadata:
+                detail["userInitiated"] = bool(metadata.get("user_initiated"))
+        self._audit("capability-authorization", "allow" if decision.get("allowed") else "deny", detail)
 
     def _evaluate_filesystem_profile(
         self,
@@ -1047,6 +1527,8 @@ class ToolPermissionBroker:
             return "Image analysis confirmation"
         if tool_name == "imagegen":
             return "Image generation confirmation"
+        if tool_name == "image_jobs":
+            return "Image job confirmation"
         return "Local command confirmation"
 
     @staticmethod
@@ -1083,6 +1565,8 @@ class ToolPermissionBroker:
             return f"EcoreX wants to analyze an image using a model API: {summary}"
         if tool_name == "imagegen":
             return f"EcoreX wants to generate or edit images and write local image files: {summary}"
+        if tool_name == "image_jobs":
+            return f"EcoreX wants to start or control an image job: {summary}"
         return f"EcoreX wants to run a local shell command: {summary}"
 
 
@@ -1091,3 +1575,7 @@ _BROKER = ToolPermissionBroker()
 
 def get_tool_permission_broker() -> ToolPermissionBroker:
     return _BROKER
+
+
+def authorize_capability(capability: str, action: str = "", **kwargs) -> Decision:
+    return _BROKER.authorize_capability(capability, action, **kwargs)

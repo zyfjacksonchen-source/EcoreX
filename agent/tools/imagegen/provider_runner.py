@@ -34,6 +34,7 @@ CONFIG_TO_ENV = {
     "dashscope_api_key": "DASHSCOPE_API_KEY",
     "dashscope_api_base": "DASHSCOPE_API_BASE",
 }
+_TRUE_VALUES = {"1", "true", "yes", "on", "enabled"}
 
 
 def _image_url_arg(args: Mapping[str, Any]) -> Any:
@@ -56,6 +57,10 @@ def image_generation_env_with_config(base_env: Mapping[str, str] | None = None) 
             env[env_key] = str(cfg.get(config_key))
     env["PYTHONIOENCODING"] = "utf-8"
     return env
+
+
+def _env_bool(env: Mapping[str, str], name: str) -> bool:
+    return str(env.get(name) or "").strip().lower() in _TRUE_VALUES
 
 
 def load_image_generation_module(script_path: Path) -> ModuleType:
@@ -122,12 +127,15 @@ def run_image_generation_payload(
 
     effective_env = image_generation_env_with_config(env)
     output_dir_text = str(output_dir)
+    honor_legacy_skill_model = _env_bool(effective_env, "ECOREX_IMAGEGEN_ALLOW_SKILL_MODEL")
     model = (
         args.get("model")
-        or effective_env.get("SKILL_IMAGE_GENERATION_MODEL")
+        or (effective_env.get("SKILL_IMAGE_GENERATION_MODEL") if honor_legacy_skill_model else "")
         or module.OpenAIProvider.DEFAULT_MODEL
     )
-    provider_id = args.get("provider") or effective_env.get("SKILL_IMAGE_GENERATION_PROVIDER") or ""
+    provider_id = args.get("provider") or (
+        effective_env.get("SKILL_IMAGE_GENERATION_PROVIDER") if honor_legacy_skill_model else ""
+    ) or ""
     providers = _build_providers_with_env(
         module,
         model=str(model or ""),
@@ -139,11 +147,14 @@ def run_image_generation_payload(
         return {
             "returncode": 1,
             "payload": {
+                "code": "needs_provider_credentials",
+                "errorType": "provider_credentials",
+                "nextAction": "configure_model_provider",
+                "model": str(model or module.OpenAIProvider.DEFAULT_MODEL),
                 "error": (
                     f"No API key configured for {target}. "
-                    "Set at least one of OPENAI_API_KEY / GEMINI_API_KEY / "
-                    "ARK_API_KEY / DASHSCOPE_API_KEY / MINIMAX_API_KEY / "
-                    "LINKAI_API_KEY via the env_config tool, then try again."
+                    "Set OPENAI_API_KEY, or LINKAI_API_KEY for the GPT Image compatible route, "
+                    "via the admin model provider settings, then try again."
                 )
             },
             "stderr": "",

@@ -35,9 +35,9 @@ except ImportError:
 # time (subject to its own SSE / rendering limits); this bound only controls what
 # is stored in DB and replayed in history. Long reasoning is not useful for later
 # context (the LLM never sees thinking blocks anyway) and bloats DB.
-# Keep aligned with the frontend REASONING_RENDER_CAP and the SSE
-# MAX_REASONING_STREAM_CHARS so that storage / stream / display all match.
-MAX_STORED_REASONING_CHARS = 4 * 1024  # 4 KB
+# Keep aligned with the Web SSE reasoning cap so refresh/recovery does not
+# collapse a long visible thinking trace back to a tiny historical preview.
+MAX_STORED_REASONING_CHARS = 256 * 1024
 
 # Marker inserted between head and tail when reasoning is truncated.
 _REASONING_TRUNCATE_MARKER = "\n\n... [reasoning truncated, {omitted} chars omitted] ...\n\n"
@@ -78,6 +78,28 @@ def _private_agent_exception_text_for_classification(value: Any) -> str:
     if value is None:
         return ""
     return "{}".format(value)
+
+
+def _model_content_to_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        return "".join(_model_content_to_text(item) for item in value)
+    if isinstance(value, dict):
+        if "text" in value:
+            return _model_content_to_text(value.get("text"))
+        if "content" in value:
+            return _model_content_to_text(value.get("content"))
+        if "output_text" in value:
+            return _model_content_to_text(value.get("output_text"))
+        if "value" in value and value.get("type") in ("text", "output_text", None):
+            return _model_content_to_text(value.get("value"))
+        return ""
+    return str(value)
 
 
 def _safe_tool_arg_log_value(key: Any, value: Any, max_chars: int = 200) -> str:
@@ -327,7 +349,8 @@ TOOL_SCHEMA_INTENT_KEYWORDS = {
     "imagegen": (
         "imagegen", "image gen", "image generation", "text to image", "image to image",
         "generate image", "edit image", "生图", "图像生成", "图片生成", "文生图", "图生图",
-        "生成图片", "生成图像", "改图", "修图",
+        "生成图片", "生成图像", "改图", "修图", "出图", "多图", "批量生图",
+        "批量生成图片", "一张张生成", "逐张生成", "轮播图",
     ),
     "ocr": (
         "ocr", "extract text", "extract url", "screenshot link", "image link",
@@ -342,6 +365,24 @@ TOOL_SCHEMA_INTENT_KEYWORDS = {
         "诊断", "权限", "安装", "能力", "工具缺失", "配置", "密钥", "环境变量",
     ),
 }
+
+IMAGEGEN_INTENT_REGEXES = (
+    re.compile(r"(?:生成|画|出|做|设计|创作).{0,12}\d+\s*张"),
+    re.compile(r"\d+\s*张.{0,12}(?:图|图片|图像|海报|插图|插画|封面|视觉|素材)"),
+    re.compile(r"(?:一张张|逐张|多图|批量).{0,12}(?:生成|生图|出图|画|做|设计|创作)"),
+)
+IMAGEGEN_PRIORITY_TOOL_NAMES = {
+    "imagegen",
+    "host_diagnostics",
+    "optional_abilities",
+    "agent_capability",
+}
+IMAGEGEN_SHELL_SEMANTIC_SIGNAL_REGEXES = (
+    re.compile(r"(?i)(?:^|[\s;,{(\[])(?:prompt|instruction|description)\s*[:=]"),
+    re.compile(r"(?i)--prompt(?:=|\s+)"),
+    re.compile(r"(?i)\"prompt\"\s*:"),
+    re.compile(r"(?:生成|生图)"),
+)
 
 TOOL_SCHEMA_FOLLOWUP_CONFIRMATIONS = {
     "ok", "okay", "yes", "y", "go", "continue", "proceed", "do it", "run it", "execute",
@@ -663,16 +704,44 @@ class AgentStreamExecutor:
 
     def _authorize_tool_execution(self, tool_name: str, tool_id: str, arguments: dict) -> dict:
         """Ask the desktop permission broker before high-risk local tools run."""
+        def normalize_decision(decision: Any) -> dict:
+            if isinstance(decision, dict) and decision.get("allowed") in {True, False}:
+                return decision
+            return {"allowed": False, "reason": "Permission broker returned an invalid authorization decision."}
+
         try:
             from common.ecorex_tool_permissions import get_tool_permission_broker
 
-            return get_tool_permission_broker().authorize(
-                tool_name=tool_name,
-                tool_call_id=tool_id,
-                arguments=arguments,
-                emit_event=self._emit_event,
-                cancel_event=self.cancel_event,
-            )
+            action = ""
+            if isinstance(arguments, dict):
+                action = str(arguments.get("action") or "")
+            normalized_tool = str(tool_name or "").strip().lower()
+            if normalized_tool in {"bash", "shell", "terminal"}:
+                action = "system_shell"
+            broker = get_tool_permission_broker()
+            capability_authorize = getattr(broker, "authorize_capability", None)
+            if callable(capability_authorize):
+                decision = capability_authorize(
+                    capability=tool_name,
+                    action=action,
+                    tool_call_id=tool_id,
+                    arguments=arguments if isinstance(arguments, dict) else {},
+                    emit_event=self._emit_event,
+                    cancel_event=self.cancel_event,
+                )
+                return normalize_decision(decision)
+            legacy_authorize = getattr(broker, "authorize", None)
+            if callable(legacy_authorize):
+                decision = legacy_authorize(
+                    tool_name=tool_name,
+                    tool_call_id=tool_id,
+                    arguments=arguments if isinstance(arguments, dict) else {},
+                    emit_event=self._emit_event,
+                    cancel_event=self.cancel_event,
+                )
+                if isinstance(decision, dict):
+                    return normalize_decision(decision)
+            return {"allowed": False, "reason": "Permission broker returned an invalid authorization decision."}
         except AgentCancelledError:
             raise
         except Exception as e:
@@ -681,7 +750,7 @@ class AgentStreamExecutor:
                 "bash", "shell", "terminal", "browser", "feishu_cli", "optional_abilities",
                 "tongxin_cli", "agent_capability", "mcp", "mcp_server", "write", "edit", "fs_write", "skill_write",
                 "env_config", "send", "scheduler", "evolution_undo",
-                "web_fetch", "web_search", "vision", "ocr", "imagegen",
+                "web_fetch", "web_search", "vision", "ocr", "imagegen", "image_jobs",
             }
             if (tool_name or "").strip().lower() == "optional_abilities" and str((arguments or {}).get("action") or "").strip().lower() in {"list", "status"}:
                 risky = False
@@ -938,6 +1007,8 @@ class AgentStreamExecutor:
                 return "feishu_cli:bash"
             if self._looks_like_tongxin_cli_command(command):
                 return "tongxin_cli:bash"
+            if self._looks_like_image_generation_shell_command(command):
+                return "imagegen:bash"
             if "chrome-devtools" in command or "remote-debugging-port" in command or "cdp" in command:
                 return "browser:cdp"
             for prefix in ("python", "powershell", "pwsh", "node", "npm", "npx", "git", "curl"):
@@ -1193,10 +1264,19 @@ class AgentStreamExecutor:
         for group, keywords in TOOL_SCHEMA_INTENT_KEYWORDS.items():
             if any(self._intent_keyword_matches(lowered, keyword) for keyword in keywords):
                 groups.add(group)
+        if self._looks_like_imagegen_user_intent(user_text):
+            groups.add("imagegen")
         if "mcp" in lowered:
             groups.add("mcp")
             groups.add("diagnostics")
         return groups
+
+    @staticmethod
+    def _looks_like_imagegen_user_intent(user_text: str) -> bool:
+        text = str(user_text or "").strip().lower()
+        if not text:
+            return False
+        return any(pattern.search(text) for pattern in IMAGEGEN_INTENT_REGEXES)
 
     @staticmethod
     def _intent_keyword_matches(lowered_text: str, keyword: str) -> bool:
@@ -1555,12 +1635,15 @@ class AgentStreamExecutor:
         user_text = self._latest_user_text_for_tool_schema()
         lowered = user_text.lower()
         intent_groups = self._tool_schema_intent_groups(user_text)
+        imagegen_intent = "imagegen" in intent_groups
+        imagegen_available = "imagegen" in {str(name or "").strip().lower() for name in (self.tools or {})}
         inherited_followup_intent = False
         if self._is_tool_schema_followup_confirmation(user_text):
             for historical_text in self._recent_real_user_texts(limit=4)[1:]:
                 historical_groups = self._tool_schema_intent_groups(historical_text)
                 if historical_groups:
                     intent_groups.update(historical_groups)
+                    imagegen_intent = imagegen_intent or "imagegen" in historical_groups
                     inherited_followup_intent = True
                     break
         selected: Dict[str, Any] = {}
@@ -1578,6 +1661,16 @@ class AgentStreamExecutor:
                     or lowered_name.replace("_", " ") in lowered
                 )
             )
+            if imagegen_intent:
+                if imagegen_available:
+                    if lowered_name == "imagegen":
+                        selected[name] = tool
+                        reasons[name] = "imagegen_primary_route"
+                    continue
+                if lowered_name in IMAGEGEN_PRIORITY_TOOL_NAMES:
+                    selected[name] = tool
+                    reasons[name] = "imagegen_visibility_diagnostics"
+                continue
             if (
                 lowered_name == "feishu_cli"
                 and has_deferred_mcp
@@ -1600,11 +1693,44 @@ class AgentStreamExecutor:
                     selected[name] = tool
                     reasons[name] = "explicit_mcp_name"
 
-        recent_names = {name for _chain, name, _success in self.tool_chain_history[-4:]}
-        for name in recent_names:
-            if name in self.tools:
-                selected[name] = self.tools[name]
-                reasons[name] = "recent_tool_chain"
+        if imagegen_intent and not selected:
+            deferred = {name: tool for name, tool in self.tools.items()}
+            return {}, {
+                "enabled": True,
+                "reason": "imagegen_intent_no_safe_schema_tool",
+                "intent_groups": sorted(intent_groups),
+                "inherited_followup_intent": inherited_followup_intent,
+                "imagegen_intent": True,
+                "imagegen_available": False,
+                "selected_count": 0,
+                "deferred_count": len(deferred),
+                "selected_tools": [],
+                "deferred_tools": sorted(deferred.keys()),
+                "selection_reasons": reasons,
+            }
+
+        if imagegen_intent:
+            deferred = {name: tool for name, tool in self.tools.items() if name not in selected}
+            return selected, {
+                "enabled": True,
+                "reason": "imagegen_intent_primary_route",
+                "intent_groups": sorted(intent_groups),
+                "inherited_followup_intent": inherited_followup_intent,
+                "imagegen_intent": True,
+                "imagegen_available": imagegen_available,
+                "selected_count": len(selected),
+                "deferred_count": len(deferred),
+                "selected_tools": sorted(selected.keys()),
+                "deferred_tools": sorted(deferred.keys()),
+                "selection_reasons": reasons,
+            }
+
+        if not imagegen_intent:
+            recent_names = {name for _chain, name, _success in self.tool_chain_history[-4:]}
+            for name in recent_names:
+                if name in self.tools:
+                    selected[name] = self.tools[name]
+                    reasons[name] = "recent_tool_chain"
 
         if len(self.tools) <= 8 and not has_deferred_mcp:
             for name, tool in self.tools.items():
@@ -1632,6 +1758,8 @@ class AgentStreamExecutor:
             "reason": "budgeted",
             "intent_groups": sorted(intent_groups),
             "inherited_followup_intent": inherited_followup_intent,
+            "imagegen_intent": imagegen_intent,
+            "imagegen_available": imagegen_available,
             "selected_count": len(selected),
             "deferred_count": len(deferred),
             "selected_tools": sorted(selected.keys()),
@@ -1642,6 +1770,16 @@ class AgentStreamExecutor:
     def _tool_result_user_action_blocker(self, tool_name: str, payload: Any) -> str:
         """Return a convergence blocker that should force a text-only turn."""
         name = (tool_name or "").strip().lower()
+        if name == "imagegen" and isinstance(payload, dict):
+            if payload.get("error") or payload.get("code") or (payload.get("failedCount") and not payload.get("successCount")):
+                next_action = str(payload.get("nextAction") or payload.get("next_action") or "configure_model_provider")
+                return (
+                    "The native imagegen route has returned a blocker. Stop calling tools now. "
+                    "Do not fall back to shell/Python/PIL/SVG/canvas, web search, or network image scraping. "
+                    "Tell the user the exact imagegen blocker and next action "
+                    f"({next_action}); image generation must be retried only through `imagegen` after that blocker is fixed."
+                )
+            return ""
         if name != "feishu_cli" or not isinstance(payload, dict):
             return ""
         if payload.get("authRequired") is True:
@@ -1656,6 +1794,43 @@ class AgentStreamExecutor:
                 "state and ask the user to install, enable, or authorize the packaged Feishu CLI path."
             )
         return ""
+
+    @staticmethod
+    def _looks_like_image_generation_shell_command(command: str) -> bool:
+        text = str(command or "").strip().lower()
+        if not text:
+            return False
+        direct_markers = (
+            "skills/image-generation/scripts/generate.py",
+            "image-generation/scripts/generate.py",
+            "gpt-image",
+            "image-2-pro",
+            "/images/generations",
+            "/images/edits",
+            "openai.images",
+            "client.images.generate",
+            "client.images.edit",
+            "image_generation",
+            "imagegen",
+        )
+        if any(marker in text for marker in direct_markers):
+            return True
+        basename = ""
+        try:
+            first_token = shlex.split(str(command or ""), posix=False)[0]
+            basename = AgentStreamExecutor._shell_token_basename(first_token)
+        except Exception:
+            basename = ""
+        if basename in {"python", "python.exe", "python3", "py", "py.exe", "node", "node.exe"}:
+            semantic_generation_signal = any(pattern.search(text) for pattern in IMAGEGEN_SHELL_SEMANTIC_SIGNAL_REGEXES)
+            if (
+                ("from pil import" in text or "imagedraw" in text or "image.new(" in text)
+                and semantic_generation_signal
+            ):
+                return True
+            if any(marker in text for marker in ("svg", "canvas", "base64.b64decode")) and semantic_generation_signal:
+                return True
+        return False
 
     def _sleep_cancelable(self, seconds: float) -> None:
         """Sleep in short slices so user cancel interrupts retry backoff."""
@@ -1699,6 +1874,22 @@ class AgentStreamExecutor:
                 return (
                     "Do not keep probing Tongxin Assistant CLI through raw bash. Call `host_diagnostics` "
                     "with action `status` first to inspect whether the Tongxin read-only CLI is configured."
+                )
+        if self._looks_like_image_generation_shell_command(command):
+            if "imagegen" in self.tools:
+                return (
+                    "Do not generate or edit images through raw bash, Python, PIL, SVG/canvas, or direct network API scripts. "
+                    "The native `imagegen` route is visible in the current tool table; use `imagegen` for semantic image generation. "
+                    "For batch or multi-image generation, choose one or more `imagegen` tool calls according to the visible schema "
+                    "and the user's requested ordering. Do not invent a local Python fallback or a fixed setup flow. "
+                    "The image model route remains `gpt-image-2-pro` by default and may only visibly fall back within the same GPT Image compatible route."
+                )
+            if "host_diagnostics" in self.tools:
+                return (
+                    "Image generation must use the native imagegen capability, not raw shell/Python. "
+                    "`imagegen` is not visible in the current tool table; inspect capability/tool visibility with "
+                    "`host_diagnostics`, `optional_abilities`, or `agent_capability`, then decide from that evidence "
+                    "whether the route can be enabled. If it cannot, report the exact blocker instead of trying local image scripts."
                 )
         if (
             "chrome-devtools-mcp" in command
@@ -2593,20 +2784,35 @@ class AgentStreamExecutor:
                 if isinstance(chunk, dict) and chunk.get("choices"):
                     choice = chunk["choices"][0]
                     delta = choice.get("delta", {})
+                    if not isinstance(delta, dict):
+                        delta = {}
+                    message_payload = choice.get("message") or {}
+                    if not isinstance(message_payload, dict):
+                        message_payload = {}
                     
                     # Capture finish_reason if present
                     finish_reason = choice.get("finish_reason")
                     if finish_reason:
                         stop_reason = finish_reason
 
-                    reasoning_delta = delta.get("reasoning_content") or ""
+                    reasoning_delta = (
+                        _model_content_to_text(delta.get("reasoning_content"))
+                        or _model_content_to_text(message_payload.get("reasoning_content"))
+                    )
                     if reasoning_delta:
                         full_reasoning += reasoning_delta
                         if self._is_thinking_enabled():
                             self._emit_event("reasoning_update", {"delta": reasoning_delta})
 
                     # Handle text content
-                    content_delta = delta.get("content") or ""
+                    content_delta = (
+                        _model_content_to_text(delta.get("content"))
+                        or _model_content_to_text(delta.get("text"))
+                        or _model_content_to_text(delta.get("refusal"))
+                        or _model_content_to_text(message_payload.get("content"))
+                        or _model_content_to_text(message_payload.get("refusal"))
+                        or _model_content_to_text(choice.get("text"))
+                    )
                     if content_delta:
                         # Filter out <think> tags from content
                         filtered_delta = self._filter_think_tags(content_delta)
@@ -2615,8 +2821,9 @@ class AgentStreamExecutor:
                             self._emit_event("message_update", {"delta": sanitize_assistant_identity(filtered_delta)})
 
                     # Handle tool calls
-                    if "tool_calls" in delta and delta["tool_calls"]:
-                        for tc_delta in delta["tool_calls"]:
+                    tool_call_deltas = delta.get("tool_calls") or message_payload.get("tool_calls")
+                    if tool_call_deltas:
+                        for tc_delta in tool_call_deltas:
                             index = tc_delta.get("index", 0)
 
                             if index not in tool_calls_buffer:
@@ -2636,8 +2843,9 @@ class AgentStreamExecutor:
                                 if func.get("arguments"):
                                     tool_calls_buffer[index]["arguments"] += func["arguments"]
 
-                    if "function_call" in delta and delta["function_call"]:
-                        func = delta["function_call"] or {}
+                    function_call_delta = delta.get("function_call") or message_payload.get("function_call")
+                    if function_call_delta:
+                        func = function_call_delta or {}
                         index = 0
                         if index not in tool_calls_buffer:
                             tool_calls_buffer[index] = {
@@ -2729,27 +2937,43 @@ class AgentStreamExecutor:
                 if is_context_overflow and not _overflow_retry:
                     recovery = self._aggressive_trim_for_overflow()
                     trim_applied = bool(recovery.get("applied"))
-                    schema_only_recovery = bool(tools_schema) and not trim_applied
-                    if trim_applied or schema_only_recovery:
+                    imagegen_schema_recovery = (
+                        bool(tools_schema)
+                        and not trim_applied
+                        and "imagegen" in self._tool_schema_intent_groups(self._latest_user_text_for_tool_schema())
+                        and "imagegen" in {str(name or "").strip().lower() for name in (self.tools or {})}
+                    )
+                    schema_only_recovery = bool(tools_schema) and not trim_applied and not imagegen_schema_recovery
+                    if trim_applied or schema_only_recovery or imagegen_schema_recovery:
+                        force_text_retry = not imagegen_schema_recovery
                         recovery_for_retry = {
                             **recovery,
                             "applied": True,
                             "reason": (
+                                "schema_only_imagegen_tool_schema_minimized"
+                                if imagegen_schema_recovery else
                                 "schema_only_tool_schema_disabled"
                                 if schema_only_recovery else recovery.get("reason")
                             ),
                             "trim_applied": trim_applied,
                             "schema_only_recovery": schema_only_recovery,
-                            "tool_schema_disabled": True,
+                            "imagegen_schema_recovery": imagegen_schema_recovery,
+                            "tool_schema_disabled": force_text_retry,
                         }
                         retry_schema_budget = {
-                            "enabled": False,
-                            "reason": "forced_text",
-                            "force_text_reason": "context_overflow_recovery",
-                            "selected_count": 0,
-                            "deferred_count": len(self.tools or {}),
-                            "selected_tools": [],
-                            "deferred_tools": sorted((self.tools or {}).keys()),
+                            "enabled": not force_text_retry,
+                            "reason": "imagegen_context_overflow_recovery" if imagegen_schema_recovery else "forced_text",
+                            "force_text_reason": "context_overflow_recovery" if force_text_retry else "",
+                            "selected_count": 1 if imagegen_schema_recovery else 0,
+                            "deferred_count": max(0, len(self.tools or {}) - (1 if imagegen_schema_recovery else 0)),
+                            "selected_tools": ["imagegen"] if imagegen_schema_recovery else [],
+                            "deferred_tools": [
+                                name
+                                for name in sorted((self.tools or {}).keys())
+                                if not (imagegen_schema_recovery and str(name or "").strip().lower() == "imagegen")
+                            ],
+                            "imagegen_intent": imagegen_schema_recovery,
+                            "imagegen_available": imagegen_schema_recovery,
                         }
                         retry_budget = self._build_context_budget(
                             self._prepare_messages(),
@@ -2759,7 +2983,7 @@ class AgentStreamExecutor:
                         self._emit_event("context_overflow_recovery", {
                             **recovery_for_retry,
                             "retry": True,
-                            "force_text_response": True,
+                            "force_text_response": force_text_retry,
                             "before_estimated_input_tokens": context_budget.get("estimated_input_tokens"),
                             "before_effective_context_limit_tokens": context_budget.get("effective_context_limit_tokens"),
                             "after_estimated_input_tokens": retry_budget.get("estimated_input_tokens"),
@@ -2780,8 +3004,8 @@ class AgentStreamExecutor:
                             retry_count=retry_count,
                             max_retries=max_retries,
                             _overflow_retry=True,
-                            _force_text_turn=True,
-                            _force_text_reason="context_overflow_recovery",
+                            _force_text_turn=force_text_retry,
+                            _force_text_reason="context_overflow_recovery" if force_text_retry else "",
                         )
                     self._emit_event("context_overflow_recovery", {
                         **recovery,
@@ -3155,7 +3379,7 @@ class AgentStreamExecutor:
 
         permission_tool_name, permission_arguments = self._permission_proxy_for_tool(tool, tool_name, arguments)
         permission = self._authorize_tool_execution(permission_tool_name, tool_id, permission_arguments)
-        if not permission.get("allowed", True):
+        if permission.get("allowed") is not True:
             if permission.get("cancelled"):
                 raise AgentCancelledError(
                     permission.get("reason") or "agent cancelled while waiting for tool permission"
@@ -3183,6 +3407,8 @@ class AgentStreamExecutor:
             tool.model = self.model
             tool.context = self.agent
             tool.cancel_event = self.cancel_event
+            tool.emit_event = self._emit_event
+            tool.tool_call_id = tool_id
 
             # Execute tool
             start_time = time.time()

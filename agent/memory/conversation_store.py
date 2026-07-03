@@ -131,6 +131,10 @@ ALTER TABLE messages ADD COLUMN extras TEXT NOT NULL DEFAULT '';
 """
 
 DEFAULT_MAX_AGE_DAYS: int = 30
+HISTORY_CONTEXT_MAX_REFS_PER_MESSAGE = 4
+HISTORY_CONTEXT_MAX_TOTAL_REFS = 40
+HISTORY_CONTEXT_MAX_PATH_CHARS = 512
+HISTORY_CONTEXT_MAX_TITLE_CHARS = 160
 
 
 def _is_visible_user_message(content: Any) -> bool:
@@ -325,13 +329,54 @@ def _project_owners_match(left: Dict[str, str], right: Dict[str, str]) -> bool:
     return _canonical_project_owner(left) == _canonical_project_owner(right)
 
 
-def _attachment_history_context(extras: Dict[str, Any]) -> str:
+def _new_history_context_state() -> Dict[str, Any]:
+    return {"seen": set(), "count": 0, "omitted": 0}
+
+
+def _history_ref_key(label: str, value: str) -> str:
+    normalized = str(value or "").strip().replace("\\", "/").lower()
+    return f"{label}:{normalized}"
+
+
+def _history_ref_allowed(state: Optional[Dict[str, Any]], key: str) -> bool:
+    if state is None:
+        return True
+    seen = state.setdefault("seen", set())
+    if not isinstance(seen, set):
+        seen = set()
+        state["seen"] = seen
+    if key in seen:
+        state["omitted"] = int(state.get("omitted") or 0) + 1
+        return False
+    if int(state.get("count") or 0) >= HISTORY_CONTEXT_MAX_TOTAL_REFS:
+        state["omitted"] = int(state.get("omitted") or 0) + 1
+        return False
+    seen.add(key)
+    state["count"] = int(state.get("count") or 0) + 1
+    return True
+
+
+def _history_context_summary(state: Optional[Dict[str, Any]]) -> str:
+    if not state:
+        return ""
+    omitted = int(state.get("omitted") or 0)
+    if omitted <= 0:
+        return ""
+    return f"[历史文件引用摘要: 已省略 {omitted} 个重复或超出预算的本地文件/产物引用]"
+
+
+def _attachment_history_context(extras: Dict[str, Any], state: Optional[Dict[str, Any]] = None) -> str:
     raw = extras.get("attachments") if isinstance(extras, dict) else None
     if not isinstance(raw, list):
         return ""
     refs: List[str] = []
-    for item in raw[:12]:
+    included = 0
+    for item in raw:
         if not isinstance(item, dict):
+            continue
+        if included >= HISTORY_CONTEXT_MAX_REFS_PER_MESSAGE:
+            if state is not None:
+                state["omitted"] = int(state.get("omitted") or 0) + 1
             continue
         file_path = str(item.get("file_path") or item.get("path") or "").strip()
         if not file_path:
@@ -347,26 +392,96 @@ def _attachment_history_context(extras: Dict[str, Any]) -> str:
             label = "历史目录"
         else:
             label = "历史文件"
-        refs.append(f"[{label}: {file_path[:4096]}]")
+        if not _history_ref_allowed(state, _history_ref_key(label, file_path)):
+            continue
+        refs.append(f"[{label}: {file_path[:HISTORY_CONTEXT_MAX_PATH_CHARS]}]")
+        included += 1
     if not refs:
         return ""
     return "\n".join(refs)
 
 
-def _content_with_attachment_history_context(content: Any, extras: Dict[str, Any]) -> Any:
-    attachment_context = _attachment_history_context(extras)
-    if not attachment_context:
+def _artifact_history_context(extras: Dict[str, Any], state: Optional[Dict[str, Any]] = None) -> str:
+    raw = extras.get("artifacts") if isinstance(extras, dict) else None
+    if not isinstance(raw, list):
+        return ""
+    refs: List[str] = []
+    included = 0
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        if included >= HISTORY_CONTEXT_MAX_REFS_PER_MESSAGE:
+            if state is not None:
+                state["omitted"] = int(state.get("omitted") or 0) + 1
+            continue
+        ref_path = str(
+            item.get("path")
+            or item.get("file_path")
+            or item.get("relativePath")
+            or item.get("relative_path")
+            or item.get("url")
+            or ""
+        ).strip()
+        if not ref_path:
+            continue
+        artifact_type = str(
+            item.get("type")
+            or item.get("file_type")
+            or item.get("mime_type")
+            or "file"
+        ).strip().lower()
+        title = str(item.get("title") or item.get("file_name") or item.get("fileName") or "").strip()
+        if artifact_type.startswith("image"):
+            label = "历史图片产物"
+        elif artifact_type.startswith("video"):
+            label = "历史视频产物"
+        elif artifact_type.startswith("audio"):
+            label = "历史音频产物"
+        elif artifact_type in ("directory", "folder"):
+            label = "历史目录产物"
+        else:
+            label = "历史文件产物"
+        if not _history_ref_allowed(state, _history_ref_key(label, ref_path)):
+            continue
+        detail = ref_path[:HISTORY_CONTEXT_MAX_PATH_CHARS]
+        if title:
+            detail = f"{title[:HISTORY_CONTEXT_MAX_TITLE_CHARS]} | {detail}"
+        refs.append(f"[{label}: {detail}]")
+        included += 1
+    if not refs:
+        return ""
+    return "\n".join(refs)
+
+
+def _content_with_history_context(content: Any, history_context: str) -> Any:
+    if not history_context:
         return content
     if isinstance(content, str):
-        return f"{content.rstrip()}\n{attachment_context}".strip()
+        return f"{content.rstrip()}\n{history_context}".strip()
     if isinstance(content, list):
         copied = [dict(block) if isinstance(block, dict) else block for block in content]
         for block in reversed(copied):
             if isinstance(block, dict) and block.get("type") == "text":
-                block["text"] = f"{str(block.get('text') or '').rstrip()}\n{attachment_context}".strip()
+                block["text"] = f"{str(block.get('text') or '').rstrip()}\n{history_context}".strip()
                 return copied
-        return [{"type": "text", "text": attachment_context}, *copied]
+        return [{"type": "text", "text": history_context}, *copied]
     return content
+
+
+def _content_with_attachment_history_context(
+    content: Any,
+    extras: Dict[str, Any],
+    state: Optional[Dict[str, Any]] = None,
+) -> Any:
+    return _content_with_history_context(content, _attachment_history_context(extras, state))
+
+
+def _content_with_artifact_history_context(
+    content: Any,
+    extras: Dict[str, Any],
+    state: Optional[Dict[str, Any]] = None,
+) -> Any:
+    return _content_with_history_context(content, _artifact_history_context(extras, state))
 
 
 def _group_into_display_turns(
@@ -438,6 +553,7 @@ def _group_into_display_turns(
         # User turn
         if user_row:
             user_seq, content, created_at, _u_extras = user_row
+            user_extras = _u_extras if isinstance(_u_extras, dict) else {}
             text = _extract_display_text(content)
             # Hide internal injection markers (scheduler / self-evolution) so the
             # user never sees a synthetic "[SCHEDULED] self-evolution" bubble;
@@ -446,9 +562,17 @@ def _group_into_display_turns(
                 user_turn = {"role": "user", "content": text, "created_at": created_at}
                 if user_seq is not None:
                     user_turn["user_seq"] = int(user_seq)
-                if isinstance(_u_extras, dict) and _u_extras:
-                    user_turn["extras"] = _u_extras
+                request_id = str(user_extras.get("request_id") or "").strip()
+                if request_id:
+                    user_turn["request_id"] = request_id
+                turn_id = str(user_extras.get("turn_id") or request_id or "").strip()
+                if turn_id:
+                    user_turn["turn_id"] = turn_id
+                if user_extras:
+                    user_turn["extras"] = user_extras
                 turns.append(user_turn)
+        else:
+            user_extras = {}
 
         # Build an ordered list of steps preserving the original sequence:
         #   thinking → content → tool_call → content → ...
@@ -554,10 +678,18 @@ def _group_into_display_turns(
                 turn["user_seq"] = int(user_seq)
             if bot_seq is not None:
                 turn["bot_seq"] = int(bot_seq)
-            request_id = str((merged_extras or {}).get("request_id") or "").strip()
+            request_id = str(
+                (merged_extras or {}).get("request_id")
+                or (user_extras or {}).get("request_id")
+                or ""
+            ).strip()
             if request_id:
                 turn["request_id"] = request_id
-            turn_id = str((merged_extras or {}).get("turn_id") or "").strip()
+            turn_id = str(
+                (merged_extras or {}).get("turn_id")
+                or (user_extras or {}).get("turn_id")
+                or ""
+            ).strip()
             if not turn_id and request_id:
                 turn_id = request_id
             if not turn_id and user_seq is not None and bot_seq is not None:
@@ -675,6 +807,7 @@ class ConversationStore:
             cutoff_seq = visible_turn_seqs[max_turns - 1]
 
         result = []
+        history_context_state = _new_history_context_state()
         for seq, role, raw_content, raw_extras in reversed(rows):
             if cutoff_seq is not None and seq < cutoff_seq:
                 continue
@@ -689,11 +822,16 @@ class ConversationStore:
             except Exception:
                 extras = {}
             if role == "user":
-                content = _content_with_attachment_history_context(content, extras)
+                content = _content_with_attachment_history_context(content, extras, history_context_state)
             # Strip thinking blocks — they are stored for UI display only
             if role == "assistant" and isinstance(content, list):
                 content = [b for b in content if b.get("type") != "thinking"]
+            if role == "assistant":
+                content = _content_with_artifact_history_context(content, extras, history_context_state)
             result.append({"role": role, "content": content})
+        summary = _history_context_summary(history_context_state)
+        if summary and result:
+            result[-1]["content"] = _content_with_history_context(result[-1].get("content"), summary)
         return result
 
     def append_messages(

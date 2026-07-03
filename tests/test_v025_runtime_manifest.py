@@ -22,6 +22,75 @@ check_manifest = _load_script("check-v025-runtime-manifest.py")
 release_validator = _load_script("validate-ecorex-release-artifacts.py")
 
 
+def test_v025_release_validator_accepts_refactored_active_requests_route():
+    files = {
+        "channel/web/routes.py": "WEB_ROUTES = ('/api/active-requests', 'ActiveRequestsHandler')",
+        "channel/web/projection.py": (
+            "class ActiveRequestsHandler:\n"
+            "    def GET(self):\n"
+            "        return channel.active_requests_snapshot()\n"
+        ),
+    }
+
+    release_validator.validate_active_requests_route(
+        lambda suffix: files[suffix],
+        "def active_requests_snapshot(self):\n    return {}\n",
+        "unit",
+    )
+
+
+def test_v025_release_validator_rejects_missing_refactored_active_requests_route():
+    files = {
+        "channel/web/routes.py": "WEB_ROUTES = ()",
+        "channel/web/projection.py": "class ActiveRequestsHandler: pass\n",
+    }
+
+    with pytest.raises(release_validator.ValidationError):
+        release_validator.validate_active_requests_route(
+            lambda suffix: files[suffix],
+            "def active_requests_snapshot(self):\n    return {}\n",
+            "unit",
+        )
+
+
+def test_v027_runtime_update_state_payload_is_redacted_and_refreshable(monkeypatch, tmp_path):
+    pytest.importorskip("web")
+    from channel.web import web_channel
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    monkeypatch.setenv("ECOREX_WEBUI_STATE_DIR", str(state_dir))
+    (state_dir / "update-state.json").write_text(
+        json.dumps(
+            {
+                "product": "EcoreX WebUI",
+                "version": "0.2.7",
+                "mode": "background",
+                "status": "installed",
+                "reason": "",
+                "url": "http://127.0.0.1:9909/app/?token=secret",
+                "browserAction": "defer-to-existing-tab-soft-refresh",
+                "activationPolicy": "prompt-soft-refresh-existing-tab",
+                "healthCheck": {"endpoint": "/api/version", "status": "pass", "passed": True},
+                "generatedAt": "2026-07-02T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = web_channel._runtime_update_state_payload()
+
+    assert payload["stateAvailable"] is True
+    assert payload["mode"] == "background"
+    assert payload["status"] == "installed"
+    assert payload["browserAction"] == "defer-to-existing-tab-soft-refresh"
+    assert payload["activationPolicy"] == "prompt-soft-refresh-existing-tab"
+    assert payload["healthCheck"]["passed"] is True
+    assert payload["refreshRequired"] is True
+    assert payload["url"] == "http://127.0.0.1:9909/app/"
+    assert str(tmp_path) not in json.dumps(payload, ensure_ascii=False)
+
+
 def _touch(path: Path, text: str = "") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
@@ -788,27 +857,296 @@ def test_v025_public_zip_rejects_externalized_local_artifact_href(tmp_path):
         release_validator.validate_public_zip(public_zip, {"version": "0.2.5"}, [artifact])
 
 
+def test_v027_public_zip_accepts_externalized_downloads_contract(tmp_path):
+    payload = b"release-payload"
+    artifact_name = "EcoreX_0.2.7-web-linux-service.tar.gz"
+    digest = release_validator.sha256_bytes(payload)
+    artifact = {
+        "id": "web-linux-service",
+        "status": "ready",
+        "fileName": artifact_name,
+        "href": f"downloads/{artifact_name}",
+        "size": len(payload),
+        "sha256": digest,
+    }
+    public_artifact = dict(artifact)
+    public_zip = tmp_path / "public-thin.zip"
+
+    with zipfile.ZipFile(public_zip, "w") as archive:
+        archive.writestr("README.txt", "EcoreX public release\n")
+        archive.writestr("site/index.html", "<html></html>")
+        archive.writestr("site/admin/index.html", "<html></html>")
+        archive.writestr("admin-api/ecorex_admin_api.py", "print('ok')\n")
+        archive.writestr("server/install-ecorex-public-release.sh", "#!/bin/sh\n")
+        archive.writestr("server/check-ecorex-server-release.sh", "#!/bin/sh\n")
+        archive.writestr("site/assets/icon.png", b"x")
+        archive.writestr("site/assets/ecorex-app-preview.png", b"x")
+        archive.writestr("site/assets/ecorex-ecosystem-hub.png", b"x")
+        archive.writestr("site/site.js", "install-webui.ps1 webui-windows-x64 webui-macos-universal")
+        archive.writestr(
+            "site/install-webui.ps1",
+            'function Try-SaveUrlWithCurl {}\n"--continue-at", "-"\nfunction Expand-EcoreXZip {}\nfunction ConvertTo-EcoreXLongPath {}\n$source.CopyTo($target)\nBlocked unsafe zip entry\n',
+        )
+        archive.writestr(
+            "site/manifest.json",
+            json.dumps(
+                {
+                    "version": "0.2.7",
+                    "downloadsExternalized": True,
+                    "update": {
+                        "webui": {
+                            "channel": "stable",
+                            "promotion": "admin-gated",
+                            "backgroundUpdate": {
+                                "idleGate": "/api/active-requests",
+                                "browserAfterInstall": "soft-refresh-existing-tab",
+                                "manualBrowserOpen": "first-install-or-user-request",
+                                "activationPolicy": "prompt-soft-refresh-existing-tab",
+                                "healthCheck": "/api/version",
+                                "stateFile": "update-state.json",
+                                "autoLaunchBrowser": "never-in-background",
+                            },
+                        }
+                    },
+                    "artifacts": [public_artifact],
+                }
+            ),
+        )
+        archive.writestr(
+            "checksums.json",
+            json.dumps(
+                {
+                    "version": "0.2.7",
+                    "downloadsExternalized": True,
+                    "downloadsSource": "public-release-downloads-source",
+                    "artifacts": {
+                        "web-linux-service": {
+                            "fileName": artifact_name,
+                            "relativePath": f"site/downloads/{artifact_name}",
+                            "href": f"downloads/{artifact_name}",
+                            "size": len(payload),
+                            "sha256": digest,
+                            "status": "ready",
+                            "external": True,
+                            "deploymentSourceFileName": artifact_name,
+                        }
+                    },
+                }
+            ),
+        )
+
+    release_validator.validate_public_zip(public_zip, {"version": "0.2.7"}, [artifact])
+
+
+def test_v027_public_release_updates_are_admin_promotion_gated():
+    root = Path(__file__).resolve().parents[1]
+    public_installer = (root / "scripts" / "install-ecorex-public-release.sh").read_text(encoding="utf-8")
+    deployer = (root / "scripts" / "deploy-v024-production.py").read_text(encoding="utf-8")
+    real_gate = (root / "scripts" / "真实发布校验.py").read_text(encoding="utf-8")
+    admin_api = (root / "deploy" / "ecorex-admin-api" / "ecorex_admin_api.py").read_text(encoding="utf-8")
+    admin_html = (root / "deploy" / "ecorex-site" / "admin" / "index.html").read_text(encoding="utf-8")
+    admin_js = (root / "deploy" / "ecorex-site" / "admin" / "admin.js").read_text(encoding="utf-8")
+
+    assert 'PROMOTE_PUBLIC_RELEASE="${PROMOTE_PUBLIC_RELEASE:-0}"' in public_installer
+    assert 'ln -sfn "$release_dir" "$RELEASE_ROOT/staged-v${VERSION}"' in public_installer
+    assert 'if [[ "$PROMOTE_PUBLIC_RELEASE" == "1" ]]; then' in public_installer
+    assert 'ln -sfn "$release_dir" "$RELEASE_ROOT/current"' in public_installer
+    assert 'promotion: $promotion_status' in public_installer
+    assert "ECOREX_PROMOTE_PUBLIC_RELEASE" in deployer
+    assert "--promote-public-release" in deployer
+    assert '"adminTriggerRequired": True' in deployer
+    assert '"mode": "stable" if self.promote_public_release else "staged"' in deployer
+    assert 'remote_tmp_dir = posixpath.join(self.remote_dir, "tmp")' in deployer
+    assert 'remote_cache_dir = "/srv/ecorex-agent-download/downloads-cache/sha256"' in deployer
+    assert 'def cache_probe_command(' in deployer
+    assert 'def ensure_download_source(' in deployer
+    assert 'sha256sum "$1"' in deployer
+    assert '"adopted-staging"' in deployer
+    assert '"webui_windows_download"' in deployer
+    assert '"webui_macos_download"' in deployer
+    assert 'f"{name}_cache_probe"' in deployer
+    assert 'f"{name}_cache_upload"' in deployer
+    assert '&& chmod 700 {shlex.quote(remote_tmp_dir)}' in deployer
+    assert 'f"TMPDIR={shlex.quote(remote_tmp_dir)} VERSION={shlex.quote(VERSION)} EXPECTED_SHA256=' in deployer
+    assert 'f"TMPDIR={shlex.quote(remote_tmp_dir)} VERSION={shlex.quote(VERSION)} BASE_URL=' in deployer
+    assert 'f"TMPDIR={shlex.quote(remote_tmp_dir)} VERSION={shlex.quote(VERSION)} PUBLIC_BASE_URL=' in deployer
+    assert 'os.environ["ECOREX_PROMOTE_PUBLIC_RELEASE"] = "1"' in real_gate
+    assert 'path == "/release/state"' in admin_api
+    assert 'path == "/release/promote"' in admin_api
+    assert "_validate_release_dir(release_dir, manifest, verify_sha=True)" in admin_api
+    assert "os.replace(str(tmp_pointer), str(current_pointer))" in admin_api
+    assert '"release.promote"' in admin_api
+    assert "data-release-summary" in admin_html
+    assert "data-release-promote" in admin_js
+    assert 'request("/release/state")' in admin_js
+    assert 'mutate("/release/promote"' in admin_js
+
+
+def test_v027_webui_installers_keep_windows_macos_user_flow_consistent():
+    root = Path(__file__).resolve().parents[1]
+    win_installer = (root / "deploy" / "ecorex-site" / "install-webui.ps1").read_text(encoding="utf-8")
+    mac_installer = (root / "deploy" / "ecorex-site" / "install-webui.sh").read_text(encoding="utf-8")
+    local_packager = (root / "scripts" / "prepare-ecorex-webui-local-release.ps1").read_text(encoding="utf-8")
+    manifest = json.loads((root / "deploy" / "ecorex-site" / "manifest.json").read_text(encoding="utf-8"))
+
+    assert 'Join-Url $BaseUrl "manifest.json"' in win_installer
+    assert 'join_url "$BASE_URL" "manifest.json"' in mac_installer
+    assert "does not match requested" in win_installer
+    assert "does not match requested" in mac_installer
+    assert 'id -eq "webui-windows-x64" -and $_.status -eq "ready"' in win_installer
+    assert '"webui-macos-universal"' in mac_installer
+    assert '$artifactUrl = Join-Url $BaseUrl $artifact.href' in win_installer
+    assert 'ARTIFACT_URL="$(join_url "$BASE_URL" "$ARTIFACT_HREF")"' in mac_installer
+    assert 'Test-ExpectedHash -Path $CachePath -ExpectedSha256 $ExpectedSha256' in win_installer
+    assert 'sha256_file "$destination")" == "$expected_sha"' in mac_installer
+    assert '"--continue-at", "-"' in win_installer
+    assert 'resume_args=(-C -)' in mac_installer
+    assert "EcoreX-WebUI-Installer/0.2.7" in win_installer
+    assert "EcoreX WebUI installer script: 0.2.7" in win_installer
+    assert "EcoreX WebUI installer script: 0.2.7" in mac_installer
+    assert "install-ecorex-webui-win.ps1" in win_installer
+    assert "install-ecorex-webui-mac.sh" in mac_installer
+    webui_policy = manifest["update"]["webui"]
+    assert webui_policy["promotion"] == "admin-gated"
+    assert webui_policy["backgroundUpdate"]["idleGate"] == "/api/active-requests"
+    assert webui_policy["backgroundUpdate"]["browserAfterInstall"] == "soft-refresh-existing-tab"
+    assert webui_policy["backgroundUpdate"]["manualBrowserOpen"] == "first-install-or-user-request"
+    assert webui_policy["backgroundUpdate"]["activationPolicy"] == "prompt-soft-refresh-existing-tab"
+    assert webui_policy["backgroundUpdate"]["healthCheck"] == "/api/version"
+    assert webui_policy["backgroundUpdate"]["stateFile"] == "update-state.json"
+    assert webui_policy["backgroundUpdate"]["autoLaunchBrowser"] == "never-in-background"
+    assert 'ValidateSet("manual", "background")' in local_packager
+    assert '$backgroundUpdate = $UpdateMode -ieq "background"' in local_packager
+    assert 'Get-ActiveRequestCount -StateDir $stateDir' in local_packager
+    assert 'Write-UpdateState -StateDir $stateDir -Status "deferred" -Reason "active_requests"' in local_packager
+    assert 'activationPolicy = if ($backgroundUpdate) { "prompt-soft-refresh-existing-tab" }' in local_packager
+    assert 'autoLaunchBrowser = if ($backgroundUpdate) { "never-in-background" }' in local_packager
+    assert 'healthCheck = [ordered]@{' in local_packager
+    assert 'if ((-not $NoBrowser) -and (-not $backgroundUpdate))' in local_packager
+    assert 'UPDATE_MODE="${ECOREX_UPDATE_MODE:-manual}"' in local_packager
+    assert 'BACKGROUND_UPDATE=1' in local_packager
+    assert 'active_request_count' in local_packager
+    assert 'write_update_state "deferred" "active_requests"' in local_packager
+    assert '"activationPolicy": "prompt-soft-refresh-existing-tab" if sys.argv[3] == "background"' in local_packager
+    assert '"autoLaunchBrowser": "never-in-background" if sys.argv[3] == "background"' in local_packager
+    assert '"healthCheck": {' in local_packager
+    assert 'if [[ "$OPEN_BROWSER" == "1" && "$BACKGROUND_UPDATE" != "1" ]]' in local_packager
+    assert 'defer-to-existing-tab-soft-refresh' in local_packager
+
+
+def test_v027_real_release_browser_toolchain_probe_is_timeout_bounded():
+    root = Path(__file__).resolve().parents[1]
+    legacy_smoke = (root / "scripts" / "smoke-v026-production-200-user-behavior.py").read_text(encoding="utf-8")
+    agent_smoke = (root / "scripts" / "smoke-v026-production-agent-product-acceptance.py").read_text(encoding="utf-8")
+    image_smoke = (root / "scripts" / "smoke-v026-production-30-image-ocr-vision-toolchain.py").read_text(encoding="utf-8")
+
+    assert '"probe": "static-runtime-source"' in legacy_smoke
+    assert 'browser_tool_source = read_text("/opt/ecorex-web/current/runtime/agent/tools/browser/browser_tool.py")' in legacy_smoke
+    assert 'browser_service_source = read_text("/opt/ecorex-web/current/runtime/agent/tools/browser/browser_service.py")' in legacy_smoke
+    assert 'browser_automation_source = read_text("/opt/ecorex-web/current/runtime/agent/tools/browser/browser_automation_service.py")' in legacy_smoke
+    assert "Page.captureScreenshot" in legacy_smoke
+    assert "BrowserTool({" not in legacy_smoke
+    assert 'browser_automation_diagnostics({})' not in legacy_smoke
+    assert 'VALIDATION_TMP_ROOT = Path("/srv/ecorex-agent-download/validation-tmp")' in legacy_smoke
+    assert 'VALIDATION_TMP_ROOT = Path("/srv/ecorex-agent-download/validation-tmp")' in agent_smoke
+    assert 'VALIDATION_TMP_ROOT = Path("/srv/ecorex-agent-download/validation-tmp")' in image_smoke
+    assert 'remote_tmp_root = "/srv/ecorex-agent-download/validation-tmp"' in agent_smoke
+    assert "client.open_sftp()" in agent_smoke
+    assert 'handle.write(remote_script)' in agent_smoke
+    assert 'TMPDIR={shlex.quote(remote_tmp_root)}' in agent_smoke
+    assert 'python - <<' not in agent_smoke
+    assert 'mpi_policy = (mpi_payload.get("sourcePolicy") or {}) if isinstance(mpi_payload, dict) else {}' in agent_smoke
+    assert 'os.environ.setdefault("TMPDIR", str(VALIDATION_TMP_ROOT))' in legacy_smoke
+    assert 'os.environ.setdefault("TMPDIR", str(VALIDATION_TMP_ROOT))' in agent_smoke
+    assert 'os.environ.setdefault("TMPDIR", str(VALIDATION_TMP_ROOT))' in image_smoke
+    assert "tempfile.tempdir = str(VALIDATION_TMP_ROOT)" in legacy_smoke
+    assert "tempfile.tempdir = str(VALIDATION_TMP_ROOT)" in agent_smoke
+    assert "tempfile.tempdir = str(VALIDATION_TMP_ROOT)" in image_smoke
+    assert 'tempfile.mkdtemp(prefix="ecorex-v027-200-", dir=str(VALIDATION_TMP_ROOT))' in legacy_smoke
+    assert 'tempfile.mkdtemp(prefix="ecorex-agent-acceptance-", dir=str(VALIDATION_TMP_ROOT))' in agent_smoke
+    assert "def published_artifact_path(url):" in legacy_smoke
+    assert 'relative.startswith("downloads/")' in legacy_smoke
+    assert '"validationSource": "published-local-file"' in legacy_smoke
+    assert "os.link(local_source, dest)" in legacy_smoke
+
+
 def test_v025_linux_release_scripts_install_core_requirements_and_manifest():
     install_script = (Path(__file__).resolve().parents[1] / "scripts" / "install-ecorex-web.sh").read_text(encoding="utf-8")
     check_script = (Path(__file__).resolve().parents[1] / "scripts" / "check-ecorex-web-release.sh").read_text(encoding="utf-8")
     local_packager = (Path(__file__).resolve().parents[1] / "scripts" / "prepare-ecorex-webui-local-release.ps1").read_text(encoding="utf-8")
-    core_requirements = (Path(__file__).resolve().parents[1] / "desktop" / "runtime-packs" / "core-requirements.txt").read_text(encoding="utf-8")
+    runtime_pack_root = Path(__file__).resolve().parents[1] / "runtime-packs"
+    core_requirements = (runtime_pack_root / "core-requirements.txt").read_text(encoding="utf-8")
     root_requirements = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text(encoding="utf-8")
 
     assert 'core-requirements.txt' in install_script
     assert 'Environment=ECOREX_INSTALL_ROOT=$INSTALL_ROOT' in install_script
+    assert 'Environment=ECOREX_STATE_DIR=$STATE_DIR' in install_script
+    assert 'Environment=ECOREX_NODE_ROOT=$INSTALL_ROOT/node' in install_script
+    assert 'feishu_cli.setdefault("allow_system_node", False)' in install_script
+    assert 'install_node_runtime "$bundle_root"' in install_script
+    assert 'run_web_core_baseline_gate "$runtime_dir"' in install_script
+    assert '--strict' in install_script
+    assert 'check-web-core-runtime-baseline.py' in install_script
+    assert 'member.isfile()' in install_script
+    assert 'member.isdir()' in install_script
+    assert 'member.issym()' in install_script
+    assert 'Unsupported Node archive member type' in install_script
+    assert 'Unsupported Node archive top-level member' in install_script
+    assert 'was not present in SHASUMS256.txt' in install_script
+    assert 'os.chmod(destination, safe_mode(member))' in install_script
+    assert 'tar.extract(member' not in install_script
+    assert 'Copy-IfExists -Source (Join-Path $repoRoot "scripts/check-web-core-runtime-baseline.py")' in (
+        Path(__file__).resolve().parents[1] / "scripts" / "prepare-ecorex-web-release.ps1"
+    ).read_text(encoding="utf-8")
+    assert 'Resolve-RequiredPath (Join-Path $repoRoot "runtime-packs")' in (
+        Path(__file__).resolve().parents[1] / "scripts" / "prepare-ecorex-web-release.ps1"
+    ).read_text(encoding="utf-8")
     assert '"/runtime/core-requirements.txt"' in check_script
     assert '"/runtime/runtime-manifest.json"' in check_script
+    assert '"/runtime/scripts/check-web-core-runtime-baseline.py"' in check_script
     assert 'check_file "$INSTALL_ROOT/current/runtime/core-requirements.txt"' in check_script
     assert 'check_file "$INSTALL_ROOT/current/runtime/runtime-manifest.json"' in check_script
+    assert 'check_file "$INSTALL_ROOT/current/runtime/scripts/check-web-core-runtime-baseline.py"' in check_script
+    assert 'check_file "$INSTALL_ROOT/node/bin/node"' in check_script
+    assert 'check_runtime_baseline' in check_script
+    assert 'runtime baseline releaseReady' in check_script
     assert "numpy>=1.21" in core_requirements
     assert "web.py>=0.76,<0.77" in core_requirements
     assert "git+https://github.com/webpy/webpy.git" not in core_requirements
     assert "git+https://github.com/webpy/webpy.git" not in root_requirements
+    assert core_requirements == (Path(__file__).resolve().parents[1] / "desktop" / "runtime-packs" / "core-requirements.txt").read_text(encoding="utf-8")
+    assert (runtime_pack_root / "capabilities.json").read_text(encoding="utf-8") == (
+        Path(__file__).resolve().parents[1] / "desktop" / "runtime-packs" / "capabilities.json"
+    ).read_text(encoding="utf-8")
+    assert '"allow_system_node": false' in (Path(__file__).resolve().parents[1] / "config-template.json").read_text(encoding="utf-8")
     assert 'Install-WindowsRuntimeDependency -RuntimeDir $winRuntime -ModuleName "web"' in local_packager
     assert 'PackageSpec "web.py>=0.76,<0.77"' in local_packager
     assert 'Install-WindowsRuntimeDependency -RuntimeDir $winRuntime -ModuleName "chardet"' in local_packager
     assert 'Install-WindowsRuntimeDependency -RuntimeDir $winRuntime -ModuleName "numpy"' in local_packager
+
+
+def test_v027_macos_stage_runtime_preinstalls_node_and_playwright_browser():
+    root = Path(__file__).resolve().parents[1]
+    mac_stage = (root / "desktop" / "scripts" / "stage-runtime-mac.sh").read_text(encoding="utf-8")
+    win_stage = (root / "desktop" / "scripts" / "stage-runtime-win.ps1").read_text(encoding="utf-8")
+    dependency_provider = (root / "common" / "runtime_dependencies.py").read_text(encoding="utf-8")
+    baseline_checker = (root / "scripts" / "check-web-core-runtime-baseline.py").read_text(encoding="utf-8")
+
+    assert 'NODE_VERSION="${NODE_VERSION:-22.22.0}"' in mac_stage
+    assert "--node-version" in mac_stage
+    assert "--skip-node-install" in mac_stage
+    assert "--skip-playwright-browser-install" in mac_stage
+    assert "stage_node" in mac_stage
+    assert "node-v${NODE_VERSION}-darwin-${node_arch}.tar.gz" in mac_stage
+    assert 'PLAYWRIGHT_BROWSERS_PATH="$RUNTIME_DIR/playwright-browsers"' in mac_stage
+    assert '"nodeVersion": None if skip_node == "1" else node_version' in mac_stage
+    assert '"playwrightBrowserInstall": skip_playwright_browser != "1"' in mac_stage
+    assert 'NODE_VERSION' in win_stage or 'NodeVersion' in win_stage
+    assert "def playwright_browser_dirs" in dependency_provider
+    assert 'env.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(browser_dirs[0]))' in dependency_provider
+    assert 'self.runtime_root / "playwright-browsers"' in dependency_provider
+    assert "def _capture_browser_runtime(runtime_root: Path, state_root: Path)" in baseline_checker
+    assert "ecorex-bundled-playwright" in baseline_checker
 
 
 def test_v025_runtime_manifest_rejects_bad_native_and_tool_file_statuses(tmp_path):

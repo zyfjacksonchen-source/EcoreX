@@ -2,6 +2,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 from common.runtime_dependencies import (
     SOURCE_CODEX_PRIVATE,
     SOURCE_ECOREX_BUNDLED,
@@ -234,6 +236,21 @@ def test_runtime_dependency_provider_build_env_uses_only_owned_pythonpath(tmp_pa
     assert str(foreign) not in env["PYTHONPATH"]
 
 
+def test_runtime_dependency_provider_build_env_exposes_owned_playwright_browsers(tmp_path):
+    runtime = tmp_path / "runtime"
+    state = tmp_path / "state"
+    browser_root = runtime / "playwright-browsers"
+    browser_root.mkdir(parents=True)
+    provider = RuntimeDependencyProvider(runtime, state, env={"PATH": ""})
+
+    env = provider.build_env(include_system_path=False)
+    snapshot = provider.snapshot()
+
+    assert env["PLAYWRIGHT_BROWSERS_PATH"] == str(browser_root)
+    assert env["ECOREX_PLAYWRIGHT_BROWSERS_DIR"] == str(browser_root)
+    assert any(str(item).endswith("runtime/playwright-browsers") for item in snapshot["playwrightBrowserDirs"])
+
+
 def test_runtime_dependency_provider_snapshot_defaults_to_strict_resolution(tmp_path):
     runtime = tmp_path / "runtime"
     state = tmp_path / "state"
@@ -296,3 +313,30 @@ def test_runtime_dependency_provider_linux_install_root_venv_is_owned_state(tmp_
     assert dependency.available is True
     assert dependency.source == SOURCE_ECOREX_STATE
     assert str(site_packages) in provider.build_env()["PYTHONPATH"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX venv python symlink behavior")
+def test_runtime_dependency_provider_accepts_owned_venv_python_symlink(tmp_path):
+    install_root = tmp_path / "ecorex-web"
+    runtime = install_root / "releases" / "rel-1" / "runtime"
+    state = install_root / "state"
+    system_python = tmp_path / "usr" / "bin" / "python3.11"
+    _touch(system_python)
+    venv_python = install_root / "venv" / "bin" / "python"
+    venv_python.parent.mkdir(parents=True, exist_ok=True)
+    venv_python.symlink_to(system_python)
+    provider = RuntimeDependencyProvider(
+        runtime,
+        state,
+        env={
+            "PATH": "",
+            "ECOREX_INSTALL_ROOT": str(install_root),
+            "ECOREX_PYTHON_PATH": str(venv_python),
+        },
+    )
+
+    dependency = provider.python()
+
+    assert dependency.available is True
+    assert dependency.source == SOURCE_ECOREX_STATE
+    assert dependency.path == str(venv_python)

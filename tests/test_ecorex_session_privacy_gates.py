@@ -174,6 +174,27 @@ class EcoreXSessionPrivacyGateTests(unittest.TestCase):
         patterns = {item["pattern"] for item in dirty_payload["findings"]}
         self.assertIn("windows_path", patterns)
 
+    def test_privacy_scan_does_not_treat_low_risk_reason_as_api_token(self):
+        with tempfile.TemporaryDirectory() as raw_workspace:
+            clean = Path(raw_workspace) / "permission-matrix.json"
+            clean.write_text(
+                json.dumps({
+                    "schemaVersion": "web-permission-matrix-v1",
+                    "checks": [
+                        {"reason": "default-low-risk-optional-ability-status"},
+                        {"reason": "default-low-risk-agent-capability-status"},
+                        {"reason": "default-low-risk-browser-snapshot"},
+                    ],
+                }),
+                encoding="utf-8",
+            )
+
+            result = self._run([SCAN_SCRIPT, clean, "--salt", "test-salt"])
+            payload = json.loads(result.stdout)
+
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["findingCount"], 0)
+
     def test_v023_security_permission_audit_passes_and_self_scan_is_clean(self):
         with tempfile.TemporaryDirectory() as raw_workspace:
             output = Path(raw_workspace) / "security-permission-audit.json"

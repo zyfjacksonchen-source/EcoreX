@@ -1,0 +1,189 @@
+{
+  "status": "PASS",
+  "version": "0.2.6",
+  "scope": "production-browser-ui-v026",
+  "generatedAt": "2026-07-01T17:57:54.026602+00:00",
+  "target": {
+    "domainHash": "A753D877497CBE35",
+    "rawTargetPersisted": false
+  },
+  "checkCount": 18,
+  "passCount": 18,
+  "failCount": 0,
+  "checks": [
+    {
+      "index": 1,
+      "name": "login returns success",
+      "status": "PASS",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 2,
+      "name": "login is not local fallback",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 3,
+      "name": "login uses smoke email",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 4,
+      "name": "app shell rendered",
+      "status": "PASS",
+      "detail": {
+        "bodyLength": 692
+      }
+    },
+    {
+      "index": 5,
+      "name": "version visible v0.2.6",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 6,
+      "name": "model popover opened",
+      "status": "PASS",
+      "detail": {
+        "count": 4
+      }
+    },
+    {
+      "index": 7,
+      "name": "model menu has more than gpt-5.5",
+      "status": "PASS",
+      "detail": {
+        "count": 4
+      }
+    },
+    {
+      "index": 8,
+      "name": "model menu has no Unauthorized",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 9,
+      "name": "model menu shows provider labels",
+      "status": "PASS",
+      "detail": {
+        "labels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ]
+      }
+    },
+    {
+      "index": 10,
+      "name": "model menu buttons have loaded provider logo images",
+      "status": "PASS",
+      "detail": {
+        "optionCount": 4,
+        "logoImageCount": 4,
+        "loadedLogoImageCount": 4
+      }
+    },
+    {
+      "index": 11,
+      "name": "regular general sessions have no task title row",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 12,
+      "name": "old sticky model switch divider absent before click",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 13,
+      "name": "model can switch through UI",
+      "status": "PASS",
+      "detail": {
+        "targetHash": "EC275DA68F5D"
+      }
+    },
+    {
+      "index": 14,
+      "name": "model switch prompt is normal system message",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 15,
+      "name": "model switch sticky divider absent",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 16,
+      "name": "ui screenshot captured",
+      "status": "PASS",
+      "detail": {
+        "bytes": 60924
+      }
+    },
+    {
+      "index": 17,
+      "name": "provider logo resources return 200",
+      "status": "PASS",
+      "detail": {
+        "count": 4
+      }
+    },
+    {
+      "index": 18,
+      "name": "no unexpected browser console errors",
+      "status": "PASS",
+      "detail": {
+        "consoleErrorCount": 0,
+        "failedResponseCount": 0,
+        "failedResponses": [],
+        "consoleErrors": []
+      }
+    }
+  ],
+  "failurePreview": [],
+  "metrics": {
+    "logoResponses": [
+      {
+        "status": 200,
+        "fileHash": "A3C005D0237E"
+      },
+      {
+        "status": 200,
+        "fileHash": "C848058A4E61"
+      },
+      {
+        "status": 200,
+        "fileHash": "5F8F63569F0B"
+      },
+      {
+        "status": 200,
+        "fileHash": "A616F4B6A9DD"
+      }
+    ],
+    "modelMenuCount": 4,
+    "providerLabels": [
+      "OpenAI",
+      "DeepSeek",
+      "Gemini",
+      "豆包"
+    ],
+    "logoImageCount": 4,
+    "loadedLogoImageCount": 4
+  },
+  "screenshot": "C:\\EcoreX-Agent生产版\\docs\\v0.2.6\\artifacts\\production-browser-ui-v026-smoke.png",
+  "redaction": {
+    "rawPasswordPersisted": false,
+    "rawUrlPersisted": false,
+    "rawSecretPersisted": false
+  }
+}

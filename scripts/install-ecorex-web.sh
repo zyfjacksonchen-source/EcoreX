@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${VERSION:-0.2.5}"
+VERSION="${VERSION:-0.2.7}"
 SERVICE_NAME="${SERVICE_NAME:-ecorex-web}"
 SERVICE_USER="${SERVICE_USER:-ecorex}"
 SERVICE_GROUP="${SERVICE_GROUP:-$SERVICE_USER}"
@@ -21,6 +21,11 @@ EXPECTED_SHA256="${EXPECTED_SHA256:-}"
 START_SERVICE="${START_SERVICE:-1}"
 OPEN_BROWSER="${OPEN_BROWSER:-1}"
 INSTALL_PY_DEPS="${INSTALL_PY_DEPS:-1}"
+INSTALL_NODE_RUNTIME="${INSTALL_NODE_RUNTIME:-1}"
+ECOREX_NODE_VERSION="${ECOREX_NODE_VERSION:-22.22.0}"
+NODE_DIST_BASE_URL="${NODE_DIST_BASE_URL:-https://nodejs.org/dist}"
+NODE_ARCHIVE_PATH="${NODE_ARCHIVE_PATH:-}"
+NODE_ARCHIVE_SHA256="${NODE_ARCHIVE_SHA256:-}"
 INSTALL_LOCK_DIR="${INSTALL_LOCK_DIR:-/var/lock/ecorex-web-install.lock}"
 INSTALL_LOCK_TIMEOUT_SECONDS="${INSTALL_LOCK_TIMEOUT_SECONDS:-900}"
 INSTALL_LOCK_STALE_SECONDS="${INSTALL_LOCK_STALE_SECONDS:-3600}"
@@ -179,12 +184,28 @@ download_release() {
     return
   fi
 
+  if [[ -z "$EXPECTED_SHA256" ]]; then
+    fail "EXPECTED_SHA256 is required for online Web release installs. Set TARBALL_PATH for a local package or provide the pinned SHA256."
+  fi
+
   if command -v curl >/dev/null 2>&1; then
     curl -fL --retry 3 --connect-timeout 20 -o "$target" "$RELEASE_URL"
   elif command -v wget >/dev/null 2>&1; then
     wget -O "$target" "$RELEASE_URL"
   else
     fail "Missing curl or wget for online install. Set TARBALL_PATH to install from a local tarball."
+  fi
+}
+
+download_url() {
+  local url="$1"
+  local target="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fL --retry 3 --connect-timeout 20 -o "$target" "$url"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -O "$target" "$url"
+  else
+    fail "Missing curl or wget for online install. Provide a local archive path instead."
   fi
 }
 
@@ -230,6 +251,243 @@ find_bundle_root() {
   fail "Release tarball does not contain runtime/app.py"
 }
 
+node_arch() {
+  local machine
+  machine="$(uname -m)"
+  case "$machine" in
+    x86_64|amd64) printf 'x64' ;;
+    aarch64|arm64) printf 'arm64' ;;
+    *) fail "Unsupported Linux architecture for bundled Node runtime: $machine" ;;
+  esac
+}
+
+node_runtime_ready() {
+  local root="$1"
+  [[ -x "$root/bin/node" && -x "$root/bin/npm" && -x "$root/bin/npx" ]]
+}
+
+extract_node_archive() {
+  local archive="$1"
+  local target="$2"
+  python3 - "$archive" "$target" <<'PY'
+import os
+import pathlib
+import shutil
+import sys
+import tarfile
+
+archive = pathlib.Path(sys.argv[1]).resolve()
+target = pathlib.Path(sys.argv[2]).resolve()
+target.mkdir(parents=True, exist_ok=True)
+
+
+def ensure_within(path: pathlib.Path) -> None:
+    if target not in (path, *path.parents):
+        raise SystemExit(f"Unsafe Node archive member path: {path}")
+
+
+def safe_mode(member: tarfile.TarInfo) -> int:
+    executable = bool(member.mode & 0o111)
+    return 0o755 if executable else 0o644
+
+with tarfile.open(archive, "r:*") as tar:
+    members = tar.getmembers()
+    if not members:
+        raise SystemExit("Node archive is empty")
+    for member in members:
+        name = member.name.replace("\\", "/")
+        if name.startswith("/") or name.startswith("../") or "/../" in name:
+            raise SystemExit(f"Unsafe Node archive member path: {member.name}")
+        parts = pathlib.PurePosixPath(name).parts
+        if len(parts) < 2:
+            if member.isdir():
+                continue
+            raise SystemExit(f"Unsupported Node archive top-level member: {member.name}")
+        stripped = pathlib.PurePosixPath(*parts[1:])
+        if not stripped.parts:
+            continue
+        destination = (target / pathlib.Path(*stripped.parts)).resolve()
+        ensure_within(destination)
+        if member.isdir():
+            destination.mkdir(parents=True, exist_ok=True)
+            os.chmod(destination, 0o755)
+            continue
+        if member.isfile():
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            source = tar.extractfile(member)
+            if source is None:
+                raise SystemExit(f"Could not read Node archive file: {member.name}")
+            with source, destination.open("wb") as handle:
+                shutil.copyfileobj(source, handle)
+            os.chmod(destination, safe_mode(member))
+            continue
+        if member.issym():
+            link = (member.linkname or "").replace("\\", "/")
+            if link.startswith("/"):
+                raise SystemExit(f"Unsafe Node archive link target: {member.name}")
+            link_destination = (destination.parent / link).resolve()
+            ensure_within(link_destination)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                destination.unlink()
+            except FileNotFoundError:
+                pass
+            os.symlink(member.linkname, destination)
+            continue
+        raise SystemExit(f"Unsupported Node archive member type: {member.name}")
+PY
+}
+
+verify_node_archive() {
+  local archive="$1"
+  local archive_name="$2"
+  local downloaded="$3"
+  local expected="$NODE_ARCHIVE_SHA256"
+  if [[ -z "$expected" && "$downloaded" == "1" ]]; then
+    local sums="$tmp_dir/SHASUMS256.txt"
+    download_url "$NODE_DIST_BASE_URL/v${ECOREX_NODE_VERSION}/SHASUMS256.txt" "$sums"
+    expected="$(awk -v name="$archive_name" '$2 == name {print toupper($1)}' "$sums")"
+    if [[ -z "$expected" ]]; then
+      fail "Node archive $archive_name was not present in SHASUMS256.txt"
+    fi
+  fi
+  if [[ -z "$expected" ]]; then
+    log "Node archive SHA256 not provided; relying on release package checksum or TLS for local archive."
+    return
+  fi
+  local actual
+  actual="$(calc_sha256 "$archive")"
+  if [[ "$actual" != "${expected^^}" ]]; then
+    fail "Node archive SHA256 mismatch: expected ${expected^^}, got $actual"
+  fi
+}
+
+install_node_runtime() {
+  local bundle_root="$1"
+  if [[ "$INSTALL_NODE_RUNTIME" != "1" ]]; then
+    log "Node runtime install disabled. Strict Web core baseline may fail if node/npm/npx are not already owned by EcoreX."
+    return
+  fi
+
+  local node_root="$INSTALL_ROOT/node"
+  if node_runtime_ready "$node_root"; then
+    log "EcoreX-owned Node runtime already available at $node_root"
+    return
+  fi
+
+  local arch
+  arch="$(node_arch)"
+  local archive_name="node-v${ECOREX_NODE_VERSION}-linux-${arch}.tar.xz"
+  local archive_path=""
+  local downloaded_archive=0
+  if [[ -n "$NODE_ARCHIVE_PATH" ]]; then
+    [[ -f "$NODE_ARCHIVE_PATH" ]] || fail "NODE_ARCHIVE_PATH does not exist: $NODE_ARCHIVE_PATH"
+    archive_path="$NODE_ARCHIVE_PATH"
+  elif [[ -f "$bundle_root/node/$archive_name" ]]; then
+    archive_path="$bundle_root/node/$archive_name"
+  elif [[ -f "$bundle_root/node/${archive_name%.tar.xz}.tar.gz" ]]; then
+    archive_path="$bundle_root/node/${archive_name%.tar.xz}.tar.gz"
+  else
+    archive_path="$tmp_dir/$archive_name"
+    download_url "$NODE_DIST_BASE_URL/v${ECOREX_NODE_VERSION}/$archive_name" "$archive_path"
+    downloaded_archive=1
+  fi
+  verify_node_archive "$archive_path" "$(basename "$archive_path")" "$downloaded_archive"
+
+  local versioned_root="$INSTALL_ROOT/node-v${ECOREX_NODE_VERSION}-linux-${arch}"
+  local tmp_node_root="$versioned_root.tmp.$$"
+  rm -rf -- "$tmp_node_root"
+  install -d -m 0755 -o root -g root "$tmp_node_root"
+  extract_node_archive "$archive_path" "$tmp_node_root"
+  if ! node_runtime_ready "$tmp_node_root"; then
+    rm -rf -- "$tmp_node_root"
+    fail "Node archive did not provide bin/node, bin/npm, and bin/npx"
+  fi
+  rm -rf -- "$versioned_root"
+  mv "$tmp_node_root" "$versioned_root"
+  ln -sfn "$versioned_root" "$node_root"
+  log "Installed EcoreX-owned Node runtime: $node_root"
+}
+
+install_playwright_chromium_runtime() {
+  local browsers_dir="$STATE_DIR/playwright-browsers"
+  install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$browsers_dir"
+
+  playwright_chromium_smoke() {
+    PLAYWRIGHT_BROWSERS_PATH="$browsers_dir" "$VENV_DIR/bin/python" - <<'PY'
+from playwright.sync_api import sync_playwright
+
+with sync_playwright() as p:
+    browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+    page = browser.new_page()
+    page.goto("data:text/html,<title>EcoreX Browser Smoke</title><h1>ok</h1>", wait_until="domcontentloaded", timeout=15000)
+    if page.title() != "EcoreX Browser Smoke":
+        raise SystemExit(2)
+    browser.close()
+PY
+  }
+
+  if "$VENV_DIR/bin/python" - "$browsers_dir" <<'PY'
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+patterns = [
+    "chromium-*/chrome-linux/chrome",
+    "chromium_headless_shell-*/chrome-linux/headless_shell",
+]
+raise SystemExit(0 if any(any(root.glob(pattern)) for pattern in patterns) else 1)
+PY
+  then
+    if playwright_chromium_smoke; then
+      chown -R "$SERVICE_USER:$SERVICE_GROUP" "$browsers_dir"
+      log "Playwright Chromium runtime already available at $browsers_dir"
+      return
+    fi
+    log "Playwright Chromium exists but native launch smoke failed; repairing browser dependencies."
+  fi
+  log "Installing EcoreX-owned Playwright Chromium runtime at $browsers_dir"
+  PLAYWRIGHT_BROWSERS_PATH="$browsers_dir" "$VENV_DIR/bin/python" -m playwright install --with-deps chromium
+  chown -R "$SERVICE_USER:$SERVICE_GROUP" "$browsers_dir"
+  playwright_chromium_smoke
+}
+
+run_web_core_baseline_gate() {
+  local runtime_dir="$1"
+  local checker="$runtime_dir/scripts/check-web-core-runtime-baseline.py"
+  if [[ ! -f "$checker" ]]; then
+    fail "Web core runtime baseline checker is missing: $checker"
+  fi
+  ECOREX_INSTALL_ROOT="$INSTALL_ROOT" \
+  ECOREX_STATE_DIR="$STATE_DIR" \
+  ECOREX_NODE_ROOT="$INSTALL_ROOT/node" \
+  ECOREX_PYTHON_PATH="$VENV_DIR/bin/python" \
+  "$VENV_DIR/bin/python" "$checker" \
+    --runtime-root "$runtime_dir" \
+    --state-root "$STATE_DIR" \
+    --output "$STATE_DIR/runtime-baseline.json" \
+    --strict
+}
+
+run_web_release_gate() {
+  local runtime_dir="$1"
+  local generator="$runtime_dir/scripts/generate-web-runtime-release-gate.py"
+  if [[ ! -f "$generator" ]]; then
+    fail "Web release gate generator is missing: $generator"
+  fi
+  ECOREX_INSTALL_ROOT="$INSTALL_ROOT" \
+  ECOREX_STATE_DIR="$STATE_DIR" \
+  ECOREX_NODE_ROOT="$INSTALL_ROOT/node" \
+  ECOREX_PYTHON_PATH="$VENV_DIR/bin/python" \
+  "$VENV_DIR/bin/python" "$generator" \
+    --runtime-root "$runtime_dir" \
+    --state-root "$STATE_DIR" \
+    --workspace-root "$WORKSPACE_ROOT" \
+    --output-dir "$STATE_DIR" \
+    --baseline-input "$STATE_DIR/runtime-baseline.json" \
+    --strict
+}
+
 write_env_file() {
   install -d -m 0750 -o root -g "$SERVICE_GROUP" "$ENV_DIR"
 
@@ -266,6 +524,7 @@ AGENT_WORKSPACE=$WORKSPACE_ROOT
 ECOREX_WEB_PUBLIC_BASE_URL=$PUBLIC_BASE_URL
 ECOREX_WEB_CLIENT_BASE=$client_base
 ECOREX_TONGXIN_AUTH_URL=$tongxin_auth_url
+ECOREX_TONGXIN_DATABASE=
 ECOREX_TOOL_EXECUTION_LEASE_SECONDS=900
 ECOREX_TOOL_EXECUTION_EXTENSION_SECONDS=900
 ECOREX_TOOL_EXECUTION_MAX_SECONDS=5400
@@ -289,10 +548,12 @@ EOF
       upsert_env_value ECOREX_WEB_PUBLIC_BASE_URL "$PUBLIC_BASE_URL"
       upsert_env_value ECOREX_WEB_CLIENT_BASE "$client_base"
       upsert_env_value ECOREX_TONGXIN_AUTH_URL "$tongxin_auth_url"
+      grep -q '^ECOREX_TONGXIN_DATABASE=' "$ENV_FILE" || printf 'ECOREX_TONGXIN_DATABASE=\n' >> "$ENV_FILE"
     else
       grep -q '^ECOREX_WEB_PUBLIC_BASE_URL=' "$ENV_FILE" || printf 'ECOREX_WEB_PUBLIC_BASE_URL=\n' >> "$ENV_FILE"
       grep -q '^ECOREX_WEB_CLIENT_BASE=' "$ENV_FILE" || printf 'ECOREX_WEB_CLIENT_BASE=\n' >> "$ENV_FILE"
       grep -q '^ECOREX_TONGXIN_AUTH_URL=' "$ENV_FILE" || printf 'ECOREX_TONGXIN_AUTH_URL=\n' >> "$ENV_FILE"
+      grep -q '^ECOREX_TONGXIN_DATABASE=' "$ENV_FILE" || printf 'ECOREX_TONGXIN_DATABASE=\n' >> "$ENV_FILE"
     fi
   fi
 }
@@ -303,14 +564,17 @@ write_runtime_config() {
   local effective_host
   local effective_port
   local tongxin_auth_url
+  local tongxin_database
 
   password="$(read_env_value WEB_PASSWORD "")"
   effective_host="$(read_env_value WEB_HOST "$WEB_HOST")"
   effective_port="$(read_env_value WEB_PORT "$WEB_PORT")"
   tongxin_auth_url="$(read_env_value ECOREX_TONGXIN_AUTH_URL "")"
+  tongxin_database="$(read_env_value ECOREX_TONGXIN_DATABASE "")"
 
   install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$STATE_DIR"
   install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_GROUP" \
+    "$STATE_DIR/appdata" \
     "$STATE_DIR/capability-state" \
     "$STATE_DIR/capability-packages" \
     "$STATE_DIR/playwright-browsers"
@@ -322,7 +586,9 @@ write_runtime_config() {
   ECOREX_WEB_PASSWORD="$password" \
   ECOREX_WORKSPACE_ROOT="$WORKSPACE_ROOT" \
   ECOREX_STATE_DIR="$STATE_DIR" \
+  ECOREX_RELEASE_RUNTIME_DIR="$runtime_dir" \
   ECOREX_TONGXIN_AUTH_URL="$tongxin_auth_url" \
+  ECOREX_TONGXIN_DATABASE="$tongxin_database" \
   python3 - <<'PY'
 import json
 import os
@@ -346,7 +612,7 @@ payload.update({
     "agent": True,
     "agent_workspace": os.environ["ECOREX_WORKSPACE_ROOT"],
     "web_file_serve_root": os.environ["ECOREX_WORKSPACE_ROOT"],
-    "appdata_dir": os.path.join(os.environ["ECOREX_WORKSPACE_ROOT"], "appdata"),
+    "appdata_dir": os.path.join(os.environ["ECOREX_STATE_DIR"], "appdata"),
 })
 
 tools = payload.setdefault("tools", {})
@@ -360,7 +626,7 @@ if not isinstance(feishu_cli, dict):
     tools["feishu_cli"] = feishu_cli
 feishu_cli.setdefault("package", "@larksuite/cli@1.0.56")
 feishu_cli.setdefault("auto_install", False)
-feishu_cli.setdefault("allow_system_node", True)
+feishu_cli.setdefault("allow_system_node", False)
 feishu_cli.setdefault("install_root", os.path.join(os.environ["ECOREX_STATE_DIR"], "tools", "lark-cli"))
 
 tongxin_cli = tools.setdefault("tongxin_cli", {})
@@ -368,7 +634,15 @@ if not isinstance(tongxin_cli, dict):
     tongxin_cli = {}
     tools["tongxin_cli"] = tongxin_cli
 tongxin_cli.setdefault("script_path", "")
+built_in_tongxin = os.path.join(os.environ["ECOREX_RELEASE_RUNTIME_DIR"], "tools", "tongxin", "xin_agent_cli.py")
+if not tongxin_cli.get("script_path") and os.path.isfile(built_in_tongxin):
+    tongxin_cli["script_path"] = built_in_tongxin
 tongxin_cli.setdefault("python_path", "")
+tongxin_database = os.environ.get("ECOREX_TONGXIN_DATABASE", "").strip()
+if tongxin_database:
+    tongxin_cli["database_path"] = tongxin_database
+else:
+    tongxin_cli.setdefault("database_path", os.path.join(os.environ["ECOREX_STATE_DIR"], "tongxin.sqlite3"))
 tongxin_cli["read_only"] = True
 tongxin_auth_url = os.environ.get("ECOREX_TONGXIN_AUTH_URL", "").strip()
 if tongxin_auth_url:
@@ -379,6 +653,17 @@ tongxin_cli.setdefault("bootstrap_manifest_url", "")
 tongxin_cli.setdefault("bootstrap_url", "")
 tongxin_cli.setdefault("bootstrap_sha256", "")
 tongxin_cli.setdefault("bootstrap_dir", os.path.join(os.environ["ECOREX_STATE_DIR"], "tools", "tongxin"))
+
+browser = tools.setdefault("browser", {})
+if not isinstance(browser, dict):
+    browser = {}
+    tools["browser"] = browser
+browser.setdefault("cdp_endpoint", "http://127.0.0.1:9222")
+browser["cdp_auto_launch"] = os.environ.get("ECOREX_BROWSER_CDP_AUTO_LAUNCH", "").strip().lower() not in {"0", "false", "no", "off"}
+browser["cdp_fallback"] = os.environ.get("ECOREX_BROWSER_CDP_FALLBACK", "").strip().lower() not in {"0", "false", "no", "off"}
+browser["persistent"] = os.environ.get("ECOREX_BROWSER_PERSISTENT", "").strip().lower() not in {"0", "false", "no", "off"}
+browser.setdefault("cdp_user_data_dir", os.path.join(os.environ["ECOREX_STATE_DIR"], "chrome-cdp-profile"))
+browser.setdefault("user_data_dir", os.path.join(os.environ["ECOREX_STATE_DIR"], "browser-profile"))
 
 config_path.parent.mkdir(parents=True, exist_ok=True)
 tmp_path = config_path.with_suffix(".json.tmp")
@@ -481,6 +766,9 @@ WorkingDirectory=$INSTALL_ROOT/current/runtime
 EnvironmentFile=$ENV_FILE
 Environment=PYTHONPATH=$INSTALL_ROOT/current/runtime
 Environment=ECOREX_INSTALL_ROOT=$INSTALL_ROOT
+Environment=ECOREX_STATE_DIR=$STATE_DIR
+Environment=ECOREX_NODE_ROOT=$INSTALL_ROOT/node
+Environment=ECOREX_PYTHON_PATH=$VENV_DIR/bin/python
 Environment=ECOREX_CAPABILITY_STATE_DIR=$STATE_DIR/capability-state
 Environment=ECOREX_CAPABILITY_TARGET_DIR=$STATE_DIR/capability-packages
 Environment=ECOREX_PLAYWRIGHT_BROWSERS_DIR=$STATE_DIR/playwright-browsers
@@ -621,8 +909,6 @@ write_runtime_config "$runtime_dir"
 chown -R root:root "$release_dir"
 chown -h "$SERVICE_USER:$SERVICE_GROUP" "$runtime_dir/config.json" 2>/dev/null || true
 
-ln -sfn "$release_dir" "$INSTALL_ROOT/current"
-
 if [[ ! -d "$VENV_DIR" ]]; then
   python3 -m venv "$VENV_DIR"
 fi
@@ -643,6 +929,11 @@ if [[ "$INSTALL_PY_DEPS" == "1" ]]; then
     "$VENV_DIR/bin/python" -m pip install -r "$requirements_file"
   done
 fi
+install_playwright_chromium_runtime
+install_node_runtime "$bundle_root"
+run_web_core_baseline_gate "$runtime_dir"
+run_web_release_gate "$runtime_dir"
+ln -sfn "$release_dir" "$INSTALL_ROOT/current"
 chown -R "$SERVICE_USER:$SERVICE_GROUP" "$VENV_DIR" "$STATE_DIR" "$WORKSPACE_ROOT"
 
 write_installation_manifest "$release_dir" "$bundle_version"

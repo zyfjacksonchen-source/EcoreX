@@ -1,0 +1,307 @@
+{
+  "status": "PASS",
+  "version": "0.2.6",
+  "scope": "production-server-32-image-ocr-vision-toolchain",
+  "generatedAt": "2026-07-01T18:04:20.302703+00:00",
+  "durationSeconds": 119.03,
+  "checkCount": 32,
+  "passCount": 32,
+  "failCount": 0,
+  "checks": [
+    {
+      "index": 1,
+      "group": "discovery",
+      "name": "login works and is not local fallback",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 2,
+      "group": "discovery",
+      "name": "full-access permission visible",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 3,
+      "group": "discovery",
+      "name": "imagegen capability discoverable",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 4,
+      "group": "discovery",
+      "name": "ocr capability discoverable",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 5,
+      "group": "discovery",
+      "name": "vision capability discoverable",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 6,
+      "group": "discovery",
+      "name": "browser capability discoverable",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 7,
+      "group": "discovery",
+      "name": "owned node/npm/npx available",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 8,
+      "group": "discovery",
+      "name": "runtime python image deps import",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 9,
+      "group": "ocr",
+      "name": "OCR diagnose succeeds",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 10,
+      "group": "ocr",
+      "name": "rapidocr provider is available",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 11,
+      "group": "ocr",
+      "name": "OCR fixture file exists",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 12,
+      "group": "ocr",
+      "name": "OCR extracts ECX token",
+      "status": "PASS",
+      "detail": {
+        "textHash": "db98290da1fe"
+      }
+    },
+    {
+      "index": 13,
+      "group": "ocr",
+      "name": "OCR extracts number 4827",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 14,
+      "group": "ocr",
+      "name": "OCR extracts expected URL",
+      "status": "PASS",
+      "detail": {
+        "urlCount": 1
+      }
+    },
+    {
+      "index": 15,
+      "group": "ocr",
+      "name": "OCR URL extraction provides browser nextAction",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 16,
+      "group": "vision",
+      "name": "Vision tool call succeeds",
+      "status": "PASS",
+      "detail": {
+        "status": "success"
+      }
+    },
+    {
+      "index": 17,
+      "group": "vision",
+      "name": "Vision answer mentions red",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 18,
+      "group": "vision",
+      "name": "Vision answer mentions green",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 19,
+      "group": "vision",
+      "name": "Vision answer reads ECX/OCR text",
+      "status": "PASS",
+      "detail": {
+        "answerHash": "860a6b0178a4",
+        "mentionsEcx": true,
+        "mentionsOcr": true,
+        "mentions4827": true
+      }
+    },
+    {
+      "index": 20,
+      "group": "vision",
+      "name": "Vision answer reads number 4827",
+      "status": "PASS",
+      "detail": {
+        "answerHash": "860a6b0178a4",
+        "mentionsEcx": true,
+        "mentionsOcr": true,
+        "mentions4827": true
+      }
+    },
+    {
+      "index": 21,
+      "group": "toolchain-imagegen",
+      "name": "Browser step succeeds in OCR chain",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 22,
+      "group": "toolchain-imagegen",
+      "name": "Imagegen probe is ready",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 23,
+      "group": "toolchain-imagegen",
+      "name": "Imagegen provider credentials configured",
+      "status": "PASS",
+      "detail": {
+        "configuredProviderEnvCount": 3
+      }
+    },
+    {
+      "index": 24,
+      "group": "toolchain-imagegen",
+      "name": "Single image generation succeeds",
+      "status": "PASS",
+      "detail": {
+        "status": "success",
+        "code": null,
+        "nextAction": null
+      }
+    },
+    {
+      "index": 25,
+      "group": "toolchain-imagegen",
+      "name": "Single image route uses native generations",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 26,
+      "group": "toolchain-imagegen",
+      "name": "Single image uses gpt-image-2-pro",
+      "status": "PASS",
+      "detail": {
+        "model": "gpt-image-2-pro"
+      }
+    },
+    {
+      "index": 27,
+      "group": "toolchain-imagegen",
+      "name": "Generated image file exists",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 28,
+      "group": "toolchain-imagegen",
+      "name": "No Python fallback used for single image",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 29,
+      "group": "toolchain-imagegen",
+      "name": "Native batch imagegen path used",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 30,
+      "group": "toolchain-imagegen",
+      "name": "Batch imagegen produced two successful tasks",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 31,
+      "group": "toolchain-imagegen",
+      "name": "After chat model switch text-to-image still uses gpt-image-2-pro native route",
+      "status": "PASS",
+      "detail": {
+        "switchedFrom": [
+          "deepseek",
+          "deepseek-v4-pro"
+        ],
+        "switchedTo": [
+          "gemini",
+          "gemini-3.1-pro-preview"
+        ],
+        "switchStatus": 200,
+        "restored": 200,
+        "restoreConfirmed": true
+      }
+    },
+    {
+      "index": 32,
+      "group": "toolchain-imagegen",
+      "name": "After chat model switch image edit still uses gpt-image-2-pro edit route",
+      "status": "PASS",
+      "detail": {
+        "switchedFrom": [
+          "deepseek",
+          "deepseek-v4-pro"
+        ],
+        "switchedTo": [
+          "gemini",
+          "gemini-3.1-pro-preview"
+        ],
+        "switchStatus": 200,
+        "restored": 200,
+        "restoreConfirmed": true
+      }
+    }
+  ],
+  "failurePreview": [],
+  "artifacts": {
+    "fixtureHash": "581d4b915046",
+    "generatedImageCount": 1,
+    "batchImageCount": 2
+  },
+  "redaction": {
+    "rawPasswordPersisted": false,
+    "rawSecretPersisted": false,
+    "rawUrlPersisted": false,
+    "rawImagePathPersisted": false
+  },
+  "remoteExitCode": 0,
+  "remoteStdoutHash": "CA58253D0EBDDD5392623297F42B13159E9BF76A65ED48577AA10AF69B50D58E",
+  "remoteStderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+  "remoteStderrExcerptRedacted": "",
+  "generatedLocallyAt": "2026-07-01T18:04:26.028883+00:00",
+  "target": {
+    "domainHash": "A753D877497CBE35",
+    "sshHostHash": "CDF1CF905198CA97",
+    "sshUserHash": "4813494D137E1631",
+    "rawTargetPersisted": false
+  }
+}

@@ -1,0 +1,96 @@
+{
+  "slice": "S9c-imagegen-multi-image-routing",
+  "status": "review_passed",
+  "createdAt": "2026-07-02",
+  "sourceThread": "redacted-user-provided-thread-ref",
+  "goal": "Keep semantic image generation on the native imagegen route for single, serial, parallel, and multi-image requests; avoid local Python/bash generation fallback and avoid hardcoded remount or tasks-only flows.",
+  "rootCause": [
+    "Image generation was documented as a native imagegen route, but batch guidance in multiple prompts/contracts still hardcoded imagegen.tasks as the batch path.",
+    "Tool schema budgeting could still expose bash alongside imagegen, and long-context schema-only recovery could disable all tool schemas for the next turn.",
+    "When imagegen was not visible, the shell guard blocked local scripts but did not expose enough tool-visibility context for the model to reason about capability recovery."
+  ],
+  "implementation": {
+    "agentStream": {
+      "file": "agent/protocol/agent_stream.py",
+      "changes": [
+        "Expand imagegen intent detection for multi-image, one-by-one generation, product carousel, and numeric image-count phrasing.",
+        "When imagegen intent is detected and imagegen is available, select imagegen as the primary schema route and do not expose bash as a competing semantic image-generation path.",
+        "When imagegen intent is detected but imagegen is missing, expose diagnostics/capability tools instead of bash so the model can inspect visibility and recovery evidence.",
+        "Prevent recent tool-chain selection from re-adding bash/shell/terminal after an imagegen intent has already narrowed the schema route.",
+        "Return immediately after imagegen-intent schema selection so small custom toolset and fallback expansion cannot re-add unrelated tools.",
+        "Ignore explicit non-imagegen tool mentions during an imagegen turn when imagegen is visible, so read/custom_renderer or other non-diagnostic tools cannot compete with the native imagegen route.",
+        "Exclude env_config from the imagegen-missing diagnostic route to avoid prompting local provider configuration probing.",
+        "Exclude vision and OCR from pure image-generation schema selection; those capabilities must not compete with the native imagegen route for semantic generation.",
+        "Narrow raw-shell semantic image-generation detection so deterministic PIL/SVG/canvas post-processing such as contact sheets, labels, resize of generated outputs, masks, and format conversion remains allowed.",
+        "Keep imagegen schema available during context-overflow schema-only recovery for image-generation turns instead of forcing a text-only retry.",
+        "Update raw-shell reroute guidance to allow one or more imagegen tool calls according to visible schema, not a fixed tasks-array or remount flow."
+      ]
+    },
+    "promptBoundary": {
+      "file": "agent/prompt/builder.py",
+      "changes": [
+        "Replace tasks-only batch guidance with Codex-style native imagegen tool routing.",
+        "Clarify that local Python/PIL/HTML/SVG/canvas is only for deterministic post-processing, not semantic final image generation."
+      ]
+    },
+    "imagegenTool": {
+      "file": "agent/tools/imagegen/imagegen.py",
+      "changes": [
+        "Document that batches may use multiple imagegen calls or the optional tasks field according to visible schema and requested ordering.",
+        "Keep tasks support as an optional native batch loop rather than the only valid multi-image route."
+      ]
+    },
+    "skillBinding": {
+      "file": "agent/skills/tool_binding_contract.py",
+      "changes": [
+        "Remove imagegen.tasks-only failure prompt guidance from the imagegen capability contract."
+      ]
+    }
+  },
+  "verification": {
+    "commands": [
+      {
+        "command": "python -m py_compile agent/protocol/agent_stream.py agent/prompt/builder.py agent/tools/imagegen/imagegen.py agent/skills/tool_binding_contract.py",
+        "result": "passed"
+      },
+      {
+        "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_ecorex_web_parallel_backend.py::TestAgentHostBoundary::test_tool_schema_budget_prioritizes_imagegen_for_multi_image_requests tests/test_ecorex_web_parallel_backend.py::TestAgentHostBoundary::test_tool_schema_budget_uses_diagnostics_when_imagegen_is_missing_not_bash tests/test_ecorex_web_parallel_backend.py::TestAgentHostBoundary::test_context_overflow_schema_recovery_keeps_imagegen_for_generation_intent tests/test_ecorex_web_parallel_backend.py::TestAgentHostBoundary::test_image_generation_raw_bash_is_blocked_in_favor_of_imagegen -q",
+        "result": "4 passed"
+      },
+      {
+        "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_ecorex_web_parallel_backend.py::TestAgentHostBoundary::test_tool_schema_budget_does_not_restore_recent_bash_for_imagegen_intent tests/test_ecorex_web_parallel_backend.py::TestAgentHostBoundary::test_tool_schema_budget_prioritizes_imagegen_for_multi_image_requests tests/test_ecorex_web_parallel_backend.py::TestAgentHostBoundary::test_tool_schema_budget_uses_diagnostics_when_imagegen_is_missing_not_bash -q",
+        "result": "3 passed"
+      },
+      {
+        "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_ecorex_web_parallel_backend.py::TestAgentHostBoundary::test_tool_schema_budget_ignores_explicit_non_imagegen_tool_for_imagegen_intent tests/test_ecorex_web_parallel_backend.py::TestAgentHostBoundary::test_tool_schema_budget_does_not_restore_other_tools_for_imagegen_intent tests/test_ecorex_web_parallel_backend.py::TestAgentHostBoundary::test_tool_schema_budget_does_not_restore_recent_bash_for_imagegen_intent tests/test_ecorex_web_parallel_backend.py::TestAgentHostBoundary::test_tool_schema_budget_prioritizes_imagegen_for_multi_image_requests tests/test_ecorex_web_parallel_backend.py::TestAgentHostBoundary::test_tool_schema_budget_uses_diagnostics_when_imagegen_is_missing_not_bash -q",
+        "result": "5 passed"
+      },
+      {
+        "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_ecorex_web_parallel_backend.py::TestAgentHostBoundary::test_tool_schema_budget_excludes_env_config_when_imagegen_is_missing tests/test_ecorex_web_parallel_backend.py::TestAgentHostBoundary::test_tool_schema_budget_excludes_vision_for_pure_imagegen_intent tests/test_ecorex_web_parallel_backend.py::TestAgentHostBoundary::test_tool_schema_budget_ignores_explicit_non_imagegen_tool_for_imagegen_intent tests/test_ecorex_web_parallel_backend.py::TestAgentHostBoundary::test_tool_schema_budget_uses_diagnostics_when_imagegen_is_missing_not_bash -q",
+        "result": "4 passed"
+      },
+      {
+        "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_ecorex_web_parallel_backend.py::TestAgentHostBoundary::test_image_generation_reroute_allows_deterministic_pil_postprocessing tests/test_ecorex_web_parallel_backend.py::TestAgentHostBoundary::test_image_generation_raw_bash_is_blocked_in_favor_of_imagegen -q",
+        "result": "2 passed"
+      },
+      {
+        "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_ecorex_web_parallel_backend.py::TestAgentHostBoundary tests/test_image_generation_skill_retry.py tests/test_v025_tool_matrix_smoke.py tests/test_v025_skill_tool_binding.py -q",
+        "result": "175 passed, 3 warnings, 12 subtests passed"
+      },
+      {
+        "command": "rg -n \"Use `imagegen\\.tasks`|imagegen\\.tasks|For batch generation, call `imagegen` once|fixed remount|重新挂载|remount\" agent scripts runtime-packs desktop/runtime-packs -S",
+        "result": "no matches"
+      }
+    ]
+  },
+  "reviewGate": {
+    "status": "pass",
+    "roles": {
+      "runtimeConfig": "PASS",
+      "frontendApi": "PASS",
+      "toolchainCdpOcrTongxin": "PASS",
+      "qaRelease": "PASS",
+      "privacyData": "PASS"
+    }
+  }
+}

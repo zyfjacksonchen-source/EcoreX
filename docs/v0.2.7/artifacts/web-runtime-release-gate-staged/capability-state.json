@@ -1,0 +1,2487 @@
+{
+  "schemaVersion": "web-capability-state-snapshot-v1",
+  "generatedAt": "2026-07-02T08:35:12.483547+00:00",
+  "status": "success",
+  "source": "runtime-capability-service",
+  "capabilities": {
+    "status": "success",
+    "source": "runtime-capability-service",
+    "serviceVersion": "web-runtime-goal-s6-v1",
+    "workspace": "%WORKSPACE_ROOT%",
+    "generatedAt": "2026-07-02T08:35:12Z",
+    "policy": "Heavy abilities are discoverable but disabled by default; enable/install only after user permission.",
+    "abilities": [
+      {
+        "id": "find-skill",
+        "label": "Find skill and file finder",
+        "kind": "built-in",
+        "defaultPolicy": "loaded",
+        "startupImpact": "low",
+        "notes": "Built in for v0.1.14; no extra install required.",
+        "agentCanEnable": false,
+        "agentCanInstall": false,
+        "enabled": true,
+        "packId": "find-skill",
+        "state": "ready",
+        "missingItems": [],
+        "nextAction": "none",
+        "actionLabel": "Ready",
+        "retryable": false,
+        "diagnosticSummary": "Built in for v0.1.14; no extra install required.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "ready",
+          "missingItems": [],
+          "nextAction": "none",
+          "actionLabel": "Ready",
+          "retryable": false,
+          "diagnosticSummary": "Built in for v0.1.14; no extra install required.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "skill-creator",
+        "label": "Skill creator",
+        "kind": "built-in",
+        "defaultPolicy": "loaded",
+        "startupImpact": "low",
+        "notes": "Built in for v0.1.14; use when creating or packaging skills.",
+        "agentCanEnable": false,
+        "agentCanInstall": false,
+        "enabled": true,
+        "packId": "skill-creator",
+        "state": "ready",
+        "missingItems": [],
+        "nextAction": "none",
+        "actionLabel": "Ready",
+        "retryable": false,
+        "diagnosticSummary": "Built in for v0.1.14; use when creating or packaging skills.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "ready",
+          "missingItems": [],
+          "nextAction": "none",
+          "actionLabel": "Ready",
+          "retryable": false,
+          "diagnosticSummary": "Built in for v0.1.14; use when creating or packaging skills.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "ecorex-cli",
+        "label": "Structured EcoreX CLI",
+        "kind": "built-in",
+        "defaultPolicy": "loaded",
+        "startupImpact": "low",
+        "notes": "Use ecorex_cli instead of raw shell for bundled CLI actions.",
+        "agentCanEnable": false,
+        "agentCanInstall": false,
+        "enabled": true,
+        "packId": "ecorex-cli",
+        "state": "ready",
+        "missingItems": [],
+        "nextAction": "none",
+        "actionLabel": "Ready",
+        "retryable": false,
+        "diagnosticSummary": "Use ecorex_cli instead of raw shell for bundled CLI actions.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "ready",
+          "missingItems": [],
+          "nextAction": "none",
+          "actionLabel": "Ready",
+          "retryable": false,
+          "diagnosticSummary": "Use ecorex_cli instead of raw shell for bundled CLI actions.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "host-diagnostics",
+        "label": "Host diagnostics",
+        "kind": "built-in",
+        "defaultPolicy": "loaded",
+        "startupImpact": "low",
+        "notes": "Read-only diagnostics for capability, MCP, CDP, permissions, and logs.",
+        "agentCanEnable": false,
+        "agentCanInstall": false,
+        "enabled": true,
+        "packId": "host-diagnostics",
+        "state": "ready",
+        "missingItems": [],
+        "nextAction": "none",
+        "actionLabel": "Ready",
+        "retryable": false,
+        "diagnosticSummary": "Read-only diagnostics for capability, MCP, CDP, permissions, and logs.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "ready",
+          "missingItems": [],
+          "nextAction": "none",
+          "actionLabel": "Ready",
+          "retryable": false,
+          "diagnosticSummary": "Read-only diagnostics for capability, MCP, CDP, permissions, and logs.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "chrome-devtools-mcp",
+        "label": "Chrome DevTools MCP",
+        "kind": "optional-runtime",
+        "defaultPolicy": "discoverable-disabled",
+        "startupImpact": "high",
+        "notes": "Uses npx -y chrome-devtools-mcp@latest with CDP-first full-compatible DevTools flags after explicit enablement.",
+        "agentCanEnable": true,
+        "agentCanInstall": false,
+        "enabled": false,
+        "configured": true,
+        "fullToolset": true,
+        "npx": true,
+        "packId": "chrome-devtools-mcp",
+        "state": "not-installed",
+        "missingItems": [],
+        "nextAction": "enable",
+        "actionLabel": "Enable",
+        "retryable": true,
+        "diagnosticSummary": "Uses npx -y chrome-devtools-mcp@latest with CDP-first full-compatible DevTools flags after explicit enablement.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "not-installed",
+          "missingItems": [],
+          "nextAction": "enable",
+          "actionLabel": "Enable",
+          "retryable": true,
+          "diagnosticSummary": "Uses npx -y chrome-devtools-mcp@latest with CDP-first full-compatible DevTools flags after explicit enablement.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "browser-cdp",
+        "label": "Browser CDP auto-launch",
+        "kind": "optional-runtime",
+        "defaultPolicy": "loaded-by-default",
+        "startupImpact": "medium",
+        "notes": "CDP is first priority and auto-launches Chrome/Edge on first browser use; fallback Chromium is used only when CDP is unavailable.",
+        "agentCanEnable": true,
+        "agentCanInstall": true,
+        "enabled": true,
+        "packId": "browser-automation",
+        "packIdRedacted": false,
+        "policyMode": "ask",
+        "installAllowed": true,
+        "disabledReason": "",
+        "policyStatus": "",
+        "policyUpdatedAt": "",
+        "policySource": "runtime-default",
+        "policyAvailable": false,
+        "mirrorConfigured": false,
+        "offlineCacheConfigured": false,
+        "state": "ready",
+        "missingItems": [],
+        "nextAction": "none",
+        "actionLabel": "Ready",
+        "retryable": false,
+        "diagnosticSummary": "browser-automation is built into this runtime through the bundled Playwright Python package. CDP can use the user's Chrome/Edge, and the Chromium fallback can still be repaired with install_pack if a browser binary is missing.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "installed": true,
+          "state": "installed",
+          "builtIn": true,
+          "message": "browser-automation is built into this runtime through the bundled Playwright Python package. CDP can use the user's Chrome/Edge, and the Chromium fallback can still be repaired with install_pack if a browser binary is missing.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "ready",
+          "missingItems": [],
+          "nextAction": "none",
+          "actionLabel": "Ready",
+          "retryable": false,
+          "diagnosticSummary": "browser-automation is built into this runtime through the bundled Playwright Python package. CDP can use the user's Chrome/Edge, and the Chromium fallback can still be repaired with install_pack if a browser binary is missing.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "feishu-cli",
+        "label": "Feishu/Lark CLI connector",
+        "kind": "optional-runtime",
+        "defaultPolicy": "discoverable-disabled",
+        "startupImpact": "medium",
+        "notes": "Installs official @larksuite/cli on demand through the structured feishu_cli tool after the find-skill gate.",
+        "agentCanEnable": true,
+        "agentCanInstall": true,
+        "sourceUrl": "https://github.com/larksuite/cli",
+        "mirrorUrls": [
+          "https://registry.npmmirror.com/@larksuite/cli"
+        ],
+        "installHint": "Agent should use the built-in find skill first (gated as find-skill), then install official @larksuite/cli on demand. If npmjs.org times out, retry with the domestic npm mirror https://registry.npmmirror.com.",
+        "enabled": false,
+        "larkCli": false,
+        "npm": true,
+        "feishuMcp": {
+          "configured": false,
+          "configuredServers": [],
+          "status": {},
+          "toolCount": 0,
+          "callable": false
+        },
+        "packId": "feishu-lark",
+        "packIdRedacted": false,
+        "policyMode": "ask",
+        "installAllowed": true,
+        "disabledReason": "",
+        "policyStatus": "",
+        "policyUpdatedAt": "",
+        "policySource": "runtime-default",
+        "policyAvailable": false,
+        "mirrorConfigured": false,
+        "offlineCacheConfigured": false,
+        "state": "discovery_only",
+        "missingItems": [],
+        "nextAction": "discover",
+        "actionLabel": "Discover",
+        "retryable": true,
+        "diagnosticSummary": "Agent should use the built-in find skill first (gated as find-skill), then install official @larksuite/cli on demand. If npmjs.org times out, retry with the domestic npm mirror https://registry.npmmirror.com.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "installed": false,
+          "state": "not-installed",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "discovery_only",
+          "missingItems": [],
+          "nextAction": "discover",
+          "actionLabel": "Discover",
+          "retryable": true,
+          "diagnosticSummary": "Agent should use the built-in find skill first (gated as find-skill), then install official @larksuite/cli on demand. If npmjs.org times out, retry with the domestic npm mirror https://registry.npmmirror.com.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "scheduler",
+        "label": "Scheduler background service",
+        "kind": "optional-runtime",
+        "defaultPolicy": "discoverable-disabled",
+        "startupImpact": "medium",
+        "notes": "Enables scheduled task scanning on future agent/runtime initialization.",
+        "agentCanEnable": true,
+        "agentCanInstall": false,
+        "enabled": false,
+        "packId": "scheduler",
+        "state": "not-installed",
+        "missingItems": [],
+        "nextAction": "enable",
+        "actionLabel": "Enable",
+        "retryable": true,
+        "diagnosticSummary": "Enables scheduled task scanning on future agent/runtime initialization.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "not-installed",
+          "missingItems": [],
+          "nextAction": "enable",
+          "actionLabel": "Enable",
+          "retryable": true,
+          "diagnosticSummary": "Enables scheduled task scanning on future agent/runtime initialization.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "self-evolution",
+        "label": "Self-evolution idle trigger",
+        "kind": "optional-runtime",
+        "defaultPolicy": "discoverable-disabled",
+        "startupImpact": "medium",
+        "notes": "Manual skill/memory edits still work; proactive idle repair starts only after enable.",
+        "agentCanEnable": true,
+        "agentCanInstall": false,
+        "enabled": true,
+        "packId": "self-evolution",
+        "state": "ready",
+        "missingItems": [],
+        "nextAction": "none",
+        "actionLabel": "Ready",
+        "retryable": false,
+        "diagnosticSummary": "Manual skill/memory edits still work; proactive idle repair starts only after enable.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "ready",
+          "missingItems": [],
+          "nextAction": "none",
+          "actionLabel": "Ready",
+          "retryable": false,
+          "diagnosticSummary": "Manual skill/memory edits still work; proactive idle repair starts only after enable.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "browser-automation",
+        "label": "Playwright fallback browser pack",
+        "kind": "capability-pack",
+        "defaultPolicy": "install-on-demand",
+        "startupImpact": "none-until-used",
+        "notes": "Large pack. Install only when fallback Chromium is required.",
+        "agentCanEnable": false,
+        "agentCanInstall": true,
+        "enabled": false,
+        "packId": "browser-automation",
+        "packIdRedacted": false,
+        "policyMode": "ask",
+        "installAllowed": true,
+        "disabledReason": "",
+        "policyStatus": "",
+        "policyUpdatedAt": "",
+        "policySource": "runtime-default",
+        "policyAvailable": false,
+        "mirrorConfigured": false,
+        "offlineCacheConfigured": false,
+        "state": "ready",
+        "missingItems": [],
+        "nextAction": "none",
+        "actionLabel": "Ready",
+        "retryable": false,
+        "diagnosticSummary": "browser-automation is built into this runtime through the bundled Playwright Python package. CDP can use the user's Chrome/Edge, and the Chromium fallback can still be repaired with install_pack if a browser binary is missing.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "installed": true,
+          "state": "installed",
+          "builtIn": true,
+          "message": "browser-automation is built into this runtime through the bundled Playwright Python package. CDP can use the user's Chrome/Edge, and the Chromium fallback can still be repaired with install_pack if a browser binary is missing.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "ready",
+          "missingItems": [],
+          "nextAction": "none",
+          "actionLabel": "Ready",
+          "retryable": false,
+          "diagnosticSummary": "browser-automation is built into this runtime through the bundled Playwright Python package. CDP can use the user's Chrome/Edge, and the Chromium fallback can still be repaired with install_pack if a browser binary is missing.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "fast-ocr",
+        "label": "Fast local OCR pack",
+        "kind": "capability-pack",
+        "defaultPolicy": "install-on-demand",
+        "startupImpact": "none-until-used",
+        "notes": "Optional local OCR engine for screenshot text and URL extraction; vision remains the high-quality fallback.",
+        "agentCanEnable": false,
+        "agentCanInstall": true,
+        "enabled": false,
+        "packId": "fast-ocr",
+        "packIdRedacted": false,
+        "policyMode": "ask",
+        "installAllowed": true,
+        "disabledReason": "",
+        "policyStatus": "",
+        "policyUpdatedAt": "",
+        "policySource": "runtime-default",
+        "policyAvailable": false,
+        "mirrorConfigured": false,
+        "offlineCacheConfigured": false,
+        "state": "ready",
+        "missingItems": [],
+        "nextAction": "none",
+        "actionLabel": "Ready",
+        "retryable": false,
+        "diagnosticSummary": "fast-ocr is available through a local OCR provider in this runtime.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "installed": true,
+          "state": "installed",
+          "builtIn": true,
+          "message": "fast-ocr is available through a local OCR provider in this runtime.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "ready",
+          "missingItems": [],
+          "nextAction": "none",
+          "actionLabel": "Ready",
+          "retryable": false,
+          "diagnosticSummary": "fast-ocr is available through a local OCR provider in this runtime.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "office-pdf",
+        "label": "Office/PDF parsing pack",
+        "kind": "capability-pack",
+        "defaultPolicy": "install-on-demand",
+        "startupImpact": "none-until-used",
+        "notes": "Document parsing extras for PDF, Word, Excel, and PowerPoint.",
+        "agentCanEnable": false,
+        "agentCanInstall": true,
+        "enabled": false,
+        "packId": "office-pdf",
+        "packIdRedacted": false,
+        "policyMode": "ask",
+        "installAllowed": true,
+        "disabledReason": "",
+        "policyStatus": "",
+        "policyUpdatedAt": "",
+        "policySource": "runtime-default",
+        "policyAvailable": false,
+        "mirrorConfigured": false,
+        "offlineCacheConfigured": false,
+        "state": "not-installed",
+        "missingItems": [],
+        "nextAction": "install",
+        "actionLabel": "Install",
+        "retryable": true,
+        "diagnosticSummary": "Document parsing extras for PDF, Word, Excel, and PowerPoint.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "installed": false,
+          "state": "not-installed",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "not-installed",
+          "missingItems": [],
+          "nextAction": "install",
+          "actionLabel": "Install",
+          "retryable": true,
+          "diagnosticSummary": "Document parsing extras for PDF, Word, Excel, and PowerPoint.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "tongxin-cli",
+        "label": "Tongxin Assistant CLI read-only data",
+        "kind": "capability-pack",
+        "defaultPolicy": "default-enabled-read-only",
+        "startupImpact": "none",
+        "notes": "Default all-user read-only access through the structured tongxin_cli tool; auto-configure a trusted local script or configured remote auth/bootstrap when unavailable.",
+        "agentCanEnable": false,
+        "agentCanInstall": false,
+        "installHint": "Tongxin CLI is a default read-only EcoreX capability. Use the structured tongxin_cli tool; EcoreX first uses the bundled/trusted local tools/tongxin/xin_agent_cli.py path and records it for the agent; authenticated remote bootstrap with SHA256 verification is only a fallback when the bundled/local path is unavailable. Do not install it as a generic capability pack.",
+        "configureOnly": true,
+        "readOnly": true,
+        "defaultEnabled": true,
+        "allowedCommands": [
+          "schema",
+          "account list",
+          "project list",
+          "report summary",
+          "note detail",
+          "realtime summary --xhs-channel all"
+        ],
+        "enabled": false,
+        "packId": "tongxin-cli",
+        "packIdRedacted": false,
+        "policyMode": "ask",
+        "installAllowed": true,
+        "disabledReason": "",
+        "policyStatus": "",
+        "policyUpdatedAt": "",
+        "policySource": "runtime-default",
+        "policyAvailable": false,
+        "mirrorConfigured": false,
+        "offlineCacheConfigured": false,
+        "state": "needs_configuration",
+        "missingItems": [],
+        "nextAction": "configure",
+        "actionLabel": "Configure",
+        "retryable": true,
+        "diagnosticSummary": "Tongxin CLI wrapper is built in. Run tongxin_cli status/diagnose or the S5 matrix smoke to verify the read-only script and data-layer health.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "installed": false,
+          "state": "not-installed",
+          "builtIn": true,
+          "configureOnly": true,
+          "readOnly": true,
+          "defaultEnabled": true,
+          "configured": false,
+          "available": false,
+          "configurationState": "probe-required",
+          "message": "Tongxin CLI wrapper is built in. Run tongxin_cli status/diagnose or the S5 matrix smoke to verify the read-only script and data-layer health.",
+          "installHint": "Tongxin CLI is a default read-only EcoreX capability. Use the structured tongxin_cli tool; EcoreX first uses the bundled/trusted local tools/tongxin/xin_agent_cli.py path and records it for the agent; authenticated remote bootstrap with SHA256 verification is only a fallback when the bundled/local path is unavailable. Do not install it as a generic capability pack.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "needs_configuration",
+          "missingItems": [],
+          "nextAction": "configure",
+          "actionLabel": "Configure",
+          "retryable": true,
+          "diagnosticSummary": "Tongxin CLI wrapper is built in. Run tongxin_cli status/diagnose or the S5 matrix smoke to verify the read-only script and data-layer health.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "memory-heavy",
+        "label": "Heavy memory/data pack",
+        "kind": "capability-pack",
+        "defaultPolicy": "install-on-demand",
+        "startupImpact": "none-until-used",
+        "notes": "Installs heavier local data dependencies such as numpy/pandas.",
+        "agentCanEnable": false,
+        "agentCanInstall": true,
+        "enabled": false,
+        "packId": "memory-heavy",
+        "packIdRedacted": false,
+        "policyMode": "ask",
+        "installAllowed": true,
+        "disabledReason": "",
+        "policyStatus": "",
+        "policyUpdatedAt": "",
+        "policySource": "runtime-default",
+        "policyAvailable": false,
+        "mirrorConfigured": false,
+        "offlineCacheConfigured": false,
+        "state": "not-installed",
+        "missingItems": [],
+        "nextAction": "install",
+        "actionLabel": "Install",
+        "retryable": true,
+        "diagnosticSummary": "Installs heavier local data dependencies such as numpy/pandas.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "installed": false,
+          "state": "not-installed",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "not-installed",
+          "missingItems": [],
+          "nextAction": "install",
+          "actionLabel": "Install",
+          "retryable": true,
+          "diagnosticSummary": "Installs heavier local data dependencies such as numpy/pandas.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "model-connectors",
+        "label": "Vendor model SDK pack",
+        "kind": "capability-pack",
+        "defaultPolicy": "install-on-demand",
+        "startupImpact": "none-until-used",
+        "notes": "Official SDKs for selected non-OpenAI-compatible providers.",
+        "agentCanEnable": false,
+        "agentCanInstall": true,
+        "enabled": false,
+        "packId": "model-connectors",
+        "packIdRedacted": false,
+        "policyMode": "ask",
+        "installAllowed": true,
+        "disabledReason": "",
+        "policyStatus": "",
+        "policyUpdatedAt": "",
+        "policySource": "runtime-default",
+        "policyAvailable": false,
+        "mirrorConfigured": false,
+        "offlineCacheConfigured": false,
+        "state": "not-installed",
+        "missingItems": [],
+        "nextAction": "install",
+        "actionLabel": "Install",
+        "retryable": true,
+        "diagnosticSummary": "Official SDKs for selected non-OpenAI-compatible providers.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "installed": false,
+          "state": "not-installed",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "not-installed",
+          "missingItems": [],
+          "nextAction": "install",
+          "actionLabel": "Install",
+          "retryable": true,
+          "diagnosticSummary": "Official SDKs for selected non-OpenAI-compatible providers.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "voice",
+        "label": "Voice capability pack",
+        "kind": "capability-pack",
+        "defaultPolicy": "install-on-demand",
+        "startupImpact": "none-until-used",
+        "notes": "Speech recognition and voice-related dependencies.",
+        "agentCanEnable": false,
+        "agentCanInstall": true,
+        "enabled": false,
+        "packId": "voice",
+        "packIdRedacted": false,
+        "policyMode": "ask",
+        "installAllowed": true,
+        "disabledReason": "",
+        "policyStatus": "",
+        "policyUpdatedAt": "",
+        "policySource": "runtime-default",
+        "policyAvailable": false,
+        "mirrorConfigured": false,
+        "offlineCacheConfigured": false,
+        "state": "not-installed",
+        "missingItems": [],
+        "nextAction": "install",
+        "actionLabel": "Install",
+        "retryable": true,
+        "diagnosticSummary": "Speech recognition and voice-related dependencies.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "installed": false,
+          "state": "not-installed",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "not-installed",
+          "missingItems": [],
+          "nextAction": "install",
+          "actionLabel": "Install",
+          "retryable": true,
+          "diagnosticSummary": "Speech recognition and voice-related dependencies.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "im-channels",
+        "label": "Extra IM channel pack",
+        "kind": "capability-pack",
+        "defaultPolicy": "install-on-demand",
+        "startupImpact": "none-until-used",
+        "notes": "Slack, Discord, Telegram, WeChat, WeCom, DingTalk dependencies.",
+        "agentCanEnable": false,
+        "agentCanInstall": true,
+        "enabled": false,
+        "packId": "im-channels",
+        "packIdRedacted": false,
+        "policyMode": "ask",
+        "installAllowed": true,
+        "disabledReason": "",
+        "policyStatus": "",
+        "policyUpdatedAt": "",
+        "policySource": "runtime-default",
+        "policyAvailable": false,
+        "mirrorConfigured": false,
+        "offlineCacheConfigured": false,
+        "state": "not-installed",
+        "missingItems": [],
+        "nextAction": "install",
+        "actionLabel": "Install",
+        "retryable": true,
+        "diagnosticSummary": "Slack, Discord, Telegram, WeChat, WeCom, DingTalk dependencies.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "installed": false,
+          "state": "not-installed",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "not-installed",
+          "missingItems": [],
+          "nextAction": "install",
+          "actionLabel": "Install",
+          "retryable": true,
+          "diagnosticSummary": "Slack, Discord, Telegram, WeChat, WeCom, DingTalk dependencies.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "subagents",
+        "label": "Parallel subagent orchestration",
+        "kind": "planned",
+        "defaultPolicy": "plan-required",
+        "startupImpact": "n/a",
+        "notes": "Not a runtime switch yet. Requires durable child sessions, worktree transactions, and UI/API orchestration.",
+        "agentCanEnable": false,
+        "agentCanInstall": false,
+        "enabled": false,
+        "packId": "subagents",
+        "state": "planned",
+        "missingItems": [],
+        "nextAction": "plan",
+        "actionLabel": "Open plan",
+        "retryable": false,
+        "diagnosticSummary": "Not a runtime switch yet. Requires durable child sessions, worktree transactions, and UI/API orchestration.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "planned",
+          "missingItems": [],
+          "nextAction": "plan",
+          "actionLabel": "Open plan",
+          "retryable": false,
+          "diagnosticSummary": "Not a runtime switch yet. Requires durable child sessions, worktree transactions, and UI/API orchestration.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "goals",
+        "label": "Runtime goal tool",
+        "kind": "planned",
+        "defaultPolicy": "plan-required",
+        "startupImpact": "n/a",
+        "notes": "Goal ledger docs exist; a first-class runtime goal API/tool is still planned.",
+        "agentCanEnable": false,
+        "agentCanInstall": false,
+        "enabled": false,
+        "packId": "goals",
+        "state": "planned",
+        "missingItems": [],
+        "nextAction": "plan",
+        "actionLabel": "Open plan",
+        "retryable": false,
+        "diagnosticSummary": "Goal ledger docs exist; a first-class runtime goal API/tool is still planned.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "planned",
+          "missingItems": [],
+          "nextAction": "plan",
+          "actionLabel": "Open plan",
+          "retryable": false,
+          "diagnosticSummary": "Goal ledger docs exist; a first-class runtime goal API/tool is still planned.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      }
+    ],
+    "packs": [
+      {
+        "id": "find-skill",
+        "label": "Find skill and file finder",
+        "kind": "built-in",
+        "defaultPolicy": "loaded",
+        "startupImpact": "low",
+        "notes": "Built in for v0.1.14; no extra install required.",
+        "agentCanEnable": false,
+        "agentCanInstall": false,
+        "enabled": true,
+        "packId": "find-skill",
+        "state": "ready",
+        "missingItems": [],
+        "nextAction": "none",
+        "actionLabel": "Ready",
+        "retryable": false,
+        "diagnosticSummary": "Built in for v0.1.14; no extra install required.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "ready",
+          "missingItems": [],
+          "nextAction": "none",
+          "actionLabel": "Ready",
+          "retryable": false,
+          "diagnosticSummary": "Built in for v0.1.14; no extra install required.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "skill-creator",
+        "label": "Skill creator",
+        "kind": "built-in",
+        "defaultPolicy": "loaded",
+        "startupImpact": "low",
+        "notes": "Built in for v0.1.14; use when creating or packaging skills.",
+        "agentCanEnable": false,
+        "agentCanInstall": false,
+        "enabled": true,
+        "packId": "skill-creator",
+        "state": "ready",
+        "missingItems": [],
+        "nextAction": "none",
+        "actionLabel": "Ready",
+        "retryable": false,
+        "diagnosticSummary": "Built in for v0.1.14; use when creating or packaging skills.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "ready",
+          "missingItems": [],
+          "nextAction": "none",
+          "actionLabel": "Ready",
+          "retryable": false,
+          "diagnosticSummary": "Built in for v0.1.14; use when creating or packaging skills.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "ecorex-cli",
+        "label": "Structured EcoreX CLI",
+        "kind": "built-in",
+        "defaultPolicy": "loaded",
+        "startupImpact": "low",
+        "notes": "Use ecorex_cli instead of raw shell for bundled CLI actions.",
+        "agentCanEnable": false,
+        "agentCanInstall": false,
+        "enabled": true,
+        "packId": "ecorex-cli",
+        "state": "ready",
+        "missingItems": [],
+        "nextAction": "none",
+        "actionLabel": "Ready",
+        "retryable": false,
+        "diagnosticSummary": "Use ecorex_cli instead of raw shell for bundled CLI actions.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "ready",
+          "missingItems": [],
+          "nextAction": "none",
+          "actionLabel": "Ready",
+          "retryable": false,
+          "diagnosticSummary": "Use ecorex_cli instead of raw shell for bundled CLI actions.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "host-diagnostics",
+        "label": "Host diagnostics",
+        "kind": "built-in",
+        "defaultPolicy": "loaded",
+        "startupImpact": "low",
+        "notes": "Read-only diagnostics for capability, MCP, CDP, permissions, and logs.",
+        "agentCanEnable": false,
+        "agentCanInstall": false,
+        "enabled": true,
+        "packId": "host-diagnostics",
+        "state": "ready",
+        "missingItems": [],
+        "nextAction": "none",
+        "actionLabel": "Ready",
+        "retryable": false,
+        "diagnosticSummary": "Read-only diagnostics for capability, MCP, CDP, permissions, and logs.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "ready",
+          "missingItems": [],
+          "nextAction": "none",
+          "actionLabel": "Ready",
+          "retryable": false,
+          "diagnosticSummary": "Read-only diagnostics for capability, MCP, CDP, permissions, and logs.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "chrome-devtools-mcp",
+        "label": "Chrome DevTools MCP",
+        "kind": "optional-runtime",
+        "defaultPolicy": "discoverable-disabled",
+        "startupImpact": "high",
+        "notes": "Uses npx -y chrome-devtools-mcp@latest with CDP-first full-compatible DevTools flags after explicit enablement.",
+        "agentCanEnable": true,
+        "agentCanInstall": false,
+        "enabled": false,
+        "configured": true,
+        "fullToolset": true,
+        "npx": true,
+        "packId": "chrome-devtools-mcp",
+        "state": "not-installed",
+        "missingItems": [],
+        "nextAction": "enable",
+        "actionLabel": "Enable",
+        "retryable": true,
+        "diagnosticSummary": "Uses npx -y chrome-devtools-mcp@latest with CDP-first full-compatible DevTools flags after explicit enablement.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "not-installed",
+          "missingItems": [],
+          "nextAction": "enable",
+          "actionLabel": "Enable",
+          "retryable": true,
+          "diagnosticSummary": "Uses npx -y chrome-devtools-mcp@latest with CDP-first full-compatible DevTools flags after explicit enablement.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "browser-cdp",
+        "label": "Browser CDP auto-launch",
+        "kind": "optional-runtime",
+        "defaultPolicy": "loaded-by-default",
+        "startupImpact": "medium",
+        "notes": "CDP is first priority and auto-launches Chrome/Edge on first browser use; fallback Chromium is used only when CDP is unavailable.",
+        "agentCanEnable": true,
+        "agentCanInstall": true,
+        "enabled": true,
+        "packId": "browser-automation",
+        "packIdRedacted": false,
+        "policyMode": "ask",
+        "installAllowed": true,
+        "disabledReason": "",
+        "policyStatus": "",
+        "policyUpdatedAt": "",
+        "policySource": "runtime-default",
+        "policyAvailable": false,
+        "mirrorConfigured": false,
+        "offlineCacheConfigured": false,
+        "state": "ready",
+        "missingItems": [],
+        "nextAction": "none",
+        "actionLabel": "Ready",
+        "retryable": false,
+        "diagnosticSummary": "browser-automation is built into this runtime through the bundled Playwright Python package. CDP can use the user's Chrome/Edge, and the Chromium fallback can still be repaired with install_pack if a browser binary is missing.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "installed": true,
+          "state": "installed",
+          "builtIn": true,
+          "message": "browser-automation is built into this runtime through the bundled Playwright Python package. CDP can use the user's Chrome/Edge, and the Chromium fallback can still be repaired with install_pack if a browser binary is missing.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "ready",
+          "missingItems": [],
+          "nextAction": "none",
+          "actionLabel": "Ready",
+          "retryable": false,
+          "diagnosticSummary": "browser-automation is built into this runtime through the bundled Playwright Python package. CDP can use the user's Chrome/Edge, and the Chromium fallback can still be repaired with install_pack if a browser binary is missing.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "feishu-cli",
+        "label": "Feishu/Lark CLI connector",
+        "kind": "optional-runtime",
+        "defaultPolicy": "discoverable-disabled",
+        "startupImpact": "medium",
+        "notes": "Installs official @larksuite/cli on demand through the structured feishu_cli tool after the find-skill gate.",
+        "agentCanEnable": true,
+        "agentCanInstall": true,
+        "sourceUrl": "https://github.com/larksuite/cli",
+        "mirrorUrls": [
+          "https://registry.npmmirror.com/@larksuite/cli"
+        ],
+        "installHint": "Agent should use the built-in find skill first (gated as find-skill), then install official @larksuite/cli on demand. If npmjs.org times out, retry with the domestic npm mirror https://registry.npmmirror.com.",
+        "enabled": false,
+        "larkCli": false,
+        "npm": true,
+        "feishuMcp": {
+          "configured": false,
+          "configuredServers": [],
+          "status": {},
+          "toolCount": 0,
+          "callable": false
+        },
+        "packId": "feishu-lark",
+        "packIdRedacted": false,
+        "policyMode": "ask",
+        "installAllowed": true,
+        "disabledReason": "",
+        "policyStatus": "",
+        "policyUpdatedAt": "",
+        "policySource": "runtime-default",
+        "policyAvailable": false,
+        "mirrorConfigured": false,
+        "offlineCacheConfigured": false,
+        "state": "discovery_only",
+        "missingItems": [],
+        "nextAction": "discover",
+        "actionLabel": "Discover",
+        "retryable": true,
+        "diagnosticSummary": "Agent should use the built-in find skill first (gated as find-skill), then install official @larksuite/cli on demand. If npmjs.org times out, retry with the domestic npm mirror https://registry.npmmirror.com.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "installed": false,
+          "state": "not-installed",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "discovery_only",
+          "missingItems": [],
+          "nextAction": "discover",
+          "actionLabel": "Discover",
+          "retryable": true,
+          "diagnosticSummary": "Agent should use the built-in find skill first (gated as find-skill), then install official @larksuite/cli on demand. If npmjs.org times out, retry with the domestic npm mirror https://registry.npmmirror.com.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "scheduler",
+        "label": "Scheduler background service",
+        "kind": "optional-runtime",
+        "defaultPolicy": "discoverable-disabled",
+        "startupImpact": "medium",
+        "notes": "Enables scheduled task scanning on future agent/runtime initialization.",
+        "agentCanEnable": true,
+        "agentCanInstall": false,
+        "enabled": false,
+        "packId": "scheduler",
+        "state": "not-installed",
+        "missingItems": [],
+        "nextAction": "enable",
+        "actionLabel": "Enable",
+        "retryable": true,
+        "diagnosticSummary": "Enables scheduled task scanning on future agent/runtime initialization.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "not-installed",
+          "missingItems": [],
+          "nextAction": "enable",
+          "actionLabel": "Enable",
+          "retryable": true,
+          "diagnosticSummary": "Enables scheduled task scanning on future agent/runtime initialization.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "self-evolution",
+        "label": "Self-evolution idle trigger",
+        "kind": "optional-runtime",
+        "defaultPolicy": "discoverable-disabled",
+        "startupImpact": "medium",
+        "notes": "Manual skill/memory edits still work; proactive idle repair starts only after enable.",
+        "agentCanEnable": true,
+        "agentCanInstall": false,
+        "enabled": true,
+        "packId": "self-evolution",
+        "state": "ready",
+        "missingItems": [],
+        "nextAction": "none",
+        "actionLabel": "Ready",
+        "retryable": false,
+        "diagnosticSummary": "Manual skill/memory edits still work; proactive idle repair starts only after enable.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "ready",
+          "missingItems": [],
+          "nextAction": "none",
+          "actionLabel": "Ready",
+          "retryable": false,
+          "diagnosticSummary": "Manual skill/memory edits still work; proactive idle repair starts only after enable.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "browser-automation",
+        "label": "Playwright fallback browser pack",
+        "kind": "capability-pack",
+        "defaultPolicy": "install-on-demand",
+        "startupImpact": "none-until-used",
+        "notes": "Large pack. Install only when fallback Chromium is required.",
+        "agentCanEnable": false,
+        "agentCanInstall": true,
+        "enabled": false,
+        "packId": "browser-automation",
+        "packIdRedacted": false,
+        "policyMode": "ask",
+        "installAllowed": true,
+        "disabledReason": "",
+        "policyStatus": "",
+        "policyUpdatedAt": "",
+        "policySource": "runtime-default",
+        "policyAvailable": false,
+        "mirrorConfigured": false,
+        "offlineCacheConfigured": false,
+        "state": "ready",
+        "missingItems": [],
+        "nextAction": "none",
+        "actionLabel": "Ready",
+        "retryable": false,
+        "diagnosticSummary": "browser-automation is built into this runtime through the bundled Playwright Python package. CDP can use the user's Chrome/Edge, and the Chromium fallback can still be repaired with install_pack if a browser binary is missing.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "installed": true,
+          "state": "installed",
+          "builtIn": true,
+          "message": "browser-automation is built into this runtime through the bundled Playwright Python package. CDP can use the user's Chrome/Edge, and the Chromium fallback can still be repaired with install_pack if a browser binary is missing.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "ready",
+          "missingItems": [],
+          "nextAction": "none",
+          "actionLabel": "Ready",
+          "retryable": false,
+          "diagnosticSummary": "browser-automation is built into this runtime through the bundled Playwright Python package. CDP can use the user's Chrome/Edge, and the Chromium fallback can still be repaired with install_pack if a browser binary is missing.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "fast-ocr",
+        "label": "Fast local OCR pack",
+        "kind": "capability-pack",
+        "defaultPolicy": "install-on-demand",
+        "startupImpact": "none-until-used",
+        "notes": "Optional local OCR engine for screenshot text and URL extraction; vision remains the high-quality fallback.",
+        "agentCanEnable": false,
+        "agentCanInstall": true,
+        "enabled": false,
+        "packId": "fast-ocr",
+        "packIdRedacted": false,
+        "policyMode": "ask",
+        "installAllowed": true,
+        "disabledReason": "",
+        "policyStatus": "",
+        "policyUpdatedAt": "",
+        "policySource": "runtime-default",
+        "policyAvailable": false,
+        "mirrorConfigured": false,
+        "offlineCacheConfigured": false,
+        "state": "ready",
+        "missingItems": [],
+        "nextAction": "none",
+        "actionLabel": "Ready",
+        "retryable": false,
+        "diagnosticSummary": "fast-ocr is available through a local OCR provider in this runtime.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "installed": true,
+          "state": "installed",
+          "builtIn": true,
+          "message": "fast-ocr is available through a local OCR provider in this runtime.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "ready",
+          "missingItems": [],
+          "nextAction": "none",
+          "actionLabel": "Ready",
+          "retryable": false,
+          "diagnosticSummary": "fast-ocr is available through a local OCR provider in this runtime.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "office-pdf",
+        "label": "Office/PDF parsing pack",
+        "kind": "capability-pack",
+        "defaultPolicy": "install-on-demand",
+        "startupImpact": "none-until-used",
+        "notes": "Document parsing extras for PDF, Word, Excel, and PowerPoint.",
+        "agentCanEnable": false,
+        "agentCanInstall": true,
+        "enabled": false,
+        "packId": "office-pdf",
+        "packIdRedacted": false,
+        "policyMode": "ask",
+        "installAllowed": true,
+        "disabledReason": "",
+        "policyStatus": "",
+        "policyUpdatedAt": "",
+        "policySource": "runtime-default",
+        "policyAvailable": false,
+        "mirrorConfigured": false,
+        "offlineCacheConfigured": false,
+        "state": "not-installed",
+        "missingItems": [],
+        "nextAction": "install",
+        "actionLabel": "Install",
+        "retryable": true,
+        "diagnosticSummary": "Document parsing extras for PDF, Word, Excel, and PowerPoint.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "installed": false,
+          "state": "not-installed",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "not-installed",
+          "missingItems": [],
+          "nextAction": "install",
+          "actionLabel": "Install",
+          "retryable": true,
+          "diagnosticSummary": "Document parsing extras for PDF, Word, Excel, and PowerPoint.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "tongxin-cli",
+        "label": "Tongxin Assistant CLI read-only data",
+        "kind": "capability-pack",
+        "defaultPolicy": "default-enabled-read-only",
+        "startupImpact": "none",
+        "notes": "Default all-user read-only access through the structured tongxin_cli tool; auto-configure a trusted local script or configured remote auth/bootstrap when unavailable.",
+        "agentCanEnable": false,
+        "agentCanInstall": false,
+        "installHint": "Tongxin CLI is a default read-only EcoreX capability. Use the structured tongxin_cli tool; EcoreX first uses the bundled/trusted local tools/tongxin/xin_agent_cli.py path and records it for the agent; authenticated remote bootstrap with SHA256 verification is only a fallback when the bundled/local path is unavailable. Do not install it as a generic capability pack.",
+        "configureOnly": true,
+        "readOnly": true,
+        "defaultEnabled": true,
+        "allowedCommands": [
+          "schema",
+          "account list",
+          "project list",
+          "report summary",
+          "note detail",
+          "realtime summary --xhs-channel all"
+        ],
+        "enabled": false,
+        "packId": "tongxin-cli",
+        "packIdRedacted": false,
+        "policyMode": "ask",
+        "installAllowed": true,
+        "disabledReason": "",
+        "policyStatus": "",
+        "policyUpdatedAt": "",
+        "policySource": "runtime-default",
+        "policyAvailable": false,
+        "mirrorConfigured": false,
+        "offlineCacheConfigured": false,
+        "state": "needs_configuration",
+        "missingItems": [],
+        "nextAction": "configure",
+        "actionLabel": "Configure",
+        "retryable": true,
+        "diagnosticSummary": "Tongxin CLI wrapper is built in. Run tongxin_cli status/diagnose or the S5 matrix smoke to verify the read-only script and data-layer health.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "installed": false,
+          "state": "not-installed",
+          "builtIn": true,
+          "configureOnly": true,
+          "readOnly": true,
+          "defaultEnabled": true,
+          "configured": false,
+          "available": false,
+          "configurationState": "probe-required",
+          "message": "Tongxin CLI wrapper is built in. Run tongxin_cli status/diagnose or the S5 matrix smoke to verify the read-only script and data-layer health.",
+          "installHint": "Tongxin CLI is a default read-only EcoreX capability. Use the structured tongxin_cli tool; EcoreX first uses the bundled/trusted local tools/tongxin/xin_agent_cli.py path and records it for the agent; authenticated remote bootstrap with SHA256 verification is only a fallback when the bundled/local path is unavailable. Do not install it as a generic capability pack.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "needs_configuration",
+          "missingItems": [],
+          "nextAction": "configure",
+          "actionLabel": "Configure",
+          "retryable": true,
+          "diagnosticSummary": "Tongxin CLI wrapper is built in. Run tongxin_cli status/diagnose or the S5 matrix smoke to verify the read-only script and data-layer health.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "memory-heavy",
+        "label": "Heavy memory/data pack",
+        "kind": "capability-pack",
+        "defaultPolicy": "install-on-demand",
+        "startupImpact": "none-until-used",
+        "notes": "Installs heavier local data dependencies such as numpy/pandas.",
+        "agentCanEnable": false,
+        "agentCanInstall": true,
+        "enabled": false,
+        "packId": "memory-heavy",
+        "packIdRedacted": false,
+        "policyMode": "ask",
+        "installAllowed": true,
+        "disabledReason": "",
+        "policyStatus": "",
+        "policyUpdatedAt": "",
+        "policySource": "runtime-default",
+        "policyAvailable": false,
+        "mirrorConfigured": false,
+        "offlineCacheConfigured": false,
+        "state": "not-installed",
+        "missingItems": [],
+        "nextAction": "install",
+        "actionLabel": "Install",
+        "retryable": true,
+        "diagnosticSummary": "Installs heavier local data dependencies such as numpy/pandas.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "installed": false,
+          "state": "not-installed",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "not-installed",
+          "missingItems": [],
+          "nextAction": "install",
+          "actionLabel": "Install",
+          "retryable": true,
+          "diagnosticSummary": "Installs heavier local data dependencies such as numpy/pandas.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "model-connectors",
+        "label": "Vendor model SDK pack",
+        "kind": "capability-pack",
+        "defaultPolicy": "install-on-demand",
+        "startupImpact": "none-until-used",
+        "notes": "Official SDKs for selected non-OpenAI-compatible providers.",
+        "agentCanEnable": false,
+        "agentCanInstall": true,
+        "enabled": false,
+        "packId": "model-connectors",
+        "packIdRedacted": false,
+        "policyMode": "ask",
+        "installAllowed": true,
+        "disabledReason": "",
+        "policyStatus": "",
+        "policyUpdatedAt": "",
+        "policySource": "runtime-default",
+        "policyAvailable": false,
+        "mirrorConfigured": false,
+        "offlineCacheConfigured": false,
+        "state": "not-installed",
+        "missingItems": [],
+        "nextAction": "install",
+        "actionLabel": "Install",
+        "retryable": true,
+        "diagnosticSummary": "Official SDKs for selected non-OpenAI-compatible providers.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "installed": false,
+          "state": "not-installed",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "not-installed",
+          "missingItems": [],
+          "nextAction": "install",
+          "actionLabel": "Install",
+          "retryable": true,
+          "diagnosticSummary": "Official SDKs for selected non-OpenAI-compatible providers.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "voice",
+        "label": "Voice capability pack",
+        "kind": "capability-pack",
+        "defaultPolicy": "install-on-demand",
+        "startupImpact": "none-until-used",
+        "notes": "Speech recognition and voice-related dependencies.",
+        "agentCanEnable": false,
+        "agentCanInstall": true,
+        "enabled": false,
+        "packId": "voice",
+        "packIdRedacted": false,
+        "policyMode": "ask",
+        "installAllowed": true,
+        "disabledReason": "",
+        "policyStatus": "",
+        "policyUpdatedAt": "",
+        "policySource": "runtime-default",
+        "policyAvailable": false,
+        "mirrorConfigured": false,
+        "offlineCacheConfigured": false,
+        "state": "not-installed",
+        "missingItems": [],
+        "nextAction": "install",
+        "actionLabel": "Install",
+        "retryable": true,
+        "diagnosticSummary": "Speech recognition and voice-related dependencies.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "installed": false,
+          "state": "not-installed",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "not-installed",
+          "missingItems": [],
+          "nextAction": "install",
+          "actionLabel": "Install",
+          "retryable": true,
+          "diagnosticSummary": "Speech recognition and voice-related dependencies.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "im-channels",
+        "label": "Extra IM channel pack",
+        "kind": "capability-pack",
+        "defaultPolicy": "install-on-demand",
+        "startupImpact": "none-until-used",
+        "notes": "Slack, Discord, Telegram, WeChat, WeCom, DingTalk dependencies.",
+        "agentCanEnable": false,
+        "agentCanInstall": true,
+        "enabled": false,
+        "packId": "im-channels",
+        "packIdRedacted": false,
+        "policyMode": "ask",
+        "installAllowed": true,
+        "disabledReason": "",
+        "policyStatus": "",
+        "policyUpdatedAt": "",
+        "policySource": "runtime-default",
+        "policyAvailable": false,
+        "mirrorConfigured": false,
+        "offlineCacheConfigured": false,
+        "state": "not-installed",
+        "missingItems": [],
+        "nextAction": "install",
+        "actionLabel": "Install",
+        "retryable": true,
+        "diagnosticSummary": "Slack, Discord, Telegram, WeChat, WeCom, DingTalk dependencies.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "installed": false,
+          "state": "not-installed",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "not-installed",
+          "missingItems": [],
+          "nextAction": "install",
+          "actionLabel": "Install",
+          "retryable": true,
+          "diagnosticSummary": "Slack, Discord, Telegram, WeChat, WeCom, DingTalk dependencies.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "subagents",
+        "label": "Parallel subagent orchestration",
+        "kind": "planned",
+        "defaultPolicy": "plan-required",
+        "startupImpact": "n/a",
+        "notes": "Not a runtime switch yet. Requires durable child sessions, worktree transactions, and UI/API orchestration.",
+        "agentCanEnable": false,
+        "agentCanInstall": false,
+        "enabled": false,
+        "packId": "subagents",
+        "state": "planned",
+        "missingItems": [],
+        "nextAction": "plan",
+        "actionLabel": "Open plan",
+        "retryable": false,
+        "diagnosticSummary": "Not a runtime switch yet. Requires durable child sessions, worktree transactions, and UI/API orchestration.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "planned",
+          "missingItems": [],
+          "nextAction": "plan",
+          "actionLabel": "Open plan",
+          "retryable": false,
+          "diagnosticSummary": "Not a runtime switch yet. Requires durable child sessions, worktree transactions, and UI/API orchestration.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      },
+      {
+        "id": "goals",
+        "label": "Runtime goal tool",
+        "kind": "planned",
+        "defaultPolicy": "plan-required",
+        "startupImpact": "n/a",
+        "notes": "Goal ledger docs exist; a first-class runtime goal API/tool is still planned.",
+        "agentCanEnable": false,
+        "agentCanInstall": false,
+        "enabled": false,
+        "packId": "goals",
+        "state": "planned",
+        "missingItems": [],
+        "nextAction": "plan",
+        "actionLabel": "Open plan",
+        "retryable": false,
+        "diagnosticSummary": "Goal ledger docs exist; a first-class runtime goal API/tool is still planned.",
+        "logRef": {
+          "present": false,
+          "redacted": true
+        },
+        "targetRef": {
+          "present": false,
+          "redacted": true
+        },
+        "capabilityState": {
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        },
+        "actionPlan": {
+          "state": "planned",
+          "missingItems": [],
+          "nextAction": "plan",
+          "actionLabel": "Open plan",
+          "retryable": false,
+          "diagnosticSummary": "Goal ledger docs exist; a first-class runtime goal API/tool is still planned.",
+          "logRef": {
+            "present": false,
+            "redacted": true
+          },
+          "targetRef": {
+            "present": false,
+            "redacted": true
+          }
+        }
+      }
+    ],
+    "abilityDiagnostics": {
+      "status": "success",
+      "generatedAt": "2026-07-02T08:35:12Z",
+      "policy": "Heavy abilities are discoverable but disabled by default; enable/install only after user permission."
+    },
+    "summary": {
+      "total": 19,
+      "ready": 8,
+      "missing": 7,
+      "repairable": 0,
+      "needsConfiguration": 1,
+      "discoveryOnly": 1,
+      "disabled": 0
+    },
+    "visualWorkflow": {
+      "schemaVersion": "visual-workflow-v1",
+      "imageInput": {
+        "supported": true,
+        "autoDetect": true,
+        "acceptedMimePrefixes": [
+          "image/"
+        ],
+        "attachmentTypes": [
+          "image"
+        ]
+      },
+      "ocr": {
+        "capability": "ocr",
+        "state": "ready",
+        "routeVisible": true,
+        "missingItems": [],
+        "nextAction": "none",
+        "actionLabel": "Ready",
+        "retryable": false,
+        "diagnosticSummary": "Fast OCR is ready for uploaded image text extraction."
+      },
+      "vision": {
+        "capability": "vision",
+        "state": "needs_provider_credentials",
+        "routeVisible": false,
+        "providerConfigured": false,
+        "configuredProvider": "",
+        "missingItems": [
+          "provider_credentials"
+        ],
+        "nextAction": "configure_model_provider",
+        "actionLabel": "Configure model provider",
+        "retryable": true,
+        "diagnosticSummary": "vision is available but needs model provider credentials."
+      },
+      "imagegen": {
+        "capability": "imagegen",
+        "state": "needs_provider_credentials",
+        "routeVisible": false,
+        "providerConfigured": false,
+        "configuredProvider": "",
+        "missingItems": [
+          "provider_credentials"
+        ],
+        "nextAction": "configure_model_provider",
+        "actionLabel": "Configure model provider",
+        "retryable": true,
+        "diagnosticSummary": "imagegen is available but needs model provider credentials.",
+        "model": "gpt-image-2-pro"
+      },
+      "overall": {
+        "state": "needs_configuration",
+        "ready": false,
+        "visionFallbackAvailable": false,
+        "blockingItems": [
+          {
+            "capability": "vision",
+            "state": "needs_provider_credentials",
+            "nextAction": "configure_model_provider",
+            "actionLabel": "Configure model provider"
+          },
+          {
+            "capability": "imagegen",
+            "state": "needs_provider_credentials",
+            "nextAction": "configure_model_provider",
+            "actionLabel": "Configure model provider"
+          }
+        ]
+      }
+    }
+  },
+  "summary": {
+    "total": 19,
+    "ready": 8,
+    "missing": 7,
+    "repairable": 0,
+    "needsConfiguration": 1,
+    "discoveryOnly": 1,
+    "disabled": 0
+  },
+  "visualWorkflow": {
+    "schemaVersion": "visual-workflow-v1",
+    "imageInput": {
+      "supported": true,
+      "autoDetect": true,
+      "acceptedMimePrefixes": [
+        "image/"
+      ],
+      "attachmentTypes": [
+        "image"
+      ]
+    },
+    "ocr": {
+      "capability": "ocr",
+      "state": "ready",
+      "routeVisible": true,
+      "missingItems": [],
+      "nextAction": "none",
+      "actionLabel": "Ready",
+      "retryable": false,
+      "diagnosticSummary": "Fast OCR is ready for uploaded image text extraction."
+    },
+    "vision": {
+      "capability": "vision",
+      "state": "needs_provider_credentials",
+      "routeVisible": false,
+      "providerConfigured": false,
+      "configuredProvider": "",
+      "missingItems": [
+        "provider_credentials"
+      ],
+      "nextAction": "configure_model_provider",
+      "actionLabel": "Configure model provider",
+      "retryable": true,
+      "diagnosticSummary": "vision is available but needs model provider credentials."
+    },
+    "imagegen": {
+      "capability": "imagegen",
+      "state": "needs_provider_credentials",
+      "routeVisible": false,
+      "providerConfigured": false,
+      "configuredProvider": "",
+      "missingItems": [
+        "provider_credentials"
+      ],
+      "nextAction": "configure_model_provider",
+      "actionLabel": "Configure model provider",
+      "retryable": true,
+      "diagnosticSummary": "imagegen is available but needs model provider credentials.",
+      "model": "gpt-image-2-pro"
+    },
+    "overall": {
+      "state": "needs_configuration",
+      "ready": false,
+      "visionFallbackAvailable": false,
+      "blockingItems": [
+        {
+          "capability": "vision",
+          "state": "needs_provider_credentials",
+          "nextAction": "configure_model_provider",
+          "actionLabel": "Configure model provider"
+        },
+        {
+          "capability": "imagegen",
+          "state": "needs_provider_credentials",
+          "nextAction": "configure_model_provider",
+          "actionLabel": "Configure model provider"
+        }
+      ]
+    }
+  }
+}

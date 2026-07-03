@@ -1,0 +1,180 @@
+{
+  "status": "FAIL",
+  "checkCount": 0,
+  "targetCheckCount": 516,
+  "enabledCheckCount": 0,
+  "passCount": 0,
+  "failCount": 0,
+  "skipCount": 0,
+  "hardGateFailures": [],
+  "p1Failures": [],
+  "p2Failures": [],
+  "skipWithoutReason": [],
+  "domainCounts": {},
+  "domainPassCounts": {},
+  "domainGaps": [
+    {
+      "group": "fresh-env",
+      "minimum": 12,
+      "actual": 0
+    },
+    {
+      "group": "auth-first-use",
+      "minimum": 10,
+      "actual": 0
+    },
+    {
+      "group": "runtime-api",
+      "minimum": 20,
+      "actual": 0
+    },
+    {
+      "group": "ui-ux",
+      "minimum": 12,
+      "actual": 0
+    },
+    {
+      "group": "stream-state-machine",
+      "minimum": 12,
+      "actual": 0
+    },
+    {
+      "group": "context-session",
+      "minimum": 10,
+      "actual": 0
+    },
+    {
+      "group": "tool-skill",
+      "minimum": 16,
+      "actual": 0
+    },
+    {
+      "group": "multi-model-image-route",
+      "minimum": 8,
+      "actual": 0
+    },
+    {
+      "group": "concurrency-pressure",
+      "minimum": 10,
+      "actual": 0
+    },
+    {
+      "group": "v027-integrated-capabilities",
+      "minimum": 50,
+      "actual": 0
+    },
+    {
+      "group": "security-observability",
+      "minimum": 4,
+      "actual": 0
+    }
+  ],
+  "qualityGateSummary": {
+    "totalCheckCountOk": false,
+    "enabledCheckCountOk": false,
+    "p0PassRate": "100%",
+    "p1PassRate": "100%",
+    "p2FailuresAllowed": false
+  },
+  "version": "0.2.7",
+  "scope": "production-agent-product-acceptance",
+  "schemaVersion": "v0.2.7-agent-product-acceptance-v1",
+  "generatedAt": "2026-07-02T17:28:30.766925+00:00",
+  "durationSeconds": 400.38,
+  "budgetMode": "tiered",
+  "pressureProfile": {
+    "users": 20,
+    "turnsPerUser": 3
+  },
+  "modelRouteEvidence": [],
+  "stateMachineEvidence": {},
+  "matrixChangeLog": [
+    {
+      "action": "baseline",
+      "declaredNewCases": 284,
+      "targetTotalChecks": 516,
+      "minimumEnabledChecks": 360,
+      "developerAgentMayRemove": "Only removable=true P2 cases; P0/P1 and domain minimums must remain."
+    }
+  ],
+  "declaredCaseSummary": {
+    "newCaseCount": 284,
+    "groups": [
+      {
+        "group": "fresh-env",
+        "count": 18,
+        "priority": "P0",
+        "cost": "low"
+      },
+      {
+        "group": "auth-first-use",
+        "count": 16,
+        "priority": "P0",
+        "cost": "low"
+      },
+      {
+        "group": "runtime-api",
+        "count": 30,
+        "priority": "P0",
+        "cost": "low"
+      },
+      {
+        "group": "ui-ux",
+        "count": 24,
+        "priority": "P0",
+        "cost": "low"
+      },
+      {
+        "group": "stream-state-machine",
+        "count": 28,
+        "priority": "P0",
+        "cost": "model"
+      },
+      {
+        "group": "context-session",
+        "count": 20,
+        "priority": "P0",
+        "cost": "low"
+      },
+      {
+        "group": "tool-skill",
+        "count": 26,
+        "priority": "P0",
+        "cost": "model"
+      },
+      {
+        "group": "multi-model-image-route",
+        "count": 32,
+        "priority": "P0",
+        "cost": "image"
+      },
+      {
+        "group": "concurrency-pressure",
+        "count": 18,
+        "priority": "P0",
+        "cost": "stress"
+      },
+      {
+        "group": "v027-integrated-capabilities",
+        "count": 66,
+        "priority": "P0",
+        "cost": "model"
+      },
+      {
+        "group": "security-observability",
+        "count": 6,
+        "priority": "P0",
+        "cost": "low"
+      }
+    ]
+  },
+  "checks": [],
+  "failurePreview": [],
+  "redaction": {
+    "rawPasswordPersisted": false,
+    "rawSecretPersisted": false,
+    "rawUrlPersisted": false,
+    "rawUserPathPersisted": false,
+    "violations": []
+  }
+}

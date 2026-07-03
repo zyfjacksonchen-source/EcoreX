@@ -1490,6 +1490,12 @@ html[data-platform="web"] .window-brand {
   justify-content: flex-start;
 }
 
+.message.model-switch-message {
+  width: 100%;
+  display: block;
+  contain-intrinsic-size: 34px;
+}
+
 .message-body {
   position: relative;
   min-width: 0;
@@ -3065,6 +3071,231 @@ html[data-platform="web"] .window-brand {
   align-items: center;
   gap: 6px;
   padding: 0 11px;
+  max-width: min(240px, 32vw);
+}
+
+.mode-button svg {
+  flex: 0 0 auto;
+}
+
+.provider-model-icon {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
+  border-radius: 6px;
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.provider-model-icon--openai,
+.provider-model-icon--chatgpt {
+  background: color-mix(in srgb, #111827 88%, var(--color-surface));
+  color: #ffffff;
+}
+
+.provider-model-icon--chatgptonazure {
+  background: color-mix(in srgb, #2563eb 88%, var(--color-surface));
+  color: #ffffff;
+}
+
+.provider-model-icon--deepseek {
+  background: color-mix(in srgb, #2563eb 14%, var(--color-surface));
+  color: #1d4ed8;
+  border-color: color-mix(in srgb, #2563eb 30%, var(--color-border));
+}
+
+.provider-model-icon--gemini {
+  background: linear-gradient(135deg, #4285f4 0%, #34a853 52%, #fbbc05 100%);
+  color: #ffffff;
+  border-color: color-mix(in srgb, #4285f4 35%, var(--color-border));
+}
+
+.provider-model-icon--doubao {
+  background: color-mix(in srgb, #f97316 13%, var(--color-surface));
+  color: #c2410c;
+  border-color: color-mix(in srgb, #f97316 32%, var(--color-border));
+}
+
+.provider-model-icon--claude {
+  background: color-mix(in srgb, #a16207 13%, var(--color-surface));
+  color: #92400e;
+  border-color: color-mix(in srgb, #a16207 28%, var(--color-border));
+}
+
+.provider-model-icon--dashscope,
+.provider-model-icon--qianfan,
+.provider-model-icon--moonshot,
+.provider-model-icon--minimax,
+.provider-model-icon--zhipu,
+.provider-model-icon--linkai,
+.provider-model-icon--openai_compatible {
+  background: color-mix(in srgb, var(--color-brand) 10%, var(--color-surface));
+  color: var(--color-brand);
+  border-color: color-mix(in srgb, var(--color-brand) 28%, var(--color-border));
+}
+
+.provider-model-icon.has-logo {
+  background: #ffffff;
+  color: transparent;
+  border-color: color-mix(in srgb, var(--color-border) 82%, transparent);
+  padding: 3px;
+}
+
+.provider-model-icon.has-logo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.mode-button {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mode-button-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-model-menu {
+  position: relative;
+  min-width: 0;
+}
+
+.chat-model-popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 30;
+  width: min(360px, calc(100vw - 24px));
+  max-height: min(360px, 45vh);
+  display: grid;
+  gap: 4px;
+  padding: 6px;
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-popover);
+}
+
+.chat-model-popover button {
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 9px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  background: transparent;
+  text-align: left;
+}
+
+.chat-model-popover button:hover,
+.chat-model-popover button:focus-visible,
+.chat-model-popover button.is-active {
+  border-color: var(--color-border);
+  background: var(--color-surface-muted);
+  outline: 0;
+}
+
+.chat-model-popover button.is-unavailable {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.chat-model-popover button.is-unavailable:hover,
+.chat-model-popover button.is-unavailable:focus-visible {
+  border-color: transparent;
+  background: transparent;
+}
+
+.chat-model-popover button span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.chat-model-popover strong,
+.chat-model-popover small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-model-popover strong {
+  font-size: 13px;
+}
+
+.chat-model-popover small {
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.chat-model-popover svg {
+  width: 15px;
+  height: 15px;
+  color: var(--color-brand);
+}
+
+.chat-model-empty {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 9px;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.chat-model-empty button {
+  min-height: 28px;
+  padding: 0 10px;
+  border-color: var(--color-border);
+  background: var(--color-surface);
+}
+
+.model-switch-divider {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.model-switch-divider::before,
+.model-switch-divider::after {
+  content: "";
+  height: 1px;
+  flex: 1 1 0;
+  background: var(--color-border);
+}
+
+.model-switch-divider span {
+  min-width: 0;
+  max-width: min(520px, 74vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .composer-footer {

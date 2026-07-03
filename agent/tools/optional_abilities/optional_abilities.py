@@ -61,8 +61,8 @@ TONGXIN_CLI_PACK_ID = "tongxin-cli"
 TONGXIN_CLI_ALIASES = {"tongxin", "tongxin-cli", "xin-agent", "xin-agent-cli", "tx-assistant"}
 TONGXIN_CLI_INSTALL_HINT = (
     "Tongxin CLI is a default read-only EcoreX capability. Use the structured tongxin_cli tool; "
-    "EcoreX first authenticates to the configured Tongxin server and bootstraps the CLI with SHA256 verification; "
-    "a trusted local xin_agent_cli.py path is only an explicit fallback. "
+    "EcoreX first uses the bundled/trusted local tools/tongxin/xin_agent_cli.py path and records it for the agent; "
+    "authenticated remote bootstrap with SHA256 verification is only a fallback when the bundled/local path is unavailable. "
     "Do not install it as a generic capability pack."
 )
 
@@ -236,6 +236,7 @@ def _apply_installed_capability_paths() -> None:
 def _capability_manifest_path() -> Optional[Path]:
     candidates = [
         RUNTIME_ROOT / "capabilities.json",
+        RUNTIME_ROOT / "runtime-packs" / "capabilities.json",
         RUNTIME_ROOT / "desktop" / "runtime-packs" / "capabilities.json",
     ]
     for path in candidates:
@@ -291,6 +292,14 @@ def _capability_state(pack_id: str) -> Dict[str, Any]:
                 "defaultEnabled",
                 "installHint",
                 "configKey",
+                "missingModules",
+                "retryable",
+                "nextAction",
+                "repairAction",
+                "configureAction",
+                "discoveryOnly",
+                "sourceConfigured",
+                "mirrorConfigured",
             ):
                 if field in data:
                     state[field] = data[field]

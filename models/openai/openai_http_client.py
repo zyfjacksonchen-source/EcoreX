@@ -447,6 +447,20 @@ class OpenAIHTTPClient:
             }
             return
 
+        content_type = str(
+            resp.headers.get("Content-Type")
+            or resp.headers.get("content-type")
+            or ""
+        ).lower()
+        if content_type and "text/event-stream" not in content_type:
+            try:
+                payload = resp.json()
+            except ValueError:
+                payload = None
+            if isinstance(payload, dict):
+                yield from self._stream_chunks_from_chat_response(payload)
+                return
+
         # IMPORTANT: do NOT use `iter_lines(decode_unicode=True)`.
         #
         # `requests` decodes per-network-chunk using the response's declared
@@ -476,7 +490,7 @@ class OpenAIHTTPClient:
                         f"[OpenAIHTTP] skip malformed SSE chunk: {sse_event[:200]}"
                     )
                     continue
-                yield chunk
+                yield self._normalize_chat_completion_chunk(chunk)
         except requests.exceptions.ChunkedEncodingError as e:
             logger.warning("[OpenAIHTTP] stream interrupted: %s", e)
             yield self._make_error_chunk(0, NETWORK_INTERRUPTED_MESSAGE)
@@ -583,6 +597,110 @@ class OpenAIHTTPClient:
             "message": message,
             "status_code": status_code,
         }
+
+    @classmethod
+    def _stream_chunks_from_chat_response(
+        cls,
+        payload: Dict[str, Any],
+    ) -> Generator[Dict[str, Any], None, None]:
+        """Expose a non-SSE chat response through the streaming contract.
+
+        Some OpenAI-compatible gateways accept ``stream=true`` but still return
+        a normal JSON chat completion. Without this normalization the agent sees
+        zero chunks and falls into the empty-response fallback.
+        """
+        if not isinstance(payload, dict):
+            return
+        yield cls._normalize_chat_completion_chunk(payload)
+
+    @classmethod
+    def _normalize_chat_completion_chunk(cls, chunk: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(chunk, dict):
+            return chunk
+        choices = chunk.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return chunk
+
+        normalized = dict(chunk)
+        next_choices = []
+        changed = False
+        for choice in choices:
+            if not isinstance(choice, dict):
+                next_choices.append(choice)
+                continue
+
+            next_choice = dict(choice)
+            delta = next_choice.get("delta")
+            if isinstance(delta, dict):
+                next_delta = cls._normalize_delta_content(delta)
+                if next_delta != delta:
+                    next_choice["delta"] = next_delta
+                    changed = True
+            elif isinstance(next_choice.get("message"), dict):
+                next_choice["delta"] = cls._message_to_delta(next_choice["message"])
+                changed = True
+            elif "text" in next_choice:
+                next_choice["delta"] = {
+                    "content": cls._content_to_text(next_choice.get("text"))
+                }
+                changed = True
+
+            next_choices.append(next_choice)
+
+        if changed:
+            normalized["choices"] = next_choices
+        return normalized
+
+    @classmethod
+    def _normalize_delta_content(cls, delta: Dict[str, Any]) -> Dict[str, Any]:
+        next_delta = dict(delta)
+        if "content" in next_delta and not isinstance(next_delta.get("content"), str):
+            next_delta["content"] = cls._content_to_text(next_delta.get("content"))
+        if not next_delta.get("content"):
+            fallback_text = cls._content_to_text(next_delta.get("text")) or cls._content_to_text(
+                next_delta.get("refusal")
+            )
+            if fallback_text:
+                next_delta["content"] = fallback_text
+        if "reasoning_content" in next_delta and not isinstance(next_delta.get("reasoning_content"), str):
+            next_delta["reasoning_content"] = cls._content_to_text(next_delta.get("reasoning_content"))
+        return next_delta
+
+    @classmethod
+    def _message_to_delta(cls, message: Dict[str, Any]) -> Dict[str, Any]:
+        delta: Dict[str, Any] = {}
+        text = cls._content_to_text(message.get("content")) or cls._content_to_text(message.get("refusal"))
+        if text:
+            delta["content"] = text
+        reasoning = cls._content_to_text(message.get("reasoning_content"))
+        if reasoning:
+            delta["reasoning_content"] = reasoning
+        for key in ("tool_calls", "function_call", "_gemini_raw_parts"):
+            if key in message:
+                delta[key] = message[key]
+        return delta
+
+    @classmethod
+    def _content_to_text(cls, value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (int, float, bool)):
+            return str(value)
+        if isinstance(value, list):
+            return "".join(cls._content_to_text(item) for item in value)
+        if isinstance(value, dict):
+            if "text" in value:
+                return cls._content_to_text(value.get("text"))
+            if "content" in value:
+                return cls._content_to_text(value.get("content"))
+            if "output_text" in value:
+                return cls._content_to_text(value.get("output_text"))
+            if "value" in value and value.get("type") in ("text", "output_text", None):
+                return cls._content_to_text(value.get("value"))
+            return ""
+        return str(value)
 
 
 # A tiny helper for callers that just need a one-shot client without storing

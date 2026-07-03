@@ -74,6 +74,7 @@ import {
   loadMemoryFiles,
   loadRuntimeUiState,
   loadRuntimeSnapshot,
+  loadChatModelOptions,
   loadSessionHistoryWithMeta,
   openLocalPath,
   openMessageStream,
@@ -88,6 +89,7 @@ import {
   savePastedFile,
   saveRuntimeUiState,
   sendChatMessage,
+  setChatModel,
   setSkillEnabled,
   statLocalPath,
   updateScheduler,
@@ -95,6 +97,8 @@ import {
   updatePermissionMode,
   type CapabilityPack,
   type ChatSendResult,
+  type ChatModelOption,
+  type ChatContextPolicy,
   type AgentArtifact,
   type EnterpriseQuotaCheckResult,
   type EnterpriseSession,
@@ -120,6 +124,8 @@ import {
   type RuntimeStep,
   type RuntimeToolCall,
   type RuntimeTool,
+  type RuntimeReleaseNotes,
+  type RuntimeUpdateState,
   type RuntimeSnapshot,
   type RuntimeSchedulerProjection,
   type RuntimeSchedulerTask,
@@ -189,6 +195,7 @@ type SessionRow = {
 type ChatItem = {
   id: string;
   role: "user" | "assistant" | "system";
+  kind?: "model-switch-divider";
   content: string;
   createdAt: string;
   attachments?: FileAttachment[];
@@ -410,6 +417,7 @@ const LAST_ACTIVE_SESSION_STORAGE_KEY = "ecorex-last-active-session-id";
 const CAPABILITY_ENABLED_STORAGE_KEY = "ecorex-capability-enabled";
 const SKILL_DEFAULTS_STORAGE_KEY = "ecorex-skill-defaults-v1";
 const RELEASE_NOTES_SEEN_STORAGE_KEY = "ecorex-release-notes-seen-version";
+const BACKGROUND_UPDATE_APPLIED_STORAGE_KEY = "ecorex-background-update-applied";
 const SIDEBAR_COLLAPSE_STORAGE_KEY = "ecorex-sidebar-collapse-state-v1";
 const RUN_CENTER_DEV_GATE_STORAGE_KEY = "ecorex-dev-run-center";
 const NEW_SESSION_START_TITLE = "和EcoreX一起开始工作";
@@ -420,12 +428,35 @@ const SESSION_UI_SESSION_SOFT_BYTES = 36_000;
 const SESSION_UI_TOTAL_SOFT_BYTES = 520_000;
 const SESSION_UI_CONTENT_CHARS = 2400;
 const SESSION_UI_STEP_CHARS = 600;
+const SESSION_UI_THINKING_STEP_CHARS = 12_000;
 const SESSION_UI_TOOL_CHARS = 800;
 const SESSION_UI_REASONING_CHARS = 900;
+
+function releaseNotesSeenId(notes?: RuntimeReleaseNotes | null, fallbackVersion?: string) {
+  if (notes?.version) {
+    return `${notes.version}:${notes.revision || "initial"}`;
+  }
+  return fallbackVersion || "";
+}
+
+function backgroundUpdateSeenId(state?: RuntimeUpdateState | null) {
+  if (!state?.version) return "";
+  return `${state.version}:${state.generatedAt || "installed"}`;
+}
+
+function backgroundUpdateReadyForRefresh(state?: RuntimeUpdateState | null) {
+  return Boolean(
+    state?.refreshRequired
+    || (
+      state?.mode === "background"
+      && state.status === "installed"
+      && state.browserAction === "defer-to-existing-tab-soft-refresh"
+    )
+  );
+}
 const SESSION_UI_PREVIEW_DATA_URL_CHARS = 500;
-const CONTEXT_THRESHOLD_TOKENS = 258_000;
+const DEFAULT_CONTEXT_THRESHOLD_TOKENS = 800_000;
 const EFFECTIVE_MODEL_FALLBACK = "gpt-5.5";
-const EFFECTIVE_MODEL_ALIAS_PREFIXES = ["deepseek-"];
 const COMPOSER_PERMISSION_MENU_MODES: PermissionMode[] = ["smart-ask", "full-access"];
 const SETTINGS_PERMISSION_MODES: PermissionMode[] = ["smart-ask", "full-access"];
 
@@ -815,7 +846,7 @@ function slimPersistedStep(step: AgentStepDisclosure): AgentStepDisclosure {
   if (step.type === "thinking") {
     return {
       type: "thinking",
-      content: truncatePersistedText(step.content, SESSION_UI_STEP_CHARS),
+      content: truncatePersistedText(step.content, SESSION_UI_THINKING_STEP_CHARS),
       running: step.running,
       startedAt: step.startedAt,
       duration: step.duration
@@ -880,6 +911,7 @@ function slimPersistedMessage(message: ChatItem): ChatItem {
   return {
     id: message.id,
     role: message.role,
+    kind: message.kind,
     content: truncatePersistedText(message.content, SESSION_UI_CONTENT_CHARS),
     createdAt: message.createdAt,
     attachments: message.attachments?.slice(0, 8).map(slimPersistedAttachment),
@@ -1069,9 +1101,16 @@ function applyTheme(theme: ThemeMode) {
 function displayModelName(value?: string) {
   const model = (value || "").trim();
   if (!model || /^ecorex$/i.test(model) || /^openai$/i.test(model)) return EFFECTIVE_MODEL_FALLBACK;
-  const normalized = model.toLowerCase();
-  if (EFFECTIVE_MODEL_ALIAS_PREFIXES.some((prefix) => normalized.startsWith(prefix))) return EFFECTIVE_MODEL_FALLBACK;
   return model;
+}
+
+function chatModelProviderDisplayLabel(option?: ChatModelOption | null) {
+  if (!option) return "";
+  const base = option.providerLabel || option.provider || "";
+  if (option.provider === "custom" && option.modelAliasFamily === "gemini") {
+    return base ? `${base} Gemini` : "自定义 Gemini";
+  }
+  return base;
 }
 
 function isRuntimeRequestUiActive(request?: RuntimeActiveRequest | null) {
@@ -1729,17 +1768,23 @@ function estimateTextTokens(text: string) {
   let latin = 0;
   let wide = 0;
   let symbols = 0;
+  let whitespace = 0;
+  let structural = 0;
   for (const char of text || "") {
-    if (/\s/.test(char)) continue;
+    if (/\s/.test(char)) {
+      whitespace += 1;
+      continue;
+    }
     if (/[\u3400-\u9fff\uf900-\ufaff]/.test(char)) {
       wide += 1;
     } else if (/[\x00-\x7f]/.test(char)) {
       latin += 1;
+      if ("{}[]():,.;/\\|`'\"".includes(char)) structural += 1;
     } else {
       symbols += 1;
     }
   }
-  return Math.ceil(latin / 4) + Math.ceil(wide * 1.25) + Math.ceil(symbols / 2);
+  return Math.max(0, Math.ceil(wide * 1.2 + latin * 0.27 + whitespace * 0.12 + structural * 0.08 + symbols * 0.7) + 1);
 }
 
 function estimateStructuredTokens(value: unknown) {
@@ -1752,12 +1797,30 @@ function estimateStructuredTokens(value: unknown) {
   }
 }
 
+const TOKEN_ESTIMATE_MAX_FILES_PER_MESSAGE = 8;
+const TOKEN_ESTIMATE_MAX_FILE_KEY_CHARS = 240;
+const TOKEN_ESTIMATE_MAX_STEPS_PER_MESSAGE = 16;
+const TOKEN_ESTIMATE_MAX_TOOL_CALLS_PER_MESSAGE = 12;
+const TOKEN_ESTIMATE_OMITTED_FILE_COST = 80;
+const TOKEN_ESTIMATE_OMITTED_STEP_COST = 120;
+const TOKEN_ESTIMATE_OMITTED_TOOL_COST = 120;
+
+function tokenEstimateFileKey(file: FileAttachment) {
+  const source = file.file_name || file.file_path || "";
+  return source.length > TOKEN_ESTIMATE_MAX_FILE_KEY_CHARS
+    ? source.slice(0, TOKEN_ESTIMATE_MAX_FILE_KEY_CHARS)
+    : source;
+}
+
 function estimateFileTokens(files: FileAttachment[]) {
-  return files.reduce((total, file) => {
-    const nameTokens = estimateTextTokens(file.file_name || file.file_path || "");
+  const visibleFiles = files.slice(0, TOKEN_ESTIMATE_MAX_FILES_PER_MESSAGE);
+  const omittedFiles = Math.max(0, files.length - visibleFiles.length);
+  const visibleCost = visibleFiles.reduce((total, file) => {
+    const nameTokens = estimateTextTokens(tokenEstimateFileKey(file));
     const mediaCost = file.file_type === "image" ? 420 : file.file_type === "video" ? 900 : file.file_type === "directory" ? 220 : 160;
     return total + nameTokens + mediaCost;
   }, 0);
+  return visibleCost + omittedFiles * TOKEN_ESTIMATE_OMITTED_FILE_COST;
 }
 
 function estimateTokenCount(text: string, files: FileAttachment[]) {
@@ -1822,11 +1885,104 @@ function meterTitle(label: string, used: number, limit?: number) {
   return `${label}：${usedDetail} / ${limitDetail}，${Math.round(percentOf(used, limit))}%`;
 }
 
+function contextPolicyLimit(policy?: ChatContextPolicy | null) {
+  return policy?.autoCompactTokenLimit || policy?.hardContextTokenLimit || policy?.contextWindowTokens || DEFAULT_CONTEXT_THRESHOLD_TOKENS;
+}
+
+function contextPolicyTitle(policy?: ChatContextPolicy | null) {
+  const status = (policy?.tokenizerStatus || "").toLowerCase();
+  if (status === "local_tokenizer") return "本地 tokenizer 估算";
+  if (status === "actual_usage") return "基于模型 usage";
+  return "本地保守估算";
+}
+
+function contextPolicyOptionHint(policy?: ChatContextPolicy | null) {
+  if (!policy?.contextWindowTokens) return "";
+  const status = (policy.tokenizerStatus || "").toLowerCase() === "local_tokenizer" ? "tokenizer" : "估算";
+  return `${compactTokenCount(policy.contextWindowTokens)} ctx · ${status}`;
+}
+
+const PROVIDER_MODEL_ICON_LABELS: Record<string, string> = {
+  openai: "OA",
+  chatgpt: "OA",
+  chatgptonazure: "AZ",
+  openai_compatible: "AI",
+  deepseek: "DS",
+  gemini: "G",
+  doubao: "豆",
+  claude: "C",
+  dashscope: "Q",
+  qianfan: "千",
+  moonshot: "K",
+  minimax: "M",
+  zhipu: "智",
+  linkai: "L"
+};
+
+const PROVIDER_MODEL_LOGOS: Record<string, string> = {
+  openai: "openai",
+  chatgpt: "openai",
+  chatgptonazure: "openai",
+  deepseek: "deepseek",
+  gemini: "gemini",
+  doubao: "doubao",
+  claude: "claudeAPI",
+  claudeapi: "claudeAPI",
+  dashscope: "dashscope",
+  qianfan: "qianfan",
+  moonshot: "moonshot",
+  minimax: "minimax",
+  zhipu: "zhipu",
+  mimo: "minimax",
+  linkai: "openai",
+  openai_compatible: "openai"
+};
+
+function providerModelIconSlug(provider?: string) {
+  const normalized = String(provider || "model").trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+  return normalized || "model";
+}
+
+function providerModelLogoUrl(provider?: string) {
+  const slug = providerModelIconSlug(provider);
+  const logo = PROVIDER_MODEL_LOGOS[slug];
+  return logo ? `./assets/logos/${logo}.svg` : "";
+}
+
+function providerModelIconLabel(provider?: string, providerLabel?: string) {
+  const key = String(provider || "").trim().toLowerCase();
+  if (PROVIDER_MODEL_ICON_LABELS[key]) return PROVIDER_MODEL_ICON_LABELS[key];
+  const label = String(providerLabel || provider || "AI").trim();
+  const compact = label.replace(/\s+/g, "");
+  if (!compact) return "AI";
+  return compact.slice(0, compact.charCodeAt(0) > 127 ? 1 : 2).toUpperCase();
+}
+
+function ProviderModelIcon(props: { provider?: string; providerLabel?: string }) {
+  const title = props.providerLabel || props.provider || "模型厂商";
+  const logoUrl = providerModelLogoUrl(props.provider);
+  const [logoFailed, setLogoFailed] = useState(false);
+  return (
+    <span
+      className={`provider-model-icon provider-model-icon--${providerModelIconSlug(props.provider)}${logoUrl && !logoFailed ? " has-logo" : ""}`}
+      title={title}
+      aria-hidden="true"
+    >
+      {logoUrl && !logoFailed ? (
+        <img src={logoUrl} alt="" onError={() => setLogoFailed(true)} />
+      ) : providerModelIconLabel(props.provider, props.providerLabel)}
+    </span>
+  );
+}
+
 function estimateContextTokens(messages: ChatItem[], draft: string, files: FileAttachment[]) {
   const history = messages.reduce((total, message) => {
+    if (message.kind === "model-switch-divider") return total;
     if (message.contextExcluded) return total;
     const messageTokens = estimateTokenCount(message.content || "", message.attachments || []);
-    const stepTokens = (message.steps || []).reduce((stepTotal, step) => {
+    const visibleSteps = (message.steps || []).slice(0, TOKEN_ESTIMATE_MAX_STEPS_PER_MESSAGE);
+    const omittedSteps = Math.max(0, (message.steps || []).length - visibleSteps.length);
+    const stepTokens = visibleSteps.reduce((stepTotal, step) => {
       if (step.type === "thinking" || step.type === "content" || step.type === "phase") {
         return stepTotal + estimateStructuredTokens(step.content);
       }
@@ -1838,14 +1994,16 @@ function estimateContextTokens(messages: ChatItem[], draft: string, files: FileA
           + 80;
       }
       return stepTotal + estimateStructuredTokens(step.fileName || step.url) + 120;
-    }, 0);
-    const legacyToolTokens = (message.toolCalls || []).reduce((toolTotal, tool) => (
+    }, omittedSteps * TOKEN_ESTIMATE_OMITTED_STEP_COST);
+    const visibleToolCalls = (message.toolCalls || []).slice(0, TOKEN_ESTIMATE_MAX_TOOL_CALLS_PER_MESSAGE);
+    const omittedToolCalls = Math.max(0, (message.toolCalls || []).length - visibleToolCalls.length);
+    const legacyToolTokens = visibleToolCalls.reduce((toolTotal, tool) => (
       toolTotal
       + estimateStructuredTokens(tool.name)
       + estimateStructuredTokens(tool.arguments)
       + estimateStructuredTokens(tool.result)
       + 80
-    ), 0);
+    ), omittedToolCalls * TOKEN_ESTIMATE_OMITTED_TOOL_COST);
     return total + messageTokens + stepTokens + legacyToolTokens;
   }, 0);
   return history + estimateTokenCount(draft, files);
@@ -2000,7 +2158,7 @@ function messageSequenceKey(message: ChatItem) {
 }
 
 function messageRequestKey(message: ChatItem) {
-  return message.role === "assistant" && message.requestId ? `request:${message.requestId}` : "";
+  return message.requestId ? `request:${message.requestId}` : "";
 }
 
 function messageContentKey(message: ChatItem) {
@@ -2145,6 +2303,85 @@ function messageHasTerminalPayload(message: ChatItem) {
     || Boolean(message.artifacts?.length);
 }
 
+function assistantVisibleAnswerWeight(message?: ChatItem) {
+  if (!message || message.role !== "assistant") return 0;
+  return redactInternalPromptText(message.content || "").trim().length
+    + (message.artifacts || []).length * 400;
+}
+
+function disclosureValueWeight(value: unknown) {
+  if (value === undefined || value === null || value === "") return 0;
+  if (typeof value === "string") return value.length;
+  try {
+    return JSON.stringify(value).length;
+  } catch {
+    return String(value).length;
+  }
+}
+
+function assistantDisclosureWeight(message?: ChatItem) {
+  if (!message || message.role !== "assistant") return 0;
+  let total = redactInternalPromptText(message.reasoning || "").length;
+  for (const step of message.steps || []) {
+    if (step.type === "thinking" || step.type === "content" || step.type === "phase") {
+      total += redactInternalPromptText(step.content || "").length;
+    } else if (step.type === "tool") {
+      total += disclosureValueWeight(step.arguments) + disclosureValueWeight(step.result) + String(step.name || "").length;
+    } else if (step.type === "media") {
+      total += String(step.fileName || step.url || step.filePath || "").length;
+    }
+  }
+  for (const tool of message.toolCalls || []) {
+    total += disclosureValueWeight(tool.arguments) + disclosureValueWeight(tool.result) + String(tool.name || "").length;
+  }
+  return total;
+}
+
+function mergeLocalLiveAssistantDisclosure(historyMessage: ChatItem, localMessage: ChatItem, baseMessage: ChatItem) {
+  const localDisclosureWeight = assistantDisclosureWeight(localMessage);
+  const historyDisclosureWeight = assistantDisclosureWeight(historyMessage);
+  const localIsLiveOrSettled = Boolean(localMessage.pending || localMessage.visibleOutputSettled);
+  if (!localIsLiveOrSettled && localDisclosureWeight <= historyDisclosureWeight) {
+    return baseMessage;
+  }
+
+  const historyHasVisibleAnswer = assistantVisibleAnswerWeight(historyMessage) > 0;
+  const localWithHistoryArtifacts = mergeArtifactsIntoMessage(localMessage, historyMessage.artifacts || []);
+  const localHasRicherDisclosure = localDisclosureWeight > historyDisclosureWeight;
+  const localReasoning = redactInternalPromptText(localMessage.reasoning || "");
+  const historyReasoning = redactInternalPromptText(historyMessage.reasoning || "");
+  return {
+    ...baseMessage,
+    id: localMessage.id || historyMessage.id,
+    createdAt: localMessage.createdAt || historyMessage.createdAt,
+    content: historyHasVisibleAnswer ? historyMessage.content : (localMessage.content || historyMessage.content),
+    pending: historyHasVisibleAnswer ? false : localMessage.pending,
+    paused: historyHasVisibleAnswer ? false : localMessage.paused,
+    visibleOutputSettled: historyHasVisibleAnswer ? undefined : localMessage.visibleOutputSettled,
+    cancelled: historyHasVisibleAnswer ? historyMessage.cancelled : localMessage.cancelled,
+    recovery: historyHasVisibleAnswer ? historyMessage.recovery : localMessage.recovery,
+    requestId: localMessage.requestId || historyMessage.requestId,
+    userSeq: typeof historyMessage.userSeq === "number" ? historyMessage.userSeq : localMessage.userSeq,
+    botSeq: typeof historyMessage.botSeq === "number" ? historyMessage.botSeq : localMessage.botSeq,
+    reasoning: localReasoning.length > historyReasoning.length ? localMessage.reasoning : historyMessage.reasoning,
+    steps: localHasRicherDisclosure && localMessage.steps?.length ? localMessage.steps : historyMessage.steps,
+    toolCalls: localHasRicherDisclosure && localMessage.toolCalls?.length ? localMessage.toolCalls : historyMessage.toolCalls,
+    artifacts: localWithHistoryArtifacts.artifacts || baseMessage.artifacts,
+    runTiming: {
+      ...(localMessage.runTiming || {}),
+      ...(historyMessage.runTiming || {}),
+      requestId: historyMessage.runTiming?.requestId || localMessage.runTiming?.requestId || localMessage.requestId || historyMessage.requestId,
+      state: historyHasVisibleAnswer ? (historyMessage.runTiming?.state || "completed") : (localMessage.runTiming?.state || historyMessage.runTiming?.state),
+      startedAtMs: localMessage.runTiming?.startedAtMs || historyMessage.runTiming?.startedAtMs,
+      updatedAtMs: Math.max(
+        typeof localMessage.runTiming?.updatedAtMs === "number" ? localMessage.runTiming.updatedAtMs : 0,
+        typeof historyMessage.runTiming?.updatedAtMs === "number" ? historyMessage.runTiming.updatedAtMs : 0
+      ) || undefined,
+      terminalAtMs: historyMessage.runTiming?.terminalAtMs || localMessage.runTiming?.terminalAtMs
+    }
+  };
+}
+
 function isTerminalAssistantMessage(message?: ChatItem) {
   return Boolean(message
     && message.role === "assistant"
@@ -2202,6 +2439,14 @@ function mergeHistoryAndLocalRequestMessage(historyMessage: ChatItem, localMessa
   }
   if (!isSameAssistantTurn(historyMessage, localMessage)) {
     return historyWithLocalArtifacts;
+  }
+  const historyWithLiveLocalDisclosure = mergeLocalLiveAssistantDisclosure(
+    historyMessage,
+    localMessage,
+    historyWithLocalArtifacts
+  );
+  if (historyWithLiveLocalDisclosure !== historyWithLocalArtifacts) {
+    return historyWithLiveLocalDisclosure;
   }
   const historyText = redactInternalPromptText(historyMessage.content || "").trim();
   const localText = redactInternalPromptText(localMessage.content || "").trim();
@@ -2565,6 +2810,16 @@ function mapRuntimeMessage(item: RuntimeMessage, sessionId: string, index: numbe
     ...runtimeExtrasMediaSteps(item)
   ];
   const displaySeq = typeof item._seq === "number" ? item._seq : typeof item.seq === "number" ? item.seq : undefined;
+  const extras = item.extras && typeof item.extras === "object" ? item.extras : {};
+  const requestId = String(item.request_id || extras.request_id || "").trim() || undefined;
+  const userSeq = typeof item.user_seq === "number"
+    ? item.user_seq
+    : typeof extras.user_seq === "number"
+      ? extras.user_seq
+      : item._seq ?? item.seq;
+  const botSeq = item.role === "assistant"
+    ? (typeof item.bot_seq === "number" ? item.bot_seq : typeof extras.bot_seq === "number" ? extras.bot_seq : item.seq)
+    : undefined;
   const contextSeq = item.role === "user" ? displaySeq : (typeof displaySeq === "number" ? displaySeq : turnSeq);
   return {
     id: `${sessionId}-${index}`,
@@ -2576,19 +2831,36 @@ function mapRuntimeMessage(item: RuntimeMessage, sessionId: string, index: numbe
     attachments: item.role === "user" ? runtimeExtrasAttachments(item) : undefined,
     artifacts: item.role === "assistant" ? runtimeExtrasArtifacts(item) : undefined,
     toolCalls: item.tool_calls?.map(normalizeToolCall),
-    requestId: item.request_id,
-    userSeq: item.user_seq ?? item._seq ?? item.seq,
-    botSeq: item.role === "assistant" ? item.seq : undefined,
+    requestId,
+    userSeq,
+    botSeq,
     contextExcluded: contextStartSeq > 0 && typeof contextSeq === "number" && contextSeq < contextStartSeq
   };
 }
 
 function mapRuntimeHistory(messages: RuntimeMessage[], sessionId: string, contextStartSeq = 0): ChatItem[] {
   let currentTurnSeq: number | undefined;
+  let currentTurnStartedAtMs: number | undefined;
   return messages.map((item, index) => {
     const seq = typeof item._seq === "number" ? item._seq : typeof item.seq === "number" ? item.seq : undefined;
     if (item.role === "user" && typeof seq === "number") currentTurnSeq = seq;
-    return mapRuntimeMessage(item, sessionId, index, contextStartSeq, currentTurnSeq);
+    if (item.role === "user" && typeof item.created_at === "number") currentTurnStartedAtMs = item.created_at * 1000;
+    const mapped = mapRuntimeMessage(item, sessionId, index, contextStartSeq, currentTurnSeq);
+    if (mapped.role !== "assistant" || mapped.runTiming?.startedAtMs) return mapped;
+    const assistantAtMs = timeMs(mapped.createdAt) || (typeof item.created_at === "number" ? item.created_at * 1000 : 0);
+    if (!assistantAtMs && !currentTurnStartedAtMs) return mapped;
+    const startedAtMs = currentTurnStartedAtMs || assistantAtMs || Date.now();
+    const terminalAtMs = mapped.pending ? undefined : (assistantAtMs || startedAtMs);
+    return {
+      ...mapped,
+      runTiming: {
+        requestId: mapped.requestId,
+        state: mapped.pending ? "running" : "completed",
+        startedAtMs,
+        updatedAtMs: assistantAtMs || terminalAtMs || startedAtMs,
+        terminalAtMs
+      }
+    };
   });
 }
 
@@ -3058,8 +3330,19 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [runCenterOpen, setRunCenterOpen] = useState(false);
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
+  const [backgroundUpdateApplied, setBackgroundUpdateApplied] = useState(() => {
+    try {
+      return window.localStorage.getItem(BACKGROUND_UPDATE_APPLIED_STORAGE_KEY) || "";
+    } catch {
+      return "";
+    }
+  });
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [chatModelOptions, setChatModelOptions] = useState<ChatModelOption[]>([]);
+  const [chatContextPolicy, setChatContextPolicy] = useState<ChatContextPolicy | null>(null);
+  const [chatModelBusy, setChatModelBusy] = useState(false);
   const [showJumpLatest, setShowJumpLatest] = useState(false);
   const [previewFile, setPreviewFile] = useState<FileAttachment | null>(null);
   const [previewZoom, setPreviewZoom] = useState(1);
@@ -3104,6 +3387,7 @@ export function App() {
   const projectMenuRef = useRef<HTMLDivElement | null>(null);
   const chatFileMenuRef = useRef<HTMLDivElement | null>(null);
   const projectStartMenuRef = useRef<HTMLDivElement | null>(null);
+  const modelMenuRef = useRef<HTMLDivElement | null>(null);
   const composerDragDepth = useRef(0);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const streamCleanup = useRef<null | (() => void)>(null);
@@ -3238,6 +3522,77 @@ export function App() {
       runtimeSnapshotRefreshTimer.current = null;
       void loadRuntimeSnapshot().then(setRuntimeSnapshot).catch(() => undefined);
     }, delay);
+  }
+
+  async function refreshChatModelOptions() {
+    const payload = await loadChatModelOptions();
+    setChatModelOptions(payload.options || []);
+    setChatContextPolicy(payload.currentContextPolicy || payload.options?.find((option) => option.current)?.contextPolicy || null);
+    if (payload.currentModel || payload.currentProvider) {
+      setRuntimeSnapshot((current) => ({
+        ...current,
+        currentModel: payload.currentModel || current.currentModel,
+        currentProvider: payload.currentProvider || current.currentProvider
+      }));
+    }
+    return payload;
+  }
+
+  async function toggleModelMenu() {
+    if (!modelMenuOpen) {
+      setModelMenuOpen(true);
+      setChatModelBusy(true);
+      try {
+        await refreshChatModelOptions();
+      } catch (error) {
+        setToast(error instanceof Error ? error.message : "模型列表刷新失败");
+      } finally {
+        setChatModelBusy(false);
+      }
+      return;
+    }
+    setModelMenuOpen(false);
+  }
+
+  function modelSwitchDivider(model: string): ChatItem {
+    const label = displayModelName(model);
+    return {
+      id: `model-switch-${Date.now()}`,
+      role: "system",
+      kind: "model-switch-divider",
+      content: `已切换 ${label} 模型`,
+      createdAt: new Date().toISOString(),
+      contextExcluded: true
+    };
+  }
+
+  async function chooseChatModel(option: ChatModelOption) {
+    if (!option.provider || !option.model || option.current || chatModelBusy) {
+      setModelMenuOpen(false);
+      return;
+    }
+    setChatModelBusy(true);
+    try {
+      const result = await setChatModel(option.provider, option.model);
+      if (result.status === "error") {
+        throw new Error(result.message || "模型切换失败");
+      }
+      const nextModel = result.model || option.model;
+      const nextPolicy = result.contextPolicy || option.contextPolicy || null;
+      setChatModelOptions((current) => current.map((item) => ({
+        ...item,
+        current: item.provider === option.provider && item.model === nextModel
+      })));
+      setChatContextPolicy(nextPolicy);
+      setRuntimeSnapshot((current) => ({ ...current, currentModel: nextModel, currentProvider: option.provider }));
+      updateSessionMessages(activeSessionIdRef.current, (current) => [...current, modelSwitchDivider(nextModel)]);
+      setModelMenuOpen(false);
+      scheduleRuntimeSnapshotRefresh(150);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "模型切换失败");
+    } finally {
+      setChatModelBusy(false);
+    }
   }
 
   function bindSessionToProject(sessionId: string, projectOrBinding: ProjectFolder | ProjectSessionBinding | null, source: ProjectSessionBinding["source"] = "project-session-send") {
@@ -3540,14 +3895,16 @@ export function App() {
   useEffect(() => {
     const notes = runtimeSnapshot.releaseNotes;
     if (runtimeSnapshot.status !== "ready" || !notes?.version) return;
-    if (releaseNotesDismissedVersion.current === notes.version) return;
+    const seenId = releaseNotesSeenId(notes, runtimeSnapshot.version);
+    if (!seenId) return;
+    if (releaseNotesDismissedVersion.current === seenId) return;
     try {
-      if (window.localStorage.getItem(RELEASE_NOTES_SEEN_STORAGE_KEY) === notes.version) return;
+      if (window.localStorage.getItem(RELEASE_NOTES_SEEN_STORAGE_KEY) === seenId) return;
     } catch {
       // Showing the notes is still useful when storage is unavailable.
     }
     setReleaseNotesOpen(true);
-  }, [runtimeSnapshot.status, runtimeSnapshot.releaseNotes?.version]);
+  }, [runtimeSnapshot.status, runtimeSnapshot.version, runtimeSnapshot.releaseNotes?.version, runtimeSnapshot.releaseNotes?.revision]);
 
   useEffect(() => {
     attachmentsRef.current = attachments;
@@ -3838,6 +4195,30 @@ export function App() {
   }, [projectStartMenuOpen]);
 
   useEffect(() => {
+    if (!modelMenuOpen) return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target instanceof Node ? event.target : null;
+      if (target && modelMenuRef.current?.contains(target)) return;
+      setModelMenuOpen(false);
+    };
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setModelMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [modelMenuOpen]);
+
+  useEffect(() => {
+    if (runtimeSnapshot.status !== "ready") return;
+    if (chatModelOptions.length) return;
+    void refreshChatModelOptions().catch(() => undefined);
+  }, [runtimeSnapshot.status, runtimeSnapshot.currentModel, chatModelOptions.length]);
+
+  useEffect(() => {
     if (runtimeSnapshot.status !== "ready") return;
     if (runtimeSnapshot.activeRequestsStatus === "unavailable") return;
     const activeRequestIds = new Set(
@@ -4060,6 +4441,16 @@ export function App() {
     startNewSession(project);
   };
   const currentModelName = displayModelName(runtimeSnapshot.currentModel);
+  const currentChatModelOption = useMemo(() => (
+    chatModelOptions.find((option) => option.current)
+    || chatModelOptions.find((option) => (
+      option.model === runtimeSnapshot.currentModel
+      && (!runtimeSnapshot.currentProvider || option.provider === runtimeSnapshot.currentProvider)
+    ))
+    || null
+  ), [chatModelOptions, runtimeSnapshot.currentModel, runtimeSnapshot.currentProvider]);
+  const activeChatModelLabel = displayModelName(currentChatModelOption?.model || runtimeSnapshot.currentModel);
+  const activeChatProviderLabel = chatModelProviderDisplayLabel(currentChatModelOption);
   const activeRuntimeRequest = useMemo(() => (
     (runtimeSnapshot.activeRequests || []).find((request) => (
       isPrimaryChatActiveRequest(request)
@@ -4068,7 +4459,13 @@ export function App() {
     )) || null
   ), [runtimeSnapshot.activeRequests, activeSessionId, locallyCompletedRequestIds]);
   const activeRuntimeElapsed = runtimeRequestElapsedLabel(activeRuntimeRequest, runClockTick);
-  const appVersion = runtimeSnapshot.version || runtimeSnapshot.releaseNotes?.version || "0.2.2";
+  const appVersion = runtimeSnapshot.version || runtimeSnapshot.releaseNotes?.version || "0.2.6";
+  const backgroundUpdateKey = backgroundUpdateSeenId(runtimeSnapshot.updateState);
+  const showBackgroundUpdateBanner = Boolean(
+    backgroundUpdateKey
+    && backgroundUpdateKey !== backgroundUpdateApplied
+    && backgroundUpdateReadyForRefresh(runtimeSnapshot.updateState)
+  );
   const deferredComposerText = useDeferredValue(composerText);
   const skillDisplayRows = useMemo(() => buildSkillDisplayRows(runtimeSnapshot), [runtimeSnapshot]);
   const mentionableSkillRows = useMemo(() => skillDisplayRows.filter((skill) => skill.mentionable), [skillDisplayRows]);
@@ -4126,7 +4523,9 @@ export function App() {
   const weeklyLimit = quotaNumber(quotaSnapshot, "weeklyLimit");
   const draftContextUsed = useMemo(() => estimateTokenCount(deferredComposerText, attachments), [deferredComposerText, attachments]);
   const contextUsed = historyContextUsed + draftContextUsed;
-  const contextPercent = percentOf(contextUsed, CONTEXT_THRESHOLD_TOKENS);
+  const activeContextPolicy = chatContextPolicy || currentChatModelOption?.contextPolicy || null;
+  const contextLimit = contextPolicyLimit(activeContextPolicy);
+  const contextPercent = percentOf(contextUsed, contextLimit);
   const tokenMeters = [
     {
       key: "daily",
@@ -4145,7 +4544,7 @@ export function App() {
     key: "context",
     label: "上下文",
     percent: contextPercent,
-    title: meterTitle("当前会话上下文估算", contextUsed, CONTEXT_THRESHOLD_TOKENS)
+    title: `${meterTitle("当前会话上下文估算", contextUsed, contextLimit)}；${contextPolicyTitle(activeContextPolicy)}`
   };
 
   useEffect(() => {
@@ -6225,7 +6624,7 @@ export function App() {
     const currentLength = activeSessionIdRef.current === sessionId
       ? messagesRef.current.find((message) => message.id === assistantId)?.content.length || 0
       : 0;
-    const flushDelay = currentLength >= 100000 ? 90 : currentLength >= 30000 ? 45 : 16;
+    const flushDelay = currentLength >= 100000 ? 140 : currentLength >= 30000 ? 80 : 32;
     buffer.timer = window.setTimeout(() => {
       const current = streamDeltaBuffers.current[key];
       if (current) current.timer = null;
@@ -7133,9 +7532,14 @@ export function App() {
         restoreUnacceptedDraft(message, result);
         return;
       }
+      const acceptedRequestId = result.request_id || "";
       updateSessionMessages(requestSessionId, (current) => current.map((item) => (
         item.id === userMessage.id || item.id === assistantId
-          ? { ...item, sendAttempt: item.sendAttempt ? { ...item.sendAttempt, state: "accepted" } : undefined }
+          ? {
+              ...item,
+              requestId: acceptedRequestId || item.requestId,
+              sendAttempt: item.sendAttempt ? { ...item.sendAttempt, state: "accepted" } : undefined
+            }
           : item
       )));
       const replacedRequestIds = result.same_session?.decision === "replacement_accepted" || result.same_session?.decision === "accepted_after_recovery"
@@ -8248,16 +8652,32 @@ export function App() {
   }
 
   function closeReleaseNotes() {
-    const seenVersion = runtimeSnapshot.releaseNotes?.version || runtimeSnapshot.version;
-    if (seenVersion) {
-      releaseNotesDismissedVersion.current = seenVersion;
+    const seenId = releaseNotesSeenId(runtimeSnapshot.releaseNotes, runtimeSnapshot.version);
+    if (seenId) {
+      releaseNotesDismissedVersion.current = seenId;
       try {
-        window.localStorage.setItem(RELEASE_NOTES_SEEN_STORAGE_KEY, seenVersion);
+        window.localStorage.setItem(RELEASE_NOTES_SEEN_STORAGE_KEY, seenId);
       } catch {
         // Ignore storage failures; closing should still work.
       }
     }
     setReleaseNotesOpen(false);
+  }
+
+  function markBackgroundUpdateApplied(key: string) {
+    if (!key) return;
+    setBackgroundUpdateApplied(key);
+    try {
+      window.localStorage.setItem(BACKGROUND_UPDATE_APPLIED_STORAGE_KEY, key);
+    } catch {
+      // The banner can still close for this render even if storage is unavailable.
+    }
+  }
+
+  function reloadIntoBackgroundUpdate() {
+    const key = backgroundUpdateSeenId(runtimeSnapshot.updateState);
+    markBackgroundUpdateApplied(key);
+    window.location.reload();
   }
 
   function externalConnectionConfigState(connection: ExternalConnection) {
@@ -8553,7 +8973,9 @@ export function App() {
     try {
       const payload: Record<string, unknown> = {
         action,
-        config: externalConnectionConfig(connection)
+        config: externalConnectionConfig(connection),
+        sessionId: activeSessionIdRef.current,
+        webSessionId: activeSessionIdRef.current
       };
       if (action === "set_home_channel") {
         const homeChannel = externalConnectionHomeChannel(connection);
@@ -8778,20 +9200,9 @@ export function App() {
   const visibleMessages = messages.filter((message) => !isSilentPausedAssistantMessage(message));
   const isNewSessionView = visibleMessages.length === 0 && !hasPendingAssistantMessage;
   const composerHasPayload = Boolean(composerHasText || attachments.length);
-  const sessionRowNeedsReveal = (row: SessionRow, options?: { includeActive?: boolean }) => {
-    const cachedMessages = sessionUiState[row.id]?.messages || [];
-    const isRunning = row.status === "waiting" || row.status === "cancelling" || Boolean(row.requestId) || Boolean(sessionRequestIds[row.id]) || cachedMessages.some((message) => Boolean(message.recovery) || isUiLiveAssistantMessage(message));
-    return (options?.includeActive !== false && row.id === activeSessionId)
-      || isRunning
-      || Boolean(unreadSessionIds[row.id])
-      || Boolean(searchQuery.trim());
-  };
-  const projectsForceRevealed = projectSessionGroups.some(({ project, sessions }) => (
-    project.id === activeProjectId || sessions.some((row) => sessionRowNeedsReveal(row))
-  ));
-  const projectsSectionCollapsed = sidebarCollapse.projectsSection && !projectsForceRevealed && !searchQuery.trim();
-  const generalForceRevealed = generalSessions.some((row) => sessionRowNeedsReveal(row, { includeActive: false }));
-  const generalSessionsCollapsed = sidebarCollapse.generalSessions && !generalForceRevealed && !searchQuery.trim();
+  const sessionSearchActive = Boolean(searchQuery.trim());
+  const projectsSectionCollapsed = sidebarCollapse.projectsSection && !sessionSearchActive;
+  const generalSessionsCollapsed = sidebarCollapse.generalSessions && !sessionSearchActive;
   const currentComposerPermissionMode: PermissionMode = permissionState?.mode || "smart-ask";
   const releaseNotes = runtimeSnapshot.releaseNotes;
   const settingsNav: Array<{ id: SettingsSection; label: string; icon: ReactNode }> = [
@@ -8941,10 +9352,12 @@ export function App() {
 
   const renderGeneralSessionGroup = (label: string, rows: SessionRow[], kind: "pinned" | "regular") => (
     <section className={`session-group is-${kind}`} aria-label={label} key={kind}>
-      <div className="session-group-title">
-        <span>{kind === "pinned" ? <Pin aria-hidden="true" /> : null}{label}</span>
-        <small>{rows.length}</small>
-      </div>
+      {kind === "pinned" ? (
+        <div className="session-group-title">
+          <span><Pin aria-hidden="true" />{label}</span>
+          <small>{rows.length}</small>
+        </div>
+      ) : null}
       <div className="session-group-rows">
         {rows.map(renderSessionRow)}
       </div>
@@ -9064,8 +9477,7 @@ export function App() {
           ) : (
             <div className="project-list">
               {projectSessionGroups.slice(0, 8).map(({ project, sessions }) => {
-                const forceRevealGroup = project.id === activeProjectId || sessions.some((row) => sessionRowNeedsReveal(row));
-                const groupCollapsed = Boolean(sidebarCollapse.projectGroups[project.id]) && !forceRevealGroup && !searchQuery.trim();
+                const groupCollapsed = Boolean(sidebarCollapse.projectGroups[project.id]) && !sessionSearchActive;
                 return (
                 <article className={`project-group ${project.id === activeProjectId ? "is-active" : ""}${groupCollapsed ? " is-collapsed" : ""}`} key={project.id}>
                   <div
@@ -9117,7 +9529,7 @@ export function App() {
           {generalSessionsCollapsed ? null : generalSessions.length ? (
             <div className="session-groups">
               {pinnedGeneralSessions.length ? renderGeneralSessionGroup("置顶任务", pinnedGeneralSessions, "pinned") : null}
-              {regularGeneralSessions.length ? renderGeneralSessionGroup("任务", regularGeneralSessions, "regular") : null}
+              {regularGeneralSessions.length ? renderGeneralSessionGroup("通用会话", regularGeneralSessions, "regular") : null}
             </div>
           ) : <div className="session-empty">暂无通用会话</div>}
         </div>
@@ -9197,6 +9609,30 @@ export function App() {
           )}
         </header>
 
+        {showBackgroundUpdateBanner && (
+          <section className="update-banner" role="status" aria-live="polite">
+            <div>
+              <strong>新版本已就绪</strong>
+              <span>后台更新已安装，刷新当前页面即可使用 EcoreX {runtimeSnapshot.updateState?.version || appVersion}</span>
+            </div>
+            <div className="update-actions">
+              <em>{runtimeSnapshot.updateState?.healthCheck?.passed ? "健康检查通过" : "等待生效"}</em>
+              <button type="button" onClick={reloadIntoBackgroundUpdate} title="刷新当前页面使用新版本">
+                <RefreshCw aria-hidden="true" />刷新
+              </button>
+              <button
+                type="button"
+                className="icon-button"
+                title="关闭提示"
+                aria-label="关闭更新提示"
+                onClick={() => markBackgroundUpdateApplied(backgroundUpdateKey)}
+              >
+                <X aria-hidden="true" />
+              </button>
+            </div>
+          </section>
+        )}
+
         <div className="message-list" ref={messageListRef} onScroll={updateJumpLatestState}>
           {visibleMessages.length === 0 ? (
             <div className="empty-chat new-session-start">
@@ -9263,6 +9699,15 @@ export function App() {
             </div>
           ) : (
             visibleMessages.map((message) => {
+              if (message.kind === "model-switch-divider") {
+                return (
+                  <article className="message system model-switch-message" key={message.id}>
+                    <div className="model-switch-divider" role="separator" aria-label={message.content}>
+                      <span>{message.content}</span>
+                    </div>
+                  </article>
+                );
+              }
               const messageSessionId = activeSessionId;
               const messageFiles = message.attachments || [];
               const hasMessageFiles = messageFiles.length > 0;
@@ -9429,9 +9874,63 @@ export function App() {
               onPaste={(event) => void handlePaste(event)}
               rows={1}
             />
-            <button type="button" className="mode-button" onClick={() => void loadRuntimeSnapshot().then(setRuntimeSnapshot).catch(() => undefined)} title={`当前模型：${currentModelName}`}>
-              <Bot aria-hidden="true" />{currentModelName}<ChevronDown aria-hidden="true" />
-            </button>
+            <div className="chat-model-menu" ref={modelMenuRef}>
+              <button
+                type="button"
+                className="mode-button"
+                onClick={() => void toggleModelMenu()}
+                aria-haspopup="menu"
+                aria-expanded={modelMenuOpen}
+                title={`当前模型：${activeChatProviderLabel ? `${activeChatProviderLabel} / ` : ""}${activeChatModelLabel}`}
+              >
+                <ProviderModelIcon provider={currentChatModelOption?.provider} providerLabel={activeChatProviderLabel || currentChatModelOption?.providerLabel} />
+                <span className="mode-button-label">{activeChatModelLabel}</span><ChevronDown aria-hidden="true" />
+              </button>
+              {modelMenuOpen && (
+                <div className="chat-model-popover" role="menu" aria-label="切换聊天模型">
+                  {chatModelBusy && !chatModelOptions.length ? (
+                    <div className="chat-model-empty">刷新中</div>
+                  ) : chatModelOptions.length ? (
+                    chatModelOptions.map((option) => {
+                      const active = Boolean(option.current || (
+                        option.model === runtimeSnapshot.currentModel
+                        && (!runtimeSnapshot.currentProvider || option.provider === runtimeSnapshot.currentProvider)
+                      ));
+                      const unavailable = option.configured === false;
+                      const providerDisplayLabel = chatModelProviderDisplayLabel(option);
+                      return (
+                        <button
+                          key={`${option.provider}:${option.model}`}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={active}
+                          className={`${active ? "is-active" : ""}${unavailable ? " is-unavailable" : ""}`.trim()}
+                          disabled={chatModelBusy || active || unavailable}
+                          onClick={() => void chooseChatModel(option)}
+                          title={`${providerDisplayLabel || option.provider} / ${option.model}${unavailable ? " / 需配置凭证" : ""}`}
+                        >
+                          <ProviderModelIcon provider={option.provider} providerLabel={providerDisplayLabel || option.providerLabel} />
+                          <span>
+                            <strong>{displayModelName(option.model)}</strong>
+                            <small>
+                              {[providerDisplayLabel || option.provider, option.hint, contextPolicyOptionHint(option.contextPolicy)]
+                                .filter(Boolean)
+                                .join(" · ")}
+                            </small>
+                          </span>
+                          {active ? <CheckCircle2 aria-hidden="true" /> : null}
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <div className="chat-model-empty">
+                      <span>暂无可切换模型</span>
+                      <button type="button" onClick={() => void refreshChatModelOptions().catch(() => setToast("模型列表刷新失败"))}>刷新</button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
             {(activeSessionRequestId || hasPendingAssistantMessage) && !composerHasPayload ? (
               <button type="button" className="send-button stop" onClick={stopActiveRequest} title="停止当前回复"><Square aria-hidden="true" /></button>
             ) : (

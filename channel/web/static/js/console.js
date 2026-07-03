@@ -1688,6 +1688,7 @@ function runtimeProjectionRenderableText(projection, assistant) {
 function runtimeProjectionHasRenderableContent(projection, assistant) {
     if (!projection) return false;
     if (assistant || runtimeProjectionRenderableText(projection, assistant)) return true;
+    if (inlineActionPlansFromProjection(projection).length > 0) return true;
     return runtimeProjectionArtifacts(assistant, projection).length > 0;
 }
 
@@ -1727,6 +1728,143 @@ function runtimeProjectionActiveState(projection, assistant) {
     return !!(assistant && assistant.pending === true);
 }
 
+function localActionText(zh, en) {
+    return currentLang === 'zh' ? zh : en;
+}
+
+function inlineActionDeps(opts) {
+    return {
+        ...(opts || {}),
+        lang: currentLang,
+        escapeHtml,
+        cssEscape,
+        document,
+    };
+}
+
+function inlineActionsModule() {
+    if (!window.EcoreXInlineActions) {
+        throw new Error('EcoreXInlineActions module is not loaded');
+    }
+    return window.EcoreXInlineActions;
+}
+
+function normalizeInlineActionPlan(input, opts) {
+    return inlineActionsModule().normalizeInlineActionPlan(input, inlineActionDeps(opts));
+}
+
+function inlineActionTone(plan) {
+    return inlineActionsModule().inlineActionTone(plan);
+}
+
+function inlineActionIcon(plan) {
+    return inlineActionsModule().inlineActionIcon(plan);
+}
+
+function renderInlineActionRowHtml(rawPlan) {
+    return inlineActionsModule().renderInlineActionRowHtml(rawPlan, inlineActionDeps());
+}
+
+function inlineActionPlansFromProjection(projection) {
+    return inlineActionsModule().inlineActionPlansFromProjection(projection, inlineActionDeps());
+}
+
+function inlineActionPlansFromSubmitError(payload) {
+    return inlineActionsModule().inlineActionPlansFromSubmitError(payload, inlineActionDeps());
+}
+
+function renderInlineActionRows(plans, container) {
+    return inlineActionsModule().renderInlineActionRows(plans, container, inlineActionDeps());
+}
+
+function syncInlineActionRows(plans, container) {
+    return inlineActionsModule().syncInlineActionRows(plans, container, inlineActionDeps());
+}
+
+function appendInlineActionBotMessage(content, plans, timestamp) {
+    const message = content || localActionText('操作需要处理。', 'Action required.');
+    const el = createBotMessageEl(message, timestamp || new Date(), '', { action_plans: plans || [] });
+    const steps = el.querySelector('.agent-steps');
+    renderInlineActionRows(plans || [], steps);
+    messagesDiv.appendChild(el);
+    scrollChatToBottom(true);
+    return el;
+}
+
+function renderSubmitFailureOnce(loadingEl, payload, fallbackMessage) {
+    const message = fallbackMessage || (payload && payload.message) || t('error_send');
+    const plans = inlineActionPlansFromSubmitError(payload);
+    if (loadingEl && loadingEl.dataset && loadingEl.dataset.submitFailureRendered === '1') return false;
+    if (loadingEl && loadingEl.dataset) loadingEl.dataset.submitFailureRendered = '1';
+    if (loadingEl && loadingEl.classList && loadingEl.classList.contains('bot-message-group')) {
+        loadingEl.querySelector('.agent-loading-dots')?.remove();
+        loadingEl.querySelector('.agent-current-phase')?.remove();
+        const answer = loadingEl.querySelector('.answer-content');
+        if (answer) {
+            answer.classList.remove('sse-streaming');
+            answer.textContent = message;
+            answer.dataset.rawMd = message;
+        }
+        if (plans.length) {
+            let steps = loadingEl.querySelector('.agent-steps');
+            if (!steps) {
+                steps = document.createElement('div');
+                steps.className = 'agent-steps';
+                const contentBox = loadingEl.querySelector('.msg-content');
+                if (contentBox) contentBox.insertBefore(steps, answer || contentBox.firstChild);
+            }
+            renderInlineActionRows(plans, steps);
+        }
+        scrollChatToBottom(true);
+        return true;
+    }
+    if (loadingEl && loadingEl.remove) loadingEl.remove();
+    appendInlineActionBotMessage(message, plans, new Date());
+    return true;
+}
+
+async function loadActiveRequestsSnapshot() {
+    const response = await fetch('/api/active-requests', { cache: 'no-store' });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    if (!payload || payload.status !== 'success') return null;
+    return payload;
+}
+
+async function refreshActiveRuntimeRequests(reason, opts) {
+    opts = opts || {};
+    const ownerSession = String(opts.sessionId || sessionId || '').trim();
+    if (!ownerSession) return false;
+    let snapshot = null;
+    try {
+        snapshot = await loadActiveRequestsSnapshot();
+    } catch (err) {
+        console.warn('[active-requests] recovery snapshot failed:', err);
+        return false;
+    }
+    if (!snapshot || ownerSession !== sessionId) return false;
+    const activeForSession = Array.isArray(snapshot.sessions && snapshot.sessions[ownerSession])
+        ? snapshot.sessions[ownerSession].slice()
+        : [];
+    const requests = Array.isArray(snapshot.requests) ? snapshot.requests : [];
+    requests.forEach(item => {
+        const rid = String((item && (item.request_id || item.requestId)) || '').trim();
+        const sid = String((item && (item.session_id || item.sessionId)) || '').trim();
+        const runType = String((item && item.run_type) || 'message').toLowerCase();
+        if (rid && sid === ownerSession && runType !== 'subagent' && runType !== 'scheduler' && !activeForSession.includes(rid)) {
+            activeForSession.push(rid);
+        }
+    });
+    let applied = false;
+    for (const requestId of activeForSession) {
+        const projection = await loadRequestRuntimeProjection(requestId, { limit: 1000 });
+        if (projection && String(projection.request_id || '') === String(requestId || '')) {
+            applied = renderRuntimeProjectionRequest(projection, reason || 'active_requests_recovery') || applied;
+        }
+    }
+    return applied;
+}
+
 fetch('/config').then(r => r.json()).then(data => {
     if (data.status === 'success') {
         appConfig = data;
@@ -1740,6 +1878,15 @@ fetch('/config').then(r => r.json()).then(data => {
 
 // Start polling immediately so scheduler/push messages are received at any time
 startPolling();
+
+window.addEventListener('focus', () => {
+    void refreshActiveRuntimeRequests('window_focus_active_requests').catch(() => {});
+});
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+        void refreshActiveRuntimeRequests('visibility_active_requests').catch(() => {});
+    }
+});
 
 const chatInput = document.getElementById('chat-input');
 const sendBtn = document.getElementById('send-btn');
@@ -2005,6 +2152,62 @@ messagesDiv.addEventListener('click', (e) => {
             .catch(() => {})
             .finally(() => { subagentActionBtn.disabled = false; });
         return;
+    }
+
+    const inlineActionBtn = e.target.closest('[data-inline-action-command]');
+    if (inlineActionBtn) {
+        e.preventDefault();
+        const command = inlineActionBtn.dataset.inlineActionCommand || '';
+        if (command === 'permission-allow' || command === 'permission-deny') {
+            const requestId = inlineActionBtn.dataset.permissionRequestId || '';
+            if (!requestId) return;
+            inlineActionBtn.disabled = true;
+            let shouldReenable = true;
+            fetch('/api/tool-permissions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    request_id: requestId,
+                    decision: command === 'permission-allow' ? 'allow' : 'deny',
+                    remember: false,
+                })
+            })
+                .then(r => r.json())
+                .then(data => {
+                    const row = inlineActionBtn.closest('[data-inline-action-row="1"]');
+                    const ok = data && data.status === 'success';
+                    if (row) {
+                        row.classList.toggle('is-complete', ok);
+                        row.classList.toggle('is-error', !ok);
+                        if (ok) {
+                            shouldReenable = false;
+                            row.querySelectorAll('button').forEach(btn => { btn.disabled = true; });
+                        }
+                    }
+                })
+                .catch(() => {
+                    const row = inlineActionBtn.closest('[data-inline-action-row="1"]');
+                    if (row) row.classList.add('is-error');
+                })
+                .finally(() => {
+                    if (shouldReenable) inlineActionBtn.disabled = false;
+                });
+            return;
+        }
+        if (command === 'open-models') {
+            navigateTo('models');
+            if (typeof loadModelsView === 'function') loadModelsView({ preserveScroll: true });
+            return;
+        }
+        if (command === 'open-channels') {
+            navigateTo('channels');
+            if (typeof loadChannelsView === 'function') loadChannelsView();
+            return;
+        }
+        if (command === 'inspect-capability' || command === 'view-capability-policy') {
+            navigateTo('skills');
+            return;
+        }
     }
 
     const longAnswerBtn = e.target.closest('[data-long-answer-toggle]');
@@ -2758,6 +2961,80 @@ chatInput.addEventListener('blur', () => {
     setTimeout(hideSlashMenu, 150);
 });
 
+const MESSAGE_SUBMIT_MAX_RETRIES = 2;
+const MESSAGE_SUBMIT_RETRY_DELAY_MS = 1000;
+
+function submitMessage(opts) {
+    opts = opts || {};
+    const text = String(opts.text || '').trim();
+    const timestamp = opts.timestamp || new Date();
+    const loadingEl = opts.loadingEl || addLoadingIndicator();
+    const titleInfo = opts.titleInfo || null;
+    const attachments = Array.isArray(opts.attachments) ? opts.attachments.slice() : [];
+    const body = {
+        session_id: opts.sessionId || sessionId,
+        message: text,
+        stream: true,
+        timestamp: timestamp.toISOString(),
+        lang: currentLang,
+        ...(opts.bodyExtras || {}),
+    };
+    if (attachments.length > 0) {
+        body.attachments = attachments.map(a => ({
+            file_path: a.file_path,
+            file_name: a.file_name,
+            file_type: a.file_type,
+            file_count: a.file_count,
+        }));
+    }
+    const retryLabel = opts.retryLabel || 'submitMessage';
+
+    function handleResponse(data) {
+        if (data && data.status === 'success') {
+            if (data.inline_reply) {
+                loadingEl.remove();
+                addBotMessage(data.inline_reply, new Date());
+                resetSendBtnSendMode();
+            } else if (data.stream) {
+                setSendBtnCancelMode(data.request_id);
+                startSSE(data.request_id, loadingEl, timestamp, titleInfo);
+            } else {
+                loadingContainers[data.request_id] = loadingEl;
+            }
+            return;
+        }
+        renderSubmitFailureOnce(loadingEl, data || {}, (data && data.message) || t('error_send'));
+        resetSendBtnSendMode();
+    }
+
+    function postWithRetry(attempt) {
+        fetch('/message', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        })
+        .then(r => r.json())
+        .then(handleResponse)
+        .catch(err => {
+            if (err && err.name === 'AbortError') {
+                renderSubmitFailureOnce(loadingEl, { message: t('error_timeout') }, t('error_timeout'));
+                resetSendBtnSendMode();
+                return;
+            }
+            if (attempt < MESSAGE_SUBMIT_MAX_RETRIES) {
+                console.warn(`[${retryLabel}] attempt ${attempt + 1} failed, retrying...`, err);
+                setTimeout(() => postWithRetry(attempt + 1), MESSAGE_SUBMIT_RETRY_DELAY_MS * (attempt + 1));
+                return;
+            }
+            renderSubmitFailureOnce(loadingEl, { message: t('error_send') }, t('error_send'));
+            resetSendBtnSendMode();
+        });
+    }
+
+    postWithRetry(0);
+    return body;
+}
+
 // Voice-message variant of sendMessage(): renders a playable audio bubble
 // with the ASR caption, then dispatches the recognised text to /message
 // through the same SSE/loading flow as a typed message.
@@ -2773,57 +3050,19 @@ function sendVoiceMessage(text, audioUrl) {
     const isFirstMessage = !!ws;
     if (ws) ws.remove();
 
-    const titleInfo = isFirstMessage ? { sid: sessionId, userMsg: text } : null;
+    const titleInfo = isFirstMessage ? { sid: sessionId } : null;
     const timestamp = new Date();
     addUserVoiceMessage(audioUrl, text, timestamp);
     const loadingEl = addLoadingIndicator();
 
-    const body = {
-        session_id: sessionId,
-        message: text,
-        stream: true,
-        timestamp: timestamp.toISOString(),
-        is_voice: true,
-        lang: currentLang,
-    };
-
-    const MAX_RETRIES = 2;
-    const RETRY_DELAY_MS = 1000;
-    function postWithRetry(attempt) {
-        fetch('/message', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        })
-        .then(r => r.json())
-        .then(async data => {
-            if (data.status === 'success') {
-                if (data.inline_reply) {
-                    // Synchronous fast-path reply (e.g. /cancel); skip SSE.
-                    loadingEl.remove();
-                    addBotMessage(data.inline_reply, new Date());
-                } else if (data.stream) {
-                    setSendBtnCancelMode(data.request_id);
-                    startSSE(data.request_id, loadingEl, timestamp, titleInfo);
-                } else {
-                    loadingContainers[data.request_id] = loadingEl;
-                }
-            } else {
-                loadingEl.remove();
-                addBotMessage(t('error_send'), new Date());
-                resetSendBtnSendMode();
-            }
-        })
-        .catch(err => {
-            if (attempt < MAX_RETRIES) {
-                setTimeout(() => postWithRetry(attempt + 1), RETRY_DELAY_MS * (attempt + 1));
-                return;
-            }
-            loadingEl.remove();
-            addBotMessage(t('error_send'), new Date());
-        });
-    }
-    postWithRetry(0);
+    return submitMessage({
+        text,
+        timestamp,
+        loadingEl,
+        titleInfo,
+        bodyExtras: { is_voice: true },
+        retryLabel: 'sendVoiceMessage',
+    });
 }
 
 function addUserVoiceMessage(audioUrl, caption, timestamp) {
@@ -3019,56 +3258,13 @@ async function regenerateResponse(botMsgEl) {
     // Show loading indicator
     const loadingEl = addLoadingIndicator();
 
-    // Resend the message
     const timestamp = new Date();
-    const body = { session_id: sessionId, message: userContent, stream: true, timestamp: timestamp.toISOString(), lang: currentLang };
-
-    const MAX_RETRIES = 2;
-    const RETRY_DELAY_MS = 1000;
-
-    function postWithRetry(attempt) {
-        fetch('/message', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        })
-        .then(r => r.json())
-        .then(data => {
-            if (data.status === 'success') {
-                if (data.inline_reply) {
-                    loadingEl.remove();
-                    addBotMessage(data.inline_reply, new Date());
-                } else if (data.stream) {
-                    setSendBtnCancelMode(data.request_id);
-                    startSSE(data.request_id, loadingEl, timestamp, null);
-                } else {
-                    loadingContainers[data.request_id] = loadingEl;
-                }
-            } else {
-                loadingEl.remove();
-                addBotMessage(t('error_send'), new Date());
-                resetSendBtnSendMode();
-            }
-        })
-        .catch(err => {
-            if (err.name === 'AbortError') {
-                loadingEl.remove();
-                addBotMessage(t('error_timeout'), new Date());
-                resetSendBtnSendMode();
-                return;
-            }
-            if (attempt < MAX_RETRIES) {
-                console.warn(`[regenerateResponse] attempt ${attempt + 1} failed, retrying...`, err);
-                setTimeout(() => postWithRetry(attempt + 1), RETRY_DELAY_MS * (attempt + 1));
-                return;
-            }
-            loadingEl.remove();
-            addBotMessage(t('error_send'), new Date());
-            resetSendBtnSendMode();
-        });
-    }
-
-    postWithRetry(0);
+    return submitMessage({
+        text: userContent,
+        timestamp,
+        loadingEl,
+        retryLabel: 'regenerateResponse',
+    });
 }
 
 function sendMessage() {
@@ -3089,7 +3285,7 @@ function sendMessage() {
     const isFirstMessage = !!ws;
     if (ws) ws.remove();
 
-    const titleInfo = (isFirstMessage && text) ? { sid: sessionId, userMsg: text } : null;
+    const titleInfo = isFirstMessage ? { sid: sessionId } : null;
 
     const timestamp = new Date();
     const attachments = [...pendingAttachments];
@@ -3104,64 +3300,14 @@ function sendMessage() {
     renderAttachmentPreview();
     sendBtn.disabled = true;
 
-    const body = { session_id: sessionId, message: text, stream: true, timestamp: timestamp.toISOString(), lang: currentLang };
-    if (attachments.length > 0) {
-        body.attachments = attachments.map(a => ({
-            file_path: a.file_path,
-            file_name: a.file_name,
-            file_type: a.file_type,
-            file_count: a.file_count,
-        }));
-    }
-
-    const MAX_RETRIES = 2;
-    const RETRY_DELAY_MS = 1000;
-
-    function postWithRetry(attempt) {
-        fetch('/message', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        })
-        .then(r => r.json())
-        .then(data => {
-            if (data.status === 'success') {
-                if (data.inline_reply) {
-                    // Channel handled synchronously (e.g. /cancel fast-path);
-                    // render as a bot bubble and skip SSE entirely.
-                    loadingEl.remove();
-                    addBotMessage(data.inline_reply, new Date());
-                } else if (data.stream) {
-                    setSendBtnCancelMode(data.request_id);
-                    startSSE(data.request_id, loadingEl, timestamp, titleInfo);
-                } else {
-                    loadingContainers[data.request_id] = loadingEl;
-                }
-            } else {
-                loadingEl.remove();
-                addBotMessage(t('error_send'), new Date());
-                resetSendBtnSendMode();
-            }
-        })
-        .catch(err => {
-            if (err.name === 'AbortError') {
-                loadingEl.remove();
-                addBotMessage(t('error_timeout'), new Date());
-                resetSendBtnSendMode();
-                return;
-            }
-            if (attempt < MAX_RETRIES) {
-                console.warn(`[sendMessage] attempt ${attempt + 1} failed, retrying...`, err);
-                setTimeout(() => postWithRetry(attempt + 1), RETRY_DELAY_MS * (attempt + 1));
-                return;
-            }
-            loadingEl.remove();
-            addBotMessage(t('error_send'), new Date());
-            resetSendBtnSendMode();
-        });
-    }
-
-    postWithRetry(0);
+    return submitMessage({
+        text,
+        attachments,
+        timestamp,
+        loadingEl,
+        titleInfo,
+        retryLabel: 'sendMessage',
+    });
 }
 
 function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
@@ -3313,6 +3459,7 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
         if (stepsEl && toolCalls.length) {
             stepsEl.innerHTML = renderToolCallsHtml(toolCalls);
         }
+        syncInlineActionRows(inlineActionPlansFromProjection(projection), stepsEl);
 
         const artifacts = runtimeProjectionArtifacts(assistant, projection);
         if (mediaEl && artifacts.length) {
@@ -3534,9 +3681,9 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                     currentReasoningEl._streamCharsRendered = 0;
                     currentReasoningEl._streamCapped = false;
                 }
-                // Hard cap: once REASONING_RENDER_CAP chars are in the DOM, stop
-                // appending further deltas. The full text is still kept in
-                // `reasoningText` for finalize-time head+tail rendering.
+                // During live streaming, append with a generous cap so the UI
+                // remains responsive. The full text is kept in `reasoningText`
+                // and rendered completely on finalize.
                 if (!currentReasoningEl._streamCapped) {
                     currentReasoningEl._streamPendingText += item.content;
                     if (!currentReasoningEl._streamRafScheduled) {
@@ -3558,11 +3705,6 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                                 }
                                 elRef._streamTextNode.appendData(pending);
                                 elRef._streamCharsRendered += pending.length;
-                                if (elRef._streamCapped) {
-                                    elRef._streamTextNode.appendData(
-                                        '\n\n... [reasoning truncated for display] ...'
-                                    );
-                                }
                             }
                             scrollChatToBottom();
                         });
@@ -3806,6 +3948,25 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                 // Coarse progress (e.g. cow install-browser); must not close SSE (unlike "done")
                 replaceCurrentPhase(item.content || item.message || '');
 
+            } else if (item.type === 'tool_permission_request' || item.type === 'action_plan') {
+                ensureBotEl();
+                botEl?.querySelector('.agent-loading-dots')?.remove();
+                clearCurrentPhase();
+                const plan = item.type === 'action_plan'
+                    ? (item.actionPlan || item.action_plan || item.plan || item)
+                    : {
+                        type: 'tool_permission_request',
+                        state: 'waiting_permission',
+                        nextAction: 'confirm_permission',
+                        actionLabel: localActionText('处理权限', 'Review'),
+                        title: item.title || localActionText('需要权限确认', 'Permission required'),
+                        message: item.message || item.summary || '',
+                        tool: item.tool || '',
+                        permissionRequestId: item.permission_request_id || item.permissionRequestId || '',
+                    };
+                renderInlineActionRows([plan], stepsEl);
+                scrollChatToBottom();
+
             } else if (item.type && item.type.startsWith('subagent_')) {
                 ensureBotEl();
                 const task = item.task || {
@@ -3924,7 +4085,7 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                 scrollChatToBottom();
 
                 if (titleInfo) {
-                    generateSessionTitle(titleInfo.sid, titleInfo.userMsg, '');
+                    generateSessionTitle(titleInfo.sid);
                     titleInfo = null;
                 } else if (sessionPanelOpen) {
                     loadSessionList();
@@ -4055,7 +4216,12 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                 resetSendBtnSendMode();
             };
             void refreshRuntimeProjectionSnapshot('stream_lost').then(applied => {
-                if (!applied) renderLegacyStreamLoss();
+                if (applied) return;
+                void refreshActiveRuntimeRequests('stream_lost_active_requests', {
+                    sessionId: ownerSession
+                }).then(applied => {
+                    if (!applied) renderLegacyStreamLoss();
+                }).catch(() => renderLegacyStreamLoss());
             });
         };
     }
@@ -4265,7 +4431,7 @@ function renderSubagentCardHtml(task, opts) {
         <span class="subagent-state-pill">${escapeHtml(status)}</span>
     </div>
     ${summary ? `<div class="subagent-summary">${escapeHtml(summary)}</div>` : ''}
-    ${result ? `<details class="subagent-result"><summary>${currentLang === 'zh' ? '查看结果' : 'View result'}</summary><pre>${escapeHtml(String(result).slice(0, 2000))}</pre></details>` : ''}
+    ${result ? `<details class="subagent-result"><summary>${currentLang === 'zh' ? '查看结果' : 'View result'}</summary><pre>${escapeHtml(String(result))}</pre></details>` : ''}
     <div class="subagent-actions">
         ${taskId && !terminal ? `<button type="button" class="subagent-action-btn" data-action="cancel" data-id="${escapeHtml(taskId)}">${currentLang === 'zh' ? '停止' : 'Stop'}</button>` : ''}
         ${taskId && terminal ? `<button type="button" class="subagent-action-btn" data-action="collect" data-id="${escapeHtml(taskId)}">${currentLang === 'zh' ? '收集' : 'Collect'}</button>` : ''}
@@ -4274,24 +4440,16 @@ function renderSubagentCardHtml(task, opts) {
 </div>`;
 }
 
-// Cap for rendering reasoning content in the bubble. Beyond this size,
-// we skip markdown rendering entirely and show plain text head + tail to
-// keep the page responsive (very long chains-of-thought can otherwise
-// stall or crash the browser when re-parsed by marked.js).
+// Cap for markdown rendering reasoning content in the bubble. Beyond this size,
+// show the complete text in a plain <pre> so long thinking remains inspectable
+// without repeatedly parsing huge markdown payloads.
 // Keep this in sync with backend MAX_STORED_REASONING_CHARS and
 // MAX_REASONING_STREAM_CHARS so storage / SSE / display stay aligned.
-const REASONING_RENDER_CAP = 4 * 1024; // 4 KB
+const REASONING_RENDER_CAP = 256 * 1024;
 
 function _truncateReasoningForDisplay(text) {
-    if (!text || text.length <= REASONING_RENDER_CAP) return { text, truncated: false, omitted: 0 };
-    const half = Math.floor(REASONING_RENDER_CAP / 2);
-    const head = text.slice(0, half);
-    const tail = text.slice(-half);
-    return {
-        text: head + '\n\n... [' + (text.length - head.length - tail.length) + ' chars omitted] ...\n\n' + tail,
-        truncated: true,
-        omitted: text.length - head.length - tail.length,
-    };
+    const full = String(text || '');
+    return { text: full, truncated: full.length > REASONING_RENDER_CAP, omitted: 0 };
 }
 
 function _renderReasoningBody(text) {
@@ -4471,6 +4629,9 @@ function createBotMessageEl(content, timestamp, requestId, msg) {
         const toolCalls = msg && msg.tool_calls;
         const reasoning = msg && msg.reasoning;
         stepsHtml = renderThinkingHtml(reasoning) + renderToolCallsHtml(toolCalls);
+    }
+    if (msg && Array.isArray(msg.action_plans) && msg.action_plans.length) {
+        stepsHtml += msg.action_plans.map(renderInlineActionRowHtml).join('');
     }
 
     // Self-evolution bubbles get a small badge so the user can feel the agent
@@ -4703,6 +4864,7 @@ function runtimeProjectionBotMessageData(projection, assistant) {
         request_id: projection.request_id || assistant.request_id || '',
         turn_id: projection.turn_id || assistant.turn_id || '',
         tool_calls: Array.isArray(assistant.tool_calls) ? assistant.tool_calls : [],
+        action_plans: inlineActionPlansFromProjection(projection),
         extras: {
             artifacts: runtimeProjectionArtifacts(assistant, projection)
         }
@@ -4775,16 +4937,20 @@ function updateBotMessageElFromRuntimeProjection(botEl, projection, reason) {
     }
 
     const toolCalls = Array.isArray(assistant.tool_calls) ? assistant.tool_calls : [];
+    const actionPlans = inlineActionPlansFromProjection(projection);
     let stepsEl = botEl.querySelector('.agent-steps');
-    if (toolCalls.length) {
+    if (toolCalls.length || actionPlans.length || (stepsEl && stepsEl.querySelector('[data-inline-action-row="1"]'))) {
         if (!stepsEl) {
             stepsEl = document.createElement('div');
             stepsEl.className = 'agent-steps';
             const contentBox = botEl.querySelector('.msg-content');
             if (contentBox) contentBox.insertBefore(stepsEl, answer || contentBox.firstChild);
         }
-        stepsEl.innerHTML = renderToolCallsHtml(toolCalls);
+        if (toolCalls.length) {
+            stepsEl.innerHTML = renderToolCallsHtml(toolCalls);
+        }
     }
+    syncInlineActionRows(actionPlans, stepsEl);
 
     const artifacts = runtimeProjectionArtifacts(assistant, projection);
     const mediaEl = botEl.querySelector('.media-content');
@@ -5013,6 +5179,9 @@ function loadHistory(page) {
                     sessionId: ownerSession,
                     afterEventId: sessionRuntimeProjectionCursors[ownerSession] || 0
                 }).catch(err => console.warn('[runtime-projection] session refresh failed:', err));
+                void refreshActiveRuntimeRequests('history_active_requests_recheck', {
+                    sessionId: ownerSession
+                }).catch(err => console.warn('[active-requests] session recovery failed:', err));
             }
         });
 }
@@ -5539,11 +5708,11 @@ function clearContext() {
         .catch(() => {});
 }
 
-function generateSessionTitle(sid, userMsg, assistantReply) {
+function generateSessionTitle(sid) {
     fetch(`/api/sessions/${encodeURIComponent(sid)}/generate_title`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_message: userMsg, assistant_reply: assistantReply }),
+        body: JSON.stringify({}),
     })
         .then(r => r.json())
         .then(data => {

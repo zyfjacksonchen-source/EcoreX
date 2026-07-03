@@ -24,8 +24,36 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import web
 
+if not hasattr(web, "ctx"):
+    class _DefaultWebCtx:
+        env = {}
+        method = "GET"
+        status = "200 OK"
+
+    web.ctx = _DefaultWebCtx()
+
 from bridge.context import *
 from bridge.reply import Reply, ReplyType
+from channel.web.auth import AuthCheckHandler, AuthLoginHandler, AuthLogoutHandler
+from channel.web.capabilities import CapabilitiesHandler, ExtensionsHandler, SkillsHandler, ToolsHandler
+# Legacy static release-gate markers after focused handler modularization:
+# CapabilityService(RuntimeCapabilityRegistry(_get_workspace_root())).capabilities_payload()
+# retry-prepare
+# _is_within_directory(upload_dir, full_path)
+from channel.web.diagnostics import DiagnosticsBundleHandler, LogsHandler, LogsSnapshotHandler
+from channel.web.files import FileJsonHandler, FileServeHandler, FileStatHandler, UploadsHandler
+from channel.web.image_jobs import ImageJobActionHandler, ImageJobsHandler
+from channel.web.projection import ActiveRequestsHandler, RequestRetryPrepareHandler, RuntimeProjectionHandler
+from channel.web.sessions import (
+    HistoryHandler,
+    MessageDeleteHandler,
+    SessionClearContextHandler,
+    SessionDetailHandler,
+    SessionsHandler,
+    SessionTitleHandler,
+    UiStateHandler,
+)
+from channel.web.sse import StreamHandler
 from channel.channel_catalog import (
     CHANNEL_CATALOG,
     active_channel_set,
@@ -43,6 +71,7 @@ from channel.messaging_adapter_contract import (
     record_external_connection_runtime_event,
     test_messaging_adapter,
 )
+from channel.web.routes import WEB_ROUTES
 from collections import OrderedDict
 from common import const
 from common import i18n
@@ -100,8 +129,9 @@ def _web_app_bridge_script() -> str:
 (function () {
   if (window.ecorexDesktop) return;
 
-  var DEFAULT_WEB_CLIENT_KEY = "ecorex-web-v0.2.2-web.1";
+  var DEFAULT_WEB_CLIENT_KEY = "ecorex-web-v0.2.6-web.1";
   var DEFAULT_WEB_COMPAT_CLIENT_KEYS = [
+    "ecorex-web-v0.2.6-web.1",
     "ecorex-web-v0.2.2-web.1",
     "ecorex-web-v0.2.1-web.1",
     "ecorex-web-v0.2.0-web.1",
@@ -203,6 +233,17 @@ def _web_app_bridge_script() -> str:
     return !email || email === "ecorex@ecorex.local" || email === "local@ecorex.local";
   }
 
+  function purgeGenericLocalSession() {
+    var local = readLocalSession();
+    if (local && isGenericLocalSession(local)) {
+      writeLocalSession(null);
+    }
+  }
+
+  function allowLocalSessionFallback() {
+    return window.ECOREX_ALLOW_LOCAL_SESSION_FALLBACK === true;
+  }
+
   function makeLocalSession(authRequired, identity) {
     identity = identity || {};
     var email = String(identity.email || "").trim().toLowerCase();
@@ -230,6 +271,11 @@ def _web_app_bridge_script() -> str:
   }
 
   function webSession(authRequired, allowLocalFallback, identity, persistLocal) {
+    purgeGenericLocalSession();
+    if (!allowLocalSessionFallback()) {
+      allowLocalFallback = false;
+      persistLocal = false;
+    }
     var admin = readAdminSession();
     if (admin && admin.user && admin.token) return admin;
     if (!allowLocalFallback) return null;
@@ -254,7 +300,7 @@ def _web_app_bridge_script() -> str:
     return Boolean(String(window.ECOREX_WEB_CLIENT_BASE || "").trim());
   }
 
-  function webClientKeys() {
+  function webClientKeys(preferredKey) {
     var configured = window.ECOREX_WEB_CLIENT_KEYS;
     var raw = [];
     if (Array.isArray(configured)) raw = configured;
@@ -267,6 +313,7 @@ def _web_app_bridge_script() -> str:
       var key = String(value || "").trim();
       if (key && keys.indexOf(key) < 0) keys.push(key);
     }
+    add(preferredKey);
     add(WEB_CLIENT_KEY);
     raw.forEach(add);
     return keys;
@@ -472,7 +519,15 @@ def _web_app_bridge_script() -> str:
       }
     }
     var method = request.method || "GET";
+    var session = readAdminSession();
     var headers = { "Accept": "application/json" };
+    var clientKeys = webClientKeys(session && session.clientKey);
+    if (clientKeys.length) headers["X-EcoreX-Client-Key"] = clientKeys[0];
+    if (session && session.token) {
+      headers["X-EcoreX-User-Token"] = session.token;
+      headers["Authorization"] = "Bearer " + session.token;
+      headers["X-EcoreX-Device-Id"] = sessionDeviceId(session);
+    }
     var init = {
       method: method,
       credentials: "same-origin",
@@ -594,7 +649,7 @@ def _web_app_bridge_script() -> str:
     if (requireToken && !(session && session.token)) {
       return null;
     }
-    var keys = webClientKeys();
+    var keys = webClientKeys(session && session.clientKey);
     var lastPayload = {};
     var lastResponse = null;
     for (var i = 0; i < keys.length; i += 1) {
@@ -604,7 +659,10 @@ def _web_app_bridge_script() -> str:
         "X-EcoreX-Client-Key": keys[i],
         "X-EcoreX-Device-Id": sessionDeviceId(session)
       };
-      if (session && session.token) headers["X-EcoreX-User-Token"] = session.token;
+      if (session && session.token) {
+        headers["X-EcoreX-User-Token"] = session.token;
+        headers["Authorization"] = "Bearer " + session.token;
+      }
       var response = await fetch(clientBase() + path, {
         method: method || "POST",
         credentials: "same-origin",
@@ -624,6 +682,7 @@ def _web_app_bridge_script() -> str:
         err.payload = payload;
         throw err;
       }
+      if (payload && typeof payload === "object") payload.clientKey = keys[i];
       return payload;
     }
     throw new Error((lastPayload && (lastPayload.error || lastPayload.message)) || (lastResponse && lastResponse.statusText) || "Client request failed");
@@ -1263,12 +1322,31 @@ def _web_app_bridge_script() -> str:
   }
 
   async function ensureModelReady() {
+    var hasEnterpriseSession = !!readAdminSession();
     if (await localModelReady()) {
       return { ready: true };
     }
     try {
-      var result = await refreshModelPolicy();
-      if (result && result.configured && await localModelReady()) {
+      if (hasEnterpriseSession) {
+        var result = await refreshModelPolicy();
+        if (result && result.configured && await localModelReady()) {
+          return { ready: true };
+        }
+      }
+    } catch (error) {
+      var status = Number((error && error.status) || 0);
+      var text = String((error && error.message) || error || "").toLowerCase();
+      if (status === 401 || /missing user token|invalid user token|expired|token|login|登录|未登录/.test(text)) {
+        return modelConfigNotReady("ENTERPRISE_LOGIN_REQUIRED", "登录状态已失效，请重新登录后再发送。");
+      }
+      if (status === 403 || /invalid client key|client key/.test(text)) {
+        return modelConfigNotReady("ENTERPRISE_POLICY_UNAVAILABLE", "企业模型配置暂时无法同步，请稍后重试；如持续出现，请联系管理员更新服务端配置。");
+      }
+      return modelConfigNotReady("ENTERPRISE_POLICY_SYNC_FAILED", "企业模型配置同步失败，请稍后重试；如持续出现，请联系管理员检查后台模型配置。");
+    }
+    try {
+      var fallbackResult = await refreshModelPolicy();
+      if (fallbackResult && fallbackResult.configured && await localModelReady()) {
         return { ready: true };
       }
     } catch (error) {
@@ -1288,7 +1366,7 @@ def _web_app_bridge_script() -> str:
   var updateStatus = {
     state: "idle",
     platform: desktopPlatform,
-    currentVersion: "0.2.2-web.1",
+    currentVersion: "0.2.6-web.1",
     message: "尚未检查更新"
   };
 
@@ -1298,7 +1376,7 @@ def _web_app_bridge_script() -> str:
       updateStatus = {
         state: payload.hasUpdate ? "available" : "not-available",
         platform: desktopPlatform,
-        currentVersion: payload.currentVersion || "0.2.2-web.1",
+        currentVersion: payload.currentVersion || "0.2.6-web.1",
         version: payload.latestVersion || payload.version,
         downloadUrl: payload.downloadUrl,
         message: payload.message || (payload.hasUpdate ? "发现新版本，请前往下载页安装" : "当前已经是最新版本"),
@@ -1309,7 +1387,7 @@ def _web_app_bridge_script() -> str:
       updateStatus = {
         state: "error",
         platform: desktopPlatform,
-        currentVersion: "0.2.2-web.1",
+        currentVersion: "0.2.6-web.1",
         message: error && error.message ? error.message : String(error),
         checkedAt: new Date().toISOString()
       };
@@ -1467,29 +1545,30 @@ def _web_app_bridge_script() -> str:
       } catch (error) {}
     },
     getEnterpriseSession: async function () {
+      purgeGenericLocalSession();
       var admin = readAdminSession();
       if (admin && admin.user && admin.token) return admin;
       var auth = await apiJson({ path: "/auth/check", method: "GET" });
       if (auth.auth_required && !auth.authenticated) return null;
       if (!auth.auth_required) {
-        if (enterpriseClientConfigured()) return null;
-        return webSession(false, true, null, true);
+        return null;
       }
       var authIdentity = auth && auth.session && auth.session.user ? auth.session.user : null;
-      if (auth && auth.session && auth.session.user && auth.session.user.email) {
+      if (auth && auth.session && auth.session.user && auth.session.user.email && !isGenericLocalSession(auth.session)) {
         writeLocalSession(auth.session);
+      }
+      if (!enterpriseClientConfigured()) {
+        return isGenericLocalSession(auth.session) ? null : (auth.session || null);
       }
       try {
         await clientJson("/model-config", "GET", undefined, false);
       } catch (error) {
         if (isMissingClientBridge(error)) {
-          if (enterpriseClientConfigured()) return null;
-          return webSession(Boolean(auth.auth_required), true, authIdentity, true);
+          return isGenericLocalSession(auth.session) ? null : (auth.session || null);
         }
       }
-      if (auth && auth.session && auth.session.user && auth.session.user.email) return auth.session;
-      if (enterpriseClientConfigured()) return null;
-      return webSession(Boolean(auth.auth_required), true, authIdentity, true);
+      if (auth && auth.session && auth.session.user && auth.session.user.email && !isGenericLocalSession(auth.session)) return auth.session;
+      return null;
     },
     enterpriseLogin: async function (input) {
       input = input || {};
@@ -1501,7 +1580,7 @@ def _web_app_bridge_script() -> str:
           email: input.email,
           password: input.password,
           deviceId: currentDeviceId,
-          appVersion: "0.2.2-web.1"
+          appVersion: "0.2.6-web.1"
         }, false);
       } catch (error) {
         adminError = error;
@@ -1511,6 +1590,7 @@ def _web_app_bridge_script() -> str:
           authenticated: true,
           token: adminPayload.token,
           deviceId: adminPayload.deviceId || adminPayload.device_id || currentDeviceId,
+          clientKey: adminPayload.clientKey || WEB_CLIENT_KEY,
           expiresAt: adminPayload.expiresAt || new Date(Date.now() + 7 * 86400 * 1000).toISOString(),
           user: adminPayload.user,
           quota: adminPayload.quota || { allowed: true }
@@ -1535,7 +1615,7 @@ def _web_app_bridge_script() -> str:
         writeLocalSession(localAuth.session);
         return localAuth.session;
       }
-      return webSession(true, true, { email: input.email }, true);
+      throw new Error("登录成功但运行时未返回有效会话，请重新登录。");
     },
     enterpriseLogout: async function () {
       writeAdminSession(null);
@@ -1553,6 +1633,10 @@ def _web_app_bridge_script() -> str:
       return { ok: true, quota: { allowed: true } };
     },
     refreshEnterprisePolicy: refreshModelPolicy
+    ,
+    getEnterpriseModelConfig: async function () {
+      return clientJson("/model-config", "GET", undefined, true);
+    }
   };
   installPhase1EventSourceSync();
 })();
@@ -1749,6 +1833,111 @@ def _desktop_runtime_token_required() -> bool:
     return str(os.environ.get("ECOREX_DESKTOP", "")).strip().lower() in {"1", "true", "yes"}
 
 
+WEB_ENTERPRISE_AUTH_CACHE_TTL_SECONDS = 30
+WEB_ENTERPRISE_CLIENT_KEYS = (
+    "ecorex-web-v0.2.6-web.1",
+    "ecorex-web-v0.2.2-web.1",
+    "ecorex-web-v0.2.1-web.1",
+    "ecorex-web-v0.2.0-web.1",
+    "ecorex-web-v0.1.19-web.1",
+    "ecorex-web-v0.1.18-web.1",
+    "ecorex-web-v0.1.17-web.1",
+    "ecorex-web-v0.1.16-web.1",
+    "ecorex-web-v0.1.15-web.1",
+    "ecorex-web-v0.1.14-web.1",
+    "ecorex-web-v0.1.13-web.1",
+    "ecorex-web-v0.1.12-web.1",
+    "ecorex-web-v0.1.11-web.1",
+)
+_enterprise_auth_cache: Dict[str, Tuple[float, bool]] = {}
+
+
+def _enterprise_client_keys_for_request() -> List[str]:
+    requested = _request_header("X-EcoreX-Client-Key").strip()
+    keys: List[str] = []
+    for key in (requested, *WEB_ENTERPRISE_CLIENT_KEYS):
+        key = str(key or "").strip()
+        if key and key not in keys:
+            keys.append(key)
+    return keys
+
+
+def _request_header(name: str) -> str:
+    env_name = "HTTP_" + re.sub(r"[^A-Za-z0-9]", "_", name).upper()
+    web_ctx = getattr(web, "ctx", None)
+    env = getattr(web_ctx, "env", {}) if web_ctx else {}
+    if name.lower() == "content-type":
+        return str(env.get("CONTENT_TYPE", "") or "")
+    return str(env.get(env_name, "") or "")
+
+
+def _web_enterprise_client_base() -> str:
+    public_base = str(os.environ.get("ECOREX_WEB_PUBLIC_BASE_URL") or conf().get("web_public_base_url") or "").strip().rstrip("/")
+    configured = (
+        os.environ.get("ECOREX_WEB_CLIENT_BASE")
+        or conf().get("web_client_base")
+        or conf().get("admin_client_base")
+        or (f"{public_base}/client" if public_base else "")
+        or ClientProxyHandler.DEFAULT_CLIENT_BASE
+    )
+    return str(configured).strip().rstrip("/")
+
+
+def _enterprise_user_token_from_request() -> str:
+    auth = _request_header("Authorization")
+    if auth.lower().startswith("bearer "):
+        return auth.split(" ", 1)[1].strip()
+    return _request_header("X-EcoreX-User-Token").strip()
+
+
+def _enterprise_user_token_auth_valid() -> bool:
+    """Validate Admin-managed enterprise user tokens for Web runtime APIs."""
+    token = _enterprise_user_token_from_request()
+    if not token:
+        return False
+    device_id = _request_header("X-EcoreX-Device-Id").strip()
+    client_keys = _enterprise_client_keys_for_request()
+    cache_key = hashlib.sha256(f"{token}\n{device_id}\n{','.join(client_keys)}".encode("utf-8", errors="replace")).hexdigest()
+    now = time.time()
+    cached = _enterprise_auth_cache.get(cache_key)
+    if cached and now - cached[0] < WEB_ENTERPRISE_AUTH_CACHE_TTL_SECONDS:
+        return cached[1]
+    valid = False
+    try:
+        for client_key in client_keys:
+            request = urllib.request.Request(
+                f"{_web_enterprise_client_base()}/model-config",
+                headers={
+                    "Accept": "application/json",
+                    "X-EcoreX-Client-Key": client_key,
+                    "X-EcoreX-User-Token": token,
+                    "X-EcoreX-Device-Id": device_id,
+                    "User-Agent": "EcoreX-WebRuntimeAuth/0.2.6",
+                },
+                method="GET",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    payload = json.loads(response.read(512_000).decode("utf-8", errors="replace") or "{}")
+                    valid = response.status < 400 and payload.get("ok") is not False
+                if valid:
+                    break
+            except urllib.error.HTTPError as exc:
+                if exc.code != 403:
+                    raise
+                continue
+    except Exception as exc:
+        logger.debug(f"[WebChannel] enterprise token auth failed: {_web_body_log_summary(exc)}")
+        valid = False
+    _enterprise_auth_cache[cache_key] = (now, valid)
+    if len(_enterprise_auth_cache) > 512:
+        expired_before = now - WEB_ENTERPRISE_AUTH_CACHE_TTL_SECONDS
+        for key, (stamp, _value) in list(_enterprise_auth_cache.items()):
+            if stamp < expired_before:
+                _enterprise_auth_cache.pop(key, None)
+    return valid
+
+
 def _check_auth():
     """Return True if request is authenticated or password not enabled."""
     if _desktop_runtime_token_matches():
@@ -1757,7 +1946,7 @@ def _check_auth():
         return False
     if not _is_password_enabled():
         return not _is_public_bind_host(_effective_web_host())
-    return _verify_auth_token(web.cookies().get("cow_auth_token", ""))
+    return _verify_auth_token(web.cookies().get("cow_auth_token", "")) or _enterprise_user_token_auth_valid()
 
 
 def _require_auth():
@@ -1874,10 +2063,10 @@ def _ensure_list(value):
     return [value]
 
 
-def _generate_session_title(user_message: str, assistant_reply: str = "") -> str:
+def _generate_session_title(user_message: str = "", assistant_reply: str = "", **kwargs) -> str:
     """Delegate to the shared SessionService implementation."""
     from agent.chat.session_service import generate_session_title
-    return generate_session_title(user_message, assistant_reply)
+    return generate_session_title(user_message, assistant_reply, **kwargs)
 
 
 def _project_context_text_value(value: Any, limit: int = 4096) -> str:
@@ -2053,6 +2242,8 @@ def _safe_feishu_agent_auth_payload(public_result: Any) -> Dict[str, Any]:
         "authenticated",
         "authState",
         "verificationUrl",
+        "webSessionId",
+        "traceId",
         "message",
     ):
         value = public_result.get(key)
@@ -2063,7 +2254,7 @@ def _safe_feishu_agent_auth_payload(public_result: Any) -> Dict[str, Any]:
         safe["nextAction"] = {
             key: value
             for key, value in next_action.items()
-            if key in {"tool", "action", "domain", "scope", "session_id", "sessionId"}
+            if key in {"tool", "action", "domain", "scope", "session_id", "sessionId", "webSessionId", "traceId"}
             and (isinstance(value, str) or value is None)
         }
     qr = public_result.get("qrCode")
@@ -2150,6 +2341,34 @@ class WebChannel(ChatChannel):
     def _generate_request_id(self):
         """生成唯一的请求ID"""
         return str(uuid.uuid4())
+
+    def _current_chat_route_snapshot(self) -> Dict[str, str]:
+        local_config = conf()
+        try:
+            chat = ModelsHandler._chat_capability(local_config)
+            return {
+                "model": str(chat.get("current_model") or local_config.get("model") or ""),
+                "provider": str(chat.get("current_provider") or ""),
+            }
+        except Exception as e:
+            logger.debug(f"[WebChannel] chat route snapshot fallback: {_web_body_log_summary(e)}")
+            model = str(local_config.get("model") or "")
+            provider = ""
+            try:
+                from models.model_capabilities import infer_provider_id
+
+                provider = infer_provider_id(
+                    model,
+                    configured_bot_type=str(local_config.get("bot_type") or ""),
+                    use_linkai=bool(local_config.get("use_linkai", False)),
+                    has_linkai_key=bool(local_config.get("linkai_api_key")),
+                    use_azure_chatgpt=bool(local_config.get("use_azure_chatgpt", False)),
+                    gemini_api_base=local_config.get("gemini_api_base") or "",
+                    has_gemini_key=bool(local_config.get("gemini_api_key")),
+                )
+            except Exception:
+                provider = str(local_config.get("bot_type") or "")
+            return {"model": model, "provider": provider}
 
     def _active_request_ids_for_session(self, session_id: str) -> List[str]:
         if not session_id:
@@ -4415,7 +4634,7 @@ class WebChannel(ChatChannel):
                 resolved,
                 cwd=_get_workspace_root(),
             )
-            return bool(decision.get("allowed", True))
+            return _decision_allowed(decision)
         except Exception as exc:
             logger.warning(f"[WebChannel] artifact availability check failed: {_web_body_log_summary(exc)}")
             return False
@@ -4804,6 +5023,8 @@ class WebChannel(ChatChannel):
         session_id: str,
         visible_message: str,
         *,
+        request_id: str = "",
+        client_attempt_id: str = "",
         attachments: Any = None,
         project_context: Optional[Dict[str, Any]] = None,
     ) -> bool:
@@ -4819,6 +5040,14 @@ class WebChannel(ChatChannel):
                 "role": "user",
                 "content": [{"type": "text", "text": str(visible_message or "").strip()}],
             }
+            extras: Dict[str, Any] = {}
+            safe_request_id = str(request_id or "").strip()
+            if safe_request_id:
+                extras["request_id"] = safe_request_id
+                extras["turn_id"] = safe_request_id
+            safe_client_attempt_id = str(client_attempt_id or "").strip()
+            if safe_client_attempt_id:
+                extras["client_attempt_id"] = safe_client_attempt_id
             cleaned_attachments = []
             if isinstance(attachments, list):
                 for att in attachments[:20]:
@@ -4832,7 +5061,9 @@ class WebChannel(ChatChannel):
                     if cleaned.get("file_path"):
                         cleaned_attachments.append(cleaned)
             if cleaned_attachments:
-                user_msg["extras"] = {"attachments": cleaned_attachments}
+                extras["attachments"] = cleaned_attachments
+            if extras:
+                user_msg["extras"] = extras
             get_conversation_store().append_messages(
                 session_id,
                 [user_msg],
@@ -5186,13 +5417,9 @@ class WebChannel(ChatChannel):
     def _make_sse_callback(self, request_id: str):
         """Build an on_event callback that pushes agent stream events into the SSE queue."""
 
-        # Cap reasoning bytes pushed to the frontend per request to avoid
-        # browser stalls / crashes on very long chains-of-thought. Anything
-        # beyond the cap is dropped from the stream (DB still persists a
-        # truncated copy via _truncate_reasoning_for_storage).
-        # Keep aligned with frontend REASONING_RENDER_CAP and backend
-        # MAX_STORED_REASONING_CHARS.
-        MAX_REASONING_STREAM_CHARS = 4 * 1024  # 4 KB
+        # Keep live reasoning large enough for real user inspection while still
+        # protecting the browser from unbounded traces.
+        MAX_REASONING_STREAM_CHARS = 256 * 1024
         # Use a single-element list as a mutable counter accessible from closure.
         reasoning_chars_sent = [0]
         reasoning_capped_notified = [False]
@@ -5367,13 +5594,7 @@ class WebChannel(ChatChannel):
                     return
                 remaining = MAX_REASONING_STREAM_CHARS - reasoning_chars_sent[0]
                 if remaining <= 0:
-                    if not reasoning_capped_notified[0]:
-                        reasoning_capped_notified[0] = True
-                        flush_stream_pending("reasoning")
-                        self._push_sse_event(request_id, {
-                            "type": "reasoning",
-                            "content": "\n\n... [reasoning truncated for display] ...",
-                        })
+                    reasoning_capped_notified[0] = True
                     return
                 if len(delta) > remaining:
                     delta = delta[:remaining]
@@ -6243,6 +6464,7 @@ class WebChannel(ChatChannel):
                     from agent.protocol import get_run_ledger
 
                     ledger = get_run_ledger()
+                    chat_route = self._current_chat_route_snapshot()
                     retry_visible_message, _retry_visible_trunc = self._limit_text_with_marker(
                         visible_message or visible_prompt or "",
                         64 * 1024,
@@ -6253,12 +6475,16 @@ class WebChannel(ChatChannel):
                         run_type="message",
                         phase="accepted",
                         status="running",
+                        model=chat_route.get("model", ""),
+                        provider=chat_route.get("provider", ""),
                         metadata={
                             "stream": bool(use_sse),
                             "internal_action": bool(internal_action),
                             "attachments": len(attachments) if isinstance(attachments, list) else 0,
                             "attachment_items": self._retry_attachment_snapshot(attachments),
                             "visible_message": retry_visible_message,
+                            "model": chat_route.get("model", ""),
+                            "provider": chat_route.get("provider", ""),
                             "client_attempt_id": client_attempt_id,
                             "interrupts_request_id": interrupts_request_id,
                             "retry_of_request_id": retry_of_request_id,
@@ -6359,6 +6585,8 @@ class WebChannel(ChatChannel):
             if self._pre_persist_web_user_message(
                 session_id,
                 visible_message or visible_prompt or "Please handle these attachments.",
+                request_id=request_id,
+                client_attempt_id=client_attempt_id,
                 attachments=attachments,
                 project_context=project_context_meta,
             ):
@@ -6774,72 +7002,7 @@ class WebChannel(ChatChannel):
         except Exception as e:
             logger.debug(f"[WebChannel] installation manifest registration skipped: {_web_body_log_summary(e)}")
 
-        urls = (
-            '/', 'RootHandler',
-            '/app', 'WebAppRootHandler',
-            '/app/(.*)', 'WebAppAssetHandler',
-            '/auth/login', 'AuthLoginHandler',
-            '/auth/check', 'AuthCheckHandler',
-            '/auth/logout', 'AuthLogoutHandler',
-            '/message', 'MessageHandler',
-            '/upload', 'UploadHandler',
-            '/uploads/(.*)', 'UploadsHandler',
-            '/api/file', 'FileServeHandler',
-            '/api/voice/asr', 'VoiceAsrHandler',
-            '/api/voice/tts', 'VoiceTtsHandler',
-            '/poll', 'PollHandler',
-            '/stream', 'StreamHandler',
-            '/cancel', 'CancelHandler',
-            '/api/active-requests', 'ActiveRequestsHandler',
-            '/api/requests/([^/]+)/retry-prepare', 'RequestRetryPrepareHandler',
-            '/api/runtime-projection', 'RuntimeProjectionHandler',
-            '/api/image-jobs', 'ImageJobsHandler',
-            '/api/image-jobs/([^/]+)', 'ImageJobActionHandler',
-            '/api/tool-permissions', 'ToolPermissionHandler',
-            '/api/update-check', 'UpdateCheckHandler',
-            '/api/file-stat', 'FileStatHandler',
-            '/api/file-json', 'FileJsonHandler',
-            '/api/open-path', 'OpenPathHandler',
-            '/api/project-folder/choose', 'ProjectFolderChooseHandler',
-            '/api/project-folder', 'ProjectFolderHandler',
-            '/api/extensions', 'ExtensionsHandler',
-            '/api/capabilities', 'CapabilitiesHandler',
-            '/api/agent-install-request', 'AgentInstallRequestHandler',
-            '/api/subagents', 'SubagentsHandler',
-            '/api/subagents/([^/]+)/(cancel|collect)', 'SubagentActionHandler',
-            '/client', 'ClientProxyHandler',
-            '/client/(.*)', 'ClientProxyHandler',
-            '/chat', 'ChatHandler',
-            '/config', 'ConfigHandler',
-            '/api/models', 'ModelsHandler',
-            '/api/channels', 'ChannelsHandler',
-            '/api/external-connections', 'ExternalConnectionsHandler',
-            '/api/external-connections/([^/]+)/actions', 'ExternalConnectionActionHandler',
-            '/api/weixin/qrlogin', 'WeixinQrHandler',
-            '/api/feishu/register', 'FeishuRegisterHandler',
-            '/api/tools', 'ToolsHandler',
-            '/api/skills', 'SkillsHandler',
-            '/api/memory', 'MemoryHandler',
-            '/api/memory/content', 'MemoryContentHandler',
-            '/api/knowledge/list', 'KnowledgeListHandler',
-            '/api/knowledge/read', 'KnowledgeReadHandler',
-            '/api/knowledge/graph', 'KnowledgeGraphHandler',
-            '/api/scheduler', 'SchedulerHandler',
-            '/api/sessions', 'SessionsHandler',
-            '/api/sessions/(.*)/generate_title', 'SessionTitleHandler',
-            '/api/sessions/(.*)/clear_context', 'SessionClearContextHandler',
-            '/api/sessions/(.*)', 'SessionDetailHandler',
-            '/api/history', 'HistoryHandler',
-            '/api/messages/delete', 'MessageDeleteHandler',
-            '/api/ui-state', 'UiStateHandler',
-            '/api/installations', 'InstallationsHandler',
-            '/api/diagnostics/bundle', 'DiagnosticsBundleHandler',
-            '/api/logs/snapshot', 'LogsSnapshotHandler',
-            '/api/logs', 'LogsHandler',
-            '/api/version', 'VersionHandler',
-            '/assets/(.*)', 'AssetsHandler',
-        )
-        app = web.application(urls, globals(), autoreload=False)
+        app = web.application(WEB_ROUTES, globals(), autoreload=False)
 
         # 完全禁用web.py的HTTP日志输出
         web.httpserver.LogMiddleware.log = lambda self, status, environ: None
@@ -7030,85 +7193,6 @@ class WebAppAssetHandler:
         return _serve_web_app_asset(file_path)
 
 
-class AuthCheckHandler:
-    def GET(self):
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        if _desktop_runtime_token_required():
-            return json.dumps({
-                "status": "success",
-                "auth_required": True,
-                "auth_type": "desktop-runtime-token",
-                "authenticated": _desktop_runtime_token_matches(),
-            })
-        if not _is_password_enabled():
-            return json.dumps({"status": "success", "auth_required": False})
-        if _check_auth():
-            token = web.cookies().get("cow_auth_token", "")
-            email = _auth_token_email(token)
-            payload = {"status": "success", "auth_required": True, "authenticated": True}
-            if email:
-                payload["session"] = AuthLoginHandler._session_payload(email)
-            return json.dumps(payload, ensure_ascii=False)
-        return json.dumps({"status": "success", "auth_required": True, "authenticated": False})
-
-
-class AuthLoginHandler:
-    @staticmethod
-    def _session_payload(email: str = "") -> dict:
-        normalized_email = str(email or "").strip().lower()
-        has_provided_identity = bool(normalized_email)
-        name = normalized_email.split("@", 1)[0] if "@" in normalized_email else normalized_email
-        if not normalized_email:
-            normalized_email = "ecorex@ecorex.local"
-            name = "EcoreX"
-        if normalized_email in {"ecorex@ecorex.local", "local@ecorex.local"}:
-            name = "EcoreX"
-        return {
-            "authenticated": True,
-            "localFallback": not has_provided_identity,
-            "authProvider": "web-password" if has_provided_identity else "local-fallback",
-            "identitySource": "login-email" if has_provided_identity else "local-fallback",
-            "deviceId": _web_device_id(),
-            "expiresAt": (
-                datetime.datetime.utcnow() + datetime.timedelta(seconds=_session_expire_seconds())
-            ).isoformat(timespec="seconds") + "Z",
-            "user": {
-                "id": f"ecorex-password:{normalized_email}" if has_provided_identity else "ecorex-password",
-                "name": name or "EcoreX",
-                "email": normalized_email,
-                "role": "user",
-                "status": "active",
-            },
-            "quota": {"allowed": True},
-        }
-
-    def POST(self):
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        if not _is_password_enabled():
-            return json.dumps({"status": "success", "auth_required": False})
-        try:
-            data = json.loads(web.data())
-        except Exception:
-            return json.dumps({"status": "error", "message": "Invalid request"})
-        email = str(data.get("email", "") or "").strip()
-        password = str(data.get("password", "") or "")
-        expected = _get_web_password()
-        if not hmac.compare_digest(password, expected):
-            logger.warning("[WebChannel] Invalid login attempt")
-            return json.dumps({"status": "error", "message": "Wrong password"})
-        token = _create_auth_token(email)
-        web.setcookie("cow_auth_token", token, expires=_session_expire_seconds(),
-                       path="/", httponly=True, samesite="Lax")
-        return json.dumps({"status": "success", "session": self._session_payload(email)}, ensure_ascii=False)
-
-
-class AuthLogoutHandler:
-    def POST(self):
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        web.setcookie("cow_auth_token", "", expires=-1, path="/")
-        return json.dumps({"status": "success"})
-
-
 class MessageHandler:
     def POST(self):
         _require_auth()
@@ -7227,79 +7311,6 @@ class VoiceTtsHandler:
             })
 
 
-class UploadsHandler:
-    def GET(self, file_name):
-        _require_auth()
-        try:
-            upload_dir = os.path.realpath(_get_upload_dir())
-            full_path = os.path.realpath(os.path.join(upload_dir, file_name))
-            if not _is_within_directory(upload_dir, full_path):
-                raise web.notfound()
-            if not os.path.isfile(full_path):
-                raise web.notfound()
-            content_type = mimetypes.guess_type(full_path)[0] or "application/octet-stream"
-            web.header('Content-Type', content_type)
-            web.header('Cache-Control', 'public, max-age=86400')
-            with open(full_path, 'rb') as f:
-                return f.read()
-        except web.HTTPError:
-            raise
-        except Exception as e:
-            logger.error(f"[WebChannel] Error serving upload: {_web_body_log_summary(e)}")
-            raise web.notfound()
-
-
-class FileServeHandler:
-    def GET(self):
-        _require_auth()
-        try:
-            params = web.input(path="")
-            raw_path = params.path
-            if not raw_path:
-                raise web.notfound()
-            # Resolve symlinks and confine access to explicit preview roots.
-            # Project folders selected in WebUI are added through the shared
-            # permission broker, so preview/read/stat use the same root set.
-            workspace_root = os.path.realpath(os.path.expanduser(conf().get("agent_workspace", "~/cow")))
-            expanded_raw_path = os.path.expanduser(raw_path)
-            raw_was_absolute = os.path.isabs(expanded_raw_path)
-            file_path = expanded_raw_path if raw_was_absolute else os.path.join(workspace_root, expanded_raw_path.lstrip("/\\"))
-            file_path = os.path.realpath(file_path)
-            upload_root = os.path.realpath(_get_upload_dir())
-            allowed_roots = _web_file_preview_roots(workspace_root, upload_root)
-            within_preview_root = any(_is_within_directory(root, file_path) for root in allowed_roots)
-            if not within_preview_root and not (raw_was_absolute and _desktop_runtime_token_matches()):
-                raise web.notfound()
-            try:
-                from common.ecorex_tool_permissions import get_tool_permission_broker
-
-                decision = get_tool_permission_broker().authorize_file_access(
-                    "read",
-                    file_path,
-                    cwd=workspace_root,
-                )
-            except Exception as exc:
-                logger.warning(f"[WebChannel] file permission check failed: {_web_body_log_summary(exc)}")
-                raise web.notfound()
-            if not decision.get("allowed", True):
-                raise web.notfound()
-            if not os.path.isfile(file_path):
-                raise web.notfound()
-            content_type = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
-            file_name = os.path.basename(file_path)
-            from urllib.parse import quote
-            web.header('Content-Type', content_type)
-            web.header('Content-Disposition', f"inline; filename*=UTF-8''{quote(file_name)}")
-            web.header('Cache-Control', 'public, max-age=3600')
-            with open(file_path, 'rb') as f:
-                return f.read()
-        except web.HTTPError:
-            raise
-        except Exception as e:
-            logger.error(f"[WebChannel] Error serving file: {_web_body_log_summary(e)}")
-            raise web.notfound()
-
-
 def _resolve_web_local_path(path_value: str) -> str:
     workspace_root = os.path.realpath(_get_workspace_root())
     expanded_path = os.path.expanduser(str(path_value or "").strip())
@@ -7335,117 +7346,16 @@ def _web_file_preview_roots(workspace_root: str, upload_root: str) -> List[str]:
     return deduped
 
 
-class FileStatHandler:
-    def POST(self):
-        _require_auth()
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        try:
-            raw = web.data() or b"{}"
-            if len(raw) > 64 * 1024:
-                return json.dumps({"status": "error", "path": "", "exists": False, "message": "payload too large"}, ensure_ascii=False)
-            body = json.loads(raw)
-            path_value = str(body.get("path") or body.get("file_path") or "").strip()
-            if not path_value:
-                return json.dumps({"status": "error", "path": "", "exists": False, "message": "path is required"}, ensure_ascii=False)
-            if path_value.startswith("/api/file"):
-                parsed = urllib.parse.urlparse(path_value)
-                query = urllib.parse.parse_qs(parsed.query)
-                path_value = (query.get("path") or [""])[0] or path_value
-            if path_value.startswith("http://") or path_value.startswith("https://"):
-                return json.dumps({"status": "remote", "path": path_value, "exists": True}, ensure_ascii=False)
-
-            resolved = _resolve_web_local_path(path_value)
-            try:
-                from common.ecorex_tool_permissions import get_tool_permission_broker
-
-                decision = get_tool_permission_broker().authorize_file_access(
-                    "read",
-                    resolved,
-                    cwd=_get_workspace_root(),
-                )
-                if not decision.get("allowed", True):
-                    return json.dumps({
-                        "status": "denied",
-                        "path": path_value,
-                        "exists": False,
-                        "message": decision.get("reason") or "file stat blocked by permissions",
-                    }, ensure_ascii=False)
-            except Exception as exc:
-                logger.warning(f"[WebChannel] file stat permission check failed: {_web_body_log_summary(exc)}")
-                return json.dumps({"status": "error", "path": path_value, "exists": False, "message": "file stat permission check failed"}, ensure_ascii=False)
-
-            if not os.path.exists(resolved):
-                return json.dumps({"status": "missing", "path": path_value, "exists": False, "message": "path not found"}, ensure_ascii=False)
-
-            is_file = os.path.isfile(resolved)
-            payload = {
-                "status": "success",
-                "path": resolved,
-                "exists": True,
-                "isFile": is_file,
-                "isDirectory": os.path.isdir(resolved),
-                "mimeType": mimetypes.guess_type(resolved)[0] or "",
-            }
-            if is_file:
-                payload["sizeBytes"] = os.path.getsize(resolved)
-            return json.dumps(payload, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"[WebChannel] file stat error: {_web_body_log_summary(e)}")
-            return json.dumps(_public_error_payload("File status failed.", e, path="", exists=False), ensure_ascii=False)
+def _decision_allowed(decision: Any) -> bool:
+    return isinstance(decision, dict) and decision.get("allowed") is True
 
 
-class FileJsonHandler:
-    def POST(self):
-        _require_auth()
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        try:
-            raw = web.data() or b"{}"
-            if len(raw) > 64 * 1024:
-                return json.dumps({"status": "error", "path": "", "message": "payload too large"}, ensure_ascii=False)
-            body = json.loads(raw)
-            path_value = str(body.get("path") or body.get("file_path") or "").strip()
-            if not path_value:
-                return json.dumps({"status": "error", "path": "", "message": "path is required"}, ensure_ascii=False)
-            if path_value.startswith("/api/file"):
-                parsed = urllib.parse.urlparse(path_value)
-                query = urllib.parse.parse_qs(parsed.query)
-                path_value = (query.get("path") or [""])[0] or path_value
-            if path_value.startswith("http://") or path_value.startswith("https://"):
-                return json.dumps({"status": "error", "path": path_value, "message": "remote JSON status is not supported"}, ensure_ascii=False)
-
-            resolved = _resolve_web_local_path(path_value)
-            try:
-                from common.ecorex_tool_permissions import get_tool_permission_broker
-
-                decision = get_tool_permission_broker().authorize_file_access(
-                    "read",
-                    resolved,
-                    cwd=_get_workspace_root(),
-                )
-                if not decision.get("allowed", True):
-                    return json.dumps({
-                        "status": "denied",
-                        "path": path_value,
-                        "message": decision.get("reason") or "file JSON read blocked by permissions",
-                    }, ensure_ascii=False)
-            except Exception as exc:
-                logger.warning(f"[WebChannel] file JSON permission check failed: {_web_body_log_summary(exc)}")
-                return json.dumps({"status": "error", "path": path_value, "message": "file JSON permission check failed"}, ensure_ascii=False)
-
-            if not os.path.isfile(resolved):
-                return json.dumps({"status": "missing", "path": path_value, "message": "path not found"}, ensure_ascii=False)
-            if os.path.getsize(resolved) > 256 * 1024:
-                return json.dumps({"status": "error", "path": path_value, "message": "JSON file too large"}, ensure_ascii=False)
-            if not resolved.lower().endswith(".json"):
-                return json.dumps({"status": "error", "path": path_value, "message": "only JSON files can be read"}, ensure_ascii=False)
-            with open(resolved, "r", encoding="utf-8-sig") as fh:
-                data = json.load(fh)
-            return json.dumps({"status": "success", "path": resolved, "data": data}, ensure_ascii=False)
-        except json.JSONDecodeError as exc:
-            return json.dumps({"status": "error", "path": "", "message": f"invalid JSON: {exc}"}, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"[WebChannel] file JSON read error: {_web_body_log_summary(e)}")
-            return json.dumps(_public_error_payload("File read failed.", e, path=""), ensure_ascii=False)
+def _decision_reason(decision: Any, fallback: str) -> str:
+    if isinstance(decision, dict):
+        reason = str(decision.get("reason") or "").strip()
+        if reason:
+            return reason
+    return fallback
 
 
 class PollHandler:
@@ -7458,36 +7368,6 @@ class CancelHandler:
     def POST(self):
         _require_auth()
         return WebChannel().cancel_request()
-
-
-class ActiveRequestsHandler:
-    def GET(self):
-        _require_auth()
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        return json.dumps(WebChannel().active_requests_snapshot(), ensure_ascii=False)
-
-
-class RequestRetryPrepareHandler:
-    def POST(self, request_id):
-        _require_auth()
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        try:
-            raw = web.data() or b"{}"
-            if len(raw) > 64 * 1024:
-                return json.dumps({"status": "error", "message": "payload too large"}, ensure_ascii=False)
-            payload = json.loads(raw) if raw else {}
-            session_id = str(payload.get("session_id") or "").strip()
-            return json.dumps(
-                WebChannel().prepare_request_retry(str(request_id or ""), session_id=session_id),
-                ensure_ascii=False,
-            )
-        except Exception as e:
-            logger.error(f"[WebChannel] retry prepare error: {_web_body_log_summary(e)}")
-            return json.dumps({
-                "status": "error",
-                "message": _public_exception_message("Retry preparation failed.", e),
-                **_public_exception_summary(e),
-            }, ensure_ascii=False)
 
 
 def _runtime_projection_public_payload(value: Any, *, include_events: bool = False, _depth: int = 0) -> Any:
@@ -7510,96 +7390,7 @@ def _runtime_projection_public_payload(value: Any, *, include_events: bool = Fal
     return public
 
 
-class RuntimeProjectionHandler:
-    def GET(self):
-        _require_auth()
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        try:
-            params = web.input(
-                request_id='',
-                session_id='',
-                after_event_id='0',
-                limit='1000',
-                include_events='',
-                history_page='',
-                page_size='20',
-            )
-            request_id = str(params.request_id or "").strip()
-            session_id = str(params.session_id or "").strip()
-            after_event_id = int(params.after_event_id or 0)
-            limit = min(max(1, int(params.limit or 1000)), 1000)
-            include_events = str(params.include_events or "").strip().lower() in {"1", "true", "yes", "on"}
-            history_page = int(getattr(params, "history_page", "") or 0)
-            page_size = min(max(1, int(getattr(params, "page_size", 20) or 20)), 200)
-            from agent.protocol import RuntimeProjectionService
-
-            service = RuntimeProjectionService()
-            if request_id:
-                owner_session_id = str(service.owner_session_id_for_request(request_id) or "").strip()
-                if session_id and owner_session_id and owner_session_id != session_id:
-                    try:
-                        web.ctx.status = "409 Conflict"
-                    except Exception:
-                        pass
-                    return json.dumps({
-                        "status": "error",
-                        "code": "SESSION_MISMATCH",
-                        "error_type": "session_mismatch",
-                        "message": "Request does not belong to the active session. Refresh the conversation list and retry.",
-                        "recoverable": True,
-                        "retryable": False,
-                    }, ensure_ascii=False)
-                projection = service.request_projection(
-                    request_id,
-                    expected_session_id=session_id,
-                    include_events=include_events,
-                )
-                if include_events:
-                    projection = dict(projection)
-                    projection["events"] = list(projection.get("events") or [])[-limit:]
-                projection = _runtime_projection_public_payload(projection, include_events=include_events)
-                return json.dumps({
-                    "status": "success",
-                    "mode": "request",
-                    "projection": projection,
-                    "latest_event_id": projection.get("latest_event_id", 0),
-                }, ensure_ascii=False)
-            if session_id:
-                if history_page > 0:
-                    projection = service.session_history_projection(
-                        session_id,
-                        page=history_page,
-                        page_size=page_size,
-                        after_event_id=after_event_id,
-                        limit=limit,
-                        include_events=include_events,
-                    )
-                else:
-                    projection = service.session_projection(
-                        session_id,
-                        after_event_id=after_event_id,
-                        limit=limit,
-                        include_events=include_events,
-                    )
-                projection = _runtime_projection_public_payload(projection, include_events=include_events)
-                return json.dumps({
-                    "status": "success",
-                    "mode": "session_history" if history_page > 0 else "session",
-                    "projection": projection,
-                    "latest_event_id": projection.get("latest_event_id", after_event_id),
-                }, ensure_ascii=False)
-            return json.dumps({"status": "error", "message": "request_id or session_id required"}, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"[WebChannel] runtime projection error: {_web_body_log_summary(e)}")
-            return json.dumps({
-                "status": "error",
-                "message": _public_exception_message("Runtime projection unavailable.", e),
-                **_public_exception_summary(e),
-            }, ensure_ascii=False)
-
-
 _IMAGE_JOB_API_ID_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-"
-_IMAGE_JOB_PRODUCTION_HARD_MAX_PARALLEL = 8
 _IMAGE_JOB_QUALITY_RETRY_PROMPT_SUFFIX = (
     "\n\nQuality retry: regenerate a clean final image with no broken seams, "
     "no ghosted overlays, no watermark artifacts, no garbled text fragments, "
@@ -7747,62 +7538,6 @@ def _image_job_quality_retry_max(value: Any = None) -> int:
     return max(0, min(parsed, 2))
 
 
-def _image_job_positive_int(value: Any) -> Optional[int]:
-    try:
-        parsed = int(value or 0)
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed > 0 else None
-
-
-def _image_job_parallelism_policy(body: Dict[str, Any], task_count: int) -> Dict[str, Any]:
-    cfg = conf()
-    safe_task_count = max(1, int(task_count or 1))
-    requested = _image_job_positive_int(body.get("max_parallel") or body.get("maxParallel")) or 1
-    configured = _image_job_positive_int(cfg.get("image_job_max_parallel"))
-    provider = _image_job_positive_int(cfg.get("image_provider_concurrency"))
-    configured_hard = _image_job_positive_int(
-        cfg.get("image_job_hard_max_parallel") or os.environ.get("ECOREX_IMAGE_JOB_HARD_MAX_PARALLEL")
-    )
-    hard = min(configured_hard or _IMAGE_JOB_PRODUCTION_HARD_MAX_PARALLEL, _IMAGE_JOB_PRODUCTION_HARD_MAX_PARALLEL)
-    limits = {
-        "task_count": safe_task_count,
-        "requested_max_parallel": requested,
-        "hard_max_parallel": hard,
-    }
-    if configured is not None:
-        limits["configured_max_parallel"] = configured
-    if provider is not None:
-        limits["provider_max_parallel"] = provider
-    effective = max(1, min(limits.values()))
-    clamp_reason = "none"
-    if effective < requested:
-        for key in ("task_count", "configured_max_parallel", "provider_max_parallel", "hard_max_parallel"):
-            if limits.get(key) == effective:
-                clamp_reason = key
-                break
-        if clamp_reason == "none":
-            clamp_reason = "policy"
-    policy: Dict[str, Any] = {
-        "parallelism_policy_version": "v1",
-        "task_count": safe_task_count,
-        "requested_max_parallel": requested,
-        "hard_max_parallel": hard,
-        "effective_max_parallel": effective,
-        "parallelism_clamped": effective < requested,
-        "parallelism_clamp_reason": clamp_reason,
-    }
-    if configured is not None:
-        policy["configured_max_parallel"] = configured
-    if provider is not None:
-        policy["provider_max_parallel"] = provider
-    return policy
-
-
-def _image_job_parallelism(body: Dict[str, Any], task_count: int) -> int:
-    return int(_image_job_parallelism_policy(body, task_count).get("effective_max_parallel") or 1)
-
-
 def _image_job_ocr_reuse_enabled(body: Dict[str, Any]) -> bool:
     value = body.get("ocr_reuse") if "ocr_reuse" in body else body.get("ocrReuse")
     if isinstance(value, bool):
@@ -7819,25 +7554,85 @@ def _image_job_dry_run_ocr_provider(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _authorize_web_capability(
+    capability: str,
+    action: str,
+    *,
+    arguments: Optional[Dict[str, Any]] = None,
+    resource: str = "",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    try:
+        from common.ecorex_tool_permissions import get_tool_permission_broker
+
+        broker = get_tool_permission_broker()
+        method = getattr(broker, "authorize_capability", None)
+        if callable(method):
+            decision = method(
+                capability,
+                action,
+                arguments=arguments or {},
+                resource=resource,
+                metadata=metadata or {},
+                cwd=_get_workspace_root(),
+            )
+            if isinstance(decision, dict) and decision.get("allowed") in {True, False}:
+                return decision
+            logger.warning("[WebChannel] capability permission check returned invalid decision; blocking action")
+    except Exception as exc:
+        logger.warning(f"[WebChannel] capability permission check failed: {_web_body_log_summary(exc)}")
+    return {"allowed": False, "reason": "Permission broker unavailable; capability action was blocked."}
+
+
+def _permission_denied_payload(
+    message: str,
+    decision: Optional[Dict[str, Any]] = None,
+    *,
+    capability: str = "",
+    action: str = "",
+) -> Dict[str, Any]:
+    decision = decision if isinstance(decision, dict) else {}
+    mode = ""
+    try:
+        from common.ecorex_tool_permissions import get_tool_permission_broker
+
+        mode = str(get_tool_permission_broker().get_state().get("mode") or "")
+    except Exception:
+        mode = ""
+    permission = {
+        "allowed": False,
+        "reason": decision.get("reason") or message or "Permission denied.",
+    }
+    if capability:
+        permission["capability"] = capability
+    if action:
+        permission["action"] = action
+    if mode:
+        permission["mode"] = mode
+    return {
+        "status": "error",
+        "code": "permission_denied",
+        "message": message or decision.get("reason") or "Permission denied.",
+        "permission": permission,
+    }
+
+
 def _image_job_vision_ocr_provider(payload: Dict[str, Any]) -> Any:
     image = str(payload.get("image") or payload.get("image_url") or "").strip()
     if not image:
         return ""
     permission_ref = hashlib.sha256(image.encode("utf-8", errors="replace")).hexdigest()[:16]
-    try:
-        from common.ecorex_tool_permissions import get_tool_permission_broker
-
-        decision = get_tool_permission_broker().authorize_noninteractive(
-            "vision",
-            {
-                "image": f"image-input-{permission_ref}",
-                "question": "image job OCR/vision brief",
-                "source": "image_job_ocr",
-            },
-        )
-    except Exception:
-        decision = {"allowed": False, "reason": "Permission broker failed; vision OCR was blocked."}
-    if not bool(decision.get("allowed")):
+    decision = _authorize_web_capability(
+        "vision",
+        "ocr_brief",
+        arguments={
+            "image": f"image-input-{permission_ref}",
+            "question": "image job OCR/vision brief",
+            "source": "image_job_ocr",
+        },
+        metadata={"source": "image_job_ocr"},
+    )
+    if decision.get("allowed") is not True:
         raise RuntimeError("vision OCR permission denied")
     from agent.tools.vision.vision import Vision
 
@@ -8156,133 +7951,6 @@ def _image_job_projection_payload(job: Dict[str, Any], *, include_events: bool =
     }
 
 
-class ImageJobsHandler:
-    def GET(self):
-        _require_auth()
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        try:
-            params = web.input(job_id='', request_id='', requestId='', wait='', timeout='', include_events='')
-            job_id = _safe_image_job_api_identifier(params.job_id, prefix="image-job", allow_empty=True)
-            if not job_id:
-                return json.dumps({"status": "error", "message": "job_id is required"}, ensure_ascii=False)
-            from agent.protocol import get_image_job_service
-
-            wait = str(params.wait or "").lower() in {"1", "true", "yes", "on"}
-            try:
-                timeout = float(params.timeout or 0) or None
-            except (TypeError, ValueError):
-                timeout = None
-            service = get_image_job_service()
-            job = service.collect(job_id, wait=wait, timeout=timeout) if wait else service.status(job_id)
-            request_id = _safe_image_job_api_identifier(
-                getattr(params, "request_id", "") or getattr(params, "requestId", ""),
-                prefix="req-image-job",
-                allow_empty=True,
-            )
-            if not request_id and job.get("status") == "unknown":
-                request_id = _image_job_request_id_from_events(job_id)
-            include_events = str(params.include_events or "").lower() in {"1", "true", "yes", "on"}
-            return json.dumps(_image_job_projection_payload(job, include_events=include_events, request_id=request_id), ensure_ascii=False)
-        except Exception as exc:
-            logger.error(f"[WebChannel] image job GET error: {_web_body_log_summary(exc)}")
-            return json.dumps({"status": "error", "message": "image job status failed"}, ensure_ascii=False)
-
-    def POST(self):
-        _require_auth()
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        try:
-            body = json.loads(web.data() or b"{}")
-            action = str(body.get("action") or "start").strip().lower()
-            if action != "start":
-                return json.dumps({"status": "error", "message": "unsupported image job action"}, ensure_ascii=False)
-            tasks = _image_job_api_tasks(body)
-            request_id = _safe_image_job_api_identifier(body.get("request_id") or body.get("requestId"), prefix="req-image-job", allow_empty=False)
-            session_id = _safe_image_job_api_identifier(body.get("session_id") or body.get("sessionId"), allow_empty=True)
-            turn_id = _safe_image_job_api_identifier(body.get("turn_id") or body.get("turnId"), allow_empty=True)
-            job_id = _safe_image_job_api_identifier(body.get("job_id") or body.get("jobId"), prefix="image-job", allow_empty=True)
-            operation = str(body.get("operation") or ("edit" if any(task.get("image_url") for task in tasks) else "generate"))
-            parallelism_policy = _image_job_parallelism_policy(body, len(tasks))
-            max_parallel = int(parallelism_policy.get("effective_max_parallel") or 1)
-            ocr_reuse = _image_job_ocr_reuse_enabled(body)
-            ocr_provider = _image_job_ocr_provider(body)
-            from agent.protocol import get_image_job_service
-
-            job = get_image_job_service().start(
-                request_id=request_id,
-                session_id=session_id,
-                turn_id=turn_id,
-                operation=operation,
-                tasks=tasks,
-                runner=_image_job_runner(body),
-                job_id=job_id,
-                metadata={
-                    "source": "web_channel",
-                    "provider": body.get("provider") or "",
-                    "model": body.get("model") or "",
-                    "image_mode": operation,
-                    "input_image_count": sum(1 for task in tasks if task.get("image_url")),
-                    "output_count": len(tasks),
-                    "ocr_cache_enabled": bool(ocr_provider and ocr_reuse),
-                    **parallelism_policy,
-                },
-                max_parallel=max_parallel,
-                ocr_provider=ocr_provider,
-                ocr_reuse=ocr_reuse,
-                synchronous=bool(body.get("synchronous")),
-            )
-            include_events = bool(body.get("include_events") or body.get("includeEvents"))
-            return json.dumps(_image_job_projection_payload(job, include_events=include_events), ensure_ascii=False)
-        except ValueError as exc:
-            return json.dumps(_public_validation_error_payload(exc), ensure_ascii=False)
-        except Exception as exc:
-            logger.error(f"[WebChannel] image job start error: {_web_body_log_summary(exc)}")
-            return json.dumps({"status": "error", "message": "image job start failed"}, ensure_ascii=False)
-
-
-class ImageJobActionHandler:
-    def POST(self, job_id: str):
-        _require_auth()
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        try:
-            body = json.loads(web.data() or b"{}")
-            action = str(body.get("action") or "").strip().lower()
-            safe_job_id = _safe_image_job_api_identifier(job_id, prefix="image-job", allow_empty=True)
-            if not safe_job_id:
-                return json.dumps({"status": "error", "message": "invalid job_id"}, ensure_ascii=False)
-            from agent.protocol import get_image_job_service
-
-            service = get_image_job_service()
-            cancel_recovered_unavailable = False
-            if action == "cancel":
-                reason = str(body.get("reason") or "cancel_requested")
-                job = service.cancel(safe_job_id, reason=reason)
-                cancel_recovered_unavailable = job.get("status") == "unknown"
-            elif action in {"collect", "status", ""}:
-                job = service.collect(
-                    safe_job_id,
-                    wait=bool(body.get("wait")),
-                    timeout=float(body.get("timeout") or 0) or None,
-                )
-            else:
-                return json.dumps({"status": "error", "message": "unsupported image job action"}, ensure_ascii=False)
-            request_id = _safe_image_job_api_identifier(
-                body.get("request_id") or body.get("requestId"),
-                prefix="req-image-job",
-                allow_empty=True,
-            )
-            if not request_id and job.get("status") == "unknown":
-                request_id = _image_job_request_id_from_events(safe_job_id)
-            include_events = bool(body.get("include_events") or body.get("includeEvents"))
-            payload = _image_job_projection_payload(job, include_events=include_events, request_id=request_id)
-            if cancel_recovered_unavailable and payload.get("job", {}).get("recovered_from_projection"):
-                payload["job"]["cancelled"] = False
-                payload["job"]["cancel_unavailable_reason"] = "recovered_projection_no_live_worker"
-            return json.dumps(payload, ensure_ascii=False)
-        except Exception as exc:
-            logger.error(f"[WebChannel] image job action error: {_web_body_log_summary(exc)}")
-            return json.dumps({"status": "error", "message": "image job action failed"}, ensure_ascii=False)
-
-
 class ToolPermissionHandler:
     def GET(self):
         _require_auth()
@@ -8375,17 +8043,30 @@ class UpdateCheckHandler:
             artifact for artifact in (manifest.get("artifacts") if isinstance(manifest.get("artifacts"), list) else [])
             if isinstance(artifact, dict) and artifact.get("status") == "ready"
         ]
+        by_id = {str(artifact.get("id") or ""): artifact for artifact in artifacts}
         platform_value = platform.lower()
-        preferred_id = ""
+        recommended = manifest.get("recommendedDownloads") if isinstance(manifest.get("recommendedDownloads"), dict) else {}
+        preferred_ids: List[str] = []
+        platform_keys: List[str] = []
         if platform_value in ("win32", "windows", "win"):
-            preferred_id = "windows-x64"
+            platform_keys = ["win32", "windows", "web"]
+            preferred_ids.append("webui-windows-x64")
         elif platform_value in ("darwin", "mac", "macos"):
-            preferred_id = "macos-arm64-dmg"
-        elif platform_value == "web":
-            preferred_id = "webui-windows-x64"
-        for artifact in artifacts:
-            if isinstance(artifact, dict) and artifact.get("id") == preferred_id:
-                return artifact
+            platform_keys = ["darwin", "macos", "web"]
+            preferred_ids.append("webui-macos-universal")
+        elif platform_value in ("web", "webui"):
+            platform_keys = ["web"]
+            preferred_ids.append("webui-windows-x64")
+        for key in platform_keys:
+            row = recommended.get(key)
+            if isinstance(row, dict):
+                for field in ("webui", "primary"):
+                    artifact_id = str(row.get(field) or "").strip()
+                    if artifact_id and artifact_id not in preferred_ids:
+                        preferred_ids.append(artifact_id)
+        for preferred_id in preferred_ids:
+            if preferred_id in by_id:
+                return by_id[preferred_id]
         return {}
 
     def _absolute_download_url(self, href: str) -> str:
@@ -8437,10 +8118,10 @@ class OpenPathHandler:
                     path_value,
                     cwd=workspace_root,
                 )
-                if not decision.get("allowed", True):
+                if not _decision_allowed(decision):
                     return json.dumps({
                         "status": "error",
-                        "message": decision.get("reason") or "open path blocked by permissions",
+                        "message": _decision_reason(decision, "open path blocked by permissions"),
                     }, ensure_ascii=False)
             except Exception as exc:
                 logger.warning(f"[WebChannel] open path permission check failed: {_web_body_log_summary(exc)}")
@@ -8503,16 +8184,16 @@ def _project_payload_from_path(path_value: str, create: bool = False, user_selec
             if not os.path.isdir(parent):
                 raise ValueError(f"parent folder not found: {parent}")
             parent_decision = broker.authorize_file_access("write", parent, cwd=workspace_root)
-            if not parent_decision.get("allowed", True):
-                raise PermissionError(parent_decision.get("reason") or "project folder parent is not writable")
+            if not _decision_allowed(parent_decision):
+                raise PermissionError(_decision_reason(parent_decision, "project folder parent is not writable"))
             os.makedirs(folder_path, exist_ok=True)
         if user_selected:
             registered = broker.remember_workspace_root(folder_path, access="write", cwd=workspace_root)
             if registered.get("status") == "error":
                 raise PermissionError(registered.get("message") or "project folder permission registration failed")
         folder_decision = broker.authorize_file_access("write", folder_path, cwd=workspace_root)
-        if not folder_decision.get("allowed", True):
-            raise PermissionError(folder_decision.get("reason") or "project folder is not writable")
+        if not _decision_allowed(folder_decision):
+            raise PermissionError(_decision_reason(folder_decision, "project folder is not writable"))
     except Exception as exc:
         logger.warning(f"[WebChannel] project folder permission registration failed: {_web_body_log_summary(exc)}")
         raise
@@ -8711,42 +8392,6 @@ def _record_capability_policy_blocked_event(request_id: str, session_id: str, bl
         logger.debug(f"[WebChannel] capability policy event skipped: {_web_body_log_summary(exc)}")
 
 
-class CapabilitiesHandler:
-    def GET(self):
-        _require_auth()
-        web.header("Content-Type", "application/json; charset=utf-8")
-        try:
-            from agent.tools.agent_capability.agent_capability import AgentCapabilityTool
-
-            tool = AgentCapabilityTool()
-            result = tool.execute({"action": "diagnose"})
-            return json.dumps(_flatten_capability_payload(_tool_result_to_payload(result)), ensure_ascii=False)
-        except Exception as exc:
-            logger.error(f"[WebChannel] capability status failed: {_web_body_log_summary(exc)}")
-            return json.dumps({
-                "status": "error",
-                "message": _public_exception_message("Capability status unavailable.", exc),
-                **_public_exception_summary(exc),
-            }, ensure_ascii=False)
-
-
-class ExtensionsHandler:
-    def GET(self):
-        _require_auth()
-        web.header("Content-Type", "application/json; charset=utf-8")
-        try:
-            from agent.extensions import ExtensionRegistry
-
-            return json.dumps(ExtensionRegistry(_get_workspace_root()).list_extensions(), ensure_ascii=False)
-        except Exception as exc:
-            logger.error(f"[WebChannel] extensions status failed: {_web_body_log_summary(exc)}")
-            return json.dumps({
-                "status": "error",
-                "message": _public_exception_message("Extensions status unavailable.", exc),
-                **_public_exception_summary(exc),
-                "extensions": [],
-            }, ensure_ascii=False)
-
 class AgentInstallRequestHandler:
     def POST(self):
         _require_auth()
@@ -8938,36 +8583,6 @@ class SubagentActionHandler:
             }, ensure_ascii=False)
 
 
-class StreamHandler:
-    def GET(self):
-        _require_auth()
-        env = getattr(getattr(web, "ctx", None), "env", {}) or {}
-        origin = str(env.get("HTTP_ORIGIN") or "")
-        desktop_runtime = _desktop_runtime_token_matches()
-        if origin and not desktop_runtime:
-            try:
-                origin_host = urllib.parse.urlparse(origin).netloc
-            except Exception:
-                origin_host = ""
-            if origin_host and origin_host != str(env.get("HTTP_HOST") or ""):
-                raise web.HTTPError("401 Unauthorized",
-                                    {"Content-Type": "application/json; charset=utf-8"},
-                                    json.dumps({"status": "error", "message": "Unauthorized"}))
-        params = web.input(request_id='', session_id='', sessionId='')
-        request_id = params.request_id
-        session_id = str(getattr(params, "session_id", "") or getattr(params, "sessionId", "") or "")
-        if not request_id:
-            raise web.badrequest()
-
-        web.header('Content-Type', 'text/event-stream; charset=utf-8')
-        web.header('Cache-Control', 'no-cache')
-        web.header('X-Accel-Buffering', 'no')
-        if desktop_runtime:
-            web.header('Access-Control-Allow-Origin', origin or '*')
-
-        return WebChannel().stream_response(request_id, session_id=session_id)
-
-
 class ChatHandler:
     def GET(self):
         return _serve_web_app_asset("")
@@ -9016,7 +8631,7 @@ class ClientProxyHandler:
         return target
 
     def _forward_headers(self) -> dict:
-        headers = {"User-Agent": "EcoreX-WebUI/0.2.2"}
+        headers = {"User-Agent": "EcoreX-WebUI/0.2.6"}
         for key, value in web.ctx.env.items():
             if key == "CONTENT_TYPE":
                 name = "Content-Type"
@@ -9037,6 +8652,20 @@ class ClientProxyHandler:
         web.header("Cache-Control", "no-store")
         return json.dumps(payload, ensure_ascii=False)
 
+    def _model_config_fallback_response(self, code: str, message: str, status: int = 200) -> str:
+        return self._json_response(status, {
+            "ok": False,
+            "configured": False,
+            "source": "web-client-proxy",
+            "code": code,
+            "message": message,
+            "configurationState": code,
+        })
+
+    @staticmethod
+    def _is_model_config_path(path: str = "") -> bool:
+        return (path or "").strip("/") == "model-config"
+
     def _proxy(self, path: str = ""):
         method = web.ctx.method.upper()
         body = web.data() if method not in ("GET", "HEAD") else None
@@ -9052,14 +8681,26 @@ class ClientProxyHandler:
                 web.ctx.status = f"{response.status} {response.reason}"
                 web.header("Content-Type", response.headers.get("Content-Type", "application/json; charset=utf-8"))
                 web.header("Cache-Control", "no-store")
-                return raw
+            return raw
         except urllib.error.HTTPError as exc:
             raw = exc.read()
+            if self._is_model_config_path(path) and exc.code == 404:
+                logger.info("[WebChannel] Admin client model-config bridge unavailable; using local model fallback")
+                return self._model_config_fallback_response(
+                    "enterprise_model_config_bridge_unavailable",
+                    "Enterprise model config bridge is unavailable; local Web model configuration remains active.",
+                )
             web.ctx.status = f"{exc.code} {exc.reason}"
             web.header("Content-Type", exc.headers.get("Content-Type", "application/json; charset=utf-8"))
             web.header("Cache-Control", "no-store")
             return raw
         except Exception as exc:
+            if self._is_model_config_path(path):
+                logger.info(f"[WebChannel] Admin client model-config bridge unreachable: {_web_body_log_summary(exc)}")
+                return self._model_config_fallback_response(
+                    "enterprise_model_config_bridge_unreachable",
+                    "Enterprise model config bridge is unreachable; local Web model configuration remains active.",
+                )
             logger.warning(f"[WebChannel] Admin client proxy failed: {_web_body_log_summary(exc)}")
             return self._json_response(502, {
                 "ok": False,
@@ -9090,17 +8731,17 @@ class ClientProxyHandler:
 class ConfigHandler:
 
     _RECOMMENDED_MODELS = [
-        const.DEEPSEEK_V4_FLASH, const.DEEPSEEK_V4_PRO,
+        const.DEEPSEEK_V4_PRO, const.DEEPSEEK_V4_FLASH,
         const.MINIMAX_M3, const.MINIMAX_M2_7_HIGHSPEED, const.MINIMAX_M2_7,
         # claude-fable-5 is intentionally placed at the end of the Claude
         # group here: it is expensive, so avoid surfacing it too early in
         # the LinkAI dropdown.
         const.CLAUDE_4_8_OPUS, const.CLAUDE_4_7_OPUS, const.CLAUDE_4_6_SONNET, const.CLAUDE_4_6_OPUS, const.CLAUDE_FABLE_5,
-        const.GEMINI_35_FLASH, const.GEMINI_31_FLASH_LITE_PRE, const.GEMINI_31_PRO_PRE, const.GEMINI_3_FLASH_PRE,
+        const.GEMINI_31_PRO_PRE, const.GEMINI_35_FLASH, const.GEMINI_31_FLASH_LITE_PRE, const.GEMINI_3_FLASH_PRE,
         const.GPT_55, const.GPT_54, const.GPT_54_MINI, const.GPT_54_NANO, const.GPT_5, const.GPT_41, const.GPT_4o,
         const.GLM_5_1, const.GLM_5_TURBO, const.GLM_5, const.GLM_4_7,
         const.QWEN37_PLUS, const.QWEN37_MAX, const.QWEN36_PLUS,
-        const.DOUBAO_SEED_2_PRO, const.DOUBAO_SEED_2_CODE,
+        const.DOUBAO_SEED_2_PRO, const.DOUBAO_SEED_21_PRO, const.DOUBAO_SEED_2_CODE,
         const.KIMI_K2_6, const.KIMI_K2_5, const.KIMI_K2,
         const.ERNIE_5_1, const.ERNIE_5, const.ERNIE_X1_1, const.ERNIE_45_TURBO_128K, const.ERNIE_45_TURBO_32K,
         const.MIMO_V2_5_PRO, const.MIMO_V2_5,
@@ -9124,7 +8765,7 @@ class ConfigHandler:
             "api_base_key": "deepseek_api_base",
             "api_base_default": "https://api.deepseek.com/v1",
             "api_base_placeholder": _PLACEHOLDER_V1,
-            "models": [const.DEEPSEEK_V4_FLASH, const.DEEPSEEK_V4_PRO, const.DEEPSEEK_CHAT, const.DEEPSEEK_REASONER],
+            "models": [const.DEEPSEEK_V4_PRO],
         }),
         ("minimax", {
             "label": "MiniMax",
@@ -9132,7 +8773,7 @@ class ConfigHandler:
             "api_base_key": None,
             "api_base_default": None,
             "api_base_placeholder": "",
-            "models": [const.MINIMAX_M3, const.MINIMAX_M2_7, const.MINIMAX_M2_7_HIGHSPEED],
+            "models": [const.MINIMAX_M3],
         }),
         ("claudeAPI", {
             "label": "Claude",
@@ -9140,7 +8781,7 @@ class ConfigHandler:
             "api_base_key": "claude_api_base",
             "api_base_default": "https://api.anthropic.com/v1",
             "api_base_placeholder": _PLACEHOLDER_V1,
-            "models": [const.CLAUDE_FABLE_5, const.CLAUDE_4_8_OPUS, const.CLAUDE_4_7_OPUS, const.CLAUDE_4_6_SONNET, const.CLAUDE_4_6_OPUS],
+            "models": [const.CLAUDE_FABLE_5],
         }),
         ("gemini", {
             "label": "Gemini",
@@ -9148,7 +8789,7 @@ class ConfigHandler:
             "api_base_key": "gemini_api_base",
             "api_base_default": "https://generativelanguage.googleapis.com",
             "api_base_placeholder": _PLACEHOLDER_GEMINI,
-            "models": [const.GEMINI_35_FLASH, const.GEMINI_31_FLASH_LITE_PRE, const.GEMINI_31_PRO_PRE, const.GEMINI_3_FLASH_PRE],
+            "models": [const.GEMINI_31_PRO_PRE],
         }),
         ("openai", {
             "label": "OpenAI",
@@ -9156,7 +8797,7 @@ class ConfigHandler:
             "api_base_key": "open_ai_api_base",
             "api_base_default": "https://api.openai.com/v1",
             "api_base_placeholder": _PLACEHOLDER_V1,
-            "models": [const.GPT_55, const.GPT_54, const.GPT_54_MINI, const.GPT_54_NANO, const.GPT_5, const.GPT_41, const.GPT_4o],
+            "models": [const.GPT_55],
         }),
         ("zhipu", {
             "label": {"zh": "智谱AI", "en": "GLM"},
@@ -9164,7 +8805,7 @@ class ConfigHandler:
             "api_base_key": "zhipu_ai_api_base",
             "api_base_default": "https://open.bigmodel.cn/api/paas/v4",
             "api_base_placeholder": _PLACEHOLDER_ZHIPU,
-            "models": [const.GLM_5_1, const.GLM_5_TURBO, const.GLM_5, const.GLM_4_7],
+            "models": [const.GLM_5_1],
         }),
         ("dashscope", {
             "label": {"zh": "通义千问", "en": "Qwen"},
@@ -9172,7 +8813,7 @@ class ConfigHandler:
             "api_base_key": None,
             "api_base_default": None,
             "api_base_placeholder": "",
-            "models": [const.QWEN37_PLUS, const.QWEN37_MAX, const.QWEN36_PLUS],
+            "models": [const.QWEN37_MAX],
         }),
         ("doubao", {
             "label": {"zh": "豆包", "en": "Doubao"},
@@ -9180,7 +8821,7 @@ class ConfigHandler:
             "api_base_key": "ark_base_url",
             "api_base_default": "https://ark.cn-beijing.volces.com/api/v3",
             "api_base_placeholder": _PLACEHOLDER_DOUBAO,
-            "models": [const.DOUBAO_SEED_2_PRO, const.DOUBAO_SEED_2_CODE],
+            "models": [const.DOUBAO_SEED_2_PRO],
         }),
         ("moonshot", {
             "label": "Kimi",
@@ -9188,7 +8829,7 @@ class ConfigHandler:
             "api_base_key": "moonshot_base_url",
             "api_base_default": "https://api.moonshot.cn/v1",
             "api_base_placeholder": _PLACEHOLDER_V1,
-            "models": [const.KIMI_K2_6, const.KIMI_K2_5, const.KIMI_K2],
+            "models": [const.KIMI_K2_6],
         }),
         ("qianfan", {
             "label": {"zh": "百度千帆", "en": "ERNIE"},
@@ -9196,7 +8837,7 @@ class ConfigHandler:
             "api_base_key": "qianfan_api_base",
             "api_base_default": "https://qianfan.baidubce.com/v2",
             "api_base_placeholder": _PLACEHOLDER_QIANFAN,
-            "models": [const.ERNIE_5_1, const.ERNIE_5, const.ERNIE_X1_1, const.ERNIE_45_TURBO_128K, const.ERNIE_45_TURBO_32K],
+            "models": [const.ERNIE_5_1],
         }),
         ("mimo", {
             "label": {"zh": "小米 MiMo", "en": "MiMo"},
@@ -9204,7 +8845,7 @@ class ConfigHandler:
             "api_base_key": "mimo_api_base",
             "api_base_default": "https://api.xiaomimimo.com/v1",
             "api_base_placeholder": _PLACEHOLDER_V1,
-            "models": [const.MIMO_V2_5_PRO, const.MIMO_V2_5],
+            "models": [const.MIMO_V2_5_PRO],
         }),
         ("linkai", {
             "label": "LinkAI",
@@ -9212,7 +8853,7 @@ class ConfigHandler:
             "api_base_key": None,
             "api_base_default": None,
             "api_base_placeholder": "",
-            "models": _RECOMMENDED_MODELS,
+            "models": [const.GPT_55],
         }),
         ("custom", {
             "label": {"zh": "自定义", "en": "Custom"},
@@ -9286,7 +8927,10 @@ class ConfigHandler:
                 "bot_type": "openai" if local_config.get("bot_type") == "chatGPT" else local_config.get("bot_type", ""),
                 "use_linkai": bool(local_config.get("use_linkai", False)),
                 "channel_type": local_config.get("channel_type", ""),
-                "agent_max_context_tokens": local_config.get("agent_max_context_tokens", 258000),
+                "agent_max_context_tokens": (
+                    local_config.get("model_auto_compact_token_limit")
+                    or local_config.get("agent_max_context_tokens", 800000)
+                ),
                 "agent_max_context_turns": local_config.get("agent_max_context_turns", 20),
                 "agent_max_steps": local_config.get("agent_max_steps", 20),
                 "enable_thinking": bool(local_config.get("enable_thinking", False)),
@@ -9320,6 +8964,9 @@ class ConfigHandler:
                     value = bool(value)
                 local_config[key] = value
                 applied[key] = value
+                if key == "agent_max_context_tokens":
+                    local_config["model_auto_compact_token_limit"] = value
+                    applied["model_auto_compact_token_limit"] = value
 
             if not applied:
                 return json.dumps({"status": "error", "message": "no valid keys to update"})
@@ -9354,8 +9001,14 @@ class ConfigHandler:
             if any(k in applied for k in bridge_routing_keys):
                 try:
                     from bridge.bridge import Bridge
-                    Bridge().reset_bot()
-                    logger.info("[WebChannel] Bridge bot routing reset due to config change")
+                    bridge = Bridge()
+                    refresh = getattr(bridge, "refresh_chat_routing", None)
+                    if callable(refresh):
+                        refresh()
+                        logger.info("[WebChannel] Bridge chat routing refreshed due to config change")
+                    else:
+                        bridge.reset_bot()
+                        logger.info("[WebChannel] Bridge bot routing reset due to config change")
                 except Exception as reset_err:
                     logger.warning(f"[WebChannel] Failed to reset bridge: {reset_err}")
 
@@ -9793,10 +9446,257 @@ class ModelsHandler:
         items.sort(key=lambda it: (0 if it["configured"] else 1, list(ConfigHandler.PROVIDER_MODELS.keys()).index(it["id"])))
         return items
 
+    @staticmethod
+    def _provider_label_text(label) -> str:
+        if isinstance(label, dict):
+            return label.get("zh") or label.get("en") or ""
+        return str(label or "")
+
+    @staticmethod
+    def _model_entry_value(entry) -> str:
+        if isinstance(entry, dict):
+            return str(entry.get("value") or entry.get("model") or "").strip()
+        return str(entry or "").strip()
+
+    @classmethod
+    def _provider_for_model(cls, model: str) -> str:
+        target = str(model or "").strip()
+        if not target:
+            return ""
+        for provider_id, provider in ConfigHandler.PROVIDER_MODELS.items():
+            for entry in provider.get("models") or ():
+                if cls._model_entry_value(entry) == target:
+                    return provider_id
+        return ""
+
+    @classmethod
+    def _chat_context_policy(cls, model: str, provider_id: str) -> dict:
+        from models.model_capabilities import context_policy_for_model
+
+        policy = context_policy_for_model(model, provider_id).to_dict()
+        return {
+            "contextWindowTokens": policy.get("context_window_tokens"),
+            "maxOutputTokens": policy.get("max_output_tokens"),
+            "autoCompactTokenLimit": policy.get("auto_compact_token_limit"),
+            "hardContextTokenLimit": policy.get("hard_context_token_limit"),
+            "source": policy.get("source"),
+            "note": policy.get("note"),
+            "tokenizer": policy.get("tokenizer"),
+            "tokenizerStatus": policy.get("tokenizer_status"),
+            "tokenizerNote": policy.get("tokenizer_note"),
+            "context_window_tokens": policy.get("context_window_tokens"),
+            "max_output_tokens": policy.get("max_output_tokens"),
+            "auto_compact_token_limit": policy.get("auto_compact_token_limit"),
+            "hard_context_token_limit": policy.get("hard_context_token_limit"),
+            "tokenizer_status": policy.get("tokenizer_status"),
+            "tokenizer_note": policy.get("tokenizer_note"),
+        }
+
+    @staticmethod
+    def _model_alias_family(model: str) -> str:
+        lowered = str(model or "").strip().lower()
+        if lowered.startswith("gemini"):
+            return "gemini"
+        return ""
+
+    @classmethod
+    def _is_legacy_custom_gemini_config(cls, local_config: dict, model: str = "") -> bool:
+        from models.model_capabilities import is_custom_gemini_transport
+
+        return is_custom_gemini_transport(
+            model or (local_config or {}).get("model") or "",
+            configured_bot_type=(local_config or {}).get("bot_type") or "",
+            gemini_api_base=(local_config or {}).get("gemini_api_base") or "",
+            has_gemini_key=cls._is_real_key((local_config or {}).get("gemini_api_key", "")),
+        )
+
+    @classmethod
+    def _has_legacy_custom_gemini_transport(cls, local_config: dict) -> bool:
+        from models.model_capabilities import is_custom_gemini_transport
+
+        return is_custom_gemini_transport(
+            const.GEMINI_31_PRO_PRE,
+            configured_bot_type=const.GEMINI,
+            gemini_api_base=(local_config or {}).get("gemini_api_base") or "",
+            has_gemini_key=cls._is_real_key((local_config or {}).get("gemini_api_key", "")),
+        )
+
+    @classmethod
+    def _chat_route_metadata(cls, provider_id: str, model: str) -> dict:
+        alias_family = cls._model_alias_family(model)
+        official_gemini = bool(provider_id == const.GEMINI and alias_family == "gemini")
+        return {
+            "modelAliasFamily": alias_family,
+            "model_alias_family": alias_family,
+            "effectiveTransportProvider": provider_id,
+            "effective_transport_provider": provider_id,
+            "isOfficialGeminiProvider": official_gemini,
+            "is_official_gemini_provider": official_gemini,
+            "officialGeminiApiUsed": official_gemini,
+            "official_gemini_api_used": official_gemini,
+        }
+
+    @staticmethod
+    def _coerce_positive_int(value) -> Optional[int]:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    @classmethod
+    def _apply_chat_context_policy(cls, local_config: dict, file_cfg: dict, provider_id: str, model: str) -> dict:
+        policy = cls._chat_context_policy(model, provider_id)
+        context_window = cls._coerce_positive_int(policy.get("contextWindowTokens"))
+        auto_limit = cls._coerce_positive_int(policy.get("autoCompactTokenLimit"))
+        if context_window:
+            local_config["model_context_window"] = context_window
+            file_cfg["model_context_window"] = context_window
+        if auto_limit:
+            local_config["model_auto_compact_token_limit"] = auto_limit
+            file_cfg["model_auto_compact_token_limit"] = auto_limit
+            # Agent execution still consumes this legacy key; keep it synced
+            # until S7/S8 collapse runtime settings into one projection.
+            local_config["agent_max_context_tokens"] = auto_limit
+            file_cfg["agent_max_context_tokens"] = auto_limit
+        return policy
+
+    @classmethod
+    def _chat_model_options(cls, local_config: dict, current_provider: str, current_model: str) -> List[dict]:
+        options = []
+        seen = set()
+        has_legacy_custom_gemini = cls._has_legacy_custom_gemini_transport(local_config)
+        for provider_id, provider in ConfigHandler.PROVIDER_MODELS.items():
+            key_field = provider.get("api_key_field")
+            configured = cls._is_real_key(local_config.get(key_field, "")) if key_field else False
+            if provider_id == const.GEMINI and has_legacy_custom_gemini:
+                configured = False
+            if provider_id == const.CUSTOM and not configured and has_legacy_custom_gemini:
+                configured = True
+            preserve_unconfigured = provider_id == "openai" or provider_id == current_provider
+            if not configured and not preserve_unconfigured:
+                continue
+            provider_label = cls._provider_label_text(provider.get("label")) or provider_id
+            entries = list(provider.get("models") or [])
+            selected_entry = entries[0] if entries else current_model
+            selected_index = 0
+            if provider_id == current_provider and current_model:
+                for index, entry in enumerate(entries):
+                    if cls._model_entry_value(entry) == current_model:
+                        selected_entry = entry
+                        selected_index = index
+                        break
+                else:
+                    selected_entry = current_model
+                    selected_index = -1
+            model = cls._model_entry_value(selected_entry)
+            if not model:
+                continue
+            option_key = (provider_id, model)
+            if option_key in seen:
+                continue
+            seen.add(option_key)
+            hint = selected_entry.get("hint") if isinstance(selected_entry, dict) else ""
+            if not hint:
+                if not configured:
+                    hint = "needs credentials"
+                elif provider_id == current_provider and model == current_model:
+                    hint = "current"
+                else:
+                    hint = "top-tier"
+            options.append({
+                "provider": provider_id,
+                "providerLabel": provider_label,
+                "model": model,
+                "label": model,
+                "hint": hint,
+                "configured": configured,
+                "current": provider_id == current_provider and model == current_model,
+                "contextPolicy": cls._chat_context_policy(model, provider_id),
+                **cls._chat_route_metadata(provider_id, model),
+            })
+
+        custom_provider = ConfigHandler.PROVIDER_MODELS.get(const.CUSTOM) or {}
+        custom_key_field = custom_provider.get("api_key_field")
+        custom_configured = cls._is_real_key(local_config.get(custom_key_field, "")) if custom_key_field else False
+        custom_model = str(current_model or "").strip()
+        if has_legacy_custom_gemini and cls._model_alias_family(custom_model) != "gemini":
+            custom_model = const.GEMINI_31_PRO_PRE
+        legacy_custom_gemini = has_legacy_custom_gemini and cls._model_alias_family(custom_model) == "gemini"
+        if (
+            custom_model
+            and (custom_configured or legacy_custom_gemini)
+            and cls._model_alias_family(custom_model) == "gemini"
+            and (const.CUSTOM, custom_model) not in seen
+        ):
+            seen.add((const.CUSTOM, custom_model))
+            options.append({
+                "provider": const.CUSTOM,
+                "providerLabel": cls._provider_label_text(custom_provider.get("label")) or "Custom",
+                "model": custom_model,
+                "label": custom_model,
+                "hint": "OpenAI-compatible",
+                "configured": True,
+                "current": current_provider == const.CUSTOM and custom_model == current_model,
+                "contextPolicy": cls._chat_context_policy(custom_model, const.CUSTOM),
+                **cls._chat_route_metadata(const.CUSTOM, custom_model),
+            })
+
+        if current_model and (current_provider, current_model) not in seen:
+            provider = ConfigHandler.PROVIDER_MODELS.get(current_provider) or {}
+            provider_label = cls._provider_label_text(provider.get("label")) or current_provider or "Current"
+            key_field = provider.get("api_key_field")
+            configured = cls._is_real_key(local_config.get(key_field, "")) if key_field else False
+            options.insert(0, {
+                "provider": current_provider,
+                "providerLabel": provider_label,
+                "model": current_model,
+                "label": current_model,
+                "hint": "current" if configured else "needs credentials",
+                "configured": configured,
+                "current": True,
+                "contextPolicy": cls._chat_context_policy(current_model, current_provider),
+                **cls._chat_route_metadata(current_provider, current_model),
+            })
+        provider_order = {provider_id: index for index, provider_id in enumerate(ConfigHandler.PROVIDER_MODELS.keys())}
+        options.sort(key=lambda option: (
+            0 if option.get("current") else 1,
+            0 if option.get("configured") else 1,
+            provider_order.get(option.get("provider"), 999),
+            str(option.get("model") or ""),
+        ))
+        return options
+
+    @classmethod
+    def _chat_route_provider(cls, local_config: dict, capability_provider: str) -> str:
+        bot_type = str((local_config or {}).get("bot_type") or "").strip()
+        if cls._is_legacy_custom_gemini_config(local_config):
+            return const.CUSTOM
+        if bot_type:
+            if bot_type == const.OPENAI:
+                return "openai"
+            if bot_type == const.CHATGPT:
+                return capability_provider if capability_provider == "openai_compatible" else "openai"
+            if bot_type in ConfigHandler.PROVIDER_MODELS:
+                return bot_type
+        model_provider = cls._provider_for_model(str((local_config or {}).get("model") or ""))
+        if model_provider:
+            if model_provider == "openai":
+                if bot_type == const.OPENAI:
+                    return "openai"
+                base = str((local_config or {}).get("open_ai_api_base") or "").strip().rstrip("/")
+                default_base = str(ConfigHandler.PROVIDER_MODELS["openai"].get("api_base_default") or "").rstrip("/")
+                if base and default_base and base != default_base and capability_provider:
+                    return capability_provider
+            return model_provider
+        if bot_type == const.OPENAI:
+            return "openai"
+        return capability_provider
+
     @classmethod
     def _chat_capability(cls, local_config: dict) -> dict:
         """Main chat model — drives the agent. bot_type maps to a provider id."""
-        from models.model_capabilities import build_provider_capability_matrix, capabilities_for_config
+        from models.model_capabilities import build_provider_capability_matrix, capabilities_for_config, get_model_capabilities
 
         capability = capabilities_for_config(local_config or {})
         provider_models = {
@@ -9804,16 +9704,45 @@ class ModelsHandler:
             for provider_id, provider in ConfigHandler.PROVIDER_MODELS.items()
         }
         provider_models.setdefault(const.CHATGPTONAZURE, provider_models.get("openai") or ())
-        provider_id = capability.provider
+        provider_id = cls._chat_route_provider(local_config, capability.provider)
+        current_model = local_config.get("model", "")
+        routed_capability = get_model_capabilities(current_model, provider_id) if provider_id else capability
         return {
             "editable": True,
             "current_provider": provider_id,
-            "current_model": local_config.get("model", ""),
+            "current_model": current_model,
             "providers": list(ConfigHandler.PROVIDER_MODELS.keys()),
+            "provider_models": provider_models,
+            "model_options": cls._chat_model_options(local_config, provider_id, current_model),
             "use_linkai": bool(local_config.get("use_linkai", False)),
-            "capabilities": capability.to_dict(),
+            "context_policy": cls._chat_context_policy(current_model, provider_id),
+            "capabilities": routed_capability.to_dict(),
             "capability_matrix": build_provider_capability_matrix(provider_models),
         }
+
+    @classmethod
+    def _validate_chat_selection(cls, local_config: dict, provider_id: str, model: str) -> Tuple[bool, str]:
+        provider_id = (provider_id or "").strip()
+        model = (model or "").strip()
+        if not provider_id or not model:
+            return True, ""
+        capability = cls._chat_capability(local_config)
+        for option in capability.get("model_options") or []:
+            if not isinstance(option, dict):
+                continue
+            if option.get("provider") == provider_id and option.get("model") == model:
+                if option.get("configured") is False:
+                    return False, "model provider credentials are required"
+                return True, ""
+        if provider_id == const.CUSTOM:
+            provider = ConfigHandler.PROVIDER_MODELS.get(provider_id) or {}
+            key_field = provider.get("api_key_field")
+            if key_field and cls._is_real_key((local_config or {}).get(key_field, "")):
+                return True, ""
+            if cls._model_alias_family(model) == "gemini" and cls._has_legacy_custom_gemini_transport(local_config):
+                return True, ""
+            return False, "model provider credentials are required"
+        return False, "model is not available in configured model options"
 
     # Auto-fallback order for vision when no explicit model is pinned.
     # Mirrors agent/tools/vision/vision.py::_resolve_providers — DeepSeek and
@@ -10089,6 +10018,7 @@ class ModelsHandler:
             img_node = {}
         explicit_model = (img_node.get("model") or "").strip()
         explicit_provider = (img_node.get("provider") or "").strip()
+        configured_model = explicit_model or cls._configured_image_model(local_config)
 
         # Provider resolution priority:
         #   1. Explicit `skills.image-generation.provider` (persisted via UI;
@@ -10098,11 +10028,11 @@ class ModelsHandler:
         inferred_provider = ""
         if explicit_provider and explicit_provider in cls._IMAGE_PROVIDER_MODELS:
             inferred_provider = explicit_provider
-        elif explicit_model:
+        elif configured_model:
             for pid, models in cls._IMAGE_PROVIDER_MODELS.items():
                 for entry in models:
                     val = entry if isinstance(entry, str) else (entry.get("value") or "")
-                    if val == explicit_model:
+                    if val == configured_model:
                         inferred_provider = pid
                         break
                 if inferred_provider:
@@ -10116,9 +10046,9 @@ class ModelsHandler:
 
         return {
             "editable": True,
-            "strategy": "specified" if explicit_model else "auto",
+            "strategy": "specified" if explicit_model or local_config.get("text_to_image") else "auto",
             "current_provider": inferred_provider,
-            "current_model": explicit_model,
+            "current_model": configured_model,
             "fallback_provider": predicted["provider"],
             "fallback_model": predicted["model"],
             "providers": list(cls._IMAGE_PROVIDER_MODELS.keys()),
@@ -10129,6 +10059,15 @@ class ModelsHandler:
             "runtime_active": False,
             "note": "router_pending",
         }
+
+    @classmethod
+    def _configured_image_model(cls, local_config: dict) -> str:
+        skills_node = local_config.get("skills") or local_config.get("skill") or {}
+        if isinstance(skills_node, dict):
+            img_node = skills_node.get("image-generation") or {}
+            if isinstance(img_node, dict) and img_node.get("model"):
+                return str(img_node.get("model") or "")
+        return str(local_config.get("text_to_image") or "gpt-image-2-pro")
 
     # Canonical search provider order. Mirrors PROVIDER_ORDER in
     # agent/tools/web_search/web_search.py — keep them in sync.
@@ -10398,9 +10337,22 @@ class ModelsHandler:
         applied = {}
         local_config = conf()
         file_cfg = self._read_file_config()
+        valid, message = self._validate_chat_selection(local_config, provider_id, model)
+        if not valid:
+            return json.dumps({
+                "status": "error",
+                "message": message,
+                "provider": provider_id,
+                "model": model,
+                "code": "CHAT_MODEL_NOT_CONFIGURED",
+            })
 
+        legacy_custom_gemini = (
+            provider_id == const.CUSTOM
+            and self._is_legacy_custom_gemini_config(local_config, model or local_config.get("model", ""))
+        )
         if provider_id:
-            bot_type_value = "chatGPT" if provider_id == "openai" else provider_id
+            bot_type_value = const.OPENAI if provider_id == "openai" else provider_id
             local_config["bot_type"] = bot_type_value
             file_cfg["bot_type"] = bot_type_value
             applied["bot_type"] = bot_type_value
@@ -10408,18 +10360,75 @@ class ModelsHandler:
             local_config["use_linkai"] = use_linkai
             file_cfg["use_linkai"] = use_linkai
             applied["use_linkai"] = use_linkai
+            if legacy_custom_gemini:
+                migrated = False
+                for source_key, target_key in (
+                    ("gemini_api_key", "custom_api_key"),
+                    ("gemini_api_base", "custom_api_base"),
+                ):
+                    if not self._is_real_key(local_config.get(target_key, "")) and local_config.get(source_key):
+                        local_config[target_key] = local_config.get(source_key, "")
+                        file_cfg[target_key] = file_cfg.get(source_key) or local_config.get(source_key, "")
+                        migrated = True
+                if migrated:
+                    applied["custom_transport_migrated"] = True
         if model:
             local_config["model"] = model
             file_cfg["model"] = model
             applied["model"] = model
+            context_policy = self._apply_chat_context_policy(local_config, file_cfg, provider_id, model)
+            applied["model_context_window"] = context_policy.get("contextWindowTokens")
+            applied["model_auto_compact_token_limit"] = context_policy.get("autoCompactTokenLimit")
+        else:
+            context_policy = self._chat_context_policy(local_config.get("model", ""), provider_id)
 
         if not applied:
-            return json.dumps({"status": "success", "applied": {}, "noop": True})
+            context_continuity = {
+                "agentBridgePreserved": True,
+                "existingAgentRoutesReset": 0,
+                "artifactHistoryRefs": "enabled",
+                "strategy": "noop",
+            }
+            return json.dumps({
+                "status": "success",
+                "provider": provider_id,
+                "model": model,
+                "image_model": self._configured_image_model(local_config),
+                "context_policy": context_policy,
+                "contextContinuity": context_continuity,
+                "context_continuity": context_continuity,
+                "applied": {},
+                "noop": True,
+            })
 
         self._write_file_config(file_cfg)
         logger.info(f"[ModelsHandler] chat updated: {applied}")
-        self._reset_bridge()
-        return json.dumps({"status": "success", "applied": applied})
+        route_refresh = self._reset_bridge()
+        if not isinstance(route_refresh, dict):
+            route_refresh = {}
+        route_reset_count = route_refresh.get("modelRoutesReset", 0)
+        try:
+            route_reset_count = int(route_reset_count)
+        except (TypeError, ValueError):
+            route_reset_count = 0
+        effective_provider = provider_id or (self._chat_capability(local_config).get("current_provider") or "")
+        context_continuity = {
+            "agentBridgePreserved": route_refresh.get("agentBridgePreserved") is not False,
+            "existingAgentRoutesReset": route_reset_count,
+            "artifactHistoryRefs": "enabled",
+            "strategy": route_refresh.get("strategy") or "refresh_chat_routing",
+        }
+        return json.dumps({
+            "status": "success",
+            "provider": effective_provider,
+            "model": local_config.get("model", ""),
+            "image_model": self._configured_image_model(local_config),
+            "context_policy": context_policy,
+            "contextContinuity": context_continuity,
+            "context_continuity": context_continuity,
+            **self._chat_route_metadata(effective_provider, local_config.get("model", "")),
+            "applied": applied,
+        })
 
     def _set_vision(self, provider_id: str, model: str) -> str:
         # Source of truth: tools.vision.{provider, model}. The provider field
@@ -10614,13 +10623,22 @@ class ModelsHandler:
         return json.dumps({"status": "success", "provider": "bocha"})
 
     @staticmethod
-    def _reset_bridge() -> None:
+    def _reset_bridge() -> dict:
         try:
             from bridge.bridge import Bridge
-            Bridge().reset_bot()
+            bridge = Bridge()
+            refresh = getattr(bridge, "refresh_chat_routing", None)
+            if callable(refresh):
+                result = refresh()
+                result["strategy"] = "refresh_chat_routing"
+                logger.info("[ModelsHandler] Bridge chat routing refreshed")
+                return result
+            bridge.reset_bot()
             logger.info("[ModelsHandler] Bridge bot routing reset")
+            return {"agentBridgePreserved": False, "modelRoutesReset": 0, "strategy": "reset_bot"}
         except Exception as e:
             logger.warning(f"[ModelsHandler] Bridge reset failed: {_web_body_log_summary(e)}")
+            return {"agentBridgePreserved": True, "modelRoutesReset": 0, "strategy": "reset_failed"}
 
 
 class ChannelsHandler:
@@ -10901,7 +10919,12 @@ class ChannelsHandler:
     def _refresh_runtime_capabilities(reason: str = "") -> None:
         try:
             from bridge.bridge import Bridge
-            Bridge().reset_bot()
+            bridge = Bridge()
+            refresh = getattr(bridge, "refresh_chat_routing", None)
+            if callable(refresh):
+                refresh()
+            else:
+                bridge.reset_bot()
             logger.info(f"[WebChannel] Runtime capabilities refresh requested: {reason}")
         except Exception as e:
             logger.debug(f"[WebChannel] Runtime capability refresh skipped: {_web_body_log_summary(e)}")
@@ -11632,7 +11655,7 @@ class ExternalConnectionActionHandler:
             if action == "test":
                 return self._handle_test(channel_name)
             if action in {"agent_auth", "agent_authorize", "authorize_agent"}:
-                return self._handle_agent_auth(channel_name, config)
+                return self._handle_agent_auth(channel_name, config, body)
             if action in {"agent_auth_status", "agent_auth_poll", "poll_agent_auth"}:
                 return self._handle_agent_auth_status(channel_name, body)
             if action in {"set_home_channel", "clear_home_channel"}:
@@ -11725,10 +11748,48 @@ class ExternalConnectionActionHandler:
             }
 
     @staticmethod
-    def _handle_agent_auth(channel_name: str, config: Dict[str, Any]) -> str:
+    def _handle_agent_auth(channel_name: str, config: Dict[str, Any], body: Optional[Dict[str, Any]] = None) -> str:
         channel_name = normalize_channel_name(channel_name)
         if channel_name != "feishu":
             return ExternalConnectionActionHandler._handle_generic_agent_auth(channel_name, config)
+        body = body if isinstance(body, dict) else {}
+        web_session_id = str(
+            body.get("webSessionId")
+            or body.get("sessionId")
+            or body.get("session_id")
+            or config.get("webSessionId")
+            or config.get("sessionId")
+            or config.get("session_id")
+            or ""
+        ).strip()
+        trace_id = f"web:{web_session_id}:feishu-agent-auth:{int(time.time())}" if web_session_id else f"web:feishu-agent-auth:{int(time.time())}"
+        decision = _authorize_web_capability(
+            "feishu_cli",
+            "agent_auth",
+            arguments={
+                "action": "agent_auth",
+                "surface": "web_external_connection",
+                "web_session_id": web_session_id,
+                "trace_id": trace_id,
+            },
+            metadata={
+                "surface": "web",
+                "source": "external_connection_action",
+                "user_initiated": True,
+                "webSessionId": web_session_id,
+                "traceId": trace_id,
+            },
+        )
+        if decision.get("allowed") is not True:
+            return json.dumps(
+                _permission_denied_payload(
+                    decision.get("reason", ""),
+                    decision,
+                    capability="feishu_cli",
+                    action="agent_auth",
+                ),
+                ensure_ascii=False,
+            )
         try:
             from agent.tools.feishu_cli.feishu_cli import FeishuCli
 
@@ -11740,6 +11801,8 @@ class ExternalConnectionActionHandler:
                 "action": "agent_auth",
                 "timeout": 240,
                 "surface": "web_external_connection",
+                "web_session_id": web_session_id,
+                "trace_id": trace_id,
             }
 
             result = FeishuCli({"cwd": _get_workspace_root()}).execute(args)
@@ -11747,6 +11810,9 @@ class ExternalConnectionActionHandler:
             public = redact_public_tool_value(raw)
             public = restore_feishu_public_auth_fields(public, raw, "feishu_cli")
             public = _safe_feishu_agent_auth_payload(public)
+            if web_session_id:
+                public["webSessionId"] = web_session_id
+                public["traceId"] = trace_id
             if isinstance(raw, dict) and raw.get("sessionId"):
                 public["sessionId"] = str(raw.get("sessionId"))
                 if isinstance(public.get("nextAction"), dict) and isinstance(raw.get("nextAction"), dict):
@@ -11763,6 +11829,8 @@ class ExternalConnectionActionHandler:
                     "authRequired": bool(isinstance(raw, dict) and raw.get("authRequired")),
                     "writebackPending": bool(isinstance(raw, dict) and raw.get("writebackPending")),
                     "hasVerificationUrl": bool(isinstance(raw, dict) and raw.get("verificationUrl")),
+                    "webSessionId": web_session_id,
+                    "traceId": trace_id,
                 },
             )
             return json.dumps({
@@ -12396,80 +12464,6 @@ def _get_workspace_root():
     return expand_path(conf().get("agent_workspace", "~/cow"))
 
 
-class ToolsHandler:
-    def GET(self):
-        _require_auth()
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        try:
-            from agent.tools.tool_manager import ToolManager
-            tm = ToolManager()
-            if not tm.tool_classes:
-                tm.load_tools()
-            tools = []
-            for name, info in tm.list_tools().items():
-                if not isinstance(info, dict):
-                    info = {}
-                tools.append({
-                    "name": name,
-                    "description": info.get("description", ""),
-                    "parameters": info.get("parameters", {}),
-                })
-            registry = tm.registry_health() if hasattr(tm, "registry_health") else {}
-            registry_status = registry.get("status") or ("ready" if tools else "error")
-            return json.dumps({
-                "status": "success",
-                "tools": tools,
-                "toolCount": len(tools),
-                "registryStatus": registry_status,
-                "registry": registry,
-            }, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"[WebChannel] Tools API error: {_web_body_log_summary(e)}")
-            return json.dumps(_public_error_payload("Request failed.", e))
-
-
-class SkillsHandler:
-    def GET(self):
-        _require_auth()
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        try:
-            from agent.skills.service import SkillService
-            from agent.skills.manager import SkillManager
-            workspace_root = _get_workspace_root()
-            manager = SkillManager(custom_dir=os.path.join(workspace_root, "skills"))
-            service = SkillService(manager)
-            skills = service.query()
-            return json.dumps({"status": "success", "skills": skills}, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"[WebChannel] Skills API error: {_web_body_log_summary(e)}")
-            return json.dumps(_public_error_payload("Request failed.", e))
-
-    def POST(self):
-        _require_auth()
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        try:
-            from agent.skills.service import SkillService
-            from agent.skills.manager import SkillManager
-            body = json.loads(web.data())
-            action = body.get("action")
-            name = body.get("name")
-            if not action or not name:
-                return json.dumps({"status": "error", "message": "action and name are required"})
-            workspace_root = _get_workspace_root()
-            manager = SkillManager(custom_dir=os.path.join(workspace_root, "skills"))
-            service = SkillService(manager)
-            if action == "open":
-                service.open({"name": name})
-            elif action == "close":
-                service.close({"name": name})
-            else:
-                return json.dumps({"status": "error", "message": f"unknown action: {action}"})
-            return json.dumps({"status": "success"}, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"[WebChannel] Skills POST error: {_web_body_log_summary(e)}")
-            return json.dumps(_public_error_payload("Request failed.", e))
-
-
 class MemoryHandler:
     def GET(self):
         _require_auth()
@@ -12513,15 +12507,23 @@ class MemoryContentHandler:
 
 class SchedulerHandler:
     @staticmethod
-    def _mutation_blocked() -> str:
+    def _authorize_action(action: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         try:
-            from common.ecorex_tool_permissions import get_tool_permission_broker
-
-            if get_tool_permission_broker().is_read_only():
-                return "Current read-only mode blocks scheduled task changes."
+            return _authorize_web_capability(
+                "scheduler",
+                action,
+                arguments=body or {"action": action},
+                metadata={"surface": "web", "source": "scheduler_api"},
+            )
         except Exception as exc:
             logger.warning(f"[WebChannel] Scheduler permission check unavailable: {_web_body_log_summary(exc)}")
-            return "Permission broker unavailable; scheduled task change was blocked."
+            return {"allowed": False, "reason": "Permission broker unavailable; scheduled task action was blocked."}
+
+    @staticmethod
+    def _mutation_blocked() -> str:
+        decision = SchedulerHandler._authorize_action("update", {"action": "update"})
+        if decision.get("allowed") is not True:
+            return str(decision.get("reason") or "Permission denied.")
         return ""
 
     @staticmethod
@@ -12606,6 +12608,17 @@ class SchedulerHandler:
         _require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
+            decision = self._authorize_action("list", {"action": "list"})
+            if decision.get("allowed") is not True:
+                return json.dumps(
+                    _permission_denied_payload(
+                        decision.get("reason", ""),
+                        decision,
+                        capability="scheduler",
+                        action="list",
+                    ),
+                    ensure_ascii=False,
+                )
             return json.dumps({"status": "success", **self._projection()}, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[WebChannel] Scheduler API error: {_web_body_log_summary(e)}")
@@ -12626,7 +12639,15 @@ class SchedulerHandler:
 
             blocked = self._mutation_blocked()
             if blocked:
-                return json.dumps({"status": "error", "message": blocked}, ensure_ascii=False)
+                return json.dumps(
+                    _permission_denied_payload(
+                        blocked,
+                        {"allowed": False, "reason": blocked},
+                        capability="scheduler",
+                        action=action,
+                    ),
+                    ensure_ascii=False,
+                )
 
             store = self._store()
             if action == "start":
@@ -12697,280 +12718,6 @@ class SchedulerHandler:
             }, ensure_ascii=False)
 
 
-class SessionsHandler:
-    def GET(self):
-        _require_auth()
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        try:
-            params = web.input(
-                page='1',
-                page_size='50',
-                include_ids='',
-                include_session_ids='',
-                include_pinned='',
-                pinned_ids='',
-            )
-            from agent.memory import get_conversation_store
-            store = get_conversation_store()
-            include_ids_text = str(params.include_ids or params.include_session_ids or "")
-            include_pinned = str(params.include_pinned or "").strip().lower() in {"1", "true", "yes", "on"}
-            pinned_ids_text = str(params.pinned_ids or "") if include_pinned else ""
-            include_session_ids = [
-                item.strip()
-                for item in re.split(r"[\s,]+", f"{include_ids_text},{pinned_ids_text}")
-                if item.strip()
-            ][:200]
-            result = store.list_sessions(
-                channel_type="web",
-                page=int(params.page),
-                page_size=int(params.page_size),
-                include_session_ids=include_session_ids,
-            )
-            return json.dumps({"status": "success", **result}, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"[WebChannel] Sessions API error: {_web_body_log_summary(e)}")
-            return json.dumps(_public_error_payload("Request failed.", e))
-
-
-class SessionDetailHandler:
-    def DELETE(self, session_id: str):
-        _require_auth()
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        logger.info(f"[WebChannel] DELETE session request: {session_id}")
-        try:
-            if not session_id:
-                return json.dumps({"status": "error", "message": "session_id required"})
-
-            from agent.memory import get_conversation_store
-            store = get_conversation_store()
-            store.clear_session(session_id)
-            try:
-                from models.openai.responses_state_store import clear_responses_state_for_session
-
-                removed = clear_responses_state_for_session(session_id)
-                if removed:
-                    logger.info(f"[WebChannel] Cleared Responses state for session {session_id}: removed={removed}")
-            except Exception as e:
-                logger.warning(f"[WebChannel] Failed clearing Responses state for {session_id}: {_web_body_log_summary(e)}")
-
-            # Also remove the Agent instance from AgentBridge if exists
-            try:
-                from bridge.bridge import Bridge
-                ab = Bridge().get_agent_bridge()
-                if session_id in ab.agents:
-                    del ab.agents[session_id]
-                    logger.info(f"[WebChannel] Removed agent instance for session {session_id}")
-            except Exception:
-                pass
-
-            channel = WebChannel()
-            channel.session_queues.pop(session_id, None)
-
-            logger.info(f"[WebChannel] Session deleted: {session_id}")
-            return json.dumps({"status": "success"})
-        except Exception as e:
-            logger.error(f"[WebChannel] Session delete error: {_web_body_log_summary(e)}")
-            return json.dumps(_public_error_payload("Request failed.", e))
-
-    def PUT(self, session_id: str):
-        _require_auth()
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        try:
-            if not session_id:
-                return json.dumps({"status": "error", "message": "session_id required"})
-            body = json.loads(web.data())
-            title = body.get("title", "").strip()
-            if not title:
-                return json.dumps({"status": "error", "message": "title required"})
-
-            from agent.memory import get_conversation_store
-            store = get_conversation_store()
-            found = store.rename_session(session_id, title, lock_title=True)
-            if not found:
-                return json.dumps({"status": "error", "message": "session not found"})
-            return json.dumps({"status": "success"})
-        except Exception as e:
-            logger.error(f"[WebChannel] Session rename error: {_web_body_log_summary(e)}")
-            return json.dumps(_public_error_payload("Request failed.", e))
-
-
-class SessionTitleHandler:
-    def POST(self, session_id: str):
-        _require_auth()
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        try:
-            if not session_id:
-                return json.dumps({"status": "error", "message": "session_id required"})
-
-            body = json.loads(web.data())
-            user_message = body.get("user_message", "")
-            assistant_reply = body.get("assistant_reply", "")
-            if not user_message:
-                return json.dumps({"status": "error", "message": "user_message required"})
-
-            title = _generate_session_title(user_message, assistant_reply)
-
-            from agent.memory import get_conversation_store
-            store = get_conversation_store()
-            title_state = store.get_session_title_state(session_id)
-            if title_state and title_state.get("title_locked"):
-                current_title = str(title_state.get("title") or "")
-                logger.info(f"[WebChannel] Session title locked: sid={session_id}, title='{current_title}'")
-                return json.dumps({
-                    "status": "success",
-                    "title": current_title,
-                    "updated": False,
-                    "title_locked": True,
-                    "titleLocked": True,
-                }, ensure_ascii=False)
-            updated = store.rename_session(session_id, title, respect_title_lock=True)
-            logger.info(f"[WebChannel] Session title set: sid={session_id}, title='{title}', db_updated={updated}")
-
-            return json.dumps({"status": "success", "title": title, "updated": updated}, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"[WebChannel] Title generation error: {_web_body_log_summary(e)}")
-            return json.dumps(_public_error_payload("Request failed.", e))
-
-
-class SessionClearContextHandler:
-    def POST(self, session_id: str):
-        _require_auth()
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        try:
-            if not session_id:
-                return json.dumps({"status": "error", "message": "session_id required"})
-
-            from agent.memory import get_conversation_store
-            store = get_conversation_store()
-            new_seq = store.clear_context(session_id)
-            try:
-                from models.openai.responses_state_store import clear_responses_state_for_session
-
-                removed = clear_responses_state_for_session(session_id)
-                if removed:
-                    logger.info(f"[WebChannel] Cleared Responses state for session {session_id}: removed={removed}")
-            except Exception as e:
-                logger.warning(f"[WebChannel] Failed clearing Responses state for {session_id}: {_web_body_log_summary(e)}")
-
-            # Delete the agent instance so a fresh one is created on the next message
-            try:
-                from bridge.bridge import Bridge
-                bridge = Bridge()
-                ab = bridge.get_agent_bridge()
-                if session_id in ab.agents:
-                    del ab.agents[session_id]
-                    logger.info(f"[WebChannel] Cleared agent instance for session {session_id}")
-            except Exception:
-                pass
-
-            return json.dumps({"status": "success", "context_start_seq": new_seq})
-        except Exception as e:
-            logger.error(f"[WebChannel] Clear context error: {_web_body_log_summary(e)}")
-            return json.dumps(_public_error_payload("Request failed.", e))
-
-
-class HistoryHandler:
-    def GET(self):
-        _require_auth()
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        web.header('Access-Control-Allow-Origin', '*')
-        try:
-            params = web.input(session_id='', page='1', page_size='20')
-            session_id = params.session_id.strip()
-            if not session_id:
-                return json.dumps({"status": "error", "message": "session_id required"})
-
-            from agent.memory import get_conversation_store
-            store = get_conversation_store()
-            result = store.load_history_page(
-                session_id=session_id,
-                page=int(params.page),
-                page_size=int(params.page_size),
-            )
-            return json.dumps({"status": "success", **result}, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"[WebChannel] History API error: {_web_body_log_summary(e)}")
-            return json.dumps(_public_error_payload("Request failed.", e))
-
-
-class MessageDeleteHandler:
-    def POST(self):
-        _require_auth()
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        web.header('Access-Control-Allow-Origin', '*')
-        try:
-            data = json.loads(web.data())
-            session_id = data.get('session_id', '').strip()
-            user_seq = data.get('user_seq')
-            delete_user = data.get('delete_user', True)
-            cascade = data.get('cascade', False)
-            
-            if not session_id or user_seq is None:
-                return json.dumps({"status": "error", "message": "session_id and user_seq required"})
-            
-            # 1. Delete from database
-            from agent.memory import get_conversation_store
-            store = get_conversation_store()
-            deleted = store.delete_message_pair(session_id, int(user_seq), delete_user=delete_user, cascade=cascade)
-
-            # 2. Sync agent's in-memory context so its next turn sees the
-            # same history as the DB. Handled by the agent_bridge helper.
-            try:
-                from bridge import Bridge
-                Bridge().get_agent_bridge().sync_session_messages_from_store(session_id)
-            except Exception as sync_err:
-                logger.warning(f"[WebChannel] Failed to sync agent memory: {sync_err}")
-
-            return json.dumps({"status": "success", "deleted": deleted}, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"[WebChannel] Message delete error: {_web_body_log_summary(e)}")
-            return json.dumps(_public_error_payload("Request failed.", e))
-
-
-class UiStateHandler:
-    MAX_UI_STATE_PAYLOAD_BYTES = 8 * 1024 * 1024
-
-    def GET(self):
-        _require_auth()
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        try:
-            from common.ecorex_workspace import load_ui_state
-            state = load_ui_state(_get_workspace_root())
-            return json.dumps({"status": "success", "state": state}, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"[WebChannel] UI state GET error: {_web_body_log_summary(e)}")
-            return json.dumps(_public_error_payload("Request failed.", e))
-
-    def _save(self):
-        _require_auth()
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        try:
-            raw = web.data() or b"{}"
-            if len(raw) > self.MAX_UI_STATE_PAYLOAD_BYTES:
-                return json.dumps({"status": "error", "message": "ui state payload too large"})
-            body = json.loads(raw)
-            incoming = body.get("state", body)
-            if not isinstance(incoming, dict):
-                return json.dumps({"status": "error", "message": "state must be an object"})
-            from common.ecorex_workspace import save_ui_state
-            state = save_ui_state(_get_workspace_root(), incoming)
-            import_result = WebChannel()._hydrate_conversation_store_from_ui_state(incoming)
-            return json.dumps({
-                "status": "success",
-                "updatedAt": state.get("updatedAt"),
-                "historyImport": import_result,
-            }, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"[WebChannel] UI state PUT error: {_web_body_log_summary(e)}")
-            return json.dumps(_public_error_payload("Request failed.", e))
-
-    def POST(self):
-        return self._save()
-
-    def PUT(self):
-        return self._save()
-
-
 class InstallationsHandler:
     def GET(self):
         _require_auth()
@@ -13013,13 +12760,21 @@ def _log_snapshot_payload(max_lines: int = 200) -> Dict[str, Any]:
         from agent.tools.host_diagnostics.host_diagnostics import _tail_text
 
         tail = _tail_text(log_path, max_lines=max(1, min(500, int(max_lines or 200))), cwd=str(log_path.parent))
+        safe_tail = dict(tail)
+        safe_tail["lines"] = [
+            mask_sensitive_text(line, max_chars=2000)
+            for line in (tail.get("lines") or [])
+        ]
+        for key in ("path", "cwd", "reason", "error"):
+            if key in safe_tail:
+                safe_tail[key] = mask_sensitive_text(safe_tail.get(key), max_chars=500)
         return {
-            "status": "success" if tail.get("exists") and not tail.get("blocked") else "error",
+            "status": "success" if safe_tail.get("exists") and not safe_tail.get("blocked") else "error",
             "type": "snapshot",
             "generatedAt": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
-            "log": tail,
-            "content": "\n".join(tail.get("lines") or []),
-            "message": tail.get("reason") or tail.get("error") or ("" if tail.get("exists") else "run.log not found"),
+            "log": safe_tail,
+            "content": "\n".join(safe_tail.get("lines") or []),
+            "message": safe_tail.get("reason") or safe_tail.get("error") or ("" if safe_tail.get("exists") else "run.log not found"),
         }
     except Exception as exc:
         public_message = _public_exception_message("Log snapshot unavailable.", exc)
@@ -13530,96 +13285,6 @@ def _parse_log_line_limit(value: Any, default: int = 200) -> int:
         return default
 
 
-class LogsSnapshotHandler:
-    def GET(self):
-        _require_auth()
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        params = web.input(lines="200")
-        return json.dumps(_log_snapshot_payload(_parse_log_line_limit(params.lines)), ensure_ascii=False)
-
-
-class DiagnosticsBundleHandler:
-    def GET(self):
-        _require_auth()
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        params = web.input(session_id="", request_id="")
-        return json.dumps(
-            _diagnostic_bundle_payload(
-                session_id=str(params.session_id or "").strip(),
-                request_id=str(params.request_id or "").strip(),
-            ),
-            ensure_ascii=False,
-        )
-
-
-class LogsHandler:
-    def GET(self):
-        _require_auth()
-        accept = (web.ctx.env.get("HTTP_ACCEPT") or "").lower()
-        if "text/event-stream" not in accept:
-            web.header('Content-Type', 'application/json; charset=utf-8')
-            params = web.input(lines="200")
-            return json.dumps(_log_snapshot_payload(_parse_log_line_limit(params.lines)), ensure_ascii=False)
-
-        web.header('Content-Type', 'text/event-stream; charset=utf-8')
-        web.header('Cache-Control', 'no-cache')
-        web.header('X-Accel-Buffering', 'no')
-
-        from config import get_root
-        log_path = _resolve_run_log_path(Path(get_root()))
-
-        def generate():
-            if not log_path.is_file():
-                yield b"data: {\"type\": \"error\", \"message\": \"run.log not found\"}\n\n"
-                return
-
-            # Read last 200 lines for initial display
-            try:
-                from agent.tools.host_diagnostics.host_diagnostics import _mask, _tail_text
-
-                tail = _tail_text(log_path, max_lines=200, cwd=str(log_path.parent))
-                if tail.get("blocked"):
-                    payload = json.dumps({
-                        "type": "error",
-                        "message": tail.get("reason") or "run.log read blocked by permissions",
-                    }, ensure_ascii=False)
-                    yield f"data: {payload}\n\n".encode('utf-8')
-                    return
-                if not tail.get("exists"):
-                    yield b"data: {\"type\": \"error\", \"message\": \"run.log not found\"}\n\n"
-                    return
-                chunk = "\n".join(tail.get("lines") or [])
-                if chunk:
-                    chunk += "\n"
-                payload = json.dumps({"type": "init", "content": chunk}, ensure_ascii=False)
-                yield f"data: {payload}\n\n".encode('utf-8')
-            except Exception as e:
-                public = _public_error_payload("Log stream unavailable.", e, type="error")
-                payload = json.dumps(public, ensure_ascii=False)
-                yield f"data: {payload}\n\n".encode('utf-8')
-                return
-
-            # Tail new lines
-            try:
-                with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
-                    f.seek(0, 2)  # seek to end
-                    deadline = time.time() + 600  # 10 min max
-                    while time.time() < deadline:
-                        line = f.readline()
-                        if line:
-                            payload = json.dumps({"type": "line", "content": _mask(line)}, ensure_ascii=False)
-                            yield f"data: {payload}\n\n".encode('utf-8')
-                        else:
-                            yield b": keepalive\n\n"
-                            time.sleep(1)
-            except GeneratorExit:
-                return
-            except Exception:
-                return
-
-        return generate()
-
-
 class AssetsHandler:
     def GET(self, file_path):  # 修改默认参数
         try:
@@ -13713,6 +13378,135 @@ class KnowledgeGraphHandler:
             return json.dumps({"nodes": [], "links": []})
 
 
+_UPDATE_STATE_MODES = {"manual", "background"}
+_UPDATE_STATE_STATUSES = {"installed", "deferred", "failed", "rollback", "started", "ready"}
+_UPDATE_BROWSER_ACTIONS = {
+    "defer-to-existing-tab-soft-refresh",
+    "open-default-browser",
+    "none",
+}
+
+
+def _safe_local_update_url(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urllib.parse.urlparse(raw)
+    except Exception:
+        return ""
+    if parsed.scheme not in {"http", "https"}:
+        return ""
+    host = (parsed.hostname or "").lower()
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        return ""
+    return urllib.parse.urlunparse((
+        parsed.scheme,
+        parsed.netloc,
+        parsed.path or "/",
+        "",
+        "",
+        "",
+    ))
+
+
+def _webui_update_state_path() -> Optional[Path]:
+    configured = (
+        os.environ.get("ECOREX_WEBUI_STATE_DIR")
+        or conf().get("webui_state_dir")
+        or conf().get("state_dir")
+    )
+    candidates: List[Path] = []
+    if configured:
+        candidates.append(Path(str(configured)).expanduser())
+    appdata_dir = str(conf().get("appdata_dir") or "").strip()
+    if appdata_dir:
+        appdata_path = Path(appdata_dir).expanduser()
+        if appdata_path.name.lower() == "appdata":
+            candidates.append(appdata_path.parent)
+        candidates.append(appdata_path)
+    for candidate in candidates:
+        try:
+            path = candidate / "update-state.json"
+            resolved = path.resolve()
+            if path.is_file():
+                return resolved
+        except Exception:
+            continue
+    return candidates[0] / "update-state.json" if candidates else None
+
+
+def _runtime_update_state_payload() -> Dict[str, Any]:
+    path = _webui_update_state_path()
+    if not path or not path.is_file():
+        return {}
+    try:
+        raw = path.read_text(encoding="utf-8")
+        if len(raw) > 64 * 1024:
+            return {
+                "stateAvailable": False,
+                "status": "failed",
+                "reason": "state_file_too_large",
+                "source": "local-update-state",
+            }
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            return {}
+        mode = _diagnostic_enum(payload.get("mode"), _UPDATE_STATE_MODES, 40) or "manual"
+        status = _diagnostic_enum(payload.get("status"), _UPDATE_STATE_STATUSES, 40) or "ready"
+        browser_action = (
+            _diagnostic_enum(payload.get("browserAction") or payload.get("browser_action"), _UPDATE_BROWSER_ACTIONS, 80)
+            or ("defer-to-existing-tab-soft-refresh" if mode == "background" else "open-default-browser")
+        )
+        activation_policy = str(payload.get("activationPolicy") or payload.get("activation_policy") or "").strip()
+        if not activation_policy:
+            activation_policy = "prompt-soft-refresh-existing-tab" if mode == "background" else "manual-open-browser"
+        health_check = payload.get("healthCheck") or payload.get("health_check") or {}
+        health_payload: Dict[str, Any] = {
+            "endpoint": "/api/version",
+            "status": "pass" if status == "installed" else "pending",
+            "passed": status == "installed",
+        }
+        if isinstance(health_check, dict):
+            endpoint = str(health_check.get("endpoint") or "").strip()
+            if endpoint.startswith("/api/"):
+                health_payload["endpoint"] = endpoint
+            check_status = _diagnostic_enum(health_check.get("status"), {"pass", "pending", "failed"}, 40)
+            if check_status:
+                health_payload["status"] = check_status
+            if isinstance(health_check.get("passed"), bool):
+                health_payload["passed"] = health_check.get("passed")
+        result: Dict[str, Any] = {
+            "stateAvailable": True,
+            "source": "local-update-state",
+            "product": str(payload.get("product") or "EcoreX WebUI")[:80],
+            "version": str(payload.get("version") or "")[:40],
+            "mode": mode,
+            "status": status,
+            "reason": str(payload.get("reason") or "")[:120],
+            "browserAction": browser_action,
+            "activationPolicy": activation_policy[:80],
+            "healthCheck": health_payload,
+            "generatedAt": _diagnostic_timestamp(payload.get("generatedAt")),
+            "refreshRequired": mode == "background" and status == "installed" and browser_action == "defer-to-existing-tab-soft-refresh",
+            "redacted": True,
+        }
+        safe_url = _safe_local_update_url(payload.get("url"))
+        if safe_url:
+            result["url"] = safe_url
+        return {key: value for key, value in result.items() if value not in ("", None)}
+    except Exception as exc:
+        logger.debug(f"[WebChannel] update state unavailable: {_web_body_log_summary(exc)}")
+        return {
+            "stateAvailable": False,
+            "status": "failed",
+            "reason": "state_read_error",
+            "errorHash": _diagnostic_hash(exc),
+            "source": "local-update-state",
+            "redacted": True,
+        }
+
+
 class VersionHandler:
     def GET(self):
         web.header('Content-Type', 'application/json; charset=utf-8')
@@ -13728,6 +13522,7 @@ class VersionHandler:
             "version": __version__,
             "releaseNotes": get_current_release_notes(),
             "desktopRuntimeVerified": verified,
+            "updateState": _runtime_update_state_payload(),
         }
         if verified:
             payload["bootId"] = os.environ.get("ECOREX_DESKTOP_BOOT_ID", "")

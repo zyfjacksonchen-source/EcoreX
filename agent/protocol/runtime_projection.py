@@ -427,6 +427,7 @@ class RuntimeProjectionService:
         image_jobs_by_id: Dict[str, Dict[str, Any]] = {}
         skill_drafts_by_id: Dict[str, Dict[str, Any]] = {}
         external_connections_by_platform: Dict[str, Dict[str, Any]] = {}
+        action_plans_by_id: Dict[str, Dict[str, Any]] = {}
 
         for event in ordered:
             payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
@@ -543,6 +544,16 @@ class RuntimeProjectionService:
                 assistant_started = True
                 state = "waiting_permission"
                 assistant["pending"] = True
+                plan = _projection_permission_action_plan(payload, event)
+                if plan:
+                    action_plans_by_id[str(plan.get("id") or "")] = plan
+            elif event_type == "capability.policy_blocked":
+                assistant_started = True
+                state = "blocked"
+                assistant["pending"] = False
+                plan = _projection_capability_policy_action_plan(payload, event)
+                if plan:
+                    action_plans_by_id[str(plan.get("id") or "")] = plan
             elif event_type in TERMINAL_EVENT_STATES:
                 state = TERMINAL_EVENT_STATES[event_type]
                 terminal_reason = str(payload.get("terminal_reason") or payload.get("reason") or state)
@@ -563,6 +574,16 @@ class RuntimeProjectionService:
         assistant["request_id"] = safe_request_id
         assistant["turn_id"] = safe_turn_id
         assistant["tool_calls"] = list(tools_by_id.values())
+        action_plans = list(action_plans_by_id.values())
+        if state != "waiting_permission":
+            action_plans = [
+                plan for plan in action_plans
+                if not (
+                    str(plan.get("kind") or "") == "permission"
+                    and str(plan.get("nextAction") or "") == "confirm_permission"
+                )
+            ]
+
         return {
             "request_id": safe_request_id,
             "session_id": safe_session_id,
@@ -579,6 +600,7 @@ class RuntimeProjectionService:
             "image_jobs": list(image_jobs_by_id.values()),
             "skill_drafts": list(skill_drafts_by_id.values()),
             "external_connections": list(external_connections_by_platform.values()),
+            "action_plans": action_plans,
             "events": _safe_projection_events(ordered) if include_events else [],
         }
 
@@ -727,6 +749,84 @@ def _safe_projection_permission_payload(payload: Dict[str, Any]) -> Dict[str, An
         safe["payload_sanitized"] = True
         safe["omitted_payload_field_count"] = omitted_count
     return safe
+
+
+def _safe_projection_action_text(value: Any, *, string_limit: int = 240) -> str:
+    if value is None:
+        return ""
+    raw = str(value).strip()
+    if not raw:
+        return ""
+    if _projection_text_has_sensitive_material(raw):
+        return "[redacted]"
+    safe = mask_sensitive_text(raw, max_chars=string_limit)
+    if len(safe) <= string_limit:
+        return safe
+    return f"{safe[:string_limit]}...[truncated {len(safe) - string_limit} chars]"
+
+
+def _projection_action_id(*parts: Any) -> str:
+    safe_parts = []
+    for part in parts:
+        value = _safe_projection_identifier(part)
+        if value:
+            safe_parts.append(value)
+    return ":".join(safe_parts)
+
+
+def _projection_permission_action_plan(payload: Dict[str, Any], event: Dict[str, Any]) -> Dict[str, Any]:
+    safe = _safe_projection_permission_payload(payload)
+    permission_request_id = str(safe.get("permission_request_id") or safe.get("id") or "").strip()
+    if not permission_request_id:
+        return {}
+    tool = str(safe.get("tool") or "tool").strip() or "tool"
+    plan_id = _projection_action_id("permission", permission_request_id)
+    if not plan_id:
+        return {}
+    title = _safe_projection_action_text(payload.get("title"), string_limit=160)
+    if not title:
+        title = f"Permission required for {tool}"
+    message = _safe_projection_action_text(payload.get("message") or payload.get("summary"), string_limit=360)
+    return {
+        "id": plan_id,
+        "kind": "permission",
+        "state": "waiting_permission",
+        "nextAction": "confirm_permission",
+        "actionLabel": "Review permission",
+        "title": title,
+        "message": message,
+        "tool": tool,
+        "permissionRequestId": permission_request_id,
+        "retryable": True,
+        "eventId": _safe_projection_nonnegative_int(event.get("event_id")) or 0,
+    }
+
+
+def _projection_capability_policy_action_plan(payload: Dict[str, Any], event: Dict[str, Any]) -> Dict[str, Any]:
+    safe = _safe_projection_capability_policy_payload(payload)
+    pack_id = str(safe.get("pack_id") or safe.get("packId") or "").strip()
+    action = str(safe.get("action") or "install").strip() or "install"
+    plan_id = _projection_action_id("capability_policy", pack_id or "pack", action)
+    if not plan_id:
+        return {}
+    error_type = str(safe.get("error_type") or safe.get("errorType") or "capability_policy_blocked")
+    pack_redacted = bool(safe.get("pack_id_redacted") or safe.get("packIdRedacted"))
+    title = "Capability action blocked by policy"
+    if pack_id and not pack_redacted:
+        title = f"Capability {pack_id} blocked by policy"
+    return {
+        "id": plan_id,
+        "kind": "capability_policy",
+        "state": "blocked",
+        "nextAction": "view_capability_policy",
+        "actionLabel": "View policy",
+        "title": title,
+        "message": error_type,
+        "packId": "" if pack_redacted else pack_id,
+        "requestedAction": action,
+        "retryable": False,
+        "eventId": _safe_projection_nonnegative_int(event.get("event_id")) or 0,
+    }
 
 
 def _safe_projection_tool_name(value: Any) -> str:
@@ -1667,7 +1767,11 @@ def _projection_identifier_has_sensitive_text(value: str) -> bool:
 
 def _projection_text_has_sensitive_material(value: str) -> bool:
     lowered = str(value or "").lower()
-    sensitive_markers = ("api_key", "authorization:", "bearer ", "password=", "secret=", "token=", "sk-")
+    sensitive_markers = (
+        "api_key", "api key", "api-key", "apikey",
+        "authorization", "bearer ",
+        "password=", "secret=", "token=", "sk-",
+    )
     return any(marker in lowered for marker in sensitive_markers)
 
 
@@ -2768,7 +2872,7 @@ def _overlay_runtime_requests_on_history(
         )
         if not should_append:
             continue
-        if existing is None and user and not _history_has_user_request(messages, request_id):
+        if existing is None and user and not _history_has_user_request(messages, request_id, user):
             messages.append(_runtime_user_history_message(request, user))
             appended = True
         if existing is None:
@@ -2849,9 +2953,17 @@ def _projection_user(request: Dict[str, Any]) -> Dict[str, Any]:
     return {}
 
 
-def _history_has_user_request(messages: List[Dict[str, Any]], request_id: str) -> bool:
+def _history_has_user_request(messages: List[Dict[str, Any]], request_id: str, user: Optional[Dict[str, Any]] = None) -> bool:
+    user_content = str((user or {}).get("content") or "").strip()
     for message in messages:
-        if message.get("role") == "user" and str(message.get("request_id") or "") == request_id:
+        if message.get("role") != "user":
+            continue
+        extras = message.get("extras") if isinstance(message.get("extras"), dict) else {}
+        message_request_id = str(message.get("request_id") or extras.get("request_id") or "").strip()
+        message_turn_id = str(message.get("turn_id") or extras.get("turn_id") or "").strip()
+        if request_id and (message_request_id == request_id or message_turn_id == request_id):
+            return True
+        if user_content and str(message.get("content") or "").strip() == user_content:
             return True
     return False
 

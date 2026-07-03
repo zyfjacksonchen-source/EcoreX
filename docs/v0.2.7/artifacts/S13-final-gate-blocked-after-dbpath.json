@@ -1,0 +1,117 @@
+{
+  "schemaVersion": "v0.2.7-final-gate-v2",
+  "status": "BLOCKED",
+  "version": "0.2.7",
+  "generatedAt": "2026-07-02T21:22:05.355614+00:00",
+  "reason": "S7 Tongxin MPI accuracy remains fail-closed because the production server has no mounted Tongxin project/sub-account data-volume database at the configured path.",
+  "releaseArtifacts": {
+    "publicZip": {
+      "artifactId": "EcoreX_0.2.7-public-release.zip",
+      "size": 2843740,
+      "sha256": "99D78721B8E9888BC2A6110569619DEC8FBE6FA7544C5692047D03A16C97F6D9"
+    },
+    "webLinuxService": {
+      "artifactId": "EcoreX_0.2.7-web-linux-service.tar.gz",
+      "size": 4084307,
+      "sha256": "69F63DF7ACB1224FEF0FE14120342A98E92BC6198EC762A40DCC639271F7EBD8"
+    },
+    "webuiWindows": {
+      "artifactId": "EcoreX_0.2.7-webui-windows-x64.zip",
+      "size": 550736122,
+      "sha256": "B5FC4E4593D2899987996AFE3180D127FFB852E2E3748302EF3EC44D5BC74AF6"
+    },
+    "webuiMacos": {
+      "artifactId": "EcoreX_0.2.7-webui-macos-universal.zip",
+      "size": 652190955,
+      "sha256": "9DE3FAC55240F0015287FB4AF1F27AF0B97011A2FC26CC46C48792C4B42E40D8"
+    }
+  },
+  "localGates": {
+    "releaseArtifactValidation": "PASS",
+    "lightRealReleaseValidation": {
+      "status": "PASS",
+      "checkCount": 107,
+      "passCount": 107,
+      "failCount": 0
+    },
+    "focusedUnitSuites": {
+      "status": "PASS",
+      "testCount": 4
+    },
+    "desktopTypecheck": "PASS"
+  },
+  "productionDeployment": {
+    "status": "PASS",
+    "evidence": "docs/v0.2.7/artifacts/production-deploy-online.json",
+    "generatedAt": "2026-07-02T21:16:43.265862+00:00"
+  },
+  "productionAcceptance": {
+    "status": "FAIL",
+    "evidence": "docs/v0.2.7/artifacts/production-agent-product-acceptance.json",
+    "checkCount": 520,
+    "enabledCheckCount": 512,
+    "passCount": 510,
+    "failCount": 2,
+    "skipCount": 8,
+    "durationSeconds": 322.08
+  },
+  "newS13Fixes": [
+    "Tongxin wrapper now accepts tools.tongxin_cli.database_path and compatible env aliases.",
+    "Tongxin wrapper injects XIN_AGENT_DATABASE, DATABASE, and ECOREX_TONGXIN_DATABASE into the subprocess.",
+    "Tongxin status/diagnose now exposes redacted database path reference and database file existence.",
+    "Server installer, WebUI Windows config, WebUI macOS config, desktop sidecar, config template, release validator, and real-release acceptance checks are aligned on the data-volume contract."
+  ],
+  "postDeployTongxinProbe": {
+    "evidence": "docs/v0.2.7/artifacts/S13-tongxin-data-volume-postdeploy.json",
+    "databaseConfigured": true,
+    "databaseFileExists": false,
+    "databasePathName": "tongxin.sqlite3",
+    "dataVolume": {
+      "accountCount": 0,
+      "projectCount": 0
+    },
+    "errorType": "tongxin_mpi_accuracy_zero_project_samples"
+  },
+  "passedCapabilities": [
+    "custom OpenAI-compatible Gemini routing",
+    "model switch context continuity and assistant artifact history references",
+    "paged model-switch divider UI",
+    "background update state and soft refresh banner",
+    "CDP-first browser open-box capability",
+    "local OCR and Vision open-box capability",
+    "native multi-image generation routing without bash fallback",
+    "large local-file context budgeting",
+    "macOS runtime preinstall alignment",
+    "public manifest artifact sha/size contract",
+    "Tongxin data-volume database path configuration contract"
+  ],
+  "blockingFailures": [
+    {
+      "group": "v027-integrated-capabilities",
+      "name": "Tongxin MPI accuracy action succeeds",
+      "errorType": "tongxin_mpi_accuracy_zero_project_samples",
+      "dataVolume": {
+        "accountCount": 0,
+        "projectCount": 0
+      },
+      "rule": "sampleCount must be greater than zero; cache fallback must not masquerade as MPI"
+    },
+    {
+      "group": "v027-integrated-capabilities",
+      "name": "Tongxin MPI accuracy has samples without fallback or drift",
+      "errorType": "tongxin_mpi_accuracy_zero_project_samples",
+      "dataVolume": {
+        "accountCount": 0,
+        "projectCount": 0
+      },
+      "rule": "sampleCount must be greater than zero before drift can be evaluated"
+    }
+  ],
+  "strictMultiAgentReview": {
+    "status": "NOT_AVAILABLE",
+    "countsAsStrictPass": false,
+    "blocker": "multi-agent spawn was unavailable in this thread because the agent thread limit had already been reached",
+    "fallbackEvidence": "docs/v0.2.7/artifacts/S11-online-update-stability-review.json"
+  },
+  "nextUnblockAction": "Mount or provide the Tongxin SQLite data-volume database as tongxin.sqlite3 at the configured state path, or set tools.tongxin_cli.database_path/ECOREX_TONGXIN_DATABASE to the mounted read-only database, then rerun python scripts/真实发布校验.py."
+}

@@ -70,6 +70,15 @@ class V023CdpOcrExternalConnectionsTests(unittest.TestCase):
         with patch.object(service.sys, "platform", "linux"), patch.object(service.shutil, "which", return_value="/usr/bin/chromium"):
             self.assertEqual(service.find_chrome_executable({}), "/usr/bin/chromium")
 
+    def test_cdp_screenshot_uses_native_capture_fallback(self):
+        source = Path("agent/tools/browser/browser_service.py").read_text(encoding="utf-8")
+
+        self.assertIn('page.screenshot(path=filepath, full_page=full_page, animations="disabled")', source)
+        self.assertIn('if self._launch_mode != "cdp":', source)
+        self.assertIn("self._capture_screenshot_via_cdp(page, filepath, full_page=full_page)", source)
+        self.assertIn('session.send("Page.captureScreenshot", params)', source)
+        self.assertIn("base64.b64decode(image_data)", source)
+
     def test_cdp_auto_launch_timeout_cleans_up_spawned_process(self):
         from agent.tools.browser import browser_automation_service as service
 
@@ -102,6 +111,15 @@ class V023CdpOcrExternalConnectionsTests(unittest.TestCase):
 
         self.assertTrue(fake.terminated)
         self.assertTrue(fake.killed)
+
+    def test_cdp_fallback_cleans_auto_launched_process_before_switching_launch_mode(self):
+        source = Path("agent/tools/browser/browser_service.py").read_text(encoding="utf-8")
+
+        fallback_idx = source.index('fallback_launch_mode = "persistent" if self._user_data_dir else "fresh"')
+        shutdown_idx = source.index("self._shutdown_browser()", fallback_idx)
+        switch_idx = source.index("self._launch_mode = fallback_launch_mode", shutdown_idx)
+        self.assertLess(fallback_idx, shutdown_idx)
+        self.assertLess(shutdown_idx, switch_idx)
 
     def test_chrome_devtools_mcp_defaults_use_full_cdp_profile(self):
         import config
@@ -259,6 +277,34 @@ class V023CdpOcrExternalConnectionsTests(unittest.TestCase):
         self.assertEqual(result.result["nextAction"]["tool"], "browser")
         self.assertEqual(result.result["nextAction"]["action"], "navigate")
 
+    def test_ocr_extract_urls_normalizes_bare_domain_for_browser_handoff(self):
+        from agent.tools.ocr.ocr import OcrTool
+
+        result = OcrTool().execute({
+            "action": "extract_urls",
+            "text": "截图里写着 example.com/ecorex-4827，请打开它。",
+        })
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.result["urls"], ["https://example.com/ecorex-4827"])
+        self.assertEqual(result.result["nextAction"], {
+            "tool": "browser",
+            "action": "navigate",
+            "url": "https://example.com/ecorex-4827",
+        })
+
+    def test_ocr_extract_urls_repairs_ocr_misread_scheme_separator(self):
+        from agent.tools.ocr.ocr import OcrTool
+
+        result = OcrTool().execute({
+            "action": "extract_urls",
+            "text": "URL https/example.com/ecorex-4827",
+        })
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.result["urls"], ["https://example.com/ecorex-4827"])
+        self.assertEqual(result.result["nextAction"]["url"], "https://example.com/ecorex-4827")
+
     def test_ocr_extract_urls_uses_rapidocr_provider_for_image_handoff(self):
         from PIL import Image
         from agent.tools.ocr.ocr import OcrTool, _CACHE, _RAPIDOCR_ENGINES
@@ -314,8 +360,8 @@ class V023CdpOcrExternalConnectionsTests(unittest.TestCase):
     def test_fast_ocr_provider_is_declared_for_runtime_packaging(self):
         root = Path(__file__).resolve().parents[1]
         requirements = (root / "requirements.txt").read_text(encoding="utf-8")
-        core_requirements = (root / "desktop" / "runtime-packs" / "core-requirements.txt").read_text(encoding="utf-8")
-        capabilities = json.loads((root / "desktop" / "runtime-packs" / "capabilities.json").read_text(encoding="utf-8"))
+        core_requirements = (root / "runtime-packs" / "core-requirements.txt").read_text(encoding="utf-8")
+        capabilities = json.loads((root / "runtime-packs" / "capabilities.json").read_text(encoding="utf-8"))
         packs = {str(item.get("id")): item for item in capabilities.get("packs") or []}
 
         self.assertIn("rapidocr-onnxruntime", requirements)
@@ -3764,6 +3810,16 @@ class V023CdpOcrExternalConnectionsTests(unittest.TestCase):
         source = Path("desktop/electron/sidecar.ts").read_text(encoding="utf-8")
         self.assertIn("cdp_auto_launch: true", source)
         self.assertNotIn("cdp_auto_launch: false", source)
+
+    def test_v027_sidecar_prefers_bundled_playwright_browsers_on_macos(self):
+        source = Path("desktop/electron/sidecar.ts").read_text(encoding="utf-8")
+
+        self.assertIn('bundledPlaywrightBrowsersDir = path.join(this.repoRoot, "playwright-browsers")', source)
+        self.assertIn("fs.existsSync(bundledPlaywrightBrowsersDir)", source)
+        self.assertIn("PLAYWRIGHT_BROWSERS_PATH: managedPlaywrightBrowsersDir", source)
+        self.assertIn("ECOREX_PLAYWRIGHT_BROWSERS_DIR: managedPlaywrightBrowsersDir", source)
+        self.assertIn('inheritedPlaywrightBrowsersDir || path.join(userDataDir, "capabilities", "playwright-browsers")', source)
+        self.assertNotIn('PLAYWRIGHT_BROWSERS_PATH:\n            process.platform === "darwin"', source)
 
     def test_docs_skeleton_exists_for_v023_goal(self):
         root = Path("docs/v0.2.3")

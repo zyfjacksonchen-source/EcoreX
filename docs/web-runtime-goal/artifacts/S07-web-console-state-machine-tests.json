@@ -1,0 +1,97 @@
+{
+  "schemaVersion": "web-runtime-goal-artifact-v1",
+  "slice": "S7",
+  "title": "Web console state machine and inline action rows",
+  "date": "2026-07-01",
+  "changedFiles": [
+    "agent/protocol/runtime_projection.py",
+    "channel/web/static/js/console.js",
+    "channel/web/static/css/console.css",
+    "scripts/smoke-s7-inline-actions.js",
+    "tests/test_web_runtime_goal.py"
+  ],
+  "contracts": {
+    "singleSubmitEntry": "submitMessage(opts) is the only Web console /message POST path.",
+    "submitCallers": [
+      "sendMessage",
+      "sendVoiceMessage",
+      "regenerateResponse"
+    ],
+    "activeRecovery": [
+      "/api/runtime-projection",
+      "/api/active-requests"
+    ],
+    "inlineActionRows": [
+      "confirm_permission",
+      "configure_model_provider",
+      "repair*",
+      "connector_login",
+      "view_capability_policy"
+    ],
+    "dedupe": "renderSubmitFailureOnce uses dataset.submitFailureRendered so one failed send renders one recovery/action prompt.",
+    "projectionActionPlans": "RuntimeProjectionService exposes sanitized action_plans for permission.requested and capability.policy_blocked events."
+  },
+  "reviewFixes": {
+    "stalePermissionRows": "Permission confirm action plans are omitted once projection state is no longer waiting_permission, and frontend projection sync removes stale inline rows.",
+    "sseTerminalRows": "applyRuntimeProjectionSnapshot uses syncInlineActionRows so live SSE terminal refresh also removes stale permission rows.",
+    "actionPlanOnlyRecovery": "Runtime projection action plans now make a request renderable and are carried into newly created bot bubbles.",
+    "submitPermissionAction": "Submit-error permission rows use view_capability_policy instead of the removed open_permissions action.",
+    "submitFailurePhase": "renderSubmitFailureOnce removes the stale agent-current-phase before showing an error/action row.",
+    "behavioralSmoke": "scripts/smoke-s7-inline-actions.js executes console.js helper code against a minimal DOM shim."
+  },
+  "security": {
+    "rawPermissionArgumentsInProjection": false,
+    "rawSecretsInActionPlans": false,
+    "permissionDecisionEndpoint": "/api/tool-permissions",
+    "repairSideEffectsFromInlineRows": false,
+    "notes": [
+      "Inline rows render deterministic actions but do not introduce a Web-only repair executor.",
+      "Capability policy rows navigate to existing management/diagnostic surfaces instead of bypassing S3/S4 installer contracts."
+    ]
+  },
+  "tests": [
+    {
+      "command": "node --check channel/web/static/js/console.js; node --check scripts/smoke-s7-inline-actions.js",
+      "status": "passed",
+      "summary": "JavaScript syntax checks passed."
+    },
+    {
+      "command": "python -m py_compile agent/protocol/runtime_projection.py tests/test_web_runtime_goal.py scripts/smoke-chat-model-connectivity.py",
+      "status": "passed",
+      "summary": "Python syntax compile passed."
+    },
+    {
+      "command": "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_web_runtime_goal.py -q -k s7",
+      "status": "passed",
+      "summary": "4 passed, 42 deselected"
+    },
+    {
+      "command": "node scripts/smoke-s7-inline-actions.js",
+      "status": "passed",
+      "summary": "projectionOnlyRenderable=true; submitPermissionAction=view_capability_policy; permissionRowRemovedAfterTerminalSync=true; applyRuntimeProjectionSnapshot uses syncInlineActionRows"
+    },
+    {
+      "command": "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_web_runtime_goal.py -q",
+      "status": "passed",
+      "summary": "46 passed, 3 warnings"
+    },
+    {
+      "command": "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -q -k \"runtime_projection_api_returns_request_and_session_projection or web_stream_terminal_and_loss_converge_from_runtime_projection or web_history_load_refreshes_session_runtime_projection or web_runtime_real_network_browser_smoke_harness_contract or frontend_has_typed_runtime_projection_fetch_contract\"",
+      "status": "passed",
+      "summary": "5 passed, 401 deselected, 2 warnings"
+    }
+  ],
+  "warnings": [
+    "pydub reported a local ffmpeg/avconv warning in imported test paths.",
+    "Python reported audioop and setDaemon deprecation warnings from pre-existing code paths."
+  ],
+  "notes": [
+    "S7 keeps Web console recovery on SSE plus runtime projection and active request snapshots.",
+    "sendMessage, sendVoiceMessage, and regenerateResponse now converge through submitMessage(opts).",
+    "History load, stream loss, window focus, and visibility restore paths all re-check active runtime requests.",
+    "Inline action rows consume S5/S6/S7 contracts and provide a common visual row for permission, credential, repair, and policy states.",
+    "Terminal projections no longer resurrect stale Allow/Deny permission rows.",
+    "Projection-only permission/policy rows are renderable even without tool calls or assistant text.",
+    "Image generation remains pinned by S4b/S6 and is not changed by this slice."
+  ]
+}

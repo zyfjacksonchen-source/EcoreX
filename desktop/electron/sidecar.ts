@@ -297,12 +297,19 @@ export class SidecarManager {
       return;
     }
     const webPort = this.getWebPort();
+    const userDataDir = this.appGetPath("userData");
+    const bundledPlaywrightBrowsersDir = path.join(this.repoRoot, "playwright-browsers");
+    const inheritedPlaywrightBrowsersDir = process.env.PLAYWRIGHT_BROWSERS_PATH || process.env.ECOREX_PLAYWRIGHT_BROWSERS_DIR || "";
+    const managedPlaywrightBrowsersDir = fs.existsSync(bundledPlaywrightBrowsersDir)
+      ? bundledPlaywrightBrowsersDir
+      : process.platform === "darwin"
+        ? inheritedPlaywrightBrowsersDir || path.join(userDataDir, "capabilities", "playwright-browsers")
+        : inheritedPlaywrightBrowsersDir;
     const capabilityEnv = process.platform === "darwin"
       ? {
-          ECOREX_CAPABILITY_STATE_DIR: path.join(this.appGetPath("userData"), "capabilities", "state"),
-          ECOREX_CAPABILITY_TARGET_DIR: path.join(this.appGetPath("userData"), "capabilities", "python-site"),
-          ECOREX_PLAYWRIGHT_BROWSERS_DIR: path.join(this.appGetPath("userData"), "capabilities", "playwright-browsers"),
-          ECOREX_LARK_CLI_INSTALL_ROOT: path.join(this.appGetPath("userData"), "capabilities", "lark-cli")
+          ECOREX_CAPABILITY_STATE_DIR: path.join(userDataDir, "capabilities", "state"),
+          ECOREX_CAPABILITY_TARGET_DIR: path.join(userDataDir, "capabilities", "python-site"),
+          ECOREX_LARK_CLI_INSTALL_ROOT: path.join(userDataDir, "capabilities", "lark-cli")
         }
       : {};
     this.ensureDesktopRuntimeDefaults();
@@ -336,10 +343,10 @@ export class SidecarManager {
           ...capabilityEnv,
           PATH: [this.resolveExternalCliPath(), process.env.PATH].filter(Boolean).join(path.delimiter),
           PYTHONPATH: [this.repoRoot, this.resolveCapabilityPythonPath(), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
-          PLAYWRIGHT_BROWSERS_PATH:
-            process.platform === "darwin"
-              ? path.join(this.appGetPath("userData"), "capabilities", "playwright-browsers")
-              : process.env.PLAYWRIGHT_BROWSERS_PATH,
+          ...(managedPlaywrightBrowsersDir ? {
+            PLAYWRIGHT_BROWSERS_PATH: managedPlaywrightBrowsersDir,
+            ECOREX_PLAYWRIGHT_BROWSERS_DIR: managedPlaywrightBrowsersDir
+          } : {}),
           PYTHONNOUSERSITE: "1",
           WEB_PORT: String(webPort)
         },
@@ -907,6 +914,10 @@ export class SidecarManager {
       }
       if (tongxinCli.auth_url === undefined || tongxinCli.auth_url === "") {
         tongxinCli.auth_url = "https://mvdcm.ecoremedia.net/ecorex-agent/client/tongxin/auth";
+        changed = true;
+      }
+      if (tongxinCli.database_path === undefined || tongxinCli.database_path === "") {
+        tongxinCli.database_path = path.join(this.appGetPath("userData"), "tongxin.sqlite3");
         changed = true;
       }
       if (tools.tongxin_cli !== tongxinCli) {

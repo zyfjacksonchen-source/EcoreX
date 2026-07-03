@@ -6,7 +6,7 @@ import os
 import hashlib
 import threading
 import uuid
-from typing import Optional
+from typing import Any, Optional
 from config import conf
 from channel.channel_catalog import normalize_channel_name
 from common.log import logger
@@ -547,20 +547,41 @@ def _execute_scheduled_task(task: dict, agent_bridge) -> bool:
 
 def _authorize_scheduled_execution(task: dict) -> bool:
     """Fail closed for background scheduler work that cannot ask the UI."""
+    def normalize_decision(decision: Any) -> dict:
+        if isinstance(decision, dict) and decision.get("allowed") in {True, False}:
+            return decision
+        return {"allowed": False, "reason": "Permission broker returned an invalid authorization decision."}
+
     try:
         from common.ecorex_tool_permissions import get_tool_permission_broker
 
+        broker = get_tool_permission_broker()
         action = task.get("action", {}) if isinstance(task, dict) else {}
-        decision = get_tool_permission_broker().authorize_noninteractive(
-            "scheduler",
-            {
-                "action": "execute",
-                "task_id": task.get("id") if isinstance(task, dict) else "",
-                "name": task.get("name") if isinstance(task, dict) else "",
-                "action_type": action.get("type") if isinstance(action, dict) else "",
-            },
-        )
-        if decision.get("allowed"):
+        auth_args = {
+            "action": "execute",
+            "task_id": task.get("id") if isinstance(task, dict) else "",
+            "name": task.get("name") if isinstance(task, dict) else "",
+            "action_type": action.get("type") if isinstance(action, dict) else "",
+        }
+        capability_authorize = getattr(broker, "authorize_capability", None)
+        decision = None
+        if callable(capability_authorize):
+            candidate = capability_authorize(
+                "scheduler",
+                "execute",
+                arguments=auth_args,
+                metadata={"source": "scheduler_background"},
+            )
+            decision = normalize_decision(candidate)
+        if decision is None:
+            noninteractive = getattr(broker, "authorize_noninteractive", None)
+            if callable(noninteractive):
+                candidate = noninteractive("scheduler", auth_args)
+                if isinstance(candidate, dict):
+                    decision = normalize_decision(candidate)
+        if decision is None:
+            decision = {"allowed": False, "reason": "Permission broker returned an invalid authorization decision."}
+        if decision.get("allowed") is True:
             return True
         logger.warning(
             f"[Scheduler] Task {task.get('id') if isinstance(task, dict) else '<unknown>'} "
@@ -574,6 +595,11 @@ def _authorize_scheduled_execution(task: dict) -> bool:
 
 def _authorize_scheduled_tool_call(tool, tool_name: str, tool_params: dict, task: dict) -> bool:
     """Authorize a concrete tool invoked by a scheduled task."""
+    def normalize_decision(decision: Any) -> dict:
+        if isinstance(decision, dict) and decision.get("allowed") in {True, False}:
+            return decision
+        return {"allowed": False, "reason": "Permission broker returned an invalid authorization decision."}
+
     try:
         from agent.protocol.agent_stream import AgentStreamExecutor
         from common.ecorex_tool_permissions import get_tool_permission_broker
@@ -583,8 +609,26 @@ def _authorize_scheduled_tool_call(tool, tool_name: str, tool_params: dict, task
             tool_name,
             tool_params if isinstance(tool_params, dict) else {},
         )
-        decision = get_tool_permission_broker().authorize_noninteractive(proxy_name, proxy_args)
-        if decision.get("allowed"):
+        broker = get_tool_permission_broker()
+        capability_authorize = getattr(broker, "authorize_capability", None)
+        decision = None
+        if callable(capability_authorize):
+            candidate = capability_authorize(
+                proxy_name,
+                str((proxy_args or {}).get("action") or ""),
+                arguments=proxy_args,
+                metadata={"source": "scheduler_background_tool_call"},
+            )
+            decision = normalize_decision(candidate)
+        if decision is None:
+            noninteractive = getattr(broker, "authorize_noninteractive", None)
+            if callable(noninteractive):
+                candidate = noninteractive(proxy_name, proxy_args)
+                if isinstance(candidate, dict):
+                    decision = normalize_decision(candidate)
+        if decision is None:
+            decision = {"allowed": False, "reason": "Permission broker returned an invalid authorization decision."}
+        if decision.get("allowed") is True:
             return True
         logger.warning(
             f"[Scheduler] Task {task.get('id') if isinstance(task, dict) else '<unknown>'} "

@@ -1,0 +1,102 @@
+{
+  "schemaVersion": "web-runtime-goal-artifact-v1",
+  "slice": "S8",
+  "status": "passed_with_notes",
+  "title": "Web megolith split evidence",
+  "date": "2026-07-01",
+  "lineCounts": {
+    "web_channel_py_before": 12897,
+    "web_channel_py_after": 11958,
+    "auth_py": 90,
+    "capabilities_py": 96,
+    "diagnostics_py": 98,
+    "files_py": 183,
+    "handler_support_py": 45,
+    "image_jobs_py": 180,
+    "projection_py": 143,
+    "routes_py": 72,
+    "sessions_py": 255,
+    "sse_py": 37
+  },
+  "changedFiles": [
+    "channel/web/auth.py",
+    "channel/web/capabilities.py",
+    "channel/web/diagnostics.py",
+    "channel/web/files.py",
+    "channel/web/handler_support.py",
+    "channel/web/image_jobs.py",
+    "channel/web/projection.py",
+    "channel/web/routes.py",
+    "channel/web/sessions.py",
+    "channel/web/sse.py",
+    "channel/web/static/js/inline-actions.js",
+    "channel/web/static/js/console.js",
+    "channel/web/chat.html",
+    "channel/web/web_channel.py",
+    "scripts/smoke-s7-inline-actions.js",
+    "tests/test_web_runtime_goal.py"
+  ],
+  "completed": [
+    "Moved the declarative Web route table out of WebChannel.startup() into channel/web/routes.py.",
+    "Moved Web auth, SSE, sessions/history/UI state, runtime projection, file, image job, capabilities, and diagnostics route handlers into dedicated modules.",
+    "Kept extracted handler class names imported into web_channel.py so existing web.py string handler routing stays compatible.",
+    "Split inline action normalization/rendering/synchronization out of console.js into channel/web/static/js/inline-actions.js.",
+    "Loaded inline-actions.js before console.js in chat.html.",
+    "Added S8 structural regression assertions for route table, handler ownership modules, and frontend module load order."
+  ],
+  "transitionalBridges": [
+    "handler_support.py calls legacy web_channel auth/workspace helpers so existing tests and security semantics stay intact.",
+    "files.py, image_jobs.py, sessions.py, diagnostics.py, projection.py, and sse.py call existing web_channel helper functions where moving helpers would expand blast radius.",
+    "console.js keeps wrapper functions so existing call sites continue to work while implementation lives in inline-actions.js."
+  ],
+  "postReviewFixes": [
+    "Changed sessions.py failed agent-memory-sync logging from raw exception text to web_body_log_summary(sync_err).",
+    "Main thread rechecked web_channel.py line count after architecture note; current line count remains 11958 and matches this artifact."
+  ],
+  "notComplete": [
+    "Deep helper/service extraction from web_channel.py remains future work after S8; this slice focuses on route-handler ownership and frontend module split.",
+    "InstallationsHandler and several configuration/channel handlers remain in web_channel.py for later slices because they were not part of the immediate S8 risk path."
+  ],
+  "tests": [
+    {
+      "command": "python -m py_compile channel/web/auth.py channel/web/sse.py channel/web/sessions.py channel/web/files.py channel/web/image_jobs.py channel/web/projection.py channel/web/capabilities.py channel/web/diagnostics.py channel/web/web_channel.py tests/test_web_runtime_goal.py",
+      "status": "passed",
+      "summary": "syntax compile passed"
+    },
+    {
+      "command": "node --check channel/web/static/js/inline-actions.js; node --check channel/web/static/js/console.js; node scripts/smoke-s7-inline-actions.js",
+      "status": "passed",
+      "summary": "inline action module syntax and behavior smoke passed"
+    },
+    {
+      "command": "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_web_runtime_goal.py -q",
+      "status": "passed",
+      "summary": "47 passed, 3 warnings"
+    },
+    {
+      "command": "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -q -k \"runtime_projection_api_returns_request_and_session_projection or web_stream_terminal_and_loss_converge_from_runtime_projection or web_history_load_refreshes_session_runtime_projection or image_jobs_api_starts_collects_and_projects_backend_job or web_file_serve_obeys_custom_filesystem_profile or capabilities_api_flattens_policy_capability_packs_for_frontend_contract\"",
+      "status": "passed",
+      "summary": "6 passed, 400 deselected, 2 warnings"
+    },
+    {
+      "command": "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -q -k \"web_stream_terminal_and_loss_converge_from_runtime_projection or web_history_load_refreshes_session_runtime_projection or sse or session\"",
+      "status": "passed",
+      "summary": "63 passed, 343 deselected, 3 warnings, 8 subtests passed"
+    },
+    {
+      "command": "python -m py_compile channel/web/sessions.py channel/web/web_channel.py tests/test_web_runtime_goal.py",
+      "status": "passed",
+      "summary": "post-review security logging fix compile passed"
+    },
+    {
+      "command": "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_web_runtime_goal.py -q -k \"s8_web_routes or s7_inline_action_node_smoke_executes_recovery_contract\"",
+      "status": "passed",
+      "summary": "2 passed, 45 deselected"
+    },
+    {
+      "command": "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -q -k \"web_history_load_refreshes_session_runtime_projection or session\"",
+      "status": "passed",
+      "summary": "41 passed, 365 deselected, 3 warnings, 3 subtests passed"
+    }
+  ]
+}

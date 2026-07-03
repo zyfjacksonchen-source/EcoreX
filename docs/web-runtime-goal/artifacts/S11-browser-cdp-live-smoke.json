@@ -1,0 +1,65 @@
+{
+  "status": "PASS",
+  "scenario": "browser-cdp-live-smoke",
+  "createdAt": "2026-07-01T11:30:14Z",
+  "checks": [
+    {
+      "name": "chrome executable discovered",
+      "ok": true,
+      "source": "external-browser"
+    },
+    {
+      "name": "cdp endpoint ready",
+      "ok": true,
+      "endpoint": "http://127.0.0.1:9222",
+      "browser": "Chrome/149.0.7827.200",
+      "protocolVersion": "1.3"
+    },
+    {
+      "name": "browser tool navigate snapshot",
+      "ok": true,
+      "preview": "Navigated to: data:text/html,<title>EcoreX CDP Smoke</title><main><h1>EcoreX CDP Smoke OK</h1><button id=ok>OK</button></main>\nTitle: EcoreX CDP Smoke\nStatus: None\n\n--- Page Snapshot ---\nPage: EcoreX CDP Smoke  (data:text/html,<title>EcoreX CDP Smoke</title><main><h1>EcoreX CDP Smoke OK</h1><button "
+    },
+    {
+      "name": "browser tool snapshot",
+      "ok": true,
+      "preview": "Page: EcoreX CDP Smoke  (data:text/html,<title>EcoreX CDP Smoke</title><main><h1>EcoreX CDP Smoke OK</h1><button id=ok>OK</button></main>)\nInteractive elements: 1\n---\nmain\n  h1: EcoreX CDP Smoke OK\n  [1] button: OK"
+    },
+    {
+      "name": "browser tool screenshot",
+      "ok": true,
+      "pathPresent": true,
+      "bytes": 21400,
+      "suffix": ".png"
+    }
+  ],
+  "diagnosticsBefore": {
+    "mode": "cdp-first",
+    "endpoint": "http://127.0.0.1:9222",
+    "cdp": {
+      "configured": true,
+      "ready": true,
+      "endpoint": "http://127.0.0.1:9222",
+      "browser": "Chrome/149.0.7827.200",
+      "protocolVersion": "1.3",
+      "webSocketDebuggerUrl": true
+    },
+    "autoLaunch": true,
+    "fallbackEnabled": true,
+    "fallbackAvailable": false,
+    "persistent": true,
+    "chromeExecutableFound": true,
+    "chromeExecutableSource": "external-browser",
+    "cdpUserDataDir": "C:\\Users\\user/.cow/chrome_cdp_profile",
+    "openAtFirstUse": true
+  },
+  "chromeExecutableFound": true,
+  "cdpAfterLaunch": {
+    "configured": true,
+    "ready": true,
+    "endpoint": "http://127.0.0.1:9222",
+    "browser": "Chrome/149.0.7827.200",
+    "protocolVersion": "1.3",
+    "webSocketDebuggerUrlPresent": true
+  }
+}

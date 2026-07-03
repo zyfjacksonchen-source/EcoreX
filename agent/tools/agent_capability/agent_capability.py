@@ -212,7 +212,9 @@ class AgentCapabilityTool(BaseTool):
         workspace = _workspace_for(self)
         try:
             if action == "list_packs":
-                return OptionalAbilities().execute({"action": "list"})
+                from agent.runtime_capabilities import CapabilityService
+
+                return ToolResult.success(CapabilityService(workspace_root=workspace).capabilities_payload(include_related=False))
             if action == "diagnose":
                 return self._diagnose(workspace)
             if action == "install_pack":
@@ -400,22 +402,9 @@ class AgentCapabilityTool(BaseTool):
             logger.debug(f"[AgentCapability] capability policy event skipped: {exc}")
 
     def _diagnose(self, workspace: str) -> ToolResult:
-        abilities = OptionalAbilities().execute({"action": "list"}).result
-        skills = _skill_service(workspace).dispatch("query")
-        try:
-            from agent.tools import ToolManager
+        from agent.runtime_capabilities import CapabilityService
 
-            manager = ToolManager()
-            mcp_status = manager.list_mcp_status()
-        except Exception as exc:
-            mcp_status = {"error": str(exc)}
-        return ToolResult.success({
-            "status": "success",
-            "workspace": workspace,
-            "abilities": abilities,
-            "skills": skills,
-            "mcpStatus": mcp_status,
-        })
+        return ToolResult.success(CapabilityService(workspace_root=workspace).diagnose_payload())
 
     def _install_skill(self, workspace: str, params: Dict[str, Any]) -> ToolResult:
         name = str(params.get("skill") or params.get("name") or "").strip()

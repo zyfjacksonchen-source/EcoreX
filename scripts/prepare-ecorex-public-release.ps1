@@ -9,7 +9,8 @@ param(
     [string]$WebTarballPath = "",
     [string]$OutputDir = "release-artifacts",
     [switch]$KeepStaging,
-    [switch]$SkipValidation
+    [switch]$SkipValidation,
+    [switch]$ExternalizeDownloads
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,6 +49,19 @@ function Write-Utf8NoBom {
     )
     $encoding = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($Path, $Value, $encoding)
+}
+
+function Set-JsonObjectProperty {
+    param(
+        [Parameter(Mandatory = $true)][object]$Object,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)]$Value
+    )
+    if ($Object.PSObject.Properties.Name -contains $Name) {
+        $Object.PSObject.Properties[$Name].Value = $Value
+    } else {
+        Add-Member -InputObject $Object -NotePropertyName $Name -NotePropertyValue $Value -Force
+    }
 }
 
 function Get-EcoreXFileSha256 {
@@ -487,6 +501,9 @@ foreach ($ready in $readyArtifacts) {
     if ($ready.External) {
         continue
     }
+    if ($ExternalizeDownloads) {
+        continue
+    }
     Copy-Item -LiteralPath $ready.Path -Destination (Join-Path $downloadOut $ready.Artifact.fileName) -Force
     if ($ready.Artifact.id -eq "windows-x64") {
         $sourceDir = Split-Path -Parent $ready.Path
@@ -545,6 +562,27 @@ foreach ($ready in $readyArtifacts) {
     }
 }
 
+if ($ExternalizeDownloads) {
+    $publicManifestPath = Join-Path $siteOut "manifest.json"
+    $publicManifest = Get-Content -Raw -Encoding UTF8 -LiteralPath $publicManifestPath | ConvertFrom-Json
+    foreach ($ready in $readyArtifacts) {
+        if ($ready.External) {
+            continue
+        }
+        $artifactId = [string]$ready.Artifact.id
+        $fileName = [string]$ready.Artifact.fileName
+        foreach ($publicArtifact in $publicManifest.artifacts) {
+            if ([string]$publicArtifact.id -ne $artifactId) {
+                continue
+            }
+            Set-JsonObjectProperty -Object $publicArtifact -Name "href" -Value "downloads/$fileName"
+            break
+        }
+    }
+    Set-JsonObjectProperty -Object $publicManifest -Name "downloadsExternalized" -Value $true
+    Write-Utf8NoBom -Path $publicManifestPath -Value (($publicManifest | ConvertTo-Json -Depth 12) + "`n")
+}
+
 $adminFiles = @("ecorex_admin_api.py", "Dockerfile", "README.md")
 foreach ($fileName in $adminFiles) {
     $source = Join-Path $adminApiRootResolved $fileName
@@ -587,6 +625,21 @@ foreach ($ready in $readyArtifacts) {
         continue
     }
 
+    if ($ExternalizeDownloads) {
+        $checksumArtifacts[$ready.Artifact.id] = [ordered]@{
+            fileName = $ready.Artifact.fileName
+            relativePath = "site/downloads/$($ready.Artifact.fileName)"
+            href = "downloads/$($ready.Artifact.fileName)"
+            size = $ready.Size
+            sha256 = $ready.Sha256
+            status = $ready.Artifact.status
+            authenticode = $ready.Signature
+            external = $true
+            deploymentSourceFileName = $ready.Artifact.fileName
+        }
+        continue
+    }
+
     $stagedPath = Join-Path $downloadOut $ready.Artifact.fileName
     $stagedHash = Get-EcoreXFileSha256 -Path $stagedPath
     $stagedSize = (Get-Item -LiteralPath $stagedPath).Length
@@ -612,6 +665,8 @@ $checksums = [ordered]@{
     product = "EcoreX"
     version = $Version
     generatedAt = (Get-Date).ToString("o")
+    downloadsExternalized = [bool]$ExternalizeDownloads
+    downloadsSource = if ($ExternalizeDownloads) { "public-release-downloads-source" } else { "embedded" }
     siteRoot = "site"
     adminApiRoot = "admin-api"
     serverHelperRoot = "server"

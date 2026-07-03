@@ -262,6 +262,14 @@ def chunk_has_model_output(chunk: Any) -> bool:
             return True
         if delta.get("tool_calls") or delta.get("function_call"):
             return True
+        message = choice.get("message") or {}
+        if isinstance(message, dict):
+            if message.get("content") or message.get("reasoning_content") or message.get("refusal"):
+                return True
+            if message.get("tool_calls") or message.get("function_call"):
+                return True
+        if choice.get("text"):
+            return True
     return False
 
 

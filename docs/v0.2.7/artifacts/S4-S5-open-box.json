@@ -1,0 +1,56 @@
+{
+  "schema": "ecorex.v0.2.7.open_box_capabilities.v1",
+  "generatedAt": "2026-07-02T00:00:00+08:00",
+  "sourceSafety": {
+    "publicArtifactContainsSecrets": false,
+    "publicArtifactContainsRawApiBase": false,
+    "publicArtifactContainsRawLocalPaths": false,
+    "diagnosticPolicy": "hash-count-category-only"
+  },
+  "slices": {
+    "S4CdpOpenBox": {
+      "status": "review_passed",
+      "browserDefaultMode": "cdp-first",
+      "cdpEndpointClass": "trusted-localhost",
+      "autoLaunchDefault": true,
+      "fallbackDefault": true,
+      "persistentDefault": true,
+      "chromeDevtoolsMcpAutoStartDefault": false,
+      "chromeDevtoolsPrivacyFlagsRequired": true,
+      "trustedMcpStartRequiresLocalhost": true,
+      "readOnlyDoesNotLaunchNewBrowser": true,
+      "cdpFallbackCleansAutoLaunchedProcess": true
+    },
+    "S5VisionOcrOpenBox": {
+      "status": "review_passed",
+      "visionToolDeclared": true,
+      "ocrToolDeclared": true,
+      "rapidOcrRuntimePackDeclared": true,
+      "pillowRuntimePackDeclared": true,
+      "ocrBrowserHandoffDeclared": true,
+      "visionFallbackWhenOcrMissing": true,
+      "publicOcrErrorRedaction": true
+    }
+  },
+  "localVerification": {
+    "focusedPytest": "108 passed, 3 warnings",
+    "pythonCompile": "passed"
+  },
+  "reviewGate": {
+    "status": "PASS",
+    "rolePassCount": 5,
+    "roles": [
+      "runtime-config",
+      "frontend-api",
+      "toolchain-cdp-ocr-tongxin",
+      "qa-release",
+      "privacy-data"
+    ]
+  },
+  "notes": [
+    "The only code change in this slice was a safe default web.ctx fallback for no-request test/runtime contexts.",
+    "CDP fallback now shuts down while still in cdp launch mode before switching to persistent/fresh fallback.",
+    "WebFetch read-only guard remains compatible with brokers that only implement authorize_noninteractive.",
+    "CDP and OCR/Vision open-box behavior is verified by release contracts."
+  ]
+}

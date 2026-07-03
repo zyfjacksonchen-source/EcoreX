@@ -19,6 +19,8 @@ capability-state/
 workspace
 config.yaml
 user_datas.pkl
+user_datas.json
+**/user_datas.json
 chatgpt_tool_hub/
 plugins/**/
 !plugins/bdunit

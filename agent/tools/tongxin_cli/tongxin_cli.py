@@ -28,12 +28,14 @@ MAX_BOOTSTRAP_BYTES = 10 * 1024 * 1024
 DEFAULT_SCRIPT_NAME = "xin_agent_cli.py"
 DEFAULT_CLIENT_EVENT_KEY = "ecorex-web-v0.2.5-web.1"
 PYTHON_CONFIG_KEYS = ("python_path", "pythonPath", "runtime_python_path", "runtimePythonPath")
+DATABASE_CONFIG_KEYS = ("database_path", "databasePath", "db_path", "dbPath", "database")
 SUPPORTED_SCRIPT_NAMES = (
     DEFAULT_SCRIPT_NAME,
     "xin agent cli.py",
     "xin-agent-cli.py",
     "tongxin_cli.py",
 )
+TONGXIN_BUNDLED_RELATIVE_PATH = Path("tools") / "tongxin" / DEFAULT_SCRIPT_NAME
 DEFAULT_TONGXIN_SCOPE = "all-users-read-only"
 TONGXIN_DATA_HEALTH_PROBE_ARGS = ("project", "list", "--source", "cache", "--limit", "1")
 BOOTSTRAP_CONFIG_KEYS = {
@@ -59,7 +61,7 @@ TONGXIN_RUNPY_SHIM = (
 READ_ONLY_ALLOWED_COMMANDS = (
     "schema",
     "account list --source --platform --xhs-channel --project-id --search --limit --offset",
-    "project list --source --platform --xhs-channel --search --limit --offset",
+    "project list --source --platform --xhs-channel --account-id --search --start-date --end-date --limit --offset",
     "report summary --source --platform --xhs-channel --account-id --project-id --start-date --end-date --limit --offset",
     "note detail --source --platform --xhs-channel --account-id --project-id --start-date --end-date --limit --offset",
     "realtime summary --xhs-channel all|spotlight|chengfeng --project-id --account-id --search --limit --offset",
@@ -130,7 +132,17 @@ _BOOLEAN_FLAGS = {"--json", "--help", "-h", "--no-cache-write", "--read-only"}
 _ALL_FLAGS = _FLAGS_WITH_VALUES | _BOOLEAN_FLAGS
 _COMMAND_ALLOWED_FLAGS = {
     ("account", "list"): {"--source", "--platform", "--xhs-channel", "--project-id", "--search", "--limit", "--offset"},
-    ("project", "list"): {"--source", "--platform", "--xhs-channel", "--search", "--limit", "--offset"},
+    ("project", "list"): {
+        "--source",
+        "--platform",
+        "--xhs-channel",
+        "--account-id",
+        "--search",
+        "--start-date",
+        "--end-date",
+        "--limit",
+        "--offset",
+    },
     ("report", "summary"): {
         "--source",
         "--platform",
@@ -391,7 +403,7 @@ def validate_read_only_tongxin_args(raw_args: Any) -> Tuple[bool, str]:
 
 def is_read_only_tongxin_request(args: Dict[str, Any]) -> bool:
     action = str((args or {}).get("action") or "").strip().lower()
-    if action in {"status", "schema", "diagnose"}:
+    if action in {"status", "schema", "diagnose", "mpi_accuracy", "accuracy_check"}:
         return True
     if action == "run":
         ok, _reason = validate_read_only_tongxin_args((args or {}).get("args"))
@@ -507,7 +519,7 @@ class TongxinCli(BaseTool):
     description: str = (
         "Default all-user read-only access to Tongxin Assistant / Xin Agent account data. "
         "Use this instead of bash for xin_agent_cli.py. It can configure an existing "
-        "local CLI path, authenticate to the Tongxin server with per-call login input, bootstrap the CLI from an authenticated server with SHA256 verification, run schema, and run approved "
+        "local CLI path, authenticate to the Tongxin server with per-call login input, bootstrap the CLI from an authenticated server with SHA256 verification, run schema, run an MPI accuracy check, and run approved "
         "read-only account/project/report/note/realtime queries only; data writes, sync, "
         "submit, approve, delete, and permission-changing commands are blocked."
     )
@@ -516,7 +528,7 @@ class TongxinCli(BaseTool):
         "properties": {
             "action": {
                 "type": "string",
-                "description": "One of: status, configure, auto_configure, auth, login, bootstrap, download, schema, diagnose, run.",
+                "description": "One of: status, configure, auto_configure, auth, login, bootstrap, download, schema, diagnose, run, mpi_accuracy.",
             },
             "script_path": {
                 "type": "string",
@@ -526,10 +538,34 @@ class TongxinCli(BaseTool):
                 "type": "string",
                 "description": "Optional EcoreX-owned Python executable path for the Tongxin CLI. Prefer tools.tongxin_cli.python_path or ECOREX_TONGXIN_CLI_PYTHON_PATH.",
             },
+            "database_path": {
+                "type": "string",
+                "description": "Optional read-only Tongxin data-volume SQLite path. Prefer tools.tongxin_cli.database_path or ECOREX_TONGXIN_DATABASE.",
+            },
             "args": {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "Arguments after xin_agent_cli.py for action=run, e.g. ['realtime', 'summary', '--xhs-channel', 'all'].",
+            },
+            "start_date": {
+                "type": "string",
+                "description": "Inclusive YYYY-MM-DD start date for action=mpi_accuracy.",
+            },
+            "end_date": {
+                "type": "string",
+                "description": "Inclusive YYYY-MM-DD end date for action=mpi_accuracy.",
+            },
+            "sample_limit": {
+                "type": "integer",
+                "description": "Maximum data-volume account samples for action=mpi_accuracy. Default 3, max 20.",
+            },
+            "tolerance_abs": {
+                "type": "number",
+                "description": "Absolute drift tolerance for action=mpi_accuracy.",
+            },
+            "tolerance_ratio": {
+                "type": "number",
+                "description": "Relative drift tolerance for action=mpi_accuracy.",
             },
             "timeout": {
                 "type": "integer",
@@ -604,7 +640,9 @@ class TongxinCli(BaseTool):
             if action in {"bootstrap", "download"}:
                 return self._bootstrap(args, timeout, include_paths=include_paths)
             if action == "schema":
-                return self._run_cli(["schema"], timeout, include_paths=include_paths)
+                return self._schema(timeout, include_paths=include_paths)
+            if action in {"mpi_accuracy", "accuracy_check"}:
+                return self._mpi_accuracy_check(args, timeout)
             if action == "run":
                 cli_args = _as_args(args.get("args"))
                 ok, reason = validate_read_only_tongxin_args(cli_args)
@@ -617,7 +655,51 @@ class TongxinCli(BaseTool):
                         "allowedCommands": list(READ_ONLY_ALLOWED_COMMANDS),
                     })
                 return self._run_cli(cli_args, timeout, include_paths=include_paths)
-            return ToolResult.fail({"status": "error", "message": "action must be one of: status, configure, auto_configure, auth, login, bootstrap, download, schema, diagnose, run"})
+            return ToolResult.fail({"status": "error", "message": "action must be one of: status, configure, auto_configure, auth, login, bootstrap, download, schema, diagnose, run, mpi_accuracy"})
+
+    def _schema(self, timeout: int, *, include_paths: bool = False) -> ToolResult:
+        cli_schema_status = "unavailable"
+        cli_schema: Any = None
+        cli_output_ref = ""
+        cli_result = self._run_cli(["schema"], timeout, include_paths=include_paths)
+        cli_payload = getattr(cli_result, "result", cli_result)
+        if getattr(cli_result, "status", "") == "success" and isinstance(cli_payload, dict):
+            cli_schema_status = "success"
+            cli_schema = cli_payload.get("json")
+            cli_output_ref = hashlib.sha256(str(cli_payload.get("output") or "").encode("utf-8", errors="replace")).hexdigest()[:16]
+        elif isinstance(cli_payload, dict):
+            cli_schema_status = str(cli_payload.get("status") or getattr(cli_result, "status", "") or "error")
+
+        return ToolResult.success({
+            "status": "success",
+            "tool": self.name,
+            "readOnly": True,
+            "defaultAudience": DEFAULT_TONGXIN_SCOPE,
+            "actions": [
+                "status",
+                "diagnose",
+                "configure",
+                "auto_configure",
+                "auth",
+                "login",
+                "bootstrap",
+                "download",
+                "schema",
+                "run",
+                "mpi_accuracy",
+                "accuracy_check",
+            ],
+            "parameters": self.get_json_schema().get("parameters") or self.params,
+            "allowedCommands": list(READ_ONLY_ALLOWED_COMMANDS),
+            "sourcePolicy": {
+                "factSource": "mpi",
+                "projectAccountSource": "tongxin-data-volume",
+                "cacheFallbackAllowedForMpi": False,
+            },
+            "cliSchemaStatus": cli_schema_status,
+            "cliSchema": cli_schema,
+            "cliOutputHash": cli_output_ref,
+        })
 
     def _status(self, *, include_paths: bool = False, diagnose: bool = False) -> Dict[str, Any]:
         script = self._script_path()
@@ -640,6 +722,7 @@ class TongxinCli(BaseTool):
             or self._bootstrap_setting("manifest_url")
             or self._bootstrap_setting("url")
         )
+        remote_preferred = bool(remote_bootstrap_configured and not configured and not auto_configurable)
         configuration_state = (
             str(health_failure.get("configurationState") or "dependency_failed")
             if health_failure
@@ -665,11 +748,16 @@ class TongxinCli(BaseTool):
             "allowedCommands": list(READ_ONLY_ALLOWED_COMMANDS),
             "remoteAuthConfigured": bool(remote_auth_url),
             "remoteBootstrapAvailable": remote_bootstrap_configured,
-            "remotePreferred": remote_bootstrap_configured,
+            "remotePreferred": remote_preferred,
             "configured": configured,
             "persistedConfig": persisted,
             "autoConfigurable": bool(auto_configurable),
             "configurationState": configuration_state,
+            "bundledPathRef": _path_ref(self._bundled_script_path()),
+            "bundledAvailable": bool(self._bundled_script_path().is_file()),
+            "databaseConfigured": bool(self._effective_database_path()),
+            "databasePathRef": _path_ref(self._effective_database_path()),
+            "databaseFileExists": self._database_file_exists(),
         }
         if health_failure:
             payload["scriptHealth"] = health_failure
@@ -692,8 +780,9 @@ class TongxinCli(BaseTool):
             )
         elif not script and remote_auth_url:
             payload["message"] = (
-                "Tongxin CLI is configured for remote auth/bootstrap. Run tongxin_cli action=auto_configure "
-                "with per-call username/password to download and verify the read-only CLI. Local script_path is only an explicit fallback."
+                "Tongxin CLI bundled/local script was not found. Run tongxin_cli action=auto_configure "
+                "to use the bundled path when present; authenticated remote bootstrap is only a fallback "
+                "when no healthy local script exists."
             )
             payload["nextAction"] = {
                 "tool": "tongxin_cli",
@@ -711,7 +800,7 @@ class TongxinCli(BaseTool):
         elif not configured:
             if auto_configurable:
                 payload["message"] = (
-                    "Tongxin CLI script was auto-discovered but not persisted. "
+                    "Tongxin CLI bundled/local script was auto-discovered but not persisted. "
                     "Run tongxin_cli action=configure or use EcoreX capability configuration to save it."
                 )
             else:
@@ -797,7 +886,8 @@ class TongxinCli(BaseTool):
 
     def _auto_configure(self, args: Dict[str, Any], timeout: int, *, include_paths: bool = False) -> ToolResult:
         status = self._status(include_paths=include_paths)
-        if status.get("configured"):
+        prefer_remote = self._remote_auto_config_preferred(args)
+        if status.get("configured") and not prefer_remote:
             status.update({
                 "status": "success",
                 "autoConfigured": False,
@@ -805,7 +895,18 @@ class TongxinCli(BaseTool):
             })
             return ToolResult.success(status)
 
-        prefer_remote = self._remote_auto_config_preferred(args)
+        if not prefer_remote:
+            configured = self._configure({}, timeout, include_paths=include_paths)
+            if configured.status == "success":
+                payload = configured.result if isinstance(configured.result, dict) else {"result": configured.result}
+                payload["autoConfigured"] = True
+                payload["autoConfigureStep"] = "local_trusted_script"
+                payload["previousRemoteConfigured"] = {
+                    "remoteAuthConfigured": bool(status.get("remoteAuthConfigured")),
+                    "remoteBootstrapAvailable": bool(status.get("remoteBootstrapAvailable")),
+                }
+                return ToolResult.success(payload)
+
         if prefer_remote:
             bootstrapped = self._bootstrap(args, timeout, include_paths=include_paths)
             payload = bootstrapped.result if isinstance(bootstrapped.result, dict) else {"result": bootstrapped.result}
@@ -876,11 +977,7 @@ class TongxinCli(BaseTool):
         )
         if any((args or {}).get(key) for key in explicit_remote_keys):
             return True
-        return bool(
-            self._remote_auth_setting("url")
-            or self._bootstrap_setting("manifest_url")
-            or self._bootstrap_setting("url")
-        )
+        return False
 
     def _remote_auth(self, args: Dict[str, Any], timeout: int) -> ToolResult:
         try:
@@ -1260,6 +1357,344 @@ class TongxinCli(BaseTool):
             return ToolResult.fail(payload)
         return ToolResult.success(payload)
 
+    def _mpi_accuracy_check(self, args: Dict[str, Any], timeout: int) -> ToolResult:
+        start_date = str(args.get("start_date") or args.get("startDate") or "").strip()
+        end_date = str(args.get("end_date") or args.get("endDate") or "").strip()
+        if not start_date or not end_date:
+            return ToolResult.fail({
+                "status": "error",
+                "errorType": "tongxin_mpi_accuracy_date_required",
+                "message": "start_date and end_date are required for MPI accuracy checks.",
+            })
+        sample_limit = self._bounded_int(args.get("sample_limit") or args.get("sampleLimit"), default=3, lower=1, upper=20)
+        tolerance_abs = self._bounded_float(args.get("tolerance_abs") or args.get("toleranceAbs"), default=0.01, lower=0.0, upper=1000000.0)
+        tolerance_ratio = self._bounded_float(args.get("tolerance_ratio") or args.get("toleranceRatio"), default=0.01, lower=0.0, upper=1.0)
+        xhs_channel = str(args.get("xhs_channel") or args.get("xhsChannel") or "spotlight").strip().lower()
+        if xhs_channel not in _XHS_OFFLINE_CHANNELS:
+            return ToolResult.fail({
+                "status": "error",
+                "errorType": "tongxin_mpi_accuracy_invalid_channel",
+                "message": "xhs_channel must be spotlight or chengfeng for MPI accuracy checks.",
+            })
+
+        account_payload = self._run_cli_json_for_accuracy(
+            ["account", "list", "--source", "cache", "--limit", str(sample_limit), "--offset", "0"],
+            timeout,
+        )
+        if not account_payload.get("ok"):
+            return ToolResult.fail(self._accuracy_error_payload("data_volume_accounts_unavailable", account_payload))
+        project_payload = self._run_cli_json_for_accuracy(
+            ["project", "list", "--source", "cache", "--limit", str(sample_limit), "--offset", "0"],
+            timeout,
+        )
+        if not project_payload.get("ok"):
+            return ToolResult.fail(self._accuracy_error_payload("data_volume_projects_unavailable", project_payload))
+
+        account_items = self._extract_items(account_payload.get("json"))
+        project_items = self._extract_items(project_payload.get("json"))
+        if not project_items:
+            return ToolResult.fail({
+                "status": "error",
+                "errorType": "tongxin_mpi_accuracy_zero_project_samples",
+                "message": "No data-volume projects were available for MPI accuracy sampling.",
+                "sourcePolicy": {
+                    "factSource": "mpi",
+                    "projectAccountSource": "tongxin-data-volume",
+                    "cacheFallbackAllowedForMpi": False,
+                },
+                "dataVolume": {
+                    "accountCount": len(account_items),
+                    "projectCount": 0,
+                },
+            })
+        account_ids = [
+            str(item.get("account_id") or item.get("sub_account_id") or item.get("id") or "").strip()
+            for item in account_items
+            if isinstance(item, dict)
+        ]
+        account_ids = [item for item in account_ids if item][:sample_limit]
+        if not account_ids:
+            return ToolResult.fail({
+                "status": "error",
+                "errorType": "tongxin_mpi_accuracy_zero_samples",
+                "message": "No data-volume accounts were available for MPI accuracy sampling.",
+                "sourcePolicy": {
+                    "factSource": "mpi",
+                    "projectAccountSource": "tongxin-data-volume",
+                    "cacheFallbackAllowedForMpi": False,
+                },
+                "dataVolume": {
+                    "accountCount": 0,
+                    "projectCount": len(project_items),
+                },
+            })
+
+        sample_results: List[Dict[str, Any]] = []
+        fallback_detected = False
+        mpi_unavailable = 0
+        comparable_count = 0
+        passed_count = 0
+        max_abs_drift = 0.0
+        max_ratio_drift = 0.0
+
+        for account_id in account_ids:
+            account_hash = self._hash_public(account_id)
+            cache_report = self._run_cli_json_for_accuracy(
+                [
+                    "report",
+                    "summary",
+                    "--source",
+                    "cache",
+                    "--account-id",
+                    account_id,
+                    "--start-date",
+                    start_date,
+                    "--end-date",
+                    end_date,
+                    "--limit",
+                    "1",
+                    "--offset",
+                    "0",
+                ],
+                timeout,
+            )
+            mpi_report = self._run_cli_json_for_accuracy(
+                [
+                    "report",
+                    "summary",
+                    "--source",
+                    "mpi",
+                    "--platform",
+                    "xhs",
+                    "--xhs-channel",
+                    xhs_channel,
+                    "--account-id",
+                    account_id,
+                    "--start-date",
+                    start_date,
+                    "--end-date",
+                    end_date,
+                    "--limit",
+                    "1",
+                    "--offset",
+                    "0",
+                ],
+                timeout,
+            )
+            if not mpi_report.get("ok"):
+                mpi_unavailable += 1
+                sample_results.append({"accountHash": account_hash, "status": "mpi_unavailable"})
+                continue
+            if self._payload_uses_cache_fallback(mpi_report.get("json")):
+                fallback_detected = True
+                sample_results.append({"accountHash": account_hash, "status": "cache_fallback_detected"})
+                continue
+            cache_metric = self._first_metric_value(cache_report.get("json"))
+            mpi_metric = self._first_metric_value(mpi_report.get("json"))
+            if cache_metric is None or mpi_metric is None:
+                sample_results.append({"accountHash": account_hash, "status": "not_comparable"})
+                continue
+            comparable_count += 1
+            abs_drift = abs(cache_metric - mpi_metric)
+            ratio_drift = abs_drift / max(abs(mpi_metric), 1.0)
+            max_abs_drift = max(max_abs_drift, abs_drift)
+            max_ratio_drift = max(max_ratio_drift, ratio_drift)
+            passed = abs_drift <= tolerance_abs or ratio_drift <= tolerance_ratio
+            if passed:
+                passed_count += 1
+            sample_results.append({
+                "accountHash": account_hash,
+                "status": "pass" if passed else "drift_exceeded",
+                "driftBucket": self._drift_bucket(abs_drift, tolerance_abs),
+                "ratioBucket": self._ratio_bucket(ratio_drift, tolerance_ratio),
+            })
+
+        status = "success"
+        error_type = ""
+        if mpi_unavailable:
+            status = "error"
+            error_type = "tongxin_mpi_accuracy_mpi_unavailable"
+        elif fallback_detected:
+            status = "error"
+            error_type = "tongxin_mpi_accuracy_cache_fallback_detected"
+        elif comparable_count == 0:
+            status = "error"
+            error_type = "tongxin_mpi_accuracy_no_comparable_metrics"
+        elif passed_count != comparable_count:
+            status = "error"
+            error_type = "tongxin_mpi_accuracy_drift_exceeded"
+
+        payload = {
+            "status": status,
+            "errorType": error_type,
+            "sourcePolicy": {
+                "factSource": "mpi",
+                "projectAccountSource": "tongxin-data-volume",
+                "cacheFallbackAllowedForMpi": False,
+            },
+            "dateRangeHash": self._hash_public(f"{start_date}:{end_date}"),
+            "xhsChannel": xhs_channel,
+            "sampleCount": len(account_ids),
+            "comparableMetricCount": comparable_count,
+            "passedMetricCount": passed_count,
+            "mpiUnavailableCount": mpi_unavailable,
+            "cacheFallbackDetected": fallback_detected,
+            "tolerance": {
+                "absolute": tolerance_abs,
+                "ratio": tolerance_ratio,
+            },
+            "drift": {
+                "maxAbsoluteBucket": self._drift_bucket(max_abs_drift, tolerance_abs),
+                "maxRatioBucket": self._ratio_bucket(max_ratio_drift, tolerance_ratio),
+            },
+            "dataVolume": {
+                "accountCount": len(account_items),
+                "projectCount": len(project_items),
+                "accountHashes": [self._hash_public(account_id) for account_id in account_ids],
+                "projectHashes": [
+                    self._hash_public(str(item.get("project_id") or item.get("id") or ""))
+                    for item in project_items[:sample_limit]
+                    if isinstance(item, dict) and str(item.get("project_id") or item.get("id") or "").strip()
+                ],
+            },
+            "samples": sample_results,
+            "publicArtifactSafe": True,
+        }
+        if status == "error":
+            payload["message"] = "Tongxin MPI accuracy check did not meet the strict gate."
+            return ToolResult.fail(payload)
+        payload["message"] = "Tongxin MPI accuracy check passed."
+        return ToolResult.success(payload)
+
+    def _run_cli_json_for_accuracy(self, cli_args: List[str], timeout: int) -> Dict[str, Any]:
+        result = self._run_cli(cli_args, timeout, include_paths=False)
+        payload = result.result if isinstance(result.result, dict) else {}
+        return {
+            "ok": result.status == "success" and isinstance(payload.get("json"), (dict, list)),
+            "status": result.status,
+            "exitCode": payload.get("exitCode"),
+            "commandHash": self._hash_public(" ".join(str(item) for item in cli_args)),
+            "json": payload.get("json") if isinstance(payload.get("json"), (dict, list)) else {},
+            "errorType": payload.get("errorType") or payload.get("configurationState") or "",
+        }
+
+    @staticmethod
+    def _accuracy_error_payload(error_type: str, detail: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "status": "error",
+            "errorType": f"tongxin_mpi_accuracy_{error_type}",
+            "message": "Tongxin MPI accuracy check could not read the required data-volume source.",
+            "commandHash": detail.get("commandHash", ""),
+            "exitCode": detail.get("exitCode"),
+            "sourcePolicy": {
+                "factSource": "mpi",
+                "projectAccountSource": "tongxin-data-volume",
+                "cacheFallbackAllowedForMpi": False,
+            },
+        }
+
+    @classmethod
+    def _extract_items(cls, payload: Any) -> List[Dict[str, Any]]:
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        if not isinstance(payload, dict):
+            return []
+        for key in ("items", "rows", "records", "list"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+        data = payload.get("data")
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        if isinstance(data, dict):
+            if any(isinstance(data.get(key), list) for key in ("items", "rows", "records", "list")):
+                for key in ("items", "rows", "records", "list"):
+                    value = data.get(key)
+                    if isinstance(value, list):
+                        return [item for item in value if isinstance(item, dict)]
+            nested = cls._extract_items(data)
+            if nested:
+                return nested
+            return [data]
+        result = payload.get("result")
+        if isinstance(result, (dict, list)):
+            return cls._extract_items(result)
+        return []
+
+    @classmethod
+    def _first_metric_value(cls, payload: Any) -> Optional[float]:
+        metric_keys = (
+            "cost",
+            "total_cost",
+            "selected_cost",
+            "spend",
+            "amount",
+            "consumption",
+            "consume",
+            "realtime_cost",
+        )
+        for item in cls._extract_items(payload):
+            for key in metric_keys:
+                value = item.get(key)
+                if value in (None, ""):
+                    continue
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    continue
+        return None
+
+    @staticmethod
+    def _payload_uses_cache_fallback(payload: Any) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+        source = str(meta.get("source") or "").strip().lower()
+        requested = str(meta.get("requested_source") or meta.get("requestedSource") or "").strip().lower()
+        effective = str(meta.get("effective_source") or meta.get("effectiveSource") or "").strip().lower()
+        fallback = str(meta.get("fallback_source") or meta.get("fallbackSource") or "").strip().lower()
+        return fallback == "cache" or effective == "cache" or (requested == "mpi" and source == "cache")
+
+    @staticmethod
+    def _hash_public(value: Any) -> str:
+        return hashlib.sha256(str(value or "").encode("utf-8", errors="replace")).hexdigest()[:16]
+
+    @staticmethod
+    def _bounded_int(value: Any, *, default: int, lower: int, upper: int) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            parsed = default
+        return max(lower, min(upper, parsed))
+
+    @staticmethod
+    def _bounded_float(value: Any, *, default: float, lower: float, upper: float) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            parsed = default
+        return max(lower, min(upper, parsed))
+
+    @staticmethod
+    def _drift_bucket(value: float, tolerance: float) -> str:
+        if value <= tolerance:
+            return "within_tolerance"
+        if value <= max(tolerance * 5, tolerance + 1):
+            return "low"
+        if value <= max(tolerance * 20, tolerance + 10):
+            return "medium"
+        return "high"
+
+    @staticmethod
+    def _ratio_bucket(value: float, tolerance: float) -> str:
+        if value <= tolerance:
+            return "within_tolerance"
+        if value <= max(tolerance * 2, 0.05):
+            return "low"
+        if value <= max(tolerance * 5, 0.2):
+            return "medium"
+        return "high"
+
     @staticmethod
     def _requires_data_health(cli_args: List[str]) -> bool:
         tokens = _lower_tokens(cli_args)
@@ -1277,6 +1712,11 @@ class TongxinCli(BaseTool):
         env.pop("PYTHONPATH", None)
         env.pop("PYTHONHOME", None)
         env.setdefault("PYTHONIOENCODING", "utf-8")
+        database_path = self._effective_database_path()
+        if database_path:
+            env["XIN_AGENT_DATABASE"] = database_path
+            env["DATABASE"] = database_path
+            env["ECOREX_TONGXIN_DATABASE"] = database_path
         return env
 
     def _python_dependency(self):
@@ -1348,6 +1788,13 @@ class TongxinCli(BaseTool):
                 self._script_health_cache[cache_key] = payload
                 self._last_script_health_failure = dict(payload)
                 return dict(payload)
+            if phase == "data":
+                parsed = self._parse_json(result.stdout)
+                if self._is_bundled_placeholder_result(parsed):
+                    payload = self._script_health_failure(script, phase, result.returncode, output)
+                    self._script_health_cache[cache_key] = payload
+                    self._last_script_health_failure = dict(payload)
+                    return dict(payload)
 
         payload = {
             "ok": True,
@@ -1380,7 +1827,13 @@ class TongxinCli(BaseTool):
         cancelled: bool = False,
     ) -> Dict[str, Any]:
         lowered = (output or "").lower()
-        if "models" in lowered and "database" in lowered:
+        if "bundled_placeholder" in lowered or "ecorex-bundled" in lowered:
+            state = "bundled_placeholder"
+            message = (
+                "Tongxin bundled placeholder is installed but does not provide live data; "
+                "authenticate/bootstrap the full Tongxin package before running data queries."
+            )
+        elif "models" in lowered and "database" in lowered:
             state = "dependency_failed"
             message = (
                 "Tongxin CLI script imports an incompatible models module; "
@@ -1409,10 +1862,19 @@ class TongxinCli(BaseTool):
             "message": message,
         }
 
+    @staticmethod
+    def _is_bundled_placeholder_result(value: Any) -> bool:
+        if not isinstance(value, dict):
+            return False
+        source = str(value.get("source") or "").strip().lower()
+        state = str(value.get("configurationState") or value.get("configuration_state") or "").strip().lower()
+        return source == "ecorex-bundled" or state == "bundled_placeholder"
+
     def _candidate_script_paths(self) -> List[Path]:
         configured = self._configured_script_path()
         raw: List[Any] = [
             configured,
+            self._bundled_script_path(),
             *self._env_script_path_values(),
             *self._trusted_auto_config_roots(),
             Path(self.cwd),
@@ -1487,6 +1949,68 @@ class TongxinCli(BaseTool):
                 return str(value)
         return ""
 
+    def _direct_database_path(self) -> str:
+        for key in DATABASE_CONFIG_KEYS:
+            value = self.config.get(key)
+            if value:
+                return str(value).strip()
+        return ""
+
+    @staticmethod
+    def _env_database_path() -> str:
+        for key in ("ECOREX_TONGXIN_DATABASE", "XIN_AGENT_DATABASE", "DATABASE"):
+            value = os.environ.get(key)
+            if value:
+                return str(value).strip()
+        return ""
+
+    def _configured_database_path(self) -> str:
+        direct = self._direct_database_path()
+        if direct:
+            return direct
+        file_cfg = self._read_runtime_config()
+        file_tools = file_cfg.get("tools") if isinstance(file_cfg.get("tools"), dict) else {}
+        file_tongxin = file_tools.get("tongxin_cli") if isinstance(file_tools, dict) else None
+        if isinstance(file_tongxin, dict):
+            for key in DATABASE_CONFIG_KEYS:
+                value = file_tongxin.get(key)
+                if value:
+                    return str(value).strip()
+        try:
+            from config import conf
+
+            tools = conf().get("tools", {})
+            cfg = tools.get("tongxin_cli") if isinstance(tools, dict) else None
+            if isinstance(cfg, dict):
+                for key in DATABASE_CONFIG_KEYS:
+                    value = cfg.get(key)
+                    if value:
+                        return str(value).strip()
+        except Exception:
+            pass
+        return ""
+
+    def _effective_database_path(self) -> str:
+        direct = self._direct_database_path()
+        if direct:
+            return direct
+        env_path = self._env_database_path()
+        if env_path:
+            return env_path
+        configured = self._configured_database_path()
+        if configured:
+            return configured
+        return ""
+
+    def _database_file_exists(self) -> bool:
+        database_path = self._effective_database_path()
+        if not database_path:
+            return False
+        try:
+            return Path(database_path).expanduser().is_file()
+        except Exception:
+            return False
+
     def _script_path(self) -> Optional[Path]:
         for path in self._candidate_script_paths():
             script = self._resolve_configurable_script(path)
@@ -1497,6 +2021,7 @@ class TongxinCli(BaseTool):
     def _execution_script_path(self) -> Optional[Path]:
         raw: List[Any] = [
             self._configured_script_path(),
+            self._bundled_script_path(),
             *self._env_script_path_values(),
             *self._trusted_auto_config_roots(),
         ]
@@ -1510,6 +2035,7 @@ class TongxinCli(BaseTool):
 
     def _auto_configurable_script_path(self, timeout: int = DEFAULT_TIMEOUT_SECONDS) -> Optional[Path]:
         raw: List[Any] = [
+            self._bundled_script_path(),
             *self._env_script_path_values(),
             *self._trusted_auto_config_roots(),
         ]
@@ -1558,6 +2084,9 @@ class TongxinCli(BaseTool):
             if value and provider.classify_path(value) in {"ecorex-bundled", "ecorex-state"}:
                 values.append(value)
         return values
+
+    def _bundled_script_path(self) -> Path:
+        return Path(__file__).resolve().parents[3] / TONGXIN_BUNDLED_RELATIVE_PATH
 
     def _trusted_auto_config_roots(self) -> List[Path]:
         runtime_root = Path(__file__).resolve().parents[3]
@@ -2192,6 +2721,12 @@ class TongxinCli(BaseTool):
                     value = scope_self.params.get(key)
                     if value:
                         transient["python_path"] = str(value)
+                        changed = True
+                        break
+                for key in DATABASE_CONFIG_KEYS:
+                    value = scope_self.params.get(key)
+                    if value:
+                        transient["database_path"] = str(value)
                         changed = True
                         break
                 if changed:

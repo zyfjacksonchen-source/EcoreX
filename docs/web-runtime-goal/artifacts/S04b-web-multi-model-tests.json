@@ -1,0 +1,148 @@
+{
+  "schemaVersion": "ecorex.web-runtime-goal.artifact.v1",
+  "slice": "S4b-web-multi-model-selection",
+  "generatedAt": "2026-07-01T08:12:16+08:00",
+  "status": "pass_pending_review",
+  "currentChatConfig": {
+    "provider": "openai",
+    "model": "gpt-5.5",
+    "configuredBy": "admin-managed enterprise model policy cache",
+    "contextWindowTokens": 1000000,
+    "autoCompactTokenLimit": 800000,
+    "tokenizerStatus": "local_tokenizer"
+  },
+  "imageGenerationConfig": {
+    "provider": "openai",
+    "model": "gpt-image-2-pro",
+    "chatSwitcherCoupled": false
+  },
+  "chatModelOptionsPolicy": {
+    "oneModelPerProvider": true,
+    "preserveGpt55": true,
+    "preserveUnconfiguredOpenAI": true,
+    "gpt55CredentialBoundary": "OpenAI gpt-5.5 smoke may use runtime_config or admin_policy_cache only; the local multi-model key file is not an OpenAI fallback.",
+    "rejectUnconfiguredSwitches": true,
+    "disableUnconfiguredRowsInWeb": true,
+    "sortOrder": "current, configured providers, retained unconfigured entries",
+    "menuModelsRealConnectivity": [
+      {
+        "provider": "openai",
+        "model": "gpt-5.5",
+        "ok": true,
+        "credentialSource": "admin policy cache",
+        "contextWindowTokens": 1000000,
+        "autoCompactTokenLimit": 800000
+      },
+      {
+        "provider": "deepseek",
+        "model": "deepseek-v4-pro",
+        "ok": true,
+        "contextWindowTokens": 1000000,
+        "autoCompactTokenLimit": 800000
+      },
+      {
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+        "ok": true,
+        "contextWindowTokens": 1048576,
+        "autoCompactTokenLimit": 838860
+      },
+      {
+        "provider": "doubao",
+        "model": "doubao-seed-2-0-pro-260215",
+        "ok": true,
+        "contextWindowTokens": 256000,
+        "autoCompactTokenLimit": 204800
+      }
+    ],
+    "diagnosticOnly": [
+      {
+        "provider": "doubao",
+        "model": "doubao-seed-2.1-pro",
+        "ok": false,
+        "status": "model_not_found_or_no_entitlement",
+        "reason": "Current Ark key is not entitled for this model; do not surface it as the main menu entry."
+      }
+    ]
+  },
+  "releaseRuntimeSmoke": {
+    "artifact": "docs/web-runtime-goal/artifacts/S04b-release-runtime-models.json",
+    "target": "http://127.0.0.1:9899/api/models",
+    "packagedConfigSecretClean": true,
+    "adminPolicyApplied": true,
+    "result": {
+      "currentProvider": "openai",
+      "currentModel": "gpt-5.5",
+      "capabilityProvider": "openai",
+      "maxTokensParam": "max_completion_tokens",
+      "optionCount": 1,
+      "optionModels": [
+        "openai:gpt-5.5:configured=True:hint=current"
+      ],
+      "imageProvider": "openai",
+      "imageModel": "gpt-image-2-pro",
+      "contextWindow": 1000000,
+      "autoCompact": 800000,
+      "tokenizerStatus": "local_tokenizer"
+    }
+  },
+  "connectivitySmoke": {
+    "artifact": "docs/web-runtime-goal/artifacts/S04b-chat-model-connectivity.json",
+    "menuModelsFail": [],
+    "credentialSources": {
+      "openai:gpt-5.5": "admin_policy_cache"
+    },
+    "secretsRedacted": true
+  },
+  "frontendContract": {
+    "chatModelMenu": true,
+    "providerModelIcons": true,
+    "genericBotIconRemovedFromModelOptions": true,
+    "noProviderModelAliasMasking": true,
+    "unconfiguredRowsDisabled": true,
+    "switchDivider": "已切换 ${label} 模型",
+    "dynamicContextMeter": true
+  },
+  "commands": [
+    {
+      "name": "py_compile",
+      "command": "python -m py_compile config.py channel/web/web_channel.py common/const.py models/model_capabilities.py models/token_estimator.py models/doubao/doubao_bot.py models/doubao/doubao_session.py scripts/smoke-chat-model-connectivity.py tests/test_models_handler.py tests/test_model_capabilities.py tests/test_web_runtime_goal.py",
+      "status": "passed"
+    },
+    {
+      "name": "full pytest subset",
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_models_handler.py tests/test_model_capabilities.py tests/test_web_runtime_goal.py -q",
+      "status": "passed",
+      "summary": "60 passed, 2 warnings"
+    },
+    {
+      "name": "frontend typecheck",
+      "command": "npm run typecheck -- --pretty false",
+      "status": "passed"
+    },
+    {
+      "name": "renderer build",
+      "command": "npm run build:renderer",
+      "status": "passed_with_notes",
+      "notes": "Vite reported the existing chunk-size warning."
+    },
+    {
+      "name": "real provider connectivity",
+      "command": "python scripts/smoke-chat-model-connectivity.py --config config.json --key-file C:/Users/user/Desktop/多模型key.txt --include-diagnostic-fallbacks --output docs/web-runtime-goal/artifacts/S04b-chat-model-connectivity.json",
+      "status": "passed",
+      "summary": "OpenAI gpt-5.5 returned ok via admin_policy_cache; DeepSeek V4 Pro, Gemini 3.1 Pro Preview, and Doubao Seed 2.0 Pro all returned ok; Doubao Seed 2.1 Pro failed only as diagnostic entitlement check."
+    }
+  ],
+  "credentialBoundaries": [
+    {
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "boundary": "Uses the admin-managed enterprise model policy cache; release package config does not include the secret."
+    },
+    {
+      "provider": "doubao",
+      "model": "doubao-seed-2.1-pro",
+      "boundary": "Current Ark key lacks access, so the main menu uses doubao-seed-2-0-pro-260215 until entitlement changes."
+    }
+  ]
+}

@@ -1,0 +1,126 @@
+{
+  "slice": "S10-real-release-validation-update",
+  "status": "review_passed",
+  "scope": [
+    "Upgrade full real release validation contracts from v0.2.6 semantics to v0.2.7.",
+    "Add the v027-integrated-capabilities server-side group for custom Gemini, context continuity, divider UI, CDP/OCR/Vision, imagegen routing, Tongxin MPI, and runtime packaging markers.",
+    "Update legacy production smoke scripts so the full gate validates v0.2.7 instead of failing on old version and divider expectations.",
+    "Update lightweight validation, multi-agent split strategy, focused rerun strategy, and docs."
+  ],
+  "changedFiles": [
+    "scripts/smoke-v026-production-agent-product-acceptance.py",
+    "scripts/smoke-v026-production-200-user-behavior.py",
+    "scripts/smoke-v026-production-30-image-ocr-vision-toolchain.py",
+    "scripts/light-real-release-validation.py",
+    "scripts/real-release-multi-agent-strategy.py",
+    "scripts/real-release-rerun-strategy.py",
+    "tests/test_v026_agent_product_acceptance.py",
+    "docs/v0.2.7/real-release-multi-agent-strategy.md",
+    "docs/v0.2.7/real-release-rerun-strategy.md"
+  ],
+  "matrix": {
+    "targetNewChecks": 284,
+    "targetTotalChecks": 516,
+    "minimumEnabledChecks": 360,
+    "newGroup": {
+      "id": "v027-integrated-capabilities",
+      "declaredChecks": 66,
+      "minimumChecks": 50
+    }
+  },
+  "verification": [
+    {
+      "command": "python -m py_compile scripts/smoke-v026-production-agent-product-acceptance.py scripts/smoke-v026-production-200-user-behavior.py scripts/smoke-v026-production-30-image-ocr-vision-toolchain.py scripts/light-real-release-validation.py scripts/real-release-multi-agent-strategy.py scripts/real-release-rerun-strategy.py tests/test_v026_agent_product_acceptance.py",
+      "status": "PASS"
+    },
+    {
+      "command": "AST count phase_v027_integrated_capabilities add() calls",
+      "status": "PASS",
+      "count": 66
+    },
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_v026_agent_product_acceptance.py -q",
+      "status": "PASS",
+      "result": "12 passed",
+      "notes": "Includes regression that the remote script uses browser_automation_diagnostics and not the stale browser_diagnostics name."
+    },
+    {
+      "command": "python scripts/真实发布轻量校验.py",
+      "status": "PASS",
+      "artifact": "docs/v0.2.7/artifacts/real-release-light-validation.json",
+      "checkCount": 107,
+      "passCount": 107,
+      "failCount": 0
+    },
+    {
+      "command": "python scripts/真实发布多Agent分工策略.py",
+      "status": "PASS",
+      "artifact": "docs/v0.2.7/artifacts/real-release-multi-agent-strategy.json",
+      "laneCount": 10,
+      "finalGateCaseCount": 516
+    },
+    {
+      "command": "python scripts/真实发布失败复验策略.py --groups v027-integrated-capabilities",
+      "status": "PASS",
+      "artifact": "docs/v0.2.7/artifacts/real-release-rerun-strategy.json",
+      "selectedGroups": [
+        "fresh-env",
+        "auth-first-use",
+        "stream-state-machine",
+        "context-session",
+        "tool-skill",
+        "v027-integrated-capabilities"
+      ]
+    },
+    {
+      "command": "python scripts/scan-session-artifacts-privacy.py docs/v0.2.7/artifacts/S10-real-release-validation-update.json docs/v0.2.7/artifacts/real-release-light-validation.json docs/v0.2.7/artifacts/real-release-multi-agent-strategy.json docs/v0.2.7/artifacts/real-release-rerun-strategy.json docs/v0.2.7/artifacts/real-release-case-registry.json --json-output docs/v0.2.7/artifacts/S10-real-release-privacy-scan.json --salt v027-real-release-validation-update",
+      "status": "PASS",
+      "artifact": "docs/v0.2.7/artifacts/S10-real-release-privacy-scan.json",
+      "filesScanned": 5,
+      "findingCount": 0
+    },
+    {
+      "command": "from agent.tools.browser.browser_automation_service import browser_automation_diagnostics; browser_automation_diagnostics({'cdp_auto_launch': True, 'cdp_fallback': True})",
+      "status": "PASS",
+      "result": {
+        "mode": "cdp-first",
+        "autoLaunch": true,
+        "fallbackEnabled": true
+      }
+    }
+  ],
+  "fixesAfterInitialReview": [
+    {
+      "reviewer": "qaRelease",
+      "issue": "real-release-rerun-strategy.json persisted a raw local reportPath.",
+      "fix": "reportPath now uses a repo-relative path for in-repo reports and an external-path marker for outside paths; regression test added.",
+      "verification": "rerun strategy regenerated, tests passed, privacy scan passed with 0 findings."
+    },
+    {
+      "reviewer": "privacyData",
+      "issue": "real-release-multi-agent-strategy.json used sensitive keyword wording in public evidence text.",
+      "fix": "public wording changed from restricted-keyword phrases to sensitive-value/content-chunk wording.",
+      "verification": "multi-agent strategy regenerated and privacy scan passed with 0 findings."
+    },
+    {
+      "reviewer": "toolchainCdpOcrTongxin",
+      "issue": "heavy remote script imported a stale CDP diagnostics symbol name.",
+      "fix": "phase_v027_integrated_capabilities now imports and calls browser_automation_diagnostics.",
+      "verification": "direct import probe returned cdp-first/autoLaunch/fallbackEnabled and regression test passed."
+    }
+  ],
+  "privacy": {
+    "rawServerHostPersisted": false,
+    "rawUrlPersisted": false,
+    "rawUserPathPersisted": false,
+    "rawSecretPersisted": false,
+    "notes": "S10 public artifacts record only relative paths, counts, hashes, group names, and status summaries."
+  },
+  "reviewGate": {
+    "runtimeConfig": "PASS",
+    "frontendApi": "PASS",
+    "toolchainCdpOcrTongxin": "PASS",
+    "qaRelease": "PASS",
+    "privacyData": "PASS"
+  }
+}

@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import os
+import pathlib
 import re
 import secrets
 import sqlite3
@@ -17,11 +18,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 
-VERSION = "0.2.5"
+VERSION = "0.2.7"
 PASSWORD_ITERATIONS = 180000
 SESSION_DAYS = 7
-DEFAULT_CLIENT_EVENT_KEY = "ecorex-web-v0.2.2-web.1"
+DEFAULT_CLIENT_EVENT_KEY = "ecorex-web-v0.2.7-web.1"
 DEFAULT_COMPAT_CLIENT_EVENT_KEYS = (
+    "ecorex-web-v0.2.7-web.1",
+    "ecorex-web-v0.2.6-web.1",
     "ecorex-web-v0.2.2-web.1",
     "ecorex-web-v0.2.1-web.1",
     "ecorex-desktop-v0.2.0",
@@ -224,7 +227,7 @@ DEFAULT_CAPABILITIES = [
 
 PROVIDER_CONFIG_KEYS = {
     "openai": ("open_ai_api_key", "open_ai_api_base", "openai"),
-    "deepseek": ("deepseek_api_key", "deepseek_api_base", "openai"),
+    "deepseek": ("deepseek_api_key", "deepseek_api_base", "deepseek"),
     "custom": ("custom_api_key", "custom_api_base", "custom"),
     "zhipu": ("zhipu_ai_api_key", "zhipu_ai_api_base", "zhipuai"),
     "moonshot": ("moonshot_api_key", "moonshot_base_url", "moonshot"),
@@ -864,6 +867,275 @@ class AdminStore:
             (str(uuid.uuid4()), action, compact_text(actor, 120), compact_text(target, 160), json_dumps(safe_detail), now_iso()),
         )
 
+    def release_root(self):
+        return pathlib.Path(os.environ.get("ECOREX_RELEASE_ROOT") or "/srv/ecorex-agent-download").expanduser()
+
+    def _read_release_manifest(self, release_dir):
+        manifest_path = release_dir / "manifest.json"
+        if not manifest_path.is_file():
+            return {}
+        return json_loads(manifest_path.read_text(encoding="utf-8-sig"), {})
+
+    def _release_file_sha256(self, path):
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest().upper()
+
+    def _release_ready_artifacts(self, manifest):
+        artifacts = manifest.get("artifacts") if isinstance(manifest, dict) else []
+        if not isinstance(artifacts, list):
+            return []
+        return [
+            artifact for artifact in artifacts
+            if isinstance(artifact, dict) and artifact.get("status") == "ready"
+        ]
+
+    def _release_webui_policy(self, manifest):
+        update = manifest.get("update") if isinstance(manifest, dict) else {}
+        webui = (update.get("webui") if isinstance(update, dict) else {}) or {}
+        if not isinstance(webui, dict):
+            webui = {}
+        return {
+            "mode": compact_text(webui.get("mode") or "", 80),
+            "channel": compact_text(webui.get("channel") or "", 80),
+            "promotion": compact_text(webui.get("promotion") or "", 80),
+            "artifactIds": [
+                compact_text(item, 120)
+                for item in (webui.get("artifactIds") if isinstance(webui.get("artifactIds"), list) else [])
+                if item
+            ][:16],
+        }
+
+    def _release_artifact_file(self, release_dir, artifact):
+        href = compact_text(artifact.get("href") or "", 500)
+        if href.startswith("http://") or href.startswith("https://"):
+            return None, "external-href"
+        rel = (href or ("downloads/" + compact_text(artifact.get("fileName") or "", 255))).replace("\\", "/")
+        rel = rel.lstrip("./")
+        if not rel or rel.startswith("/") or ".." in pathlib.PurePosixPath(rel).parts:
+            return None, "unsafe-href"
+        path = (release_dir / rel).resolve(strict=False)
+        try:
+            path.relative_to(release_dir.resolve(strict=False))
+        except ValueError:
+            return None, "escaped-href"
+        return path, ""
+
+    def _validate_release_dir(self, release_dir, manifest, *, verify_sha=False):
+        failures = []
+        ready = self._release_ready_artifacts(manifest)
+        ready_by_id = {str(item.get("id") or ""): item for item in ready}
+        if not isinstance(manifest, dict) or manifest.get("product") != "EcoreX":
+            failures.append("manifest product must be EcoreX")
+        if not compact_text(manifest.get("version") or "", 80):
+            failures.append("manifest version is required")
+        if not ready:
+            failures.append("manifest has no ready artifacts")
+
+        policy = self._release_webui_policy(manifest)
+        required_webui = [item for item in policy["artifactIds"] if item.startswith("webui-")]
+        for artifact_id in required_webui:
+            if artifact_id not in ready_by_id:
+                failures.append(f"ready WebUI artifact missing: {artifact_id}")
+
+        for artifact in ready:
+            artifact_id = compact_text(artifact.get("id") or artifact.get("fileName") or "artifact", 160)
+            file_path, error = self._release_artifact_file(release_dir, artifact)
+            if error == "external-href":
+                failures.append(f"{artifact_id} uses external href after staging")
+                continue
+            if error:
+                failures.append(f"{artifact_id} has {error}")
+                continue
+            if file_path is None or not file_path.is_file():
+                failures.append(f"{artifact_id} file is missing")
+                continue
+            expected_size = as_int(artifact.get("size"), 0, 0, 10_000_000_000)
+            if expected_size and file_path.stat().st_size != expected_size:
+                failures.append(f"{artifact_id} size mismatch")
+            expected_sha = compact_text(artifact.get("sha256") or "", 80).upper()
+            if verify_sha and re.fullmatch(r"[A-F0-9]{64}", expected_sha or ""):
+                if self._release_file_sha256(file_path) != expected_sha:
+                    failures.append(f"{artifact_id} sha256 mismatch")
+            elif verify_sha:
+                failures.append(f"{artifact_id} sha256 missing")
+
+        return {
+            "status": "pass" if not failures else "fail",
+            "checkedSha256": bool(verify_sha),
+            "failureCount": len(failures),
+            "failures": failures[:8],
+            "readyArtifactCount": len(ready),
+            "artifactCount": len(manifest.get("artifacts") or []) if isinstance(manifest.get("artifacts"), list) else 0,
+        }
+
+    def _release_entry(self, pointer, root, role):
+        entry = {
+            "id": compact_text(pointer.name, 120),
+            "role": role,
+            "exists": False,
+            "manifestPresent": False,
+            "version": "",
+            "updatedAt": "",
+            "targetHash": "",
+            "artifactCount": 0,
+            "readyArtifactCount": 0,
+            "updatePolicy": {},
+            "validation": {"status": "fail", "checkedSha256": False, "failureCount": 1, "failures": ["release pointer missing"]},
+            "canPromote": False,
+        }
+        if not (pointer.exists() or pointer.is_symlink()):
+            return entry
+        try:
+            resolved = pointer.resolve(strict=True)
+            resolved.relative_to(root.resolve(strict=False))
+        except Exception:
+            entry["exists"] = True
+            entry["validation"] = {"status": "fail", "checkedSha256": False, "failureCount": 1, "failures": ["release pointer escapes release root"]}
+            return entry
+        manifest = self._read_release_manifest(resolved)
+        entry.update({
+            "exists": True,
+            "manifestPresent": bool(manifest),
+            "version": compact_text(manifest.get("version") or "", 80) if isinstance(manifest, dict) else "",
+            "updatedAt": compact_text(manifest.get("updatedAt") or "", 80) if isinstance(manifest, dict) else "",
+            "targetHash": short_hash(str(resolved), 16),
+            "artifactCount": len(manifest.get("artifacts") or []) if isinstance(manifest.get("artifacts"), list) else 0,
+            "readyArtifactCount": len(self._release_ready_artifacts(manifest)),
+            "updatePolicy": self._release_webui_policy(manifest),
+            "validation": self._validate_release_dir(resolved, manifest, verify_sha=False),
+        })
+        return entry
+
+    def release_state(self):
+        root = self.release_root()
+        payload = {
+            "ok": True,
+            "releaseRootConfigured": root.exists(),
+            "current": self._release_entry(root / "current", root, "current"),
+            "staged": [],
+            "latestStaged": None,
+            "promotion": {
+                "mode": "staged-to-current",
+                "adminTriggerRequired": True,
+                "sha256VerifiedOnPromote": True,
+                "currentPointer": "current",
+            },
+        }
+        if not root.exists():
+            return payload
+        staged = []
+        for child in root.iterdir():
+            if child.name.startswith("staged-v"):
+                staged.append(self._release_entry(child, root, "staged"))
+        current_version = payload["current"].get("version") or ""
+        for entry in staged:
+            entry["canPromote"] = (
+                entry.get("validation", {}).get("status") == "pass"
+                and bool(entry.get("version"))
+                and entry.get("version") != current_version
+            )
+        staged.sort(key=lambda item: (item.get("version") or "", item.get("id") or ""), reverse=True)
+        payload["staged"] = staged
+        payload["latestStaged"] = next((item for item in staged if item.get("canPromote")), staged[0] if staged else None)
+        return payload
+
+    def _find_staged_release(self, root, version="", staged_id=""):
+        wanted_version = compact_text(version, 80)
+        wanted_id = compact_text(staged_id, 120)
+        if wanted_version and not re.fullmatch(r"[0-9A-Za-z._-]+", wanted_version):
+            raise ValueError("invalid release version")
+        if wanted_id and not re.fullmatch(r"staged-v[0-9A-Za-z._-]+", wanted_id):
+            raise ValueError("invalid staged release id")
+        candidates = [child for child in root.iterdir() if child.name.startswith("staged-v")]
+        for child in candidates:
+            if wanted_id and child.name != wanted_id:
+                continue
+            try:
+                resolved = child.resolve(strict=True)
+                resolved.relative_to(root.resolve(strict=False))
+            except Exception:
+                continue
+            manifest = self._read_release_manifest(resolved)
+            manifest_version = compact_text(manifest.get("version") or "", 80) if isinstance(manifest, dict) else ""
+            if wanted_version and manifest_version != wanted_version:
+                continue
+            return child, resolved, manifest
+        raise ValueError("staged release not found")
+
+    def _acquire_release_lock(self, root):
+        lock_path = root / ".release-promote.lock"
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        try:
+            fd = os.open(lock_path, flags, 0o600)
+        except FileExistsError:
+            try:
+                age = time.time() - lock_path.stat().st_mtime
+                if age > 900:
+                    lock_path.unlink()
+                    fd = os.open(lock_path, flags, 0o600)
+                else:
+                    raise ValueError("release promotion is already running")
+            except FileNotFoundError:
+                fd = os.open(lock_path, flags, 0o600)
+        os.write(fd, now_iso().encode("utf-8"))
+        os.close(fd)
+        return lock_path
+
+    def promote_release(self, payload):
+        root = self.release_root()
+        if not root.exists():
+            raise ValueError("release root is not configured")
+        staged_pointer, release_dir, manifest = self._find_staged_release(
+            root,
+            version=payload.get("version") or "",
+            staged_id=payload.get("stagedId") or payload.get("staged_id") or "",
+        )
+        validation = self._validate_release_dir(release_dir, manifest, verify_sha=True)
+        if validation["status"] != "pass":
+            raise ValueError("staged release validation failed: " + "; ".join(validation["failures"]))
+        version = compact_text(manifest.get("version") or "", 80)
+        current_pointer = root / "current"
+        if current_pointer.exists() and not current_pointer.is_symlink():
+            raise ValueError("current release pointer is not a symlink")
+
+        lock_path = self._acquire_release_lock(root)
+        tmp_pointer = root / f".current-next-{version}-{int(time.time())}"
+        try:
+            if tmp_pointer.exists() or tmp_pointer.is_symlink():
+                tmp_pointer.unlink()
+            os.symlink(str(release_dir), str(tmp_pointer), target_is_directory=True)
+            os.replace(str(tmp_pointer), str(current_pointer))
+        finally:
+            if tmp_pointer.exists() or tmp_pointer.is_symlink():
+                tmp_pointer.unlink()
+            if lock_path.exists():
+                lock_path.unlink()
+
+        with self.connect() as conn:
+            self.audit(
+                conn,
+                "release.promote",
+                payload.get("actor", "admin"),
+                version,
+                {
+                    "stagedId": staged_pointer.name,
+                    "version": version,
+                    "targetHash": short_hash(str(release_dir), 16),
+                    "readyArtifactCount": validation["readyArtifactCount"],
+                    "sha256Verified": True,
+                },
+            )
+            conn.commit()
+        return {
+            "ok": True,
+            "status": "success",
+            "promotedVersion": version,
+            "release": self.release_state(),
+        }
+
     def state(self, filters=None):
         filters = filters or {}
         with self.connect() as conn:
@@ -885,7 +1157,7 @@ class AdminStore:
             policy = dict(conn.execute("SELECT mirror, mode, offline_cache AS offlineCache, updated_at AS updatedAt FROM capability_policy WHERE id = 1").fetchone())
             capabilities = [dict(row) for row in conn.execute("SELECT id, name, mode, size, status, updated_at AS updatedAt FROM capability_packs ORDER BY id")]
             global_model = self.get_global_model(conn, masked=True)
-            model_credentials = [global_model] if global_model else []
+            model_credentials = self.list_model_credentials(conn, masked=True)
             total_tokens = sum(item["totalTokens"] for item in usage_by_user)
             summary = {
                 "users": len(users),
@@ -893,7 +1165,7 @@ class AdminStore:
                 "tokens": total_tokens,
                 "errors": sum(1 for item in logs if item["level"] == "error" and item["status"] != "read"),
                 "capabilities": sum(1 for item in capabilities if "建议" in item["status"]),
-                "modelCredentials": 1 if global_model and global_model.get("enabled") else 0,
+                "modelCredentials": sum(1 for item in model_credentials if item.get("enabled")),
                 "version": VERSION,
                 "syncEvents": sync_summary["events"],
                 "syncArtifacts": sync_summary["artifacts"],
@@ -917,6 +1189,7 @@ class AdminStore:
                 "syncSummary": sync_summary,
                 "syncPolicy": sync_policy,
                 "runtimeAudit": runtime_audit,
+                "release": self.release_state(),
                 "summary": summary,
             }
 
@@ -2140,6 +2413,28 @@ class AdminStore:
             data["apiKeyMask"] = mask_secret(data.pop("apiKey", ""))
         return data
 
+    def list_model_credentials(self, conn, masked=False):
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT id, name, provider, model, bot_type AS botType, api_base AS baseUrl,
+                       api_key AS apiKey, scope_type AS scopeType, scope_value AS scopeValue,
+                       enabled, created_at AS createdAt, updated_at AS updatedAt
+                FROM model_credentials
+                WHERE scope_type='global'
+                ORDER BY enabled DESC, updated_at DESC, provider ASC, model ASC
+                """
+            )
+        ]
+        result = []
+        for row in rows:
+            row["enabled"] = bool(row.get("enabled"))
+            if masked:
+                row["apiKeyMask"] = mask_secret(row.pop("apiKey", ""))
+            result.append(row)
+        return result
+
     def upsert_global_model(self, payload):
         prepared = self._prepare_model_credential({**payload, "scopeType": "global", "scopeValue": "", "enabled": True}, require_api_key=False)
         stamp = now_iso()
@@ -2194,14 +2489,100 @@ class AdminStore:
         return self.state()
 
     def create_model_credential(self, payload):
-        return self.upsert_global_model(payload)
+        return self._save_model_credential(payload)
 
     def update_model_credential(self, credential_id, payload):
-        payload = {**payload, "id": credential_id}
-        return self.upsert_global_model(payload)
+        return self._save_model_credential({**payload, "id": credential_id})
 
     def delete_model_credential(self, credential_id, payload):
-        raise ValueError("global model cannot be deleted")
+        target = compact_text(credential_id, 120)
+        if not target:
+            raise ValueError("credential id is required")
+        with self.connect() as conn:
+            row = conn.execute("SELECT id FROM model_credentials WHERE id=?", (target,)).fetchone()
+            if not row:
+                raise ValueError("model credential not found")
+            conn.execute("DELETE FROM model_credentials WHERE id=?", (target,))
+            self.audit(conn, "model.credential.delete", payload.get("actor", "admin"), target, {})
+            conn.commit()
+        return self.state()
+
+    def _save_model_credential(self, payload):
+        target = compact_text(payload.get("id"), 120)
+        prepared = self._prepare_model_credential({**payload, "scopeType": "global", "scopeValue": "", "enabled": True}, require_api_key=False)
+        stamp = now_iso()
+        with self.connect() as conn:
+            current = None
+            if target:
+                current = conn.execute(
+                    """
+                    SELECT id, api_key AS apiKey
+                    FROM model_credentials
+                    WHERE id=?
+                    """,
+                    (target,),
+                ).fetchone()
+                if not current:
+                    raise ValueError("model credential not found")
+                current = dict(current)
+            else:
+                current = conn.execute(
+                    """
+                    SELECT id, api_key AS apiKey
+                    FROM model_credentials
+                    WHERE scope_type='global' AND provider=? AND model=?
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """,
+                    (prepared["provider"], prepared["model"]),
+                ).fetchone()
+                current = dict(current) if current else None
+            if current:
+                api_key = prepared["api_key"] or current["apiKey"]
+                conn.execute(
+                    """
+                    UPDATE model_credentials
+                    SET name=?, provider=?, model=?, bot_type=?, api_base=?, api_key=?,
+                        scope_type='global', scope_value='', enabled=1, updated_at=?
+                    WHERE id=?
+                    """,
+                    (
+                        prepared["name"],
+                        prepared["provider"],
+                        prepared["model"],
+                        prepared["bot_type"],
+                        prepared["api_base"],
+                        api_key,
+                        stamp,
+                        current["id"],
+                    ),
+                )
+                target = current["id"]
+            else:
+                if not prepared["api_key"]:
+                    raise ValueError("api key is required for a new model credential")
+                target = str(uuid.uuid4())
+                conn.execute(
+                    """
+                    INSERT INTO model_credentials
+                    (id, name, provider, model, bot_type, api_base, api_key, scope_type, scope_value, enabled, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'global', '', 1, ?, ?)
+                    """,
+                    (
+                        target,
+                        prepared["name"],
+                        prepared["provider"],
+                        prepared["model"],
+                        prepared["bot_type"],
+                        prepared["api_base"],
+                        prepared["api_key"],
+                        stamp,
+                        stamp,
+                    ),
+                )
+            self.audit(conn, "model.credential.upsert", payload.get("actor", "admin"), target, self._audit_model_detail(prepared))
+            conn.commit()
+        return self.state()
 
     def resolve_client_model_config(self, user_email="", device_id="", token=""):
         user = self.require_session(token, device_id)
@@ -2211,6 +2592,7 @@ class AdminStore:
             if not quota["allowed"]:
                 raise PermissionError(quota["reason"] or "token quota exceeded")
             selected = self.get_global_model(conn, masked=False)
+            credentials = [item for item in self.list_model_credentials(conn, masked=False) if item.get("enabled")]
         if not selected or not selected.get("enabled"):
             return {"ok": True, "configured": False, "settings": {}, "updatedAt": "", "version": VERSION}
         api_key_name, api_base_name, default_bot_type = PROVIDER_CONFIG_KEYS.get(selected["provider"], PROVIDER_CONFIG_KEYS["custom"])
@@ -2221,6 +2603,23 @@ class AdminStore:
             api_key_name: selected["apiKey"],
             api_base_name: selected["baseUrl"],
         }
+        credential_summaries = []
+        for credential in credentials:
+            key_name, base_name, _ = PROVIDER_CONFIG_KEYS.get(credential["provider"], PROVIDER_CONFIG_KEYS["custom"])
+            if credential.get("apiKey"):
+                settings[key_name] = credential["apiKey"]
+            if credential.get("baseUrl"):
+                settings[base_name] = credential["baseUrl"]
+            credential_summaries.append({
+                "id": credential["id"],
+                "name": credential["name"],
+                "provider": credential["provider"],
+                "model": credential["model"],
+                "baseUrl": credential["baseUrl"],
+                "enabled": bool(credential.get("enabled")),
+                "apiKeyMask": mask_secret(credential.get("apiKey", "")),
+                "updatedAt": credential.get("updatedAt"),
+            })
         return {
             "ok": True,
             "configured": True,
@@ -2230,6 +2629,7 @@ class AdminStore:
             "model": selected["model"],
             "baseUrl": selected["baseUrl"],
             "scopeType": "global",
+            "modelCredentials": credential_summaries,
             "userEmail": user_email,
             "updatedAt": selected["updatedAt"],
             "settings": settings,
@@ -3082,6 +3482,10 @@ class AdminHandler(BaseHTTPRequestHandler):
                     return
                 with self.store.connect() as conn:
                     self._json(200, {"ok": True, "runtimeAudit": self.store.runtime_audit(conn, self._query())})
+            elif path == "/release/state":
+                if not self._require_admin():
+                    return
+                self._json(200, {"ok": True, "release": self.store.release_state()})
             elif path in ("/client/model-config", "/model-config"):
                 if not self._client_key_valid():
                     self._json(403, {"ok": False, "error": "invalid client key"})
@@ -3177,6 +3581,10 @@ class AdminHandler(BaseHTTPRequestHandler):
                 if not self._require_admin():
                     return
                 self._json(200, self.store.ingest_event(payload))
+            elif path == "/release/promote":
+                if not self._require_admin():
+                    return
+                self._json(200, self.store.promote_release(payload))
             elif path in ("/client/events", "/events/client"):
                 if not self._client_key_valid():
                     self._json(403, {"ok": False, "error": "invalid client key"})

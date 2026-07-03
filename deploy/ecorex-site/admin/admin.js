@@ -10,6 +10,11 @@ const state = {
     capabilityPolicy: { mirror: "https://pypi.org/simple", mode: "ask", offlineCache: "未配置" },
     globalModel: null,
     modelCredentials: [],
+    release: {
+      current: {},
+      staged: [],
+      promotion: {},
+    },
     summary: {},
     runtimeAudit: {
       summary: {},
@@ -20,7 +25,7 @@ const state = {
       recentEvents: [],
       privacy: {},
     },
-    version: "0.2.5",
+    version: "0.2.7",
   },
   connected: false,
 };
@@ -87,6 +92,18 @@ function roleLabel(role) {
 function modeLabel(mode) {
   return { ask: "首次使用询问安装", preinstall: "管理员预置", disabled: "禁用普通用户安装" }[mode] || "首次使用询问安装";
 }
+
+const MODEL_PROVIDER_BOT_TYPES = {
+  openai: "openai",
+  deepseek: "deepseek",
+  zhipu: "zhipuai",
+  moonshot: "moonshot",
+  doubao: "doubao",
+  qianfan: "qianfan",
+  gemini: "gemini",
+  claude: "claudeapi",
+  custom: "custom"
+};
 
 function setApiStatus(connected, message = "") {
   const node = $("[data-api-status]");
@@ -292,8 +309,8 @@ function renderRuntimeAudit() {
 function renderModel() {
   const target = $("[data-global-model]");
   if (!target) return;
-  const model = state.data.globalModel || state.data.modelCredentials?.[0];
-  if (!model) {
+  const models = Array.isArray(state.data.modelCredentials) ? state.data.modelCredentials : [];
+  if (!models.length) {
     target.innerHTML = `
       <article class="model-empty">
         <strong>尚未配置企业模型</strong>
@@ -303,14 +320,17 @@ function renderModel() {
     return;
   }
   target.innerHTML = `
-    <article class="model-summary">
-      <div><span>名称</span><strong>${escapeHtml(model.name)}</strong></div>
-      <div><span>供应商</span><strong>${escapeHtml(model.provider)}</strong></div>
-      <div><span>模型</span><strong>${escapeHtml(model.model)}</strong></div>
-      <div><span>Base URL</span><strong>${escapeHtml(model.baseUrl)}</strong></div>
-      <div><span>API Key</span><strong>${escapeHtml(model.apiKeyMask || "已保存")}</strong></div>
-      <div><span>状态</span><strong>${model.enabled ? "已启用" : "未启用"}</strong></div>
-    </article>
+    ${models.map((model, index) => `
+      <article class="model-summary">
+        <div><span>${index === 0 ? "默认" : "名称"}</span><strong>${escapeHtml(model.name)}</strong></div>
+        <div><span>供应商</span><strong>${escapeHtml(model.provider)}</strong></div>
+        <div><span>模型</span><strong>${escapeHtml(model.model)}</strong></div>
+        <div><span>Base URL</span><strong>${escapeHtml(model.baseUrl)}</strong></div>
+        <div><span>API Key</span><strong>${escapeHtml(model.apiKeyMask || "已保存")}</strong></div>
+        <div><span>状态</span><strong>${model.enabled ? "已启用" : "未启用"}</strong></div>
+        <div class="row-actions"><button type="button" data-model-edit-id="${escapeHtml(model.id)}">编辑</button></div>
+      </article>
+    `).join("")}
   `;
 }
 
@@ -340,27 +360,47 @@ function renderCapabilities() {
 }
 
 function renderRelease() {
-  fetch("../manifest.json", { cache: "no-store" })
-    .then((response) => response.json())
-    .then((manifest) => {
-      setMetric("version", manifest.version || "0.2.5");
-      const target = $("[data-release]");
-      target.innerHTML = manifest.artifacts
-        .map(
-          (item) => `
-            <article class="release-item">
-              <strong>${escapeHtml(item.platform)} ${escapeHtml(item.variant)}</strong>
-              <span>${escapeHtml(item.fileName)}</span>
-              <span title="${escapeHtml(item.sha256)}">${escapeHtml(item.status)}</span>
-            </article>
-          `,
-        )
-        .join("");
+  const target = $("[data-release]");
+  const summaryTarget = $("[data-release-summary]");
+  if (!target) return;
+  const release = state.data.release || {};
+  const current = release.current || {};
+  const staged = Array.isArray(release.staged) ? release.staged : [];
+  const policy = current.updatePolicy || {};
+  if (summaryTarget) {
+    summaryTarget.innerHTML = `
+      <article><span>当前 stable</span><strong>${escapeHtml(current.version || "未发布")}</strong></article>
+      <article><span>候选版本</span><strong>${formatNumber(staged.length)}</strong></article>
+      <article><span>更新通道</span><strong>${escapeHtml(policy.channel || "stable")}</strong></article>
+      <article><span>发布方式</span><strong>${release.promotion?.adminTriggerRequired ? "管理员确认" : "未配置"}</strong></article>
+    `;
+  }
+  const currentRow = current.exists ? `
+    <article class="release-item is-current">
+      <div><strong>当前 stable</strong><span>${escapeHtml(current.id || "current")}</span></div>
+      <span>${escapeHtml(current.version || "未知版本")}</span>
+      <span>${escapeHtml(current.updatedAt || "未记录")}</span>
+      <span class="pill" data-status="${current.validation?.status === "pass" ? "active" : "disabled"}">${current.validation?.status === "pass" ? "可更新" : "需检查"}</span>
+    </article>
+  ` : "";
+  const stagedRows = staged
+    .map((item) => {
+      const valid = item.validation?.status === "pass";
+      const canPromote = Boolean(item.canPromote);
+      return `
+        <article class="release-item">
+          <div><strong>${escapeHtml(item.version || "未知版本")}</strong><span>${escapeHtml(item.id || "staged")}</span></div>
+          <span>${escapeHtml(item.updatedAt || "未记录")}</span>
+          <span>${formatNumber(item.readyArtifactCount || 0)} ready</span>
+          <div class="row-actions">
+            <span class="pill" data-status="${valid ? "active" : "disabled"}">${valid ? "已校验" : "不可发布"}</span>
+            <button type="button" data-release-promote="${escapeHtml(item.version || "")}" data-release-staged-id="${escapeHtml(item.id || "")}" ${canPromote ? "" : "disabled"}>发布新版</button>
+          </div>
+        </article>
+      `;
     })
-    .catch(() => {
-      const target = $("[data-release]");
-      target.innerHTML = `<p class="empty">发布清单暂不可用。</p>`;
-    });
+    .join("");
+  target.innerHTML = currentRow + stagedRows || `<p class="empty">发布清单暂不可用。</p>`;
 }
 
 function renderMetrics() {
@@ -373,7 +413,7 @@ function renderMetrics() {
   setMetric("errors", formatNumber(summary.errors ?? 0));
   setMetric("capabilities", formatNumber(summary.capabilities ?? 0));
   setMetric("modelCredentials", formatNumber(summary.modelCredentials ?? (state.data.globalModel ? 1 : 0)));
-  setMetric("version", state.data.version || summary.version || "0.2.5");
+  setMetric("version", state.data.version || summary.version || "0.2.7");
 }
 
 function render() {
@@ -477,6 +517,43 @@ $all("[data-refresh]").forEach((button) => {
   button.addEventListener("click", () => loadState());
 });
 
+$("[data-release-refresh]")?.addEventListener("click", async () => {
+  try {
+    const payload = await request("/release/state");
+    mergeState(payload);
+    renderRelease();
+    setApiStatus(true);
+    showNotice("发布状态已刷新", "info");
+  } catch (error) {
+    setApiStatus(false, error.message);
+    showNotice(error.message || "发布状态刷新失败", "error");
+  }
+});
+
+document.addEventListener("click", async (event) => {
+  const clicked = event.target instanceof Element ? event.target : null;
+  const button = clicked?.closest("[data-release-promote]");
+  if (!button) return;
+  const version = button.dataset.releasePromote || "";
+  const stagedId = button.dataset.releaseStagedId || "";
+  if (!version || button.disabled) return;
+  if (!window.confirm(`发布 ${version} 到 stable，并让用户本机在线更新可见？`)) return;
+  button.disabled = true;
+  try {
+    const payload = await mutate("/release/promote", {
+      method: "POST",
+      body: JSON.stringify({ version, stagedId, actor: "admin-ui" }),
+    });
+    if (payload.release) {
+      mergeState({ release: payload.release });
+      renderRelease();
+    }
+    showNotice(`已发布 ${version}`, "info");
+  } catch (_) {
+    button.disabled = false;
+  }
+});
+
 $("[data-user-form]")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -567,9 +644,8 @@ $("[data-logs]")?.addEventListener("click", (event) => {
 
 $("[data-clear-errors]")?.addEventListener("click", () => mutate("/logs/mark-read", { method: "POST", body: JSON.stringify({}) }).catch(() => undefined));
 
-$("[data-model-edit]")?.addEventListener("click", () => {
-  const model = state.data.globalModel || {};
-  showModal("编辑企业全局模型", "edit-model", (body) => {
+function openModelEditor(model = {}, endpoint = "/model-credentials/global", method = "POST", title = "编辑企业全局模型") {
+  showModal(title, "edit-model", (body) => {
     const form = $("[data-model-form]", body);
     const resultTarget = $("[data-model-test-result]", body);
     form.elements.name.value = model.name || "EcoreX 企业模型";
@@ -577,7 +653,15 @@ $("[data-model-edit]")?.addEventListener("click", () => {
     form.elements.model.value = model.model || "";
     form.elements.baseUrl.value = model.baseUrl || "";
     if (form.elements.botType) {
-      form.elements.botType.value = model.botType || (model.provider === "openai" ? "openai" : "custom");
+      form.elements.botType.value = model.botType || MODEL_PROVIDER_BOT_TYPES[form.elements.provider.value] || "custom";
+      form.elements.provider.addEventListener("change", () => {
+        if (!form.elements.botType.dataset.userEdited) {
+          form.elements.botType.value = MODEL_PROVIDER_BOT_TYPES[form.elements.provider.value] || "custom";
+        }
+      });
+      form.elements.botType.addEventListener("change", () => {
+        form.elements.botType.dataset.userEdited = "true";
+      });
     }
     $all("[data-model-test]", body).forEach((button) => {
       button.addEventListener("click", async () => {
@@ -599,13 +683,35 @@ $("[data-model-edit]")?.addEventListener("click", () => {
       event.preventDefault();
       const payload = Object.fromEntries(new FormData(form).entries());
       try {
-        await mutate("/model-credentials/global", { method: "POST", body: JSON.stringify(payload) });
+        await mutate(endpoint, { method, body: JSON.stringify(payload) });
         closeModal();
       } catch {
         // mutate already surfaced the error.
       }
     });
   });
+}
+
+$("[data-model-edit]")?.addEventListener("click", () => {
+  const model = state.data.globalModel || {};
+  openModelEditor(model);
+});
+
+$("[data-model-add]")?.addEventListener("click", () => {
+  openModelEditor(
+    { name: "新增模型凭证", provider: "custom", model: "", baseUrl: "", botType: "custom" },
+    "/model-credentials",
+    "POST",
+    "新增模型凭证"
+  );
+});
+
+$("[data-global-model]")?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-model-edit-id]");
+  if (!button) return;
+  const id = button.dataset.modelEditId;
+  const model = (state.data.modelCredentials || []).find((item) => item.id === id) || {};
+  openModelEditor(model, `/model-credentials/${encodeURIComponent(id)}`, "PUT", "编辑模型凭证");
 });
 
 $("[data-capability-form]")?.addEventListener("submit", async (event) => {

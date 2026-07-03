@@ -11,6 +11,8 @@ COMPOSE_SERVICE="${COMPOSE_SERVICE:-ecorex-admin-api}"
 COMPOSE_ADMIN_CONTEXT="${COMPOSE_ADMIN_CONTEXT:-$COMPOSE_ROOT/_ecorex_admin_api}"
 EXPECTED_SHA256="${EXPECTED_SHA256:-}"
 RESTART_SERVICE="${RESTART_SERVICE:-1}"
+DOWNLOADS_SOURCE_DIR="${DOWNLOADS_SOURCE_DIR:-}"
+PROMOTE_PUBLIC_RELEASE="${PROMOTE_PUBLIC_RELEASE:-0}"
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -88,20 +90,57 @@ for required in "site/index.html" "site/manifest.json" "site/admin/index.html" "
   fi
 done
 
-python3 - "$tmp_dir" "$VERSION" <<'PY'
+python3 - "$tmp_dir" "$VERSION" "$DOWNLOADS_SOURCE_DIR" <<'PY'
 import hashlib
 import json
 import pathlib
+import shutil
 import sys
 
 root = pathlib.Path(sys.argv[1])
 expected_version = sys.argv[2]
+downloads_source_arg = sys.argv[3] if len(sys.argv) > 3 else ""
+downloads_source = pathlib.Path(downloads_source_arg).resolve() if downloads_source_arg else None
 checksums = json.loads((root / "checksums.json").read_text(encoding="utf-8-sig"))
 if checksums.get("version") != expected_version:
     raise SystemExit(f"Unexpected release version: {checksums.get('version')}; expected {expected_version}")
 artifacts = checksums.get("artifacts") or {}
 if not artifacts:
     raise SystemExit("checksums.json does not contain any ready artifacts")
+
+def sha256_path(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest().upper()
+
+def require_download_source(artifact_id, rel, artifact):
+    if downloads_source is None:
+        raise SystemExit(f"Artifact {artifact_id} is externalized to {rel}; set DOWNLOADS_SOURCE_DIR")
+    file_name = str(artifact.get("deploymentSourceFileName") or artifact.get("fileName") or pathlib.PurePosixPath(rel).name)
+    if pathlib.PurePosixPath(file_name).name != file_name or ".." in pathlib.PurePosixPath(file_name).parts:
+        raise SystemExit(f"Artifact {artifact_id} has unsafe deployment source file name")
+    source = (downloads_source / file_name).resolve()
+    try:
+        source.relative_to(downloads_source)
+    except Exception:
+        raise SystemExit(f"Artifact {artifact_id} deployment source escaped DOWNLOADS_SOURCE_DIR")
+    if not source.is_file():
+        raise SystemExit(f"Externalized artifact {artifact_id} missing from DOWNLOADS_SOURCE_DIR: {file_name}")
+    expected_size = int(artifact.get("size") or 0)
+    if source.stat().st_size != expected_size:
+        raise SystemExit(f"Externalized artifact {artifact_id} size does not match checksums.json")
+    if sha256_path(source) != str(artifact.get("sha256") or "").upper():
+        raise SystemExit(f"Externalized artifact {artifact_id} SHA256 does not match checksums.json")
+    target = (root / rel).resolve()
+    try:
+        target.relative_to(root)
+    except Exception:
+        raise SystemExit(f"Artifact {artifact_id} target escaped release root")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
+
 for artifact_id, artifact in artifacts.items():
     rel = artifact.get("relativePath", "")
     if not rel:
@@ -111,14 +150,15 @@ for artifact_id, artifact in artifacts.items():
             raise SystemExit(f"External artifact {artifact_id} has no positive size")
         if len(str(artifact.get("sha256") or "")) != 64:
             raise SystemExit(f"External artifact {artifact_id} has no SHA256")
+        if rel.startswith("site/downloads/"):
+            require_download_source(artifact_id, rel, artifact)
         continue
     path = root / rel
     if not path.is_file():
         raise SystemExit(f"Artifact {artifact_id} missing from release zip: {path}")
     if path.stat().st_size != int(artifact.get("size") or 0):
         raise SystemExit(f"Artifact {artifact_id} size does not match checksums.json")
-    digest = hashlib.sha256(path.read_bytes()).hexdigest().upper()
-    if digest != str(artifact.get("sha256") or "").upper():
+    if sha256_path(path) != str(artifact.get("sha256") or "").upper():
         raise SystemExit(f"Artifact {artifact_id} SHA256 does not match checksums.json")
 PY
 
@@ -207,9 +247,16 @@ ensure_tongxin_env_defaults() {
 ensure_tongxin_env_defaults "$env_file"
 ensure_tongxin_env_defaults "$active_env_file"
 
-ln -sfn "$release_dir" "$RELEASE_ROOT/current"
+ln -sfn "$release_dir" "$RELEASE_ROOT/staged-v${VERSION}"
+promotion_status="staged"
+if [[ "$PROMOTE_PUBLIC_RELEASE" == "1" ]]; then
+  ln -sfn "$release_dir" "$RELEASE_ROOT/current"
+  promotion_status="promoted"
+elif [[ ! -e "$RELEASE_ROOT/current" ]]; then
+  echo "No current public release exists; $release_dir is staged but not promoted. Set PROMOTE_PUBLIC_RELEASE=1 to publish stable." >&2
+fi
 
-if [[ "$RESTART_SERVICE" == "1" ]]; then
+if [[ "$RESTART_SERVICE" == "1" && "$PROMOTE_PUBLIC_RELEASE" == "1" ]]; then
   compose_cmd=()
   if [[ -f "$COMPOSE_ROOT/docker-compose.yml" || -f "$COMPOSE_ROOT/compose.yml" ]]; then
     if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
@@ -239,6 +286,8 @@ EcoreX public release installed.
 version: $VERSION
 zipSha256: $actual_sha
 releaseDir: $release_dir
+promotion: $promotion_status
+staged: $RELEASE_ROOT/staged-v${VERSION}
 current: $RELEASE_ROOT/current
 adminApp: $ADMIN_ROOT/app
 adminEnv: $env_file

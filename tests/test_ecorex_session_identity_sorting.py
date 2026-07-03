@@ -170,6 +170,113 @@ class SessionIdentityOwnerContractTests(unittest.TestCase):
         self.assertEqual(ui_page["messages"][0]["content"], "帮我看这张图")
         self.assertEqual(ui_page["messages"][0]["extras"]["attachments"][0]["file_path"], image_path)
 
+    def test_load_messages_restores_assistant_artifact_references_for_next_turn_context(self):
+        from agent.memory.conversation_store import ConversationStore
+
+        with tempfile.TemporaryDirectory() as workspace:
+            artifact_path = str(Path(workspace) / "carousel-output.png")
+            store = ConversationStore(Path(workspace) / "conversation.sqlite3")
+            store.append_messages(
+                "session-artifact-context",
+                [
+                    {"role": "user", "content": "先生成一张轮播图"},
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "已生成轮播图"}],
+                        "extras": {
+                            "artifacts": [{
+                                "path": artifact_path,
+                                "title": "轮播图",
+                                "type": "image/png",
+                            }]
+                        },
+                    },
+                ],
+                channel_type="web",
+            )
+            history_messages = store.load_messages("session-artifact-context", max_turns=10)
+            ui_page = store.load_history_page("session-artifact-context", page=1, page_size=20)
+
+        self.assertIn("[历史图片产物:", history_messages[1]["content"][0]["text"])
+        self.assertIn("轮播图", history_messages[1]["content"][0]["text"])
+        self.assertIn(artifact_path, history_messages[1]["content"][0]["text"])
+        self.assertEqual(ui_page["messages"][1]["content"], "已生成轮播图")
+        self.assertEqual(ui_page["messages"][1]["extras"]["artifacts"][0]["path"], artifact_path)
+
+    def test_load_messages_limits_recovered_file_refs_per_message(self):
+        from agent.memory.conversation_store import ConversationStore
+
+        with tempfile.TemporaryDirectory() as workspace:
+            long_path = str(Path(workspace) / ("x" * 700 + ".txt"))
+            store = ConversationStore(Path(workspace) / "conversation.sqlite3")
+            store.append_messages(
+                "session-context-budget",
+                [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "整理这些本地文件"}],
+                        "extras": {
+                            "attachments": [
+                                {"file_path": long_path, "file_type": "file"},
+                                {"file_path": long_path, "file_type": "file"},
+                            ] + [
+                                {"file_path": str(Path(workspace) / f"file-{idx}.txt"), "file_type": "file"}
+                                for idx in range(5)
+                            ],
+                        },
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "已输出文件"}],
+                        "extras": {
+                            "artifacts": [
+                                {"path": str(Path(workspace) / f"artifact-{idx}.txt"), "title": f"artifact-{idx}", "type": "text/plain"}
+                                for idx in range(5)
+                            ],
+                        },
+                    },
+                ],
+                channel_type="web",
+            )
+            history_messages = store.load_messages("session-context-budget", max_turns=10)
+
+        user_text = history_messages[0]["content"][0]["text"]
+        assistant_text = history_messages[1]["content"][0]["text"]
+        self.assertEqual(user_text.count("[历史文件:"), 4)
+        self.assertEqual(assistant_text.count("[历史文件产物:"), 4)
+        self.assertIn(long_path[:512], user_text)
+        self.assertNotIn(long_path, user_text)
+        self.assertNotIn("file-4.txt", user_text)
+        self.assertNotIn("artifact-4.txt", assistant_text)
+        self.assertIn("历史文件引用摘要", assistant_text)
+
+    def test_load_messages_caps_recovered_file_refs_across_large_context(self):
+        from agent.memory.conversation_store import ConversationStore
+
+        with tempfile.TemporaryDirectory() as workspace:
+            store = ConversationStore(Path(workspace) / "conversation.sqlite3")
+            messages = []
+            for msg_idx in range(12):
+                messages.append({
+                    "role": "user",
+                    "content": f"处理第 {msg_idx} 批文件",
+                    "extras": {
+                        "attachments": [
+                            {
+                                "file_path": str(Path(workspace) / f"batch-{msg_idx}" / f"file-{file_idx}.txt"),
+                                "file_type": "file",
+                            }
+                            for file_idx in range(4)
+                        ],
+                    },
+                })
+            store.append_messages("session-large-context-budget", messages, channel_type="web")
+            history_messages = store.load_messages("session-large-context-budget", max_turns=20)
+
+        joined = "\n".join(str(message["content"]) for message in history_messages)
+        self.assertEqual(joined.count("[历史文件:"), 40)
+        self.assertIn("历史文件引用摘要", joined)
+
     def test_web_channel_checks_owner_before_ui_state_binding_persist(self):
         source = Path("channel/web/web_channel.py").read_text(encoding="utf-8")
 

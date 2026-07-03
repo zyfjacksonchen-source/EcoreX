@@ -24,6 +24,7 @@ from .image_job_service import (
     ImageJobCancelled,
     ImageJobService,
     get_image_job_service,
+    resolve_image_job_parallelism_policy,
     reset_image_job_service_for_tests,
 )
 
@@ -54,5 +55,6 @@ __all__ = [
     'ImageJobCancelled',
     'ImageJobService',
     'get_image_job_service',
+    'resolve_image_job_parallelism_policy',
     'reset_image_job_service_for_tests',
 ]

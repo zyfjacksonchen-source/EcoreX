@@ -29,9 +29,9 @@ def main() -> int:
     packaging = read("scripts/prepare-ecorex-webui-local-release.ps1")
     install_ps1 = read("deploy/ecorex-site/install-webui.ps1")
     web_release = read("scripts/prepare-ecorex-web-release.ps1")
-    runtime_packs = read("desktop/runtime-packs/core-requirements.txt")
+    runtime_packs = read("runtime-packs/core-requirements.txt")
     runtime_copy = read("desktop/runtime/ecorex-runtime/core-requirements.txt")
-    capabilities = json.loads(read("desktop/runtime-packs/capabilities.json"))
+    capabilities = json.loads(read("runtime-packs/capabilities.json"))
     packs = {item.get("id"): item for item in capabilities.get("packs", [])}
 
     checks = [
@@ -91,14 +91,14 @@ def main() -> int:
             "local WebUI packaging overlays current root config ABI",
             '"config.py"' in packaging
             and '"config-template.json"' in packaging
-            and "desktop/runtime-packs/capabilities.json" in packaging
-            and "desktop/runtime-packs/core-requirements.txt" in packaging,
+            and "runtime-packs/capabilities.json" in packaging
+            and "runtime-packs/core-requirements.txt" in packaging,
         ),
         check(
             "web service release overlays current root config ABI",
             'Join-Path $repoRoot "config.py"' in web_release
             and 'Join-Path $repoRoot "config-template.json"' in web_release
-            and 'desktop/runtime-packs/core-requirements.txt' in web_release,
+            and 'Join-Path $runtimePackRoot "core-requirements.txt"' in web_release,
         ),
         check("source core requirements still declare lark-oapi", "lark-oapi>=1.5.5" in runtime_packs and "lark-oapi>=1.5.5" in runtime_copy),
         check("source core requirements still declare rapidocr", "rapidocr-onnxruntime" in runtime_packs),

@@ -45,7 +45,7 @@
         <article><span>未读错误</span><strong data-metric="errors">0</strong></article>
         <article><span>能力包</span><strong data-metric="capabilities">0</strong></article>
         <article><span>模型</span><strong data-metric="modelCredentials">0</strong></article>
-        <article><span>客户端版本</span><strong data-metric="version">0.2.5</strong></article>
+        <article><span>客户端版本</span><strong data-metric="version">0.2.7</strong></article>
       </section>
 
       <section class="panel active" data-panel-view="users">
@@ -128,7 +128,10 @@
             <p class="eyebrow">Models</p>
             <h2>企业全局模型</h2>
           </div>
-          <button class="primary-button" type="button" data-model-edit>编辑模型</button>
+          <div class="section-actions">
+            <button type="button" data-model-add>新增模型</button>
+            <button class="primary-button" type="button" data-model-edit>编辑默认模型</button>
+          </div>
         </div>
         <div class="model-card" data-global-model></div>
       </section>
@@ -156,7 +159,9 @@
             <p class="eyebrow">Release</p>
             <h2>客户端发布状态</h2>
           </div>
+          <button class="soft-button" type="button" data-release-refresh>刷新</button>
         </div>
+        <div class="release-summary" data-release-summary></div>
         <div class="release-list" data-release></div>
       </section>
     </main>

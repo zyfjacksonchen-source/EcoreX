@@ -44,6 +44,77 @@ def test_tongxin_cli_config_template_does_not_persist_login_fields():
         assert key not in tongxin
 
 
+def test_bundled_tongxin_realtime_account_id_bypasses_missing_cache(monkeypatch):
+    import importlib.util
+
+    root = Path(__file__).resolve().parents[1]
+    tool_dir = root / "tools" / "tongxin"
+    module_name = "xin_agent_cli_direct_account_test"
+    saved_modules = {name: sys.modules.get(name) for name in ("config", "models", "mpi", module_name)}
+    captured = {}
+
+    try:
+        sys.modules.pop("config", None)
+        sys.modules.pop("models", None)
+        sys.modules.pop("mpi", None)
+        sys.path.insert(0, str(tool_dir))
+        spec = importlib.util.spec_from_file_location(module_name, tool_dir / "xin_agent_cli.py")
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        class FakeService:
+            def list_cache_accounts(self, *_args, **_kwargs):
+                return []
+
+            def cache_status_meta(self):
+                return {"cache_status": "missing", "cache_database_exists": False}
+
+        class FakeAdapter:
+            def realtime_summary(self, accounts, limit, offset, xhs_channel="all"):
+                captured["accounts"] = accounts
+                captured["limit"] = limit
+                captured["offset"] = offset
+                captured["xhs_channel"] = xhs_channel
+                return [{"account_id": accounts[0]["account_id"], "status": "ok", "cost": 12.5}]
+
+        monkeypatch.setattr(module, "XinAgentReadService", FakeService)
+        monkeypatch.setattr(module, "MpiReadOnlyAdapter", lambda: FakeAdapter())
+        args = types.SimpleNamespace(
+            role="admin",
+            limit=5,
+            offset=0,
+            xhs_channel="all",
+            project_id=None,
+            account_id="12345",
+            search=None,
+        )
+
+        result = module.run_realtime_summary(args)
+
+        assert result["ok"] is True
+        assert result["meta"]["account_resolution"] == "direct_account_id"
+        assert result["meta"]["cache_database_exists"] is False
+        assert result["data"]["resolution"]["status"] == "ok"
+        assert result["data"]["total_cost"] == 12.5
+        assert captured["accounts"] == [{
+            "account_id": "12345",
+            "account_name": "",
+            "project_id": None,
+            "project_name": "",
+            "source": "direct_account_id",
+        }]
+        assert captured["xhs_channel"] == "all"
+    finally:
+        if str(tool_dir) in sys.path:
+            sys.path.remove(str(tool_dir))
+        for name, module in saved_modules.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
+
+
 def _make_tongxin_script(root: Path) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     script = root / "xin_agent_cli.py"
@@ -107,6 +178,79 @@ def _make_tongxin_script_with_bad_models(root: Path) -> Path:
                 print(json.dumps({"ok": True, "name": "xin_agent_cli", "mode": "read_only"}))
             else:
                 raise AttributeError("module 'models' has no attribute 'DATABASE'")
+            """
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    return script
+
+
+def _make_tongxin_accuracy_script(
+    root: Path,
+    *,
+    mpi_fallback: bool = False,
+    mpi_cost: float = 10.0,
+    cache_cost: float = 10.0,
+    empty_projects: bool = False,
+) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    script = root / "xin_agent_cli.py"
+    script.write_text(
+        textwrap.dedent(
+            f"""
+            import json
+            import sys
+
+            MPI_FALLBACK = {str(mpi_fallback)}
+            MPI_COST = {float(mpi_cost)!r}
+            CACHE_COST = {float(cache_cost)!r}
+            EMPTY_PROJECTS = {str(empty_projects)}
+
+            args = sys.argv[1:]
+
+            def flag(name, default=""):
+                if name in args:
+                    idx = args.index(name)
+                    if idx + 1 < len(args):
+                        return args[idx + 1]
+                return default
+
+            if args == ["schema"]:
+                print(json.dumps({{"ok": True, "name": "xin_agent_cli", "mode": "read_only"}}))
+            elif args[:2] == ["account", "list"]:
+                print(json.dumps({{
+                    "ok": True,
+                    "data": {{"items": [{{"account_id": "acct-private-1", "account_name": "Private Clinic"}}]}},
+                    "meta": {{"source": flag("--source", "cache")}},
+                }}))
+            elif args[:2] == ["project", "list"]:
+                items = [] if EMPTY_PROJECTS else [{{"project_id": "project-private-1", "project_name": "Private Project"}}]
+                print(json.dumps({{
+                    "ok": True,
+                    "data": {{"items": items}},
+                    "meta": {{"source": flag("--source", "cache")}},
+                }}))
+            elif args[:2] == ["report", "summary"]:
+                source = flag("--source", "cache")
+                meta = {{"source": source}}
+                cost = MPI_COST if source == "mpi" else CACHE_COST
+                if source == "mpi" and MPI_FALLBACK:
+                    meta = {{
+                        "source": "cache",
+                        "requested_source": "mpi",
+                        "effective_source": "cache",
+                        "fallback_source": "cache",
+                    }}
+                    cost = CACHE_COST
+                print(json.dumps({{
+                    "ok": True,
+                    "data": {{"items": [{{"cost": cost}}]}},
+                    "meta": meta,
+                }}))
+            else:
+                print(json.dumps({{"ok": False, "args": args}}))
+                sys.exit(2)
             """
         ).strip()
         + "\n",
@@ -372,6 +516,22 @@ def test_tongxin_cli_read_only_contract_is_command_specific():
     allowed = [
         ["account", "list", "--source", "mpi", "--platform", "xhs"],
         ["project", "list", "--search", "clinic"],
+        [
+            "project",
+            "list",
+            "--source",
+            "mpi",
+            "--platform",
+            "xhs",
+            "--xhs-channel",
+            "chengfeng",
+            "--account-id",
+            "12345",
+            "--start-date",
+            "2026-01-01",
+            "--end-date",
+            "2026-01-31",
+        ],
         ["report", "summary", "--source", "mpi", "--platform", "xhs", "--start-date", "2026-01-01"],
         ["note", "detail", "--source", "mpi", "--platform", "xhs", "--end-date", "2026-01-31"],
         ["realtime", "summary", "--xhs-channel", "all", "--limit", "20"],
@@ -397,6 +557,334 @@ def test_tongxin_cli_read_only_contract_is_command_specific():
     for args in blocked:
         ok, reason = validate_read_only_tongxin_args(args)
         assert not ok, (args, reason)
+
+
+def test_tongxin_mpi_project_cache_fallback_is_not_labeled_as_mpi():
+    import importlib.util
+
+    root = Path(__file__).resolve().parents[1]
+    tool_dir = root / "tools" / "tongxin"
+    module_name = "xin_agent_cli_cache_fallback_meta_test"
+    saved_modules = {name: sys.modules.get(name) for name in ("config", "models", "mpi", module_name)}
+    try:
+        sys.modules.pop("config", None)
+        sys.modules.pop("models", None)
+        sys.modules.pop("mpi", None)
+        sys.path.insert(0, str(tool_dir))
+        spec = importlib.util.spec_from_file_location(module_name, tool_dir / "xin_agent_cli.py")
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        meta = {"source": "mpi"}
+        module.mark_cache_fallback(meta, "mpi_permission_denied")
+
+        assert meta["requested_source"] == "mpi"
+        assert meta["effective_source"] == "cache"
+        assert meta["source"] == "cache"
+        assert meta["fallback_source"] == "cache"
+        assert meta["cache_fallback_from_mpi"] is True
+    finally:
+        if str(tool_dir) in sys.path:
+            sys.path.remove(str(tool_dir))
+        for name, module_obj in saved_modules.items():
+            if module_obj is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module_obj
+
+
+def test_tongxin_cli_schema_exposes_wrapper_mpi_accuracy_action():
+    from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
+
+    with tempfile.TemporaryDirectory() as workspace:
+        tool = TongxinCli({"cwd": workspace})
+        result = tool.execute({"action": "schema", "timeout": 2})
+
+    assert result.status == "success"
+    payload = result.result
+    assert payload["status"] == "success"
+    assert "mpi_accuracy" in payload["actions"]
+    assert "accuracy_check" in payload["actions"]
+    assert payload["sourcePolicy"] == {
+        "factSource": "mpi",
+        "projectAccountSource": "tongxin-data-volume",
+        "cacheFallbackAllowedForMpi": False,
+    }
+
+
+def test_tongxin_cli_database_path_is_injected_for_data_volume_reads():
+    from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
+
+    with tempfile.TemporaryDirectory() as workspace:
+        root = Path(workspace)
+        db = root / "tongxin.sqlite3"
+        db.write_bytes(b"sqlite-placeholder")
+        script = root / "xin_agent_cli.py"
+        script.write_text(
+            textwrap.dedent(
+                """
+                import json
+                import os
+                import sys
+                from pathlib import Path
+
+                args = sys.argv[1:]
+                if args == ["schema"]:
+                    print(json.dumps({"ok": True, "name": "xin_agent_cli"}))
+                elif args[:2] == ["project", "list"]:
+                    values = [
+                        os.environ.get("XIN_AGENT_DATABASE", ""),
+                        os.environ.get("DATABASE", ""),
+                        os.environ.get("ECOREX_TONGXIN_DATABASE", ""),
+                    ]
+                    print(json.dumps({
+                        "ok": True,
+                        "data": {"items": [{
+                            "project_id": "project-private-1",
+                            "databaseName": Path(values[0]).name,
+                            "allDatabaseEnvEqual": len(set(values)) == 1,
+                        }]},
+                        "meta": {"source": "cache"},
+                    }))
+                else:
+                    print(json.dumps({"ok": False, "args": args}))
+                    sys.exit(2)
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        tool = TongxinCli({"cwd": workspace, "script_path": str(script), "database_path": str(db)})
+
+        status = tool.execute({"action": "status"})
+        result = tool.execute({"action": "run", "args": ["project", "list", "--source", "cache", "--limit", "1"]})
+
+    assert status.status == "success"
+    assert status.result["databaseConfigured"] is True
+    assert status.result["databaseFileExists"] is True
+    assert status.result["databasePathRef"]["name"] == "tongxin.sqlite3"
+    assert result.status == "success"
+    item = result.result["json"]["data"]["items"][0]
+    assert item["databaseName"] == "tongxin.sqlite3"
+    assert item["allDatabaseEnvEqual"] is True
+
+
+def test_tongxin_cli_database_env_overrides_runtime_config_default(monkeypatch):
+    from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
+
+    with tempfile.TemporaryDirectory() as workspace:
+        root = Path(workspace)
+        config_db = root / "default.sqlite3"
+        env_db = root / "mounted.sqlite3"
+        per_call_db = root / "per-call.sqlite3"
+        for db in (config_db, env_db, per_call_db):
+            db.write_bytes(b"sqlite-placeholder")
+        script = root / "xin_agent_cli.py"
+        script.write_text(
+            textwrap.dedent(
+                """
+                import json
+                import os
+                import sys
+                from pathlib import Path
+
+                if sys.argv[1:] == ["schema"]:
+                    print(json.dumps({"ok": True, "name": "xin_agent_cli"}))
+                else:
+                    print(json.dumps({
+                        "ok": True,
+                        "data": {"items": [{"databaseName": Path(os.environ.get("XIN_AGENT_DATABASE", "")).name}]},
+                        "meta": {"source": "cache"},
+                    }))
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        config_path = root / "config.json"
+        config_path.write_text(
+            json.dumps({
+                "tools": {
+                    "tongxin_cli": {
+                        "script_path": str(script),
+                        "database_path": str(config_db),
+                        "read_only": True,
+                    }
+                }
+            }),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("ECOREX_TONGXIN_DATABASE", str(env_db))
+        tool = TongxinCli({"cwd": workspace, "config_path": str(config_path)})
+
+        env_result = tool.execute({"action": "run", "args": ["project", "list", "--source", "cache", "--limit", "1"]})
+        per_call_result = tool.execute({
+            "action": "run",
+            "args": ["project", "list", "--source", "cache", "--limit", "1"],
+            "database_path": str(per_call_db),
+        })
+
+    assert env_result.status == "success"
+    assert env_result.result["json"]["data"]["items"][0]["databaseName"] == "mounted.sqlite3"
+    assert per_call_result.status == "success"
+    assert per_call_result.result["json"]["data"]["items"][0]["databaseName"] == "per-call.sqlite3"
+
+
+def test_tongxin_cli_mpi_accuracy_uses_data_volume_samples_and_public_hashes():
+    from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
+
+    with tempfile.TemporaryDirectory() as workspace:
+        script = _make_tongxin_accuracy_script(Path(workspace), mpi_cost=10.0, cache_cost=10.0)
+        tool = TongxinCli({"cwd": workspace, "script_path": str(script)})
+
+        result = tool.execute({
+            "action": "mpi_accuracy",
+            "start_date": "2026-01-01",
+            "end_date": "2026-01-31",
+            "sample_limit": 1,
+            "tolerance_abs": 0.01,
+            "tolerance_ratio": 0.01,
+        })
+
+    assert result.status == "success"
+    payload = result.result
+    assert payload["sourcePolicy"] == {
+        "factSource": "mpi",
+        "projectAccountSource": "tongxin-data-volume",
+        "cacheFallbackAllowedForMpi": False,
+    }
+    assert payload["sampleCount"] == 1
+    assert payload["comparableMetricCount"] == 1
+    assert payload["passedMetricCount"] == 1
+    assert payload["cacheFallbackDetected"] is False
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert "acct-private" not in serialized
+    assert "project-private" not in serialized
+    assert "Private Clinic" not in serialized
+    assert "Private Project" not in serialized
+    assert payload["dataVolume"]["accountHashes"]
+    assert payload["dataVolume"]["projectHashes"]
+
+
+def test_tongxin_cli_mpi_accuracy_blocks_cache_fallback_masquerading_as_mpi():
+    from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
+
+    with tempfile.TemporaryDirectory() as workspace:
+        script = _make_tongxin_accuracy_script(Path(workspace), mpi_fallback=True)
+        tool = TongxinCli({"cwd": workspace, "script_path": str(script)})
+
+        result = tool.execute({
+            "action": "mpi_accuracy",
+            "start_date": "2026-01-01",
+            "end_date": "2026-01-31",
+            "sample_limit": 1,
+        })
+
+    assert result.status == "error"
+    assert result.result["errorType"] == "tongxin_mpi_accuracy_cache_fallback_detected"
+    assert result.result["cacheFallbackDetected"] is True
+    assert result.result["sourcePolicy"]["cacheFallbackAllowedForMpi"] is False
+
+
+def test_tongxin_cli_mpi_accuracy_blocks_zero_project_samples():
+    from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
+
+    with tempfile.TemporaryDirectory() as workspace:
+        script = _make_tongxin_accuracy_script(Path(workspace), empty_projects=True)
+        tool = TongxinCli({"cwd": workspace, "script_path": str(script)})
+
+        result = tool.execute({
+            "action": "mpi_accuracy",
+            "start_date": "2026-01-01",
+            "end_date": "2026-01-31",
+            "sample_limit": 1,
+        })
+
+    assert result.status == "error"
+    assert result.result["errorType"] == "tongxin_mpi_accuracy_zero_project_samples"
+    assert result.result["dataVolume"]["projectCount"] == 0
+    assert result.result["sourcePolicy"]["projectAccountSource"] == "tongxin-data-volume"
+
+
+def test_bundled_tongxin_chengfeng_project_list_empty_does_not_reference_missing_permission_errors(monkeypatch):
+    import importlib.util
+
+    root = Path(__file__).resolve().parents[1]
+    tool_dir = root / "tools" / "tongxin"
+    module_name = "xin_agent_cli_chengfeng_empty_test"
+    saved_modules = {name: sys.modules.get(name) for name in ("config", "models", "mpi", module_name)}
+    try:
+        sys.modules.pop("config", None)
+        sys.modules.pop("models", None)
+        sys.modules.pop("mpi", None)
+        sys.path.insert(0, str(tool_dir))
+        spec = importlib.util.spec_from_file_location(module_name, tool_dir / "xin_agent_cli.py")
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        monkeypatch.setattr(module.MpiReadOnlyAdapter, "list_chengfeng_projects", lambda *_args, **_kwargs: [])
+        adapter = module.MpiReadOnlyAdapter()
+        rows = adapter.list_projects(
+            "12345",
+            limit=5,
+            offset=0,
+            start_date="2026-01-01",
+            end_date="2026-01-31",
+            platform="xhs",
+            xhs_channel="chengfeng",
+        )
+
+        assert rows == []
+    finally:
+        if str(tool_dir) in sys.path:
+            sys.path.remove(str(tool_dir))
+        for name, module_obj in saved_modules.items():
+            if module_obj is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module_obj
+
+
+def test_bundled_tongxin_chengfeng_project_permission_errors_raise_cli_error(monkeypatch):
+    import importlib.util
+
+    root = Path(__file__).resolve().parents[1]
+    tool_dir = root / "tools" / "tongxin"
+    module_name = "xin_agent_cli_chengfeng_permission_test"
+    saved_modules = {name: sys.modules.get(name) for name in ("config", "models", "mpi", module_name)}
+
+    class FakeClient:
+        app_id = "xhs-chengfeng-app"
+
+        def fetch_chengfeng_offline_report(self, **_kwargs):
+            raise RuntimeError("没有该接口权限")
+
+    try:
+        sys.modules.pop("config", None)
+        sys.modules.pop("models", None)
+        sys.modules.pop("mpi", None)
+        sys.path.insert(0, str(tool_dir))
+        spec = importlib.util.spec_from_file_location(module_name, tool_dir / "xin_agent_cli.py")
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        monkeypatch.setattr(module.MpiReadOnlyAdapter, "_read_only_clients", lambda self: [FakeClient()])
+        adapter = module.MpiReadOnlyAdapter()
+        with pytest.raises(module.CliError) as exc:
+            adapter.list_chengfeng_projects("12345", 5, 0, "2026-01-01", "2026-01-31")
+
+        assert exc.value.code == "permission_denied"
+    finally:
+        if str(tool_dir) in sys.path:
+            sys.path.remove(str(tool_dir))
+        for name, module_obj in saved_modules.items():
+            if module_obj is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module_obj
 
 
 def test_tongxin_cli_broker_allows_readonly_and_blocks_mutations_in_readonly_mode():
@@ -814,7 +1302,96 @@ def test_tongxin_cli_bootstrap_installs_manifest_models_database_package():
             conf()["tools"] = old_tools
 
 
-def test_tongxin_cli_auto_configure_remote_auth_requires_login_before_local_fallback():
+def test_tongxin_cli_bootstrap_accepts_models_init_database_exports():
+    from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
+    from config import conf
+
+    script_body = textwrap.dedent(
+        """
+        import json
+        import sys
+        import models
+        if sys.argv[1:] == ["schema"]:
+            print(json.dumps({"ok": True, "name": "xin_agent_cli"}))
+        else:
+            print(json.dumps({
+                "ok": True,
+                "database": models.DATABASE["name"],
+                "databaseAlias": models.database["name"],
+                "DatabaseAlias": models.Database["name"],
+            }))
+        """
+    ).strip() + "\n"
+    models_body = "database = {'name': 'remote-bootstrap'}\nDATABASE = database\nDatabase = DATABASE\n"
+    script_bytes = script_body.encode("utf-8")
+    models_bytes = models_body.encode("utf-8")
+    script_sha = __import__("hashlib").sha256(script_bytes).hexdigest().upper()
+    models_sha = __import__("hashlib").sha256(models_bytes).hexdigest().upper()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/manifest.json":
+                body = json.dumps({
+                    "downloadUrl": f"http://127.0.0.1:{self.server.server_port}/xin_agent_cli.py",
+                    "sha256": script_sha,
+                    "fileName": "xin_agent_cli.py",
+                    "files": [
+                        {
+                            "path": "models/__init__.py",
+                            "downloadUrl": f"http://127.0.0.1:{self.server.server_port}/models/__init__.py",
+                            "sha256": models_sha,
+                        }
+                    ],
+                }).encode("utf-8")
+            elif self.path == "/xin_agent_cli.py":
+                body = script_bytes
+            elif self.path == "/models/__init__.py":
+                body = models_bytes
+            else:
+                self.send_response(404)
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            return
+
+    with tempfile.TemporaryDirectory() as workspace:
+        config_path = Path(workspace) / "config.json"
+        target_dir = Path(workspace) / "runtime" / "tools" / "tongxin"
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        old_tools = copy.deepcopy(conf().get("tools", {}))
+        conf()["tools"] = {}
+        try:
+            tool = TongxinCli({
+                "cwd": workspace,
+                "config_path": str(config_path),
+                "bootstrap_manifest_url": f"http://127.0.0.1:{server.server_port}/manifest.json",
+                "bootstrap_dir": str(target_dir),
+            })
+            with patch.object(TongxinCli, "_trusted_auto_config_roots", return_value=[Path(workspace)]):
+                result = tool.execute({"action": "bootstrap", "allow_insecure_localhost": True})
+
+            assert result.status == "success"
+            assert (target_dir / "models" / "__init__.py").read_text(encoding="utf-8") == models_body
+            run = tool.execute({"action": "run", "args": ["project", "list", "--source", "cache", "--limit", "1"]})
+            assert run.status == "success"
+            assert run.result["json"]["database"] == "remote-bootstrap"
+            assert run.result["json"]["databaseAlias"] == "remote-bootstrap"
+            assert run.result["json"]["DatabaseAlias"] == "remote-bootstrap"
+        finally:
+            server.shutdown()
+            server.server_close()
+            conf()["tools"] = old_tools
+
+
+def test_tongxin_cli_auto_configure_prefers_healthy_local_script_over_configured_remote_auth():
     from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
     from config import conf
 
@@ -835,12 +1412,156 @@ def test_tongxin_cli_auto_configure_remote_auth_requires_login_before_local_fall
             })
             with patch.object(TongxinCli, "_trusted_auto_config_roots", return_value=[Path(workspace)]):
                 result = tool.execute({"action": "auto_configure", "allow_insecure_localhost": True})
+                assert result.status == "success"
+                assert result.result["configurationState"] == "configured"
+                assert result.result["autoConfigureStep"] == "local_trusted_script"
+                assert result.result["autoConfigured"] is True
+                assert result.result["previousRemoteConfigured"]["remoteAuthConfigured"] is True
+                assert config_path.exists()
+                persisted = json.loads(config_path.read_text(encoding="utf-8"))
+                assert persisted["tools"]["tongxin_cli"]["script_path"] == str(local_script.resolve())
+        finally:
+            conf()["tools"] = old_tools
+
+
+def test_tongxin_cli_bundled_placeholder_requires_authenticated_bootstrap():
+    from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
+    from config import conf
+
+    with tempfile.TemporaryDirectory() as workspace:
+        config_path = Path(workspace) / "config.json"
+        placeholder = Path(workspace) / "xin_agent_cli.py"
+        placeholder.write_text(
+            textwrap.dedent(
+                """
+                import json
+                import sys
+
+                if sys.argv[1:] == ["schema"]:
+                    print(json.dumps({"ok": True, "name": "xin_agent_cli"}))
+                else:
+                    print(json.dumps({
+                        "ok": True,
+                        "source": "ecorex-bundled",
+                        "configurationState": "bundled_placeholder",
+                        "data": [],
+                    }))
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        old_tools = copy.deepcopy(conf().get("tools", {}))
+        conf()["tools"] = {}
+        try:
+            tool = TongxinCli({
+                "cwd": workspace,
+                "config_path": str(config_path),
+                "auth_url": "http://127.0.0.1:9/login",
+            })
+            with (
+                patch.object(TongxinCli, "_trusted_auto_config_roots", return_value=[Path(workspace)]),
+                patch.object(TongxinCli, "_bundled_script_path", return_value=placeholder),
+            ):
+                configure = tool.execute({
+                    "action": "configure",
+                    "script_path": str(placeholder),
+                    "allow_insecure_localhost": True,
+                })
+                assert configure.status == "error"
+                assert configure.result["configurationState"] == "bundled_placeholder"
+
+                auto = tool.execute({"action": "auto_configure", "allow_insecure_localhost": True})
+                assert auto.status == "error"
+                assert auto.result["configurationState"] == "remote_auth_required"
+                assert auto.result["autoConfigureStep"] == "remote_authenticated_bootstrap"
+                assert auto.result["previousLocalStatus"]["configurationState"] in {"detected_untrusted", "bundled_placeholder"}
+                assert not config_path.exists()
+        finally:
+            conf()["tools"] = old_tools
+
+
+def test_tongxin_cli_auto_configure_prefer_remote_keeps_explicit_remote_path():
+    from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
+    from config import conf
+
+    with tempfile.TemporaryDirectory() as workspace:
+        config_path = Path(workspace) / "config.json"
+        local_script = Path(workspace) / "xin_agent_cli.py"
+        local_script.write_text(
+            "import json, sys\nprint(json.dumps({'ok': True, 'name': 'xin_agent_cli'}))\n",
+            encoding="utf-8",
+        )
+        old_tools = copy.deepcopy(conf().get("tools", {}))
+        conf()["tools"] = {}
+        try:
+            tool = TongxinCli({
+                "cwd": workspace,
+                "config_path": str(config_path),
+                "auth_url": "http://127.0.0.1:9/login",
+            })
+            with patch.object(TongxinCli, "_trusted_auto_config_roots", return_value=[Path(workspace)]):
+                result = tool.execute({
+                    "action": "auto_configure",
+                    "prefer_remote": True,
+                    "allow_insecure_localhost": True,
+                })
                 assert result.status == "error"
                 assert result.result["configurationState"] == "remote_auth_required"
                 assert result.result["autoConfigureStep"] == "remote_authenticated_bootstrap"
                 assert result.result["autoConfigured"] is False
-                assert result.result["nextAction"]["requires"] == ["username", "password"]
                 assert not config_path.exists()
+        finally:
+            conf()["tools"] = old_tools
+
+
+def test_tongxin_cli_auto_configure_prefer_remote_bypasses_existing_config():
+    from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
+    from config import conf
+
+    with tempfile.TemporaryDirectory() as workspace:
+        config_path = Path(workspace) / "config.json"
+        local_script = Path(workspace) / "xin_agent_cli.py"
+        local_script.write_text(
+            textwrap.dedent(
+                """
+                import json
+                import sys
+
+                if sys.argv[1:] == ["schema"]:
+                    print(json.dumps({"ok": True, "name": "xin_agent_cli"}))
+                else:
+                    print(json.dumps({"ok": True, "data": [{"id": "local"}]}))
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        config_path.write_text(
+            json.dumps({"tools": {"tongxin_cli": {"script_path": str(local_script), "read_only": True}}}),
+            encoding="utf-8",
+        )
+        old_tools = copy.deepcopy(conf().get("tools", {}))
+        conf()["tools"] = {}
+        try:
+            tool = TongxinCli({
+                "cwd": workspace,
+                "config_path": str(config_path),
+                "auth_url": "http://127.0.0.1:9/login",
+            })
+            with patch.object(TongxinCli, "_trusted_auto_config_roots", return_value=[Path(workspace)]):
+                status = tool.execute({"action": "status"})
+                assert status.result["configured"] is True
+
+                result = tool.execute({
+                    "action": "auto_configure",
+                    "prefer_remote": True,
+                    "allow_insecure_localhost": True,
+                })
+                assert result.status == "error"
+                assert result.result["configurationState"] == "remote_auth_required"
+                assert result.result["autoConfigureStep"] == "remote_authenticated_bootstrap"
+                assert result.result["previousLocalStatus"]["configured"] is True
         finally:
             conf()["tools"] = old_tools
 

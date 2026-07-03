@@ -1,0 +1,73 @@
+{
+  "schemaVersion": "web-runtime-goal-slice-test-summary-v1",
+  "slice": "S03-runtime-packs-installer",
+  "status": "pass",
+  "commands": [
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_web_runtime_goal.py tests/test_v025_runtime_manifest.py tests/test_v025_runtime_dependencies.py tests/test_v025_tool_execution_environment.py tests/test_v024_tongxin_cli_readonly.py -q",
+      "status": "pass",
+      "summary": "129 passed, 1 skipped"
+    },
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_web_runtime_goal.py -k \"s3_install_capability or s3_public_runtime_packs\" -q",
+      "status": "pass",
+      "summary": "9 passed, 10 deselected"
+    },
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_web_runtime_goal.py tests/test_v025_tool_execution_environment.py tests/test_v024_tongxin_cli_readonly.py -q",
+      "status": "pass",
+      "summary": "64 passed, 1 skipped"
+    },
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python scripts/smoke-v023-install-packaging-contracts.py",
+      "status": "pass",
+      "summary": "install packaging contract smoke passed"
+    },
+    {
+      "command": "bash -lc 'cd <WORKSPACE> && bash -n desktop/scripts/stage-runtime-mac.sh scripts/install-ecorex-web.sh scripts/check-ecorex-web-release.sh'",
+      "status": "pass",
+      "summary": "shell syntax passed; WSL emitted a non-fatal localhost warning"
+    },
+    {
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-ecorex-web-release.ps1 -Version 0.2.5 -RuntimeRoot . -OutputDir release-artifacts -KeepStaging",
+      "status": "pass",
+      "summary": "rebuilt Web Linux service package"
+    },
+    {
+      "command": "tar package inspection",
+      "status": "pass",
+      "summary": "package contains public installer actions, runtime packs, title log redaction, empty-body title handler, and attachment-only title trigger"
+    },
+    {
+      "command": "package inspection after security/runtime review fixes",
+      "status": "pass",
+      "summary": "package installer contains redacted URL logging, needs_configuration state, and no host runtime fallback for install"
+    },
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_web_runtime_goal.py tests/test_v025_runtime_manifest.py tests/test_v025_runtime_dependencies.py tests/test_v025_tool_execution_environment.py tests/test_v024_tongxin_cli_readonly.py tests/test_ecorex_web_parallel_backend.py -k \"not browser and not playwright\" -q",
+      "status": "non_blocking_external_failure",
+      "summary": "510 passed, 1 skipped, 1 failed on unrelated v020 release-manifest wording expectation"
+    }
+  ],
+  "coverage": [
+    "public runtime-packs shared source of truth",
+    "legacy runtime-pack copies match public source",
+    "public installer status/install/repair/doctor action contract",
+    "unified capability-state and capability-packages paths",
+    "discovery-only source/mirror URL redaction",
+    "pip index/mirror URL credential redaction in command logs/errors",
+    "state/target/browser path confinement to EcoreX owned roots",
+    "pack id sanitization for status/log/lock files",
+    "module probes restricted to capability target and owned runtime site-packages",
+    "configureOnly packs return needs_configuration instead of installed",
+    "Web release package includes public installer and runtime packs",
+    "S3a latest session-title fix is included in rebuilt Web package"
+  ],
+  "releaseArtifact": {
+    "file": "release-artifacts/EcoreX_0.2.5-web-linux-service.tar.gz",
+    "sha256": "59C9E1979C751802A247565E2FF6D4F199F17F963DB967939B46218166C40E7B",
+    "size": 3878166,
+    "redacted": true
+  },
+  "redacted": true
+}

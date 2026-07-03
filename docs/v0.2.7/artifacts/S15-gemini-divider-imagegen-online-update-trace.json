@@ -1,0 +1,192 @@
+{
+  "schemaVersion": "v0.2.7-s15-fix-trace-v1",
+  "status": "BLOCKED_BY_EXTERNAL_TONGXIN_DATA_VOLUME",
+  "version": "0.2.7",
+  "generatedAt": "2026-07-03T10:24:56.3351768+08:00",
+  "scope": [
+    "custom Gemini response generation after model switch",
+    "model switch divider normal message-flow behavior",
+    "batch image generation incremental file_to_send delivery",
+    "real release validation additions for publish-to-online-update success",
+    "WebUI-first Windows/macOS update-check artifact selection",
+    "public release download externalization to avoid 1.2GB public zip uploads"
+  ],
+  "codeChanges": [
+    {
+      "area": "custom-gemini",
+      "files": [
+        "models/openai/openai_http_client.py",
+        "models/model_telemetry.py",
+        "agent/protocol/agent_stream.py"
+      ],
+      "result": "OpenAI-compatible non-SSE JSON chat responses and message-level content chunks are normalized into stream deltas, preventing the empty-stream fallback apology."
+    },
+    {
+      "area": "model-switch-divider",
+      "files": [
+        "desktop/src/App.tsx",
+        "desktop/src/styles/app.css"
+      ],
+      "result": "model-switch-divider now renders inside a normal message row and scrolls upward with later chat messages instead of behaving like a sticky bottom notice."
+    },
+    {
+      "area": "batch-imagegen",
+      "files": [
+        "agent/protocol/agent_stream.py",
+        "agent/tools/imagegen/imagegen.py"
+      ],
+      "result": "AgentStream binds emit_event/tool_call_id onto tools; ImageGenTool emits a redacted file_to_send event for each ready image before the aggregate batch result returns."
+    },
+    {
+      "area": "online-update",
+      "files": [
+        "channel/web/web_channel.py",
+        "scripts/smoke-v026-production-agent-product-acceptance.py",
+        "scripts/light-real-release-validation.py",
+        "scripts/real-release-multi-agent-strategy.py"
+      ],
+      "result": "update-check now prefers WebUI artifacts for Win/Mac, and the real release gate validates admin-gated stable manifest promotion plus Win/Mac WebUI update artifacts."
+    }
+  ],
+  "releaseArtifacts": {
+    "publicZip": {
+      "artifactId": "EcoreX_0.2.7-public-release.zip",
+      "size": 2843813,
+      "sha256": "2CB2564094FB8808D0100728A21644D89543C1D2F9055A41C278CBEA66459FD6",
+      "downloadsExternalized": true
+    },
+    "webLinuxService": {
+      "artifactId": "EcoreX_0.2.7-web-linux-service.tar.gz",
+      "size": 4086246,
+      "sha256": "E4D5482A2DEDCBD5818A3EE7EBBA9AA6178521A002163584E0ACD9F6858CD438",
+      "webBuild": "provided-web-build"
+    },
+    "webuiWindows": {
+      "artifactId": "EcoreX_0.2.7-webui-windows-x64.zip",
+      "size": 550740315,
+      "sha256": "1A3C3848C44CB5B682E3C5850D6ED89A2022145972920193C71879D975559B22"
+    },
+    "webuiMacos": {
+      "artifactId": "EcoreX_0.2.7-webui-macos-universal.zip",
+      "size": 652195150,
+      "sha256": "DF7DDF8E435E25259BD865FF5CC20BD58F0EADC7C55EA3EEDC49F43D4D1D24AF"
+    },
+    "webuiWinMacDual": {
+      "artifactId": "EcoreX_0.2.7-webui-win-mac.zip",
+      "size": 1204161642,
+      "risk": "large convenience bundle; do not use it as the production public zip upload path"
+    }
+  },
+  "verification": {
+    "local": [
+      {
+        "command": "python -m py_compile channel/web/web_channel.py scripts/smoke-v026-production-agent-product-acceptance.py scripts/light-real-release-validation.py scripts/real-release-multi-agent-strategy.py models/openai/openai_http_client.py models/model_telemetry.py agent/protocol/agent_stream.py agent/tools/imagegen/imagegen.py",
+        "status": "PASS"
+      },
+      {
+        "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest focused Gemini/divider/imagegen/update-check suites",
+        "status": "PASS",
+        "selectedTestsPassed": 15
+      },
+      {
+        "command": "npm --prefix desktop run typecheck",
+        "status": "PASS"
+      },
+      {
+        "command": "npm --prefix desktop run build:renderer",
+        "status": "PASS"
+      },
+      {
+        "command": "python scripts/真实发布轻量校验.py --output docs/v0.2.7/artifacts/real-release-light-validation.json",
+        "status": "PASS",
+        "checkCount": 114
+      }
+    ],
+    "productionDeploy": {
+      "artifact": "docs/v0.2.7/artifacts/production-deploy-online.json",
+      "status": "PASS",
+      "onlineChecks": {
+        "webServiceVersion": "0.2.7",
+        "installationManifestVersion": "0.2.7",
+        "publicManifestVersion": "0.2.7",
+        "serviceActive": true,
+        "serviceEnabled": true,
+        "webVersionStatus": 200,
+        "webVersionBodyHasExpectedVersion": true
+      }
+    },
+    "focusedRealRelease": {
+      "artifact": "docs/v0.2.7/artifacts/S15-v027-focused-after-online-update.json",
+      "status": "FAIL",
+      "checkCount": 195,
+      "passCount": 193,
+      "failCount": 2,
+      "confirmedPasses": [
+        "custom Gemini switched model produces content",
+        "custom Gemini response avoids empty fallback apology",
+        "update-check source maps Windows and macOS to WebUI artifacts",
+        "update-check endpoint exposes WebUI update policy and artifacts",
+        "model switch divider participates in normal message flow",
+        "imagegen batch emits each ready image via file_to_send"
+      ]
+    },
+    "fullRealRelease": {
+      "artifact": "docs/v0.2.7/artifacts/production-agent-product-acceptance.json",
+      "status": "FAIL",
+      "checkCount": 537,
+      "passCount": 525,
+      "failCount": 4,
+      "note": "This full run occurred before the static-asset validation patch and provided-web-build redeploy. The focused rerun confirms those two new checks are fixed; only Tongxin data-volume remains as the real blocker."
+    }
+  },
+  "blockingFailures": [
+    {
+      "group": "v027-integrated-capabilities",
+      "name": "Tongxin MPI accuracy action succeeds",
+      "errorType": "tongxin_mpi_accuracy_zero_project_samples",
+      "dataVolume": {
+        "accountCount": 0,
+        "projectCount": 0
+      },
+      "rule": "MPI accuracy must have at least one project/sub-account sample from the Tongxin data volume."
+    },
+    {
+      "group": "v027-integrated-capabilities",
+      "name": "Tongxin MPI accuracy has samples without fallback or drift",
+      "errorType": "tongxin_mpi_accuracy_zero_project_samples",
+      "dataVolume": {
+        "accountCount": 0,
+        "projectCount": 0
+      },
+      "rule": "Cache fallback must not masquerade as MPI, and zero-sample accuracy checks must fail closed."
+    }
+  ],
+  "reviewConsensus": [
+    {
+      "role": "runtime-config",
+      "status": "PASS_FOR_NEW_FIXES",
+      "notes": "Custom Gemini switched generation and OpenAI-compatible chunk normalization passed focused production evidence."
+    },
+    {
+      "role": "frontend-api",
+      "status": "PASS_FOR_NEW_FIXES",
+      "notes": "Divider behavior and update-check Win/Mac WebUI artifact selection passed focused production evidence."
+    },
+    {
+      "role": "toolchain-imagegen",
+      "status": "PASS_FOR_NEW_FIXES",
+      "notes": "ImageGen batch per-image file_to_send event contract is covered locally and in real release static probes."
+    },
+    {
+      "role": "qa-release",
+      "status": "PASS_WITH_EXTERNAL_BLOCKER",
+      "notes": "Deploy and online update success chain passed; final release acceptance remains blocked by Tongxin data-volume samples."
+    },
+    {
+      "role": "privacy-data",
+      "status": "PASS",
+      "notes": "Evidence uses hashes, counts, statuses, and relative artifact names; no raw server URL, password, or user path is persisted here."
+    }
+  ],
+  "nextUnblockAction": "Mount or configure a non-empty read-only Tongxin SQLite data-volume database for production, then rerun python scripts/真实发布校验.py. Do not relax the MPI/data-volume zero-sample failure rule."
+}

@@ -8,8 +8,11 @@ PYTHON_ARCH=""
 PYTHON_STANDALONE_URL="${PYTHON_STANDALONE_URL:-}"
 PYTHON_STANDALONE_RELEASE="${PYTHON_STANDALONE_RELEASE:-20260602}"
 PYTHON_MINOR="${PYTHON_MINOR:-3.11}"
+NODE_VERSION="${NODE_VERSION:-22.22.0}"
 PREINSTALL_PACKS="${ECOREX_PREINSTALL_PACKS:-office-pdf}"
 SKIP_DEPENDENCY_INSTALL=0
+SKIP_NODE_INSTALL=0
+SKIP_PLAYWRIGHT_BROWSER_INSTALL=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -41,12 +44,24 @@ while [[ $# -gt 0 ]]; do
       PYTHON_MINOR="$2"
       shift 2
       ;;
+    --node-version)
+      NODE_VERSION="$2"
+      shift 2
+      ;;
     --preinstall-packs)
       PREINSTALL_PACKS="$2"
       shift 2
       ;;
     --skip-dependency-install)
       SKIP_DEPENDENCY_INSTALL=1
+      shift
+      ;;
+    --skip-node-install)
+      SKIP_NODE_INSTALL=1
+      shift
+      ;;
+    --skip-playwright-browser-install)
+      SKIP_PLAYWRIGHT_BROWSER_INSTALL=1
       shift
       ;;
     *)
@@ -194,10 +209,17 @@ copy_runtime_sources() {
     cp -R "$desktop_dist/." "$app_dir/"
   fi
 
-  cp "$DESKTOP_ROOT/runtime-packs/core-requirements.txt" "$RUNTIME_DIR/core-requirements.txt"
-  cp "$DESKTOP_ROOT/runtime-packs/capabilities.json" "$RUNTIME_DIR/capabilities.json"
+  cp "$REPO_ROOT/runtime-packs/core-requirements.txt" "$RUNTIME_DIR/core-requirements.txt"
+  cp "$REPO_ROOT/runtime-packs/capabilities.json" "$RUNTIME_DIR/capabilities.json"
   mkdir -p "$RUNTIME_DIR/scripts"
-  cp "$SCRIPT_DIR/install-capability.py" "$RUNTIME_DIR/scripts/install-capability.py"
+  cp "$REPO_ROOT/scripts/install-capability.py" "$RUNTIME_DIR/scripts/install-capability.py"
+
+  if [[ -f "$REPO_ROOT/tools/tongxin/xin_agent_cli.py" ]]; then
+    mkdir -p "$RUNTIME_DIR/tools"
+    rm -rf "$RUNTIME_DIR/tools/tongxin"
+    cp -R "$REPO_ROOT/tools/tongxin" "$RUNTIME_DIR/tools/tongxin"
+    find "$RUNTIME_DIR/tools/tongxin" -type d -name __pycache__ -prune -exec rm -rf {} +
+  fi
 
   echo "Skipping bundled lark-cli for macOS runtime; Feishu/Lark connector remains discovery-only and routes installs through the built-in find skill/find-skill gate."
 
@@ -277,6 +299,40 @@ stage_python() {
   rm -rf "$extract_dir"
 }
 
+stage_node() {
+  mkdir -p "$RUNTIME_CACHE_DIR"
+  local node_arch archive_name archive_path url extract_dir source_root
+  case "$BUILDER_ARCH" in
+    arm64) node_arch="arm64" ;;
+    x64) node_arch="x64" ;;
+    *) echo "Unsupported Node arch: $BUILDER_ARCH" >&2; exit 1 ;;
+  esac
+  archive_name="node-v${NODE_VERSION}-darwin-${node_arch}.tar.gz"
+  archive_path="$RUNTIME_CACHE_DIR/$archive_name"
+  url="https://nodejs.org/dist/v${NODE_VERSION}/$archive_name"
+  if [[ ! -f "$archive_path" ]]; then
+    echo "Downloading $url"
+    curl -L --fail --retry 3 --output "$archive_path" "$url"
+  fi
+  extract_dir="$(mktemp -d "$RUNTIME_CACHE_DIR/node.XXXXXX")"
+  tar -xzf "$archive_path" -C "$extract_dir"
+  source_root="$extract_dir/node-v${NODE_VERSION}-darwin-${node_arch}"
+  if [[ ! -x "$source_root/bin/node" ]]; then
+    echo "Could not locate node in $archive_path" >&2
+    exit 1
+  fi
+  rm -rf "$RUNTIME_DIR/node"
+  mv "$source_root" "$RUNTIME_DIR/node"
+  rm -rf "$extract_dir"
+  for executable in node npm npx; do
+    if [[ ! -x "$RUNTIME_DIR/node/bin/$executable" ]]; then
+      echo "Staged Node runtime missing $executable" >&2
+      exit 1
+    fi
+  done
+  echo "Node runtime staged at $RUNTIME_DIR/node"
+}
+
 rm -rf "$RUNTIME_DIR"
 mkdir -p "$RUNTIME_DIR"
 copy_runtime_sources
@@ -299,6 +355,14 @@ if [[ "$SKIP_DEPENDENCY_INSTALL" != "1" ]]; then
   fi
   "$RUNTIME_PYTHON" -m pip install --upgrade pip --no-cache-dir --no-warn-script-location
   "$RUNTIME_PYTHON" -m pip install --no-cache-dir --no-warn-script-location -r "$RUNTIME_DIR/core-requirements.txt"
+fi
+
+if [[ "$SKIP_NODE_INSTALL" != "1" ]]; then
+  stage_node
+fi
+
+if [[ "$SKIP_PLAYWRIGHT_BROWSER_INSTALL" != "1" ]]; then
+  PLAYWRIGHT_BROWSERS_PATH="$RUNTIME_DIR/playwright-browsers" "$RUNTIME_PYTHON" -m playwright install chromium
 fi
 
 if [[ -n "$PREINSTALL_PACKS" ]]; then
@@ -330,20 +394,22 @@ fi
 
 find "$RUNTIME_DIR" -type d -name "__pycache__" -prune -exec rm -rf {} +
 
-"$RUNTIME_PYTHON" - "$RUNTIME_DIR/runtime-manifest.json" "$BUILDER_ARCH" "$PYTHON_STANDALONE_RELEASE" "$PREINSTALL_PACKS" <<'PY'
+"$RUNTIME_PYTHON" - "$RUNTIME_DIR/runtime-manifest.json" "$BUILDER_ARCH" "$PYTHON_STANDALONE_RELEASE" "$PREINSTALL_PACKS" "$NODE_VERSION" "$SKIP_NODE_INSTALL" "$SKIP_PLAYWRIGHT_BROWSER_INSTALL" <<'PY'
 import json
 import sys
 import time
 from pathlib import Path
 
-out, arch, release, preinstall_packs = sys.argv[1:5]
+out, arch, release, preinstall_packs, node_version, skip_node, skip_playwright_browser = sys.argv[1:8]
 manifest = {
     "product": "EcoreX",
     "runtime": "compatible-agent-runtime",
     "stagedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     "pythonDistribution": f"python-build-standalone-{release}",
     "pythonArch": arch,
+    "nodeVersion": None if skip_node == "1" else node_version,
     "dependencyInstall": True,
+    "playwrightBrowserInstall": skip_playwright_browser != "1",
     "preinstalledPacks": [item.strip() for item in preinstall_packs.split(",") if item.strip()],
 }
 Path(out).write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")

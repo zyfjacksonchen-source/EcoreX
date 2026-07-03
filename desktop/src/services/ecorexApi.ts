@@ -110,6 +110,63 @@ export type RuntimeSkill = {
   primary_env?: string;
 };
 
+export type ChatModelOption = {
+  provider: string;
+  providerLabel?: string;
+  model: string;
+  label?: string;
+  hint?: string;
+  configured?: boolean;
+  current?: boolean;
+  contextPolicy?: ChatContextPolicy;
+  modelAliasFamily?: string;
+  effectiveTransportProvider?: string;
+  isOfficialGeminiProvider?: boolean;
+  officialGeminiApiUsed?: boolean;
+};
+
+export type ChatContextPolicy = {
+  contextWindowTokens?: number;
+  maxOutputTokens?: number;
+  autoCompactTokenLimit?: number;
+  hardContextTokenLimit?: number;
+  source?: string;
+  note?: string;
+  tokenizer?: string;
+  tokenizerStatus?: string;
+  tokenizerNote?: string;
+};
+
+export type ChatContextContinuity = {
+  agentBridgePreserved?: boolean;
+  existingAgentRoutesReset?: number;
+  artifactHistoryRefs?: string;
+  strategy?: string;
+};
+
+export type ChatModelsPayload = {
+  status?: string;
+  currentProvider: string;
+  currentModel: string;
+  currentContextPolicy?: ChatContextPolicy;
+  options: ChatModelOption[];
+};
+
+export type SetChatModelResult = {
+  [key: string]: unknown;
+  status?: string;
+  provider?: string;
+  model?: string;
+  image_model?: string;
+  context_policy?: unknown;
+  contextPolicy?: ChatContextPolicy;
+  context_continuity?: unknown;
+  contextContinuity?: ChatContextContinuity;
+  applied?: Record<string, unknown>;
+  noop?: boolean;
+  message?: string;
+};
+
 export type RuntimeChannelAuth = {
   mode?: string;
   channelAuthorization?: string;
@@ -412,6 +469,7 @@ export type RuntimeToolCall = {
 
 export type RuntimeReleaseNotes = {
   version: string;
+  revision?: string;
   title?: string;
   summary?: string;
   highlights?: string[];
@@ -422,6 +480,27 @@ export type RuntimeReleaseNotes = {
     macos?: string;
     webui?: string;
   };
+};
+
+export type RuntimeUpdateState = {
+  stateAvailable?: boolean;
+  source?: string;
+  product?: string;
+  version?: string;
+  mode?: "manual" | "background" | string;
+  status?: "installed" | "deferred" | "failed" | "rollback" | "started" | "ready" | string;
+  reason?: string;
+  url?: string;
+  browserAction?: "defer-to-existing-tab-soft-refresh" | "open-default-browser" | "none" | string;
+  activationPolicy?: string;
+  healthCheck?: {
+    endpoint?: string;
+    status?: "pass" | "pending" | "failed" | string;
+    passed?: boolean;
+  };
+  generatedAt?: string;
+  refreshRequired?: boolean;
+  redacted?: boolean;
 };
 
 export type RuntimeStep = {
@@ -463,7 +542,13 @@ export type RuntimeMessage = {
   artifacts?: AgentArtifact[];
   kind?: string;
   request_id?: string;
+  turn_id?: string;
+  bot_seq?: number;
   extras?: {
+    request_id?: string;
+    turn_id?: string;
+    user_seq?: number;
+    bot_seq?: number;
     audio?: {
       url?: string;
       kind?: string;
@@ -640,6 +725,8 @@ export type RuntimeSnapshot = {
   message: string;
   version?: string;
   releaseNotes?: RuntimeReleaseNotes;
+  updateState?: RuntimeUpdateState;
+  currentProvider?: string;
   currentModel?: string;
   sessions: RuntimeSession[];
   activeRequests?: RuntimeActiveRequest[];
@@ -1026,12 +1113,6 @@ function mergeBuiltinExtensionTools(tools: RuntimeTool[], extensions: RuntimeExt
   return Array.from(byName.values());
 }
 
-function delay(ms: number) {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
-}
-
 type RuntimeCapabilitySnapshot = {
   tools: RuntimeTool[];
   skills: RuntimeSkill[];
@@ -1039,6 +1120,7 @@ type RuntimeCapabilitySnapshot = {
   extensionsCount: number;
   extensionSummary: Record<string, number>;
   modelsCount: number;
+  currentProvider: string;
   currentModel: string;
   modelCapabilities: Record<string, unknown>;
 };
@@ -1106,6 +1188,10 @@ async function loadRuntimeCapabilities(): Promise<RuntimeCapabilitySnapshot> {
       : models.capabilities && typeof models.capabilities === "object"
         ? Object.keys(models.capabilities).length
         : 0;
+    const modelCapabilities = models.capabilities && typeof models.capabilities === "object" ? models.capabilities as Record<string, unknown> : {};
+    const chatCapability = modelCapabilities.chat && typeof modelCapabilities.chat === "object"
+      ? modelCapabilities.chat as Record<string, unknown>
+      : {};
     const snapshot: RuntimeCapabilitySnapshot & { fetchedAt: number } = {
       tools: runtimeTools,
       skills: runtimeSkills,
@@ -1113,8 +1199,9 @@ async function loadRuntimeCapabilities(): Promise<RuntimeCapabilitySnapshot> {
       extensionsCount: runtimeExtensions.length,
       extensionSummary,
       modelsCount: countArray(models.providers) || capabilityCount,
+      currentProvider: pickString(chatCapability.current_provider),
       currentModel: inferCurrentModel(models),
-      modelCapabilities: models.capabilities && typeof models.capabilities === "object" ? models.capabilities as Record<string, unknown> : {},
+      modelCapabilities,
       fetchedAt: Date.now()
     };
     runtimeCapabilityCache = snapshot;
@@ -1196,7 +1283,7 @@ export async function loadRuntimeSnapshot(options: RuntimeSnapshotOptions = {}):
         counts: { total: 0, enabled: 0, disabled: 0, error: 0 }
       } satisfies RuntimeSchedulerProjection));
     const [version, sessions, activeRequests, capabilities, scheduler] = await Promise.all([
-      apiJson<{ version?: string; releaseNotes?: RuntimeReleaseNotes }>("/api/version"),
+      apiJson<{ version?: string; releaseNotes?: RuntimeReleaseNotes; updateState?: RuntimeUpdateState }>("/api/version"),
       apiJson<{ sessions?: RuntimeSession[]; total?: number; message?: string }>(`/api/sessions?${sessionsParams.toString()}`),
       activeRequestsPromise,
       loadRuntimeCapabilities(),
@@ -1225,6 +1312,7 @@ export async function loadRuntimeSnapshot(options: RuntimeSnapshotOptions = {}):
       message: "已连接本地 EcoreX 运行时",
       version: version.version,
       releaseNotes: version.releaseNotes,
+      updateState: version.updateState,
       sessions: runtimeSessions,
       activeRequests: runtimeActiveRequests,
       recentTerminalRequests: runtimeRecentTerminalRequests,
@@ -1238,6 +1326,7 @@ export async function loadRuntimeSnapshot(options: RuntimeSnapshotOptions = {}):
       extensionsCount: capabilities.extensionsCount,
       extensionSummary: capabilities.extensionSummary,
       modelsCount: capabilities.modelsCount,
+      currentProvider: capabilities.currentProvider,
       currentModel: capabilities.currentModel,
       tools: capabilities.tools,
       skills: capabilities.skills,
@@ -1279,6 +1368,53 @@ function pickString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
+function pickPositiveNumber(...values: unknown[]) {
+  for (const value of values) {
+    const parsed = typeof value === "number" ? value : Number(value);
+    if (Number.isFinite(parsed) && parsed > 0) return Math.round(parsed);
+  }
+  return undefined;
+}
+
+function pickNonNegativeNumber(...values: unknown[]) {
+  for (const value of values) {
+    const parsed = typeof value === "number" ? value : Number(value);
+    if (Number.isFinite(parsed) && parsed >= 0) return Math.round(parsed);
+  }
+  return undefined;
+}
+
+function normalizeChatContextPolicy(value: unknown): ChatContextPolicy | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const data = value as Record<string, unknown>;
+  const policy: ChatContextPolicy = {
+    contextWindowTokens: pickPositiveNumber(data.contextWindowTokens, data.context_window_tokens),
+    maxOutputTokens: pickPositiveNumber(data.maxOutputTokens, data.max_output_tokens),
+    autoCompactTokenLimit: pickPositiveNumber(data.autoCompactTokenLimit, data.auto_compact_token_limit),
+    hardContextTokenLimit: pickPositiveNumber(data.hardContextTokenLimit, data.hard_context_token_limit),
+    source: pickString(data.source),
+    note: pickString(data.note),
+    tokenizer: pickString(data.tokenizer),
+    tokenizerStatus: pickString(data.tokenizerStatus) || pickString(data.tokenizer_status),
+    tokenizerNote: pickString(data.tokenizerNote) || pickString(data.tokenizer_note)
+  };
+  return Object.values(policy).some((item) => item !== undefined && item !== "") ? policy : undefined;
+}
+
+function normalizeChatContextContinuity(value: unknown): ChatContextContinuity | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const data = value as Record<string, unknown>;
+  const continuity: ChatContextContinuity = {
+    agentBridgePreserved: typeof data.agentBridgePreserved === "boolean"
+      ? data.agentBridgePreserved
+      : (typeof data.agent_bridge_preserved === "boolean" ? data.agent_bridge_preserved : undefined),
+    existingAgentRoutesReset: pickNonNegativeNumber(data.existingAgentRoutesReset, data.existing_agent_routes_reset),
+    artifactHistoryRefs: pickString(data.artifactHistoryRefs) || pickString(data.artifact_history_refs),
+    strategy: pickString(data.strategy)
+  };
+  return Object.values(continuity).some((item) => item !== undefined && item !== "") ? continuity : undefined;
+}
+
 function inferCurrentModel(models: { providers?: unknown[]; capabilities?: Record<string, unknown> | unknown[] }) {
   if (models.capabilities && !Array.isArray(models.capabilities) && typeof models.capabilities === "object") {
     const capabilities = models.capabilities as Record<string, unknown>;
@@ -1310,6 +1446,133 @@ function inferCurrentModel(models: { providers?: unknown[]; capabilities?: Recor
   return "";
 }
 
+function normalizeChatModelOption(value: unknown): ChatModelOption | null {
+  if (!value || typeof value !== "object") return null;
+  const data = value as Record<string, unknown>;
+  const provider = pickString(data.provider) || pickString(data.provider_id);
+  const model = pickString(data.model) || pickString(data.value);
+  if (!provider || !model) return null;
+  return {
+    provider,
+    providerLabel: pickString(data.providerLabel) || pickString(data.provider_label),
+    model,
+    label: pickString(data.label) || model,
+    hint: pickString(data.hint),
+    configured: data.configured !== false,
+    current: data.current === true,
+    contextPolicy: normalizeChatContextPolicy(data.contextPolicy || data.context_policy),
+    modelAliasFamily: pickString(data.modelAliasFamily) || pickString(data.model_alias_family),
+    effectiveTransportProvider: pickString(data.effectiveTransportProvider) || pickString(data.effective_transport_provider),
+    isOfficialGeminiProvider: data.isOfficialGeminiProvider === true || data.is_official_gemini_provider === true,
+    officialGeminiApiUsed: data.officialGeminiApiUsed === true || data.official_gemini_api_used === true
+  };
+}
+
+function enterpriseProviderLabel(provider: string) {
+  const labels: Record<string, string> = {
+    openai: "OpenAI",
+    deepseek: "DeepSeek",
+    gemini: "Google Gemini",
+    doubao: "豆包",
+    ark: "火山方舟",
+    zhipu: "智谱",
+    qianfan: "百度千帆",
+    moonshot: "Moonshot",
+    claudeAPI: "Claude",
+    claude: "Claude"
+  };
+  return labels[provider] || provider;
+}
+
+function normalizeEnterpriseModelConfigOptions(payload: unknown): ChatModelsPayload | null {
+  if (!payload || typeof payload !== "object") return null;
+  const data = payload as Record<string, unknown>;
+  if (data.configured === false) return null;
+  const currentProvider = pickString(data.provider);
+  const currentModel = pickString(data.model);
+  const options: ChatModelOption[] = [];
+  const seen = new Set<string>();
+  function add(provider: string, model: string, name?: string) {
+    if (!provider || !model) return;
+    const key = `${provider}:${model}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    options.push({
+      provider,
+      providerLabel: enterpriseProviderLabel(provider),
+      model,
+      label: name || model,
+      configured: true,
+      current: provider === currentProvider && model === currentModel
+    });
+  }
+  const credentials = Array.isArray(data.modelCredentials) ? data.modelCredentials : [];
+  for (const item of credentials) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    if (row.enabled === false) continue;
+    add(pickString(row.provider), pickString(row.model), pickString(row.name));
+  }
+  add(currentProvider, currentModel, pickString(data.name));
+  if (!options.length || !currentModel) return null;
+  return {
+    status: "success",
+    currentProvider,
+    currentModel,
+    options
+  };
+}
+
+async function loadEnterpriseChatModelOptionsFallback(): Promise<ChatModelsPayload | null> {
+  if (!window.ecorexDesktop?.getEnterpriseModelConfig) return null;
+  try {
+    const payload = await window.ecorexDesktop.getEnterpriseModelConfig();
+    return normalizeEnterpriseModelConfigOptions(payload);
+  } catch {
+    return null;
+  }
+}
+
+export async function loadChatModelOptions(): Promise<ChatModelsPayload> {
+  let payload: { status?: string; providers?: unknown[]; capabilities?: Record<string, unknown> | unknown[] };
+  try {
+    payload = await apiJson<{ status?: string; providers?: unknown[]; capabilities?: Record<string, unknown> | unknown[] }>("/api/models");
+  } catch (error) {
+    const fallback = await loadEnterpriseChatModelOptionsFallback();
+    if (fallback) return fallback;
+    throw error;
+  }
+  const capabilities = payload.capabilities && !Array.isArray(payload.capabilities) && typeof payload.capabilities === "object"
+    ? payload.capabilities as Record<string, unknown>
+    : {};
+  const chat = capabilities.chat && typeof capabilities.chat === "object"
+    ? capabilities.chat as Record<string, unknown>
+    : {};
+  const options = Array.isArray(chat.model_options)
+    ? chat.model_options.map(normalizeChatModelOption).filter(Boolean) as ChatModelOption[]
+    : [];
+  return {
+    status: payload.status,
+    currentProvider: pickString(chat.current_provider),
+    currentModel: pickString(chat.current_model) || inferCurrentModel(payload),
+    currentContextPolicy: normalizeChatContextPolicy(chat.context_policy || chat.contextPolicy),
+    options
+  };
+}
+
+export async function setChatModel(provider: string, model: string): Promise<SetChatModelResult> {
+  const result = await apiJson<SetChatModelResult>("/api/models", "POST", {
+    action: "set_capability",
+    capability: "chat",
+    provider_id: provider,
+    model
+  });
+  invalidateRuntimeCapabilities();
+  result.contextPolicy = normalizeChatContextPolicy(result.context_policy || result.contextPolicy);
+  result.contextContinuity = normalizeChatContextContinuity(result.context_continuity || result.contextContinuity);
+  return result;
+}
+
 export async function sendChatMessage(input: {
   sessionId: string;
   message: string;
@@ -1328,17 +1591,6 @@ export async function sendChatMessage(input: {
       status: "error",
       message: "本地运行时桥接不可用"
     };
-  }
-
-  if (window.ecorexDesktop.refreshEnterprisePolicy) {
-    try {
-      const refresh = await window.ecorexDesktop.refreshEnterprisePolicy();
-      if (refresh.restarted) {
-        await delay(1200);
-      }
-    } catch {
-      // Enterprise model policy refresh is best-effort; sidecar errors are handled below.
-    }
   }
 
   const result = await window.ecorexDesktop.apiJson({

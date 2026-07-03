@@ -7,67 +7,51 @@ from typing import Any, Dict
 
 
 CURRENT_RELEASE_NOTES: Dict[str, Any] = {
-    "version": "0.2.5",
-    "title": "EcoreX 0.2.5 运行时与工具矩阵更新说明",
+    "version": "0.2.7",
+    "revision": "2026-07-02-v027-gate-r1",
+    "title": "EcoreX 0.2.7 模型切换、开箱能力与真实数据校验说明",
     "summary": (
-        "本次发布把 WebUI 本地包和 Linux Web 服务收束到 EcoreX 自有运行时、"
-        "依赖与工具执行边界，并补齐 Web 端权限、飞书、通芯助手 CLI、会话历史恢复和生图路由体验。"
+        "本次发布聚焦真实使用链路：自定义 Gemini 可切换、同一会话切模型不失忆、"
+        "Vision/OCR 与浏览器 CDP 默认可用、芯助手 CLI 按 MPI 做准确性对照，并降低大量本地文件历史带来的卡顿。"
     ),
     "highlights": [
-        "新增 RuntimeDependencyProvider，默认只接受 EcoreX 自有 runtime/state 中的 Python、Node、CLI 和包路径。",
-        "本地工具统一通过 ToolExecutionEnvironment 执行，集中处理 PATH、NODE_PATH、PYTHONPATH、工作目录、超时和脱敏。",
-        "Windows、macOS 与 Linux service 发布包写入 v0.2.5 runtime-manifest，并由发布校验器检查相对路径、依赖来源和包一致性。",
-        "Skill、能力包、扩展和工具视图共享 toolBinding 合约，ImageGen、Office/PDF、Browser、MCP、飞书和通芯助手都有统一可探测状态。",
-        "工具矩阵覆盖 current、clean-path、clean-user-state 三种本地环境，生产 service-user 探针单独保留为上线后严格门禁。",
-        "通芯助手 CLI 支持配置 EcoreX 自有 Python，并通过 runpy shim 运行外部脚本，保持只读能力和本地模块隔离。",
-        "飞书 CLI 授权改为会话化续接：WebUI 先展示官方授权链接/二维码，用户授权后由 agent_auth_status 使用内部保存的 device code 完成写回。",
-        "WebUI 权限只展示默认权限和完全访问权限；完全访问权限会放开系统 PATH、Node/npx、Python 与常用 shell 工具环境。",
-        "通芯助手 CLI 默认走服务器远端 auth/bootstrap 配置，用户输入账号密码即可拉取受控的 xin_agent_cli.py；本地脚本仅作为显式兜底。",
-        "通芯助手远端 bootstrap 支持多文件包，可随 `xin_agent_cli.py` 一起安装 `models.py` 或 `models/__init__.py` 等只读依赖模块。",
-        "WebUI 侧边栏将通用会话拆成置顶任务和任务两组，置顶任务按最近置顶时间排在组内最上方；项目会话置顶仍保留在项目内。",
-        "WebUI 启动时会先把浏览器本地保留的旧会话正文导入后端历史库，后续用户消息和最终回复也会双保险落库。",
-        "图片生成、改图和参考图生成统一走原生 imagegen 路由，默认从 `gpt-image-2-pro` 开始；`image_urls` 会被归一到 GPT Image edits/reference 路由。",
-        "PPT、文档、图片、表格等交付型任务的最终回复收敛为结果、路径/链接、验证状态和必要下一步，避免冗长日志和出厂设置追问。",
-        "发布页、安装脚本、WebUI 左上角版本和更新说明统一到 v0.2.5。"
+        "自定义 Gemini 按 OpenAI-compatible custom provider 路由，`gemini-*` 不再误切到官方 Google Gemini REST。",
+        "同一会话切换模型只刷新聊天模型路由，不清空 AgentBridge 的 agents/messages 缓存。",
+        "进程级重建时会把用户附件和 assistant 产物的标题、类型、路径恢复为模型可见历史引用，方便继续飞书图文、轮播图等任务。",
+        "模型切换提示改为分页分隔线样式，保持 `contextExcluded=true`，不会占用普通消息卡片、复制按钮或恢复入口。",
+        "浏览器工具默认 CDP-first、可自动拉起受信 localhost DevTools，并在失败时安全 fallback。",
+        "Vision/OCR 工具默认可发现可调用，本地 OCR 支持 RapidOCR/Pillow/Tesseract fallback。",
+        "芯助手 CLI 项目/子账户枚举只从芯助手数据卷读取，MPI 作为准确性对照第一事实源。",
+        "MPI 对照结果只公开 hash、计数、漂移区间和阈值，不泄露原始项目、账户、路径或指标值。",
+        "大量本地文件历史会被限量、去重、截断后恢复到模型上下文；前端 token 估算也限制扫描文件、步骤和工具调用数量，降低长会话卡顿。",
+        "发布与测试工件按 S0-S10 切片记录，必须经过 runtime、frontend/API、toolchain、QA/release、privacy/data 五角色 review gate。"
     ],
     "fixes": [
-        "修复真实发布包中 /api/version 仍返回旧版号、WebUI 左上角显示旧版本的问题。",
-        "修复更新说明仍停留在 v0.2.4 文案的问题。",
-        "修复通芯助手已配置脚本路径但因缺少 EcoreX 自有 Python 而显示 dependency_missing 的问题。",
-        "修复外部通芯助手脚本在 ambient PYTHONPATH 下可能被 EcoreX config.py/models.py 影子模块干扰的问题。",
-        "修复通芯助手缺少认证/登录地址的问题；WebUI 安装脚本写入默认通芯认证入口，便于其他用户 bootstrap xin_agent_cli.py。",
-        "修复通芯助手远端配置时仍要求用户提供 bootstrap_url 和 SHA256 的问题；有远端 auth 时优先提示账号密码认证。",
-        "修复远端下载的芯助手 CLI 通过 SHA256 校验后，因 bootstrap 包缺少真实 `models.database` / `models.DATABASE` 导出而只能提示泛化依赖失败的问题。",
-        "修复远端 bootstrap 只能安装单个 `xin_agent_cli.py`、无法携带 `models` 数据层依赖的问题；注释里出现 DATABASE 不再被误判为有效导出。",
-        "修复用户选择完全访问权限后 npx、node、python 或基础 shell 仍被 EcoreX 运行时误拦截的问题。",
-        "修复旧的 read-only/always-ask/custom 权限状态在 WebUI 中造成“默认权限”显示但实际拦截的迁移问题。",
-        "修复飞书 CLI 点击授权后 WebUI 丢失后续写回状态的问题，避免授权链接跳转后无返回提示。",
-        "修复 Web 流式会话中可弹权限请求却被后端判定为非交互环境、直接默认拒绝的问题。",
-        "修复用户难以区分置顶会话和普通会话的问题，并补齐置顶时间持久化。",
-        "修复升级后旧会话正文只存在浏览器缓存、未导入后端历史库，导致打开会话像“丢记录”的问题。",
-        "修复改图/参考图生成传入 `image_urls` 时热路径丢失参考图，可能退化成纯文本生图或诱导脚本式生成的问题。",
-        "修复交付型任务完成后仍追加命名/交流风格等出厂设置问题的问题。",
-        "修复 schema-only 或 discovery-only 状态可能把飞书/通芯助手能力误提升为 ready 的问题。",
-        "修复发布证据中可能混入未脱敏路径、CLI 原始输出或 Codex 私有 runtime 线索的风险。"
+        "修复切换自定义 Gemini 时显示 agent error 的路由问题。",
+        "修复切换模型后 `_set_chat()` 重置 bot 导致会话上下文和工具/产物链路丢失的问题。",
+        "修复切换模型提示像普通消息一样长期占位、干扰后续聊天内容的问题。",
+        "修复进程重启或 Agent 重建后 assistant 产物路径没有恢复到模型上下文的问题。",
+        "修复 CDP auto-launch fallback 时可能先切换 launch mode、再清理 CDP 进程的清理顺序问题。",
+        "修复 WebFetch 在只读 broker mock 下可能因缺少 `is_read_only()` 而不兼容的问题。",
+        "修复芯助手 `project list` 缺少 `--account-id`、`--start-date`、`--end-date` 只读 flag 的问题。",
+        "修复芯助手 chengfeng 分支空结果路径引用未定义 `permission_errors` 的问题。",
+        "修复 MPI 不可达、样本为 0 或 fallback 冒充 MPI 时未 fail-closed 的准确性风险。",
+        "修复长历史中大量附件/产物引用和工具步骤造成 token 估算与上下文恢复过重的问题。"
     ],
     "howTo": [
-        "重新打开 WebUI 后，左上角应显示 v0.2.5；首次进入会弹出本更新说明。",
-        "Windows 或 macOS 用户继续运行下载页上的同一条一键命令，脚本会读取 manifest、校验 SHA256 并替换本地 WebUI 包。",
-        "设置里的能力与外部连接页面可以查看内置、外部、自建能力的启用、依赖和工具绑定状态。",
-        "权限设置只需在默认权限和完全访问权限之间切换；需要让 Agent 自行运行 npx、node、python 或安装优先依赖时请选择完全访问权限。",
-        "飞书用户授权时保持 WebUI 打开的授权卡片；点击授权页后回到 WebUI，系统会用内部 sessionId 继续轮询并完成 user 写入。",
-        "配置通芯助手时优先使用远端登录；输入通芯账号密码后，WebUI 会通过服务器 auth/bootstrap 拉取 xin_agent_cli.py。本地脚本路径只作为兜底。",
-        "如果通芯提供方更新远端包，请确保 manifest 的 `files` / `bootstrapFiles` 包含 `models.py` 或 `models/__init__.py`，并真实导出 `database` 或 `DATABASE`。",
-        "通芯助手保持只读默认能力；写入类命令仍会在执行前被权限边界拦截。",
-        "通用会话列表中，置顶任务显示在独立分区；项目会话即使置顶，也只在所属项目的会话列表内上移。",
-        "升级后请重新打开或刷新 WebUI；浏览器里仍保留的旧会话正文会在启动时自动导入服务端历史库。",
-        "生图、改图和参考图生成都应调用原生 imagegen；没有用户指定模型时默认走 `gpt-image-2-pro`，不要用 Python/PIL/HTML/SVG 代替真实生图。",
-        "部署人员可用 v0.2.5 release gate 报告区分本地通过与生产 service-user 探针待补状态。"
+        "重新打开 WebUI 后，左上角应显示 v0.2.7；首次进入会弹出本更新说明。",
+        "自定义 Gemini 仍在自定义模型配置中维护 key/base/model；模型列表中会标识为自定义 Gemini，不会走官方 Google Gemini provider。",
+        "同一会话内可从自定义 Gemini 切回 GPT-5.5 继续任务，历史附件和 assistant 产物引用会尽量保留给新模型。",
+        "切换模型后会出现一条分页分隔线，后续聊天会自然把它顶上去；它不会进入模型上下文。",
+        "需要浏览器自动化时保持默认配置即可优先使用 CDP；CDP 不可用时会自动 fallback。",
+        "需要 OCR/Vision 时可直接上传图片或调用工具，runtime 会按本地依赖可用性选择 RapidOCR/Pillow/Tesseract fallback。",
+        "芯助手准确性测试必须以 MPI 为第一事实源，以芯助手数据卷为项目/子账户来源；MPI 不可达或样本为 0 时应阻断发布。",
+        "如果长会话仍出现卡顿，请优先检查单条消息是否携带异常大的工具结果或非常多前端附件预览。"
     ],
     "updatePolicy": {
-        "windows": "v0.2.5 继续以 WebUI 本地包交付；Windows 使用 manifest 校验包安装和更新。",
-        "macos": "v0.2.5 继续以 WebUI 本地包交付；macOS 使用 manifest 校验包安装和更新。",
-        "webui": "WebUI 通过 manifest 校验下载包、Web 服务包和静态资源；服务端部署后 /api/version 应返回 0.2.5，并携带本更新说明。",
+        "windows": "v0.2.7 继续以 WebUI 本地包交付；Windows 使用 manifest 校验包安装和更新。",
+        "macos": "v0.2.7 继续以 WebUI 本地包交付；macOS 使用 manifest 校验包安装和更新。",
+        "webui": "WebUI 通过 manifest 校验下载包、Web 服务包和静态资源；后台更新只在空闲时安装，不强制拉起新浏览器，健康检查通过后由已有页面提示刷新生效。",
     },
 }
 

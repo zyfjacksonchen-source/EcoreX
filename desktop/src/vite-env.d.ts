@@ -132,6 +132,21 @@ interface Window {
       provider?: string;
       updatedAt?: string;
     }>;
+    getEnterpriseModelConfig?: () => Promise<{
+      ok?: boolean;
+      configured?: boolean;
+      provider?: string;
+      model?: string;
+      name?: string;
+      updatedAt?: string;
+      modelCredentials?: Array<{
+        id?: string;
+        name?: string;
+        provider?: string;
+        model?: string;
+        enabled?: boolean;
+      }>;
+    }>;
     reportTelemetry: (event: {
       type: "usage" | "error" | "warn" | "info";
       source?: string;

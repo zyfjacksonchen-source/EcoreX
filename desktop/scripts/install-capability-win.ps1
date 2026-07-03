@@ -10,6 +10,7 @@ $ErrorActionPreference = "Stop"
 if (-not $RuntimeDir) {
     $RuntimeDir = Join-Path $PSScriptRoot "..\runtime\ecorex-runtime"
 }
+$repoRoot = Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")
 
 $runtimeResolved = Resolve-Path -LiteralPath $RuntimeDir
 $pythonExe = Join-Path $runtimeResolved "python\python.exe"
@@ -23,13 +24,16 @@ if (-not $ManifestPath) {
         $ManifestPath = $runtimeManifest
     }
     else {
-        $ManifestPath = Join-Path $PSScriptRoot "..\runtime-packs\capabilities.json"
+        $ManifestPath = Join-Path $repoRoot "runtime-packs\capabilities.json"
     }
 }
 
-$scriptPath = Join-Path $PSScriptRoot "install-capability.py"
+$scriptPath = Join-Path $repoRoot "scripts\install-capability.py"
 if (-not (Test-Path -LiteralPath $scriptPath)) {
     $scriptPath = Join-Path $runtimeResolved "scripts\install-capability.py"
+}
+if (-not (Test-Path -LiteralPath $scriptPath)) {
+    $scriptPath = Join-Path $PSScriptRoot "install-capability.py"
 }
 if (-not (Test-Path -LiteralPath $scriptPath)) {
     throw "Capability installer not found"

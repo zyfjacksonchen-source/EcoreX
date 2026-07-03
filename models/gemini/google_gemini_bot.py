@@ -321,7 +321,10 @@ class GoogleGeminiBot(Bot):
                         break
             
             if system_prompt:
-                payload["system_instruction"] = {
+                # Gemini REST JSON expects camelCase. The snake_case SDK field
+                # makes some REST gateways report a oneof `_system_instruction`
+                # conflict even though only one system prompt was provided.
+                payload["systemInstruction"] = {
                     "parts": [{"text": system_prompt}]
                 }
             

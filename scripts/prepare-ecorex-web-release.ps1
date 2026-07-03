@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.2.5",
+    [string]$Version = "0.2.7",
     [string]$RuntimeRoot = ".",
     [string]$SiteRoot = "deploy/ecorex-site",
     [string]$WebBuildRoot = "",
@@ -97,18 +97,18 @@ function Write-V025RuntimeManifest {
     $writer = Join-Path $repoRoot "scripts\write-v025-runtime-manifest.py"
     $checker = Join-Path $repoRoot "scripts\check-v025-runtime-manifest.py"
     if (-not (Test-Path -LiteralPath $writer)) {
-        throw "v0.2.5 runtime manifest writer missing: $writer"
+        throw "Runtime manifest writer missing: $writer"
     }
     if (-not (Test-Path -LiteralPath $checker)) {
-        throw "v0.2.5 runtime manifest checker missing: $checker"
+        throw "Runtime manifest checker missing: $checker"
     }
     & python $writer --runtime-root $RuntimeDir --package-root $PackageRoot --version $Version --platform $Platform
     if ($LASTEXITCODE -ne 0) {
-        throw "v0.2.5 runtime manifest generation failed for $Platform"
+        throw "Runtime manifest generation failed for $Platform"
     }
     & python $checker (Join-Path $RuntimeDir "runtime-manifest.json") --platform $Platform --version $Version --runtime-root $RuntimeDir --package-root $PackageRoot
     if ($LASTEXITCODE -ne 0) {
-        throw "v0.2.5 runtime manifest check failed for $Platform"
+        throw "Runtime manifest check failed for $Platform"
     }
 }
 
@@ -151,6 +151,7 @@ function Get-ReleaseMigrationReadmeNote {
 $repoRoot = (Resolve-Path -LiteralPath ".").Path
 $runtimeRootResolved = Resolve-RequiredPath $RuntimeRoot
 $siteRootResolved = Resolve-RequiredPath $SiteRoot
+$runtimePackRoot = Resolve-RequiredPath (Join-Path $repoRoot "runtime-packs")
 $outputResolved = [System.IO.Path]::GetFullPath((Join-Path $repoRoot $OutputDir))
 New-Item -ItemType Directory -Force -Path $outputResolved | Out-Null
 
@@ -214,8 +215,8 @@ foreach ($fileName in $runtimeFiles) {
 Copy-IfExists -Source (Join-Path $repoRoot "config.py") -Destination (Join-Path $runtimeOut "config.py")
 Copy-IfExists -Source (Join-Path $repoRoot "config-template.json") -Destination (Join-Path $runtimeOut "config-template.json")
 Copy-IfExists -Source (Join-Path $runtimeRootResolved "capabilities.json") -Destination (Join-Path $runtimeOut "capabilities.json")
-Copy-IfExists -Source (Join-Path $repoRoot "desktop/runtime-packs/capabilities.json") -Destination (Join-Path $runtimeOut "capabilities.json")
-Copy-IfExists -Source (Join-Path $repoRoot "desktop/runtime-packs/core-requirements.txt") -Destination (Join-Path $runtimeOut "core-requirements.txt")
+Copy-IfExists -Source (Join-Path $runtimePackRoot "capabilities.json") -Destination (Join-Path $runtimeOut "capabilities.json")
+Copy-IfExists -Source (Join-Path $runtimePackRoot "core-requirements.txt") -Destination (Join-Path $runtimeOut "core-requirements.txt")
 
 $runtimeDirs = @(
     "agent",
@@ -225,6 +226,7 @@ $runtimeDirs = @(
     "common",
     "models",
     "plugins",
+    "tools",
     "skills",
     "translate",
     "voice"
@@ -293,6 +295,8 @@ foreach ($entry in $scriptFiles) {
 $runtimeScriptsOut = Join-Path $runtimeOut "scripts"
 New-Item -ItemType Directory -Force -Path $runtimeScriptsOut | Out-Null
 Copy-IfExists -Source (Join-Path $repoRoot "scripts/install-capability.py") -Destination (Join-Path $runtimeScriptsOut "install-capability.py")
+Copy-IfExists -Source (Join-Path $repoRoot "scripts/check-web-core-runtime-baseline.py") -Destination (Join-Path $runtimeScriptsOut "check-web-core-runtime-baseline.py")
+Copy-IfExists -Source (Join-Path $repoRoot "scripts/generate-web-runtime-release-gate.py") -Destination (Join-Path $runtimeScriptsOut "generate-web-runtime-release-gate.py")
 Write-V025RuntimeManifest -RuntimeDir $runtimeOut -PackageRoot $stagingRoot -Platform "linux-service"
 
 $serviceFiles = @(

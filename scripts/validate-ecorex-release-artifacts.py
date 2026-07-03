@@ -88,6 +88,7 @@ REQUIRED_RUNTIME_SUFFIXES = (
     "runtime/agent/tools/browser/browser_tool.py",
     "runtime/agent/tools/browser/browser_service.py",
     "runtime/agent/tools/browser/browser_automation_service.py",
+    "runtime/tools/tongxin/xin_agent_cli.py",
     "runtime/agent/memory/summarizer.py",
     "runtime/agent/knowledge/service.py",
     "runtime/skills/image-generation/scripts/generate.py",
@@ -137,6 +138,7 @@ REQUIRED_DESKTOP_RUNTIME_FILES = (
     "agent/tools/browser/browser_tool.py",
     "agent/tools/browser/browser_service.py",
     "agent/tools/browser/browser_automation_service.py",
+    "tools/tongxin/xin_agent_cli.py",
     "agent/memory/summarizer.py",
     "agent/knowledge/service.py",
     "skills/image-generation/scripts/generate.py",
@@ -1113,6 +1115,28 @@ def validate_zip_assets(path: pathlib.Path, label: str, expected_version: str = 
                 any("/wheelhouse/mac-x64/playwright-" in name for name in names),
                 f"{label} missing macOS x64 Playwright wheel",
             )
+        if label in {"webui-win-mac", "webui-windows-x64"}:
+            windows_installer = zip_text_by_suffix(archive, "scripts/install-ecorex-webui-win.ps1")
+            require_contains(windows_installer, 'ValidateSet("manual", "background")', f"{label} Windows update mode")
+            require_contains(windows_installer, "$backgroundUpdate", f"{label} Windows background update")
+            require_contains(windows_installer, "Get-ActiveRequestCount", f"{label} Windows active request idle gate")
+            require_contains(windows_installer, "update-state.json", f"{label} Windows update state")
+            require_contains(windows_installer, "defer-to-existing-tab-soft-refresh", f"{label} Windows browser soft refresh policy")
+            require_contains(windows_installer, "prompt-soft-refresh-existing-tab", f"{label} Windows activation policy")
+            require_contains(windows_installer, "healthCheck", f"{label} Windows update health check")
+            require_contains(windows_installer, "never-in-background", f"{label} Windows background browser launch policy")
+            require_contains(windows_installer, 'if ((-not $NoBrowser) -and (-not $backgroundUpdate))', f"{label} Windows background no-browser")
+        if label in {"webui-win-mac", "webui-macos-universal"}:
+            mac_installer = zip_text_by_suffix(archive, "scripts/install-ecorex-webui-mac.sh")
+            require_contains(mac_installer, 'UPDATE_MODE="${ECOREX_UPDATE_MODE:-manual}"', f"{label} macOS update mode")
+            require_contains(mac_installer, "BACKGROUND_UPDATE=1", f"{label} macOS background update")
+            require_contains(mac_installer, "active_request_count", f"{label} macOS active request idle gate")
+            require_contains(mac_installer, "update-state.json", f"{label} macOS update state")
+            require_contains(mac_installer, "defer-to-existing-tab-soft-refresh", f"{label} macOS browser soft refresh policy")
+            require_contains(mac_installer, "prompt-soft-refresh-existing-tab", f"{label} macOS activation policy")
+            require_contains(mac_installer, "healthCheck", f"{label} macOS update health check")
+            require_contains(mac_installer, "never-in-background", f"{label} macOS background browser launch policy")
+            require_contains(mac_installer, 'if [[ "$OPEN_BROWSER" == "1" && "$BACKGROUND_UPDATE" != "1" ]]', f"{label} macOS background no-browser")
         for required in REQUIRED_RUNTIME_SUFFIXES + REQUIRED_WEBUI_RUNTIME_SUFFIXES:
             require(any(name.endswith(required) for name in names), f"{label} missing {required}")
         for forbidden in FORBIDDEN_WEB_ASSETS:
@@ -1226,6 +1250,7 @@ def validate_public_zip(
             "public site WebUI macOS artifact",
         )
         install_webui_ps1 = archive.read("site/install-webui.ps1").decode("utf-8", errors="replace")
+        install_web_sh = archive.read("server/install-ecorex-web.sh").decode("utf-8", errors="replace")
         require_contains(
             install_webui_ps1,
             "function Try-SaveUrlWithCurl",
@@ -1261,13 +1286,35 @@ def validate_public_zip(
             "Expand-Archive",
             "public Windows WebUI bootstrap avoids PowerShell Archive cleanup race",
         )
+        require_contains(
+            install_web_sh,
+            "ECOREX_TONGXIN_DATABASE",
+            "public server installer Tongxin data-volume env override",
+        )
         require_not_contains(
             site_js,
             '"windows-x64"',
             "public site retired desktop Windows card",
         )
         checksums = read_zip_json_no_bom(archive, "checksums.json")
+        downloads_externalized = bool(checksums.get("downloadsExternalized"))
+        if downloads_externalized:
+            require(
+                str(checksums.get("downloadsSource") or "") == "public-release-downloads-source",
+                "checksums externalized downloads source mismatch",
+            )
         require(public_manifest.get("version") == manifest.get("version"), "public manifest version mismatch")
+        webui_update = ((public_manifest.get("update") or {}).get("webui") or {})
+        background_update = webui_update.get("backgroundUpdate") or {}
+        require(webui_update.get("promotion") == "admin-gated", "public manifest WebUI update promotion must be admin-gated")
+        require(webui_update.get("channel") == "stable", "public manifest WebUI update channel must be stable")
+        require(background_update.get("idleGate") == "/api/active-requests", "public manifest WebUI background update idle gate mismatch")
+        require(background_update.get("browserAfterInstall") == "soft-refresh-existing-tab", "public manifest WebUI background browser policy mismatch")
+        require(background_update.get("manualBrowserOpen") == "first-install-or-user-request", "public manifest WebUI manual browser policy mismatch")
+        require(background_update.get("activationPolicy") == "prompt-soft-refresh-existing-tab", "public manifest WebUI activation policy mismatch")
+        require(background_update.get("healthCheck") == "/api/version", "public manifest WebUI health check mismatch")
+        require(background_update.get("stateFile") == "update-state.json", "public manifest WebUI update state file mismatch")
+        require(background_update.get("autoLaunchBrowser") == "never-in-background", "public manifest WebUI background auto-launch policy mismatch")
         checksum_artifacts = checksums.get("artifacts") or {}
         ready_by_id = {str(item.get("id")): item for item in ready}
         require(set(checksum_artifacts) == set(ready_by_id), "checksums.json ready artifact ids mismatch")
@@ -1304,15 +1351,20 @@ def validate_public_zip(
             for name in names
             if name.startswith("site/downloads/") and not name.endswith("/")
         }
-        expected_download_files = {artifact_file_name(str(item.get("id") or "unknown"), item) for item in ready if not is_external_artifact(item)}
-        windows_ready = next((item for item in ready if str(item.get("id") or "") == "windows-x64" and not is_external_artifact(item)), None)
-        if windows_ready:
-            installer_name = artifact_file_name("windows-x64", windows_ready)
-            expected_download_files.update({"latest.yml", f"{installer_name}.blockmap"})
-        windows_ia32_ready = next((item for item in ready if str(item.get("id") or "") == "windows-ia32" and not is_external_artifact(item)), None)
-        if windows_ia32_ready:
-            installer_name = artifact_file_name("windows-ia32", windows_ia32_ready)
-            expected_download_files.update({f"ia32/{installer_name}", "ia32/latest.yml", f"ia32/{installer_name}.blockmap"})
+        expected_download_files = set()
+        if not downloads_externalized:
+            expected_download_files = {artifact_file_name(str(item.get("id") or "unknown"), item) for item in ready if not is_external_artifact(item)}
+            windows_ready = next((item for item in ready if str(item.get("id") or "") == "windows-x64" and not is_external_artifact(item)), None)
+            if windows_ready:
+                installer_name = artifact_file_name("windows-x64", windows_ready)
+                expected_download_files.update({"latest.yml", f"{installer_name}.blockmap"})
+            windows_ia32_ready = next((item for item in ready if str(item.get("id") or "") == "windows-ia32" and not is_external_artifact(item)), None)
+            if windows_ia32_ready:
+                installer_name = artifact_file_name("windows-ia32", windows_ia32_ready)
+                expected_download_files.update({f"ia32/{installer_name}", "ia32/latest.yml", f"ia32/{installer_name}.blockmap"})
+        else:
+            windows_ready = None
+            windows_ia32_ready = None
         require(download_files == expected_download_files, "public zip download file set mismatch")
 
         for artifact_id, artifact in ready_by_id.items():
@@ -1338,6 +1390,20 @@ def validate_public_zip(
 
             file_name = artifact_file_name(artifact_id, artifact)
             rel = f"site/downloads/{file_name}"
+            if downloads_externalized:
+                require(rel not in names, f"public zip must not embed externalized download {rel}")
+                require(str(public_artifact.get("href") or "") == f"downloads/{file_name}", f"public manifest {artifact_id} href mismatch")
+                require(bool(checksum.get("external")), f"checksums externalized marker missing for {artifact_id}")
+                require(str(checksum.get("relativePath") or "") == rel, f"checksums relativePath mismatch for {artifact_id}")
+                require(str(checksum.get("href") or "") == f"downloads/{file_name}", f"checksums href mismatch for {artifact_id}")
+                require(
+                    str(checksum.get("deploymentSourceFileName") or file_name) == file_name,
+                    f"checksums deployment source mismatch for {artifact_id}",
+                )
+                require(int(checksum.get("size") or 0) == expected_size, f"checksums size mismatch for {artifact_id}")
+                require(str(checksum.get("sha256") or "").upper() == expected_digest, f"checksums sha mismatch for {artifact_id}")
+                continue
+
             require(rel in names, f"public zip missing ready download {rel}")
             payload = archive.read(rel)
             require(len(payload) == expected_size, f"public zip {artifact_id} size mismatch")
@@ -1466,6 +1532,17 @@ def require_section_not_contains(text: str, start: str, end: str, needle: str, l
     require_not_contains(section, needle, label)
 
 
+def validate_active_requests_route(read_text_by_suffix, web_channel_text: str, label: str) -> None:
+    if "'/api/active-requests'" in web_channel_text:
+        return
+    routes = read_text_by_suffix("channel/web/routes.py")
+    projection = read_text_by_suffix("channel/web/projection.py")
+    require_contains(routes, "'/api/active-requests'", f"{label} web routes")
+    require_contains(routes, "'ActiveRequestsHandler'", f"{label} web routes")
+    require_contains(projection, "class ActiveRequestsHandler", f"{label} web projection")
+    require_contains(projection, "active_requests_snapshot()", f"{label} web projection")
+
+
 def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     config_text = read_text_by_suffix("config.py")
     require_contains(config_text, "DEFAULT_CDP_ENDPOINT", f"{label} config")
@@ -1492,7 +1569,7 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_contains(web_channel, "produce failed before worker start", f"{label} web channel")
     require_contains(web_channel, "get_cancel_registry().unregister(request_id)", f"{label} web channel")
     require_contains(web_channel, "def active_requests_snapshot", f"{label} web channel")
-    require_contains(web_channel, "'/api/active-requests'", f"{label} web channel")
+    validate_active_requests_route(read_text_by_suffix, web_channel, label)
     require_contains(web_channel, "self.sse_events", f"{label} web channel")
     require_contains(web_channel, "self.sse_subscribers", f"{label} web channel")
     require_contains(web_channel, "def _push_sse_event", f"{label} web channel")
@@ -1706,6 +1783,9 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_contains(tongxin_cli, "bootstrap_sha256", f"{label} tongxin cli")
     require_contains(tongxin_cli, "is_config_driven_tongxin_bootstrap_request", f"{label} tongxin cli")
     require_contains(tongxin_cli, "tools.tongxin_cli.script_path", f"{label} tongxin cli")
+    require_contains(tongxin_cli, "DATABASE_CONFIG_KEYS", f"{label} tongxin cli")
+    require_contains(tongxin_cli, "XIN_AGENT_DATABASE", f"{label} tongxin cli")
+    require_contains(tongxin_cli, "ECOREX_TONGXIN_DATABASE", f"{label} tongxin cli")
     require_contains(tongxin_cli, "READ_ONLY_ALLOWED_COMMANDS", f"{label} tongxin cli")
     require_contains(tongxin_cli, "validate_read_only_tongxin_args", f"{label} tongxin cli")
     require_contains(tongxin_cli, "ToolExecutionEnvironment", f"{label} tongxin cli")
@@ -1849,6 +1929,8 @@ def validate_frontend_bundle_texts(read_text_by_suffix, label: str) -> None:
     require_contains(renderer, "activeRequests", f"{label} renderer bundle")
     require_contains(renderer, "releaseNotes", f"{label} renderer bundle")
     require_contains(renderer, "ecorex-release-notes-seen-version", f"{label} renderer bundle")
+    require_contains(renderer, "updateState", f"{label} renderer bundle")
+    require_contains(renderer, "ecorex-background-update-applied", f"{label} renderer bundle")
     require_contains(renderer, "/api/project-folder", f"{label} renderer bundle")
     require_contains(renderer, "/api/open-path", f"{label} renderer bundle")
     require_contains(renderer, "data-ecorex-file-path", f"{label} renderer bundle")
@@ -1895,6 +1977,15 @@ def validate_desktop_unpacked(desktop_dir: pathlib.Path, node_modules: pathlib.P
 
     for rel in REQUIRED_DESKTOP_RUNTIME_FILES:
         require((runtime / rel).is_file(), f"desktop runtime missing {rel}")
+
+    capabilities = read_json_no_bom(runtime / "capabilities.json")
+    packs = capabilities.get("packs") if isinstance(capabilities.get("packs"), list) else []
+    tongxin_pack = next((pack for pack in packs if isinstance(pack, dict) and pack.get("id") == "tongxin-cli"), {})
+    if tongxin_pack.get("defaultEnabled") is True:
+        require(
+            (runtime / "tools" / "tongxin" / "xin_agent_cli.py").is_file(),
+            "desktop runtime declares default-enabled tongxin-cli but missing tools/tongxin/xin_agent_cli.py",
+        )
 
     validate_runtime_source_texts(
         lambda suffix: (runtime / suffix).read_text(encoding="utf-8"),

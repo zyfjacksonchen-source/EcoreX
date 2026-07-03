@@ -7,7 +7,8 @@ and generating AI titles for conversation sessions. Backed by ConversationStore
 """
 
 import re
-from typing import Optional
+import hashlib
+from typing import Any, List, Optional
 
 from common.log import logger
 
@@ -29,27 +30,106 @@ def _truncate_fallback_title(user_message: str, max_len: int = 30) -> str:
     return first_line
 
 
-def generate_session_title(user_message: str, assistant_reply: str = "") -> str:
+def _extract_title_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: List[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text":
+                text = str(block.get("text") or "").strip()
+                if text:
+                    parts.append(text)
+        return "\n".join(parts).strip()
+    return ""
+
+
+def _title_log_summary(value: str) -> str:
+    text = str(value or "")
+    if not text:
+        return "hash= chars=0 bytes=0"
+    encoded = text.encode("utf-8", errors="replace")
+    return f"hash={hashlib.sha256(encoded).hexdigest()[:16]} chars={len(text)} bytes={len(encoded)}"
+
+
+def _format_messages_for_title(messages: List[dict], max_chars: int = 2600) -> str:
+    lines: List[str] = []
+    for item in messages[-24:]:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        if role not in {"user", "assistant"}:
+            continue
+        text = _extract_title_text(item.get("content", ""))
+        if not text:
+            continue
+        label = "User" if role == "user" else "Assistant"
+        lines.append(f"{label}: {text[:500]}")
+    context = "\n".join(lines).strip()
+    if len(context) > max_chars:
+        context = context[-max_chars:]
+    return context
+
+
+def _fallback_title_from_session_context(
+    user_message: str = "",
+    assistant_reply: str = "",
+    *,
+    session_summary: str = "",
+    conversation_context: str = "",
+) -> str:
+    for source in (session_summary, conversation_context, user_message, assistant_reply):
+        title = _truncate_fallback_title(str(source or ""), max_len=30)
+        if title != "New Chat":
+            return title
+    return "New Chat"
+
+
+def generate_session_title(
+    user_message: str = "",
+    assistant_reply: str = "",
+    *,
+    conversation_messages: Optional[List[dict]] = None,
+    session_summary: str = "",
+) -> str:
     """
     Generate a short session title by calling the current bot's reply_text.
-    Falls back to the first line of the user message if the LLM call fails
-    or returns an obvious error sentinel.
+    Prefer a whole-session summary/context over one latest message. Falls back
+    to a deterministic summary-context title if the LLM call fails.
     """
-    fallback = _truncate_fallback_title(user_message)
+    conversation_context = _format_messages_for_title(conversation_messages or [])
+    fallback = _fallback_title_from_session_context(
+        user_message,
+        assistant_reply,
+        session_summary=session_summary,
+        conversation_context=conversation_context,
+    )
     try:
         from bridge.bridge import Bridge
         from models.session_manager import Session
         bot = Bridge().get_bot("chat")
 
-        prompt_parts = [f"User: {user_message[:300]}"]
-        if assistant_reply:
-            prompt_parts.append(f"Assistant: {assistant_reply[:300]}")
+        prompt_parts: List[str] = []
+        if session_summary:
+            prompt_parts.append(f"Session summary:\n{session_summary[:1200]}")
+        if conversation_context:
+            prompt_parts.append(f"Recent conversation:\n{conversation_context}")
+        if not prompt_parts:
+            if user_message:
+                prompt_parts.append(f"User: {user_message[:500]}")
+            if assistant_reply:
+                prompt_parts.append(f"Assistant: {assistant_reply[:500]}")
+        if not prompt_parts:
+            return fallback
 
         session = Session("__title_gen__", system_prompt="")
         session.messages = [
             {"role": "user", "content": (
                 "Generate a very short title (max 15 characters for Chinese, max 6 words for English) "
-                "summarizing this conversation. Return ONLY the title text, nothing else.\n\n"
+                "from the overall session summary/topic, not from only the latest message. "
+                "Return ONLY the title text, nothing else.\n\n"
                 + "\n".join(prompt_parts)
             )}
         ]
@@ -63,17 +143,43 @@ def generate_session_title(user_message: str, assistant_reply: str = "") -> str:
         if completion_tokens <= 0:
             logger.warning(
                 f"[SessionService] Title generation got empty completion "
-                f"(completion_tokens={completion_tokens}, content='{raw[:50]}'), "
+                f"(completion_tokens={completion_tokens}, content_summary={_title_log_summary(raw)}), "
                 f"using fallback")
             return fallback
 
         title = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL).strip().strip('"\'')
-        logger.info(f"[SessionService] Title generation result: '{title}' (len={len(title)})")
+        logger.info(f"[SessionService] Title generation result: {_title_log_summary(title)}")
         if title and len(title) <= 50:
             return title
     except Exception as e:
         logger.warning(f"[SessionService] Title generation failed: {e}")
     return fallback
+
+
+def _session_messages_for_title(store: Any, session_id: str) -> List[dict]:
+    try:
+        page = store.load_history_page(session_id, page=1, page_size=40)
+    except Exception as exc:
+        logger.warning(f"[SessionService] Failed loading session history for title: {exc}")
+        return []
+    messages = page.get("messages") if isinstance(page, dict) else []
+    return messages if isinstance(messages, list) else []
+
+
+def generate_session_title_for_store(
+    store: Any,
+    session_id: str,
+    user_message: str = "",
+    assistant_reply: str = "",
+    *,
+    session_summary: str = "",
+) -> str:
+    return generate_session_title(
+        user_message,
+        assistant_reply,
+        conversation_messages=_session_messages_for_title(store, session_id),
+        session_summary=session_summary,
+    )
 
 
 class SessionService:
@@ -165,28 +271,34 @@ class SessionService:
         self._clear_responses_state(session_id)
         return new_seq
 
-    def gen_title(self, session_id: str, user_message: str,
-                  assistant_reply: str = "") -> str:
+    def gen_title(self, session_id: str, user_message: str = "",
+                  assistant_reply: str = "", session_summary: str = "") -> str:
         """
         Generate an AI title and persist it. Returns the generated title.
         """
         if not session_id:
             raise ValueError("session_id required")
-        if not user_message:
-            raise ValueError("user_message required")
         session_id = self._normalize_sid(session_id)
-
-        title = generate_session_title(user_message, assistant_reply)
 
         store = self._get_store()
         title_state = store.get_session_title_state(session_id)
         if title_state and title_state.get("title_locked"):
             current_title = str(title_state.get("title") or "")
-            logger.info(f"[SessionService] Title locked: sid={session_id}, title='{current_title}'")
+            logger.info(
+                f"[SessionService] Title locked: sid={session_id}, "
+                f"title_summary={_title_log_summary(current_title)}"
+            )
             return current_title
+        title = generate_session_title_for_store(
+            store,
+            session_id,
+            user_message,
+            assistant_reply,
+            session_summary=session_summary,
+        )
         updated = store.rename_session(session_id, title, respect_title_lock=True)
         logger.info(f"[SessionService] Title set: sid={session_id}, "
-                     f"title='{title}', db_updated={updated}")
+                     f"title_summary={_title_log_summary(title)}, db_updated={updated}")
         return title
 
     # ------------------------------------------------------------------
@@ -243,6 +355,7 @@ class SessionService:
                     payload.get("session_id", ""),
                     payload.get("user_message", ""),
                     payload.get("assistant_reply", ""),
+                    payload.get("session_summary", ""),
                 )
                 return {"action": action, "code": 200, "message": "success",
                         "payload": {"title": title}}

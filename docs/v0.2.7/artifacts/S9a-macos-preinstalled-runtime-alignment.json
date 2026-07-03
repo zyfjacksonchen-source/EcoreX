@@ -1,0 +1,118 @@
+{
+  "slice": "S9a-macos-preinstalled-runtime-alignment",
+  "status": "review_passed",
+  "createdAt": "2026-07-02",
+  "goal": "Align macOS packaged runtime with WorkBuddy/Codex-style preinstalled runtime expectations for out-of-box browser/CDP, OCR, Vision, Node, npm, and npx availability.",
+  "implementation": {
+    "macStaging": {
+      "file": "desktop/scripts/stage-runtime-mac.sh",
+      "changes": [
+        "Add Node runtime staging for darwin-arm64 and darwin-x64 using Node 22.22.0 by default.",
+        "Verify staged node, npm, and npx executables before writing runtime manifest.",
+        "Install Playwright Chromium into runtime/playwright-browsers with PLAYWRIGHT_BROWSERS_PATH.",
+        "Record nodeVersion and playwrightBrowserInstall in runtime-manifest.json.",
+        "Use repo-root runtime-packs and install-capability.py sources to match Windows packaging source paths."
+      ]
+    },
+    "runtimeResolver": {
+      "file": "common/runtime_dependencies.py",
+      "changes": [
+        "Expose owned runtime/state playwright-browsers directories.",
+        "Set PLAYWRIGHT_BROWSERS_PATH and ECOREX_PLAYWRIGHT_BROWSERS_DIR in isolated tool environments when bundled browsers exist.",
+        "Include playwrightBrowserDirs in dependency snapshots."
+      ]
+    },
+    "browserTooling": {
+      "file": "agent/tools/browser/browser_automation_service.py",
+      "changes": [
+        "Support new Playwright Chrome for Testing layouts such as chrome-win64/chrome.exe.",
+        "Support chrome-mac* and chrome-headless-shell-* layouts for macOS/Linux/Windows fallback discovery."
+      ]
+    },
+    "desktopSidecar": {
+      "file": "desktop/electron/sidecar.ts",
+      "changes": [
+        "Prefer packaged runtime/playwright-browsers before falling back to inherited or userData capability browser paths on macOS.",
+        "Export both PLAYWRIGHT_BROWSERS_PATH and ECOREX_PLAYWRIGHT_BROWSERS_DIR to the sidecar only when a managed browser directory is available."
+      ]
+    },
+    "releaseGate": {
+      "file": "scripts/check-web-core-runtime-baseline.py",
+      "changes": [
+        "Scan both runtime and state roots for Playwright Chromium.",
+        "Report bundled browser assets as ecorex-bundled-playwright."
+      ]
+    },
+    "privacyRedaction": {
+      "file": "scripts/generate-web-runtime-release-gate.py",
+      "changes": [
+        "Redact workspace-root paths from capability-state, permission-matrix, and final release gate artifacts.",
+        "Redact runtime/state/output/workspace paths and sensitive exception text from release-gate failure artifacts.",
+        "Keep public release evidence to placeholders, counts, categories, and low-risk diagnostic summaries."
+      ]
+    }
+  },
+  "verification": {
+    "commands": [
+      {
+        "command": "bash -n desktop/scripts/stage-runtime-mac.sh",
+        "result": "passed"
+      },
+      {
+        "command": "python -m py_compile common/runtime_dependencies.py scripts/check-web-core-runtime-baseline.py agent/tools/browser/browser_automation_service.py",
+        "result": "passed"
+      },
+      {
+        "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_v025_runtime_dependencies.py tests/test_web_runtime_goal.py::test_web_core_baseline_passes_with_owned_install_root_runtime tests/test_web_runtime_goal.py::test_web_core_baseline_accepts_bundled_runtime_playwright_chromium tests/test_v025_runtime_manifest.py::test_v025_linux_release_scripts_install_core_requirements_and_manifest tests/test_v025_runtime_manifest.py::test_v027_macos_stage_runtime_preinstalls_node_and_playwright_browser -q",
+        "result": "24 passed, 1 skipped"
+      },
+      {
+        "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_web_runtime_goal.py::test_v027_browser_cdp_discovers_playwright_chromium_new_cft_layout tests/test_web_runtime_goal.py::test_web_core_baseline_accepts_bundled_runtime_playwright_chromium tests/test_v025_runtime_dependencies.py::test_runtime_dependency_provider_build_env_exposes_owned_playwright_browsers tests/test_v025_runtime_manifest.py::test_v027_macos_stage_runtime_preinstalls_node_and_playwright_browser -q",
+        "result": "4 passed"
+      },
+      {
+        "command": "python scripts/generate-web-runtime-release-gate.py --runtime-root desktop/runtime/ecorex-runtime --state-root .tmp-v027-release-gate-state --workspace-root . --output-dir docs/v0.2.7/artifacts/web-runtime-release-gate-staged --strict",
+        "result": "releaseReady true, blocking 0"
+      },
+      {
+        "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_web_runtime_goal.py::test_s9_web_release_gate_generates_required_snapshots -q",
+        "result": "1 passed"
+      },
+      {
+        "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_web_runtime_goal.py::test_s9_web_release_gate_generates_required_snapshots tests/test_web_runtime_goal.py::test_v027_release_gate_failure_artifacts_redact_paths_and_secrets -q",
+        "result": "2 passed"
+      },
+      {
+        "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_v023_external_connections_cdp_ocr.py::V023CdpOcrExternalConnectionsTests::test_v027_sidecar_prefers_bundled_playwright_browsers_on_macos tests/test_v023_external_connections_cdp_ocr.py::V023CdpOcrExternalConnectionsTests::test_sidecar_default_injects_cdp_auto_launch_true -q",
+        "result": "2 passed"
+      },
+      {
+        "command": "python -m py_compile scripts/generate-web-runtime-release-gate.py",
+        "result": "passed"
+      },
+      {
+        "command": "npm run typecheck",
+        "cwd": "desktop",
+        "result": "passed"
+      },
+      {
+        "command": "privacy scan over docs/v0.2.7/artifacts/web-runtime-release-gate-staged for raw workspace/sensitive-value patterns",
+        "result": "passed; raw workspace redacted as %WORKSPACE_ROOT%"
+      }
+    ]
+  },
+  "limits": [
+    "Full macOS package execution requires a macOS runner; this Windows host verified script syntax and static packaging contracts only.",
+    "The staged release gate evidence was produced against the Windows staged runtime, proving the shared resolver/baseline recognizes bundled Node and Playwright browser assets."
+  ],
+  "reviewGate": {
+    "status": "pass",
+    "roles": {
+      "runtimeConfig": "PASS",
+      "frontendApi": "PASS",
+      "toolchainCdpOcrTongxin": "PASS",
+      "qaRelease": "PASS",
+      "privacyData": "PASS"
+    }
+  }
+}

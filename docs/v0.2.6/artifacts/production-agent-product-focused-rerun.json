@@ -1,0 +1,6495 @@
+{
+  "status": "PASS",
+  "version": "0.2.6",
+  "scope": "production-agent-product-focused-rerun",
+  "generatedAt": "2026-07-01T16:51:03.555087+00:00",
+  "durationSeconds": 477.97,
+  "budgetMode": "tiered",
+  "releaseBlocking": false,
+  "focusGroups": [
+    "auth-first-use",
+    "concurrency-pressure",
+    "fresh-env",
+    "multi-model-image-route",
+    "runtime-api",
+    "security-observability",
+    "stream-state-machine",
+    "ui-ux"
+  ],
+  "selectedGroups": [
+    "fresh-env",
+    "auth-first-use",
+    "runtime-api",
+    "ui-ux",
+    "stream-state-machine",
+    "multi-model-image-route",
+    "concurrency-pressure",
+    "security-observability"
+  ],
+  "expectedCheckCount": 172,
+  "checkCount": 172,
+  "passCount": 172,
+  "failCount": 0,
+  "skipCount": 0,
+  "hardGateFailures": [],
+  "checks": [
+    {
+      "index": 1,
+      "caseId": "v026-agent-fresh-env-001",
+      "group": "fresh-env",
+      "name": "current release directory exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 2,
+      "caseId": "v026-agent-fresh-env-002",
+      "group": "fresh-env",
+      "name": "runtime directory exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 3,
+      "caseId": "v026-agent-fresh-env-003",
+      "group": "fresh-env",
+      "name": "release version is v0.2.6",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "version": "0.2.6"
+      }
+    },
+    {
+      "index": 4,
+      "caseId": "v026-agent-fresh-env-004",
+      "group": "fresh-env",
+      "name": "service env file exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 5,
+      "caseId": "v026-agent-fresh-env-005",
+      "group": "fresh-env",
+      "name": "state config exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 6,
+      "caseId": "v026-agent-fresh-env-006",
+      "group": "fresh-env",
+      "name": "state directory exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 7,
+      "caseId": "v026-agent-fresh-env-007",
+      "group": "fresh-env",
+      "name": "workspace directory exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 8,
+      "caseId": "v026-agent-fresh-env-008",
+      "group": "fresh-env",
+      "name": "fresh envelope directory created",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "runHash": "7CAEC031690A3F13"
+      }
+    },
+    {
+      "index": 9,
+      "caseId": "v026-agent-fresh-env-009",
+      "group": "fresh-env",
+      "name": "fresh home starts without app state",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 10,
+      "caseId": "v026-agent-fresh-env-010",
+      "group": "fresh-env",
+      "name": "fresh state starts empty",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 11,
+      "caseId": "v026-agent-fresh-env-011",
+      "group": "fresh-env",
+      "name": "fresh workspace starts empty",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 12,
+      "caseId": "v026-agent-fresh-env-012",
+      "group": "fresh-env",
+      "name": "fresh browser profile starts empty",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 13,
+      "caseId": "v026-agent-fresh-env-013",
+      "group": "fresh-env",
+      "name": "runtime manifest exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 14,
+      "caseId": "v026-agent-fresh-env-014",
+      "group": "fresh-env",
+      "name": "capability state exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 15,
+      "caseId": "v026-agent-fresh-env-015",
+      "group": "fresh-env",
+      "name": "permission matrix exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 16,
+      "caseId": "v026-agent-fresh-env-016",
+      "group": "fresh-env",
+      "name": "bundled node exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 17,
+      "caseId": "v026-agent-fresh-env-017",
+      "group": "fresh-env",
+      "name": "runtime venv python exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 18,
+      "caseId": "v026-agent-fresh-env-018",
+      "group": "fresh-env",
+      "name": "systemd service active",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "state": "active"
+      }
+    },
+    {
+      "index": 19,
+      "caseId": "v026-agent-auth-first-use-001",
+      "group": "auth-first-use",
+      "name": "pre-login auth check returns 200",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 20,
+      "caseId": "v026-agent-auth-first-use-002",
+      "group": "auth-first-use",
+      "name": "pre-login auth is required",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 21,
+      "caseId": "v026-agent-auth-first-use-003",
+      "group": "auth-first-use",
+      "name": "pre-login is unauthenticated",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 22,
+      "caseId": "v026-agent-auth-first-use-004",
+      "group": "auth-first-use",
+      "name": "login returns 200",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 23,
+      "caseId": "v026-agent-auth-first-use-005",
+      "group": "auth-first-use",
+      "name": "login status success",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 24,
+      "caseId": "v026-agent-auth-first-use-006",
+      "group": "auth-first-use",
+      "name": "login session authenticated",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 25,
+      "caseId": "v026-agent-auth-first-use-007",
+      "group": "auth-first-use",
+      "name": "login is not local fallback",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 26,
+      "caseId": "v026-agent-auth-first-use-008",
+      "group": "auth-first-use",
+      "name": "login auth provider web-password",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 27,
+      "caseId": "v026-agent-auth-first-use-009",
+      "group": "auth-first-use",
+      "name": "login user is fresh smoke email",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 28,
+      "caseId": "v026-agent-auth-first-use-010",
+      "group": "auth-first-use",
+      "name": "login cookie persisted",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 29,
+      "caseId": "v026-agent-auth-first-use-011",
+      "group": "auth-first-use",
+      "name": "post-login auth is authenticated",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 30,
+      "caseId": "v026-agent-auth-first-use-012",
+      "group": "auth-first-use",
+      "name": "tool permission endpoint returns 200 before change",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 31,
+      "caseId": "v026-agent-auth-first-use-013",
+      "group": "auth-first-use",
+      "name": "set full-access returns 200",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 32,
+      "caseId": "v026-agent-auth-first-use-014",
+      "group": "auth-first-use",
+      "name": "full-access mode accepted",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 33,
+      "caseId": "v026-agent-auth-first-use-015",
+      "group": "auth-first-use",
+      "name": "permission audit path present",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 34,
+      "caseId": "v026-agent-auth-first-use-016",
+      "group": "auth-first-use",
+      "name": "sessions endpoint works for fresh user",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 35,
+      "caseId": "v026-agent-runtime-api-001",
+      "group": "runtime-api",
+      "name": "/api/version returns 2xx",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 36,
+      "caseId": "v026-agent-runtime-api-002",
+      "group": "runtime-api",
+      "name": "/api/version responds under 5s",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 0
+      }
+    },
+    {
+      "index": 37,
+      "caseId": "v026-agent-runtime-api-003",
+      "group": "runtime-api",
+      "name": "/api/models returns 2xx",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 38,
+      "caseId": "v026-agent-runtime-api-004",
+      "group": "runtime-api",
+      "name": "/api/models responds under 5s",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 5
+      }
+    },
+    {
+      "index": 39,
+      "caseId": "v026-agent-runtime-api-005",
+      "group": "runtime-api",
+      "name": "/api/tools returns 2xx",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 40,
+      "caseId": "v026-agent-runtime-api-006",
+      "group": "runtime-api",
+      "name": "/api/tools responds under 5s",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 2
+      }
+    },
+    {
+      "index": 41,
+      "caseId": "v026-agent-runtime-api-007",
+      "group": "runtime-api",
+      "name": "/api/skills returns 2xx",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 42,
+      "caseId": "v026-agent-runtime-api-008",
+      "group": "runtime-api",
+      "name": "/api/skills responds under 5s",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 42
+      }
+    },
+    {
+      "index": 43,
+      "caseId": "v026-agent-runtime-api-009",
+      "group": "runtime-api",
+      "name": "/api/capabilities returns 2xx",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 44,
+      "caseId": "v026-agent-runtime-api-010",
+      "group": "runtime-api",
+      "name": "/api/capabilities responds under 5s",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 113
+      }
+    },
+    {
+      "index": 45,
+      "caseId": "v026-agent-runtime-api-011",
+      "group": "runtime-api",
+      "name": "/api/extensions returns 2xx",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 46,
+      "caseId": "v026-agent-runtime-api-012",
+      "group": "runtime-api",
+      "name": "/api/extensions responds under 5s",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 71
+      }
+    },
+    {
+      "index": 47,
+      "caseId": "v026-agent-runtime-api-013",
+      "group": "runtime-api",
+      "name": "/api/channels returns 2xx",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 48,
+      "caseId": "v026-agent-runtime-api-014",
+      "group": "runtime-api",
+      "name": "/api/channels responds under 5s",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 3
+      }
+    },
+    {
+      "index": 49,
+      "caseId": "v026-agent-runtime-api-015",
+      "group": "runtime-api",
+      "name": "/api/external-connections returns 2xx",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 50,
+      "caseId": "v026-agent-runtime-api-016",
+      "group": "runtime-api",
+      "name": "/api/external-connections responds under 5s",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 5
+      }
+    },
+    {
+      "index": 51,
+      "caseId": "v026-agent-runtime-api-017",
+      "group": "runtime-api",
+      "name": "/api/scheduler returns 2xx",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 52,
+      "caseId": "v026-agent-runtime-api-018",
+      "group": "runtime-api",
+      "name": "/api/scheduler responds under 5s",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 1
+      }
+    },
+    {
+      "index": 53,
+      "caseId": "v026-agent-runtime-api-019",
+      "group": "runtime-api",
+      "name": "/api/active-requests returns 2xx",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 54,
+      "caseId": "v026-agent-runtime-api-020",
+      "group": "runtime-api",
+      "name": "/api/active-requests responds under 5s",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 3
+      }
+    },
+    {
+      "index": 55,
+      "caseId": "v026-agent-runtime-api-021",
+      "group": "runtime-api",
+      "name": "/api/installations returns 2xx",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 56,
+      "caseId": "v026-agent-runtime-api-022",
+      "group": "runtime-api",
+      "name": "/api/installations responds under 5s",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 1
+      }
+    },
+    {
+      "index": 57,
+      "caseId": "v026-agent-runtime-api-023",
+      "group": "runtime-api",
+      "name": "/api/runtime-projection returns 2xx",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 58,
+      "caseId": "v026-agent-runtime-api-024",
+      "group": "runtime-api",
+      "name": "/api/runtime-projection responds under 5s",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 0
+      }
+    },
+    {
+      "index": 59,
+      "caseId": "v026-agent-runtime-api-025",
+      "group": "runtime-api",
+      "name": "/api/sessions returns 2xx",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 60,
+      "caseId": "v026-agent-runtime-api-026",
+      "group": "runtime-api",
+      "name": "/api/sessions responds under 5s",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 1
+      }
+    },
+    {
+      "index": 61,
+      "caseId": "v026-agent-runtime-api-027",
+      "group": "runtime-api",
+      "name": "/api/tool-permissions returns 2xx",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 62,
+      "caseId": "v026-agent-runtime-api-028",
+      "group": "runtime-api",
+      "name": "/api/tool-permissions responds under 5s",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 0
+      }
+    },
+    {
+      "index": 63,
+      "caseId": "v026-agent-runtime-api-029",
+      "group": "runtime-api",
+      "name": "/api/update-check returns 2xx",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 64,
+      "caseId": "v026-agent-runtime-api-030",
+      "group": "runtime-api",
+      "name": "/api/update-check responds under 5s",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 21
+      }
+    },
+    {
+      "index": 65,
+      "caseId": "v026-agent-ui-ux-001",
+      "group": "ui-ux",
+      "name": "Playwright imports in runtime",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 626,
+        "buttonCount": 47,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 0,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 0,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 64038,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true,
+        "modelButtonCount": 1,
+        "modelMenuCount": 4,
+        "providerLabels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ],
+        "failedResponseCount": 0,
+        "failedResponseHashes": []
+      }
+    },
+    {
+      "index": 66,
+      "caseId": "v026-agent-ui-ux-002",
+      "group": "ui-ux",
+      "name": "Chromium launches headless",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 626,
+        "buttonCount": 47,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 0,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 0,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 64038,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true,
+        "modelButtonCount": 1,
+        "modelMenuCount": 4,
+        "providerLabels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ],
+        "failedResponseCount": 0,
+        "failedResponseHashes": []
+      }
+    },
+    {
+      "index": 67,
+      "caseId": "v026-agent-ui-ux-003",
+      "group": "ui-ux",
+      "name": "browser API login succeeds",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 626,
+        "buttonCount": 47,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 0,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 0,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 64038,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true,
+        "modelButtonCount": 1,
+        "modelMenuCount": 4,
+        "providerLabels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ],
+        "failedResponseCount": 0,
+        "failedResponseHashes": []
+      }
+    },
+    {
+      "index": 68,
+      "caseId": "v026-agent-ui-ux-004",
+      "group": "ui-ux",
+      "name": "desktop app loads",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 626,
+        "buttonCount": 47,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 0,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 0,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 64038,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true,
+        "modelButtonCount": 1,
+        "modelMenuCount": 4,
+        "providerLabels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ],
+        "failedResponseCount": 0,
+        "failedResponseHashes": []
+      }
+    },
+    {
+      "index": 69,
+      "caseId": "v026-agent-ui-ux-005",
+      "group": "ui-ux",
+      "name": "desktop body has visible text",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 626,
+        "buttonCount": 47,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 0,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 0,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 64038,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true,
+        "modelButtonCount": 1,
+        "modelMenuCount": 4,
+        "providerLabels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ],
+        "failedResponseCount": 0,
+        "failedResponseHashes": []
+      }
+    },
+    {
+      "index": 70,
+      "caseId": "v026-agent-ui-ux-006",
+      "group": "ui-ux",
+      "name": "desktop renders interactive buttons",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 626,
+        "buttonCount": 47,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 0,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 0,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 64038,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true,
+        "modelButtonCount": 1,
+        "modelMenuCount": 4,
+        "providerLabels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ],
+        "failedResponseCount": 0,
+        "failedResponseHashes": []
+      }
+    },
+    {
+      "index": 71,
+      "caseId": "v026-agent-ui-ux-007",
+      "group": "ui-ux",
+      "name": "desktop has no empty visible buttons",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 626,
+        "buttonCount": 47,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 0,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 0,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 64038,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true,
+        "modelButtonCount": 1,
+        "modelMenuCount": 4,
+        "providerLabels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ],
+        "failedResponseCount": 0,
+        "failedResponseHashes": []
+      }
+    },
+    {
+      "index": 72,
+      "caseId": "v026-agent-ui-ux-008",
+      "group": "ui-ux",
+      "name": "desktop has no unnamed visible buttons",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 626,
+        "buttonCount": 47,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 0,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 0,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 64038,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true,
+        "modelButtonCount": 1,
+        "modelMenuCount": 4,
+        "providerLabels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ],
+        "failedResponseCount": 0,
+        "failedResponseHashes": []
+      }
+    },
+    {
+      "index": 73,
+      "caseId": "v026-agent-ui-ux-009",
+      "group": "ui-ux",
+      "name": "composer input is visible",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 626,
+        "buttonCount": 47,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 0,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 0,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 64038,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true,
+        "modelButtonCount": 1,
+        "modelMenuCount": 4,
+        "providerLabels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ],
+        "failedResponseCount": 0,
+        "failedResponseHashes": []
+      }
+    },
+    {
+      "index": 74,
+      "caseId": "v026-agent-ui-ux-010",
+      "group": "ui-ux",
+      "name": "desktop has no horizontal overflow",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 626,
+        "buttonCount": 47,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 0,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 0,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 64038,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true,
+        "modelButtonCount": 1,
+        "modelMenuCount": 4,
+        "providerLabels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ],
+        "failedResponseCount": 0,
+        "failedResponseHashes": []
+      }
+    },
+    {
+      "index": 75,
+      "caseId": "v026-agent-ui-ux-011",
+      "group": "ui-ux",
+      "name": "desktop buttons do not materially overlap",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 626,
+        "buttonCount": 47,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 0,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 0,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 64038,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true,
+        "modelButtonCount": 1,
+        "modelMenuCount": 4,
+        "providerLabels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ],
+        "failedResponseCount": 0,
+        "failedResponseHashes": []
+      }
+    },
+    {
+      "index": 76,
+      "caseId": "v026-agent-ui-ux-012",
+      "group": "ui-ux",
+      "name": "mobile app loads",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 626,
+        "buttonCount": 47,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 0,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 0,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 64038,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true,
+        "modelButtonCount": 1,
+        "modelMenuCount": 4,
+        "providerLabels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ],
+        "failedResponseCount": 0,
+        "failedResponseHashes": []
+      }
+    },
+    {
+      "index": 77,
+      "caseId": "v026-agent-ui-ux-013",
+      "group": "ui-ux",
+      "name": "mobile has no horizontal overflow",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 626,
+        "buttonCount": 47,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 0,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 0,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 64038,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true,
+        "modelButtonCount": 1,
+        "modelMenuCount": 4,
+        "providerLabels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ],
+        "failedResponseCount": 0,
+        "failedResponseHashes": []
+      }
+    },
+    {
+      "index": 78,
+      "caseId": "v026-agent-ui-ux-014",
+      "group": "ui-ux",
+      "name": "mobile visible buttons have names",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 626,
+        "buttonCount": 47,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 0,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 0,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 64038,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true,
+        "modelButtonCount": 1,
+        "modelMenuCount": 4,
+        "providerLabels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ],
+        "failedResponseCount": 0,
+        "failedResponseHashes": []
+      }
+    },
+    {
+      "index": 79,
+      "caseId": "v026-agent-ui-ux-015",
+      "group": "ui-ux",
+      "name": "browser console has no fatal UI errors",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 626,
+        "buttonCount": 47,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 0,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 0,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 64038,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true,
+        "modelButtonCount": 1,
+        "modelMenuCount": 4,
+        "providerLabels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ],
+        "failedResponseCount": 0,
+        "failedResponseHashes": []
+      }
+    },
+    {
+      "index": 80,
+      "caseId": "v026-agent-ui-ux-016",
+      "group": "ui-ux",
+      "name": "static app index references script",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 626,
+        "buttonCount": 47,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 0,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 0,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 64038,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true,
+        "modelButtonCount": 1,
+        "modelMenuCount": 4,
+        "providerLabels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ],
+        "failedResponseCount": 0,
+        "failedResponseHashes": []
+      }
+    },
+    {
+      "index": 81,
+      "caseId": "v026-agent-ui-ux-017",
+      "group": "ui-ux",
+      "name": "static JS asset is non-empty",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 626,
+        "buttonCount": 47,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 0,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 0,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 64038,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true,
+        "modelButtonCount": 1,
+        "modelMenuCount": 4,
+        "providerLabels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ],
+        "failedResponseCount": 0,
+        "failedResponseHashes": []
+      }
+    },
+    {
+      "index": 82,
+      "caseId": "v026-agent-ui-ux-018",
+      "group": "ui-ux",
+      "name": "static CSS asset is non-empty",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 626,
+        "buttonCount": 47,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 0,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 0,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 64038,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true,
+        "modelButtonCount": 1,
+        "modelMenuCount": 4,
+        "providerLabels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ],
+        "failedResponseCount": 0,
+        "failedResponseHashes": []
+      }
+    },
+    {
+      "index": 83,
+      "caseId": "v026-agent-ui-ux-019",
+      "group": "ui-ux",
+      "name": "UI names EcoreX",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 626,
+        "buttonCount": 47,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 0,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 0,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 64038,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true,
+        "modelButtonCount": 1,
+        "modelMenuCount": 4,
+        "providerLabels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ],
+        "failedResponseCount": 0,
+        "failedResponseHashes": []
+      }
+    },
+    {
+      "index": 84,
+      "caseId": "v026-agent-ui-ux-020",
+      "group": "ui-ux",
+      "name": "UI screenshot is nonblank",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 626,
+        "buttonCount": 47,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 0,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 0,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 64038,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true,
+        "modelButtonCount": 1,
+        "modelMenuCount": 4,
+        "providerLabels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ],
+        "failedResponseCount": 0,
+        "failedResponseHashes": []
+      }
+    },
+    {
+      "index": 85,
+      "caseId": "v026-agent-ui-ux-021",
+      "group": "ui-ux",
+      "name": "runtime/model status is discoverable in UI",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 626,
+        "buttonCount": 47,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 0,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 0,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 64038,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true,
+        "modelButtonCount": 1,
+        "modelMenuCount": 4,
+        "providerLabels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ],
+        "failedResponseCount": 0,
+        "failedResponseHashes": []
+      }
+    },
+    {
+      "index": 86,
+      "caseId": "v026-agent-ui-ux-022",
+      "group": "ui-ux",
+      "name": "session controls are discoverable in UI",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 626,
+        "buttonCount": 47,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 0,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 0,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 64038,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true,
+        "modelButtonCount": 1,
+        "modelMenuCount": 4,
+        "providerLabels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ],
+        "failedResponseCount": 0,
+        "failedResponseHashes": []
+      }
+    },
+    {
+      "index": 87,
+      "caseId": "v026-agent-ui-ux-023",
+      "group": "ui-ux",
+      "name": "model controls are discoverable in UI",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 626,
+        "buttonCount": 47,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 0,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 0,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 64038,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true,
+        "modelButtonCount": 1,
+        "modelMenuCount": 4,
+        "providerLabels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ],
+        "failedResponseCount": 0,
+        "failedResponseHashes": []
+      }
+    },
+    {
+      "index": 88,
+      "caseId": "v026-agent-ui-ux-024",
+      "group": "ui-ux",
+      "name": "UI metrics are redacted",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 626,
+        "buttonCount": 47,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 0,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 0,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 64038,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true,
+        "modelButtonCount": 1,
+        "modelMenuCount": 4,
+        "providerLabels": [
+          "OpenAI",
+          "DeepSeek",
+          "Gemini",
+          "豆包"
+        ],
+        "failedResponseCount": 0,
+        "failedResponseHashes": []
+      }
+    },
+    {
+      "index": 89,
+      "caseId": "v026-agent-stream-state-machine-001",
+      "group": "stream-state-machine",
+      "name": "stream baseline OpenAI option configured",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "targetProvider": "openai",
+        "targetModelHash": "FFC50C70661C227E",
+        "originalProvider": "deepseek",
+        "originalModelHash": "052E4FC0BC88E2A5",
+        "switchStatus": 200,
+        "verifyStatus": 200,
+        "baselineConfirmed": true
+      }
+    },
+    {
+      "index": 90,
+      "caseId": "v026-agent-stream-state-machine-002",
+      "group": "stream-state-machine",
+      "name": "stream baseline chat switch accepted",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "targetProvider": "openai",
+        "targetModelHash": "FFC50C70661C227E",
+        "originalProvider": "deepseek",
+        "originalModelHash": "052E4FC0BC88E2A5",
+        "switchStatus": 200,
+        "verifyStatus": 200,
+        "baselineConfirmed": true
+      }
+    },
+    {
+      "index": 91,
+      "caseId": "v026-agent-stream-state-machine-003",
+      "group": "stream-state-machine",
+      "name": "stream baseline chat switch verified",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "targetProvider": "openai",
+        "targetModelHash": "FFC50C70661C227E",
+        "originalProvider": "deepseek",
+        "originalModelHash": "052E4FC0BC88E2A5",
+        "switchStatus": 200,
+        "verifyStatus": 200,
+        "baselineConfirmed": true
+      }
+    },
+    {
+      "index": 92,
+      "caseId": "v026-agent-stream-state-machine-004",
+      "group": "stream-state-machine",
+      "name": "message POST returns success",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "requestHash": "81D3699044F5C6F1",
+        "http": 200
+      }
+    },
+    {
+      "index": 93,
+      "caseId": "v026-agent-stream-state-machine-005",
+      "group": "stream-state-machine",
+      "name": "request id created",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "requestHash": "81D3699044F5C6F1"
+      }
+    },
+    {
+      "index": 94,
+      "caseId": "v026-agent-stream-state-machine-006",
+      "group": "stream-state-machine",
+      "name": "SSE first event under 5s",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "firstEventMs": 0
+      }
+    },
+    {
+      "index": 95,
+      "caseId": "v026-agent-stream-state-machine-007",
+      "group": "stream-state-machine",
+      "name": "SSE emits phase event",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "types": [
+          "phase",
+          "heartbeat",
+          "phase",
+          "phase",
+          "phase",
+          "delta",
+          "delta",
+          "delta",
+          "delta",
+          "delta",
+          "delta",
+          "done"
+        ]
+      }
+    },
+    {
+      "index": 96,
+      "caseId": "v026-agent-stream-state-machine-008",
+      "group": "stream-state-machine",
+      "name": "SSE emits content",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "contentLength": 136,
+        "contentHash": "32E27863DC71CEA7"
+      }
+    },
+    {
+      "index": 97,
+      "caseId": "v026-agent-stream-state-machine-009",
+      "group": "stream-state-machine",
+      "name": "SSE reaches terminal state",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "terminalTypes": [
+          "done"
+        ]
+      }
+    },
+    {
+      "index": 98,
+      "caseId": "v026-agent-stream-state-machine-010",
+      "group": "stream-state-machine",
+      "name": "SSE has exactly one terminal",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "terminalTypes": [
+          "done"
+        ]
+      }
+    },
+    {
+      "index": 99,
+      "caseId": "v026-agent-stream-state-machine-011",
+      "group": "stream-state-machine",
+      "name": "SSE has no error terminal",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "terminalTypes": [
+          "done"
+        ]
+      }
+    },
+    {
+      "index": 100,
+      "caseId": "v026-agent-stream-state-machine-012",
+      "group": "stream-state-machine",
+      "name": "SSE finalizes under 120s",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "terminalMs": 4662
+      }
+    },
+    {
+      "index": 101,
+      "caseId": "v026-agent-stream-state-machine-013",
+      "group": "stream-state-machine",
+      "name": "active request cleared after stream",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "activeCount": 0
+      }
+    },
+    {
+      "index": 102,
+      "caseId": "v026-agent-stream-state-machine-014",
+      "group": "stream-state-machine",
+      "name": "runtime projection available",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "requestHash": "81D3699044F5C6F1"
+      }
+    },
+    {
+      "index": 103,
+      "caseId": "v026-agent-stream-state-machine-015",
+      "group": "stream-state-machine",
+      "name": "history persisted user",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "sessionHash": "13CF96F7BDB13C4C"
+      }
+    },
+    {
+      "index": 104,
+      "caseId": "v026-agent-stream-state-machine-016",
+      "group": "stream-state-machine",
+      "name": "stream baseline restored original chat model",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "targetProvider": "openai",
+        "targetModelHash": "FFC50C70661C227E",
+        "originalProvider": "deepseek",
+        "originalModelHash": "052E4FC0BC88E2A5",
+        "switchStatus": 200,
+        "verifyStatus": 200,
+        "baselineConfirmed": true,
+        "restoreStatus": 200,
+        "restoreConfirmed": true
+      }
+    },
+    {
+      "index": 105,
+      "caseId": "v026-agent-stream-state-machine-017",
+      "group": "stream-state-machine",
+      "name": "post-terminal stream replay returns bytes",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": 200,
+        "bytes": 4625
+      }
+    },
+    {
+      "index": 106,
+      "caseId": "v026-agent-stream-state-machine-018",
+      "group": "stream-state-machine",
+      "name": "post-terminal replay has no session mismatch",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "requestHash": "81D3699044F5C6F1"
+      }
+    },
+    {
+      "index": 107,
+      "caseId": "v026-agent-stream-state-machine-019",
+      "group": "stream-state-machine",
+      "name": "idempotent cancel endpoint returns success",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 108,
+      "caseId": "v026-agent-stream-state-machine-020",
+      "group": "stream-state-machine",
+      "name": "cancel endpoint reports numeric count",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": "success",
+        "cancelled": 0,
+        "parentCancelled": 0,
+        "subagents": {
+          "cancelledTasks": 0,
+          "cancelledRequests": 0,
+          "tasks": []
+        }
+      }
+    },
+    {
+      "index": 109,
+      "caseId": "v026-agent-stream-state-machine-021",
+      "group": "stream-state-machine",
+      "name": "run ledger module imports",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 110,
+      "caseId": "v026-agent-stream-state-machine-022",
+      "group": "stream-state-machine",
+      "name": "runtime event ledger module imports",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 111,
+      "caseId": "v026-agent-stream-state-machine-023",
+      "group": "stream-state-machine",
+      "name": "cancel registry module imports",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 112,
+      "caseId": "v026-agent-stream-state-machine-024",
+      "group": "stream-state-machine",
+      "name": "active requests payload has requests",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": "success",
+        "requests": [],
+        "recent_terminal_requests": [
+          {
+            "request_id": "7d6c92dd-3df9-4c39-924d-9cd2ff409179",
+            "session_id": "accept-stream-agent-acceptance-eea07bd53c",
+            "parent_id": null,
+            "run_type": "message",
+            "status": "completed",
+            "phase": "completed",
+            "terminal_reason": "done",
+            "error_code": null,
+            "error_message": null,
+            "model": null,
+            "provider": null,
+            "created_at": 1782924189.102216,
+            "started_at": 1782924189.102216,
+            "updated_at": 1782924193.800287,
+            "terminal_at": 1782924193.800287,
+            "metadata": {
+              "attachment_items": [],
+              "attachments": 0,
+              "client_attempt_id": "",
+              "internal_action": false,
+              "interrupts_request_id": "",
+              "project_context": {},
+              "retry_of_request_id": "",
+              "stream": true,
+              "visible_message": "Fresh isolated acceptance run agent-acceptance-eea07bd53c. Reply with exactly ECX_STREAM_OK_agent-acceptance-eea07bd53c. Do not use stored memories or prior conversation context."
+            },
+            "cancelled": false,
+            "state": "completed",
+            "age_seconds": 16.725,
+            "terminal_age_seconds": 12.027,
+            "stream_available": false,
+            "source": "run_ledger",
+            "retryable": false,
+            "recoverable": true,
+            "retry_mode": "unavailable",
+            "retry_disabled_reason": "not_failed",
+            "actions": {
+              "open": true,
+              "recover": true,
+              "retry": false,
+              "stop": false,
+              "collect": false,
+              "diagnostics": true
+            }
+          },
+          {
+            "request_id": "ea15aef4-8879-4206-8cdc-c0541b0135a8",
+            "session_id": "accept-stream-agent-acceptance-a9e5c5927e",
+            "parent_id": null,
+            "run_type": "message",
+            "status": "completed",
+            "phase": "completed",
+            "terminal_reason": "done",
+            "error_code": null,
+            "error_message": null,
+            "model": null,
+            "provider": null,
+            "created_at": 1782922811.8686435,
+            "started_at": 1782922811.8686435,
+            "updated_at": 1782922815.3195097,
+            "terminal_at": 1782922815.3195097,
+            "metadata": {
+              "attachment_items": [],
+              "attachments": 0,
+              "client_attempt_id": "",
+              "internal_action": false,
+              "interrupts_request_id": "",
+              "project_context": {},
+              "retry_of_request_id": "",
+              "stream": true,
+              "visible_message": "Fresh isolated acceptance run agent-acceptance-a9e5c5927e. Reply with exactly ECX_STREAM_OK_agent-acceptance-a9e5c5927e. Do not use stored memories or prior conversation context."
+            },
+            "cancelled": false,
+            "state": "completed",
+            "age_seconds": 1393.959,
+            "terminal_age_seconds": 1390.508,
+            "stream_available": false,
+            "source": "run_ledger",
+            "retryable": false,
+            "recoverable": true,
+            "retry_mode": "unavailable",
+            "retry_disabled_reason": "not_failed",
+            "actions": {
+              "open": true,
+              "recover": true,
+              "retry": false,
+              "stop": false,
+              "collect": false,
+              "diagnostics": true
+            }
+          }
+        ],
+        "recentTerminalRequests": [
+          {
+            "request_id": "7d6c92dd-3df9-4c39-924d-9cd2ff409179",
+            "session_id": "accept-stream-agent-acceptance-eea07bd53c",
+            "parent_id": null,
+            "run_type": "message",
+            "status": "completed",
+            "phase": "completed",
+            "terminal_reason": "done",
+            "error_code": null,
+            "error_message": null,
+            "model": null,
+            "provider": null,
+            "created_at": 1782924189.102216,
+            "started_at": 1782924189.102216,
+            "updated_at": 1782924193.800287,
+            "terminal_at": 1782924193.800287,
+            "metadata": {
+              "attachment_items": [],
+              "attachments": 0,
+              "client_attempt_id": "",
+              "internal_action": false,
+              "interrupts_request_id": "",
+              "project_context": {},
+              "retry_of_request_id": "",
+              "stream": true,
+              "visible_message": "Fresh isolated acceptance run agent-acceptance-eea07bd53c. Reply with exactly ECX_STREAM_OK_agent-acceptance-eea07bd53c. Do not use stored memories or prior conversation context."
+            },
+            "cancelled": false,
+            "state": "completed",
+            "age_seconds": 16.725,
+            "terminal_age_seconds": 12.027,
+            "stream_available": false,
+            "source": "run_ledger",
+            "retryable": false,
+            "recoverable": true,
+            "retry_mode": "unavailable",
+            "retry_disabled_reason": "not_failed",
+            "actions": {
+              "open": true,
+              "recover": true,
+              "retry": false,
+              "stop": false,
+              "collect": false,
+              "diagnostics": true
+            }
+          },
+          {
+            "request_id": "ea15aef4-8879-4206-8cdc-c0541b0135a8",
+            "session_id": "accept-stream-agent-acceptance-a9e5c5927e",
+            "parent_id": null,
+            "run_type": "message",
+            "status": "completed",
+            "phase": "completed",
+            "terminal_reason": "done",
+            "error_code": null,
+            "error_message": null,
+            "model": null,
+            "provider": null,
+            "created_at": 1782922811.8686435,
+            "started_at": 1782922811.8686435,
+            "updated_at": 1782922815.3195097,
+            "terminal_at": 1782922815.3195097,
+            "metadata": {
+              "attachment_items": [],
+              "attachments": 0,
+              "client_attempt_id": "",
+              "internal_action": false,
+              "interrupts_request_id": "",
+              "project_context": {},
+              "retry_of_request_id": "",
+              "stream": true,
+              "visible_message": "Fresh isolated acceptance run agent-acceptance-a9e5c5927e. Reply with exactly ECX_STREAM_OK_agent-acceptance-a9e5c5927e. Do not use stored memories or prior conversation context."
+            },
+            "cancelled": false,
+            "state": "completed",
+            "age_seconds": 1393.959,
+            "terminal_age_seconds": 1390.508,
+            "stream_available": false,
+            "source": "run_ledger",
+            "retryable": false,
+            "recoverable": true,
+            "retry_mode": "unavailable",
+            "retry_disabled_reason": "not_failed",
+            "actions": {
+              "open": true,
+              "recover": true,
+              "retry": false,
+              "stop": false,
+              "collect": false,
+              "diagnostics": true
+            }
+          }
+        ],
+        "children_by_parent": {},
+        "childrenByParent": {},
+        "run_status_counts": {
+          "completed": 2
+        },
+        "runStatusCounts": {
+          "completed": 2
+        },
+        "sessions": {},
+        "stale_locks": [],
+        "staleLocks": []
+      }
+    },
+    {
+      "index": 113,
+      "caseId": "v026-agent-stream-state-machine-025",
+      "group": "stream-state-machine",
+      "name": "active requests payload has runStatusCounts",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": "success",
+        "requests": [],
+        "recent_terminal_requests": [
+          {
+            "request_id": "7d6c92dd-3df9-4c39-924d-9cd2ff409179",
+            "session_id": "accept-stream-agent-acceptance-eea07bd53c",
+            "parent_id": null,
+            "run_type": "message",
+            "status": "completed",
+            "phase": "completed",
+            "terminal_reason": "done",
+            "error_code": null,
+            "error_message": null,
+            "model": null,
+            "provider": null,
+            "created_at": 1782924189.102216,
+            "started_at": 1782924189.102216,
+            "updated_at": 1782924193.800287,
+            "terminal_at": 1782924193.800287,
+            "metadata": {
+              "attachment_items": [],
+              "attachments": 0,
+              "client_attempt_id": "",
+              "internal_action": false,
+              "interrupts_request_id": "",
+              "project_context": {},
+              "retry_of_request_id": "",
+              "stream": true,
+              "visible_message": "Fresh isolated acceptance run agent-acceptance-eea07bd53c. Reply with exactly ECX_STREAM_OK_agent-acceptance-eea07bd53c. Do not use stored memories or prior conversation context."
+            },
+            "cancelled": false,
+            "state": "completed",
+            "age_seconds": 16.725,
+            "terminal_age_seconds": 12.027,
+            "stream_available": false,
+            "source": "run_ledger",
+            "retryable": false,
+            "recoverable": true,
+            "retry_mode": "unavailable",
+            "retry_disabled_reason": "not_failed",
+            "actions": {
+              "open": true,
+              "recover": true,
+              "retry": false,
+              "stop": false,
+              "collect": false,
+              "diagnostics": true
+            }
+          },
+          {
+            "request_id": "ea15aef4-8879-4206-8cdc-c0541b0135a8",
+            "session_id": "accept-stream-agent-acceptance-a9e5c5927e",
+            "parent_id": null,
+            "run_type": "message",
+            "status": "completed",
+            "phase": "completed",
+            "terminal_reason": "done",
+            "error_code": null,
+            "error_message": null,
+            "model": null,
+            "provider": null,
+            "created_at": 1782922811.8686435,
+            "started_at": 1782922811.8686435,
+            "updated_at": 1782922815.3195097,
+            "terminal_at": 1782922815.3195097,
+            "metadata": {
+              "attachment_items": [],
+              "attachments": 0,
+              "client_attempt_id": "",
+              "internal_action": false,
+              "interrupts_request_id": "",
+              "project_context": {},
+              "retry_of_request_id": "",
+              "stream": true,
+              "visible_message": "Fresh isolated acceptance run agent-acceptance-a9e5c5927e. Reply with exactly ECX_STREAM_OK_agent-acceptance-a9e5c5927e. Do not use stored memories or prior conversation context."
+            },
+            "cancelled": false,
+            "state": "completed",
+            "age_seconds": 1393.959,
+            "terminal_age_seconds": 1390.508,
+            "stream_available": false,
+            "source": "run_ledger",
+            "retryable": false,
+            "recoverable": true,
+            "retry_mode": "unavailable",
+            "retry_disabled_reason": "not_failed",
+            "actions": {
+              "open": true,
+              "recover": true,
+              "retry": false,
+              "stop": false,
+              "collect": false,
+              "diagnostics": true
+            }
+          }
+        ],
+        "recentTerminalRequests": [
+          {
+            "request_id": "7d6c92dd-3df9-4c39-924d-9cd2ff409179",
+            "session_id": "accept-stream-agent-acceptance-eea07bd53c",
+            "parent_id": null,
+            "run_type": "message",
+            "status": "completed",
+            "phase": "completed",
+            "terminal_reason": "done",
+            "error_code": null,
+            "error_message": null,
+            "model": null,
+            "provider": null,
+            "created_at": 1782924189.102216,
+            "started_at": 1782924189.102216,
+            "updated_at": 1782924193.800287,
+            "terminal_at": 1782924193.800287,
+            "metadata": {
+              "attachment_items": [],
+              "attachments": 0,
+              "client_attempt_id": "",
+              "internal_action": false,
+              "interrupts_request_id": "",
+              "project_context": {},
+              "retry_of_request_id": "",
+              "stream": true,
+              "visible_message": "Fresh isolated acceptance run agent-acceptance-eea07bd53c. Reply with exactly ECX_STREAM_OK_agent-acceptance-eea07bd53c. Do not use stored memories or prior conversation context."
+            },
+            "cancelled": false,
+            "state": "completed",
+            "age_seconds": 16.725,
+            "terminal_age_seconds": 12.027,
+            "stream_available": false,
+            "source": "run_ledger",
+            "retryable": false,
+            "recoverable": true,
+            "retry_mode": "unavailable",
+            "retry_disabled_reason": "not_failed",
+            "actions": {
+              "open": true,
+              "recover": true,
+              "retry": false,
+              "stop": false,
+              "collect": false,
+              "diagnostics": true
+            }
+          },
+          {
+            "request_id": "ea15aef4-8879-4206-8cdc-c0541b0135a8",
+            "session_id": "accept-stream-agent-acceptance-a9e5c5927e",
+            "parent_id": null,
+            "run_type": "message",
+            "status": "completed",
+            "phase": "completed",
+            "terminal_reason": "done",
+            "error_code": null,
+            "error_message": null,
+            "model": null,
+            "provider": null,
+            "created_at": 1782922811.8686435,
+            "started_at": 1782922811.8686435,
+            "updated_at": 1782922815.3195097,
+            "terminal_at": 1782922815.3195097,
+            "metadata": {
+              "attachment_items": [],
+              "attachments": 0,
+              "client_attempt_id": "",
+              "internal_action": false,
+              "interrupts_request_id": "",
+              "project_context": {},
+              "retry_of_request_id": "",
+              "stream": true,
+              "visible_message": "Fresh isolated acceptance run agent-acceptance-a9e5c5927e. Reply with exactly ECX_STREAM_OK_agent-acceptance-a9e5c5927e. Do not use stored memories or prior conversation context."
+            },
+            "cancelled": false,
+            "state": "completed",
+            "age_seconds": 1393.959,
+            "terminal_age_seconds": 1390.508,
+            "stream_available": false,
+            "source": "run_ledger",
+            "retryable": false,
+            "recoverable": true,
+            "retry_mode": "unavailable",
+            "retry_disabled_reason": "not_failed",
+            "actions": {
+              "open": true,
+              "recover": true,
+              "retry": false,
+              "stop": false,
+              "collect": false,
+              "diagnostics": true
+            }
+          }
+        ],
+        "children_by_parent": {},
+        "childrenByParent": {},
+        "run_status_counts": {
+          "completed": 2
+        },
+        "runStatusCounts": {
+          "completed": 2
+        },
+        "sessions": {},
+        "stale_locks": [],
+        "staleLocks": []
+      }
+    },
+    {
+      "index": 114,
+      "caseId": "v026-agent-stream-state-machine-026",
+      "group": "stream-state-machine",
+      "name": "active requests payload has staleLocks",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": "success",
+        "requests": [],
+        "recent_terminal_requests": [
+          {
+            "request_id": "7d6c92dd-3df9-4c39-924d-9cd2ff409179",
+            "session_id": "accept-stream-agent-acceptance-eea07bd53c",
+            "parent_id": null,
+            "run_type": "message",
+            "status": "completed",
+            "phase": "completed",
+            "terminal_reason": "done",
+            "error_code": null,
+            "error_message": null,
+            "model": null,
+            "provider": null,
+            "created_at": 1782924189.102216,
+            "started_at": 1782924189.102216,
+            "updated_at": 1782924193.800287,
+            "terminal_at": 1782924193.800287,
+            "metadata": {
+              "attachment_items": [],
+              "attachments": 0,
+              "client_attempt_id": "",
+              "internal_action": false,
+              "interrupts_request_id": "",
+              "project_context": {},
+              "retry_of_request_id": "",
+              "stream": true,
+              "visible_message": "Fresh isolated acceptance run agent-acceptance-eea07bd53c. Reply with exactly ECX_STREAM_OK_agent-acceptance-eea07bd53c. Do not use stored memories or prior conversation context."
+            },
+            "cancelled": false,
+            "state": "completed",
+            "age_seconds": 16.725,
+            "terminal_age_seconds": 12.027,
+            "stream_available": false,
+            "source": "run_ledger",
+            "retryable": false,
+            "recoverable": true,
+            "retry_mode": "unavailable",
+            "retry_disabled_reason": "not_failed",
+            "actions": {
+              "open": true,
+              "recover": true,
+              "retry": false,
+              "stop": false,
+              "collect": false,
+              "diagnostics": true
+            }
+          },
+          {
+            "request_id": "ea15aef4-8879-4206-8cdc-c0541b0135a8",
+            "session_id": "accept-stream-agent-acceptance-a9e5c5927e",
+            "parent_id": null,
+            "run_type": "message",
+            "status": "completed",
+            "phase": "completed",
+            "terminal_reason": "done",
+            "error_code": null,
+            "error_message": null,
+            "model": null,
+            "provider": null,
+            "created_at": 1782922811.8686435,
+            "started_at": 1782922811.8686435,
+            "updated_at": 1782922815.3195097,
+            "terminal_at": 1782922815.3195097,
+            "metadata": {
+              "attachment_items": [],
+              "attachments": 0,
+              "client_attempt_id": "",
+              "internal_action": false,
+              "interrupts_request_id": "",
+              "project_context": {},
+              "retry_of_request_id": "",
+              "stream": true,
+              "visible_message": "Fresh isolated acceptance run agent-acceptance-a9e5c5927e. Reply with exactly ECX_STREAM_OK_agent-acceptance-a9e5c5927e. Do not use stored memories or prior conversation context."
+            },
+            "cancelled": false,
+            "state": "completed",
+            "age_seconds": 1393.959,
+            "terminal_age_seconds": 1390.508,
+            "stream_available": false,
+            "source": "run_ledger",
+            "retryable": false,
+            "recoverable": true,
+            "retry_mode": "unavailable",
+            "retry_disabled_reason": "not_failed",
+            "actions": {
+              "open": true,
+              "recover": true,
+              "retry": false,
+              "stop": false,
+              "collect": false,
+              "diagnostics": true
+            }
+          }
+        ],
+        "recentTerminalRequests": [
+          {
+            "request_id": "7d6c92dd-3df9-4c39-924d-9cd2ff409179",
+            "session_id": "accept-stream-agent-acceptance-eea07bd53c",
+            "parent_id": null,
+            "run_type": "message",
+            "status": "completed",
+            "phase": "completed",
+            "terminal_reason": "done",
+            "error_code": null,
+            "error_message": null,
+            "model": null,
+            "provider": null,
+            "created_at": 1782924189.102216,
+            "started_at": 1782924189.102216,
+            "updated_at": 1782924193.800287,
+            "terminal_at": 1782924193.800287,
+            "metadata": {
+              "attachment_items": [],
+              "attachments": 0,
+              "client_attempt_id": "",
+              "internal_action": false,
+              "interrupts_request_id": "",
+              "project_context": {},
+              "retry_of_request_id": "",
+              "stream": true,
+              "visible_message": "Fresh isolated acceptance run agent-acceptance-eea07bd53c. Reply with exactly ECX_STREAM_OK_agent-acceptance-eea07bd53c. Do not use stored memories or prior conversation context."
+            },
+            "cancelled": false,
+            "state": "completed",
+            "age_seconds": 16.725,
+            "terminal_age_seconds": 12.027,
+            "stream_available": false,
+            "source": "run_ledger",
+            "retryable": false,
+            "recoverable": true,
+            "retry_mode": "unavailable",
+            "retry_disabled_reason": "not_failed",
+            "actions": {
+              "open": true,
+              "recover": true,
+              "retry": false,
+              "stop": false,
+              "collect": false,
+              "diagnostics": true
+            }
+          },
+          {
+            "request_id": "ea15aef4-8879-4206-8cdc-c0541b0135a8",
+            "session_id": "accept-stream-agent-acceptance-a9e5c5927e",
+            "parent_id": null,
+            "run_type": "message",
+            "status": "completed",
+            "phase": "completed",
+            "terminal_reason": "done",
+            "error_code": null,
+            "error_message": null,
+            "model": null,
+            "provider": null,
+            "created_at": 1782922811.8686435,
+            "started_at": 1782922811.8686435,
+            "updated_at": 1782922815.3195097,
+            "terminal_at": 1782922815.3195097,
+            "metadata": {
+              "attachment_items": [],
+              "attachments": 0,
+              "client_attempt_id": "",
+              "internal_action": false,
+              "interrupts_request_id": "",
+              "project_context": {},
+              "retry_of_request_id": "",
+              "stream": true,
+              "visible_message": "Fresh isolated acceptance run agent-acceptance-a9e5c5927e. Reply with exactly ECX_STREAM_OK_agent-acceptance-a9e5c5927e. Do not use stored memories or prior conversation context."
+            },
+            "cancelled": false,
+            "state": "completed",
+            "age_seconds": 1393.959,
+            "terminal_age_seconds": 1390.508,
+            "stream_available": false,
+            "source": "run_ledger",
+            "retryable": false,
+            "recoverable": true,
+            "retry_mode": "unavailable",
+            "retry_disabled_reason": "not_failed",
+            "actions": {
+              "open": true,
+              "recover": true,
+              "retry": false,
+              "stop": false,
+              "collect": false,
+              "diagnostics": true
+            }
+          }
+        ],
+        "children_by_parent": {},
+        "childrenByParent": {},
+        "run_status_counts": {
+          "completed": 2
+        },
+        "runStatusCounts": {
+          "completed": 2
+        },
+        "sessions": {},
+        "stale_locks": [],
+        "staleLocks": []
+      }
+    },
+    {
+      "index": 115,
+      "caseId": "v026-agent-stream-state-machine-027",
+      "group": "stream-state-machine",
+      "name": "no duplicate done events",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "types": [
+          "phase",
+          "heartbeat",
+          "phase",
+          "phase",
+          "phase",
+          "delta",
+          "delta",
+          "delta",
+          "delta",
+          "delta",
+          "delta",
+          "done"
+        ]
+      }
+    },
+    {
+      "index": 116,
+      "caseId": "v026-agent-stream-state-machine-028",
+      "group": "stream-state-machine",
+      "name": "state machine evidence captured",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "requestHash": "81D3699044F5C6F1"
+      }
+    },
+    {
+      "index": 117,
+      "caseId": "v026-agent-multi-model-image-route-001",
+      "group": "multi-model-image-route",
+      "name": "openai configured chat option exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "openai",
+        "modelHash": "FFC50C70661C227E"
+      }
+    },
+    {
+      "index": 118,
+      "caseId": "v026-agent-multi-model-image-route-002",
+      "group": "multi-model-image-route",
+      "name": "openai chat switch accepted",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "openai"
+      }
+    },
+    {
+      "index": 119,
+      "caseId": "v026-agent-multi-model-image-route-003",
+      "group": "multi-model-image-route",
+      "name": "openai generate route native",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "openai",
+        "chatModelHash": "FFC50C70661C227E",
+        "switchStatus": "success",
+        "generateStatus": "success",
+        "generateModel": "gpt-image-2-pro",
+        "generateRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "text_to_image",
+          "providerApiRoute": "images.generations"
+        },
+        "editStatus": "success",
+        "editModel": "gpt-image-2-pro",
+        "editRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "image_edit_reference",
+          "providerApiRoute": "images.edits"
+        }
+      }
+    },
+    {
+      "index": 120,
+      "caseId": "v026-agent-multi-model-image-route-004",
+      "group": "multi-model-image-route",
+      "name": "openai generate uses gpt-image-2-pro",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "openai",
+        "chatModelHash": "FFC50C70661C227E",
+        "switchStatus": "success",
+        "generateStatus": "success",
+        "generateModel": "gpt-image-2-pro",
+        "generateRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "text_to_image",
+          "providerApiRoute": "images.generations"
+        },
+        "editStatus": "success",
+        "editModel": "gpt-image-2-pro",
+        "editRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "image_edit_reference",
+          "providerApiRoute": "images.edits"
+        }
+      }
+    },
+    {
+      "index": 121,
+      "caseId": "v026-agent-multi-model-image-route-005",
+      "group": "multi-model-image-route",
+      "name": "openai generate avoids shell/python fallback",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "openai",
+        "chatModelHash": "FFC50C70661C227E",
+        "switchStatus": "success",
+        "generateStatus": "success",
+        "generateModel": "gpt-image-2-pro",
+        "generateRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "text_to_image",
+          "providerApiRoute": "images.generations"
+        },
+        "editStatus": "success",
+        "editModel": "gpt-image-2-pro",
+        "editRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "image_edit_reference",
+          "providerApiRoute": "images.edits"
+        }
+      }
+    },
+    {
+      "index": 122,
+      "caseId": "v026-agent-multi-model-image-route-006",
+      "group": "multi-model-image-route",
+      "name": "openai edit route native",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "openai",
+        "chatModelHash": "FFC50C70661C227E",
+        "switchStatus": "success",
+        "generateStatus": "success",
+        "generateModel": "gpt-image-2-pro",
+        "generateRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "text_to_image",
+          "providerApiRoute": "images.generations"
+        },
+        "editStatus": "success",
+        "editModel": "gpt-image-2-pro",
+        "editRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "image_edit_reference",
+          "providerApiRoute": "images.edits"
+        }
+      }
+    },
+    {
+      "index": 123,
+      "caseId": "v026-agent-multi-model-image-route-007",
+      "group": "multi-model-image-route",
+      "name": "openai edit uses gpt-image-2-pro",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "openai",
+        "chatModelHash": "FFC50C70661C227E",
+        "switchStatus": "success",
+        "generateStatus": "success",
+        "generateModel": "gpt-image-2-pro",
+        "generateRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "text_to_image",
+          "providerApiRoute": "images.generations"
+        },
+        "editStatus": "success",
+        "editModel": "gpt-image-2-pro",
+        "editRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "image_edit_reference",
+          "providerApiRoute": "images.edits"
+        }
+      }
+    },
+    {
+      "index": 124,
+      "caseId": "v026-agent-multi-model-image-route-008",
+      "group": "multi-model-image-route",
+      "name": "openai edit avoids shell/python fallback",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "openai",
+        "chatModelHash": "FFC50C70661C227E",
+        "switchStatus": "success",
+        "generateStatus": "success",
+        "generateModel": "gpt-image-2-pro",
+        "generateRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "text_to_image",
+          "providerApiRoute": "images.generations"
+        },
+        "editStatus": "success",
+        "editModel": "gpt-image-2-pro",
+        "editRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "image_edit_reference",
+          "providerApiRoute": "images.edits"
+        }
+      }
+    },
+    {
+      "index": 125,
+      "caseId": "v026-agent-multi-model-image-route-009",
+      "group": "multi-model-image-route",
+      "name": "deepseek configured chat option exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "deepseek",
+        "modelHash": "052E4FC0BC88E2A5"
+      }
+    },
+    {
+      "index": 126,
+      "caseId": "v026-agent-multi-model-image-route-010",
+      "group": "multi-model-image-route",
+      "name": "deepseek chat switch accepted",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "deepseek"
+      }
+    },
+    {
+      "index": 127,
+      "caseId": "v026-agent-multi-model-image-route-011",
+      "group": "multi-model-image-route",
+      "name": "deepseek generate route native",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "deepseek",
+        "chatModelHash": "052E4FC0BC88E2A5",
+        "switchStatus": "success",
+        "generateStatus": "success",
+        "generateModel": "gpt-image-2-pro",
+        "generateRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "text_to_image",
+          "providerApiRoute": "images.generations"
+        },
+        "editStatus": "success",
+        "editModel": "gpt-image-2-pro",
+        "editRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "image_edit_reference",
+          "providerApiRoute": "images.edits"
+        }
+      }
+    },
+    {
+      "index": 128,
+      "caseId": "v026-agent-multi-model-image-route-012",
+      "group": "multi-model-image-route",
+      "name": "deepseek generate uses gpt-image-2-pro",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "deepseek",
+        "chatModelHash": "052E4FC0BC88E2A5",
+        "switchStatus": "success",
+        "generateStatus": "success",
+        "generateModel": "gpt-image-2-pro",
+        "generateRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "text_to_image",
+          "providerApiRoute": "images.generations"
+        },
+        "editStatus": "success",
+        "editModel": "gpt-image-2-pro",
+        "editRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "image_edit_reference",
+          "providerApiRoute": "images.edits"
+        }
+      }
+    },
+    {
+      "index": 129,
+      "caseId": "v026-agent-multi-model-image-route-013",
+      "group": "multi-model-image-route",
+      "name": "deepseek generate avoids shell/python fallback",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "deepseek",
+        "chatModelHash": "052E4FC0BC88E2A5",
+        "switchStatus": "success",
+        "generateStatus": "success",
+        "generateModel": "gpt-image-2-pro",
+        "generateRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "text_to_image",
+          "providerApiRoute": "images.generations"
+        },
+        "editStatus": "success",
+        "editModel": "gpt-image-2-pro",
+        "editRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "image_edit_reference",
+          "providerApiRoute": "images.edits"
+        }
+      }
+    },
+    {
+      "index": 130,
+      "caseId": "v026-agent-multi-model-image-route-014",
+      "group": "multi-model-image-route",
+      "name": "deepseek edit route native",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "deepseek",
+        "chatModelHash": "052E4FC0BC88E2A5",
+        "switchStatus": "success",
+        "generateStatus": "success",
+        "generateModel": "gpt-image-2-pro",
+        "generateRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "text_to_image",
+          "providerApiRoute": "images.generations"
+        },
+        "editStatus": "success",
+        "editModel": "gpt-image-2-pro",
+        "editRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "image_edit_reference",
+          "providerApiRoute": "images.edits"
+        }
+      }
+    },
+    {
+      "index": 131,
+      "caseId": "v026-agent-multi-model-image-route-015",
+      "group": "multi-model-image-route",
+      "name": "deepseek edit uses gpt-image-2-pro",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "deepseek",
+        "chatModelHash": "052E4FC0BC88E2A5",
+        "switchStatus": "success",
+        "generateStatus": "success",
+        "generateModel": "gpt-image-2-pro",
+        "generateRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "text_to_image",
+          "providerApiRoute": "images.generations"
+        },
+        "editStatus": "success",
+        "editModel": "gpt-image-2-pro",
+        "editRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "image_edit_reference",
+          "providerApiRoute": "images.edits"
+        }
+      }
+    },
+    {
+      "index": 132,
+      "caseId": "v026-agent-multi-model-image-route-016",
+      "group": "multi-model-image-route",
+      "name": "deepseek edit avoids shell/python fallback",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "deepseek",
+        "chatModelHash": "052E4FC0BC88E2A5",
+        "switchStatus": "success",
+        "generateStatus": "success",
+        "generateModel": "gpt-image-2-pro",
+        "generateRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "text_to_image",
+          "providerApiRoute": "images.generations"
+        },
+        "editStatus": "success",
+        "editModel": "gpt-image-2-pro",
+        "editRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "image_edit_reference",
+          "providerApiRoute": "images.edits"
+        }
+      }
+    },
+    {
+      "index": 133,
+      "caseId": "v026-agent-multi-model-image-route-017",
+      "group": "multi-model-image-route",
+      "name": "gemini configured chat option exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "gemini",
+        "modelHash": "EDCE75DECBB493F9"
+      }
+    },
+    {
+      "index": 134,
+      "caseId": "v026-agent-multi-model-image-route-018",
+      "group": "multi-model-image-route",
+      "name": "gemini chat switch accepted",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "gemini"
+      }
+    },
+    {
+      "index": 135,
+      "caseId": "v026-agent-multi-model-image-route-019",
+      "group": "multi-model-image-route",
+      "name": "gemini generate route native",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "gemini",
+        "chatModelHash": "EDCE75DECBB493F9",
+        "switchStatus": "success",
+        "generateStatus": "success",
+        "generateModel": "gpt-image-2-pro",
+        "generateRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "text_to_image",
+          "providerApiRoute": "images.generations"
+        },
+        "editStatus": "success",
+        "editModel": "gpt-image-2-pro",
+        "editRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "image_edit_reference",
+          "providerApiRoute": "images.edits"
+        }
+      }
+    },
+    {
+      "index": 136,
+      "caseId": "v026-agent-multi-model-image-route-020",
+      "group": "multi-model-image-route",
+      "name": "gemini generate uses gpt-image-2-pro",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "gemini",
+        "chatModelHash": "EDCE75DECBB493F9",
+        "switchStatus": "success",
+        "generateStatus": "success",
+        "generateModel": "gpt-image-2-pro",
+        "generateRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "text_to_image",
+          "providerApiRoute": "images.generations"
+        },
+        "editStatus": "success",
+        "editModel": "gpt-image-2-pro",
+        "editRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "image_edit_reference",
+          "providerApiRoute": "images.edits"
+        }
+      }
+    },
+    {
+      "index": 137,
+      "caseId": "v026-agent-multi-model-image-route-021",
+      "group": "multi-model-image-route",
+      "name": "gemini generate avoids shell/python fallback",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "gemini",
+        "chatModelHash": "EDCE75DECBB493F9",
+        "switchStatus": "success",
+        "generateStatus": "success",
+        "generateModel": "gpt-image-2-pro",
+        "generateRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "text_to_image",
+          "providerApiRoute": "images.generations"
+        },
+        "editStatus": "success",
+        "editModel": "gpt-image-2-pro",
+        "editRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "image_edit_reference",
+          "providerApiRoute": "images.edits"
+        }
+      }
+    },
+    {
+      "index": 138,
+      "caseId": "v026-agent-multi-model-image-route-022",
+      "group": "multi-model-image-route",
+      "name": "gemini edit route native",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "gemini",
+        "chatModelHash": "EDCE75DECBB493F9",
+        "switchStatus": "success",
+        "generateStatus": "success",
+        "generateModel": "gpt-image-2-pro",
+        "generateRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "text_to_image",
+          "providerApiRoute": "images.generations"
+        },
+        "editStatus": "success",
+        "editModel": "gpt-image-2-pro",
+        "editRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "image_edit_reference",
+          "providerApiRoute": "images.edits"
+        }
+      }
+    },
+    {
+      "index": 139,
+      "caseId": "v026-agent-multi-model-image-route-023",
+      "group": "multi-model-image-route",
+      "name": "gemini edit uses gpt-image-2-pro",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "gemini",
+        "chatModelHash": "EDCE75DECBB493F9",
+        "switchStatus": "success",
+        "generateStatus": "success",
+        "generateModel": "gpt-image-2-pro",
+        "generateRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "text_to_image",
+          "providerApiRoute": "images.generations"
+        },
+        "editStatus": "success",
+        "editModel": "gpt-image-2-pro",
+        "editRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "image_edit_reference",
+          "providerApiRoute": "images.edits"
+        }
+      }
+    },
+    {
+      "index": 140,
+      "caseId": "v026-agent-multi-model-image-route-024",
+      "group": "multi-model-image-route",
+      "name": "gemini edit avoids shell/python fallback",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "gemini",
+        "chatModelHash": "EDCE75DECBB493F9",
+        "switchStatus": "success",
+        "generateStatus": "success",
+        "generateModel": "gpt-image-2-pro",
+        "generateRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "text_to_image",
+          "providerApiRoute": "images.generations"
+        },
+        "editStatus": "success",
+        "editModel": "gpt-image-2-pro",
+        "editRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "image_edit_reference",
+          "providerApiRoute": "images.edits"
+        }
+      }
+    },
+    {
+      "index": 141,
+      "caseId": "v026-agent-multi-model-image-route-025",
+      "group": "multi-model-image-route",
+      "name": "doubao configured chat option exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "doubao",
+        "modelHash": "BCAE5BF74FD2D7AE"
+      }
+    },
+    {
+      "index": 142,
+      "caseId": "v026-agent-multi-model-image-route-026",
+      "group": "multi-model-image-route",
+      "name": "doubao chat switch accepted",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "doubao"
+      }
+    },
+    {
+      "index": 143,
+      "caseId": "v026-agent-multi-model-image-route-027",
+      "group": "multi-model-image-route",
+      "name": "doubao generate route native",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "doubao",
+        "chatModelHash": "BCAE5BF74FD2D7AE",
+        "switchStatus": "success",
+        "generateStatus": "success",
+        "generateModel": "gpt-image-2-pro",
+        "generateRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "text_to_image",
+          "providerApiRoute": "images.generations"
+        },
+        "editStatus": "success",
+        "editModel": "gpt-image-2-pro",
+        "editRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "image_edit_reference",
+          "providerApiRoute": "images.edits"
+        }
+      }
+    },
+    {
+      "index": 144,
+      "caseId": "v026-agent-multi-model-image-route-028",
+      "group": "multi-model-image-route",
+      "name": "doubao generate uses gpt-image-2-pro",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "doubao",
+        "chatModelHash": "BCAE5BF74FD2D7AE",
+        "switchStatus": "success",
+        "generateStatus": "success",
+        "generateModel": "gpt-image-2-pro",
+        "generateRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "text_to_image",
+          "providerApiRoute": "images.generations"
+        },
+        "editStatus": "success",
+        "editModel": "gpt-image-2-pro",
+        "editRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "image_edit_reference",
+          "providerApiRoute": "images.edits"
+        }
+      }
+    },
+    {
+      "index": 145,
+      "caseId": "v026-agent-multi-model-image-route-029",
+      "group": "multi-model-image-route",
+      "name": "doubao generate avoids shell/python fallback",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "doubao",
+        "chatModelHash": "BCAE5BF74FD2D7AE",
+        "switchStatus": "success",
+        "generateStatus": "success",
+        "generateModel": "gpt-image-2-pro",
+        "generateRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "text_to_image",
+          "providerApiRoute": "images.generations"
+        },
+        "editStatus": "success",
+        "editModel": "gpt-image-2-pro",
+        "editRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "image_edit_reference",
+          "providerApiRoute": "images.edits"
+        }
+      }
+    },
+    {
+      "index": 146,
+      "caseId": "v026-agent-multi-model-image-route-030",
+      "group": "multi-model-image-route",
+      "name": "doubao edit route native",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "doubao",
+        "chatModelHash": "BCAE5BF74FD2D7AE",
+        "switchStatus": "success",
+        "generateStatus": "success",
+        "generateModel": "gpt-image-2-pro",
+        "generateRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "text_to_image",
+          "providerApiRoute": "images.generations"
+        },
+        "editStatus": "success",
+        "editModel": "gpt-image-2-pro",
+        "editRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "image_edit_reference",
+          "providerApiRoute": "images.edits"
+        }
+      }
+    },
+    {
+      "index": 147,
+      "caseId": "v026-agent-multi-model-image-route-031",
+      "group": "multi-model-image-route",
+      "name": "doubao edit uses gpt-image-2-pro",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "doubao",
+        "chatModelHash": "BCAE5BF74FD2D7AE",
+        "switchStatus": "success",
+        "generateStatus": "success",
+        "generateModel": "gpt-image-2-pro",
+        "generateRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "text_to_image",
+          "providerApiRoute": "images.generations"
+        },
+        "editStatus": "success",
+        "editModel": "gpt-image-2-pro",
+        "editRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "image_edit_reference",
+          "providerApiRoute": "images.edits"
+        }
+      }
+    },
+    {
+      "index": 148,
+      "caseId": "v026-agent-multi-model-image-route-032",
+      "group": "multi-model-image-route",
+      "name": "doubao edit avoids shell/python fallback",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "image",
+      "tags": [
+        "models",
+        "imagegen",
+        "image-edit"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "provider": "doubao",
+        "chatModelHash": "BCAE5BF74FD2D7AE",
+        "switchStatus": "success",
+        "generateStatus": "success",
+        "generateModel": "gpt-image-2-pro",
+        "generateRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "text_to_image",
+          "providerApiRoute": "images.generations"
+        },
+        "editStatus": "success",
+        "editModel": "gpt-image-2-pro",
+        "editRoute": {
+          "schemaVersion": "imagegen-route-v1",
+          "routeKind": "ecorex-native-facade",
+          "executionMode": "in_process_provider_runner",
+          "runnerMode": "in_process",
+          "shellInvocation": false,
+          "pythonSubprocess": false,
+          "compatibilityCliFallbackUsed": false,
+          "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+          "providerRuntimeModuleRole": "in_process_provider_module",
+          "inputRoute": "image_edit_reference",
+          "providerApiRoute": "images.edits"
+        }
+      }
+    },
+    {
+      "index": 149,
+      "caseId": "v026-agent-concurrency-pressure-001",
+      "group": "concurrency-pressure",
+      "name": "pressure profile uses 20 virtual users by default",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "users": 20,
+        "turnsPerUser": 3,
+        "requestedOperations": 60,
+        "completedOperations": 60,
+        "loginSuccess": 20,
+        "durationMs": 92,
+        "p95LatencyMs": 37,
+        "maxLatencyMs": 38,
+        "statusCounts": {
+          "200": 60
+        },
+        "errorCount": 0,
+        "sessionHashCount": 20,
+        "activeAfterCount": 0,
+        "activeBeforeStatus": 200,
+        "activeAfterStatus": 200,
+        "observerLoginStatus": 200
+      }
+    },
+    {
+      "index": 150,
+      "caseId": "v026-agent-concurrency-pressure-002",
+      "group": "concurrency-pressure",
+      "name": "pressure profile creates at least 60 operations",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "users": 20,
+        "turnsPerUser": 3,
+        "requestedOperations": 60,
+        "completedOperations": 60,
+        "loginSuccess": 20,
+        "durationMs": 92,
+        "p95LatencyMs": 37,
+        "maxLatencyMs": 38,
+        "statusCounts": {
+          "200": 60
+        },
+        "errorCount": 0,
+        "sessionHashCount": 20,
+        "activeAfterCount": 0,
+        "activeBeforeStatus": 200,
+        "activeAfterStatus": 200,
+        "observerLoginStatus": 200
+      }
+    },
+    {
+      "index": 151,
+      "caseId": "v026-agent-concurrency-pressure-003",
+      "group": "concurrency-pressure",
+      "name": "all pressure workers completed operations",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "users": 20,
+        "turnsPerUser": 3,
+        "requestedOperations": 60,
+        "completedOperations": 60,
+        "loginSuccess": 20,
+        "durationMs": 92,
+        "p95LatencyMs": 37,
+        "maxLatencyMs": 38,
+        "statusCounts": {
+          "200": 60
+        },
+        "errorCount": 0,
+        "sessionHashCount": 20,
+        "activeAfterCount": 0,
+        "activeBeforeStatus": 200,
+        "activeAfterStatus": 200,
+        "observerLoginStatus": 200
+      }
+    },
+    {
+      "index": 152,
+      "caseId": "v026-agent-concurrency-pressure-004",
+      "group": "concurrency-pressure",
+      "name": "no pressure worker transport errors",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "errors": [],
+        "users": 20,
+        "turnsPerUser": 3,
+        "requestedOperations": 60,
+        "completedOperations": 60,
+        "loginSuccess": 20,
+        "durationMs": 92,
+        "p95LatencyMs": 37,
+        "maxLatencyMs": 38,
+        "statusCounts": {
+          "200": 60
+        },
+        "errorCount": 0,
+        "sessionHashCount": 20,
+        "activeAfterCount": 0,
+        "activeBeforeStatus": 200,
+        "activeAfterStatus": 200,
+        "observerLoginStatus": 200
+      }
+    },
+    {
+      "index": 153,
+      "caseId": "v026-agent-concurrency-pressure-005",
+      "group": "concurrency-pressure",
+      "name": "no pressure API 5xx responses",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "users": 20,
+        "turnsPerUser": 3,
+        "requestedOperations": 60,
+        "completedOperations": 60,
+        "loginSuccess": 20,
+        "durationMs": 92,
+        "p95LatencyMs": 37,
+        "maxLatencyMs": 38,
+        "statusCounts": {
+          "200": 60
+        },
+        "errorCount": 0,
+        "sessionHashCount": 20,
+        "activeAfterCount": 0,
+        "activeBeforeStatus": 200,
+        "activeAfterStatus": 200,
+        "observerLoginStatus": 200
+      }
+    },
+    {
+      "index": 154,
+      "caseId": "v026-agent-concurrency-pressure-006",
+      "group": "concurrency-pressure",
+      "name": "pressure API p95 under 5s",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "users": 20,
+        "turnsPerUser": 3,
+        "requestedOperations": 60,
+        "completedOperations": 60,
+        "loginSuccess": 20,
+        "durationMs": 92,
+        "p95LatencyMs": 37,
+        "maxLatencyMs": 38,
+        "statusCounts": {
+          "200": 60
+        },
+        "errorCount": 0,
+        "sessionHashCount": 20,
+        "activeAfterCount": 0,
+        "activeBeforeStatus": 200,
+        "activeAfterStatus": 200,
+        "observerLoginStatus": 200
+      }
+    },
+    {
+      "index": 155,
+      "caseId": "v026-agent-concurrency-pressure-007",
+      "group": "concurrency-pressure",
+      "name": "pressure API max latency under 15s",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "users": 20,
+        "turnsPerUser": 3,
+        "requestedOperations": 60,
+        "completedOperations": 60,
+        "loginSuccess": 20,
+        "durationMs": 92,
+        "p95LatencyMs": 37,
+        "maxLatencyMs": 38,
+        "statusCounts": {
+          "200": 60
+        },
+        "errorCount": 0,
+        "sessionHashCount": 20,
+        "activeAfterCount": 0,
+        "activeBeforeStatus": 200,
+        "activeAfterStatus": 200,
+        "observerLoginStatus": 200
+      }
+    },
+    {
+      "index": 156,
+      "caseId": "v026-agent-concurrency-pressure-008",
+      "group": "concurrency-pressure",
+      "name": "virtual user session hashes are isolated",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "users": 20,
+        "turnsPerUser": 3,
+        "requestedOperations": 60,
+        "completedOperations": 60,
+        "loginSuccess": 20,
+        "durationMs": 92,
+        "p95LatencyMs": 37,
+        "maxLatencyMs": 38,
+        "statusCounts": {
+          "200": 60
+        },
+        "errorCount": 0,
+        "sessionHashCount": 20,
+        "activeAfterCount": 0,
+        "activeBeforeStatus": 200,
+        "activeAfterStatus": 200,
+        "observerLoginStatus": 200
+      }
+    },
+    {
+      "index": 157,
+      "caseId": "v026-agent-concurrency-pressure-009",
+      "group": "concurrency-pressure",
+      "name": "pressure responses are all HTTP 2xx",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "users": 20,
+        "turnsPerUser": 3,
+        "requestedOperations": 60,
+        "completedOperations": 60,
+        "loginSuccess": 20,
+        "durationMs": 92,
+        "p95LatencyMs": 37,
+        "maxLatencyMs": 38,
+        "statusCounts": {
+          "200": 60
+        },
+        "errorCount": 0,
+        "sessionHashCount": 20,
+        "activeAfterCount": 0,
+        "activeBeforeStatus": 200,
+        "activeAfterStatus": 200,
+        "observerLoginStatus": 200
+      }
+    },
+    {
+      "index": 158,
+      "caseId": "v026-agent-concurrency-pressure-010",
+      "group": "concurrency-pressure",
+      "name": "pressure responses are JSON",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "users": 20,
+        "turnsPerUser": 3,
+        "requestedOperations": 60,
+        "completedOperations": 60,
+        "loginSuccess": 20,
+        "durationMs": 92,
+        "p95LatencyMs": 37,
+        "maxLatencyMs": 38,
+        "statusCounts": {
+          "200": 60
+        },
+        "errorCount": 0,
+        "sessionHashCount": 20,
+        "activeAfterCount": 0,
+        "activeBeforeStatus": 200,
+        "activeAfterStatus": 200,
+        "observerLoginStatus": 200
+      }
+    },
+    {
+      "index": 159,
+      "caseId": "v026-agent-concurrency-pressure-011",
+      "group": "concurrency-pressure",
+      "name": "active requests endpoint works after pressure",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "users": 20,
+        "turnsPerUser": 3,
+        "requestedOperations": 60,
+        "completedOperations": 60,
+        "loginSuccess": 20,
+        "durationMs": 92,
+        "p95LatencyMs": 37,
+        "maxLatencyMs": 38,
+        "statusCounts": {
+          "200": 60
+        },
+        "errorCount": 0,
+        "sessionHashCount": 20,
+        "activeAfterCount": 0,
+        "activeBeforeStatus": 200,
+        "activeAfterStatus": 200,
+        "observerLoginStatus": 200
+      }
+    },
+    {
+      "index": 160,
+      "caseId": "v026-agent-concurrency-pressure-012",
+      "group": "concurrency-pressure",
+      "name": "no stuck primary active requests after pressure",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "users": 20,
+        "turnsPerUser": 3,
+        "requestedOperations": 60,
+        "completedOperations": 60,
+        "loginSuccess": 20,
+        "durationMs": 92,
+        "p95LatencyMs": 37,
+        "maxLatencyMs": 38,
+        "statusCounts": {
+          "200": 60
+        },
+        "errorCount": 0,
+        "sessionHashCount": 20,
+        "activeAfterCount": 0,
+        "activeBeforeStatus": 200,
+        "activeAfterStatus": 200,
+        "observerLoginStatus": 200
+      }
+    },
+    {
+      "index": 161,
+      "caseId": "v026-agent-concurrency-pressure-013",
+      "group": "concurrency-pressure",
+      "name": "no stale locks after pressure",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "status": "success",
+        "requests": [],
+        "recent_terminal_requests": [
+          {
+            "request_id": "7d6c92dd-3df9-4c39-924d-9cd2ff409179",
+            "session_id": "accept-stream-agent-acceptance-eea07bd53c",
+            "parent_id": null,
+            "run_type": "message",
+            "status": "completed",
+            "phase": "completed",
+            "terminal_reason": "done",
+            "error_code": null,
+            "error_message": null,
+            "model": null,
+            "provider": null,
+            "created_at": 1782924189.102216,
+            "started_at": 1782924189.102216,
+            "updated_at": 1782924193.800287,
+            "terminal_at": 1782924193.800287,
+            "metadata": {
+              "attachment_items": [],
+              "attachments": 0,
+              "client_attempt_id": "",
+              "internal_action": false,
+              "interrupts_request_id": "",
+              "project_context": {},
+              "retry_of_request_id": "",
+              "stream": true,
+              "visible_message": "Fresh isolated acceptance run agent-acceptance-eea07bd53c. Reply with exactly ECX_STREAM_OK_agent-acceptance-eea07bd53c. Do not use stored memories or prior conversation context."
+            },
+            "cancelled": false,
+            "state": "completed",
+            "age_seconds": 474.443,
+            "terminal_age_seconds": 469.744,
+            "stream_available": false,
+            "source": "run_ledger",
+            "retryable": false,
+            "recoverable": true,
+            "retry_mode": "unavailable",
+            "retry_disabled_reason": "not_failed",
+            "actions": {
+              "open": true,
+              "recover": true,
+              "retry": false,
+              "stop": false,
+              "collect": false,
+              "diagnostics": true
+            }
+          }
+        ],
+        "recentTerminalRequests": [
+          {
+            "request_id": "7d6c92dd-3df9-4c39-924d-9cd2ff409179",
+            "session_id": "accept-stream-agent-acceptance-eea07bd53c",
+            "parent_id": null,
+            "run_type": "message",
+            "status": "completed",
+            "phase": "completed",
+            "terminal_reason": "done",
+            "error_code": null,
+            "error_message": null,
+            "model": null,
+            "provider": null,
+            "created_at": 1782924189.102216,
+            "started_at": 1782924189.102216,
+            "updated_at": 1782924193.800287,
+            "terminal_at": 1782924193.800287,
+            "metadata": {
+              "attachment_items": [],
+              "attachments": 0,
+              "client_attempt_id": "",
+              "internal_action": false,
+              "interrupts_request_id": "",
+              "project_context": {},
+              "retry_of_request_id": "",
+              "stream": true,
+              "visible_message": "Fresh isolated acceptance run agent-acceptance-eea07bd53c. Reply with exactly ECX_STREAM_OK_agent-acceptance-eea07bd53c. Do not use stored memories or prior conversation context."
+            },
+            "cancelled": false,
+            "state": "completed",
+            "age_seconds": 474.443,
+            "terminal_age_seconds": 469.744,
+            "stream_available": false,
+            "source": "run_ledger",
+            "retryable": false,
+            "recoverable": true,
+            "retry_mode": "unavailable",
+            "retry_disabled_reason": "not_failed",
+            "actions": {
+              "open": true,
+              "recover": true,
+              "retry": false,
+              "stop": false,
+              "collect": false,
+              "diagnostics": true
+            }
+          }
+        ],
+        "children_by_parent": {},
+        "childrenByParent": {},
+        "run_status_counts": {
+          "completed": 1
+        },
+        "runStatusCounts": {
+          "completed": 1
+        },
+        "sessions": {},
+        "stale_locks": [],
+        "staleLocks": []
+      }
+    },
+    {
+      "index": 162,
+      "caseId": "v026-agent-concurrency-pressure-014",
+      "group": "concurrency-pressure",
+      "name": "runStatusCounts remains bounded",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "status": "success",
+        "requests": [],
+        "recent_terminal_requests": [
+          {
+            "request_id": "7d6c92dd-3df9-4c39-924d-9cd2ff409179",
+            "session_id": "accept-stream-agent-acceptance-eea07bd53c",
+            "parent_id": null,
+            "run_type": "message",
+            "status": "completed",
+            "phase": "completed",
+            "terminal_reason": "done",
+            "error_code": null,
+            "error_message": null,
+            "model": null,
+            "provider": null,
+            "created_at": 1782924189.102216,
+            "started_at": 1782924189.102216,
+            "updated_at": 1782924193.800287,
+            "terminal_at": 1782924193.800287,
+            "metadata": {
+              "attachment_items": [],
+              "attachments": 0,
+              "client_attempt_id": "",
+              "internal_action": false,
+              "interrupts_request_id": "",
+              "project_context": {},
+              "retry_of_request_id": "",
+              "stream": true,
+              "visible_message": "Fresh isolated acceptance run agent-acceptance-eea07bd53c. Reply with exactly ECX_STREAM_OK_agent-acceptance-eea07bd53c. Do not use stored memories or prior conversation context."
+            },
+            "cancelled": false,
+            "state": "completed",
+            "age_seconds": 474.443,
+            "terminal_age_seconds": 469.744,
+            "stream_available": false,
+            "source": "run_ledger",
+            "retryable": false,
+            "recoverable": true,
+            "retry_mode": "unavailable",
+            "retry_disabled_reason": "not_failed",
+            "actions": {
+              "open": true,
+              "recover": true,
+              "retry": false,
+              "stop": false,
+              "collect": false,
+              "diagnostics": true
+            }
+          }
+        ],
+        "recentTerminalRequests": [
+          {
+            "request_id": "7d6c92dd-3df9-4c39-924d-9cd2ff409179",
+            "session_id": "accept-stream-agent-acceptance-eea07bd53c",
+            "parent_id": null,
+            "run_type": "message",
+            "status": "completed",
+            "phase": "completed",
+            "terminal_reason": "done",
+            "error_code": null,
+            "error_message": null,
+            "model": null,
+            "provider": null,
+            "created_at": 1782924189.102216,
+            "started_at": 1782924189.102216,
+            "updated_at": 1782924193.800287,
+            "terminal_at": 1782924193.800287,
+            "metadata": {
+              "attachment_items": [],
+              "attachments": 0,
+              "client_attempt_id": "",
+              "internal_action": false,
+              "interrupts_request_id": "",
+              "project_context": {},
+              "retry_of_request_id": "",
+              "stream": true,
+              "visible_message": "Fresh isolated acceptance run agent-acceptance-eea07bd53c. Reply with exactly ECX_STREAM_OK_agent-acceptance-eea07bd53c. Do not use stored memories or prior conversation context."
+            },
+            "cancelled": false,
+            "state": "completed",
+            "age_seconds": 474.443,
+            "terminal_age_seconds": 469.744,
+            "stream_available": false,
+            "source": "run_ledger",
+            "retryable": false,
+            "recoverable": true,
+            "retry_mode": "unavailable",
+            "retry_disabled_reason": "not_failed",
+            "actions": {
+              "open": true,
+              "recover": true,
+              "retry": false,
+              "stop": false,
+              "collect": false,
+              "diagnostics": true
+            }
+          }
+        ],
+        "children_by_parent": {},
+        "childrenByParent": {},
+        "run_status_counts": {
+          "completed": 1
+        },
+        "runStatusCounts": {
+          "completed": 1
+        },
+        "sessions": {},
+        "stale_locks": [],
+        "staleLocks": []
+      }
+    },
+    {
+      "index": 163,
+      "caseId": "v026-agent-concurrency-pressure-015",
+      "group": "concurrency-pressure",
+      "name": "all virtual users logged in",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "users": 20,
+        "turnsPerUser": 3,
+        "requestedOperations": 60,
+        "completedOperations": 60,
+        "loginSuccess": 20,
+        "durationMs": 92,
+        "p95LatencyMs": 37,
+        "maxLatencyMs": 38,
+        "statusCounts": {
+          "200": 60
+        },
+        "errorCount": 0,
+        "sessionHashCount": 20,
+        "activeAfterCount": 0,
+        "activeBeforeStatus": 200,
+        "activeAfterStatus": 200,
+        "observerLoginStatus": 200
+      }
+    },
+    {
+      "index": 164,
+      "caseId": "v026-agent-concurrency-pressure-016",
+      "group": "concurrency-pressure",
+      "name": "no 401 after login pressure",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "users": 20,
+        "turnsPerUser": 3,
+        "requestedOperations": 60,
+        "completedOperations": 60,
+        "loginSuccess": 20,
+        "durationMs": 92,
+        "p95LatencyMs": 37,
+        "maxLatencyMs": 38,
+        "statusCounts": {
+          "200": 60
+        },
+        "errorCount": 0,
+        "sessionHashCount": 20,
+        "activeAfterCount": 0,
+        "activeBeforeStatus": 200,
+        "activeAfterStatus": 200,
+        "observerLoginStatus": 200
+      }
+    },
+    {
+      "index": 165,
+      "caseId": "v026-agent-concurrency-pressure-017",
+      "group": "concurrency-pressure",
+      "name": "pressure duration bounded",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "users": 20,
+        "turnsPerUser": 3,
+        "requestedOperations": 60,
+        "completedOperations": 60,
+        "loginSuccess": 20,
+        "durationMs": 92,
+        "p95LatencyMs": 37,
+        "maxLatencyMs": 38,
+        "statusCounts": {
+          "200": 60
+        },
+        "errorCount": 0,
+        "sessionHashCount": 20,
+        "activeAfterCount": 0,
+        "activeBeforeStatus": 200,
+        "activeAfterStatus": 200,
+        "observerLoginStatus": 200
+      }
+    },
+    {
+      "index": 166,
+      "caseId": "v026-agent-concurrency-pressure-018",
+      "group": "concurrency-pressure",
+      "name": "pressure evidence captured",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "users": 20,
+        "turnsPerUser": 3,
+        "requestedOperations": 60,
+        "completedOperations": 60,
+        "loginSuccess": 20,
+        "durationMs": 92,
+        "p95LatencyMs": 37,
+        "maxLatencyMs": 38,
+        "statusCounts": {
+          "200": 60
+        },
+        "errorCount": 0,
+        "sessionHashCount": 20,
+        "activeAfterCount": 0,
+        "activeBeforeStatus": 200,
+        "activeAfterStatus": 200,
+        "observerLoginStatus": 200
+      }
+    },
+    {
+      "index": 167,
+      "caseId": "v026-agent-security-observability-001",
+      "group": "security-observability",
+      "name": "diagnostics bundle endpoint is gated or successful",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "security",
+        "observability",
+        "redaction"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": 401
+      }
+    },
+    {
+      "index": 168,
+      "caseId": "v026-agent-security-observability-002",
+      "group": "security-observability",
+      "name": "logs snapshot endpoint is gated or successful",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "security",
+        "observability",
+        "redaction"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": 401
+      }
+    },
+    {
+      "index": 169,
+      "caseId": "v026-agent-security-observability-003",
+      "group": "security-observability",
+      "name": "check evidence contains no raw secrets",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "security",
+        "observability",
+        "redaction"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "violations": []
+      }
+    },
+    {
+      "index": 170,
+      "caseId": "v026-agent-security-observability-004",
+      "group": "security-observability",
+      "name": "model route evidence is redacted",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "security",
+        "observability",
+        "redaction"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "count": 4
+      }
+    },
+    {
+      "index": 171,
+      "caseId": "v026-agent-security-observability-005",
+      "group": "security-observability",
+      "name": "observability evidence includes request/session hashes",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "security",
+        "observability",
+        "redaction"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "sessionHash": "13CF96F7BDB13C4C",
+        "requestHash": "81D3699044F5C6F1",
+        "firstEventMs": 0,
+        "firstContentMs": 0,
+        "terminalMs": 4662,
+        "eventTypes": [
+          "phase",
+          "heartbeat",
+          "phase",
+          "phase",
+          "phase",
+          "delta",
+          "delta",
+          "delta",
+          "delta",
+          "delta",
+          "delta",
+          "done"
+        ],
+        "terminalTypes": [
+          "done"
+        ],
+        "baseline": {
+          "targetProvider": "openai",
+          "targetModelHash": "FFC50C70661C227E",
+          "originalProvider": "deepseek",
+          "originalModelHash": "052E4FC0BC88E2A5",
+          "switchStatus": 200,
+          "verifyStatus": 200,
+          "baselineConfirmed": true,
+          "restoreStatus": 200,
+          "restoreConfirmed": true
+        }
+      }
+    },
+    {
+      "index": 172,
+      "caseId": "v026-agent-security-observability-006",
+      "group": "security-observability",
+      "name": "new matrix reaches expected checks",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "security",
+        "observability",
+        "redaction"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "checksBeforeFinal": 171,
+        "target": 172,
+        "focusMode": true
+      }
+    }
+  ],
+  "failurePreview": [],
+  "pressureProfile": {
+    "users": 20,
+    "turnsPerUser": 3,
+    "requestedOperations": 60,
+    "completedOperations": 60,
+    "loginSuccess": 20,
+    "durationMs": 92,
+    "p95LatencyMs": 37,
+    "maxLatencyMs": 38,
+    "statusCounts": {
+      "200": 60
+    },
+    "errorCount": 0,
+    "sessionHashCount": 20,
+    "activeAfterCount": 0,
+    "activeBeforeStatus": 200,
+    "activeAfterStatus": 200,
+    "observerLoginStatus": 200
+  },
+  "modelRouteEvidence": [
+    {
+      "provider": "openai",
+      "chatModelHash": "FFC50C70661C227E",
+      "switchStatus": "success",
+      "generateStatus": "success",
+      "generateModel": "gpt-image-2-pro",
+      "generateRoute": {
+        "schemaVersion": "imagegen-route-v1",
+        "routeKind": "ecorex-native-facade",
+        "executionMode": "in_process_provider_runner",
+        "runnerMode": "in_process",
+        "shellInvocation": false,
+        "pythonSubprocess": false,
+        "compatibilityCliFallbackUsed": false,
+        "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+        "providerRuntimeModuleRole": "in_process_provider_module",
+        "inputRoute": "text_to_image",
+        "providerApiRoute": "images.generations"
+      },
+      "editStatus": "success",
+      "editModel": "gpt-image-2-pro",
+      "editRoute": {
+        "schemaVersion": "imagegen-route-v1",
+        "routeKind": "ecorex-native-facade",
+        "executionMode": "in_process_provider_runner",
+        "runnerMode": "in_process",
+        "shellInvocation": false,
+        "pythonSubprocess": false,
+        "compatibilityCliFallbackUsed": false,
+        "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+        "providerRuntimeModuleRole": "in_process_provider_module",
+        "inputRoute": "image_edit_reference",
+        "providerApiRoute": "images.edits"
+      }
+    },
+    {
+      "provider": "deepseek",
+      "chatModelHash": "052E4FC0BC88E2A5",
+      "switchStatus": "success",
+      "generateStatus": "success",
+      "generateModel": "gpt-image-2-pro",
+      "generateRoute": {
+        "schemaVersion": "imagegen-route-v1",
+        "routeKind": "ecorex-native-facade",
+        "executionMode": "in_process_provider_runner",
+        "runnerMode": "in_process",
+        "shellInvocation": false,
+        "pythonSubprocess": false,
+        "compatibilityCliFallbackUsed": false,
+        "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+        "providerRuntimeModuleRole": "in_process_provider_module",
+        "inputRoute": "text_to_image",
+        "providerApiRoute": "images.generations"
+      },
+      "editStatus": "success",
+      "editModel": "gpt-image-2-pro",
+      "editRoute": {
+        "schemaVersion": "imagegen-route-v1",
+        "routeKind": "ecorex-native-facade",
+        "executionMode": "in_process_provider_runner",
+        "runnerMode": "in_process",
+        "shellInvocation": false,
+        "pythonSubprocess": false,
+        "compatibilityCliFallbackUsed": false,
+        "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+        "providerRuntimeModuleRole": "in_process_provider_module",
+        "inputRoute": "image_edit_reference",
+        "providerApiRoute": "images.edits"
+      }
+    },
+    {
+      "provider": "gemini",
+      "chatModelHash": "EDCE75DECBB493F9",
+      "switchStatus": "success",
+      "generateStatus": "success",
+      "generateModel": "gpt-image-2-pro",
+      "generateRoute": {
+        "schemaVersion": "imagegen-route-v1",
+        "routeKind": "ecorex-native-facade",
+        "executionMode": "in_process_provider_runner",
+        "runnerMode": "in_process",
+        "shellInvocation": false,
+        "pythonSubprocess": false,
+        "compatibilityCliFallbackUsed": false,
+        "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+        "providerRuntimeModuleRole": "in_process_provider_module",
+        "inputRoute": "text_to_image",
+        "providerApiRoute": "images.generations"
+      },
+      "editStatus": "success",
+      "editModel": "gpt-image-2-pro",
+      "editRoute": {
+        "schemaVersion": "imagegen-route-v1",
+        "routeKind": "ecorex-native-facade",
+        "executionMode": "in_process_provider_runner",
+        "runnerMode": "in_process",
+        "shellInvocation": false,
+        "pythonSubprocess": false,
+        "compatibilityCliFallbackUsed": false,
+        "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+        "providerRuntimeModuleRole": "in_process_provider_module",
+        "inputRoute": "image_edit_reference",
+        "providerApiRoute": "images.edits"
+      }
+    },
+    {
+      "provider": "doubao",
+      "chatModelHash": "BCAE5BF74FD2D7AE",
+      "switchStatus": "success",
+      "generateStatus": "success",
+      "generateModel": "gpt-image-2-pro",
+      "generateRoute": {
+        "schemaVersion": "imagegen-route-v1",
+        "routeKind": "ecorex-native-facade",
+        "executionMode": "in_process_provider_runner",
+        "runnerMode": "in_process",
+        "shellInvocation": false,
+        "pythonSubprocess": false,
+        "compatibilityCliFallbackUsed": false,
+        "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+        "providerRuntimeModuleRole": "in_process_provider_module",
+        "inputRoute": "text_to_image",
+        "providerApiRoute": "images.generations"
+      },
+      "editStatus": "success",
+      "editModel": "gpt-image-2-pro",
+      "editRoute": {
+        "schemaVersion": "imagegen-route-v1",
+        "routeKind": "ecorex-native-facade",
+        "executionMode": "in_process_provider_runner",
+        "runnerMode": "in_process",
+        "shellInvocation": false,
+        "pythonSubprocess": false,
+        "compatibilityCliFallbackUsed": false,
+        "providerRuntimeModule": "skills/image-generation/scripts/generate.py",
+        "providerRuntimeModuleRole": "in_process_provider_module",
+        "inputRoute": "image_edit_reference",
+        "providerApiRoute": "images.edits"
+      }
+    }
+  ],
+  "stateMachineEvidence": {
+    "sessionHash": "13CF96F7BDB13C4C",
+    "requestHash": "81D3699044F5C6F1",
+    "firstEventMs": 0,
+    "firstContentMs": 0,
+    "terminalMs": 4662,
+    "eventTypes": [
+      "phase",
+      "heartbeat",
+      "phase",
+      "phase",
+      "phase",
+      "delta",
+      "delta",
+      "delta",
+      "delta",
+      "delta",
+      "delta",
+      "done"
+    ],
+    "terminalTypes": [
+      "done"
+    ],
+    "baseline": {
+      "targetProvider": "openai",
+      "targetModelHash": "FFC50C70661C227E",
+      "originalProvider": "deepseek",
+      "originalModelHash": "052E4FC0BC88E2A5",
+      "switchStatus": 200,
+      "verifyStatus": 200,
+      "baselineConfirmed": true,
+      "restoreStatus": 200,
+      "restoreConfirmed": true
+    }
+  },
+  "securityEvidence": {
+    "diagnosticsStatus": 401,
+    "logsStatus": 401,
+    "violations": []
+  },
+  "target": {
+    "domainHash": "A753D877497CBE35",
+    "sshHostHash": "CDF1CF905198CA97",
+    "sshUserHash": "4813494D137E1631",
+    "rawTargetPersisted": false
+  },
+  "redaction": {
+    "rawPasswordPersisted": false,
+    "rawSecretPersisted": false,
+    "rawUrlPersisted": false,
+    "rawUserPathPersisted": false
+  },
+  "remoteExitCode": 0,
+  "remoteStdoutHash": "B53DFF7ECF1CC1B32F814B8213765AC9025BA2B6D9779999B9F4E7611597E368",
+  "remoteStderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+  "remoteStderrExcerptRedacted": "",
+  "generatedLocallyAt": "2026-07-01T16:51:09.080506+00:00",
+  "releaseDecision": "not-authoritative-run-full-real-release-gate-before-promotion",
+  "matrixChangeLog": [
+    {
+      "action": "focused-rerun",
+      "requestedGroups": [
+        "runtime-api",
+        "ui-ux",
+        "stream-state-machine",
+        "multi-model-image-route",
+        "concurrency-pressure",
+        "security-observability"
+      ],
+      "selectedGroups": [
+        "fresh-env",
+        "auth-first-use",
+        "runtime-api",
+        "ui-ux",
+        "stream-state-machine",
+        "multi-model-image-route",
+        "concurrency-pressure",
+        "security-observability"
+      ],
+      "releaseBlocking": false,
+      "finalGateRequiredBeforePromotion": true
+    }
+  ]
+}

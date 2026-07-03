@@ -1,0 +1,106 @@
+{
+  "schemaVersion": "ecorex-web-runtime-slice-artifact-v1",
+  "slice": "S14-cdp-webfetch-model-route-hotfix",
+  "generatedAt": "2026-07-02T11:55:00+08:00",
+  "status": "PASS_WITH_NOTES",
+  "localTests": [
+    {
+      "name": "tests/test_web_runtime_goal.py",
+      "status": "PASS",
+      "result": "63 passed"
+    },
+    {
+      "name": "tests/test_v023_external_connections_cdp_ocr.py cdp/browser group",
+      "status": "PASS",
+      "result": "97 passed"
+    },
+    {
+      "name": "tests/test_ecorex_web_parallel_backend.py run_ledger/permission focused",
+      "status": "PASS",
+      "result": "4 passed"
+    },
+    {
+      "name": "tests/test_models_handler.py cached_enterprise_model_policy",
+      "status": "PASS",
+      "result": "1 passed"
+    }
+  ],
+  "reviewConsensus": {
+    "architecture": "PASS_WITH_NOTES",
+    "securityPermissions": "PASS_WITH_NOTES",
+    "runtimeDependencies": "PASS_WITH_NOTES",
+    "webUxObservability": "PASS_WITH_NOTES",
+    "testRelease": "PASS_WITH_NOTES",
+    "blockingFails": 0
+  },
+  "releaseArtifacts": {
+    "webuiWindowsX64": {
+      "fileName": "EcoreX_0.2.6-webui-windows-x64.zip",
+      "size": 127049206,
+      "sha256": "98A0D53C3A7F6E3EB13016C03E8EA6618086C6EB429D9E51C1F524C0410E616D"
+    },
+    "webuiMacosUniversal": {
+      "fileName": "EcoreX_0.2.6-webui-macos-universal.zip",
+      "size": 301427608,
+      "sha256": "092EE5DEADAACCA91E57CDBA12488CB70F182DA8EC2510B0A5F0FD2F49C543E6"
+    },
+    "webLinuxService": {
+      "fileName": "EcoreX_0.2.6-web-linux-service.tar.gz",
+      "size": 4071759,
+      "sha256": "D80D03A439EA1633C8FB92EC956843A98130A6315CE18114ED0CCC7BFB82C161"
+    },
+    "publicRelease": {
+      "fileName": "EcoreX_0.2.6-public-release.zip",
+      "size": 431522962,
+      "sha256": "9327D12A03AA01A73A2F4C71FB09D40FB7A9C999227624AB0F3375BB944A20A2"
+    }
+  },
+  "production": {
+    "deployArtifact": "docs/v0.2.6/artifacts/production-deploy-online.json",
+    "deployStatus": "PASS",
+    "releaseChecker": "PASS",
+    "runtimeBaselineReleaseReady": true,
+    "webReleaseGateReady": true,
+    "playwrightChromium": "ready",
+    "browserCdpAutoLaunch": true,
+    "browserCdpFallback": true,
+    "feishuAllowSystemNode": false
+  },
+  "liveSmoke": [
+    {
+      "name": "read-only browser snapshot does not launch",
+      "status": "PASS"
+    },
+    {
+      "name": "browser navigate example.com via CDP auto-launch",
+      "status": "PASS"
+    },
+    {
+      "name": "web_fetch image URL saves local artifact",
+      "status": "PASS",
+      "tokenLeaked": false
+    },
+    {
+      "name": "run ledger legacy table migrates model/provider",
+      "status": "PASS"
+    },
+    {
+      "name": "download page opens in browser with v0.2.6 Windows/macOS links",
+      "status": "PASS"
+    },
+    {
+      "name": "web app route opens in browser",
+      "status": "PASS",
+      "note": "Unauthenticated app logs Unauthorized as expected."
+    }
+  ],
+  "onlineManifest": {
+    "url": "https://mvdcm.ecoremedia.net/ecorex-agent/manifest.json",
+    "version": "0.2.6",
+    "allExpectedHashesMatch": true
+  },
+  "notes": [
+    "The web-linux-service .sha256 sidecar is not exposed online, but manifest hash and public release validation match.",
+    "Windows bash syntax check was skipped because C:\\Windows\\System32\\bash.exe is the WSL launcher and timed out in this desktop environment."
+  ]
+}
