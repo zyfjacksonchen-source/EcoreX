@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
+from urllib.parse import urlsplit, urlunsplit
 
 from common import const
 
@@ -521,11 +522,32 @@ def is_custom_gemini_transport(
     if not model_name.startswith("gemini"):
         return False
     route = str(configured_bot_type or "").strip()
-    if route and route != const.GEMINI:
+    if route and route not in (const.GEMINI, const.CUSTOM):
         return False
     base = str(gemini_api_base or "").strip().rstrip("/")
     official = _OFFICIAL_GEMINI_API_BASE.rstrip("/")
     return bool(has_gemini_key and base and base != official)
+
+
+def normalize_openai_compatible_api_base(api_base: Optional[str]) -> str:
+    """Normalize a custom OpenAI-compatible base without rewriting routed paths."""
+    raw = str(api_base or "").strip()
+    if not raw:
+        return ""
+    value = raw.rstrip("/")
+    lowered = value.lower()
+    if lowered.endswith("/chat/completions"):
+        value = value[: -len("/chat/completions")].rstrip("/")
+    try:
+        parsed = urlsplit(value)
+    except Exception:
+        return value
+    if not parsed.scheme or not parsed.netloc:
+        return value
+    path = (parsed.path or "").rstrip("/")
+    if not path:
+        return urlunsplit((parsed.scheme, parsed.netloc, "/v1", parsed.query, parsed.fragment))
+    return value
 
 
 def infer_provider_id(

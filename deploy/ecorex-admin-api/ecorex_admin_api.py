@@ -908,6 +908,25 @@ class AdminStore:
             ][:16],
         }
 
+    def _release_manifest_fingerprint(self, manifest):
+        if not isinstance(manifest, dict):
+            return ""
+        artifacts = []
+        for artifact in self._release_ready_artifacts(manifest):
+            artifacts.append({
+                "fileName": compact_text(artifact.get("fileName") or "", 255),
+                "id": compact_text(artifact.get("id") or "", 120),
+                "sha256": compact_text(artifact.get("sha256") or "", 80).upper(),
+                "size": as_int(artifact.get("size"), 0, 0, 10_000_000_000),
+            })
+        artifacts.sort(key=lambda item: (item["id"], item["fileName"]))
+        payload = {
+            "artifacts": artifacts,
+            "policy": self._release_webui_policy(manifest),
+            "version": compact_text(manifest.get("version") or "", 80),
+        }
+        return short_hash(json_dumps(payload), 16)
+
     def _release_artifact_file(self, release_dir, artifact):
         href = compact_text(artifact.get("href") or "", 500)
         if href.startswith("http://") or href.startswith("https://"):
@@ -980,11 +999,13 @@ class AdminStore:
             "version": "",
             "updatedAt": "",
             "targetHash": "",
+            "artifactFingerprint": "",
             "artifactCount": 0,
             "readyArtifactCount": 0,
             "updatePolicy": {},
             "validation": {"status": "fail", "checkedSha256": False, "failureCount": 1, "failures": ["release pointer missing"]},
             "canPromote": False,
+            "sameVersionHotfix": False,
         }
         if not (pointer.exists() or pointer.is_symlink()):
             return entry
@@ -1002,6 +1023,7 @@ class AdminStore:
             "version": compact_text(manifest.get("version") or "", 80) if isinstance(manifest, dict) else "",
             "updatedAt": compact_text(manifest.get("updatedAt") or "", 80) if isinstance(manifest, dict) else "",
             "targetHash": short_hash(str(resolved), 16),
+            "artifactFingerprint": self._release_manifest_fingerprint(manifest),
             "artifactCount": len(manifest.get("artifacts") or []) if isinstance(manifest.get("artifacts"), list) else 0,
             "readyArtifactCount": len(self._release_ready_artifacts(manifest)),
             "updatePolicy": self._release_webui_policy(manifest),
@@ -1031,11 +1053,20 @@ class AdminStore:
             if child.name.startswith("staged-v"):
                 staged.append(self._release_entry(child, root, "staged"))
         current_version = payload["current"].get("version") or ""
+        current_fingerprint = payload["current"].get("artifactFingerprint") or ""
+        current_target = payload["current"].get("targetHash") or ""
         for entry in staged:
+            same_version = bool(entry.get("version")) and entry.get("version") == current_version
+            different_release = (
+                not same_version
+                or entry.get("artifactFingerprint") != current_fingerprint
+                or entry.get("targetHash") != current_target
+            )
+            entry["sameVersionHotfix"] = bool(same_version and different_release)
             entry["canPromote"] = (
                 entry.get("validation", {}).get("status") == "pass"
                 and bool(entry.get("version"))
-                and entry.get("version") != current_version
+                and different_release
             )
         staged.sort(key=lambda item: (item.get("version") or "", item.get("id") or ""), reverse=True)
         payload["staged"] = staged
@@ -1124,6 +1155,7 @@ class AdminStore:
                     "stagedId": staged_pointer.name,
                     "version": version,
                     "targetHash": short_hash(str(release_dir), 16),
+                    "artifactFingerprint": self._release_manifest_fingerprint(manifest),
                     "readyArtifactCount": validation["readyArtifactCount"],
                     "sha256Verified": True,
                 },

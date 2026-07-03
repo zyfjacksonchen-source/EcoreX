@@ -2303,6 +2303,55 @@ function messageHasTerminalPayload(message: ChatItem) {
     || Boolean(message.artifacts?.length);
 }
 
+const IMAGE_JOB_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
+
+function projectionImageJobs(projection?: RuntimeRequestProjection | null) {
+  return Array.isArray(projection?.image_jobs) ? projection.image_jobs : [];
+}
+
+function projectionImageJobArtifacts(projection?: RuntimeRequestProjection | null, requestId = "") {
+  const artifacts: AgentArtifact[] = [];
+  projectionImageJobs(projection).forEach((job, jobIndex) => {
+    const normalizedRequestId = String(projection?.request_id || requestId || job.job_id || "").trim();
+    const rawArtifacts = [
+      ...(Array.isArray(job.artifacts) ? job.artifacts : []),
+      ...(Array.isArray(job.tasks)
+        ? job.tasks.flatMap((task) => Array.isArray(task.artifacts) ? task.artifacts : [])
+        : [])
+    ];
+    rawArtifacts.forEach((entry) => {
+      const artifact = normalizeArtifactEntry(entry, artifacts.length + jobIndex, normalizedRequestId);
+      if (artifact) artifacts.push(artifact);
+    });
+  });
+  return artifacts;
+}
+
+function projectionHasRunningImageJob(projection?: RuntimeRequestProjection | null) {
+  return projectionImageJobs(projection).some((job) => {
+    const status = String(job.status || "").trim().toLowerCase();
+    return Boolean(status && !IMAGE_JOB_TERMINAL_STATUSES.has(status));
+  });
+}
+
+function projectionHasRecoverableArtifacts(projection?: RuntimeRequestProjection | null) {
+  const messages = Array.isArray(projection?.messages) ? projection.messages : [];
+  if (messages.some((message) => Boolean(runtimeExtrasArtifacts(message)?.length))) return true;
+  return projectionImageJobArtifacts(projection, projection?.request_id || "").length > 0;
+}
+
+function projectionHasAssistantProgress(projection?: RuntimeRequestProjection | null) {
+  const messages = Array.isArray(projection?.messages) ? projection.messages : [];
+  return messages.some((message) => (
+    message.role === "assistant"
+    && (
+      Boolean(redactInternalPromptText(message.content || "").trim())
+      || Boolean(message.tool_calls?.length)
+      || Boolean(runtimeExtrasArtifacts(message)?.length)
+    )
+  ));
+}
+
 function assistantVisibleAnswerWeight(message?: ChatItem) {
   if (!message || message.role !== "assistant") return 0;
   return redactInternalPromptText(message.content || "").trim().length
@@ -2585,7 +2634,30 @@ function mergeHistoryWithLocalMessages(history: ChatItem[], local: ChatItem[]) {
     if (contentKey) contentKeys.add(contentKey);
   }
 
-  return preserved.length ? [...mergedHistory, ...preserved] : mergedHistory;
+  return preserved.length ? mergePreservedLocalMessagesByTimeline(mergedHistory, preserved) : mergedHistory;
+}
+
+function mergePreservedLocalMessagesByTimeline(history: ChatItem[], preserved: ChatItem[]) {
+  if (!preserved.length) return history;
+  const merged = [...history];
+  const noTimestampTail: ChatItem[] = [];
+  preserved.forEach((message) => {
+    const messageMs = timeMs(message.createdAt);
+    if (!messageMs) {
+      noTimestampTail.push(message);
+      return;
+    }
+    const insertAt = merged.findIndex((candidate) => {
+      const candidateMs = timeMs(candidate.createdAt);
+      return Boolean(candidateMs && candidateMs > messageMs);
+    });
+    if (insertAt < 0) {
+      merged.push(message);
+    } else {
+      merged.splice(insertAt, 0, message);
+    }
+  });
+  return noTimestampTail.length ? [...merged, ...noTimestampTail] : merged;
 }
 
 function plainTextForMessage(message: ChatItem) {
@@ -3410,6 +3482,7 @@ export function App() {
   const activeProjectIdRef = useRef(activeProjectId);
   const sessionSwitchSeq = useRef(0);
   const autoScrollRef = useRef(true);
+  const suppressNextAutoScrollRef = useRef(false);
   const appBootMs = useRef(Date.now());
   const completedRequestIds = useRef<StringBoolMap>({});
   const completedRequestCleanupTimers = useRef<Record<string, number>>({});
@@ -3585,6 +3658,7 @@ export function App() {
       })));
       setChatContextPolicy(nextPolicy);
       setRuntimeSnapshot((current) => ({ ...current, currentModel: nextModel, currentProvider: option.provider }));
+      suppressNextAutoScrollRef.current = true;
       updateSessionMessages(activeSessionIdRef.current, (current) => [...current, modelSwitchDivider(nextModel)]);
       setModelMenuOpen(false);
       scheduleRuntimeSnapshotRefresh(150);
@@ -3983,6 +4057,11 @@ export function App() {
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
+      if (suppressNextAutoScrollRef.current) {
+        suppressNextAutoScrollRef.current = false;
+        updateJumpLatestState();
+        return;
+      }
       if (autoScrollRef.current) {
         scrollToLatest(false);
       } else {
@@ -5699,13 +5778,23 @@ export function App() {
   function recoverStaleRequestFromHistory(sessionId: string, assistantId: string, requestId: string) {
     void refreshSessionFromHistory(sessionId).then((restored) => {
       if (restored) return;
+      const recoveryMessage = "任务通道中断，已保留当前进度；可以恢复记录或继续任务。";
       updateAssistantMessage(sessionId, assistantId, (message) => ({
         ...finishRunningSteps(message),
-        requestId: undefined,
-        content: redactInternalPromptText(message.content || "任务状态已同步。如未完成，请重新发送。"),
+        requestId,
+        content: redactInternalPromptText(message.content || recoveryMessage),
         pending: false,
         paused: false,
-        cancelled: false
+        cancelled: false,
+        recovery: {
+          kind: "interrupted",
+          requestId,
+          message: recoveryMessage,
+          recoverable: true,
+          retryable: true,
+          reason: "stale_request_missing_projection",
+          retryMode: "manual_retry_prepare"
+        }
       }));
       markSessionOutputReady(sessionId);
     });
@@ -5762,7 +5851,7 @@ export function App() {
     const message = redactInternalPromptText(
       item.message
       || item.content
-      || "Runtime sidecar restarted before this run reached a terminal state. Refreshed saved conversation; retry if the final answer is missing."
+      || "运行时在任务完成前断开，已保留当前进度；可以恢复记录或继续任务。"
     );
     markStreamTerminal(sessionId, requestId, "interrupted");
     finishSessionRequest(sessionId, requestId);
@@ -5779,7 +5868,9 @@ export function App() {
           requestId,
           message,
           recoverable: true,
-          retryable: true
+          retryable: true,
+          reason: "stream_interrupted",
+          retryMode: "manual_retry_prepare"
         }
       }));
       markSessionOutputReady(sessionId);
@@ -6333,11 +6424,13 @@ export function App() {
     };
   }
 
-  function streamReconnectingRecovery(requestId: string, reason: string): NonNullable<ChatItem["recovery"]> {
+  function streamReconnectingRecovery(requestId: string, reason: string, hasProgress = false): NonNullable<ChatItem["recovery"]> {
     return {
       kind: "reconnecting",
       requestId,
-      message: "连接中断，正在尝试接回同一次任务；如果没有恢复，可以先恢复记录。",
+      message: hasProgress
+        ? "已保留当前进度，正在尝试接回同一次任务；后续结果会继续追加。"
+        : "连接中断，正在尝试接回同一次任务；如果没有恢复，可以先恢复记录。",
       recoverable: true,
       retryable: false,
       reason,
@@ -6375,7 +6468,7 @@ export function App() {
     });
   }
 
-  async function recoverRequestFromProjection(sessionId: string, assistantId: string, requestId: string) {
+  async function recoverRequestFromProjection(sessionId: string, assistantId: string, requestId: string): Promise<"terminal" | "partial-running" | "partial-settled" | false> {
     if (!requestId) return false;
     let projection: RuntimeRequestProjection | null = null;
     try {
@@ -6385,17 +6478,70 @@ export function App() {
       return false;
     }
     const decision = projectionRecoveryDecision(projection);
-    if (!decision.handled) return false;
-    const projectedMessages = normalizePausedMessages(mapRuntimeHistory(decision.messages, sessionId));
+    const projectionMessages = decision.handled
+      ? decision.messages
+      : Array.isArray(projection?.messages) ? projection.messages : [];
+    const projectedMessages = normalizePausedMessages(mapRuntimeHistory(projectionMessages, sessionId));
     const projectedAssistant = projectedMessages.find((message) => (
       message.role === "assistant" && (!message.requestId || message.requestId === requestId)
     ));
-    if (!projectedAssistant) return false;
+    const imageJobArtifacts = projectionImageJobArtifacts(projection, requestId);
+    if (!projectedAssistant && !imageJobArtifacts.length) return false;
     clearStreamDeltaBuffers(sessionId, requestId);
+
+    if (!decision.handled) {
+      const hasRecoverableProgress = Boolean(projectedAssistant && messageHasTerminalPayload(projectedAssistant))
+        || projectionHasAssistantProgress(projection)
+        || projectionHasRecoverableArtifacts(projection);
+      if (!hasRecoverableProgress) return false;
+
+      const runningImageJob = projectionHasRunningImageJob(projection);
+      const recoveryMessage = imageJobArtifacts.length
+        ? (runningImageJob
+          ? "已恢复已生成的图片，正在尝试接回同一次任务；后续图片会继续追加。"
+          : "已恢复部分生成结果；原任务未确认完成，可以恢复记录或继续任务。")
+        : (runningImageJob
+          ? "已恢复当前进度，正在尝试接回同一次任务。"
+          : "已恢复当前进度；原任务未确认完成，可以恢复记录或继续任务。");
+      updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => {
+        const projected = projectedAssistant
+          ? mergeArtifactsIntoMessage(projectedAssistant, imageJobArtifacts)
+          : mergeArtifactsIntoMessage(message, imageJobArtifacts);
+        const next = {
+          ...message,
+          ...projected,
+          id: message.id || assistantId,
+          requestId,
+          content: redactInternalPromptText(projected.content || message.content || ""),
+          pending: runningImageJob || message.pending,
+          paused: false,
+          cancelled: false,
+          recovery: {
+            kind: runningImageJob ? "stalled" : "interrupted",
+            requestId,
+            message: recoveryMessage,
+            recoverable: true,
+            retryable: !runningImageJob,
+            reason: runningImageJob ? "partial_image_job_projection_running" : "partial_image_job_projection",
+            retryMode: runningImageJob ? "stream_reconnect" : "manual_retry_prepare",
+            stopAllowed: runningImageJob
+          } satisfies NonNullable<ChatItem["recovery"]>
+        };
+        return imageJobArtifacts.length ? mergeArtifactsIntoMessage(next, imageJobArtifacts) : next;
+      });
+      markSessionOutputReady(sessionId);
+      if (runningImageJob) return "partial-running";
+      markStreamTerminal(sessionId, requestId, "interrupted");
+      finishSessionRequest(sessionId, requestId);
+      return "partial-settled";
+    }
+
+    if (!projectedAssistant) return false;
+    const projectedAssistantWithArtifacts = mergeArtifactsIntoMessage(projectedAssistant, imageJobArtifacts);
     const projectedContent = redactInternalPromptText(decision.content || projectedAssistant.content || "");
     updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => ({
       ...message,
-      ...projectedAssistant,
+      ...projectedAssistantWithArtifacts,
       id: message.id || assistantId,
       requestId,
       content: projectedContent || message.content,
@@ -6410,7 +6556,7 @@ export function App() {
     markStreamTerminal(sessionId, requestId, decision.terminalPhase);
     markSessionOutputReady(sessionId);
     finishSessionRequest(sessionId, requestId);
-    return true;
+    return "terminal";
   }
 
   async function handleStreamError(sessionId: string, assistantId: string, requestId: string) {
@@ -6419,7 +6565,8 @@ export function App() {
       closeSessionStream(sessionId, requestId);
       return;
     }
-    if (await recoverRequestFromProjection(sessionId, assistantId, requestId)) return;
+    const projectionRecovery = await recoverRequestFromProjection(sessionId, assistantId, requestId);
+    if (projectionRecovery === "terminal" || projectionRecovery === "partial-settled") return;
     if (!isCurrentSessionRequest(sessionId, requestId)) return;
     setStreamRequestPhase(sessionId, requestId, "stalled");
     markStreamConnectionInterrupted(sessionId, assistantId, requestId);
@@ -6433,44 +6580,41 @@ export function App() {
       if (!message.pending && !message.visibleOutputSettled) return message;
       return {
         ...(message.pending ? replaceCurrentPhase(message, "正在重新连接") : message),
-        recovery: streamReconnectingRecovery(requestId, "eventsource_error")
-      };
-      return {
-        ...(message.pending ? replaceCurrentPhase(message, "正在重新连接") : message),
-        recovery: {
-          kind: "stalled",
-          requestId,
-          message: "连接中断，正在尝试接回同一次任务；如果没有恢复，可以先恢复记录。",
-          recoverable: true,
-          retryable: false,
-          reason: "eventsource_error",
-          retryMode: "stream_reconnect"
-        }
+        recovery: streamReconnectingRecovery(requestId, "eventsource_error", Boolean(message.artifacts?.length || message.content?.trim()))
       };
     });
   }
 
   function markStreamReconnectExhausted(sessionId: string, assistantId: string, requestId: string, options: { activeStillRunning?: boolean } = {}) {
     const activeStillRunning = Boolean(options.activeStillRunning);
-    updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => ({
-      ...finishRunningSteps(message),
-      requestId,
-      pending: false,
-      paused: false,
-      cancelled: false,
-      recovery: {
-        kind: "failed",
+    updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => {
+      const hasProgress = Boolean(message.artifacts?.length || message.content?.trim());
+      return {
+        ...finishRunningSteps(message),
         requestId,
-        message: activeStillRunning
-          ? "响应通道暂时没有接回，但原任务仍在运行。可以恢复记录，或先停止后再重试。"
-          : "响应通道暂时没有接回。可以恢复记录或准备重试。",
-        recoverable: true,
-        retryable: !activeStillRunning,
-        reason: activeStillRunning ? "active_stream_unavailable" : "stream_reconnect_exhausted",
-        retryMode: activeStillRunning ? "stop_before_retry" : "manual_retry_prepare",
-        stopAllowed: activeStillRunning
-      }
-    }));
+        pending: false,
+        paused: false,
+        cancelled: false,
+        recovery: {
+          kind: "failed",
+          requestId,
+          message: activeStillRunning
+            ? (hasProgress
+              ? "已保留当前进度，响应通道暂时没有接回，但原任务仍在运行。可以恢复记录，或先停止后再继续任务。"
+              : "响应通道暂时没有接回，但原任务仍在运行。可以恢复记录，或先停止后再重试。")
+            : (hasProgress
+              ? "已保留当前进度，响应通道没有接回。可以恢复记录或继续任务。"
+              : "响应通道暂时没有接回。可以恢复记录或准备重试。"),
+          recoverable: true,
+          retryable: !activeStillRunning,
+          reason: hasProgress
+            ? (activeStillRunning ? "partial_progress_active_stream_unavailable" : "partial_progress_stream_reconnect_exhausted")
+            : (activeStillRunning ? "active_stream_unavailable" : "stream_reconnect_exhausted"),
+          retryMode: activeStillRunning ? "stop_before_retry" : "manual_retry_prepare",
+          stopAllowed: activeStillRunning
+        }
+      };
+    });
   }
 
   function scheduleStreamStallTimer(sessionId: string, assistantId: string, requestId: string, delayMs: number) {
@@ -6485,22 +6629,7 @@ export function App() {
         if (!message.pending && !message.visibleOutputSettled) return message;
         return {
           ...(message.pending ? replaceCurrentPhase(message, "正在重新连接") : message),
-          recovery: streamReconnectingRecovery(requestId, "stream_idle_timeout")
-        };
-      });
-      scheduleStreamReconnect(sessionId, assistantId, requestId);
-      return;
-      updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => {
-        if (!message.pending && !message.visibleOutputSettled) return message;
-        return {
-          ...(message.pending ? replaceCurrentPhase(message, "正在重新连接") : message),
-          recovery: {
-            kind: "stalled",
-            requestId,
-            message: "连接中断，正在尝试接回同一次任务；如果没有恢复，可以先恢复记录。",
-            recoverable: true,
-            retryable: false
-          }
+          recovery: streamReconnectingRecovery(requestId, "stream_idle_timeout", Boolean(message.artifacts?.length || message.content?.trim()))
         };
       });
       scheduleStreamReconnect(sessionId, assistantId, requestId);
@@ -9402,6 +9531,9 @@ export function App() {
     }
     const canReconnect = Boolean(requestId && (message.pending || message.visibleOutputSettled));
     const showStop = Boolean(requestId && (message.pending || message.visibleOutputSettled || recovery.stopAllowed));
+    const retryLabel = /image_job|partial_progress|partial_image|stale_request|continue/i.test(`${recovery.reason || ""} ${recovery.retryMode || ""}`)
+      ? "继续任务"
+      : "准备重试";
     return (
       <div className="message-recovery-actions">
         <span>{recovery.message}</span>
@@ -9422,7 +9554,7 @@ export function App() {
         )}
         {requestId && recovery.retryable && (
           <button type="button" onClick={() => void prepareRetryDraft(requestId, sessionId)}>
-            <RefreshCw aria-hidden="true" />准备重试
+            <RefreshCw aria-hidden="true" />{retryLabel}
           </button>
         )}
         <button type="button" onClick={() => void exportDiagnosticsBundle({ sessionId, requestId: requestId || undefined }).then((bundle) => {

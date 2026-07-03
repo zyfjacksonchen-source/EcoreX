@@ -39,7 +39,12 @@ from models.model_provider_errors import http_error_response, provider_error_res
 from models.model_retry import sleep_for_retry
 from models.session_manager import SessionManager
 from models.model_telemetry import ModelCallSpan
-from models.model_capabilities import get_model_capabilities, is_custom_gemini_transport, sanitize_chat_payload
+from models.model_capabilities import (
+    get_model_capabilities,
+    is_custom_gemini_transport,
+    normalize_openai_compatible_api_base,
+    sanitize_chat_payload,
+)
 from bridge.context import ContextType
 from bridge.reply import Reply, ReplyType
 from common.log import logger
@@ -120,7 +125,7 @@ class ChatGPTBot(Bot, OpenAIImage, OpenAICompatibleBot):
         if conf().get("custom_api_base"):
             return conf().get("custom_api_base")
         if cls._legacy_custom_gemini_transport_configured():
-            return conf().get("gemini_api_base") or None
+            return normalize_openai_compatible_api_base(conf().get("gemini_api_base")) or None
         return None
 
     def _configure_http_client_for_route(self) -> None:

@@ -1,0 +1,63 @@
+{
+  "schemaVersion": "v0.2.7-hotfix-download-stage-v1",
+  "generatedAt": "2026-07-03T05:03:04Z",
+  "status": "PASS",
+  "scope": "custom-gemini-divider-imagegen-resume-admin-same-version-hotfix",
+  "fullRealReleaseValidationRan": false,
+  "userInstruction": "Skip full real release validation and stage the update to the download page for admin-triggered online update testing.",
+  "localValidation": {
+    "pythonCompile": "PASS",
+    "frontendTypecheck": "PASS",
+    "frontendBuild": "PASS",
+    "focusedPytest": "PASS",
+    "focusedPytestSummary": "45 passed + 3 targeted release/imagegen tests passed"
+  },
+  "releaseArtifacts": {
+    "publicZip": {
+      "fileName": "EcoreX_0.2.7-public-release.zip",
+      "size": 2847705,
+      "sha256": "0757EA585FC8AB2CD87A1398663D1EA878D14F8852CDCDEDB4F998318E142859"
+    },
+    "webuiWindowsX64": {
+      "fileName": "EcoreX_0.2.7-webui-windows-x64.zip",
+      "size": 550742111,
+      "sha256": "C10F472779662FF827912AB3D3DBB04024BEFA7B358011945AEB830B03A39349"
+    },
+    "webuiMacosUniversal": {
+      "fileName": "EcoreX_0.2.7-webui-macos-universal.zip",
+      "size": 652196946,
+      "sha256": "A13D51C279C4052708EFC29A208E4DD914251BC5BF9E666D1DC5DB2A9FC90D4C"
+    },
+    "webLinuxService": {
+      "fileName": "EcoreX_0.2.7-web-linux-service.tar.gz",
+      "size": 4090918,
+      "sha256": "59A037E149819C37AC4D9AFE10DE53A14287F8D269CF90523FD3D9DF25099F58"
+    }
+  },
+  "serverStage": {
+    "productionDeployArtifact": "docs/v0.2.7/artifacts/production-deploy-online.json",
+    "status": "PASS",
+    "promoted": false,
+    "stagedPublicManifestVersion": "0.2.7",
+    "publicManifestVersion": "0.2.7",
+    "serviceActive": true,
+    "adminApiRestarted": true,
+    "adminHotfixMarkersPresent": true
+  },
+  "adminReleaseState": {
+    "currentVersion": "0.2.7",
+    "currentFingerprint": "09775ebc125d2ae0",
+    "latestStagedId": "staged-v0.2.7",
+    "latestStagedVersion": "0.2.7",
+    "latestFingerprint": "2708ed2907b8f247",
+    "latestCanPromote": true,
+    "sameVersionHotfix": true,
+    "validationStatus": "pass"
+  },
+  "privacy": {
+    "rawHostPersisted": false,
+    "rawCredentialsPersisted": false,
+    "rawUrlPersisted": false,
+    "publicArtifactPathsOnly": true
+  }
+}

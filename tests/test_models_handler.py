@@ -354,6 +354,45 @@ class TestModelsHandler(unittest.TestCase):
         self.assertNotIn("legacy-custom-gemini-key", json.dumps(result))
         write_file.assert_called_once_with(file_config)
 
+    def test_set_chat_migrates_legacy_custom_gemini_when_switching_from_gpt(self):
+        from channel.web.web_channel import ModelsHandler
+        from common import const
+
+        local_config = {
+            "model": const.GPT_55,
+            "bot_type": const.CHATGPT,
+            "gemini_api_key": "legacy-custom-gemini-key",
+            "gemini_api_base": "http://custom-gemini.test:8080",
+            "use_linkai": False,
+        }
+        file_config = dict(local_config)
+        handler = ModelsHandler()
+
+        with patch("channel.web.web_channel.conf", return_value=local_config):
+            with patch.object(ModelsHandler, "_read_file_config", return_value=file_config):
+                with patch.object(ModelsHandler, "_write_file_config") as write_file:
+                    with patch.object(ModelsHandler, "_reset_bridge", return_value={
+                        "agentBridgePreserved": True,
+                        "modelRoutesReset": 1,
+                        "strategy": "refresh_chat_routing",
+                    }):
+                        result = json.loads(handler._handle_set_capability({
+                            "capability": "chat",
+                            "provider_id": const.CUSTOM,
+                            "model": const.GEMINI_31_PRO_PRE,
+                        }))
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["provider"], const.CUSTOM)
+        self.assertEqual(local_config["bot_type"], const.CUSTOM)
+        self.assertEqual(local_config["model"], const.GEMINI_31_PRO_PRE)
+        self.assertEqual(local_config["custom_api_key"], "legacy-custom-gemini-key")
+        self.assertEqual(local_config["custom_api_base"], "http://custom-gemini.test:8080/v1")
+        self.assertEqual(file_config["custom_api_base"], "http://custom-gemini.test:8080/v1")
+        self.assertTrue(result["contextContinuity"]["agentBridgePreserved"])
+        self.assertNotIn("legacy-custom-gemini-key", json.dumps(result))
+        write_file.assert_called_once_with(file_config)
+
     def test_chat_capability_downgrades_custom_openai_base(self):
         from channel.web.web_channel import ModelsHandler
 

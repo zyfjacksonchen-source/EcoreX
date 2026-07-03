@@ -1922,6 +1922,34 @@ def test_s4b_web_app_keeps_image_generation_out_of_chat_switcher():
     assert "gpt-image-2-pro" not in app_source
 
 
+def test_v027_model_switch_divider_and_imagegen_resume_contracts():
+    app_source = (ROOT / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
+    api_source = (ROOT / "desktop" / "src" / "services" / "ecorexApi.ts").read_text(encoding="utf-8")
+    admin_api_source = (ROOT / "deploy" / "ecorex-admin-api" / "ecorex_admin_api.py").read_text(encoding="utf-8")
+
+    assert "mergePreservedLocalMessagesByTimeline" in app_source
+    assert "return preserved.length ? mergePreservedLocalMessagesByTimeline(mergedHistory, preserved) : mergedHistory;" in app_source
+    assert "[...mergedHistory, ...preserved]" not in app_source
+    assert "suppressNextAutoScrollRef" in app_source
+    assert "model-switch-divider" in app_source
+
+    assert "export type RuntimeImageJobProjection" in api_source
+    assert "image_jobs?: RuntimeImageJobProjection[]" in api_source
+    assert "projectionImageJobArtifacts" in app_source
+    assert "partial_image_job_projection_running" in app_source
+    assert "后续图片会继续追加" in app_source
+    assert "继续任务" in app_source
+    assert "Runtime sidecar restarted before this run reached a terminal state" not in app_source
+    assert "任务状态已同步。如未完成，请重新发送。" not in app_source
+
+    assert "def _release_manifest_fingerprint" in admin_api_source
+    assert '"artifactFingerprint"' in admin_api_source
+    assert '"sameVersionHotfix"' in admin_api_source
+    assert "entry[\"sameVersionHotfix\"] = bool(same_version and different_release)" in admin_api_source
+    assert "entry.get(\"artifactFingerprint\") != current_fingerprint" in admin_api_source
+    assert "entry.get(\"version\") != current_version" not in admin_api_source
+
+
 def test_s4b_gpt55_connectivity_smoke_requires_admin_managed_openai_key(monkeypatch):
     script_path = ROOT / "scripts" / "smoke-chat-model-connectivity.py"
     spec = importlib.util.spec_from_file_location("smoke_chat_model_connectivity", script_path)

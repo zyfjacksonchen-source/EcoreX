@@ -592,7 +592,30 @@ export type RuntimeRequestProjection = {
   latest_event_id?: number;
   event_count?: number;
   messages?: RuntimeMessage[];
+  image_jobs?: RuntimeImageJobProjection[];
   events?: RuntimeProjectionEvent[];
+};
+
+export type RuntimeImageJobProjection = {
+  job_id?: string;
+  status?: string;
+  operation?: string;
+  task_count?: number;
+  artifact_count?: number;
+  artifacts?: unknown[];
+  tasks?: Array<{
+    task_id?: string;
+    status?: string;
+    progress?: number;
+    terminal_job_status?: string;
+    artifacts?: unknown[];
+    [key: string]: unknown;
+  }>;
+  error_message?: string;
+  error_type?: string;
+  cancel_reason?: string;
+  last_event_id?: number;
+  [key: string]: unknown;
 };
 
 export type RuntimeSessionProjection = {

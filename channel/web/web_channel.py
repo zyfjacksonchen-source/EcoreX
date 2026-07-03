@@ -9505,7 +9505,7 @@ class ModelsHandler:
 
         return is_custom_gemini_transport(
             model or (local_config or {}).get("model") or "",
-            configured_bot_type=(local_config or {}).get("bot_type") or "",
+            configured_bot_type=const.GEMINI,
             gemini_api_base=(local_config or {}).get("gemini_api_base") or "",
             has_gemini_key=cls._is_real_key((local_config or {}).get("gemini_api_key", "")),
         )
@@ -10361,14 +10361,19 @@ class ModelsHandler:
             file_cfg["use_linkai"] = use_linkai
             applied["use_linkai"] = use_linkai
             if legacy_custom_gemini:
+                from models.model_capabilities import normalize_openai_compatible_api_base
+
                 migrated = False
                 for source_key, target_key in (
                     ("gemini_api_key", "custom_api_key"),
                     ("gemini_api_base", "custom_api_base"),
                 ):
                     if not self._is_real_key(local_config.get(target_key, "")) and local_config.get(source_key):
-                        local_config[target_key] = local_config.get(source_key, "")
-                        file_cfg[target_key] = file_cfg.get(source_key) or local_config.get(source_key, "")
+                        source_value = local_config.get(source_key, "")
+                        if source_key == "gemini_api_base":
+                            source_value = normalize_openai_compatible_api_base(source_value)
+                        local_config[target_key] = source_value
+                        file_cfg[target_key] = source_value
                         migrated = True
                 if migrated:
                     applied["custom_transport_migrated"] = True

@@ -272,6 +272,7 @@ def test_agent_product_focused_rerun_expands_dependencies_and_compiles():
     assert "update-check endpoint exposes WebUI update policy and artifacts" in remote
     assert "admin release API exposes protected state and promote endpoints" in remote
     assert "admin release promotion validates staged artifacts before current switch" in remote
+    assert "admin release supports same-version hotfix publish by artifact fingerprint" in remote
     assert "admin release page exposes one-click publish controls" in remote
     assert "/srv/ecorex-agent-download/current/checksums.json" not in remote
     assert "DATABASE_CONFIG_KEYS" in remote

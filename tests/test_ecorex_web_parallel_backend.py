@@ -3636,6 +3636,8 @@ class TestV022RunEventLedger(unittest.TestCase):
 
         self.assertIn("export type RuntimeProjectionEvent", api_source)
         self.assertIn("export type RuntimeRequestProjection", api_source)
+        self.assertIn("export type RuntimeImageJobProjection", api_source)
+        self.assertIn("image_jobs?: RuntimeImageJobProjection[]", api_source)
         self.assertIn("export type RuntimeSessionProjection", api_source)
         self.assertIn("terminal_message?: string", api_source)
         self.assertIn("export type RuntimeProjectionInput", api_source)
@@ -3649,6 +3651,9 @@ class TestV022RunEventLedger(unittest.TestCase):
         self.assertIn("loadRuntimeProjection,", app_source)
         self.assertIn("async function recoverRequestFromProjection", app_source)
         self.assertIn("projectionRecoveryDecision(projection)", app_source)
+        self.assertIn("projectionImageJobArtifacts(projection, requestId)", app_source)
+        self.assertIn("partial_image_job_projection_running", app_source)
+        self.assertIn("已恢复已生成的图片，正在尝试接回同一次任务；后续图片会继续追加。", app_source)
         self.assertIn("Array.isArray(item.artifacts) ? item.artifacts : item.extras?.artifacts", app_source)
         self.assertLess(
             app_source.index("clearStreamDeltaBuffers(sessionId, requestId);"),
@@ -3661,7 +3666,8 @@ class TestV022RunEventLedger(unittest.TestCase):
         self.assertIn("sessionId,", app_source[app_source.index("const cleanup = openMessageStream({"):])
         self.assertIn("sessionId: requestSessionId,", app_source)
         self.assertIn("async function handleStreamError", app_source)
-        self.assertIn("if (await recoverRequestFromProjection(sessionId, assistantId, requestId)) return;", app_source)
+        self.assertIn("const projectionRecovery = await recoverRequestFromProjection(sessionId, assistantId, requestId);", app_source)
+        self.assertIn('projectionRecovery === "terminal" || projectionRecovery === "partial-settled"', app_source)
         self.assertIn("void handleStreamError(sessionId, assistantId, requestId);", app_source)
         self.assertIn("void handleStreamError(requestSessionId, assistantId, requestId);", app_source)
         self.assertIn("function hasScheduledStreamReconnect", app_source)

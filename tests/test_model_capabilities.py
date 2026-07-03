@@ -79,7 +79,11 @@ class TestModelCapabilities(unittest.TestCase):
 
     def test_nonofficial_gemini_base_routes_as_custom_transport(self):
         from common import const
-        from models.model_capabilities import capabilities_for_config, infer_provider_id
+        from models.model_capabilities import (
+            capabilities_for_config,
+            infer_provider_id,
+            normalize_openai_compatible_api_base,
+        )
 
         self.assertEqual(
             infer_provider_id(
@@ -109,6 +113,23 @@ class TestModelCapabilities(unittest.TestCase):
 
         self.assertEqual(capabilities.provider, const.CUSTOM)
         self.assertEqual(capabilities.max_tokens_param, "max_tokens")
+        self.assertEqual(
+            infer_provider_id(
+                "gemini-3.1-pro-preview",
+                configured_bot_type=const.CUSTOM,
+                gemini_api_base="https://custom-gemini.test/v1",
+                has_gemini_key=True,
+            ),
+            const.CUSTOM,
+        )
+        self.assertEqual(
+            normalize_openai_compatible_api_base("http://custom-gemini.test:8080"),
+            "http://custom-gemini.test:8080/v1",
+        )
+        self.assertEqual(
+            normalize_openai_compatible_api_base("https://custom-gemini.test/v1/chat/completions"),
+            "https://custom-gemini.test/v1",
+        )
 
     def test_provider_aware_token_estimator_is_available(self):
         from common import const
@@ -560,6 +581,29 @@ class TestModelCapabilities(unittest.TestCase):
         self.assertEqual(bot.args["top_p"], 0.9)
         self.assertEqual(bot.args["frequency_penalty"], 0.2)
         self.assertEqual(bot.args["presence_penalty"], 0.1)
+
+    def test_chatgpt_custom_route_uses_normalized_legacy_gemini_base(self):
+        from common import const
+        from models.chatgpt.chat_gpt_bot import ChatGPTBot
+
+        local_config = {
+            "bot_type": const.CUSTOM,
+            "model": const.GEMINI_31_PRO_PRE,
+            "request_timeout": 30,
+            "gemini_api_key": "legacy-custom-gemini-key",
+            "gemini_api_base": "http://custom-gemini.test:8080",
+            "custom_api_key": "",
+            "custom_api_base": "",
+        }
+
+        with patch("models.chatgpt.chat_gpt_bot.conf", return_value=local_config):
+            bot = ChatGPTBot()
+            api_config = bot.get_api_config()
+
+        self.assertEqual(api_config["provider"], const.CUSTOM)
+        self.assertEqual(api_config["api_key"], "legacy-custom-gemini-key")
+        self.assertEqual(api_config["api_base"], "http://custom-gemini.test:8080/v1")
+        self.assertEqual(bot._get_http_client().api_base, "http://custom-gemini.test:8080/v1")
 
     def test_model_fallback_config_parses_explicit_routes(self):
         from models.model_fallback import configured_model_fallback_routes
