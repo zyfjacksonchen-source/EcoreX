@@ -55,6 +55,31 @@ function joinHref(href) {
   return /^https?:\/\//i.test(value) ? value : `./${value.replace(/^\.\//, "")}`;
 }
 
+function downloadMirrors(manifest) {
+  const mirrors = Array.isArray(manifest?.download?.mirrors) ? manifest.download.mirrors : [];
+  const legacyBases = Array.isArray(manifest?.download?.baseUrls) ? manifest.download.baseUrls : [];
+  return mirrors
+    .concat(legacyBases.map((baseUrl) => ({ baseUrl, pathMode: "href" })))
+    .map((mirror) => ({
+      baseUrl: String(mirror?.baseUrl || "").trim().replace(/\/+$/, ""),
+      pathMode: String(mirror?.pathMode || "href"),
+    }))
+    .filter((mirror) => /^https?:\/\//i.test(mirror.baseUrl));
+}
+
+function mirrorHref(mirror, artifact) {
+  const path = mirror.pathMode === "fileName" ? artifact?.fileName : artifact?.href;
+  if (!path) return "";
+  return `${mirror.baseUrl}/${String(path).replace(/^\.?\//, "")}`;
+}
+
+function artifactDownloadHref(manifest, artifact) {
+  const href = String(artifact?.href || "");
+  if (/^https?:\/\//i.test(href)) return href;
+  const mirror = downloadMirrors(manifest)[0];
+  return mirror ? mirrorHref(mirror, artifact) : joinHref(href);
+}
+
 function ready(artifact) {
   return Boolean(artifact && artifact.status === "ready" && artifact.size && artifact.sha256);
 }
@@ -135,7 +160,7 @@ function renderCard(grid, manifest, cardId, recommended) {
     </div>
     ${
       isReady
-        ? `<a class="download-link" href="${joinHref(artifact.href)}" download title="${artifact.source || ""}">下载安装包</a>`
+        ? `<a class="download-link" href="${artifactDownloadHref(manifest, artifact)}" download title="${artifact.source || ""}">下载安装包</a>`
         : '<span class="download-link is-disabled">待发布</span>'
     }
   `;

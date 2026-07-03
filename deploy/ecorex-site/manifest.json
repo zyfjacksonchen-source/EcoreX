@@ -3,6 +3,15 @@
     "version":  "0.2.7.1",
     "updatedAt":  "2026-07-03",
     "notes":  "EcoreX v0.2.7.1 WebUI-first release. Custom OpenAI-compatible Gemini routing, model-switch context continuity, paged switch divider UI, native multi-image generation routing, CDP-first browser automation, local OCR/Vision defaults, Tongxin MPI accuracy checks, performance context budgeting, mac runtime alignment, WebUI packages, Linux service package, installer scripts, /api/version, and update notes are aligned.",
+    "download":  {
+                     "mode":  "mirror-first-origin-fallback",
+                     "mirrors":  [
+
+                                  ],
+                     "minimumTargetBytesPerSecond":  1048576,
+                     "integrity":  "sha256",
+                     "fallback":  "origin"
+                 },
     "update":  {
                    "webui":  {
                                  "mode":  "manifest-download",

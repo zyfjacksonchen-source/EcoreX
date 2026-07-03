@@ -19,6 +19,66 @@ join_url() {
   esac
 }
 
+DOWNLOAD_URLS_TEXT=""
+
+add_download_url() {
+  local value="${1:-}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  if [[ -z "$value" ]]; then
+    return 0
+  fi
+  case "$value" in
+    http://*|https://*) ;;
+    *) return 0 ;;
+  esac
+  if printf '%s\n' "$DOWNLOAD_URLS_TEXT" | grep -Fx -- "$value" >/dev/null 2>&1; then
+    return 0
+  fi
+  DOWNLOAD_URLS_TEXT="${DOWNLOAD_URLS_TEXT}${value}
+"
+}
+
+add_download_url_for_base() {
+  local base="${1:-}"
+  local path_mode="${2:-href}"
+  local path="$ARTIFACT_HREF"
+  base="${base#"${base%%[![:space:]]*}"}"
+  base="${base%"${base##*[![:space:]]}"}"
+  base="${base%/}"
+  if [[ -z "$base" ]]; then
+    return 0
+  fi
+  case "$base" in
+    http://*|https://*) ;;
+    *) return 0 ;;
+  esac
+  if [[ "$path_mode" == "fileName" ]]; then
+    path="$ARTIFACT_NAME"
+  fi
+  if [[ -z "$path" ]]; then
+    return 0
+  fi
+  add_download_url "$(join_url "$base" "$path")"
+}
+
+add_download_base_urls_csv() {
+  local csv="${1:-}"
+  local path_mode="${2:-href}"
+  local old_ifs
+  local item
+  if [[ -z "$csv" ]]; then
+    return 0
+  fi
+  old_ifs="$IFS"
+  IFS=","
+  set -- $csv
+  IFS="$old_ifs"
+  for item in "$@"; do
+    add_download_url_for_base "$item" "$path_mode"
+  done
+}
+
 manifest_value() {
   /usr/bin/plutil -extract "$1" raw -o - "$MANIFEST_JSON" 2>/dev/null || true
 }
@@ -52,17 +112,23 @@ download_file() {
   echo "Downloading $url"
   for attempt in 1 2 3 4 5; do
     local curl_args=(-fL --retry 5 --retry-delay 5 --retry-max-time 900 --connect-timeout 45 --speed-time 120 --speed-limit 512 --progress-bar)
-    local resume_args=()
+    local should_resume=0
     if [[ -n "$retry_all_errors_flag" ]]; then
       curl_args+=("$retry_all_errors_flag")
     fi
     if [[ -s "$partial" ]]; then
       echo "Resuming download from existing partial file, attempt $attempt/5..."
-      resume_args=(-C -)
+      should_resume=1
     else
       echo "Starting download, attempt $attempt/5..."
     fi
-    if curl "${curl_args[@]}" "${resume_args[@]}" "$url" -o "$partial"; then
+    if [[ "$should_resume" == "1" ]]; then
+      if curl "${curl_args[@]}" -C - "$url" -o "$partial"; then
+        status=0
+      else
+        status=$?
+      fi
+    elif curl "${curl_args[@]}" "$url" -o "$partial"; then
       status=0
     else
       status=$?
@@ -77,7 +143,7 @@ download_file() {
       echo "Downloaded package SHA256 mismatch for $destination: $actual_sha" >&2
       rm -f "$partial"
       if [[ "$attempt" == "5" ]]; then
-        exit 1
+        return 1
       fi
       sleep $((attempt * 3))
       continue
@@ -90,10 +156,37 @@ download_file() {
     fi
     if [[ "$attempt" == "5" ]]; then
       echo "Download failed after $attempt attempts. You can rerun this installer to retry." >&2
-      exit "$status"
+      return "$status"
     fi
     sleep $((attempt * 3))
   done
+}
+
+download_file_from_urls() {
+  local destination="$1"
+  local expected_sha="$2"
+  local url
+  local attempted=0
+  while IFS= read -r url; do
+    if [[ -z "$url" ]]; then
+      continue
+    fi
+    attempted=1
+    echo "Trying download source: $url"
+    if download_file "$url" "$destination" "$expected_sha"; then
+      return 0
+    fi
+    echo "Download source failed or checksum did not match: $url" >&2
+    rm -f "$destination.part"
+  done <<EOF
+$DOWNLOAD_URLS_TEXT
+EOF
+  if [[ "$attempted" == "0" ]]; then
+    echo "No download source was configured." >&2
+  else
+    echo "All download sources failed. You can rerun this installer to retry." >&2
+  fi
+  exit 1
 }
 
 need_cmd curl
@@ -146,13 +239,22 @@ if [[ -z "$ARTIFACT_HREF" || -z "$ARTIFACT_NAME" || -z "$ARTIFACT_SHA" ]]; then
   exit 1
 fi
 
-ARTIFACT_URL="$(join_url "$BASE_URL" "$ARTIFACT_HREF")"
+add_download_base_urls_csv "${ECOREX_DOWNLOAD_ASSET_BASE_URLS:-}" "fileName"
+add_download_base_urls_csv "${ECOREX_DOWNLOAD_BASE_URLS:-}" "href"
+for index in $(seq 0 20); do
+  add_download_url_for_base "$(manifest_value "download.mirrors.$index.baseUrl")" "$(manifest_value "download.mirrors.$index.pathMode")"
+done
+for index in $(seq 0 20); do
+  add_download_url_for_base "$(manifest_value "download.baseUrls.$index")" "href"
+done
+add_download_url_for_base "$BASE_URL" "href"
+
 CACHE_ROOT="${ECOREX_CACHE_ROOT:-$HOME/Library/Caches/EcoreX WebUI/downloads}"
 ZIP_PATH="$CACHE_ROOT/$ARTIFACT_NAME"
 EXTRACT_ROOT="$TMP_ROOT/extract"
 mkdir -p "$CACHE_ROOT" "$EXTRACT_ROOT"
 
-download_file "$ARTIFACT_URL" "$ZIP_PATH" "$ARTIFACT_SHA"
+download_file_from_urls "$ZIP_PATH" "$ARTIFACT_SHA"
 
 echo "Extracting package..."
 unzip -q "$ZIP_PATH" -d "$EXTRACT_ROOT"

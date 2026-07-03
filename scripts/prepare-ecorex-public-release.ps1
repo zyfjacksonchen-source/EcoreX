@@ -8,6 +8,9 @@ param(
     [string]$MacX64DmgPath = "",
     [string]$WebTarballPath = "",
     [string]$OutputDir = "release-artifacts",
+    [string[]]$DownloadBaseUrls = @(),
+    [string[]]$AssetDownloadBaseUrls = @(),
+    [string]$GitHubReleaseMirrorUrl = "",
     [switch]$KeepStaging,
     [switch]$SkipValidation,
     [switch]$ExternalizeDownloads
@@ -62,6 +65,84 @@ function Set-JsonObjectProperty {
     } else {
         Add-Member -InputObject $Object -NotePropertyName $Name -NotePropertyValue $Value -Force
     }
+}
+
+function Add-DownloadBaseUrl {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.ArrayList]$List,
+        [string]$Url
+    )
+    $clean = ([string]$Url).Trim().TrimEnd("/")
+    if (-not $clean -or $clean -notmatch '^https?://') {
+        return
+    }
+    if (-not $List.Contains($clean)) {
+        [void]$List.Add($clean)
+    }
+}
+
+function Add-DownloadBaseUrls {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.ArrayList]$List,
+        $Values
+    )
+    foreach ($value in @($Values)) {
+        if ($null -eq $value) { continue }
+        foreach ($part in ([string]$value -split "[,;`r`n]+")) {
+            Add-DownloadBaseUrl -List $List -Url $part
+        }
+    }
+}
+
+function Get-ConfiguredDownloadBaseUrls {
+    $urls = New-Object System.Collections.ArrayList
+    Add-DownloadBaseUrls -List $urls -Values $DownloadBaseUrls
+    Add-DownloadBaseUrls -List $urls -Values $env:ECOREX_DOWNLOAD_BASE_URLS
+    return $urls.ToArray([string])
+}
+
+function Add-DownloadMirror {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.ArrayList]$List,
+        [string]$Id,
+        [string]$Kind,
+        [string]$BaseUrl,
+        [string]$PathMode
+    )
+    $clean = ([string]$BaseUrl).Trim().TrimEnd("/")
+    if (-not $clean -or $clean -notmatch '^https?://') {
+        return
+    }
+    $mode = if (([string]$PathMode).Trim() -ieq "fileName") { "fileName" } else { "href" }
+    foreach ($item in $List) {
+        if ([string]$item.baseUrl -eq $clean -and [string]$item.pathMode -eq $mode) {
+            return
+        }
+    }
+    [void]$List.Add([ordered]@{
+        id = $Id
+        kind = $Kind
+        baseUrl = $clean
+        pathMode = $mode
+    })
+}
+
+function Get-ConfiguredDownloadMirrors {
+    $mirrors = New-Object System.Collections.ArrayList
+    $assetBases = New-Object System.Collections.ArrayList
+    Add-DownloadBaseUrls -List $assetBases -Values $GitHubReleaseMirrorUrl
+    Add-DownloadBaseUrls -List $assetBases -Values $env:ECOREX_GITHUB_RELEASE_MIRROR_URL
+    Add-DownloadBaseUrls -List $assetBases -Values $AssetDownloadBaseUrls
+    Add-DownloadBaseUrls -List $assetBases -Values $env:ECOREX_DOWNLOAD_ASSET_BASE_URLS
+    foreach ($base in $assetBases) {
+        $kind = if ([string]$base -match 'github\.com/.+/releases/download/') { "github-release" } else { "asset-base" }
+        $id = if ($kind -eq "github-release") { "github-release-v$Version" } else { "asset-mirror" }
+        Add-DownloadMirror -List $mirrors -Id $id -Kind $kind -BaseUrl $base -PathMode "fileName"
+    }
+    foreach ($base in @(Get-ConfiguredDownloadBaseUrls)) {
+        Add-DownloadMirror -List $mirrors -Id "path-mirror" -Kind "path-compatible" -BaseUrl $base -PathMode "href"
+    }
+    return $mirrors.ToArray()
 }
 
 function Get-EcoreXFileSha256 {
@@ -580,6 +661,16 @@ if ($ExternalizeDownloads) {
         }
     }
     Set-JsonObjectProperty -Object $publicManifest -Name "downloadsExternalized" -Value $true
+    $configuredDownloadMirrors = @(Get-ConfiguredDownloadMirrors)
+    if ($configuredDownloadMirrors.Count -gt 0) {
+        Set-JsonObjectProperty -Object $publicManifest -Name "download" -Value ([ordered]@{
+            mode = "mirror-first-origin-fallback"
+            mirrors = $configuredDownloadMirrors
+            minimumTargetBytesPerSecond = 1048576
+            integrity = "sha256"
+            fallback = "origin"
+        })
+    }
     Write-Utf8NoBom -Path $publicManifestPath -Value (($publicManifest | ConvertTo-Json -Depth 12) + "`n")
 }
 

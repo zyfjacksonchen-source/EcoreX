@@ -223,6 +223,22 @@ location ^~ /ecorex-agent/admin/ {
     autoindex off;
 }
 
+location ^~ /ecorex-agent/downloads/ {
+    alias /srv/ecorex-agent-download/current/downloads/;
+    autoindex off;
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    add_header Accept-Ranges bytes always;
+    add_header Cache-Control "public, max-age=31536000, immutable" always;
+    default_type application/octet-stream;
+    types {
+        application/zip zip;
+        application/gzip gz;
+        application/octet-stream exe dmg;
+    }
+}
+
 location ^~ /ecorex-agent/ {
     alias /srv/ecorex-agent-download/current/;
     index index.html;

@@ -1,5 +1,7 @@
 param(
     [string]$BaseUrl = "https://mvdcm.ecoremedia.net/ecorex-agent",
+    [string[]]$DownloadBaseUrls = @(),
+    [string[]]$AssetDownloadBaseUrls = @(),
     [string]$Version = "",
     [switch]$NoBrowser
 )
@@ -15,6 +17,92 @@ function Join-Url {
     param([string]$Base, [string]$Path)
     if ($Path -match '^https?://') { return $Path }
     return ($Base.TrimEnd('/') + '/' + $Path.TrimStart('/'))
+}
+
+function Add-DownloadBaseUrl {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.ArrayList]$List,
+        [string]$Url
+    )
+    $clean = ([string]$Url).Trim().TrimEnd("/")
+    if (-not $clean -or $clean -notmatch '^https?://') {
+        return
+    }
+    if (-not $List.Contains($clean)) {
+        [void]$List.Add($clean)
+    }
+}
+
+function Add-DownloadBaseUrls {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.ArrayList]$List,
+        $Values
+    )
+    foreach ($value in @($Values)) {
+        if ($null -eq $value) { continue }
+        foreach ($part in ([string]$value -split "[,;`r`n]+")) {
+            Add-DownloadBaseUrl -List $List -Url $part
+        }
+    }
+}
+
+function Add-DownloadUrlForBase {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.ArrayList]$List,
+        [string]$BaseUrl,
+        [string]$PathMode,
+        [Parameter(Mandatory = $true)]$Artifact
+    )
+    $clean = ([string]$BaseUrl).Trim().TrimEnd("/")
+    if (-not $clean -or $clean -notmatch '^https?://') {
+        return
+    }
+    $mode = ([string]$PathMode).Trim()
+    $path = if ($mode -ieq "fileName") { [string]$Artifact.fileName } else { [string]$Artifact.href }
+    if (-not $path) {
+        return
+    }
+    Add-DownloadBaseUrl -List $List -Url (Join-Url $clean $path)
+}
+
+function Add-DownloadUrlsForBases {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.ArrayList]$List,
+        $Values,
+        [string]$PathMode,
+        [Parameter(Mandatory = $true)]$Artifact
+    )
+    foreach ($value in @($Values)) {
+        if ($null -eq $value) { continue }
+        foreach ($part in ([string]$value -split "[,;`r`n]+")) {
+            Add-DownloadUrlForBase -List $List -BaseUrl $part -PathMode $PathMode -Artifact $Artifact
+        }
+    }
+}
+
+function Get-DownloadUrls {
+    param(
+        [Parameter(Mandatory = $true)]$Manifest,
+        [Parameter(Mandatory = $true)]$Artifact,
+        [Parameter(Mandatory = $true)][string]$OriginBaseUrl,
+        [string[]]$ExplicitBaseUrls = @(),
+        [string[]]$ExplicitAssetBaseUrls = @()
+    )
+    $urls = New-Object System.Collections.ArrayList
+    Add-DownloadUrlsForBases -List $urls -Values $ExplicitAssetBaseUrls -PathMode "fileName" -Artifact $Artifact
+    Add-DownloadUrlsForBases -List $urls -Values $env:ECOREX_DOWNLOAD_ASSET_BASE_URLS -PathMode "fileName" -Artifact $Artifact
+    Add-DownloadUrlsForBases -List $urls -Values $ExplicitBaseUrls -PathMode "href" -Artifact $Artifact
+    Add-DownloadUrlsForBases -List $urls -Values $env:ECOREX_DOWNLOAD_BASE_URLS -PathMode "href" -Artifact $Artifact
+    if ($Manifest.download -and $Manifest.download.mirrors) {
+        foreach ($mirror in @($Manifest.download.mirrors)) {
+            Add-DownloadUrlForBase -List $urls -BaseUrl ([string]$mirror.baseUrl) -PathMode ([string]$mirror.pathMode) -Artifact $Artifact
+        }
+    }
+    if ($Manifest.download -and $Manifest.download.baseUrls) {
+        Add-DownloadUrlsForBases -List $urls -Values $Manifest.download.baseUrls -PathMode "href" -Artifact $Artifact
+    }
+    Add-DownloadUrlForBase -List $urls -BaseUrl $OriginBaseUrl -PathMode "href" -Artifact $Artifact
+    return $urls.ToArray([string])
 }
 
 function Format-Mib {
@@ -316,6 +404,28 @@ function Save-UrlWithProgress {
     }
 }
 
+function Save-UrlWithFallback {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Urls,
+        [Parameter(Mandatory = $true)][string]$CachePath,
+        [Parameter(Mandatory = $true)][string]$WorkDir,
+        [Parameter(Mandatory = $true)][string]$ExpectedSha256
+    )
+    $errors = @()
+    foreach ($artifactUrl in $Urls) {
+        Write-Host "Trying download source: $artifactUrl"
+        try {
+            return Save-UrlWithProgress -Uri $artifactUrl -CachePath $CachePath -WorkDir $WorkDir -ExpectedSha256 $ExpectedSha256
+        } catch {
+            $errors += ("{0}: {1}" -f $artifactUrl, $_.Exception.Message)
+            Write-Warning "Download source failed: $artifactUrl"
+            Write-Warning $_.Exception.Message
+            Remove-Item -LiteralPath "$CachePath.part" -Force -ErrorAction SilentlyContinue
+        }
+    }
+    throw "All download sources failed. $($errors -join ' | ')"
+}
+
 $manifestUrl = Join-Url $BaseUrl "manifest.json"
 Write-Host "Fetching EcoreX manifest: $manifestUrl"
 $manifest = Invoke-RestMethod -Uri $manifestUrl -UseBasicParsing -TimeoutSec 30
@@ -341,8 +451,8 @@ $extractRoot = Join-Path $tempRoot "extract"
 New-Item -ItemType Directory -Force -Path $tempRoot, $extractRoot, $cacheRoot | Out-Null
 
 try {
-    $artifactUrl = Join-Url $BaseUrl $artifact.href
-    $packagePath = Save-UrlWithProgress -Uri $artifactUrl -CachePath $zipPath -WorkDir $tempRoot -ExpectedSha256 ([string]$artifact.sha256)
+    $downloadUrls = Get-DownloadUrls -Manifest $manifest -Artifact $artifact -OriginBaseUrl $BaseUrl -ExplicitBaseUrls $DownloadBaseUrls -ExplicitAssetBaseUrls $AssetDownloadBaseUrls
+    $packagePath = Save-UrlWithFallback -Urls $downloadUrls -CachePath $zipPath -WorkDir $tempRoot -ExpectedSha256 ([string]$artifact.sha256)
 
     Write-Host "Extracting package..."
     Expand-EcoreXZip -ZipPath $packagePath -DestinationPath $extractRoot

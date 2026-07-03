@@ -995,12 +995,17 @@ def test_v027_webui_installers_keep_windows_macos_user_flow_consistent():
     assert "does not match requested" in mac_installer
     assert 'id -eq "webui-windows-x64" -and $_.status -eq "ready"' in win_installer
     assert '"webui-macos-universal"' in mac_installer
-    assert '$artifactUrl = Join-Url $BaseUrl $artifact.href' in win_installer
-    assert 'ARTIFACT_URL="$(join_url "$BASE_URL" "$ARTIFACT_HREF")"' in mac_installer
+    assert 'Get-DownloadUrls -Manifest $manifest -Artifact $artifact -OriginBaseUrl $BaseUrl' in win_installer
+    assert 'Save-UrlWithFallback -Urls $downloadUrls' in win_installer
+    assert "ECOREX_DOWNLOAD_ASSET_BASE_URLS" in win_installer
+    assert 'download_file_from_urls "$ZIP_PATH" "$ARTIFACT_SHA"' in mac_installer
+    assert 'manifest_value "download.mirrors.$index.baseUrl"' in mac_installer
+    assert "ECOREX_DOWNLOAD_ASSET_BASE_URLS" in mac_installer
     assert 'Test-ExpectedHash -Path $CachePath -ExpectedSha256 $ExpectedSha256' in win_installer
     assert 'sha256_file "$destination")" == "$expected_sha"' in mac_installer
     assert '"--continue-at", "-"' in win_installer
-    assert 'resume_args=(-C -)' in mac_installer
+    assert 'resume_args' not in mac_installer
+    assert 'should_resume=1' in mac_installer
     assert "EcoreX-WebUI-Installer/0.2.7" in win_installer
     assert "EcoreX WebUI installer script: 0.2.7" in win_installer
     assert "EcoreX WebUI installer script: 0.2.7" in mac_installer
@@ -1015,6 +1020,9 @@ def test_v027_webui_installers_keep_windows_macos_user_flow_consistent():
     assert webui_policy["backgroundUpdate"]["healthCheck"] == "/api/version"
     assert webui_policy["backgroundUpdate"]["stateFile"] == "update-state.json"
     assert webui_policy["backgroundUpdate"]["autoLaunchBrowser"] == "never-in-background"
+    assert manifest["download"]["mode"] == "mirror-first-origin-fallback"
+    assert manifest["download"]["minimumTargetBytesPerSecond"] >= 1048576
+    assert isinstance(manifest["download"]["mirrors"], list)
     assert 'ValidateSet("manual", "background")' in local_packager
     assert '$backgroundUpdate = $UpdateMode -ieq "background"' in local_packager
     assert 'Get-ActiveRequestCount -StateDir $stateDir' in local_packager
