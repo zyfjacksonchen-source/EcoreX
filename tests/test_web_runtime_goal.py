@@ -1926,6 +1926,7 @@ def test_v027_model_switch_divider_and_imagegen_resume_contracts():
     app_source = (ROOT / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
     api_source = (ROOT / "desktop" / "src" / "services" / "ecorexApi.ts").read_text(encoding="utf-8")
     admin_api_source = (ROOT / "deploy" / "ecorex-admin-api" / "ecorex_admin_api.py").read_text(encoding="utf-8")
+    admin_js_source = (ROOT / "deploy" / "ecorex-site" / "admin" / "admin.js").read_text(encoding="utf-8")
 
     assert "mergePreservedLocalMessagesByTimeline" in app_source
     assert "return preserved.length ? mergePreservedLocalMessagesByTimeline(mergedHistory, preserved) : mergedHistory;" in app_source
@@ -1948,6 +1949,23 @@ def test_v027_model_switch_divider_and_imagegen_resume_contracts():
     assert "entry[\"sameVersionHotfix\"] = bool(same_version and different_release)" in admin_api_source
     assert "entry.get(\"artifactFingerprint\") != current_fingerprint" in admin_api_source
     assert "entry.get(\"version\") != current_version" not in admin_api_source
+    assert "def _compare_release_versions" in admin_api_source
+    assert "候选版本低于当前 stable" in admin_api_source
+    assert "staged release is older than current stable" in admin_api_source
+    assert '"promoteDisabledReason"' in admin_api_source
+
+    assert "export type RuntimeUpdateCheck" in api_source
+    assert "export async function checkRuntimeUpdate" in api_source
+    assert "UPDATE_NOTICE_DISMISSED_STORAGE_KEY" in app_source
+    assert "showRuntimeUpdateBanner" in app_source
+    assert "checkRuntimeUpdate(runtimeUpdatePlatform())" in app_source
+    assert "发现 EcoreX 新版本" in app_source
+    assert "打开下载页" in app_source
+
+    assert "data-release-can-promote" in admin_js_source
+    assert "data-release-disabled-reason" in admin_js_source
+    assert "showNotice(button.dataset.releaseDisabledReason" in admin_js_source
+    assert "发布中..." in admin_js_source
 
 
 def test_s4b_gpt55_connectivity_smoke_requires_admin_managed_openai_key(monkeypatch):

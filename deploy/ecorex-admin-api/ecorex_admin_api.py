@@ -928,6 +928,22 @@ class AdminStore:
         }
         return short_hash(json_dumps(payload), 16)
 
+    def _compare_release_versions(self, left, right):
+        def parts(value):
+            tokens = re.split(r"[._-]+", str(value or "0"))
+            result = []
+            for token in tokens:
+                result.append(int(token) if token.isdigit() else 0)
+            return result or [0]
+
+        a = parts(left)
+        b = parts(right)
+        for index in range(max(len(a), len(b))):
+            diff = (a[index] if index < len(a) else 0) - (b[index] if index < len(b) else 0)
+            if diff:
+                return 1 if diff > 0 else -1
+        return 0
+
     def _release_artifact_file(self, release_dir, artifact):
         href = compact_text(artifact.get("href") or "", 500)
         if href.startswith("http://") or href.startswith("https://"):
@@ -1007,6 +1023,7 @@ class AdminStore:
             "validation": {"status": "fail", "checkedSha256": False, "failureCount": 1, "failures": ["release pointer missing"]},
             "canPromote": False,
             "sameVersionHotfix": False,
+            "promoteDisabledReason": "release pointer missing",
         }
         if not (pointer.exists() or pointer.is_symlink()):
             return entry
@@ -1029,6 +1046,7 @@ class AdminStore:
             "readyArtifactCount": len(self._release_ready_artifacts(manifest)),
             "updatePolicy": self._release_webui_policy(manifest),
             "validation": self._validate_release_dir(resolved, manifest, verify_sha=False),
+            "promoteDisabledReason": "",
         })
         return entry
 
@@ -1058,17 +1076,26 @@ class AdminStore:
         current_target = payload["current"].get("targetHash") or ""
         for entry in staged:
             same_version = bool(entry.get("version")) and entry.get("version") == current_version
-            different_release = (
-                not same_version
-                or entry.get("artifactFingerprint") != current_fingerprint
+            version_compare = self._compare_release_versions(entry.get("version"), current_version)
+            same_version_hotfix = bool(same_version and (
+                entry.get("artifactFingerprint") != current_fingerprint
                 or entry.get("targetHash") != current_target
-            )
+            ))
+            different_release = version_compare > 0 or same_version_hotfix
             entry["sameVersionHotfix"] = bool(same_version and different_release)
-            entry["canPromote"] = (
-                entry.get("validation", {}).get("status") == "pass"
-                and bool(entry.get("version"))
-                and different_release
-            )
+            if entry.get("validation", {}).get("status") != "pass":
+                entry["promoteDisabledReason"] = "候选包校验未通过"
+            elif not entry.get("version"):
+                entry["promoteDisabledReason"] = "候选版本缺失"
+            elif version_compare < 0:
+                entry["promoteDisabledReason"] = "候选版本低于当前 stable，不能发布为新版"
+            elif same_version and not same_version_hotfix:
+                entry["promoteDisabledReason"] = "该候选已经是当前 stable"
+            elif not different_release:
+                entry["promoteDisabledReason"] = "没有可发布的制品变化"
+            else:
+                entry["promoteDisabledReason"] = ""
+            entry["canPromote"] = not bool(entry["promoteDisabledReason"])
         staged.sort(key=lambda item: (item.get("version") or "", item.get("id") or ""), reverse=True)
         payload["staged"] = staged
         payload["latestStaged"] = next((item for item in staged if item.get("canPromote")), staged[0] if staged else None)
@@ -1132,6 +1159,18 @@ class AdminStore:
         current_pointer = root / "current"
         if current_pointer.exists() and not current_pointer.is_symlink():
             raise ValueError("current release pointer is not a symlink")
+        current_manifest = self._read_release_manifest(current_pointer.resolve(strict=True)) if current_pointer.exists() or current_pointer.is_symlink() else {}
+        current_version = compact_text(current_manifest.get("version") or "", 80) if isinstance(current_manifest, dict) else ""
+        version_compare = self._compare_release_versions(version, current_version)
+        same_version = bool(version and current_version and version == current_version)
+        same_version_hotfix = bool(same_version and (
+            self._release_manifest_fingerprint(manifest) != self._release_manifest_fingerprint(current_manifest)
+            or short_hash(str(release_dir), 16) != short_hash(str(current_pointer.resolve(strict=True)), 16)
+        ))
+        if version_compare < 0:
+            raise ValueError("staged release is older than current stable; refusing to downgrade")
+        if same_version and not same_version_hotfix:
+            raise ValueError("staged release is already current stable")
 
         lock_path = self._acquire_release_lock(root)
         tmp_pointer = root / f".current-next-{version}-{int(time.time())}"

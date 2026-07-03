@@ -1,0 +1,97 @@
+{
+  "schemaVersion": "v0.2.7.1-admin-publish-update-reminder-v1",
+  "generatedAt": "2026-07-03T06:48:30Z",
+  "status": "PASS",
+  "scope": "admin one-click publish feedback and installed-user update reminder hotfix",
+  "rootCause": [
+    "Admin release_state treated any version different from current as promotable, so older staged releases could appear as publishable after a hotfix version was current.",
+    "The admin release page disabled non-promotable publish buttons, which made user clicks produce no visible feedback.",
+    "The Web client only showed background-update-installed prompts and did not proactively poll the stable public update-check endpoint for installable WebUI updates."
+  ],
+  "fixes": [
+    "AdminStore now compares release versions, blocks downgrade candidates, and exposes promoteDisabledReason for every staged release.",
+    "The admin release page keeps the publish button clickable for non-promotable candidates and surfaces the disabled reason through a warning notice.",
+    "The Web client polls /api/update-check with the detected platform, shows a dismissible update banner, and opens the download page from the prompt."
+  ],
+  "localValidation": [
+    {
+      "command": "npm --prefix desktop run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "python -m py_compile deploy/ecorex-admin-api/ecorex_admin_api.py channel/web/web_channel.py scripts/smoke-v026-production-agent-product-acceptance.py",
+      "status": "PASS"
+    },
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_ecorex_admin_device_id.py::AdminReleaseStateTest::test_release_state_disables_older_staged_candidates -q",
+      "status": "PASS"
+    },
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_web_runtime_goal.py::test_v027_model_switch_divider_and_imagegen_resume_contracts tests/test_v026_agent_product_acceptance.py::test_agent_product_focused_rerun_expands_dependencies_and_compiles -q",
+      "status": "PASS"
+    }
+  ],
+  "releaseArtifacts": {
+    "publicReleaseZip": {
+      "fileName": "EcoreX_0.2.7.1-public-release.zip",
+      "size": 2848492,
+      "sha256": "C7B824C54D309542D0F84E866C26D8DB17CCEA9FAE4461D2EDC12B17D8E3A6F5"
+    },
+    "webuiWindows": {
+      "fileName": "EcoreX_0.2.7.1-webui-windows-x64.zip",
+      "size": 550744052,
+      "sha256": "56F4D7245E55C72DAB66DDF418EACF01140A784B4ED4E3F25218855225662C28"
+    },
+    "webuiMacos": {
+      "fileName": "EcoreX_0.2.7.1-webui-macos-universal.zip",
+      "size": 652198886,
+      "sha256": "9829D3C185580CDCEC51077F77A7632FA51C9A0B89C53E7B66CD5E5AA859F0CA"
+    },
+    "webLinuxService": {
+      "fileName": "EcoreX_0.2.7.1-web-linux-service.tar.gz",
+      "size": 4093698,
+      "sha256": "D44820D66C7E4D07510FD87A007B0E98A2C085EE04DF3E54CF532421E2D7EF29"
+    }
+  },
+  "productionDeployment": {
+    "artifact": "docs/v0.2.7.1/artifacts/production-deploy-online.json",
+    "status": "PASS",
+    "version": "0.2.7.1",
+    "serviceActive": true,
+    "serviceEnabled": true,
+    "publicManifestVersion": "0.2.7.1",
+    "webServiceVersion": "0.2.7.1",
+    "adminPromotion": "promoted"
+  },
+  "productionSpotChecks": {
+    "publicManifest": {
+      "status": 200,
+      "version": "0.2.7.1",
+      "webuiPromotion": "admin-gated",
+      "artifactCountChecked": 3,
+      "contentHash": "79F05BF64B9F112262298DCA1325D0BFB0930258FA8CFEFCC6C41F36EF8AF7CD"
+    },
+    "adminReleaseState": {
+      "currentVersion": "0.2.7.1",
+      "latestCanPromote": false,
+      "stagedCountChecked": 2,
+      "olderStagedVersion": "0.2.7",
+      "olderStagedCanPromote": false,
+      "olderStagedDisabledReasonCategory": "downgrade-blocked"
+    },
+    "deployedStaticMarkers": {
+      "adminPublishFeedbackMarkers": "PASS",
+      "webUpdateReminderMarkers": "PASS",
+      "webBundleHashPrefix": "C63FADA3748D0D3C"
+    }
+  },
+  "notes": [
+    "Unauthenticated /api/update-check returns 401; the reminder is exercised by logged-in clients that carry the normal app session cookie.",
+    "Already-open old browser tabs cannot execute the new polling code until they reload, but installed clients on older artifacts can discover this 0.2.7.1 hotfix through the same public update-check contract after loading the updated client."
+  ],
+  "privacy": {
+    "rawServerOutputPersisted": false,
+    "rawAdminCredentialsPersisted": false,
+    "rawPrivateUrlsPersisted": false
+  }
+}

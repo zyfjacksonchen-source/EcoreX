@@ -387,14 +387,15 @@ function renderRelease() {
     .map((item) => {
       const valid = item.validation?.status === "pass";
       const canPromote = Boolean(item.canPromote);
+      const disabledReason = item.promoteDisabledReason || (canPromote ? "" : "当前候选不可发布");
       return `
         <article class="release-item">
           <div><strong>${escapeHtml(item.version || "未知版本")}</strong><span>${escapeHtml(item.id || "staged")}</span></div>
           <span>${escapeHtml(item.updatedAt || "未记录")}</span>
           <span>${formatNumber(item.readyArtifactCount || 0)} ready</span>
           <div class="row-actions">
-            <span class="pill" data-status="${valid ? "active" : "disabled"}">${valid ? "已校验" : "不可发布"}</span>
-            <button type="button" data-release-promote="${escapeHtml(item.version || "")}" data-release-staged-id="${escapeHtml(item.id || "")}" ${canPromote ? "" : "disabled"}>发布新版</button>
+            <span class="pill" data-status="${canPromote ? "active" : "disabled"}" title="${escapeHtml(disabledReason)}">${canPromote ? "可发布" : "不可发布"}</span>
+            <button type="button" data-release-promote="${escapeHtml(item.version || "")}" data-release-staged-id="${escapeHtml(item.id || "")}" data-release-can-promote="${canPromote ? "1" : "0"}" data-release-disabled-reason="${escapeHtml(disabledReason)}" aria-disabled="${canPromote ? "false" : "true"}" title="${escapeHtml(canPromote ? "发布到 stable" : disabledReason)}">发布新版</button>
           </div>
         </article>
       `;
@@ -536,9 +537,18 @@ document.addEventListener("click", async (event) => {
   if (!button) return;
   const version = button.dataset.releasePromote || "";
   const stagedId = button.dataset.releaseStagedId || "";
-  if (!version || button.disabled) return;
+  if (!version) {
+    showNotice("候选版本缺失，刷新发布状态后再试。", "error");
+    return;
+  }
+  if (button.dataset.releaseCanPromote !== "1") {
+    showNotice(button.dataset.releaseDisabledReason || "当前候选不可发布。", "warn");
+    return;
+  }
   if (!window.confirm(`发布 ${version} 到 stable，并让用户本机在线更新可见？`)) return;
   button.disabled = true;
+  button.textContent = "发布中...";
+  showNotice(`正在发布 ${version}，请稍候。`, "info");
   try {
     const payload = await mutate("/release/promote", {
       method: "POST",
@@ -551,6 +561,7 @@ document.addEventListener("click", async (event) => {
     showNotice(`已发布 ${version}`, "info");
   } catch (_) {
     button.disabled = false;
+    button.textContent = "发布新版";
   }
 });
 

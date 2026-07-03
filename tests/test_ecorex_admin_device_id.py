@@ -25,6 +25,40 @@ def load_admin_api():
 admin_api = load_admin_api()
 
 
+def _write_release_fixture(root: pathlib.Path, name: str, version: str, payload: bytes = b"release") -> pathlib.Path:
+    release = root / name
+    downloads = release / "downloads"
+    downloads.mkdir(parents=True, exist_ok=True)
+    artifact = downloads / f"{name}.zip"
+    artifact.write_bytes(payload)
+    digest = hashlib.sha256(payload).hexdigest().upper()
+    manifest = {
+        "product": "EcoreX",
+        "version": version,
+        "updatedAt": "2026-07-03T00:00:00Z",
+        "update": {
+            "webui": {
+                "mode": "online",
+                "channel": "stable",
+                "promotion": "admin-gated",
+                "artifactIds": ["webui-windows-x64"],
+            }
+        },
+        "artifacts": [
+            {
+                "id": "webui-windows-x64",
+                "fileName": artifact.name,
+                "href": f"downloads/{artifact.name}",
+                "status": "ready",
+                "size": len(payload),
+                "sha256": digest,
+            }
+        ],
+    }
+    (release / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return release
+
+
 class DeviceIdMatchesTest(unittest.TestCase):
     def test_matches_raw_and_url_encoded_device_ids(self):
         raw = "\u7535\u8111-\u5f20\u4e09-darwin"
@@ -61,6 +95,25 @@ class AdminBasicAuthTest(unittest.TestCase):
             self.assertTrue(self._authorized("root", "Password123"))
             self.assertFalse(self._authorized("operator", "Password123"))
             self.assertFalse(self._authorized("admin", "wrong"))
+
+
+class AdminReleaseStateTest(unittest.TestCase):
+    def test_release_state_disables_older_staged_candidates(self):
+        temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(temp_dir.cleanup)
+        root = pathlib.Path(temp_dir.name) / "releases"
+        _write_release_fixture(root, "current", "0.2.7.1", b"current")
+        _write_release_fixture(root, "staged-v0.2.7", "0.2.7", b"older")
+        _write_release_fixture(root, "staged-v0.2.7.2", "0.2.7.2", b"newer")
+        store = admin_api.AdminStore(str(pathlib.Path(temp_dir.name) / "admin.sqlite3"))
+
+        with mock.patch.dict(admin_api.os.environ, {"ECOREX_RELEASE_ROOT": str(root)}, clear=False):
+            state = store.release_state()
+
+        staged = {item["version"]: item for item in state["staged"]}
+        self.assertFalse(staged["0.2.7"]["canPromote"])
+        self.assertIn("低于当前 stable", staged["0.2.7"]["promoteDisabledReason"])
+        self.assertTrue(staged["0.2.7.2"]["canPromote"])
 
 
 class TongxinAuthEndpointTest(unittest.TestCase):

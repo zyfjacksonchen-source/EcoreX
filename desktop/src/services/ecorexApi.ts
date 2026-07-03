@@ -770,6 +770,31 @@ export type RuntimeSnapshot = {
   scheduler?: RuntimeSchedulerProjection;
 };
 
+export type RuntimeUpdateCheck = {
+  [key: string]: unknown;
+  status?: string;
+  platform?: string;
+  currentVersion?: string;
+  latestVersion?: string;
+  version?: string;
+  hasUpdate?: boolean;
+  updateReason?: "version" | "artifact" | string;
+  message?: string;
+  downloadUrl?: string;
+  artifact?: {
+    id?: string;
+    fileName?: string;
+    href?: string;
+    size?: number;
+    sha256?: string;
+    version?: string;
+    [key: string]: unknown;
+  };
+  installedArtifact?: Record<string, unknown>;
+  recommendedDownloads?: Record<string, unknown>;
+  update?: Record<string, unknown>;
+};
+
 export type RuntimeSnapshotOptions = {
   includeSessionIds?: string[];
 };
@@ -1385,6 +1410,11 @@ export async function loadRuntimeSnapshot(options: RuntimeSnapshotOptions = {}):
       }
     };
   }
+}
+
+export async function checkRuntimeUpdate(platform = "web"): Promise<RuntimeUpdateCheck> {
+  const params = new URLSearchParams({ platform });
+  return apiJson<RuntimeUpdateCheck>(`/api/update-check?${params.toString()}`);
 }
 
 function pickString(value: unknown) {

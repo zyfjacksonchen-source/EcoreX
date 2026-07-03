@@ -57,6 +57,7 @@ import {
   checkEnterpriseQuota,
   chooseProjectFolder,
   chooseLocalFiles,
+  checkRuntimeUpdate,
   decideToolPermission,
   enableDefaultSkills,
   enterpriseLogin,
@@ -126,6 +127,7 @@ import {
   type RuntimeTool,
   type RuntimeReleaseNotes,
   type RuntimeUpdateState,
+  type RuntimeUpdateCheck,
   type RuntimeSnapshot,
   type RuntimeSchedulerProjection,
   type RuntimeSchedulerTask,
@@ -418,6 +420,7 @@ const CAPABILITY_ENABLED_STORAGE_KEY = "ecorex-capability-enabled";
 const SKILL_DEFAULTS_STORAGE_KEY = "ecorex-skill-defaults-v1";
 const RELEASE_NOTES_SEEN_STORAGE_KEY = "ecorex-release-notes-seen-version";
 const BACKGROUND_UPDATE_APPLIED_STORAGE_KEY = "ecorex-background-update-applied";
+const UPDATE_NOTICE_DISMISSED_STORAGE_KEY = "ecorex-update-notice-dismissed";
 const SIDEBAR_COLLAPSE_STORAGE_KEY = "ecorex-sidebar-collapse-state-v1";
 const RUN_CENTER_DEV_GATE_STORAGE_KEY = "ecorex-dev-run-center";
 const NEW_SESSION_START_TITLE = "和EcoreX一起开始工作";
@@ -453,6 +456,23 @@ function backgroundUpdateReadyForRefresh(state?: RuntimeUpdateState | null) {
       && state.browserAction === "defer-to-existing-tab-soft-refresh"
     )
   );
+}
+
+function runtimeUpdatePlatform() {
+  const platform = (navigator.platform || navigator.userAgent || "").toLowerCase();
+  if (platform.includes("win")) return "win32";
+  if (platform.includes("mac")) return "darwin";
+  return "web";
+}
+
+function updateNoticeSeenId(update?: RuntimeUpdateCheck | null) {
+  if (!update?.hasUpdate) return "";
+  const artifact = update.artifact || {};
+  return [
+    update.latestVersion || update.version || "",
+    artifact.id || "artifact",
+    artifact.sha256 || artifact.size || update.updateReason || "update"
+  ].filter(Boolean).join(":");
 }
 const SESSION_UI_PREVIEW_DATA_URL_CHARS = 500;
 const DEFAULT_CONTEXT_THRESHOLD_TOKENS = 800_000;
@@ -3409,6 +3429,14 @@ export function App() {
       return "";
     }
   });
+  const [runtimeUpdateCheck, setRuntimeUpdateCheck] = useState<RuntimeUpdateCheck | null>(null);
+  const [updateNoticeDismissed, setUpdateNoticeDismissed] = useState(() => {
+    try {
+      return window.localStorage.getItem(UPDATE_NOTICE_DISMISSED_STORAGE_KEY) || "";
+    } catch {
+      return "";
+    }
+  });
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
@@ -3491,6 +3519,7 @@ export function App() {
   const handledSnapshotTerminalRequestsRef = useRef<StringBoolMap>({});
   const postDoneStreamCloseTimers = useRef<Record<string, number>>({});
   const postDoneTailArtifactsRef = useRef<Record<string, AgentArtifact[]>>({});
+  const updateNoticeToastShownRef = useRef("");
   const streamRetryCounts = useRef<Record<string, number>>({});
   const streamRequestStates = useRef<Record<string, StreamRequestState>>({});
   const streamStallTimers = useRef<Record<string, number>>({});
@@ -3979,6 +4008,26 @@ export function App() {
     }
     setReleaseNotesOpen(true);
   }, [runtimeSnapshot.status, runtimeSnapshot.version, runtimeSnapshot.releaseNotes?.version, runtimeSnapshot.releaseNotes?.revision]);
+
+  useEffect(() => {
+    if (runtimeSnapshot.status !== "ready") return undefined;
+    let disposed = false;
+    const run = async () => {
+      try {
+        const payload = await checkRuntimeUpdate(runtimeUpdatePlatform());
+        if (!disposed) setRuntimeUpdateCheck(payload);
+      } catch {
+        if (!disposed) setRuntimeUpdateCheck(null);
+      }
+    };
+    const initialTimer = window.setTimeout(() => { void run(); }, 2500);
+    const interval = window.setInterval(() => { void run(); }, 10 * 60 * 1000);
+    return () => {
+      disposed = true;
+      window.clearTimeout(initialTimer);
+      window.clearInterval(interval);
+    };
+  }, [runtimeSnapshot.status]);
 
   useEffect(() => {
     attachmentsRef.current = attachments;
@@ -4545,6 +4594,13 @@ export function App() {
     && backgroundUpdateKey !== backgroundUpdateApplied
     && backgroundUpdateReadyForRefresh(runtimeSnapshot.updateState)
   );
+  const runtimeUpdateKey = updateNoticeSeenId(runtimeUpdateCheck);
+  const showRuntimeUpdateBanner = Boolean(runtimeUpdateCheck?.hasUpdate && runtimeUpdateKey && runtimeUpdateKey !== updateNoticeDismissed);
+  useEffect(() => {
+    if (!showRuntimeUpdateBanner || !runtimeUpdateKey || updateNoticeToastShownRef.current === runtimeUpdateKey) return;
+    updateNoticeToastShownRef.current = runtimeUpdateKey;
+    setToast(runtimeUpdateCheck?.message || "发现 EcoreX 新版本");
+  }, [showRuntimeUpdateBanner, runtimeUpdateKey, runtimeUpdateCheck?.message]);
   const deferredComposerText = useDeferredValue(composerText);
   const skillDisplayRows = useMemo(() => buildSkillDisplayRows(runtimeSnapshot), [runtimeSnapshot]);
   const mentionableSkillRows = useMemo(() => skillDisplayRows.filter((skill) => skill.mentionable), [skillDisplayRows]);
@@ -8803,6 +8859,22 @@ export function App() {
     }
   }
 
+  function dismissRuntimeUpdateNotice(key: string) {
+    if (!key) return;
+    setUpdateNoticeDismissed(key);
+    try {
+      window.localStorage.setItem(UPDATE_NOTICE_DISMISSED_STORAGE_KEY, key);
+    } catch {
+      // The banner can still close for this render even if storage is unavailable.
+    }
+  }
+
+  function openRuntimeUpdateDownload() {
+    const url = runtimeUpdateCheck?.downloadUrl || "https://mvdcm.ecoremedia.net/ecorex-agent/";
+    window.open(url, "_blank", "noopener,noreferrer");
+    setToast("已打开 EcoreX 下载页");
+  }
+
   function reloadIntoBackgroundUpdate() {
     const key = backgroundUpdateSeenId(runtimeSnapshot.updateState);
     markBackgroundUpdateApplied(key);
@@ -9758,6 +9830,30 @@ export function App() {
                 title="关闭提示"
                 aria-label="关闭更新提示"
                 onClick={() => markBackgroundUpdateApplied(backgroundUpdateKey)}
+              >
+                <X aria-hidden="true" />
+              </button>
+            </div>
+          </section>
+        )}
+
+        {showRuntimeUpdateBanner && (
+          <section className="update-banner" role="status" aria-live="polite">
+            <div>
+              <strong>发现 EcoreX 新版本</strong>
+              <span>{runtimeUpdateCheck?.message || `可更新到 EcoreX ${runtimeUpdateCheck?.latestVersion || runtimeUpdateCheck?.version || ""}`}</span>
+            </div>
+            <div className="update-actions">
+              <em>{runtimeUpdateCheck?.updateReason === "artifact" ? "同版本热修" : `当前 ${runtimeUpdateCheck?.currentVersion || appVersion}`}</em>
+              <button type="button" onClick={openRuntimeUpdateDownload} title="打开下载页安装新版本">
+                <Globe2 aria-hidden="true" />打开下载页
+              </button>
+              <button
+                type="button"
+                className="icon-button"
+                title="关闭提示"
+                aria-label="关闭更新提示"
+                onClick={() => dismissRuntimeUpdateNotice(runtimeUpdateKey)}
               >
                 <X aria-hidden="true" />
               </button>

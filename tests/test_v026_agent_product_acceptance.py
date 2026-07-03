@@ -275,6 +275,9 @@ def test_agent_product_focused_rerun_expands_dependencies_and_compiles():
     assert "admin release supports same-version hotfix publish by artifact fingerprint" in remote
     assert "update-check can surface same-version artifact hotfixes" in remote
     assert "admin release page exposes one-click publish controls" in remote
+    assert "admin release blocks older staged downgrade candidates" in remote
+    assert "admin release page surfaces publish disabled reasons" in remote
+    assert "static app polls update-check and renders user update reminder" in remote
     assert "/srv/ecorex-agent-download/current/checksums.json" not in remote
     assert "DATABASE_CONFIG_KEYS" in remote
     assert "XIN_AGENT_DATABASE" in remote

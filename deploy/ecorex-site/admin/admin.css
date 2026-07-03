@@ -332,6 +332,12 @@ select {
   font-size: 13px;
 }
 
+.row-actions button[aria-disabled="true"] {
+  color: var(--subtle);
+  background: var(--panel);
+  cursor: help;
+}
+
 .pill {
   justify-self: start;
   padding: 5px 9px;
