@@ -69,7 +69,7 @@ function Set-JsonObjectProperty {
 
 function Add-DownloadBaseUrl {
     param(
-        [Parameter(Mandatory = $true)][System.Collections.ArrayList]$List,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.ArrayList]$List,
         [string]$Url
     )
     $clean = ([string]$Url).Trim().TrimEnd("/")
@@ -83,7 +83,7 @@ function Add-DownloadBaseUrl {
 
 function Add-DownloadBaseUrls {
     param(
-        [Parameter(Mandatory = $true)][System.Collections.ArrayList]$List,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.ArrayList]$List,
         $Values
     )
     foreach ($value in @($Values)) {
@@ -103,7 +103,7 @@ function Get-ConfiguredDownloadBaseUrls {
 
 function Add-DownloadMirror {
     param(
-        [Parameter(Mandatory = $true)][System.Collections.ArrayList]$List,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.ArrayList]$List,
         [string]$Id,
         [string]$Kind,
         [string]$BaseUrl,

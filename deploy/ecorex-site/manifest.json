@@ -6,7 +6,12 @@
     "download":  {
                      "mode":  "mirror-first-origin-fallback",
                      "mirrors":  [
-
+                                      {
+                                          "id":  "github-release-v0.2.7.1",
+                                          "kind":  "github-release",
+                                          "baseUrl":  "https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.7.1",
+                                          "pathMode":  "fileName"
+                                      }
                                   ],
                      "minimumTargetBytesPerSecond":  1048576,
                      "integrity":  "sha256",

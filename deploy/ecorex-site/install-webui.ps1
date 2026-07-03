@@ -21,7 +21,7 @@ function Join-Url {
 
 function Add-DownloadBaseUrl {
     param(
-        [Parameter(Mandatory = $true)][System.Collections.ArrayList]$List,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.ArrayList]$List,
         [string]$Url
     )
     $clean = ([string]$Url).Trim().TrimEnd("/")
@@ -35,7 +35,7 @@ function Add-DownloadBaseUrl {
 
 function Add-DownloadBaseUrls {
     param(
-        [Parameter(Mandatory = $true)][System.Collections.ArrayList]$List,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.ArrayList]$List,
         $Values
     )
     foreach ($value in @($Values)) {
@@ -48,7 +48,7 @@ function Add-DownloadBaseUrls {
 
 function Add-DownloadUrlForBase {
     param(
-        [Parameter(Mandatory = $true)][System.Collections.ArrayList]$List,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.ArrayList]$List,
         [string]$BaseUrl,
         [string]$PathMode,
         [Parameter(Mandatory = $true)]$Artifact
@@ -67,7 +67,7 @@ function Add-DownloadUrlForBase {
 
 function Add-DownloadUrlsForBases {
     param(
-        [Parameter(Mandatory = $true)][System.Collections.ArrayList]$List,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.ArrayList]$List,
         $Values,
         [string]$PathMode,
         [Parameter(Mandatory = $true)]$Artifact
