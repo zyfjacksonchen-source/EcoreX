@@ -134,7 +134,10 @@ async function request(path, options = {}) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload.ok === false) {
-    throw new Error(payload.error || `HTTP ${response.status}`);
+    const error = new Error(payload.error || `HTTP ${response.status}`);
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
   }
   return payload;
 }
@@ -467,7 +470,7 @@ async function mutate(path, options) {
     showNotice("操作已保存", "info");
     return payload;
   } catch (error) {
-    setApiStatus(false, error.message);
+    setApiStatus(Boolean(error.status), error.message);
     showNotice(error.message || "操作失败，请检查权限或稍后重试。", "error");
     throw error;
   }

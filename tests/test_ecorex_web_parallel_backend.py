@@ -6501,13 +6501,138 @@ class TestWebParallelHandlers(unittest.TestCase):
             with patch.object(web_channel, "conf", return_value={"web_host": "0.0.0.0", "web_password": "secret"}), \
                     patch.object(web_channel.urllib.request, "urlopen", side_effect=fake_urlopen):
                 self.assertTrue(web_channel._check_auth())
-                self.assertEqual(calls[:2], ["ecorex-web-v0.2.6-web.1", "ecorex-web-v0.2.2-web.1"])
+                self.assertEqual(calls[:2], ["ecorex-web-v0.2.6-web.1", "ecorex-web-v0.2.7.1-web.1"])
         finally:
             web_channel._enterprise_auth_cache.clear()
             if previous_ctx is None:
                 delattr(web, "ctx")
             else:
                 web.ctx = previous_ctx
+
+    def test_enterprise_release_notice_uses_current_client_key_after_legacy_key(self):
+        from channel.web import web_channel
+        import io
+        import urllib.error
+        import web
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, *_args):
+                return json.dumps({
+                    "ok": True,
+                    "notice": {
+                        "revision": "0.2.7.1-unit",
+                        "version": "0.2.7.1",
+                        "message": "EcoreX 0.2.7.1 已发布，请刷新当前页面或前往下载页安装。",
+                        "publishedAt": "2026-07-03T00:00:00Z",
+                    },
+                }).encode("utf-8")
+
+        calls = []
+
+        def fake_urlopen(request, timeout=0):
+            key = request.get_header("X-ecorex-client-key")
+            calls.append((request.full_url, key))
+            if key == "ecorex-web-v0.2.6-web.1":
+                raise urllib.error.HTTPError(
+                    request.full_url,
+                    403,
+                    "Forbidden",
+                    {},
+                    io.BytesIO(b'{"ok": false, "error": "invalid client key"}'),
+                )
+            return FakeResponse()
+
+        previous_ctx = getattr(web, "ctx", None)
+        web.ctx = types.SimpleNamespace(env={"HTTP_X_ECOREX_CLIENT_KEY": "ecorex-web-v0.2.6-web.1"})
+        web_channel._ENTERPRISE_RELEASE_NOTICE_CACHE.update({"expiresAt": 0.0, "notice": {}})
+        try:
+            with patch.object(web_channel, "conf", return_value={"web_client_base": "https://example.invalid/client"}), \
+                    patch.object(web_channel.urllib.request, "urlopen", side_effect=fake_urlopen):
+                notice = web_channel._enterprise_release_notice_payload()
+                self.assertEqual(notice["revision"], "0.2.7.1-unit")
+                self.assertEqual(calls[:2], [
+                    ("https://example.invalid/client/release-notice", "ecorex-web-v0.2.6-web.1"),
+                    ("https://example.invalid/client/release-notice", "ecorex-web-v0.2.7.1-web.1"),
+                ])
+        finally:
+            web_channel._ENTERPRISE_RELEASE_NOTICE_CACHE.update({"expiresAt": 0.0, "notice": {}})
+            if previous_ctx is None:
+                delattr(web, "ctx")
+            else:
+                web.ctx = previous_ctx
+
+    def test_runtime_update_state_prefers_enterprise_release_notice(self):
+        from channel.web import web_channel
+
+        notice = {
+            "revision": "0.2.7.1-admin",
+            "version": "0.2.7.1",
+            "message": "EcoreX 0.2.7.1 已发布，请刷新当前页面或前往下载页安装。",
+            "publishedAt": "2026-07-03T00:00:00Z",
+        }
+        web_channel._UPDATE_NOTICE_CACHE.update({"expiresAt": 0.0, "payload": {}})
+        try:
+            with patch.object(web_channel, "_enterprise_release_notice_payload", return_value=notice):
+                payload = web_channel._runtime_update_state_payload()
+
+            self.assertEqual(payload["source"], "admin-release-notice")
+            self.assertEqual(payload["noticeRevision"], "0.2.7.1-admin")
+            self.assertTrue(payload["refreshRequired"])
+        finally:
+            web_channel._UPDATE_NOTICE_CACHE.update({"expiresAt": 0.0, "payload": {}})
+
+    def test_runtime_update_state_prefers_local_notice_over_release_notice_cache(self):
+        from channel.web import web_channel
+
+        local = {
+            "source": "local-update-state",
+            "noticeRevision": "0.2.7.1-local",
+            "refreshRequired": True,
+        }
+        release = {
+            "source": "release-notice",
+            "noticeRevision": "0.2.7.1-old-public",
+            "refreshRequired": True,
+        }
+
+        with patch.object(web_channel, "_local_runtime_update_state_payload", return_value=local), \
+                patch.object(web_channel, "_release_manifest_notice_state_payload", return_value=release):
+            payload = web_channel._runtime_update_state_payload()
+
+        self.assertEqual(payload["source"], "local-update-state")
+        self.assertEqual(payload["noticeRevision"], "0.2.7.1-local")
+
+    def test_local_runtime_update_state_exposes_notice_revision_and_message(self):
+        from channel.web import web_channel
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "update-state.json"
+            state_path.write_text(json.dumps({
+                "version": "0.2.7.1",
+                "mode": "background",
+                "status": "installed",
+                "reason": "admin-release-notify",
+                "message": "EcoreX 0.2.7.1 已发布，请刷新当前页面或前往下载页安装。",
+                "browserAction": "defer-to-existing-tab-soft-refresh",
+                "generatedAt": "2026-07-03T16:07:56+08:00",
+                "noticeRevision": "0.2.7.1-local",
+            }), encoding="utf-8")
+
+            with patch.object(web_channel, "_webui_update_state_path", return_value=state_path):
+                payload = web_channel._local_runtime_update_state_payload()
+
+        self.assertEqual(payload["source"], "local-update-state")
+        self.assertEqual(payload["noticeRevision"], "0.2.7.1-local")
+        self.assertIn("0.2.7.1", payload["message"])
+        self.assertTrue(payload["refreshRequired"])
 
     def test_v020_channel_catalog_matches_factory_and_normalizes_aliases(self):
         from channel.channel_catalog import CHANNEL_CATALOG, normalize_channel_name, parse_channel_list

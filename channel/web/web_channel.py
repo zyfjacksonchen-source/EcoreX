@@ -1835,6 +1835,8 @@ def _desktop_runtime_token_required() -> bool:
 
 WEB_ENTERPRISE_AUTH_CACHE_TTL_SECONDS = 30
 WEB_ENTERPRISE_CLIENT_KEYS = (
+    "ecorex-web-v0.2.7.1-web.1",
+    "ecorex-web-v0.2.7-web.1",
     "ecorex-web-v0.2.6-web.1",
     "ecorex-web-v0.2.2-web.1",
     "ecorex-web-v0.2.1-web.1",
@@ -8005,7 +8007,7 @@ class UpdateCheckHandler:
 
             latest_version = str(manifest.get("version") or "")
             artifact = self._pick_artifact(manifest, platform)
-            notice = self._release_notice(manifest)
+            notice = _enterprise_release_notice_payload() or self._release_notice(manifest)
             notice_revision = str(notice.get("revision") or "").strip()
             version_compare = self._compare_versions(latest_version, __version__) if latest_version else 0
             installed_artifact = self._installed_artifact_metadata(platform, artifact)
@@ -13511,6 +13513,93 @@ _UPDATE_BROWSER_ACTIONS = {
 }
 _UPDATE_NOTICE_CACHE_LOCK = threading.RLock()
 _UPDATE_NOTICE_CACHE: Dict[str, Any] = {"expiresAt": 0.0, "payload": {}}
+_ENTERPRISE_RELEASE_NOTICE_CACHE_LOCK = threading.RLock()
+_ENTERPRISE_RELEASE_NOTICE_CACHE: Dict[str, Any] = {"expiresAt": 0.0, "notice": {}}
+
+
+def _normalize_release_notice_payload(value: Any, fallback_version: str = "") -> Dict[str, Any]:
+    raw = value.get("notice") if isinstance(value, dict) and isinstance(value.get("notice"), dict) else value
+    if not isinstance(raw, dict):
+        return {}
+    revision = str(raw.get("revision") or raw.get("noticeRevision") or "").strip()
+    if not revision:
+        return {}
+    version = str(raw.get("version") or fallback_version or "").strip()[:40]
+    message = str(
+        raw.get("message")
+        or (f"EcoreX {version} 已发布，请刷新当前页面或前往下载页安装。" if version else "")
+    ).strip()[:240]
+    return {
+        "revision": revision[:120],
+        "version": version,
+        "message": message,
+        "publishedAt": str(raw.get("publishedAt") or raw.get("published_at") or raw.get("noticeUpdatedAt") or "").strip()[:80],
+        "reason": str(raw.get("reason") or "admin-release-notify").strip()[:80],
+        "redacted": True,
+    }
+
+
+def _release_notice_update_state_payload(notice: Dict[str, Any], source: str = "release-notice") -> Dict[str, Any]:
+    notice = _normalize_release_notice_payload(notice)
+    if not notice:
+        return {}
+    version = notice.get("version") or ""
+    return {
+        "stateAvailable": True,
+        "source": source,
+        "product": "EcoreX WebUI",
+        "version": version,
+        "mode": "background",
+        "status": "installed",
+        "reason": notice.get("reason") or "admin-release-notify",
+        "message": notice.get("message") or f"EcoreX {version} 已发布，请刷新当前页面或前往下载页安装。",
+        "browserAction": "defer-to-existing-tab-soft-refresh",
+        "activationPolicy": "prompt-soft-refresh-existing-tab",
+        "healthCheck": {"endpoint": "/api/version", "status": "pass", "passed": True},
+        "generatedAt": notice.get("publishedAt") or datetime.datetime.now(datetime.timezone.utc).astimezone().isoformat(timespec="seconds"),
+        "refreshRequired": True,
+        "noticeRevision": notice.get("revision"),
+        "redacted": True,
+    }
+
+
+def _enterprise_release_notice_payload() -> Dict[str, Any]:
+    now = time.time()
+    with _ENTERPRISE_RELEASE_NOTICE_CACHE_LOCK:
+        if float(_ENTERPRISE_RELEASE_NOTICE_CACHE.get("expiresAt") or 0) > now:
+            cached = _ENTERPRISE_RELEASE_NOTICE_CACHE.get("notice")
+            return dict(cached) if isinstance(cached, dict) else {}
+    notice: Dict[str, Any] = {}
+    try:
+        base = _web_enterprise_client_base()
+        if base:
+            for client_key in _enterprise_client_keys_for_request():
+                request = urllib.request.Request(
+                    f"{base}/release-notice",
+                    headers={
+                        "Accept": "application/json",
+                        "X-EcoreX-Client-Key": client_key,
+                        "User-Agent": "EcoreX-WebReleaseNotice/0.2.7.1",
+                    },
+                    method="GET",
+                )
+                try:
+                    with urllib.request.urlopen(request, timeout=3) as response:
+                        payload = json.loads(response.read(128_000).decode("utf-8", errors="replace") or "{}")
+                    notice = _normalize_release_notice_payload(payload)
+                    if notice:
+                        break
+                except urllib.error.HTTPError as exc:
+                    if exc.code in (403, 404):
+                        continue
+                    raise
+    except Exception as exc:
+        logger.debug(f"[WebChannel] enterprise release notice unavailable: {_web_body_log_summary(exc)}")
+        notice = {}
+    with _ENTERPRISE_RELEASE_NOTICE_CACHE_LOCK:
+        _ENTERPRISE_RELEASE_NOTICE_CACHE["expiresAt"] = now + 30
+        _ENTERPRISE_RELEASE_NOTICE_CACHE["notice"] = dict(notice)
+    return notice
 
 
 def _release_manifest_notice_state_payload() -> Dict[str, Any]:
@@ -13520,6 +13609,13 @@ def _release_manifest_notice_state_payload() -> Dict[str, Any]:
             cached = _UPDATE_NOTICE_CACHE.get("payload")
             return dict(cached) if isinstance(cached, dict) else {}
     payload: Dict[str, Any] = {}
+    enterprise_notice = _enterprise_release_notice_payload()
+    if enterprise_notice:
+        payload = _release_notice_update_state_payload(enterprise_notice, "admin-release-notice")
+        with _UPDATE_NOTICE_CACHE_LOCK:
+            _UPDATE_NOTICE_CACHE["expiresAt"] = now + 30
+            _UPDATE_NOTICE_CACHE["payload"] = dict(payload)
+        return payload
     try:
         configured = (
             os.environ.get("ECOREX_RELEASE_MANIFEST_URL")
@@ -13537,28 +13633,15 @@ def _release_manifest_notice_state_payload() -> Dict[str, Any]:
             update = manifest.get("update") if isinstance(manifest.get("update"), dict) else {}
             webui = update.get("webui") if isinstance(update.get("webui"), dict) else {}
             notice = webui.get("notice") if isinstance(webui.get("notice"), dict) else {}
-            revision = str(notice.get("revision") or webui.get("noticeRevision") or "").strip()
-            if revision:
-                version = str(notice.get("version") or manifest.get("version") or "")[:40]
-                generated_at = str(notice.get("publishedAt") or webui.get("noticeUpdatedAt") or "")[:80]
-                message = str(notice.get("message") or f"EcoreX {version} 已发布，请刷新当前页面或前往下载页安装。")[:240]
-                payload = {
-                    "stateAvailable": True,
-                    "source": "release-notice",
-                    "product": "EcoreX WebUI",
-                    "version": version,
-                    "mode": "background",
-                    "status": "installed",
-                    "reason": "admin-release-notify",
-                    "message": message,
-                    "browserAction": "defer-to-existing-tab-soft-refresh",
-                    "activationPolicy": "prompt-soft-refresh-existing-tab",
-                    "healthCheck": {"endpoint": "/api/version", "status": "pass", "passed": True},
-                    "generatedAt": generated_at or datetime.datetime.now(datetime.timezone.utc).astimezone().isoformat(timespec="seconds"),
-                    "refreshRequired": True,
-                    "noticeRevision": revision[:120],
-                    "redacted": True,
-                }
+            notice = _normalize_release_notice_payload(
+                {
+                    **notice,
+                    "revision": notice.get("revision") or webui.get("noticeRevision"),
+                    "publishedAt": notice.get("publishedAt") or webui.get("noticeUpdatedAt"),
+                },
+                str(manifest.get("version") or ""),
+            )
+            payload = _release_notice_update_state_payload(notice, "release-notice")
     except Exception as exc:
         logger.debug(f"[WebChannel] release notice unavailable: {_web_body_log_summary(exc)}")
     with _UPDATE_NOTICE_CACHE_LOCK:
@@ -13605,6 +13688,8 @@ def _webui_update_state_path() -> Optional[Path]:
         if appdata_path.name.lower() == "appdata":
             candidates.append(appdata_path.parent)
         candidates.append(appdata_path)
+    if os.name != "nt":
+        candidates.append(Path("/opt/ecorex-web/state"))
     for candidate in candidates:
         try:
             path = candidate / "update-state.json"
@@ -13616,10 +13701,7 @@ def _webui_update_state_path() -> Optional[Path]:
     return candidates[0] / "update-state.json" if candidates else None
 
 
-def _runtime_update_state_payload() -> Dict[str, Any]:
-    notice_payload = _release_manifest_notice_state_payload()
-    if notice_payload:
-        return notice_payload
+def _local_runtime_update_state_payload() -> Dict[str, Any]:
     path = _webui_update_state_path()
     if not path or not path.is_file():
         return {}
@@ -13667,11 +13749,13 @@ def _runtime_update_state_payload() -> Dict[str, Any]:
             "mode": mode,
             "status": status,
             "reason": str(payload.get("reason") or "")[:120],
+            "message": str(payload.get("message") or "")[:240],
             "browserAction": browser_action,
             "activationPolicy": activation_policy[:80],
             "healthCheck": health_payload,
             "generatedAt": _diagnostic_timestamp(payload.get("generatedAt")),
             "refreshRequired": mode == "background" and status == "installed" and browser_action == "defer-to-existing-tab-soft-refresh",
+            "noticeRevision": str(payload.get("noticeRevision") or payload.get("notice_revision") or "")[:120],
             "redacted": True,
         }
         safe_url = _safe_local_update_url(payload.get("url"))
@@ -13688,6 +13772,16 @@ def _runtime_update_state_payload() -> Dict[str, Any]:
             "source": "local-update-state",
             "redacted": True,
         }
+
+
+def _runtime_update_state_payload() -> Dict[str, Any]:
+    local_payload = _local_runtime_update_state_payload()
+    if local_payload.get("noticeRevision"):
+        return local_payload
+    notice_payload = _release_manifest_notice_state_payload()
+    if notice_payload:
+        return notice_payload
+    return local_payload
 
 
 class VersionHandler:

@@ -98,6 +98,33 @@ class AdminBasicAuthTest(unittest.TestCase):
 
 
 class AdminReleaseStateTest(unittest.TestCase):
+    def _start_server(self):
+        temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(temp_dir.cleanup)
+        previous_store = getattr(admin_api.AdminHandler, "store", None)
+        self.addCleanup(lambda: setattr(admin_api.AdminHandler, "store", previous_store))
+        admin_api.AdminHandler.store = admin_api.AdminStore(str(pathlib.Path(temp_dir.name) / "admin.sqlite3"))
+        server = ThreadingHTTPServer(("127.0.0.1", 0), admin_api.AdminHandler)
+        self.addCleanup(server.server_close)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.shutdown)
+        return server
+
+    def _request_json(self, server, method, path, payload=None, client_key="unit-key"):
+        body = None if payload is None else json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_port}{path}",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-EcoreX-Client-Key": client_key,
+            },
+            method=method,
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return json.loads(response.read().decode("utf-8"))
+
     def test_release_state_disables_older_staged_candidates(self):
         temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(temp_dir.cleanup)
@@ -141,10 +168,69 @@ class AdminReleaseStateTest(unittest.TestCase):
         self.assertEqual(payload["status"], "success")
         self.assertEqual(payload["notifiedVersion"], "0.2.7.1")
         self.assertTrue(payload["noticeRevision"])
+        self.assertTrue(payload["noticeFileWritten"])
+        self.assertTrue(payload["manifestNoticeWritten"])
         self.assertEqual(notice["revision"], payload["noticeRevision"])
         self.assertEqual(update_state["noticeRevision"], payload["noticeRevision"])
         self.assertEqual(update_state["mode"], "background")
         self.assertEqual(update_state["browserAction"], "defer-to-existing-tab-soft-refresh")
+
+    def test_notify_release_succeeds_when_manifest_is_not_writable(self):
+        temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(temp_dir.cleanup)
+        temp_path = pathlib.Path(temp_dir.name)
+        root = temp_path / "releases"
+        state_dir = temp_path / "state"
+        _write_release_fixture(root, "current", "0.2.7.1", b"current")
+        store = admin_api.AdminStore(str(temp_path / "admin.sqlite3"))
+        manifest_path = root / "current" / "manifest.json"
+        original_write = store._write_release_json
+
+        def write_or_deny(path, payload):
+            if pathlib.Path(path) == manifest_path:
+                raise PermissionError("manifest denied")
+            return original_write(path, payload)
+
+        with mock.patch.dict(
+            admin_api.os.environ,
+            {
+                "ECOREX_RELEASE_ROOT": str(root),
+                "ECOREX_WEBUI_STATE_DIR": str(state_dir),
+            },
+            clear=False,
+        ), mock.patch.object(store, "_write_release_json", side_effect=write_or_deny):
+            payload = store.notify_release({"version": "0.2.7.1", "actor": "unit"})
+
+        notice_state = store.release_notice()["notice"]
+        update_state = json.loads((state_dir / "update-state.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["notifiedVersion"], "0.2.7.1")
+        self.assertTrue(payload["noticeFileWritten"])
+        self.assertFalse(payload["manifestNoticeWritten"])
+        self.assertEqual(payload["manifestNoticeError"], "PermissionError")
+        self.assertNotIn(str(root), payload["manifestNoticeErrorHash"])
+        self.assertEqual(notice_state["revision"], payload["noticeRevision"])
+        self.assertEqual(update_state["noticeRevision"], payload["noticeRevision"])
+
+    def test_client_release_notice_endpoint_returns_admin_data_notice(self):
+        server = self._start_server()
+        store = admin_api.AdminHandler.store
+        notice = {
+            "revision": "0.2.7.1-unit",
+            "version": "0.2.7.1",
+            "message": "EcoreX 0.2.7.1 已发布，请刷新当前页面或前往下载页安装。",
+            "publishedAt": "2026-07-03T00:00:00Z",
+            "reason": "admin-release-notify",
+            "redacted": True,
+        }
+        store._write_release_notice_file(notice)
+
+        payload = self._request_json(server, "GET", "/client/release-notice", client_key=admin_api.DEFAULT_CLIENT_EVENT_KEY)
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["notice"]["revision"], "0.2.7.1-unit")
+        self.assertTrue(payload["redacted"])
 
 
 class TongxinAuthEndpointTest(unittest.TestCase):

@@ -1106,6 +1106,69 @@ class AdminStore:
         tmp_path.write_text(json_dumps(payload) + "\n", encoding="utf-8")
         os.replace(str(tmp_path), str(path))
 
+    def _admin_data_dir(self):
+        return pathlib.Path(os.path.dirname(os.path.abspath(self.db_path))).expanduser()
+
+    def _release_notice_path(self):
+        return self._admin_data_dir() / "release-notice.json"
+
+    def _normalize_release_notice(self, notice, fallback_version=""):
+        if not isinstance(notice, dict):
+            return {}
+        revision = compact_text(notice.get("revision") or "", 120)
+        if not revision:
+            return {}
+        version = compact_text(notice.get("version") or fallback_version, 80)
+        message = compact_text(
+            notice.get("message") or (f"EcoreX {version} 已发布，请刷新当前页面或前往下载页安装。" if version else ""),
+            240,
+        )
+        return {
+            "revision": revision,
+            "version": version,
+            "message": message,
+            "publishedAt": compact_text(notice.get("publishedAt") or notice.get("published_at") or "", 80),
+            "reason": compact_text(notice.get("reason") or "admin-release-notify", 80),
+            "redacted": True,
+        }
+
+    def _read_release_notice_file(self):
+        path = self._release_notice_path()
+        if not path.is_file():
+            return {}
+        payload = json_loads(path.read_text(encoding="utf-8-sig"), {})
+        notice = payload.get("notice") if isinstance(payload, dict) and isinstance(payload.get("notice"), dict) else payload
+        return self._normalize_release_notice(notice if isinstance(notice, dict) else {})
+
+    def _write_release_notice_file(self, notice):
+        path = self._release_notice_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._write_release_json(path, {
+            "ok": True,
+            "notice": self._normalize_release_notice(notice),
+            "updatedAt": now_iso(),
+            "redacted": True,
+        })
+        return True
+
+    def release_notice(self):
+        notice = self._read_release_notice_file()
+        if not notice:
+            try:
+                root = self.release_root()
+                current_pointer = root / "current"
+                if current_pointer.exists() or current_pointer.is_symlink():
+                    current_dir = current_pointer.resolve(strict=True)
+                    current_dir.relative_to(root.resolve(strict=False))
+                    manifest = self._read_release_manifest(current_dir)
+                    update = manifest.get("update") if isinstance(manifest, dict) and isinstance(manifest.get("update"), dict) else {}
+                    webui = update.get("webui") if isinstance(update.get("webui"), dict) else {}
+                    raw_notice = webui.get("notice") if isinstance(webui.get("notice"), dict) else {}
+                    notice = self._normalize_release_notice(raw_notice, compact_text(manifest.get("version") or "", 80))
+            except Exception:
+                notice = {}
+        return {"ok": True, "notice": notice, "redacted": True}
+
     def _write_runtime_update_notice(self, version, notice):
         state_dir = pathlib.Path(os.environ.get("ECOREX_WEBUI_STATE_DIR") or "/opt/ecorex-web/state").expanduser()
         state_path = state_dir / "update-state.json"
@@ -1166,6 +1229,7 @@ class AdminStore:
             "reason": "admin-release-notify",
             "redacted": True,
         }
+        notice_file_written = self._write_release_notice_file(notice)
         update = manifest.get("update") if isinstance(manifest.get("update"), dict) else {}
         webui = update.get("webui") if isinstance(update.get("webui"), dict) else {}
         webui["notice"] = notice
@@ -1174,7 +1238,15 @@ class AdminStore:
         update["webui"] = webui
         manifest["update"] = update
         manifest["noticeUpdatedAt"] = published_at
-        self._write_release_json(manifest_path, manifest)
+        manifest_notice_written = False
+        manifest_notice_error = ""
+        manifest_notice_error_hash = ""
+        try:
+            self._write_release_json(manifest_path, manifest)
+            manifest_notice_written = True
+        except Exception as exc:
+            manifest_notice_error = type(exc).__name__
+            manifest_notice_error_hash = short_hash(str(exc), 16)
         update_state_written = self._write_runtime_update_notice(version, notice)
 
         with self.connect() as conn:
@@ -1186,6 +1258,10 @@ class AdminStore:
                 {
                     "version": version,
                     "noticeRevision": revision,
+                    "noticeFileWritten": notice_file_written,
+                    "manifestNoticeWritten": manifest_notice_written,
+                    "manifestNoticeError": manifest_notice_error,
+                    "manifestNoticeErrorHash": manifest_notice_error_hash,
                     "runtimeUpdateStateWritten": update_state_written,
                     "targetHash": short_hash(str(current_dir), 16),
                 },
@@ -1197,6 +1273,10 @@ class AdminStore:
             "notifiedVersion": version,
             "noticeRevision": revision,
             "message": message,
+            "noticeFileWritten": notice_file_written,
+            "manifestNoticeWritten": manifest_notice_written,
+            "manifestNoticeError": manifest_notice_error,
+            "manifestNoticeErrorHash": manifest_notice_error_hash,
             "runtimeUpdateStateWritten": update_state_written,
             "release": self.release_state(),
         }
@@ -3658,6 +3738,15 @@ class AdminHandler(BaseHTTPRequestHandler):
                 if not self._require_admin():
                     return
                 self._json(200, {"ok": True, "release": self.store.release_state()})
+            elif path == "/release/notice":
+                if not self._require_admin():
+                    return
+                self._json(200, self.store.release_notice())
+            elif path in ("/client/release-notice", "/release-notice/client"):
+                if not self._client_key_valid():
+                    self._json(403, {"ok": False, "error": "invalid client key"})
+                    return
+                self._json(200, self.store.release_notice())
             elif path in ("/client/model-config", "/model-config"):
                 if not self._client_key_valid():
                     self._json(403, {"ok": False, "error": "invalid client key"})

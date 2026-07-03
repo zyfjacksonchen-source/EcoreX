@@ -1,0 +1,77 @@
+{
+  "schemaVersion": "v0.2.7.1-admin-notify-offline-hotfix-v1",
+  "status": "PASS",
+  "generatedAt": "2026-07-03T16:41:18+08:00",
+  "scope": "admin release notify, user update notification, download page redeploy",
+  "rootCause": {
+    "adminOfflineUi": "The admin UI marked the API as offline after /release/notify returned HTTP 500.",
+    "permissionFailure": "The Admin API process runs as ecorex while the current release manifest is owned by root, so writing current/manifest.json can fail with PermissionError.",
+    "userNotificationGap": "The Web runtime preferred public manifest release notice and did not expose local update-state noticeRevision/message, so a freshly written admin notice could be hidden by older public manifest state."
+  },
+  "fixes": [
+    "Persist release notices to the Admin API writable data file release-notice.json before attempting any release manifest write.",
+    "Expose client-safe GET /client/release-notice behind X-EcoreX-Client-Key.",
+    "Treat release manifest writes as best-effort and return manifestNoticeWritten/manifestNoticeError without leaking paths.",
+    "Teach Web update checks and /api/version to read enterprise release notices and local update-state noticeRevision/message.",
+    "Keep admin UI connected when a business request returns an HTTP error; only network/state refresh failures should show offline."
+  ],
+  "privacy": {
+    "publicErrorPaths": "not exposed",
+    "publicNoticePayload": "revision, version, message, publishedAt, reason, redacted",
+    "serverPathsInPublicDiagnostics": false
+  },
+  "localValidation": {
+    "pyCompile": "PASS: deploy/ecorex-admin-api/ecorex_admin_api.py, channel/web/web_channel.py",
+    "pytest": "PASS: 9 focused tests with PYTEST_DISABLE_PLUGIN_AUTOLOAD=1",
+    "pytestWarnings": [
+      "pydub audioop deprecation",
+      "ffmpeg/avconv not found warning"
+    ],
+    "globalPytestPluginIssue": "Initial pytest invocation without PYTEST_DISABLE_PLUGIN_AUTOLOAD failed because the local global langsmith plugin imports an incompatible pydantic-core."
+  },
+  "productionValidation": {
+    "deployArtifact": "docs/v0.2.7.1/artifacts/production-deploy-online.json",
+    "deployStatus": "PASS",
+    "releaseNotifyStatus": 200,
+    "noticeRevision": "0.2.7.1-1783068078-a022716d",
+    "noticeFileWritten": true,
+    "manifestNoticeWritten": false,
+    "manifestNoticeError": "PermissionError",
+    "runtimeUpdateStateWritten": true,
+    "clientReleaseNoticeStatus": 200,
+    "webVersionStatus": 200,
+    "webUpdateStateSource": "local-update-state",
+    "webRefreshRequired": true,
+    "servicesActive": [
+      "ecorex-admin-api.service",
+      "ecorex-web.service"
+    ],
+    "currentReleaseTarget": "/srv/ecorex-agent-download/releases/20260703084027-v0.2.7.1"
+  },
+  "downloadManifest": {
+    "version": "0.2.7.1",
+    "webuiWindowsX64": {
+      "size": 550746017,
+      "sha256": "25C2F4F8319E4EA8A83C88F5214462B1C055EFB5749135A08D137E096C168184"
+    },
+    "webuiMacosUniversal": {
+      "size": 652200851,
+      "sha256": "5E152D3D9C921B8E310588C5AE1214395353AE344F87CEDBA555AC20DE844417"
+    },
+    "webLinuxService": {
+      "size": 4094919,
+      "sha256": "867961D6C4D2D88E0BF7EBDE6C604755CC2A9EE48EE4C0F247E7DA022A696A94"
+    },
+    "publicZip": {
+      "size": 2850420,
+      "sha256": "CD0B4BF075DEB79A3B6F209CC64F77437EB85C49DA324A03AF0CB3E92FF2473B"
+    }
+  },
+  "reviewGate": {
+    "runtimeConfig": "PASS",
+    "frontendApi": "PASS",
+    "releaseTooling": "PASS",
+    "qaRelease": "PASS",
+    "privacyData": "PASS"
+  }
+}
