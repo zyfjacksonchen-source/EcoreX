@@ -380,7 +380,7 @@ function renderRelease() {
       <div><strong>当前 stable</strong><span>${escapeHtml(current.id || "current")}</span></div>
       <span>${escapeHtml(current.version || "未知版本")}</span>
       <span>${escapeHtml(current.updatedAt || "未记录")}</span>
-      <span class="pill" data-status="${current.validation?.status === "pass" ? "active" : "disabled"}">${current.validation?.status === "pass" ? "可更新" : "需检查"}</span>
+      <span class="pill" data-status="${current.validation?.status === "pass" ? "current" : "disabled"}">${current.validation?.status === "pass" ? "已发布" : "需检查"}</span>
     </article>
   ` : "";
   const stagedRows = staged
@@ -388,14 +388,30 @@ function renderRelease() {
       const valid = item.validation?.status === "pass";
       const canPromote = Boolean(item.canPromote);
       const disabledReason = item.promoteDisabledReason || (canPromote ? "" : "当前候选不可发布");
+      const canNotify = !canPromote && disabledReason.includes("当前 stable");
+      let pillStatus = canPromote ? "active" : "disabled";
+      let pillText = canPromote ? "可发布" : "不可发布";
+      let buttonText = canPromote ? "发布新版" : "查看原因";
+      let action = canPromote ? "promote" : "reason";
+      if (!canPromote && disabledReason.includes("当前 stable")) {
+        pillStatus = "current";
+        pillText = "已发布";
+        buttonText = "通知用户";
+        action = "notify";
+      } else if (!canPromote && disabledReason.includes("低于当前 stable")) {
+        pillStatus = "obsolete";
+        pillText = "旧版本";
+      } else if (!canPromote && !valid) {
+        pillText = "校验失败";
+      }
       return `
         <article class="release-item">
           <div><strong>${escapeHtml(item.version || "未知版本")}</strong><span>${escapeHtml(item.id || "staged")}</span></div>
           <span>${escapeHtml(item.updatedAt || "未记录")}</span>
           <span>${formatNumber(item.readyArtifactCount || 0)} ready</span>
           <div class="row-actions">
-            <span class="pill" data-status="${canPromote ? "active" : "disabled"}" title="${escapeHtml(disabledReason)}">${canPromote ? "可发布" : "不可发布"}</span>
-            <button type="button" data-release-promote="${escapeHtml(item.version || "")}" data-release-staged-id="${escapeHtml(item.id || "")}" data-release-can-promote="${canPromote ? "1" : "0"}" data-release-disabled-reason="${escapeHtml(disabledReason)}" aria-disabled="${canPromote ? "false" : "true"}" title="${escapeHtml(canPromote ? "发布到 stable" : disabledReason)}">发布新版</button>
+            <span class="pill" data-status="${pillStatus}" title="${escapeHtml(disabledReason)}">${pillText}</span>
+            <button type="button" data-release-promote="${escapeHtml(item.version || "")}" data-release-staged-id="${escapeHtml(item.id || "")}" data-release-action="${action}" data-release-can-promote="${canPromote ? "1" : "0"}" data-release-can-notify="${canNotify ? "1" : "0"}" data-release-disabled-reason="${escapeHtml(disabledReason)}" aria-disabled="${canPromote || canNotify ? "false" : "true"}" title="${escapeHtml(canPromote ? "发布到 stable" : (canNotify ? "重新通知已安装用户" : disabledReason))}">${buttonText}</button>
           </div>
         </article>
       `;
@@ -539,6 +555,27 @@ document.addEventListener("click", async (event) => {
   const stagedId = button.dataset.releaseStagedId || "";
   if (!version) {
     showNotice("候选版本缺失，刷新发布状态后再试。", "error");
+    return;
+  }
+  if (button.dataset.releaseAction === "notify" || button.dataset.releaseCanNotify === "1") {
+    if (!window.confirm(`${version} 已经是 stable。现在重新通知用户安装/刷新？`)) return;
+    button.disabled = true;
+    button.textContent = "通知中...";
+    showNotice(`正在通知用户 EcoreX ${version}，请稍候。`, "info");
+    try {
+      const payload = await mutate("/release/notify", {
+        method: "POST",
+        body: JSON.stringify({ version, stagedId, actor: "admin-ui" }),
+      });
+      if (payload.release) {
+        mergeState({ release: payload.release });
+        renderRelease();
+      }
+      showNotice(payload.message || `已通知用户 EcoreX ${version}`, "info");
+    } catch (_) {
+      button.disabled = false;
+      button.textContent = "通知用户";
+    }
     return;
   }
   if (button.dataset.releaseCanPromote !== "1") {

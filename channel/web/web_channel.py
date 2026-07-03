@@ -8005,13 +8005,18 @@ class UpdateCheckHandler:
 
             latest_version = str(manifest.get("version") or "")
             artifact = self._pick_artifact(manifest, platform)
+            notice = self._release_notice(manifest)
+            notice_revision = str(notice.get("revision") or "").strip()
             version_compare = self._compare_versions(latest_version, __version__) if latest_version else 0
             installed_artifact = self._installed_artifact_metadata(platform, artifact)
             artifact_changed = bool(artifact and version_compare == 0 and self._artifact_changed(artifact, installed_artifact))
-            has_update = bool(artifact and latest_version and (version_compare > 0 or artifact_changed))
+            notice_active = bool(latest_version and notice_revision)
+            has_update = bool(latest_version and (version_compare > 0 or artifact_changed or notice_active))
             download_url = self._absolute_download_url(artifact.get("href") if artifact else "")
-            update_reason = "version" if version_compare > 0 else ("artifact" if artifact_changed else "")
-            if has_update and update_reason == "artifact":
+            update_reason = "version" if version_compare > 0 else ("artifact" if artifact_changed else ("notice" if notice_active else ""))
+            if notice_active and update_reason == "notice":
+                message = notice.get("message") or f"EcoreX {latest_version} 已发布，请刷新当前页面或前往下载页安装"
+            elif has_update and update_reason == "artifact":
                 message = f"发现 {latest_version} 同版本更新，请前往下载页安装"
             else:
                 message = f"发现新版本 {latest_version}，请前往下载页安装" if has_update else "当前已经是最新版本"
@@ -8023,6 +8028,8 @@ class UpdateCheckHandler:
                 "version": latest_version or __version__,
                 "hasUpdate": has_update,
                 "updateReason": update_reason,
+                "noticeRevision": notice_revision,
+                "notice": notice,
                 "message": message,
                 "downloadUrl": download_url,
                 "artifact": artifact,
@@ -8033,6 +8040,24 @@ class UpdateCheckHandler:
         except Exception as e:
             logger.error(f"[WebChannel] update check error: {_web_body_log_summary(e)}")
             return json.dumps(_public_error_payload("Request failed.", e), ensure_ascii=False)
+
+    def _release_notice(self, manifest: Dict[str, Any]) -> Dict[str, Any]:
+        update = manifest.get("update") if isinstance(manifest.get("update"), dict) else {}
+        webui = update.get("webui") if isinstance(update.get("webui"), dict) else {}
+        notice = webui.get("notice") if isinstance(webui.get("notice"), dict) else {}
+        revision = str(notice.get("revision") or webui.get("noticeRevision") or "").strip()
+        if not revision:
+            return {}
+        message = str(notice.get("message") or "").strip()
+        published_at = str(notice.get("publishedAt") or webui.get("noticeUpdatedAt") or "").strip()
+        return {
+            "revision": revision[:120],
+            "version": str(notice.get("version") or manifest.get("version") or "")[:40],
+            "message": message[:240],
+            "publishedAt": published_at[:80],
+            "reason": str(notice.get("reason") or "admin-release-notify")[:80],
+            "redacted": True,
+        }
 
     def _load_manifest(self) -> Dict[str, Any]:
         configured = (
@@ -13484,6 +13509,62 @@ _UPDATE_BROWSER_ACTIONS = {
     "open-default-browser",
     "none",
 }
+_UPDATE_NOTICE_CACHE_LOCK = threading.RLock()
+_UPDATE_NOTICE_CACHE: Dict[str, Any] = {"expiresAt": 0.0, "payload": {}}
+
+
+def _release_manifest_notice_state_payload() -> Dict[str, Any]:
+    now = time.time()
+    with _UPDATE_NOTICE_CACHE_LOCK:
+        if float(_UPDATE_NOTICE_CACHE.get("expiresAt") or 0) > now:
+            cached = _UPDATE_NOTICE_CACHE.get("payload")
+            return dict(cached) if isinstance(cached, dict) else {}
+    payload: Dict[str, Any] = {}
+    try:
+        configured = (
+            os.environ.get("ECOREX_RELEASE_MANIFEST_URL")
+            or conf().get("release_manifest_url")
+            or "https://mvdcm.ecoremedia.net/ecorex-agent/manifest.json"
+        )
+        manifest_url = str(configured or "").strip()
+        if os.path.isfile(manifest_url):
+            with open(manifest_url, "r", encoding="utf-8") as handle:
+                manifest = json.load(handle)
+        else:
+            with urllib.request.urlopen(manifest_url, timeout=3) as response:
+                manifest = json.loads(response.read().decode("utf-8"))
+        if isinstance(manifest, dict):
+            update = manifest.get("update") if isinstance(manifest.get("update"), dict) else {}
+            webui = update.get("webui") if isinstance(update.get("webui"), dict) else {}
+            notice = webui.get("notice") if isinstance(webui.get("notice"), dict) else {}
+            revision = str(notice.get("revision") or webui.get("noticeRevision") or "").strip()
+            if revision:
+                version = str(notice.get("version") or manifest.get("version") or "")[:40]
+                generated_at = str(notice.get("publishedAt") or webui.get("noticeUpdatedAt") or "")[:80]
+                message = str(notice.get("message") or f"EcoreX {version} 已发布，请刷新当前页面或前往下载页安装。")[:240]
+                payload = {
+                    "stateAvailable": True,
+                    "source": "release-notice",
+                    "product": "EcoreX WebUI",
+                    "version": version,
+                    "mode": "background",
+                    "status": "installed",
+                    "reason": "admin-release-notify",
+                    "message": message,
+                    "browserAction": "defer-to-existing-tab-soft-refresh",
+                    "activationPolicy": "prompt-soft-refresh-existing-tab",
+                    "healthCheck": {"endpoint": "/api/version", "status": "pass", "passed": True},
+                    "generatedAt": generated_at or datetime.datetime.now(datetime.timezone.utc).astimezone().isoformat(timespec="seconds"),
+                    "refreshRequired": True,
+                    "noticeRevision": revision[:120],
+                    "redacted": True,
+                }
+    except Exception as exc:
+        logger.debug(f"[WebChannel] release notice unavailable: {_web_body_log_summary(exc)}")
+    with _UPDATE_NOTICE_CACHE_LOCK:
+        _UPDATE_NOTICE_CACHE["expiresAt"] = now + 30
+        _UPDATE_NOTICE_CACHE["payload"] = dict(payload)
+    return payload
 
 
 def _safe_local_update_url(value: Any) -> str:
@@ -13536,6 +13617,9 @@ def _webui_update_state_path() -> Optional[Path]:
 
 
 def _runtime_update_state_payload() -> Dict[str, Any]:
+    notice_payload = _release_manifest_notice_state_payload()
+    if notice_payload:
+        return notice_payload
     path = _webui_update_state_path()
     if not path or not path.is_file():
         return {}

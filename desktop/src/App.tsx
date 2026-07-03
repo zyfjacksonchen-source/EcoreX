@@ -444,7 +444,7 @@ function releaseNotesSeenId(notes?: RuntimeReleaseNotes | null, fallbackVersion?
 
 function backgroundUpdateSeenId(state?: RuntimeUpdateState | null) {
   if (!state?.version) return "";
-  return `${state.version}:${state.generatedAt || "installed"}`;
+  return `${state.version}:${state.noticeRevision || state.generatedAt || "installed"}`;
 }
 
 function backgroundUpdateReadyForRefresh(state?: RuntimeUpdateState | null) {
@@ -471,7 +471,7 @@ function updateNoticeSeenId(update?: RuntimeUpdateCheck | null) {
   return [
     update.latestVersion || update.version || "",
     artifact.id || "artifact",
-    artifact.sha256 || artifact.size || update.updateReason || "update"
+    update.noticeRevision || update.notice?.revision || artifact.sha256 || artifact.size || update.updateReason || "update"
   ].filter(Boolean).join(":");
 }
 const SESSION_UI_PREVIEW_DATA_URL_CHARS = 500;
@@ -4021,7 +4021,7 @@ export function App() {
       }
     };
     const initialTimer = window.setTimeout(() => { void run(); }, 2500);
-    const interval = window.setInterval(() => { void run(); }, 10 * 60 * 1000);
+    const interval = window.setInterval(() => { void run(); }, 60 * 1000);
     return () => {
       disposed = true;
       window.clearTimeout(initialTimer);
@@ -9817,7 +9817,7 @@ export function App() {
           <section className="update-banner" role="status" aria-live="polite">
             <div>
               <strong>新版本已就绪</strong>
-              <span>后台更新已安装，刷新当前页面即可使用 EcoreX {runtimeSnapshot.updateState?.version || appVersion}</span>
+              <span>{runtimeSnapshot.updateState?.message || `后台更新已安装，刷新当前页面即可使用 EcoreX ${runtimeSnapshot.updateState?.version || appVersion}`}</span>
             </div>
             <div className="update-actions">
               <em>{runtimeSnapshot.updateState?.healthCheck?.passed ? "健康检查通过" : "等待生效"}</em>
@@ -9844,7 +9844,7 @@ export function App() {
               <span>{runtimeUpdateCheck?.message || `可更新到 EcoreX ${runtimeUpdateCheck?.latestVersion || runtimeUpdateCheck?.version || ""}`}</span>
             </div>
             <div className="update-actions">
-              <em>{runtimeUpdateCheck?.updateReason === "artifact" ? "同版本热修" : `当前 ${runtimeUpdateCheck?.currentVersion || appVersion}`}</em>
+              <em>{runtimeUpdateCheck?.updateReason === "notice" ? "管理员通知" : (runtimeUpdateCheck?.updateReason === "artifact" ? "同版本热修" : `当前 ${runtimeUpdateCheck?.currentVersion || appVersion}`)}</em>
               <button type="button" onClick={openRuntimeUpdateDownload} title="打开下载页安装新版本">
                 <Globe2 aria-hidden="true" />打开下载页
               </button>

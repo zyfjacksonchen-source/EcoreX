@@ -277,6 +277,9 @@ def test_agent_product_focused_rerun_expands_dependencies_and_compiles():
     assert "admin release page exposes one-click publish controls" in remote
     assert "admin release blocks older staged downgrade candidates" in remote
     assert "admin release page surfaces publish disabled reasons" in remote
+    assert "admin release can notify users for current stable" in remote
+    assert "admin release page exposes notify users action for current stable" in remote
+    assert "update-check can surface admin notice revisions" in remote
     assert "static app polls update-check and renders user update reminder" in remote
     assert "/srv/ecorex-agent-download/current/checksums.json" not in remote
     assert "DATABASE_CONFIG_KEYS" in remote

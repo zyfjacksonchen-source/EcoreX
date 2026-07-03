@@ -1,0 +1,83 @@
+{
+  "schemaVersion": "v0.2.7.1-current-stable-user-notify-v1",
+  "generatedAt": "2026-07-03T07:44:30Z",
+  "status": "PASS",
+  "scope": "current stable release user notification",
+  "problem": "0.2.7.1 was already current stable, so clicking publish could not promote again and users did not receive a fresh notification.",
+  "fix": [
+    "Added AdminStore.notify_release and /release/notify for the product action: notify users about the current stable release without changing the current pointer.",
+    "Admin page now renders current stable staged rows as 已发布 with a 通知用户 action instead of a red 不可发布 state.",
+    "Public manifest update.webui.notice now carries noticeRevision, message, publishedAt, and reason.",
+    "Web /api/version exposes the same release notice through updateState with refreshRequired=true for already-open clients.",
+    "Web /api/update-check treats noticeRevision as an update reason so installed clients receive a banner even when the semantic version is unchanged."
+  ],
+  "localValidation": [
+    {
+      "command": "python -m py_compile deploy/ecorex-admin-api/ecorex_admin_api.py channel/web/web_channel.py scripts/smoke-v026-production-agent-product-acceptance.py",
+      "status": "PASS"
+    },
+    {
+      "command": "npm --prefix desktop run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_ecorex_admin_device_id.py::AdminReleaseStateTest tests/test_web_runtime_goal.py::test_v027_model_switch_divider_and_imagegen_resume_contracts tests/test_v026_agent_product_acceptance.py::test_agent_product_focused_rerun_expands_dependencies_and_compiles -q",
+      "status": "PASS",
+      "result": "4 passed"
+    }
+  ],
+  "releaseArtifacts": {
+    "publicReleaseZip": {
+      "fileName": "EcoreX_0.2.7.1-public-release.zip",
+      "size": 2849792,
+      "sha256": "DE213C57622195BD146A2D97B3339BFB2E75E90655523D960DAC0AF052792C44"
+    },
+    "webuiWindows": {
+      "fileName": "EcoreX_0.2.7.1-webui-windows-x64.zip",
+      "size": 550745293,
+      "sha256": "17958A1CD3465DF94FF227D5995764C41EA4E31F5797B4E5015DECC91978CC1F"
+    },
+    "webuiMacos": {
+      "fileName": "EcoreX_0.2.7.1-webui-macos-universal.zip",
+      "size": 652200128,
+      "sha256": "0970754611ED9A9EFB6D5FEB600874C4F095DEB42F427183E9CC8DD9D5C1951A"
+    },
+    "webLinuxService": {
+      "fileName": "EcoreX_0.2.7.1-web-linux-service.tar.gz",
+      "size": 4094571,
+      "sha256": "ADB387877AE07FCF27E58CDA3DE98FA3812E7A9292A3504257ADD347FE64E4DB"
+    }
+  },
+  "productionDeployment": {
+    "artifact": "docs/v0.2.7.1/artifacts/production-deploy-online.json",
+    "status": "PASS",
+    "version": "0.2.7.1",
+    "serviceActive": true,
+    "serviceEnabled": true,
+    "publicManifestVersion": "0.2.7.1",
+    "webServiceVersion": "0.2.7.1"
+  },
+  "productionNotification": {
+    "status": "PASS",
+    "notifiedVersion": "0.2.7.1",
+    "noticeRevision": "0.2.7.1-1783064622-25a68aa3",
+    "runtimeUpdateStateWritten": true,
+    "publicManifestNoticeVisible": true,
+    "versionEndpointUpdateState": {
+      "source": "release-notice",
+      "reason": "admin-release-notify",
+      "refreshRequired": true,
+      "noticeRevision": "0.2.7.1-1783064622-25a68aa3"
+    },
+    "updateCheckNoticeHelpers": {
+      "noticeRevision": "0.2.7.1-1783064622-25a68aa3",
+      "stateNoticeRevision": "0.2.7.1-1783064622-25a68aa3",
+      "stateRefreshRequired": true
+    }
+  },
+  "privacy": {
+    "rawServerOutputPersisted": false,
+    "rawAdminCredentialsPersisted": false,
+    "rawPrivateUrlsPersisted": false
+  }
+}

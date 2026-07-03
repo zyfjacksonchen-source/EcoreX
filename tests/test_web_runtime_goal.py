@@ -1927,6 +1927,7 @@ def test_v027_model_switch_divider_and_imagegen_resume_contracts():
     api_source = (ROOT / "desktop" / "src" / "services" / "ecorexApi.ts").read_text(encoding="utf-8")
     admin_api_source = (ROOT / "deploy" / "ecorex-admin-api" / "ecorex_admin_api.py").read_text(encoding="utf-8")
     admin_js_source = (ROOT / "deploy" / "ecorex-site" / "admin" / "admin.js").read_text(encoding="utf-8")
+    web_channel_source = (ROOT / "channel" / "web" / "web_channel.py").read_text(encoding="utf-8")
 
     assert "mergePreservedLocalMessagesByTimeline" in app_source
     assert "return preserved.length ? mergePreservedLocalMessagesByTimeline(mergedHistory, preserved) : mergedHistory;" in app_source
@@ -1950,19 +1951,32 @@ def test_v027_model_switch_divider_and_imagegen_resume_contracts():
     assert "entry.get(\"artifactFingerprint\") != current_fingerprint" in admin_api_source
     assert "entry.get(\"version\") != current_version" not in admin_api_source
     assert "def _compare_release_versions" in admin_api_source
+    assert "def notify_release" in admin_api_source
+    assert 'path == "/release/notify"' in admin_api_source
     assert "候选版本低于当前 stable" in admin_api_source
     assert "staged release is older than current stable" in admin_api_source
     assert '"promoteDisabledReason"' in admin_api_source
 
+    assert "_release_manifest_notice_state_payload" in web_channel_source
+    assert "noticeRevision" in web_channel_source
+    assert '"notice"' in web_channel_source
+    assert '"notice" if notice_active else ""' in web_channel_source
+
     assert "export type RuntimeUpdateCheck" in api_source
     assert "export async function checkRuntimeUpdate" in api_source
+    assert "noticeRevision?: string" in api_source
     assert "UPDATE_NOTICE_DISMISSED_STORAGE_KEY" in app_source
     assert "showRuntimeUpdateBanner" in app_source
     assert "checkRuntimeUpdate(runtimeUpdatePlatform())" in app_source
+    assert "update.noticeRevision || update.notice?.revision" in app_source
+    assert "60 * 1000" in app_source
     assert "发现 EcoreX 新版本" in app_source
     assert "打开下载页" in app_source
 
     assert "data-release-can-promote" in admin_js_source
+    assert "data-release-can-notify" in admin_js_source
+    assert "通知用户" in admin_js_source
+    assert 'mutate("/release/notify"' in admin_js_source
     assert "data-release-disabled-reason" in admin_js_source
     assert "showNotice(button.dataset.releaseDisabledReason" in admin_js_source
     assert "发布中..." in admin_js_source

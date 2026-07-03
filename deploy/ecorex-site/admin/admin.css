@@ -354,6 +354,16 @@ select {
   background: color-mix(in srgb, var(--bad) 12%, transparent);
 }
 
+.pill[data-status="current"] {
+  color: var(--good);
+  background: color-mix(in srgb, var(--good) 14%, transparent);
+}
+
+.pill[data-status="obsolete"] {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 13%, transparent);
+}
+
 .usage-table {
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
 }

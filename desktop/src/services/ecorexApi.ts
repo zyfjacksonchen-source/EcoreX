@@ -490,6 +490,7 @@ export type RuntimeUpdateState = {
   mode?: "manual" | "background" | string;
   status?: "installed" | "deferred" | "failed" | "rollback" | "started" | "ready" | string;
   reason?: string;
+  message?: string;
   url?: string;
   browserAction?: "defer-to-existing-tab-soft-refresh" | "open-default-browser" | "none" | string;
   activationPolicy?: string;
@@ -499,6 +500,7 @@ export type RuntimeUpdateState = {
     passed?: boolean;
   };
   generatedAt?: string;
+  noticeRevision?: string;
   refreshRequired?: boolean;
   redacted?: boolean;
 };
@@ -779,6 +781,7 @@ export type RuntimeUpdateCheck = {
   version?: string;
   hasUpdate?: boolean;
   updateReason?: "version" | "artifact" | string;
+  noticeRevision?: string;
   message?: string;
   downloadUrl?: string;
   artifact?: {
@@ -788,6 +791,14 @@ export type RuntimeUpdateCheck = {
     size?: number;
     sha256?: string;
     version?: string;
+    [key: string]: unknown;
+  };
+  notice?: {
+    revision?: string;
+    version?: string;
+    message?: string;
+    publishedAt?: string;
+    reason?: string;
     [key: string]: unknown;
   };
   installedArtifact?: Record<string, unknown>;

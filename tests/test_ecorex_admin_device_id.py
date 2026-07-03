@@ -115,6 +115,37 @@ class AdminReleaseStateTest(unittest.TestCase):
         self.assertIn("低于当前 stable", staged["0.2.7"]["promoteDisabledReason"])
         self.assertTrue(staged["0.2.7.2"]["canPromote"])
 
+    def test_notify_release_broadcasts_current_stable_without_promote(self):
+        temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(temp_dir.cleanup)
+        temp_path = pathlib.Path(temp_dir.name)
+        root = temp_path / "releases"
+        state_dir = temp_path / "state"
+        _write_release_fixture(root, "current", "0.2.7.1", b"current")
+        store = admin_api.AdminStore(str(temp_path / "admin.sqlite3"))
+
+        with mock.patch.dict(
+            admin_api.os.environ,
+            {
+                "ECOREX_RELEASE_ROOT": str(root),
+                "ECOREX_WEBUI_STATE_DIR": str(state_dir),
+            },
+            clear=False,
+        ):
+            payload = store.notify_release({"version": "0.2.7.1", "actor": "unit"})
+
+        manifest = json.loads((root / "current" / "manifest.json").read_text(encoding="utf-8"))
+        notice = manifest["update"]["webui"]["notice"]
+        update_state = json.loads((state_dir / "update-state.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["notifiedVersion"], "0.2.7.1")
+        self.assertTrue(payload["noticeRevision"])
+        self.assertEqual(notice["revision"], payload["noticeRevision"])
+        self.assertEqual(update_state["noticeRevision"], payload["noticeRevision"])
+        self.assertEqual(update_state["mode"], "background")
+        self.assertEqual(update_state["browserAction"], "defer-to-existing-tab-soft-refresh")
+
 
 class TongxinAuthEndpointTest(unittest.TestCase):
     def _start_server(self):

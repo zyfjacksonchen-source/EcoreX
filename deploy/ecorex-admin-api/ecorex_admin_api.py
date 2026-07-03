@@ -1101,6 +1101,106 @@ class AdminStore:
         payload["latestStaged"] = next((item for item in staged if item.get("canPromote")), staged[0] if staged else None)
         return payload
 
+    def _write_release_json(self, path, payload):
+        tmp_path = path.with_name(f".{path.name}.tmp-{int(time.time())}-{uuid.uuid4().hex[:8]}")
+        tmp_path.write_text(json_dumps(payload) + "\n", encoding="utf-8")
+        os.replace(str(tmp_path), str(path))
+
+    def _write_runtime_update_notice(self, version, notice):
+        state_dir = pathlib.Path(os.environ.get("ECOREX_WEBUI_STATE_DIR") or "/opt/ecorex-web/state").expanduser()
+        state_path = state_dir / "update-state.json"
+        try:
+            state_dir.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "product": "EcoreX WebUI",
+                "version": version,
+                "mode": "background",
+                "status": "installed",
+                "reason": "admin-release-notify",
+                "message": notice.get("message") or f"EcoreX {version} 已发布，请刷新或前往下载页安装。",
+                "browserAction": "defer-to-existing-tab-soft-refresh",
+                "activationPolicy": "prompt-soft-refresh-existing-tab",
+                "autoLaunchBrowser": "never-in-background",
+                "healthCheck": {"endpoint": "/api/version", "status": "pass", "passed": True},
+                "generatedAt": notice.get("publishedAt") or now_iso(),
+                "noticeRevision": notice.get("revision") or "",
+            }
+            self._write_release_json(state_path, payload)
+            return True
+        except Exception:
+            return False
+
+    def notify_release(self, payload):
+        root = self.release_root()
+        current_pointer = root / "current"
+        if not (current_pointer.exists() or current_pointer.is_symlink()):
+            raise ValueError("current stable release is not configured")
+        current_dir = current_pointer.resolve(strict=True)
+        try:
+            current_dir.relative_to(root.resolve(strict=False))
+        except Exception:
+            raise ValueError("current release pointer escapes release root")
+        manifest_path = current_dir / "manifest.json"
+        manifest = self._read_release_manifest(current_dir)
+        if not manifest:
+            raise ValueError("current release manifest is missing")
+        version = compact_text(manifest.get("version") or "", 80)
+        requested_version = compact_text(payload.get("version") or version, 80)
+        if requested_version and requested_version != version:
+            raise ValueError("only current stable release can notify users")
+        if self._validate_release_dir(current_dir, manifest, verify_sha=False)["status"] != "pass":
+            raise ValueError("current stable release validation failed")
+
+        published_at = now_iso()
+        revision = f"{version}-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+        message = compact_text(
+            payload.get("message")
+            or f"EcoreX {version} 已发布，请刷新当前页面或前往下载页安装。",
+            240,
+        )
+        notice = {
+            "revision": revision,
+            "version": version,
+            "message": message,
+            "publishedAt": published_at,
+            "reason": "admin-release-notify",
+            "redacted": True,
+        }
+        update = manifest.get("update") if isinstance(manifest.get("update"), dict) else {}
+        webui = update.get("webui") if isinstance(update.get("webui"), dict) else {}
+        webui["notice"] = notice
+        webui["noticeRevision"] = revision
+        webui["noticeUpdatedAt"] = published_at
+        update["webui"] = webui
+        manifest["update"] = update
+        manifest["noticeUpdatedAt"] = published_at
+        self._write_release_json(manifest_path, manifest)
+        update_state_written = self._write_runtime_update_notice(version, notice)
+
+        with self.connect() as conn:
+            self.audit(
+                conn,
+                "release.notify",
+                payload.get("actor", "admin"),
+                version,
+                {
+                    "version": version,
+                    "noticeRevision": revision,
+                    "runtimeUpdateStateWritten": update_state_written,
+                    "targetHash": short_hash(str(current_dir), 16),
+                },
+            )
+            conn.commit()
+        return {
+            "ok": True,
+            "status": "success",
+            "notifiedVersion": version,
+            "noticeRevision": revision,
+            "message": message,
+            "runtimeUpdateStateWritten": update_state_written,
+            "release": self.release_state(),
+        }
+
     def _find_staged_release(self, root, version="", staged_id=""):
         wanted_version = compact_text(version, 80)
         wanted_id = compact_text(staged_id, 120)
@@ -3657,6 +3757,10 @@ class AdminHandler(BaseHTTPRequestHandler):
                 if not self._require_admin():
                     return
                 self._json(200, self.store.promote_release(payload))
+            elif path == "/release/notify":
+                if not self._require_admin():
+                    return
+                self._json(200, self.store.notify_release(payload))
             elif path in ("/client/events", "/events/client"):
                 if not self._client_key_valid():
                     self._json(403, {"ok": False, "error": "invalid client key"})
