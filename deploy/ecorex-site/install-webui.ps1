@@ -228,7 +228,7 @@ function Save-UrlWithProgress {
 
             $request = [System.Net.HttpWebRequest][System.Net.WebRequest]::Create($Uri)
             $request.Method = "GET"
-            $request.UserAgent = "EcoreX-WebUI-Installer/0.2.7"
+            $request.UserAgent = "EcoreX-WebUI-Installer/0.2.7.1"
             $request.Timeout = 30000
             $request.ReadWriteTimeout = 30000
             $request.AllowAutoRedirect = $true
@@ -319,7 +319,7 @@ function Save-UrlWithProgress {
 $manifestUrl = Join-Url $BaseUrl "manifest.json"
 Write-Host "Fetching EcoreX manifest: $manifestUrl"
 $manifest = Invoke-RestMethod -Uri $manifestUrl -UseBasicParsing -TimeoutSec 30
-Write-Host "EcoreX WebUI installer script: 0.2.7"
+Write-Host "EcoreX WebUI installer script: 0.2.7.1"
 Write-Host "EcoreX WebUI manifest version: $($manifest.version)"
 if ($Version -and [string]$manifest.version -ne $Version) {
     throw "Manifest version '$($manifest.version)' does not match requested '$Version'."

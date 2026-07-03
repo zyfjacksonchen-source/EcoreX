@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.2.7",
+    [string]$Version = "0.2.7.1",
     [string]$RuntimeRoot = ".",
     [string]$SiteRoot = "deploy/ecorex-site",
     [string]$WebBuildRoot = "",

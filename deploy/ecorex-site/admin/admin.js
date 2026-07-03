@@ -25,7 +25,7 @@ const state = {
       recentEvents: [],
       privacy: {},
     },
-    version: "0.2.7",
+    version: "0.2.7.1",
   },
   connected: false,
 };
@@ -413,7 +413,7 @@ function renderMetrics() {
   setMetric("errors", formatNumber(summary.errors ?? 0));
   setMetric("capabilities", formatNumber(summary.capabilities ?? 0));
   setMetric("modelCredentials", formatNumber(summary.modelCredentials ?? (state.data.globalModel ? 1 : 0)));
-  setMetric("version", state.data.version || summary.version || "0.2.7");
+  setMetric("version", state.data.version || summary.version || "0.2.7.1");
 }
 
 function render() {

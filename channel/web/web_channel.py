@@ -8005,9 +8005,16 @@ class UpdateCheckHandler:
 
             latest_version = str(manifest.get("version") or "")
             artifact = self._pick_artifact(manifest, platform)
-            has_update = bool(artifact and latest_version and self._compare_versions(latest_version, __version__) > 0)
+            version_compare = self._compare_versions(latest_version, __version__) if latest_version else 0
+            installed_artifact = self._installed_artifact_metadata(platform, artifact)
+            artifact_changed = bool(artifact and version_compare == 0 and self._artifact_changed(artifact, installed_artifact))
+            has_update = bool(artifact and latest_version and (version_compare > 0 or artifact_changed))
             download_url = self._absolute_download_url(artifact.get("href") if artifact else "")
-            message = f"发现新版本 {latest_version}，请前往下载页安装" if has_update else "当前已经是最新版本"
+            update_reason = "version" if version_compare > 0 else ("artifact" if artifact_changed else "")
+            if has_update and update_reason == "artifact":
+                message = f"发现 {latest_version} 同版本更新，请前往下载页安装"
+            else:
+                message = f"发现新版本 {latest_version}，请前往下载页安装" if has_update else "当前已经是最新版本"
             return json.dumps({
                 "status": "success",
                 "platform": platform,
@@ -8015,9 +8022,11 @@ class UpdateCheckHandler:
                 "latestVersion": latest_version or __version__,
                 "version": latest_version or __version__,
                 "hasUpdate": has_update,
+                "updateReason": update_reason,
                 "message": message,
                 "downloadUrl": download_url,
                 "artifact": artifact,
+                "installedArtifact": installed_artifact,
                 "recommendedDownloads": manifest.get("recommendedDownloads", {}),
                 "update": manifest.get("update", {}),
             }, ensure_ascii=False)
@@ -8068,6 +8077,91 @@ class UpdateCheckHandler:
             if preferred_id in by_id:
                 return by_id[preferred_id]
         return {}
+
+    def _installed_artifact_metadata(self, platform: str, artifact: Dict[str, Any]) -> Dict[str, Any]:
+        if not artifact:
+            return {}
+        try:
+            from common.ecorex_workspace import load_installation_manifest
+
+            manifest = load_installation_manifest(_get_workspace_root())
+        except Exception:
+            return {}
+        surfaces = manifest.get("surfaces") if isinstance(manifest, dict) else {}
+        if not isinstance(surfaces, dict):
+            return {}
+        artifact_id = str(artifact.get("id") or "").strip()
+        platform_value = str(platform or "").strip().lower()
+        candidates: List[str] = []
+        if artifact_id:
+            candidates.append(artifact_id)
+        if platform_value in ("win32", "windows", "win"):
+            candidates.extend(["webui-windows-x64", "webui", "desktop"])
+        elif platform_value in ("darwin", "mac", "macos"):
+            candidates.extend(["webui-macos-universal", "webui", "desktop"])
+        elif platform_value in ("linux", "web-linux-service"):
+            candidates.extend(["web-linux-service", "webui-linux-service", "webui"])
+        else:
+            candidates.extend(["webui", "desktop", "webui-linux-service"])
+        seen: set[str] = set()
+        for candidate in candidates:
+            key = candidate.strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            row = surfaces.get(key)
+            if isinstance(row, dict):
+                return self._safe_installed_artifact(row)
+        for row in surfaces.values():
+            if isinstance(row, dict) and artifact_id and str(row.get("artifactId") or row.get("artifact_id") or "").strip() == artifact_id:
+                return self._safe_installed_artifact(row)
+        return {}
+
+    def _safe_installed_artifact(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        def clean_text(*names: str, limit: int = 160) -> str:
+            for name in names:
+                value = str(row.get(name) or "").strip()
+                if value:
+                    return value[:limit]
+            return ""
+
+        def clean_int(*names: str) -> int:
+            for name in names:
+                try:
+                    value = int(row.get(name) or 0)
+                except Exception:
+                    value = 0
+                if value > 0:
+                    return value
+            return 0
+
+        payload = {
+            "artifactId": clean_text("artifactId", "artifact_id"),
+            "artifactSha256": clean_text("artifactSha256", "artifact_sha256", "sha256", limit=80).upper(),
+            "artifactSize": clean_int("artifactSize", "artifact_size", "size"),
+            "contentFingerprint": clean_text("contentFingerprint", "content_fingerprint", "fingerprint", limit=120),
+            "surface": clean_text("surface", limit=120),
+            "version": clean_text("version", limit=80),
+        }
+        return {key: value for key, value in payload.items() if value not in ("", 0)}
+
+    def _artifact_changed(self, artifact: Dict[str, Any], installed: Dict[str, Any]) -> bool:
+        if not artifact or not installed:
+            return False
+        remote_fingerprint = str(artifact.get("contentFingerprint") or artifact.get("content_fingerprint") or "").strip()
+        installed_fingerprint = str(installed.get("contentFingerprint") or "").strip()
+        if remote_fingerprint and installed_fingerprint:
+            return remote_fingerprint != installed_fingerprint
+        remote_sha = str(artifact.get("sha256") or "").strip().upper()
+        installed_sha = str(installed.get("artifactSha256") or installed.get("sha256") or "").strip().upper()
+        if remote_sha and installed_sha:
+            return remote_sha != installed_sha
+        try:
+            remote_size = int(artifact.get("size") or 0)
+            installed_size = int(installed.get("artifactSize") or installed.get("size") or 0)
+        except Exception:
+            remote_size = installed_size = 0
+        return bool(remote_size and installed_size and remote_size != installed_size)
 
     def _absolute_download_url(self, href: str) -> str:
         if not href:

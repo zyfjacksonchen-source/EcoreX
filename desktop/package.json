@@ -1,6 +1,6 @@
 {
   "name": "ecorex-desktop",
-  "version": "0.2.7",
+  "version": "0.2.7.1",
   "private": true,
   "description": "EcoreX desktop application with a local agent runtime",
   "author": "EcoreX",
@@ -17,8 +17,8 @@
     "build": "npm run build:renderer && npm run build:electron",
     "build:renderer": "vite build",
     "build:electron": "tsc -p tsconfig.electron.json",
-    "webui:package": "npm run build:renderer && powershell -ExecutionPolicy Bypass -Command \"Set-Location ..; ./scripts/prepare-ecorex-webui-local-release.ps1 -Version 0.2.7\"",
-    "webui:stage-public": "npm run webui:package && powershell -ExecutionPolicy Bypass -Command \"Set-Location ..; ./scripts/update-ecorex-desktop-release-manifest.ps1 -Version 0.2.7 -PromoteVersion -WebUiWindowsPath release-artifacts/EcoreX_0.2.7-webui-windows-x64.zip -WebUiMacosPath release-artifacts/EcoreX_0.2.7-webui-macos-universal.zip; ./scripts/prepare-ecorex-public-release.ps1 -Version 0.2.7\"",
+    "webui:package": "npm run build:renderer && powershell -ExecutionPolicy Bypass -Command \"Set-Location ..; ./scripts/prepare-ecorex-webui-local-release.ps1 -Version 0.2.7.1 -SkipCombinedPackage\"",
+    "webui:stage-public": "npm run webui:package && powershell -ExecutionPolicy Bypass -Command \"Set-Location ..; ./scripts/update-ecorex-desktop-release-manifest.ps1 -Version 0.2.7.1 -PromoteVersion -WebUiWindowsPath release-artifacts/EcoreX_0.2.7.1-webui-windows-x64.zip -WebUiMacosPath release-artifacts/EcoreX_0.2.7.1-webui-macos-universal.zip; ./scripts/prepare-ecorex-public-release.ps1 -Version 0.2.7.1\"",
     "package": "npm run package:win",
     "package:dir": "npm run build && npm run stage:runtime:win && electron-builder --dir --publish never",
     "package:win": "npm run build && npm run stage:runtime:win:x64 && electron-builder --win --x64 --publish never",

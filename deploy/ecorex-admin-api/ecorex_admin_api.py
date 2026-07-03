@@ -18,11 +18,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 
-VERSION = "0.2.7"
+VERSION = "0.2.7.1"
 PASSWORD_ITERATIONS = 180000
 SESSION_DAYS = 7
-DEFAULT_CLIENT_EVENT_KEY = "ecorex-web-v0.2.7-web.1"
+DEFAULT_CLIENT_EVENT_KEY = "ecorex-web-v0.2.7.1-web.1"
 DEFAULT_COMPAT_CLIENT_EVENT_KEYS = (
+    "ecorex-web-v0.2.7.1-web.1",
     "ecorex-web-v0.2.7-web.1",
     "ecorex-web-v0.2.6-web.1",
     "ecorex-web-v0.2.2-web.1",

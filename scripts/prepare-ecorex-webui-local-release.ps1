@@ -1,8 +1,9 @@
 param(
-    [string]$Version = "0.2.7",
+    [string]$Version = "0.2.7.1",
     [string]$RuntimeRoot = "desktop/runtime/ecorex-runtime",
     [string]$OutputDir = "release-artifacts",
-    [switch]$KeepStaging
+    [switch]$KeepStaging,
+    [switch]$SkipCombinedPackage
 )
 
 $ErrorActionPreference = "Stop"
@@ -1459,13 +1460,19 @@ Compress-ZipWithUnixPermissions `
         "Install EcoreX WebUI.app/Contents/Resources/package/scripts/install-ecorex-webui-mac.sh"
     )
 
-$combinedWindows = Join-Path $combinedStage "windows"
-$combinedMac = Join-Path $combinedStage "macos"
-New-Item -ItemType Directory -Force -Path $combinedWindows, $combinedMac | Out-Null
-Copy-DirectoryWithRobocopy -Source $windowsStage -Destination $combinedWindows
-Copy-DirectoryWithRobocopy -Source $macStage -Destination $combinedMac
+$artifactEntries = @(
+    @{ id = "webui-windows-x64"; path = $windowsZip },
+    @{ id = "webui-macos-universal"; path = $macZip }
+)
 
-$combinedCmd = @'
+if (-not $SkipCombinedPackage) {
+    $combinedWindows = Join-Path $combinedStage "windows"
+    $combinedMac = Join-Path $combinedStage "macos"
+    New-Item -ItemType Directory -Force -Path $combinedWindows, $combinedMac | Out-Null
+    Copy-DirectoryWithRobocopy -Source $windowsStage -Destination $combinedWindows
+    Copy-DirectoryWithRobocopy -Source $macStage -Destination $combinedMac
+
+    $combinedCmd = @'
 @echo off
 setlocal
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0windows\scripts\install-ecorex-webui-win.ps1"
@@ -1476,7 +1483,7 @@ if errorlevel 1 (
 )
 '@
 
-$combinedReadme = @'
+    $combinedReadme = @'
 EcoreX WebUI dual-platform package
 
 Windows:
@@ -1490,27 +1497,25 @@ macOS:
 The installer copies EcoreX WebUI to the user-local app data folder, starts the local service, and opens http://127.0.0.1:9909/app/ in the default browser.
 '@
 
-Write-Utf8NoBom -Path (Join-Path $combinedStage "Install EcoreX WebUI.cmd") -Value $combinedCmd
-New-MacInstallerApp -AppRoot (Join-Path $combinedStage "Install EcoreX WebUI.app") -InstallScriptRelative "macos/scripts/install-ecorex-webui-mac.sh"
-Write-Utf8NoBom -Path (Join-Path $combinedStage "README.txt") -Value $combinedReadme
-Write-Utf8NoBom -Path (Join-Path $combinedStage "release.json") -Value (New-ReleaseJson -ArtifactId "webui-win-mac" -Platform "Windows x64 + macOS arm64/x64" -InstallEntry "Install EcoreX WebUI.cmd / Install EcoreX WebUI.app")
+    Write-Utf8NoBom -Path (Join-Path $combinedStage "Install EcoreX WebUI.cmd") -Value $combinedCmd
+    New-MacInstallerApp -AppRoot (Join-Path $combinedStage "Install EcoreX WebUI.app") -InstallScriptRelative "macos/scripts/install-ecorex-webui-mac.sh"
+    Write-Utf8NoBom -Path (Join-Path $combinedStage "README.txt") -Value $combinedReadme
+    Write-Utf8NoBom -Path (Join-Path $combinedStage "release.json") -Value (New-ReleaseJson -ArtifactId "webui-win-mac" -Platform "Windows x64 + macOS arm64/x64" -InstallEntry "Install EcoreX WebUI.cmd / Install EcoreX WebUI.app")
 
-Compress-ZipWithUnixPermissions `
-    -SourceRoot $combinedStage `
-    -DestinationPath $combinedZip `
-    -ExecutableRelativePaths @(
-        "Install EcoreX WebUI.app/Contents/MacOS/Install EcoreX WebUI",
-        "macos/Install EcoreX WebUI.app/Contents/MacOS/Install EcoreX WebUI",
-        "macos/scripts/install-ecorex-webui-mac.sh",
-        "macos/runtime/tools/bin/lark-cli"
+    Compress-ZipWithUnixPermissions `
+        -SourceRoot $combinedStage `
+        -DestinationPath $combinedZip `
+        -ExecutableRelativePaths @(
+            "Install EcoreX WebUI.app/Contents/MacOS/Install EcoreX WebUI",
+            "macos/Install EcoreX WebUI.app/Contents/MacOS/Install EcoreX WebUI",
+            "macos/scripts/install-ecorex-webui-mac.sh",
+            "macos/runtime/tools/bin/lark-cli"
     )
+    $artifactEntries = @(@{ id = "webui-win-mac"; path = $combinedZip }) + $artifactEntries
+}
 
 $artifacts = [ordered]@{}
-foreach ($entry in @(
-    @{ id = "webui-win-mac"; path = $combinedZip },
-    @{ id = "webui-windows-x64"; path = $windowsZip },
-    @{ id = "webui-macos-universal"; path = $macZip }
-)) {
+foreach ($entry in $artifactEntries) {
     $item = Get-Item -LiteralPath $entry.path
     $artifacts[$entry.id] = [ordered]@{
         fileName = $item.Name

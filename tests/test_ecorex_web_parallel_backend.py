@@ -8728,6 +8728,29 @@ process.stdout.write(JSON.stringify(payload));
         self.assertEqual(handler._pick_artifact(manifest, "darwin")["id"], "webui-macos-universal")
         self.assertEqual(handler._pick_artifact(manifest, "web")["id"], "webui-windows-x64")
 
+    def test_v027_update_check_detects_same_version_artifact_changes(self):
+        from channel.web.web_channel import UpdateCheckHandler
+
+        handler = UpdateCheckHandler()
+        artifact = {
+            "id": "webui-windows-x64",
+            "status": "ready",
+            "size": 550742111,
+            "sha256": "C10F472779662FF827912AB3D3DBB04024BEFA7B358011945AEB830B03A39349",
+        }
+
+        self.assertTrue(handler._artifact_changed(artifact, {
+            "artifactId": "webui-windows-x64",
+            "artifactSha256": "1A3C3848C44CB5B682E3C5850D6ED89A2022145972920193C71879D975559B22",
+            "artifactSize": 550740315,
+        }))
+        self.assertFalse(handler._artifact_changed(artifact, {
+            "artifactId": "webui-windows-x64",
+            "artifactSha256": "C10F472779662FF827912AB3D3DBB04024BEFA7B358011945AEB830B03A39349",
+            "artifactSize": 550742111,
+        }))
+        self.assertFalse(handler._artifact_changed(artifact, {}))
+
     def test_v020_webui_local_auth_falls_back_without_admin_client(self):
         root = Path(__file__).resolve().parents[1]
         web_source = (root / "channel" / "web" / "web_channel.py").read_text(encoding="utf-8")
