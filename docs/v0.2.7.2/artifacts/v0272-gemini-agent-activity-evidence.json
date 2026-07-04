@@ -88,7 +88,12 @@
     {
       "command": "python -m pytest tests/test_ecorex_web_parallel_backend.py -q",
       "status": "pass",
-      "result": "433 passed, 4 warnings, 25 subtests passed"
+      "result": "433 passed, 3 warnings, 25 subtests passed"
+    },
+    {
+      "command": "python -m pytest tests/test_v028_runtime_queue_observation.py -q",
+      "status": "pass",
+      "result": "3 passed"
     },
     {
       "command": "python -m pytest tests/test_ecorex_web_parallel_backend.py::TestAgentHostBoundary::test_v020_send_attempt_uses_user_facing_copy_and_preserves_live_placeholder tests/test_ecorex_web_parallel_backend.py::TestAgentHostBoundary::test_v026_live_thinking_disclosure_is_not_truncated_or_replaced_by_history -q",

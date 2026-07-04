@@ -530,7 +530,11 @@ class RuntimeProjectionService:
                 _reduce_image_job_event(image_jobs_by_id, event_type, payload, event.get("event_id"))
             elif event_type.startswith("task."):
                 assistant_started = True
-                task_id = _safe_projection_identifier(payload.get("task_id")) or f"task-{_safe_projection_nonnegative_int(event.get('event_seq')) or 0}"
+                task_id = (
+                    _safe_projection_image_task_id(payload.get("task_id"))
+                    or _safe_projection_identifier(payload.get("task_id"))
+                    or f"task-{_safe_projection_nonnegative_int(event.get('event_seq')) or 0}"
+                )
                 record = task_observations_by_id.setdefault(task_id, {
                     "task_id": task_id,
                     "kind": _safe_projection_identifier(payload.get("kind")) or "task",

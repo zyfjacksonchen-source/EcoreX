@@ -99,7 +99,12 @@ class RunLedger:
                            updated_at=?,
                            metadata_json=?,
                            model=?,
-                           provider=?
+                           provider=?,
+                           started_at=CASE
+                               WHEN ?='queued' THEN started_at
+                               WHEN started_at IS NULL THEN ?
+                               ELSE started_at
+                           END
                      WHERE request_id=?
                     """,
                     (
@@ -107,10 +112,12 @@ class RunLedger:
                         run_type or "message",
                         status,
                         phase or "",
-                        started_at,
+                        now,
                         payload,
                         model or None,
                         provider or None,
+                        status,
+                        now,
                         request_id,
                     ),
                 )
@@ -130,7 +137,7 @@ class RunLedger:
                         status,
                         phase or "",
                         now,
-                        now,
+                        started_at,
                         now,
                         payload,
                         model or None,
