@@ -10322,7 +10322,6 @@ process.stdout.write(JSON.stringify(payload));
                     old_lock.release()
                     registry.unregister(old_request_id)
                     registry.unregister(new_request_id)
-                    registry.unregister(new_request_id)
 
     def test_busy_session_message_returns_queued_contract_when_lock_stays_busy(self):
         from agent.protocol import get_cancel_registry
