@@ -674,6 +674,50 @@ def test_imagegen_tool_success_images_are_allowlisted_and_stderr_is_summarized(m
     assert malicious_url not in serialized
 
 
+def test_imagegen_tool_names_local_image_artifacts_from_session_summary_and_send_time(monkeypatch, tmp_path):
+    from agent.tools.imagegen import imagegen as imagegen_module
+
+    output_dir = tmp_path / "images"
+    output_dir.mkdir()
+    provider_path = output_dir / "provider-output.png"
+    _write_gradient(provider_path)
+
+    def fake_provider_run(_payload, **_kwargs):
+        return {
+            "returncode": 0,
+            "payload": {
+                "provider": "OpenAI",
+                "model": "gpt-image-test",
+                "attempted_provider_count": 1,
+                "images": [{"url": str(provider_path), "provider": "OpenAI", "model": "gpt-image-test"}],
+            },
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(imagegen_module, "_authorize_file_access", lambda *_args, **_kwargs: (True, ""))
+    monkeypatch.setattr(imagegen_module, "run_image_generation_payload", fake_provider_run)
+    monkeypatch.setattr(
+        imagegen_module,
+        "_image_artifact_timestamp",
+        lambda: ("20260703-165001", "2026-07-03T16:50:01+08:00"),
+    )
+
+    tool = imagegen_module.ImageGenTool()
+    tool.artifact_naming_context = {"summary": "圣都装饰推荐 / 小红书封面图", "sessionId": "session-1"}
+    result = tool.execute({"prompt": "private prompt", "output_dir": str(output_dir)})
+
+    expected = output_dir / "圣都装饰推荐-小红书封面图-20260703-165001.png"
+    assert result.status == "success"
+    assert expected.is_file()
+    assert not provider_path.exists()
+    image = result.result["images"][0]
+    assert image["url"] == str(expected)
+    assert image["title"] == expected.name
+    assert image["fileName"] == expected.name
+    assert image["file_name"] == expected.name
+    assert image["artifactNameSource"] == "session-summary-send-time"
+
+
 def test_imagegen_tool_routes_image_urls_as_reference_edit_payload(monkeypatch, tmp_path):
     from agent.tools.imagegen import imagegen as imagegen_module
 
@@ -753,6 +797,56 @@ def test_imagegen_tool_batches_tasks_without_shell_or_python_fallback(monkeypatc
     assert result.result["webFallbackUsed"] is False
     assert [item["taskIndex"] for item in result.result["images"]] == [0, 1]
     assert all(item["model"] == "gpt-image-2-pro" for item in result.result["taskResults"])
+
+
+def test_imagegen_batch_ready_events_use_session_summary_file_names(monkeypatch, tmp_path):
+    from agent.tools.imagegen import imagegen as imagegen_module
+
+    output_dir = tmp_path / "images"
+    output_dir.mkdir()
+    generated = [output_dir / "raw-1.png", output_dir / "raw-2.png"]
+    for path in generated:
+        _write_gradient(path)
+    calls = []
+    events = []
+
+    def fake_provider_run(payload, **_kwargs):
+        calls.append(dict(payload))
+        return {
+            "returncode": 0,
+            "payload": {
+                "provider": "OpenAI",
+                "model": "gpt-image-2-pro",
+                "attempted_provider_count": 1,
+                "images": [{"url": str(generated[len(calls) - 1])}],
+            },
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(imagegen_module, "_authorize_file_access", lambda *_args, **_kwargs: (True, ""))
+    monkeypatch.setattr(imagegen_module, "run_image_generation_payload", fake_provider_run)
+    monkeypatch.setattr(
+        imagegen_module,
+        "_image_artifact_timestamp",
+        lambda: ("20260703-165501", "2026-07-03T16:55:01+08:00"),
+    )
+
+    tool = imagegen_module.ImageGenTool()
+    tool.artifact_naming_context = {"summary": "轮播图 写入", "sessionId": "session-1"}
+    tool.emit_event = lambda event_type, payload: events.append((event_type, payload))
+    result = tool.execute({
+        "tasks": [{"prompt": "one"}, {"prompt": "two"}],
+        "output_dir": str(output_dir),
+    })
+
+    expected_names = [
+        "轮播图-写入-20260703-165501-01.png",
+        "轮播图-写入-20260703-165501-02.png",
+    ]
+    assert result.status == "success"
+    assert [Path(item["url"]).name for item in result.result["images"]] == expected_names
+    assert [payload["file_name"] for event_type, payload in events if event_type == "file_to_send"] == expected_names
+    assert all(payload["title"] == payload["file_name"] for event_type, payload in events if event_type == "file_to_send")
 
 
 def test_imagegen_tool_retries_local_quality_failure_before_success(monkeypatch, tmp_path):

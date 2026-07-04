@@ -6530,7 +6530,7 @@ class TestWebParallelHandlers(unittest.TestCase):
                     "notice": {
                         "revision": "0.2.7.1-unit",
                         "version": "0.2.7.1",
-                        "message": "EcoreX 0.2.7.1 已发布，请刷新当前页面或前往下载页安装。",
+                        "message": "EcoreX 0.2.7.1 已发布，已安装用户可在本机检查更新。",
                         "publishedAt": "2026-07-03T00:00:00Z",
                     },
                 }).encode("utf-8")
@@ -6575,7 +6575,7 @@ class TestWebParallelHandlers(unittest.TestCase):
         notice = {
             "revision": "0.2.7.1-admin",
             "version": "0.2.7.1",
-            "message": "EcoreX 0.2.7.1 已发布，请刷新当前页面或前往下载页安装。",
+            "message": "EcoreX 0.2.7.1 已发布，已安装用户可在本机检查更新。",
             "publishedAt": "2026-07-03T00:00:00Z",
         }
         web_channel._UPDATE_NOTICE_CACHE.update({"expiresAt": 0.0, "payload": {}})
@@ -6585,7 +6585,11 @@ class TestWebParallelHandlers(unittest.TestCase):
 
             self.assertEqual(payload["source"], "admin-release-notice")
             self.assertEqual(payload["noticeRevision"], "0.2.7.1-admin")
-            self.assertTrue(payload["refreshRequired"])
+            self.assertEqual(payload["mode"], "manual")
+            self.assertEqual(payload["status"], "ready")
+            self.assertEqual(payload["browserAction"], "none")
+            self.assertEqual(payload["activationPolicy"], "manual-update-check")
+            self.assertFalse(payload["refreshRequired"])
         finally:
             web_channel._UPDATE_NOTICE_CACHE.update({"expiresAt": 0.0, "payload": {}})
 
@@ -6620,7 +6624,7 @@ class TestWebParallelHandlers(unittest.TestCase):
                 "mode": "background",
                 "status": "installed",
                 "reason": "admin-release-notify",
-                "message": "EcoreX 0.2.7.1 已发布，请刷新当前页面或前往下载页安装。",
+                "message": "EcoreX 0.2.7.1 已发布，已安装用户可在本机检查更新。",
                 "browserAction": "defer-to-existing-tab-soft-refresh",
                 "generatedAt": "2026-07-03T16:07:56+08:00",
                 "noticeRevision": "0.2.7.1-local",
@@ -7010,8 +7014,8 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertIn("const streamReconnectChecks = useRef<StringBoolMap>({});", app_source)
         self.assertIn("function clearStreamReconnectState", app_source)
         self.assertIn("if (streamReconnectTimers.current[reconnectKey] || streamReconnectChecks.current[reconnectKey]) return;", app_source)
-        self.assertIn('recovery: streamReconnectingRecovery(requestId, "eventsource_error")', app_source)
-        self.assertIn('recovery: streamReconnectingRecovery(requestId, "stream_idle_timeout")', app_source)
+        self.assertIn('recovery: streamReconnectingRecovery(requestId, "eventsource_error", Boolean(message.artifacts?.length || message.content?.trim()))', app_source)
+        self.assertIn('recovery: streamReconnectingRecovery(requestId, "stream_idle_timeout", Boolean(message.artifacts?.length || message.content?.trim()))', app_source)
         self.assertIn('if (recovery.kind === "reconnecting")', app_source)
         self.assertIn('className="message-recovery-actions is-reconnecting ecorex-activity-status"', app_source)
         self.assertIn("if (hasTransientStreamRecovery(sessionId, assistantId, requestId))", app_source)
@@ -8759,9 +8763,9 @@ process.stdout.write(JSON.stringify(payload));
         self.assertNotIn("resume_args", mac_installer)
         self.assertIn("local curl_args=", mac_installer)
         self.assertIn('curl "${curl_args[@]}" "$url" -o "$partial"', mac_installer)
-        self.assertIn("EcoreX WebUI installer script: 0.2.7.1", mac_installer)
+        self.assertIn("EcoreX WebUI installer script: 0.2.7.2", mac_installer)
         self.assertIn("EcoreX WebUI manifest version:", mac_installer)
-        self.assertIn("EcoreX WebUI installer script: 0.2.7.1", win_installer)
+        self.assertIn("EcoreX WebUI installer script: 0.2.7.2", win_installer)
         self.assertIn("EcoreX WebUI manifest version:", win_installer)
         self.assertIn("EcoreX WebUI package installer:", package_source)
         self.assertIn("Generated macOS WebUI installer still contains retired resume_args code", package_source)
@@ -8809,8 +8813,8 @@ process.stdout.write(JSON.stringify(payload));
         self.assertIn("read_timeout 1200s", web_caddy_source)
         self.assertIn("write_timeout 1200s", web_caddy_source)
         self.assertIn('VERSION="${VERSION:-', installer_source)
-        self.assertIn("<strong data-version>0.2.7.1</strong>", (root / "deploy" / "ecorex-site" / "index.html").read_text(encoding="utf-8"))
-        self.assertIn("site.js?v=0.2.7.1-webui-0001", (root / "deploy" / "ecorex-site" / "index.html").read_text(encoding="utf-8"))
+        self.assertIn("<strong data-version>0.2.7.2</strong>", (root / "deploy" / "ecorex-site" / "index.html").read_text(encoding="utf-8"))
+        self.assertIn("site.js?v=0.2.7.2-webui-0001", (root / "deploy" / "ecorex-site" / "index.html").read_text(encoding="utf-8"))
         self.assertIn("https://mvdcm.ecoremedia.net/ecorex-agent/downloads", installer_source)
         self.assertIn("ECOREX_WEB_CLIENT_BASE=$client_base", installer_source)
         self.assertIn("ECOREX_TOOL_EXECUTION_LEASE_SECONDS=900", installer_source)
@@ -8830,7 +8834,8 @@ process.stdout.write(JSON.stringify(payload));
         self.assertIn('Set-ArtifactProperty $manifest "version" $Version', script_source)
         self.assertIn('Set-ArtifactProperty $manifest "updatedAt" $UpdatedAt', script_source)
         self.assertIn("EcoreX v$Version WebUI-first release", script_source)
-        self.assertIn("-PromoteVersion -WebUiWindowsPath", package_source)
+        self.assertIn('"release:default": "powershell -ExecutionPolicy Bypass -File ../scripts/release-ecorex-default.ps1"', package_source)
+        self.assertIn('"webui:stage-public": "powershell -ExecutionPolicy Bypass -File ../scripts/release-ecorex-default.ps1"', package_source)
 
     def test_v027_update_check_prefers_webui_artifacts_for_windows_and_macos(self):
         from channel.web.web_channel import UpdateCheckHandler
@@ -8875,6 +8880,19 @@ process.stdout.write(JSON.stringify(payload));
             "artifactSize": 550742111,
         }))
         self.assertFalse(handler._artifact_changed(artifact, {}))
+
+    def test_v027_update_check_separates_release_page_from_artifact_download(self):
+        from channel.web import web_channel
+
+        handler = web_channel.UpdateCheckHandler()
+        with patch.dict(web_channel.os.environ, {
+            "ECOREX_RELEASE_MANIFEST_URL": "https://example.invalid/ecorex-agent/manifest.json",
+        }, clear=False):
+            self.assertEqual(handler._release_page_url(), "https://example.invalid/ecorex-agent/")
+        self.assertEqual(
+            handler._absolute_download_url("downloads/EcoreX_0.2.7.2-webui-windows-x64.zip"),
+            "https://mvdcm.ecoremedia.net/ecorex-agent/downloads/EcoreX_0.2.7.2-webui-windows-x64.zip",
+        )
 
     def test_v020_webui_local_auth_falls_back_without_admin_client(self):
         root = Path(__file__).resolve().parents[1]
@@ -10244,9 +10262,8 @@ process.stdout.write(JSON.stringify(payload));
             self.assertEqual(active[0]["cancel_age_seconds"], 2.5)
             self.assertGreater(active[0]["age_seconds"], active[0]["cancel_age_seconds"])
 
-    def test_busy_session_message_interrupts_old_request_and_starts_new_one(self):
+    def test_busy_session_message_queues_without_interrupting_old_request(self):
         from agent.protocol import get_cancel_registry
-        from bridge.context import Context, ContextType
         from channel.web import web_channel
         from common.ecorex_workspace import SessionLock
 
@@ -10255,35 +10272,14 @@ process.stdout.write(JSON.stringify(payload));
             session_id = "session-busy-interrupt"
             old_request_id = "req-old-busy"
             new_request_id = "req-new-busy"
-            old_queue = Queue()
             registry = get_cancel_registry()
 
             with tempfile.TemporaryDirectory() as workspace:
                 old_lock = SessionLock(workspace, session_id).acquire()
                 old_event = registry.register(old_request_id, session_id=session_id)
                 channel.request_to_session = {old_request_id: session_id}
-                channel.sse_queues = {old_request_id: old_queue}
-                channel.sse_stream_tokens = {}
                 channel.session_queues = {}
                 produced_contexts = []
-
-                def release_old_after_cancel():
-                    if old_event.wait(timeout=3):
-                        old_lock.release()
-
-                releaser = threading.Thread(target=release_old_after_cancel, daemon=True)
-                releaser.start()
-
-                def fake_compose_context(ctype, content, **kwargs):
-                    context = Context(ctype, content)
-                    context.kwargs = kwargs
-                    return context
-
-                def fake_produce(context):
-                    produced_contexts.append(context)
-                    lock = context.get("session_lock")
-                    if lock:
-                        lock.release()
 
                 payload = {
                     "session_id": session_id,
@@ -10296,44 +10292,48 @@ process.stdout.write(JSON.stringify(payload));
                         with patch.object(channel, "BACKPRESSURE_GLOBAL_ACTIVE_LIMIT", 1):
                             with patch.object(channel, "BACKPRESSURE_SESSION_ACTIVE_LIMIT", 1):
                                 with patch.object(channel, "_generate_request_id", return_value=new_request_id):
-                                    with patch.object(channel, "_compose_context", side_effect=fake_compose_context):
-                                        with patch.object(channel, "produce", side_effect=fake_produce):
-                                            with patch.object(
-                                                web_channel.web,
-                                                "data",
-                                                return_value=json.dumps(payload).encode("utf-8"),
-                                            ):
-                                                result = json.loads(channel.post_message())
+                                    with patch.object(
+                                        web_channel.web,
+                                        "data",
+                                        return_value=json.dumps(payload).encode("utf-8"),
+                                    ):
+                                        result = json.loads(channel.post_message())
 
-                    cancelled = old_queue.get(timeout=2)
                     self.assertEqual(result["status"], "success")
                     self.assertNotEqual(result.get("code"), "session_busy")
                     self.assertEqual(result["request_id"], new_request_id)
-                    self.assertEqual(result["same_session"]["policy"], "interrupt_previous")
-                    self.assertEqual(result["same_session"]["queue"], "disabled")
-                    self.assertEqual(result["same_session"]["decision"], "replacement_accepted")
-                    self.assertEqual(result["same_session"]["replaced_request_ids"], [old_request_id])
-                    self.assertEqual(result["same_session"]["cancelled_requests"], 1)
-                    self.assertEqual(cancelled["type"], "cancelled")
-                    self.assertEqual(cancelled["request_id"], old_request_id)
+                    self.assertTrue(result["queued"])
+                    self.assertEqual(result["queue_position"], 1)
+                    self.assertEqual(result["same_session"]["policy"], "queue")
+                    self.assertEqual(result["same_session"]["queue"], "enabled")
+                    self.assertEqual(result["same_session"]["decision"], "queued")
+                    self.assertEqual(result["same_session"]["active_request_ids"], [old_request_id])
+                    self.assertEqual(result["same_session"]["queued_request_id"], new_request_id)
+                    self.assertEqual(result["same_session"]["queue_position"], 1)
+                    self.assertEqual(result["same_session"]["reason"], "session_lock_busy")
+                    self.assertEqual(result["same_session"]["replaced_request_ids"], [])
+                    self.assertEqual(result["same_session"]["cancelled_requests"], 0)
+                    self.assertFalse(old_event.is_set())
                     self.assertEqual(channel.request_to_session[new_request_id], session_id)
-                    self.assertIn(new_request_id, channel.sse_queues)
-                    self.assertTrue(produced_contexts)
-                    self.assertEqual(produced_contexts[0].get("cancel_token_owner"), "web_channel")
+                    self.assertIn(new_request_id, channel.queued_request_payloads)
+                    self.assertEqual(channel._queued_request_ids_for_session(session_id), [new_request_id])
+                    self.assertFalse(produced_contexts)
                 finally:
                     old_lock.release()
                     registry.unregister(old_request_id)
                     registry.unregister(new_request_id)
+                    registry.unregister(new_request_id)
 
-    def test_busy_session_message_returns_typed_retry_contract_when_lock_stays_busy(self):
+    def test_busy_session_message_returns_queued_contract_when_lock_stays_busy(self):
         from agent.protocol import get_cancel_registry
         from channel.web import web_channel
-        from common.ecorex_workspace import SessionBusyError, SessionLock
+        from common.ecorex_workspace import SessionLock
 
         with isolated_run_ledger():
             channel = web_channel.WebChannel()
             session_id = "session-busy-retry-contract"
             old_request_id = "req-busy-retry-old"
+            new_request_id = "req-busy-retry-new"
             registry = get_cancel_registry()
 
             with tempfile.TemporaryDirectory() as workspace:
@@ -10348,11 +10348,7 @@ process.stdout.write(JSON.stringify(payload));
                 }
                 try:
                     with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
-                        with patch.object(
-                            channel,
-                            "_interrupt_and_wait_for_session_lock",
-                            side_effect=SessionBusyError("still stopping"),
-                        ):
+                        with patch.object(channel, "_generate_request_id", return_value=new_request_id):
                             with patch.object(
                                 web_channel.web,
                                 "data",
@@ -10360,26 +10356,23 @@ process.stdout.write(JSON.stringify(payload));
                             ):
                                 result = json.loads(channel.post_message())
 
-                    self.assertEqual(result["status"], "error")
-                    self.assertEqual(result["code"], "REQUEST_CONFLICT_RETRYABLE")
-                    self.assertNotEqual(result["code"], "session_busy")
-                    self.assertEqual(result["error_type"], "concurrency_conflict")
-                    self.assertEqual(result["state"], "retryable_conflict")
-                    self.assertTrue(result["retryable"])
-                    self.assertTrue(result["recoverable"])
-                    self.assertGreaterEqual(result["retry_after_ms"], 1000)
-                    self.assertEqual(result["active_request_ids"], [old_request_id])
-                    self.assertEqual(result["same_session"]["policy"], "interrupt_previous")
-                    self.assertEqual(result["same_session"]["queue"], "disabled")
-                    self.assertEqual(result["same_session"]["decision"], "retryable_conflict")
+                    self.assertEqual(result["status"], "success")
+                    self.assertEqual(result["request_id"], new_request_id)
+                    self.assertTrue(result["queued"])
+                    self.assertEqual(result["queue_position"], 1)
+                    self.assertEqual(result["same_session"]["policy"], "queue")
+                    self.assertEqual(result["same_session"]["queue"], "enabled")
+                    self.assertEqual(result["same_session"]["decision"], "queued")
                     self.assertEqual(result["same_session"]["active_request_ids"], [old_request_id])
-                    self.assertGreaterEqual(result["same_session"]["retry_after_ms"], 1000)
-                    self.assertIn("retry", result["message"].lower())
+                    self.assertEqual(result["same_session"]["queued_request_id"], new_request_id)
+                    self.assertEqual(result["same_session"]["reason"], "session_lock_busy")
+                    self.assertEqual(channel._queued_request_ids_for_session(session_id), [new_request_id])
                 finally:
                     old_lock.release()
                     registry.unregister(old_request_id)
+                    registry.unregister(new_request_id)
 
-    def test_same_session_active_request_is_not_ignored_without_interrupt(self):
+    def test_same_session_active_request_queues_without_interrupt(self):
         from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
         from channel.web import web_channel
         from common.ecorex_workspace import SessionLock
@@ -10389,6 +10382,7 @@ process.stdout.write(JSON.stringify(payload));
             channel = web_channel.WebChannel()
             session_id = "session-free-lock-active-token"
             old_request_id = "req-free-lock-active-token"
+            new_request_id = "req-free-lock-active-token-new"
             lock_path = SessionLock(workspace, session_id).path
             registry = get_cancel_registry()
             registry.register(old_request_id, session_id=session_id)
@@ -10403,7 +10397,7 @@ process.stdout.write(JSON.stringify(payload));
             try:
                 with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
                     with patch.object(channel, "BACKPRESSURE_GLOBAL_ACTIVE_LIMIT", 99):
-                        with patch.object(channel, "_generate_request_id") as generate_request_id:
+                        with patch.object(channel, "_generate_request_id", return_value=new_request_id) as generate_request_id:
                             with patch.object(
                                 web_channel.web,
                                 "data",
@@ -10411,20 +10405,20 @@ process.stdout.write(JSON.stringify(payload));
                             ):
                                 result = json.loads(channel.post_message())
 
-                self.assertEqual(result["status"], "error")
-                self.assertEqual(result["code"], "REQUEST_CONFLICT_RETRYABLE")
-                self.assertEqual(result["error_type"], "concurrency_conflict")
-                self.assertEqual(result["state"], "retryable_conflict")
-                self.assertEqual(result["reason"], "same_session_active_request")
-                self.assertEqual(result["active_request_ids"], [old_request_id])
-                self.assertEqual(result["same_session"]["policy"], "interrupt_previous")
-                self.assertEqual(result["same_session"]["queue"], "disabled")
-                self.assertEqual(result["same_session"]["decision"], "retryable_conflict")
+                self.assertEqual(result["status"], "success")
+                self.assertEqual(result["request_id"], new_request_id)
+                self.assertTrue(result["queued"])
+                self.assertEqual(result["same_session"]["policy"], "queue")
+                self.assertEqual(result["same_session"]["queue"], "enabled")
+                self.assertEqual(result["same_session"]["decision"], "queued")
                 self.assertEqual(result["same_session"]["active_request_ids"], [old_request_id])
-                generate_request_id.assert_not_called()
+                self.assertEqual(result["same_session"]["queued_request_id"], new_request_id)
+                self.assertEqual(result["same_session"]["reason"], "same_session_active_request")
+                generate_request_id.assert_called_once()
                 self.assertFalse(lock_path.exists())
             finally:
                 registry.unregister(old_request_id)
+                registry.unregister(new_request_id)
 
     def test_superseded_same_session_replacement_waiter_does_not_queue(self):
         from agent.protocol import get_cancel_registry
@@ -10651,8 +10645,8 @@ process.stdout.write(JSON.stringify(payload));
             finally:
                 registry.unregister("req-first-admitted")
 
-    def test_post_message_session_backpressure_returns_typed_active_ids(self):
-        from agent.protocol import reset_run_ledger_for_tests
+    def test_post_message_session_active_request_queues_with_typed_active_ids(self):
+        from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
         from channel.web import web_channel
 
         with tempfile.TemporaryDirectory() as workspace:
@@ -10661,16 +10655,17 @@ process.stdout.write(JSON.stringify(payload));
             channel.request_to_session = {}
             session_id = "session-pressure-existing"
             request_id = "req-session-pressure-existing"
+            queued_request_id = "req-session-pressure-queued"
             ledger.create_run(request_id, session_id, phase="running", status="running")
             payload = {
                 "session_id": session_id,
-                "message": "same session should be rejected by session pressure",
+                "message": "same session should queue behind active pressure",
                 "stream": True,
             }
             try:
                 with patch.object(channel, "BACKPRESSURE_GLOBAL_ACTIVE_LIMIT", 99):
                     with patch.object(channel, "BACKPRESSURE_SESSION_ACTIVE_LIMIT", 1):
-                        with patch.object(channel, "_generate_request_id") as generate_request_id:
+                        with patch.object(channel, "_generate_request_id", return_value=queued_request_id) as generate_request_id:
                             with patch.object(
                                 web_channel.web,
                                 "data",
@@ -10678,17 +10673,22 @@ process.stdout.write(JSON.stringify(payload));
                             ):
                                 result = json.loads(channel.post_message())
 
-                self.assertEqual(result["status"], "error")
-                self.assertEqual(result["code"], "BACKPRESSURE_SESSION_LIMIT")
-                self.assertEqual(result["error_type"], "backpressure_limit")
-                self.assertEqual(result["scope"], "session")
-                self.assertTrue(result["retryable"])
-                self.assertEqual(result["limit"], 1)
-                self.assertEqual(result["session_active"], 1)
-                self.assertEqual(result["active_request_ids"], [request_id])
-                generate_request_id.assert_not_called()
-                self.assertEqual(channel.request_to_session, {})
+                self.assertEqual(result["status"], "success")
+                self.assertEqual(result["request_id"], queued_request_id)
+                self.assertTrue(result["queued"])
+                self.assertEqual(result["queue_position"], 1)
+                self.assertEqual(result["same_session"]["policy"], "queue")
+                self.assertEqual(result["same_session"]["queue"], "enabled")
+                self.assertEqual(result["same_session"]["decision"], "queued")
+                self.assertEqual(result["same_session"]["active_request_ids"], [request_id])
+                self.assertEqual(result["same_session"]["queued_request_id"], queued_request_id)
+                self.assertEqual(result["same_session"]["reason"], "same_session_active_request")
+                generate_request_id.assert_called_once()
+                self.assertEqual(channel.request_to_session[queued_request_id], session_id)
+                queued_rows = ledger.queued_snapshot(session_id)
+                self.assertEqual([row["request_id"] for row in queued_rows], [queued_request_id])
             finally:
+                get_cancel_registry().unregister(queued_request_id)
                 reset_run_ledger_for_tests(Path(tempfile.gettempdir()) / "ecorex-run-ledger-test-reset.db")
 
     def test_post_message_backpressure_counts_ledger_only_active_runs(self):
@@ -10764,6 +10764,7 @@ process.stdout.write(JSON.stringify(payload));
                 registry.unregister("req-config-global-pressure")
                 session_id = "session-config-session-pressure"
                 request_id = "req-config-session-pressure"
+                queued_request_id = "req-config-session-queued"
                 get_run_ledger().create_run(request_id, session_id, phase="running", status="running")
                 session_payload = {
                     "session_id": session_id,
@@ -10780,16 +10781,22 @@ process.stdout.write(JSON.stringify(payload));
                                 "web_max_active_requests_per_session": 1,
                             },
                         ):
-                            with patch.object(web_channel.web, "data", return_value=json.dumps(session_payload).encode("utf-8")):
-                                session_result = json.loads(channel.post_message())
+                            with patch.object(channel, "_generate_request_id", return_value=queued_request_id):
+                                with patch.object(web_channel.web, "data", return_value=json.dumps(session_payload).encode("utf-8")):
+                                    session_result = json.loads(channel.post_message())
 
-                self.assertEqual(session_result["code"], "BACKPRESSURE_SESSION_LIMIT")
-                self.assertEqual(session_result["scope"], "session")
-                self.assertEqual(session_result["limit"], 1)
-                self.assertEqual(session_result["session_active_limit"], 1)
-                self.assertEqual(session_result["active_request_ids"], [request_id])
+                self.assertEqual(session_result["status"], "success")
+                self.assertEqual(session_result["request_id"], queued_request_id)
+                self.assertTrue(session_result["queued"])
+                self.assertEqual(session_result["same_session"]["policy"], "queue")
+                self.assertEqual(session_result["same_session"]["queue"], "enabled")
+                self.assertEqual(session_result["same_session"]["decision"], "queued")
+                self.assertEqual(session_result["same_session"]["active_request_ids"], [request_id])
+                self.assertEqual(session_result["same_session"]["queued_request_id"], queued_request_id)
+                self.assertEqual(session_result["same_session"]["reason"], "same_session_active_request")
             finally:
                 registry.unregister("req-config-global-pressure")
+                registry.unregister("req-config-session-queued")
 
     def test_cancel_bypasses_backpressure_admission_limit(self):
         from agent.protocol import get_cancel_registry
@@ -10868,8 +10875,8 @@ process.stdout.write(JSON.stringify(payload));
 
                 self.assertEqual(result["status"], "success")
                 self.assertEqual(result["request_id"], request_id)
-                self.assertEqual(result["same_session"]["policy"], "interrupt_previous")
-                self.assertEqual(result["same_session"]["queue"], "disabled")
+                self.assertEqual(result["same_session"]["policy"], "queue")
+                self.assertEqual(result["same_session"]["queue"], "enabled")
                 self.assertEqual(result["same_session"]["decision"], "accepted")
                 self.assertEqual(result["same_session"]["active_request_ids"], [])
                 self.assertEqual(result["same_session"]["replaced_request_ids"], [])
@@ -16212,7 +16219,7 @@ class TestAgentHostBoundary(unittest.TestCase):
             'markStreamTerminal(sessionId, requestId, "interrupted")',
             "finishSessionRequest(sessionId, requestId)",
             "void refreshSessionFromHistoryForRequest(sessionId, requestId).then((restored) =>",
-            "Runtime sidecar restarted before this run reached a terminal state",
+            "运行时在任务完成前断开，已保留当前进度；可以恢复记录或继续任务。",
             'label: "stream_interrupted"',
             "terminalReason",
             "errorCode",

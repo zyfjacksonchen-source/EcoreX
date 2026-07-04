@@ -1225,6 +1225,7 @@ def validate_public_zip(
             "site/admin/index.html",
             "admin-api/ecorex_admin_api.py",
             "server/install-ecorex-public-release.sh",
+            "server/install-ecorex-web.sh",
             "server/check-ecorex-server-release.sh",
             "checksums.json",
         ):
@@ -1713,7 +1714,7 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
 
     release_notes = read_text_by_suffix("common/ecorex_release_notes.py")
     require(
-        re.search(r'"version"\s*:\s*"\d+\.\d+\.\d+"', release_notes) is not None,
+        re.search(r'"version"\s*:\s*"\d+\.\d+\.\d+(?:\.\d+)?"', release_notes) is not None,
         f"{label} release notes missing semantic version",
     )
     require_contains(release_notes, "\"updatePolicy\"", f"{label} release notes")

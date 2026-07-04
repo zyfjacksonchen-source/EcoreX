@@ -25,7 +25,7 @@ const state = {
       recentEvents: [],
       privacy: {},
     },
-    version: "0.2.7.1",
+    version: "0.2.7.2",
   },
   connected: false,
 };
@@ -240,6 +240,8 @@ function renderRuntimeAudit() {
       ["Requests", summary.requests],
       ["Sessions", summary.sessions],
       ["Artifacts", summary.artifacts],
+      ["Valid artifacts", summary.validArtifacts],
+      ["Invalid artifacts", summary.invalidArtifacts],
       ["Messages", summary.messages],
       ["Terminal", summary.terminalEvents],
       ["Policy blocked", summary.capabilityPolicyBlocked],
@@ -414,7 +416,7 @@ function renderRelease() {
           <span>${formatNumber(item.readyArtifactCount || 0)} ready</span>
           <div class="row-actions">
             <span class="pill" data-status="${pillStatus}" title="${escapeHtml(disabledReason)}">${pillText}</span>
-            <button type="button" data-release-promote="${escapeHtml(item.version || "")}" data-release-staged-id="${escapeHtml(item.id || "")}" data-release-action="${action}" data-release-can-promote="${canPromote ? "1" : "0"}" data-release-can-notify="${canNotify ? "1" : "0"}" data-release-disabled-reason="${escapeHtml(disabledReason)}" aria-disabled="${canPromote || canNotify ? "false" : "true"}" title="${escapeHtml(canPromote ? "发布到 stable" : (canNotify ? "重新通知已安装用户" : disabledReason))}">${buttonText}</button>
+            <button type="button" data-release-promote="${escapeHtml(item.version || "")}" data-release-staged-id="${escapeHtml(item.id || "")}" data-release-action="${action}" data-release-can-promote="${canPromote ? "1" : "0"}" data-release-can-notify="${canNotify ? "1" : "0"}" data-release-disabled-reason="${escapeHtml(disabledReason)}" aria-disabled="${canPromote || canNotify ? "false" : "true"}" title="${escapeHtml(canPromote ? "发布到 stable" : (canNotify ? "重新通知已安装用户检查更新" : disabledReason))}">${buttonText}</button>
           </div>
         </article>
       `;
@@ -433,7 +435,7 @@ function renderMetrics() {
   setMetric("errors", formatNumber(summary.errors ?? 0));
   setMetric("capabilities", formatNumber(summary.capabilities ?? 0));
   setMetric("modelCredentials", formatNumber(summary.modelCredentials ?? (state.data.globalModel ? 1 : 0)));
-  setMetric("version", state.data.version || summary.version || "0.2.7.1");
+  setMetric("version", state.data.version || summary.version || "0.2.7.2");
 }
 
 function render() {
@@ -561,10 +563,10 @@ document.addEventListener("click", async (event) => {
     return;
   }
   if (button.dataset.releaseAction === "notify" || button.dataset.releaseCanNotify === "1") {
-    if (!window.confirm(`${version} 已经是 stable。现在重新通知用户安装/刷新？`)) return;
+    if (!window.confirm(`${version} 已经是 stable。现在重新通知已安装用户检查更新？`)) return;
     button.disabled = true;
     button.textContent = "通知中...";
-    showNotice(`正在通知用户 EcoreX ${version}，请稍候。`, "info");
+    showNotice(`正在通知用户检查 EcoreX ${version}，请稍候。`, "info");
     try {
       const payload = await mutate("/release/notify", {
         method: "POST",
@@ -574,7 +576,7 @@ document.addEventListener("click", async (event) => {
         mergeState({ release: payload.release });
         renderRelease();
       }
-      showNotice(payload.message || `已通知用户 EcoreX ${version}`, "info");
+      showNotice(payload.message || `已通知用户检查 EcoreX ${version}`, "info");
     } catch (_) {
       button.disabled = false;
       button.textContent = "通知用户";

@@ -33,6 +33,7 @@ import {
   Search,
   SendHorizontal,
   Settings,
+  Share2,
   ShieldCheck,
   Sparkles,
   Square,
@@ -80,7 +81,9 @@ import {
   openLocalPath,
   openMessageStream,
   prepareRequestRetry,
+  queueChatRequestAction,
   readLocalJson,
+  reportArtifactFeedback,
   reportDesktopEvent,
   requestAgentInstallRequest,
   resetPermissionGrants,
@@ -91,6 +94,7 @@ import {
   saveRuntimeUiState,
   sendChatMessage,
   setChatModel,
+  shareRuntimeSession,
   setSkillEnabled,
   statLocalPath,
   updateScheduler,
@@ -101,6 +105,7 @@ import {
   type ChatModelOption,
   type ChatContextPolicy,
   type AgentArtifact,
+  type AgentArtifactValidity,
   type EnterpriseQuotaCheckResult,
   type EnterpriseSession,
   type ExternalConnection,
@@ -217,7 +222,7 @@ type ChatItem = {
   contextExcluded?: boolean;
   sendAttempt?: {
     id: string;
-    state: "stopping-previous" | "sending" | "accepted" | "restore-available";
+    state: "queued" | "stopping-previous" | "sending" | "accepted" | "restore-available";
     interruptsRequestId?: string;
   };
   recovery?: {
@@ -837,6 +842,7 @@ function slimPersistedArtifact(artifact: AgentArtifact): AgentArtifact {
   const thumbnailUrl = artifact.thumbnailUrl && artifact.thumbnailUrl.length <= 2048 ? artifact.thumbnailUrl : undefined;
   return {
     id: artifact.id,
+    safeArtifactId: artifact.safeArtifactId,
     requestId: artifact.requestId,
     kind: artifact.kind,
     intent: artifact.intent,
@@ -851,6 +857,9 @@ function slimPersistedArtifact(artifact: AgentArtifact): AgentArtifact {
     statusPath: artifact.statusPath,
     previewUrl,
     thumbnailUrl,
+    artifactValidity: artifact.artifactValidity,
+    artifactFeedbackSignal: artifact.artifactFeedbackSignal,
+    artifactFeedbackAt: artifact.artifactFeedbackAt,
     qualityEvidence: compactPersistedQualityEvidence(artifact.qualityEvidence),
     stats: artifact.stats,
     source: artifact.source ? {
@@ -1127,7 +1136,10 @@ function displayModelName(value?: string) {
 function chatModelProviderDisplayLabel(option?: ChatModelOption | null) {
   if (!option) return "";
   const base = option.providerLabel || option.provider || "";
-  if (option.provider === "custom" && option.modelAliasFamily === "gemini") {
+  if (
+    option.modelAliasFamily === "gemini"
+    && (option.provider === "custom" || option.isCustomGeminiEndpoint)
+  ) {
     return base ? `${base} Gemini` : "自定义 Gemini";
   }
   return base;
@@ -1634,13 +1646,18 @@ function mapSessions(
   nowMs = Date.now()
 ): SessionRow[] {
   const projectById = new Map(projects.map((project) => [project.id, project]));
-  const activeRequestBySession = new Map<string, RuntimeActiveRequest>(
-    (snapshot.activeRequests || [])
-      .filter((request) => request.session_id && request.request_id)
-      .filter(isPrimaryChatActiveRequest)
-      .filter((request) => !locallyCompletedRequestIds[String(request.request_id || "")])
-      .map((request) => [String(request.session_id), request])
-  );
+  const activeRequestBySession = new Map<string, RuntimeActiveRequest>();
+  (snapshot.activeRequests || [])
+    .filter((request) => request.session_id && request.request_id)
+    .filter(isPrimaryChatActiveRequest)
+    .filter((request) => !locallyCompletedRequestIds[String(request.request_id || "")])
+    .forEach((request) => {
+      const sessionId = String(request.session_id);
+      const existing = activeRequestBySession.get(sessionId);
+      if (!existing || (runCenterState(existing) === "queued" && runCenterState(request) !== "queued")) {
+        activeRequestBySession.set(sessionId, request);
+      }
+    });
   const rows: SessionRow[] = snapshot.sessions.map((session, index) => {
     const id = session.session_id || session.id || `runtime-${index}`;
     const runtimeBinding = projectBindingFromRuntimeSession(session);
@@ -2248,10 +2265,17 @@ function artifactStatusPriority(status?: AgentArtifact["status"]) {
   return 0;
 }
 
+function artifactFeedbackPriority(signal?: AgentArtifact["artifactFeedbackSignal"]) {
+  if (signal === "thumbs_down" || signal === "thumbs_up") return 2;
+  if (signal === "default") return 1;
+  return 0;
+}
+
 function mergeAgentArtifactRecord(existing: AgentArtifact, incoming: AgentArtifact): AgentArtifact {
   const existingPriority = artifactStatusPriority(existing.status);
   const incomingPriority = artifactStatusPriority(incoming.status);
   const merged = { ...existing, ...incoming };
+  merged.safeArtifactId = incoming.safeArtifactId || existing.safeArtifactId;
   merged.status = incomingPriority >= existingPriority ? incoming.status : existing.status;
   merged.statusPath = incoming.statusPath || existing.statusPath;
   merged.previewUrl = incoming.previewUrl || existing.previewUrl;
@@ -2262,6 +2286,11 @@ function mergeAgentArtifactRecord(existing: AgentArtifact, incoming: AgentArtifa
   merged.url = incoming.url || existing.url;
   merged.qualityEvidence = incoming.qualityEvidence || existing.qualityEvidence;
   merged.sizeBytes = typeof incoming.sizeBytes === "number" ? incoming.sizeBytes : existing.sizeBytes;
+  if (artifactFeedbackPriority(existing.artifactFeedbackSignal) > artifactFeedbackPriority(incoming.artifactFeedbackSignal)) {
+    merged.artifactValidity = existing.artifactValidity;
+    merged.artifactFeedbackSignal = existing.artifactFeedbackSignal;
+    merged.artifactFeedbackAt = existing.artifactFeedbackAt;
+  }
   return merged;
 }
 
@@ -2416,9 +2445,11 @@ function mergeLocalLiveAssistantDisclosure(historyMessage: ChatItem, localMessag
 
   const historyHasVisibleAnswer = assistantVisibleAnswerWeight(historyMessage) > 0;
   const localWithHistoryArtifacts = mergeArtifactsIntoMessage(localMessage, historyMessage.artifacts || []);
-  const localHasRicherDisclosure = localDisclosureWeight > historyDisclosureWeight;
   const localReasoning = redactInternalPromptText(localMessage.reasoning || "");
   const historyReasoning = redactInternalPromptText(historyMessage.reasoning || "");
+  const localHasDisclosure = Boolean(localReasoning || localMessage.steps?.length || localMessage.toolCalls?.length);
+  const localHasRicherDisclosure = localHasDisclosure
+    && (localIsLiveOrSettled ? localDisclosureWeight >= historyDisclosureWeight : localDisclosureWeight > historyDisclosureWeight);
   return {
     ...baseMessage,
     id: localMessage.id || historyMessage.id,
@@ -2704,8 +2735,59 @@ function plainTextForMessage(message: ChatItem) {
   return parts.join("\n\n").trim();
 }
 
+function shareArtifactEntry(artifact: AgentArtifact) {
+  return {
+    title: artifact.title || "未命名产物",
+    kind: artifact.kind || "file",
+    status: artifact.status || "ready",
+    artifactValidity: artifact.artifactValidity || "valid",
+    artifactFeedbackSignal: artifact.artifactFeedbackSignal || "default"
+  };
+}
+
+function shareMessageEntry(message: ChatItem) {
+  if (message.kind || (message.role !== "user" && message.role !== "assistant")) return null;
+  const content = redactInternalPromptText(message.content || "").trim();
+  const artifacts = (message.artifacts || []).map(shareArtifactEntry).slice(0, 24);
+  if (!content && !artifacts.length) return null;
+  return {
+    role: message.role,
+    content,
+    createdAt: message.createdAt,
+    artifacts
+  };
+}
+
+function shareMessagesPayload(messages: ChatItem[]) {
+  return messages
+    .map(shareMessageEntry)
+    .filter((entry): entry is NonNullable<ReturnType<typeof shareMessageEntry>> => Boolean(entry))
+    .slice(-200);
+}
+
 function isLiveAssistantMessage(message: ChatItem) {
   return message.role === "assistant" && message.pending === true && !message.paused && !message.cancelled;
+}
+
+function requestIdsFromSessionMessages(messages: ChatItem[] = []) {
+  return messages
+    .filter((message) => message.role === "assistant" && message.pending && message.requestId && !message.paused && !message.cancelled)
+    .map((message) => String(message.requestId));
+}
+
+function activeUiRequestIds(
+  runtimeRequestIds: Set<string>,
+  sessionRequestIdsMap: StringMap,
+  sessionState: Record<string, SessionUiState>,
+  activeMessages: ChatItem[]
+) {
+  const requestIds = new Set(runtimeRequestIds);
+  Object.values(sessionRequestIdsMap).filter(Boolean).forEach((requestId) => requestIds.add(requestId));
+  requestIdsFromSessionMessages(activeMessages).forEach((requestId) => requestIds.add(requestId));
+  Object.values(sessionState).forEach((state) => {
+    requestIdsFromSessionMessages(state.messages || []).forEach((requestId) => requestIds.add(requestId));
+  });
+  return requestIds;
 }
 
 function isSilentPausedAssistantMessage(message: ChatItem) {
@@ -2856,8 +2938,19 @@ function normalizeArtifactEntry(entry: unknown, index: number, requestId?: strin
   const source = raw.source && typeof raw.source === "object" ? raw.source as Record<string, unknown> : {};
   const stats = raw.stats && typeof raw.stats === "object" ? raw.stats as Record<string, unknown> : {};
   const qualityEvidence = normalizeQualityEvidence(raw.qualityEvidence || raw.quality_evidence);
+  const rawSignal = String(raw.artifactFeedbackSignal || raw.artifact_feedback_signal || raw.feedbackSignal || raw.feedback_signal || "").trim().toLowerCase();
+  const artifactFeedbackSignal: AgentArtifact["artifactFeedbackSignal"] = rawSignal === "thumbs_down"
+    ? "thumbs_down"
+    : rawSignal === "thumbs_up"
+      ? "thumbs_up"
+      : "default";
+  const rawValidity = String(raw.artifactValidity || raw.artifact_validity || raw.validity || "").trim().toLowerCase();
+  const artifactValidity: AgentArtifact["artifactValidity"] = artifactFeedbackSignal === "thumbs_down" || rawValidity === "invalid"
+    ? "invalid"
+    : "valid";
   return {
     id,
+    safeArtifactId: String(raw.safeArtifactId || raw.safe_artifact_id || "").trim() || undefined,
     requestId: String(raw.requestId || raw.request_id || requestId || "").trim() || undefined,
     kind,
     intent,
@@ -2872,6 +2965,9 @@ function normalizeArtifactEntry(entry: unknown, index: number, requestId?: strin
     previewUrl: String(raw.previewUrl || raw.preview_url || "").trim() || undefined,
     thumbnailUrl: String(raw.thumbnailUrl || raw.thumbnail_url || "").trim() || undefined,
     statusPath: String(raw.statusPath || raw.status_path || "").trim() || undefined,
+    artifactValidity,
+    artifactFeedbackSignal,
+    artifactFeedbackAt: String(raw.artifactFeedbackAt || raw.artifact_feedback_at || "").trim() || undefined,
     qualityEvidence,
     stats: Object.keys(stats).length ? {
       addedLines: typeof stats.addedLines === "number" ? stats.addedLines : typeof stats.added_lines === "number" ? stats.added_lines : undefined,
@@ -4349,13 +4445,14 @@ export function App() {
   useEffect(() => {
     if (runtimeSnapshot.status !== "ready") return;
     if (runtimeSnapshot.activeRequestsStatus === "unavailable") return;
-    const activeRequestIds = new Set(
+    const runtimeActiveRequestIds = new Set(
       (runtimeSnapshot.activeRequests || [])
         .filter(isPrimaryChatActiveRequest)
         .map((request) => request.request_id ? String(request.request_id) : "")
         .filter((requestId) => !locallyCompletedRequestIds[requestId])
         .filter(Boolean)
     );
+    const activeRequestIds = activeUiRequestIds(runtimeActiveRequestIds, sessionRequestIds, sessionUiState, messagesRef.current);
     const legacyStaleSessionIds = new Set(
       (runtimeSnapshot.staleLocks || [])
         .filter((lock) => lock.removed || lock.dead_owner || lock.deadOwner || lock.stale)
@@ -4399,7 +4496,7 @@ export function App() {
       finishSessionRequest(sessionId);
       void refreshSessionFromHistory(sessionId);
     });
-  }, [runtimeSnapshot, sessionUiState, locallyCompletedRequestIds]);
+  }, [runtimeSnapshot, sessionUiState, sessionRequestIds, locallyCompletedRequestIds]);
 
   useEffect(() => {
     if (runtimeSnapshot.status !== "ready") return;
@@ -5574,6 +5671,82 @@ export function App() {
     scheduleSessionMessagesSnapshot(sessionId, nextMessages);
   }
 
+  function updateArtifactFeedbackRecord(artifact: AgentArtifact, validity: AgentArtifactValidity): AgentArtifact {
+    return {
+      ...artifact,
+      artifactValidity: validity,
+      artifactFeedbackSignal: validity === "invalid" ? "thumbs_down" : "thumbs_up",
+      artifactFeedbackAt: new Date().toISOString()
+    };
+  }
+
+  async function handleArtifactFeedback(sessionId: string, messageId: string, artifact: AgentArtifact, validity: AgentArtifactValidity) {
+    const updatedArtifact = updateArtifactFeedbackRecord(artifact, validity);
+    const targetKey = artifactMergeKey(artifact);
+    updateSessionMessages(sessionId, (current) => current.map((message) => {
+      if (message.id !== messageId || !message.artifacts?.length) return message;
+      return {
+        ...message,
+        artifacts: message.artifacts.map((item) => (
+          item.id === artifact.id || (targetKey && artifactMergeKey(item) === targetKey)
+            ? updateArtifactFeedbackRecord(item, validity)
+            : item
+        ))
+      };
+    }));
+    try {
+      await reportArtifactFeedback({
+        sessionId,
+        requestId: artifact.requestId || "",
+        messageId,
+        artifact: updatedArtifact,
+        validity,
+        signal: updatedArtifact.artifactFeedbackSignal || "default"
+      });
+    } catch (error) {
+      void reportDesktopEvent({
+        type: "warn",
+        source: "Desktop",
+        category: "artifact_feedback",
+        label: "sync_failed",
+        sessionId,
+        detail: {
+          requestId: artifact.requestId || "",
+          validity,
+          error: error instanceof Error ? error.message : String(error)
+        }
+      });
+    }
+  }
+
+  async function handleShareActiveSession() {
+    const sessionId = activeSessionIdRef.current;
+    flushPendingSessionMessagesSnapshot(sessionId);
+    const sourceMessages = sessionId === activeSessionIdRef.current
+      ? messagesRef.current
+      : (sessionUiState[sessionId]?.messages || []);
+    const shareMessages = shareMessagesPayload(sourceMessages);
+    if (!shareMessages.length) {
+      setToast("当前会话没有可分享内容");
+      return;
+    }
+    try {
+      const result = await shareRuntimeSession({
+        sessionId,
+        title: sessionTitles[sessionId] || activeSessionTitle,
+        messages: shareMessages
+      });
+      if (result.shareUrl) {
+        await navigator.clipboard?.writeText(result.shareUrl).catch(() => undefined);
+        setToast("分享链接已复制");
+      } else {
+        setToast("分享链接已创建");
+      }
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "创建分享链接失败");
+    }
+  }
+
   function commitSessionMessagesSnapshot(sessionId: string, nextMessages: ChatItem[]) {
     committedSessionMessageSnapshots.current[sessionId] = nextMessages;
     setSessionUiState((current) => {
@@ -6277,6 +6450,26 @@ export function App() {
       type: "tool_heartbeat",
       status: item.status || "running"
     });
+  }
+
+  function taskObservationPhase(item: StreamItem) {
+    const title = String(item.title || item.tool || item.kind || "任务");
+    const health = String(item.health || item.status || "").toLowerCase();
+    const elapsed = Number(item.elapsed_seconds || 0);
+    const elapsedLabel = elapsed > 0 ? ` · 已等待 ${formatRunAge(elapsed)}` : "";
+    if (String(item.task_event_type || "") === "task.intervention_requested" || health.includes("decision")) {
+      return `${title} 需要决策${elapsedLabel}`;
+    }
+    if (health.includes("extended")) {
+      const lease = Number(item.lease_count || item.extension_count || 0);
+      return `${title} 已延长观测${lease ? ` x${lease}` : ""}${elapsedLabel}`;
+    }
+    if (health.includes("timeout")) return `${title} 触发超时保护${elapsedLabel}`;
+    if (String(item.task_event_type || "") === "task.started") return `开始观测 ${title}`;
+    if (String(item.task_event_type || "") === "task.completed") return `${title} 已完成`;
+    if (String(item.task_event_type || "") === "task.failed") return `${title} 失败${elapsedLabel}`;
+    if (String(item.task_event_type || "") === "task.cancelled") return `${title} 已停止`;
+    return `正在观测 ${title}${elapsedLabel}`;
   }
 
   function appendMediaStep(message: ChatItem, item: StreamItem, pending = true): ChatItem {
@@ -7211,6 +7404,10 @@ export function App() {
           updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => appendToolDeadlineExtended(message, item));
           return;
         }
+        if (item.type === "task_observation") {
+          updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => replaceCurrentPhase(message, taskObservationPhase(item)));
+          return;
+        }
         if (item.type === "tool_end") {
           updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => appendToolEnd(message, item));
           return;
@@ -7500,7 +7697,7 @@ export function App() {
         ...userMessage,
         sendAttempt: {
           id: clientAttemptId,
-          state: previousRequestId ? "stopping-previous" : "sending",
+          state: previousRequestId ? "queued" : "sending",
           interruptsRequestId: previousRequestId || undefined
         }
       },
@@ -7517,7 +7714,7 @@ export function App() {
         },
         sendAttempt: {
           id: clientAttemptId,
-          state: previousRequestId ? "stopping-previous" : "sending",
+          state: previousRequestId ? "queued" : "sending",
           interruptsRequestId: previousRequestId || undefined
         },
         steps: [{ type: "phase", content: "正在发送" }]
@@ -7766,7 +7963,26 @@ export function App() {
         clearAssistantPhaseTimers(assistantId);
         clearSessionPreflight(requestSessionId, preflightController);
       }
-      if (result.request_id && result.stream) {
+      const queuedResponse = Boolean(result.queued || result.same_session?.decision === "queued");
+      if (result.request_id && result.stream && queuedResponse) {
+        const requestId = result.request_id;
+        const queuePosition = Number(result.queue_position || result.same_session?.queue_position || 0);
+        clearAssistantPhaseTimers(assistantId);
+        clearSessionPreflight(requestSessionId, preflightController);
+        updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => ({
+          ...replaceCurrentPhase(message, queuePosition > 0 ? `已排队，第 ${queuePosition} 位等待执行` : "已排队，等待当前任务完成"),
+          requestId,
+          pending: true,
+          sendAttempt: message.sendAttempt ? { ...message.sendAttempt, state: "queued" } : undefined,
+          runTiming: {
+            ...(message.runTiming || { startedAtMs: Date.now() }),
+            requestId,
+            state: "queued",
+            updatedAtMs: Date.now()
+          }
+        }));
+        void refreshRunCenter(false);
+      } else if (result.request_id && result.stream) {
         const requestId = result.request_id;
         clearAssistantPhaseTimers(assistantId);
         clearSessionPreflight(requestSessionId, preflightController);
@@ -7950,6 +8166,10 @@ export function App() {
             }
             if (item.type === "tool_deadline_extended") {
               updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => appendToolDeadlineExtended(message, item));
+              return;
+            }
+            if (item.type === "task_observation") {
+              updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => replaceCurrentPhase(message, taskObservationPhase(item)));
               return;
             }
             if (item.type === "tool_end") {
@@ -8869,10 +9089,10 @@ export function App() {
     }
   }
 
-  function openRuntimeUpdateDownload() {
-    const url = runtimeUpdateCheck?.downloadUrl || "https://mvdcm.ecoremedia.net/ecorex-agent/";
+  function openRuntimeUpdatePage() {
+    const url = runtimeUpdateCheck?.releasePageUrl || runtimeUpdateCheck?.downloadUrl || "https://mvdcm.ecoremedia.net/ecorex-agent/";
     window.open(url, "_blank", "noopener,noreferrer");
-    setToast("已打开 EcoreX 下载页");
+    setToast("已打开 EcoreX 更新页");
   }
 
   function reloadIntoBackgroundUpdate() {
@@ -9590,7 +9810,9 @@ export function App() {
     const requestId = recovery?.requestId || message.requestId || "";
     if (!recovery && !message.sendAttempt) return null;
     if (message.sendAttempt && message.sendAttempt.state !== "accepted") {
-      const label = message.sendAttempt.state === "stopping-previous"
+      const label = message.sendAttempt.state === "queued"
+        ? (message.role === "user" ? "已排队，等待当前任务完成" : "队列中，稍后自动响应")
+        : message.sendAttempt.state === "stopping-previous"
         ? (message.role === "user" ? "正在发送新消息" : "正在切换到这条新消息")
         : message.sendAttempt.state === "restore-available"
           ? "消息未发出，可在输入框中重试"
@@ -9792,6 +10014,17 @@ export function App() {
             <span title="当前企业账号"><CheckCircle2 aria-hidden="true" />{session.user.email}</span>
             <button
               className="icon-button"
+              title="分享会话"
+              data-tooltip="分享会话"
+              data-tooltip-position="bottom-right"
+              aria-label="分享会话"
+              onClick={() => void handleShareActiveSession()}
+              disabled={!shareMessagesPayload(messages).length}
+            >
+              <Share2 aria-hidden="true" />
+            </button>
+            <button
+              className="icon-button"
               title={theme === "dark" ? "切换到明亮模式" : "切换到深色模式"}
               data-tooltip={theme === "dark" ? "切换到明亮模式" : "切换到深色模式"}
               data-tooltip-position="bottom-right"
@@ -9845,8 +10078,8 @@ export function App() {
             </div>
             <div className="update-actions">
               <em>{runtimeUpdateCheck?.updateReason === "notice" ? "管理员通知" : (runtimeUpdateCheck?.updateReason === "artifact" ? "同版本热修" : `当前 ${runtimeUpdateCheck?.currentVersion || appVersion}`)}</em>
-              <button type="button" onClick={openRuntimeUpdateDownload} title="打开下载页安装新版本">
-                <Globe2 aria-hidden="true" />打开下载页
+              <button type="button" onClick={openRuntimeUpdatePage} title="查看更新说明并检查本机更新">
+                <Globe2 aria-hidden="true" />查看更新
               </button>
               <button
                 type="button"
@@ -9982,6 +10215,7 @@ export function App() {
                       localFileJson={messageLocalJson}
                       localFileStat={messageLocalFileStat}
                       onLocalFileContextMenu={showChatFileMenu}
+                      onArtifactFeedback={(artifact, validity) => handleArtifactFeedback(messageSessionId, message.id, artifact, validity)}
                     />
                     {message.role !== "user" ? messageFileList : null}
                     {renderRecoveryActions(message, messageSessionId)}

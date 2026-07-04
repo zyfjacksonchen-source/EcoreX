@@ -7,6 +7,7 @@ import os
 import re
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -84,6 +85,20 @@ def _safe_token(value: Any, limit: int = 96) -> Optional[str]:
     return token or None
 
 
+def _safe_artifact_label(value: Any, limit: int = 120) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if re.search(r"(?i)(bearer\s+|https?://|file://|data:image/|sk-[a-z0-9_-]{6,}|[a-z]:[\\/])", text):
+        return ""
+    text = re.sub(r"[<>:\"/\\|?*\x00-\x1f]+", "-", text)
+    text = re.sub(r"\s+", "-", text)
+    text = re.sub(r"-{2,}", "-", text).strip(" .-_")
+    if not text:
+        return ""
+    return text[:limit].strip(" .-_")
+
+
 def _safe_int(value: Any) -> Optional[int]:
     try:
         number = int(value)
@@ -155,6 +170,10 @@ def _safe_image_result_row(item: Dict[str, Any]) -> Dict[str, Any]:
         token = _safe_token(item.get(key))
         if token:
             safe[key] = token
+    for key in ("title", "fileName", "file_name", "artifactNameSource", "sentAt"):
+        label = _safe_artifact_label(item.get(key), limit=160)
+        if label:
+            safe[key] = label
     for key in ("width", "height", "sizeBytes", "index"):
         number = _safe_int(item.get(key))
         if number is not None:
@@ -170,6 +189,52 @@ def _image_result_path(item: Dict[str, Any]) -> str:
         if value:
             return value
     return ""
+
+
+def _image_artifact_timestamp() -> tuple[str, str]:
+    now = datetime.now().astimezone()
+    return now.strftime("%Y%m%d-%H%M%S"), now.isoformat(timespec="seconds")
+
+
+def _image_artifact_ext(path: str, fallback: Any = None) -> str:
+    ext = Path(str(path or "")).suffix.lower()
+    if not ext and fallback:
+        ext = "." + str(fallback).strip().lower().lstrip(".")
+    if not re.match(r"^\.[a-z0-9]{1,8}$", ext or ""):
+        ext = ".png"
+    return ext
+
+
+def _image_artifact_name(
+    context: Any,
+    *,
+    ext: str,
+    ordinal: Optional[int] = None,
+    total: int = 1,
+) -> tuple[str, str]:
+    if not isinstance(context, dict):
+        return "", ""
+    summary = _safe_artifact_label(
+        context.get("summary") or context.get("sessionSummary") or context.get("title") or "图片产物",
+        limit=48,
+    ) or "图片产物"
+    timestamp, sent_at = _image_artifact_timestamp()
+    suffix = ""
+    if ordinal is not None and (total > 1 or ordinal >= 0):
+        suffix = f"-{ordinal + 1:02d}"
+    return f"{summary}-{timestamp}{suffix}{ext}", sent_at
+
+
+def _unique_image_artifact_target(target: Path) -> Path:
+    if not target.exists():
+        return target
+    stem = target.stem
+    suffix = target.suffix
+    for index in range(2, 1000):
+        candidate = target.with_name(f"{stem}-{index}{suffix}")
+        if not candidate.exists():
+            return candidate
+    return target.with_name(f"{stem}-{int(time.time())}{suffix}")
 
 
 def _with_image_quality_evidence(
@@ -527,9 +592,20 @@ class ImageGenTool(BaseTool):
                     "redacted": True,
                 })
 
+            raw_images = self._with_artifact_names(
+                stdout_json.get("images") or [],
+                output_dir=output_dir,
+                output_format=args.get("output_format"),
+                ordinal=(
+                    _safe_int(args.get("_artifact_batch_index"))
+                    if "_artifact_batch_index" in args
+                    else None
+                ),
+                total=_safe_int(args.get("_artifact_batch_total")) or len(stdout_json.get("images") or []) or 1,
+            )
             quality_started = time.monotonic()
             images, _quality_evidence = _with_image_quality_evidence(
-                stdout_json.get("images") or [],
+                raw_images,
                 reference_images=authorized_sources,
             )
             quality_total_latency_ms += int((time.monotonic() - quality_started) * 1000)
@@ -628,6 +704,8 @@ class ImageGenTool(BaseTool):
                 })
                 continue
             child_args = {**inherited, **raw_task, "action": "generate"}
+            child_args["_artifact_batch_index"] = index
+            child_args["_artifact_batch_total"] = len(tasks)
             child_args.pop("tasks", None)
             child = self.execute(child_args)
             payload = child.result if isinstance(child.result, dict) else {"output": child.result}
@@ -691,19 +769,79 @@ class ImageGenTool(BaseTool):
             "type": "file_to_send",
             "path": path,
             "file_path": path,
-            "file_name": Path(path).name or f"image-{task_index + 1}.png",
+            "file_name": str(image.get("file_name") or image.get("fileName") or image.get("title") or Path(path).name or f"image-{task_index + 1}.png"),
+            "title": str(image.get("title") or image.get("fileName") or image.get("file_name") or Path(path).name or f"image-{task_index + 1}.png"),
             "file_type": "image",
             "tool_name": self.name,
             "tool_call_id": str(getattr(self, "tool_call_id", "") or ""),
             "status": str(image.get("status") or "ready"),
             "task_index": task_index,
             "batchMode": "native_imagegen_tool_loop",
+            "sentAt": str(image.get("sentAt") or ""),
+            "artifactNameSource": str(image.get("artifactNameSource") or ""),
             "redacted": True,
         }
         try:
             emit_event("file_to_send", payload)
         except Exception as exc:
             logger.debug("[ImageGen] incremental artifact event skipped: %s", exc)
+
+    def _with_artifact_names(
+        self,
+        images: Any,
+        *,
+        output_dir: Path,
+        output_format: Any = None,
+        ordinal: Optional[int] = None,
+        total: int = 1,
+    ) -> list[Dict[str, Any]]:
+        if not isinstance(images, list):
+            return []
+        context = getattr(self, "artifact_naming_context", None)
+        if not isinstance(context, dict):
+            return [dict(item) for item in images if isinstance(item, dict)]
+
+        named: list[Dict[str, Any]] = []
+        try:
+            safe_output_dir = output_dir.resolve()
+        except Exception:
+            safe_output_dir = output_dir
+        image_count = max(1, int(total or len(images) or 1))
+        for local_index, item in enumerate(images):
+            if not isinstance(item, dict):
+                continue
+            projected = dict(item)
+            path = _image_result_path(projected)
+            ext = _image_artifact_ext(path, output_format or projected.get("format") or projected.get("extension"))
+            item_ordinal = ordinal if ordinal is not None else (local_index if image_count > 1 else None)
+            file_name, sent_at = _image_artifact_name(context, ext=ext, ordinal=item_ordinal, total=image_count)
+            if not file_name:
+                named.append(projected)
+                continue
+
+            new_path = ""
+            if path and not path.lower().startswith(("data:image/", "http://", "https://")):
+                try:
+                    source_path = Path(expand_path(path)).resolve()
+                    if source_path.is_file() and source_path.parent == safe_output_dir:
+                        target = _unique_image_artifact_target(source_path.with_name(file_name))
+                        if target != source_path:
+                            source_path.replace(target)
+                        new_path = str(target)
+                except Exception as exc:
+                    logger.debug("[ImageGen] image artifact file rename skipped: %s", exc.__class__.__name__)
+            if new_path:
+                for key in ("url", "path", "file_path", "filePath", "output", "output_path", "outputPath"):
+                    if projected.get(key):
+                        projected[key] = new_path
+                projected.setdefault("path", new_path)
+            projected["title"] = file_name
+            projected["fileName"] = file_name
+            projected["file_name"] = file_name
+            projected["sentAt"] = sent_at
+            projected["artifactNameSource"] = "session-summary-send-time"
+            named.append(projected)
+        return named
 
     def _probe(self) -> Dict[str, Any]:
         root = _runtime_root()

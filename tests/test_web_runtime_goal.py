@@ -1849,7 +1849,7 @@ def test_s4b_web_app_chat_model_switcher_contract():
     assert 'path: "/message"' in api_source
     assert "model-switch-divider" in app_source
     assert "function chatModelProviderDisplayLabel" in app_source
-    assert 'option.provider === "custom" && option.modelAliasFamily === "gemini"' in app_source
+    assert "option.isCustomGeminiEndpoint" in app_source
     assert "已切换 ${label} 模型" in app_source
     assert "chooseChatModel" in app_source
     assert "chat-model-popover" in app_source
@@ -1958,9 +1958,31 @@ def test_v027_model_switch_divider_and_imagegen_resume_contracts():
     assert '"promoteDisabledReason"' in admin_api_source
 
     assert "_release_manifest_notice_state_payload" in web_channel_source
+
+
+def test_v027_agent_activity_stays_visible_until_next_process_or_terminal_event():
+    app_source = (ROOT / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
+    api_source = (ROOT / "desktop" / "src" / "services" / "ecorexApi.ts").read_text(encoding="utf-8")
+    admin_js_source = (ROOT / "deploy" / "ecorex-site" / "admin" / "admin.js").read_text(encoding="utf-8")
+    web_channel_source = (ROOT / "channel" / "web" / "web_channel.py").read_text(encoding="utf-8")
+    message_source = (ROOT / "desktop" / "src" / "components" / "MessageContent.tsx").read_text(encoding="utf-8")
+
+    assert "function requestIdsFromSessionMessages" in app_source
+    assert "function activeUiRequestIds" in app_source
+    assert "const runtimeActiveRequestIds = new Set(" in app_source
+    assert "const activeRequestIds = activeUiRequestIds(runtimeActiveRequestIds, sessionRequestIds, sessionUiState, messagesRef.current);" in app_source
+    assert "requestIdsFromSessionMessages(state.messages || []).forEach((requestId) => requestIds.add(requestId));" in app_source
+    assert "localIsLiveOrSettled ? localDisclosureWeight >= historyDisclosureWeight : localDisclosureWeight > historyDisclosureWeight" in app_source
+    assert "const localHasDisclosure = Boolean(localReasoning || localMessage.steps?.length || localMessage.toolCalls?.length);" in app_source
+    assert 'replaceCurrentPhase(message, "正在连接响应")' in app_source
+    assert 'steps: [{ type: "phase", content: "正在发送" }]' in app_source
+    assert 'steps: [{ type: "phase", content: "正在连接响应" }]' in app_source
+    assert '<span className="thinking-indicator"><span className="thinking-ring" aria-hidden="true" /><span>{mainContent ? "继续生成中" : "思考中"}</span></span>' in message_source
     assert "noticeRevision" in web_channel_source
     assert '"notice"' in web_channel_source
-    assert '"notice" if notice_active else ""' in web_channel_source
+    assert "notice_active = bool(" in web_channel_source
+    assert 'update_reason = "version" if version_compare > 0 else ("artifact" if artifact_changed else "")' in web_channel_source
+    assert '"artifactDownloadUrl"' in web_channel_source
 
     assert "export type RuntimeUpdateCheck" in api_source
     assert "export async function checkRuntimeUpdate" in api_source
@@ -1971,7 +1993,9 @@ def test_v027_model_switch_divider_and_imagegen_resume_contracts():
     assert "update.noticeRevision || update.notice?.revision" in app_source
     assert "60 * 1000" in app_source
     assert "发现 EcoreX 新版本" in app_source
-    assert "打开下载页" in app_source
+    assert "查看更新" in app_source
+    assert "releasePageUrl?: string" in api_source
+    assert "artifactDownloadUrl?: string" in api_source
 
     assert "data-release-can-promote" in admin_js_source
     assert "data-release-can-notify" in admin_js_source
@@ -2116,6 +2140,8 @@ def test_s5_web_runtime_forces_browser_cdp_defaults(monkeypatch):
                 "cdp_auto_launch": False,
                 "cdp_fallback": False,
                 "persistent": False,
+                "cdp_persist_session": False,
+                "idle_timeout": 300,
             }
         },
     }
@@ -2126,6 +2152,8 @@ def test_s5_web_runtime_forces_browser_cdp_defaults(monkeypatch):
     assert browser["cdp_auto_launch"] is True
     assert browser["cdp_fallback"] is True
     assert browser["persistent"] is True
+    assert browser["cdp_persist_session"] is True
+    assert browser["idle_timeout"] == 0
 
 
 def test_s5_web_runtime_ignores_desktop_enterprise_policy_cache(monkeypatch, tmp_path):
@@ -2753,3 +2781,30 @@ def test_s5_web_file_access_malformed_broker_decisions_fail_closed(monkeypatch, 
             with pytest.raises(Exception):
                 web_channel._project_payload_from_path(str(new_project), create=True, user_selected=False)
             assert not new_project.exists()
+
+
+def test_v0272_artifact_feedback_and_session_share_are_web_wired():
+    app_source = (ROOT / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
+    api_source = (ROOT / "desktop" / "src" / "services" / "ecorexApi.ts").read_text(encoding="utf-8")
+    message_source = (ROOT / "desktop" / "src" / "components" / "MessageContent.tsx").read_text(encoding="utf-8")
+    routes_source = (ROOT / "channel" / "web" / "routes.py").read_text(encoding="utf-8")
+    web_source = (ROOT / "channel" / "web" / "web_channel.py").read_text(encoding="utf-8")
+    admin_source = (ROOT / "deploy" / "ecorex-admin-api" / "ecorex_admin_api.py").read_text(encoding="utf-8")
+    admin_js = (ROOT / "deploy" / "ecorex-site" / "admin" / "admin.js").read_text(encoding="utf-8")
+
+    assert "Share2" in app_source
+    assert "handleShareActiveSession" in app_source
+    assert "shareRuntimeSession" in api_source
+    assert "/api/sessions/${encodeURIComponent(input.sessionId)}/share" in api_source
+    assert "ThumbsUp" in message_source
+    assert "ThumbsDown" in message_source
+    assert "/api/artifacts/feedback" in routes_source
+    assert "/api/sessions/(.*)/share" in routes_source
+    assert "ArtifactFeedbackHandler" in web_source
+    assert "SessionShareHandler" in web_source
+    assert "run.paused" in web_source
+    assert "artifact.feedback" in admin_source
+    assert "session_shares" in admin_source
+    assert "redact_share_text" in admin_source
+    assert "Valid artifacts" in admin_js
+    assert "Invalid artifacts" in admin_js

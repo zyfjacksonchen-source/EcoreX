@@ -1633,7 +1633,10 @@ def _first_custom_gemini_option(options):
         model = str(item.get("model") or "").strip()
         alias = str(item.get("modelAliasFamily") or item.get("model_alias_family") or "").strip().lower()
         official = item.get("isOfficialGeminiProvider") is True or item.get("is_official_gemini_provider") is True
-        if provider == "custom" and (alias == "gemini" or "gemini" in model.lower()) and not official:
+        custom_endpoint = item.get("isCustomGeminiEndpoint") is True or item.get("is_custom_gemini_endpoint") is True
+        endpoint_family = str(item.get("geminiEndpointFamily") or item.get("gemini_endpoint_family") or "").strip().lower()
+        is_custom_route = provider == "custom" or (provider == "gemini" and (custom_endpoint or endpoint_family == "custom-rest"))
+        if is_custom_route and (alias == "gemini" or "gemini" in model.lower()) and not official:
             return item
     return {}
 
@@ -1688,14 +1691,17 @@ def phase_v027_integrated_capabilities(opener, stream_session_id):
     original_provider = str(chat_payload.get("current_provider") or "")
     original_model = str(chat_payload.get("current_model") or "")
     custom_model = str(custom_gemini.get("model") or "")
+    custom_provider = str(custom_gemini.get("provider") or "")
     custom_alias = str(custom_gemini.get("modelAliasFamily") or custom_gemini.get("model_alias_family") or "")
+    custom_endpoint = custom_gemini.get("isCustomGeminiEndpoint") is True or custom_gemini.get("is_custom_gemini_endpoint") is True
+    custom_endpoint_family = str(custom_gemini.get("geminiEndpointFamily") or custom_gemini.get("gemini_endpoint_family") or "")
     switch_payload = {}
     switch_result = {"status": 0, "json": {}}
     if custom_gemini:
         switch_result = request(
             "/api/models",
             method="POST",
-            data={"action": "set_capability", "capability": "chat", "provider_id": "custom", "model": custom_model},
+            data={"action": "set_capability", "capability": "chat", "provider_id": custom_provider, "model": custom_model},
             opener=opener,
             timeout=90,
         )
@@ -1742,9 +1748,11 @@ def phase_v027_integrated_capabilities(opener, stream_session_id):
     switch_evidence = {
         "modelHash": h(custom_model),
         "originalProvider": original_provider,
-        "customProvider": custom_gemini.get("provider"),
+        "customProvider": custom_provider,
         "aliasFamily": custom_alias,
         "officialGemini": custom_gemini.get("isOfficialGeminiProvider"),
+        "customEndpoint": custom_endpoint,
+        "endpointFamily": custom_endpoint_family,
         "switchStatus": switch_result.get("status"),
         "switchResultStatus": switch_payload.get("status"),
         "restoreStatus": restore.get("status"),
@@ -1757,22 +1765,23 @@ def phase_v027_integrated_capabilities(opener, stream_session_id):
     add("v027-integrated-capabilities", "models endpoint succeeds", models["status"] == 200 and models_payload.get("status") == "success")
     add("v027-integrated-capabilities", "chat model options are returned", isinstance(options, list) and bool(options), {"count": len(options)})
     add("v027-integrated-capabilities", "custom Gemini option exists", bool(custom_gemini), switch_evidence)
-    add("v027-integrated-capabilities", "custom Gemini provider is custom", str(custom_gemini.get("provider") or "").lower() == "custom", switch_evidence)
+    add("v027-integrated-capabilities", "custom Gemini option uses custom route or custom-rest endpoint", custom_provider.lower() == "custom" or (custom_provider.lower() == "gemini" and custom_endpoint), switch_evidence)
     add("v027-integrated-capabilities", "custom Gemini alias family is gemini", custom_alias.lower() == "gemini", switch_evidence)
     add("v027-integrated-capabilities", "custom Gemini is not official Google provider", custom_gemini.get("isOfficialGeminiProvider") is False or custom_gemini.get("is_official_gemini_provider") is False, switch_evidence)
     add("v027-integrated-capabilities", "custom Gemini option is configured", custom_gemini.get("configured") is not False, switch_evidence)
     add("v027-integrated-capabilities", "set custom Gemini chat capability succeeds", switch_result["status"] == 200 and switch_payload.get("status") == "success", switch_evidence)
-    add("v027-integrated-capabilities", "set custom Gemini result provider is custom", str(switch_payload.get("provider") or "").lower() == "custom", switch_evidence)
+    add("v027-integrated-capabilities", "set custom Gemini result provider matches option", str(switch_payload.get("provider") or "").lower() == custom_provider.lower(), switch_evidence)
     add("v027-integrated-capabilities", "set custom Gemini result model matches option", str(switch_payload.get("model") or "") == custom_model, switch_evidence)
     add("v027-integrated-capabilities", "set custom Gemini result alias remains gemini", str(switch_payload.get("modelAliasFamily") or "").lower() == "gemini", switch_evidence)
     add("v027-integrated-capabilities", "set custom Gemini result is not official Gemini", switch_payload.get("isOfficialGeminiProvider") is False, switch_evidence)
+    add("v027-integrated-capabilities", "set custom Gemini result preserves custom endpoint marker", (custom_provider.lower() == "custom") or switch_payload.get("isCustomGeminiEndpoint") is True, switch_evidence)
     add("v027-integrated-capabilities", "set custom Gemini exposes context policy", isinstance(context_policy, dict) and bool(context_policy), {"keys": sorted(context_policy.keys())[:10]})
     add("v027-integrated-capabilities", "context policy has positive window", int(context_policy.get("contextWindowTokens") or 0) > 0, {"window": context_policy.get("contextWindowTokens")})
     add("v027-integrated-capabilities", "set custom Gemini exposes context continuity", isinstance(continuity, dict) and bool(continuity), continuity)
     add("v027-integrated-capabilities", "context continuity preserves agent bridge", continuity.get("agentBridgePreserved") is True, continuity)
     add("v027-integrated-capabilities", "context continuity enables artifact history refs", continuity.get("artifactHistoryRefs") == "enabled", continuity)
     add("v027-integrated-capabilities", "context continuity uses refresh chat routing", continuity.get("strategy") == "refresh_chat_routing", continuity)
-    add("v027-integrated-capabilities", "current API reports custom Gemini after switch", verify_chat.get("current_provider") == "custom" and verify_chat.get("current_model") == custom_model, {"modelHash": h(verify_chat.get("current_model"))})
+    add("v027-integrated-capabilities", "current API reports custom Gemini after switch", verify_chat.get("current_provider") == custom_provider and verify_chat.get("current_model") == custom_model, {"modelHash": h(verify_chat.get("current_model")), "provider": verify_chat.get("current_provider")})
     custom_terminal_types = [str(item.get("type") or "") for item in custom_stream.get("terminalEvents", [])]
     custom_stream_preview = str(custom_stream.get("contentPreview") or "")
     if BUDGET_MODE == "no-external-models":
@@ -1857,7 +1866,7 @@ def phase_v027_integrated_capabilities(opener, stream_session_id):
     update_win_artifact = update_win_payload.get("artifact") if isinstance(update_win_payload.get("artifact"), dict) else {}
     update_mac_artifact = update_mac_payload.get("artifact") if isinstance(update_mac_payload.get("artifact"), dict) else {}
     add("v027-integrated-capabilities", "update-check endpoint exposes WebUI update policy and artifacts", update_check_win.get("status") == 200 and update_check_mac.get("status") == 200 and update_win_artifact.get("id") == "webui-windows-x64" and update_mac_artifact.get("id") == "webui-macos-universal" and ((update_win_payload.get("update") or {}).get("webui") or {}).get("promotion") == "admin-gated", {"winStatus": update_check_win.get("status"), "macStatus": update_check_mac.get("status"), "winArtifact": update_win_artifact.get("id"), "macArtifact": update_mac_artifact.get("id")})
-    add("v027-integrated-capabilities", "static app polls update-check and renders user update reminder", all(marker in app_js for marker in ("/api/update-check", "ecorex-update-notice-dismissed", "发现 EcoreX 新版本", "打开下载页")))
+    add("v027-integrated-capabilities", "static app polls update-check and renders user update reminder", all(marker in app_js for marker in ("/api/update-check", "ecorex-update-notice-dismissed", "发现 EcoreX 新版本", "查看更新")))
     add("v027-integrated-capabilities", "public manifest carries rebuilt WebUI artifacts", all(
         artifact_id in public_manifest_artifacts
         and int(public_manifest_artifacts[artifact_id].get("size") or 0) > 0
@@ -1877,7 +1886,7 @@ def phase_v027_integrated_capabilities(opener, stream_session_id):
     add("v027-integrated-capabilities", "model switch divider participates in normal message flow", ".message.model-switch-message" in app_css and "model-switch-divider" in app_js and "contextExcluded" in app_js, {"windowHash": h(divider_window), "cssWindowHash": h(divider_css_window)})
     add("v027-integrated-capabilities", "model switch divider is not pinned or sticky", all(marker not in divider_css_window for marker in ("position:sticky", "position:fixed", "bottom:0", "bottom: 0")), {"cssWindowHash": h(divider_css_window)})
     add("v027-integrated-capabilities", "model switch divider has no copy controls", "copyMessage" not in divider_window and "message-actions" not in divider_window, {"windowHash": h(divider_window)})
-    add("v027-integrated-capabilities", "custom Gemini UI keeps provider custom alias condition", "modelAliasFamily" in app_js and "isOfficialGeminiProvider" in app_js and "custom" in app_js and "gemini" in app_js.lower())
+    add("v027-integrated-capabilities", "custom Gemini UI keeps custom endpoint alias condition", "modelAliasFamily" in app_js and "isCustomGeminiEndpoint" in app_js and "gemini" in app_js.lower())
 
     add("v027-integrated-capabilities", "imagegen semantic regex guard exists", "IMAGEGEN_SHELL_SEMANTIC_SIGNAL_REGEXES" in agent_stream)
     add("v027-integrated-capabilities", "imagegen intent selects primary route", "imagegen_intent_primary_route" in agent_stream and "imagegen_primary_route" in agent_stream)
@@ -1890,6 +1899,7 @@ def phase_v027_integrated_capabilities(opener, stream_session_id):
     add("v027-integrated-capabilities", "AgentStream binds tool emit_event callback", "tool.emit_event = self._emit_event" in agent_stream and "tool.tool_call_id = tool_id" in agent_stream)
     add("v027-integrated-capabilities", "imagegen batch emits each ready image via file_to_send", "_emit_batch_image_ready" in imagegen_tool and 'emit_event("file_to_send"' in imagegen_tool and "_image_result_path" in imagegen_tool)
     add("v027-integrated-capabilities", "imagegen batch ready event is observable and redacted", "task_index" in imagegen_tool and '"redacted": True' in imagegen_tool and "native_imagegen_tool_loop" in imagegen_tool)
+    add("v027-integrated-capabilities", "imagegen artifacts use session summary and send time names", "_with_artifact_names" in imagegen_tool and "session-summary-send-time" in imagegen_tool and "artifact_naming_context" in imagegen_tool and "_image_artifact_naming_context" in agent_stream)
 
     try:
         from agent.tools.browser.browser_automation_service import browser_automation_diagnostics
@@ -1901,6 +1911,8 @@ def phase_v027_integrated_capabilities(opener, stream_session_id):
     add("v027-integrated-capabilities", "browser diagnostics mode is cdp-first", browser_diag.get("mode") == "cdp-first", browser_diag)
     add("v027-integrated-capabilities", "browser diagnostics auto launch enabled", browser_diag.get("autoLaunch") is True, browser_diag)
     add("v027-integrated-capabilities", "browser diagnostics fallback enabled", browser_diag.get("fallbackEnabled") is True, browser_diag)
+    add("v027-integrated-capabilities", "browser diagnostics keeps CDP session persistent", browser_diag.get("cdpPersistSession") is True and int(browser_diag.get("idleTimeoutSeconds") or 0) == 0, browser_diag)
+    add("v027-integrated-capabilities", "BrowserService keeps CDP alive and reconnects stale sessions", "_maybe_cdp_keepalive" in read_text(runtime / "agent" / "tools" / "browser" / "browser_service.py") and "CDP action hit stale connection; reconnecting once" in read_text(runtime / "agent" / "tools" / "browser" / "browser_service.py"))
     add("v027-integrated-capabilities", "trusted Chrome DevTools launch is permission-scoped", "trusted_default_chrome_devtools" in permission_broker and "127.0.0.1:9222" in permission_broker and "chrome_devtools_mcp_args" in config_source and "--redactNetworkHeaders" in config_source)
     add("v027-integrated-capabilities", "PLAYWRIGHT_BROWSERS_PATH is set for runtime", bool(os.environ.get("PLAYWRIGHT_BROWSERS_PATH")) or "PLAYWRIGHT_BROWSERS_PATH" in browser_auto, {"envSet": bool(os.environ.get("PLAYWRIGHT_BROWSERS_PATH"))})
     try:

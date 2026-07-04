@@ -9,6 +9,9 @@ Launch modes (configured under `tools.browser` in config.json):
   - cdp (default for EcoreX): attach to or auto-launch Chrome/Edge through
     the Chrome DevTools Protocol. This is the first priority so real browser
     behavior is used before Playwright-managed Chromium fallback.
+    CDP sessions are persistent by default: the DevTools client is kept alive
+    across quiet periods and reconnects automatically when the socket becomes
+    stale.
   - persistent: Chromium runs with a persistent user_data_dir
     (default `~/.cow/browser_profile`), so cookies and login state survive
     across runs. The user only needs to log in once.
@@ -133,6 +136,9 @@ class BrowserTool(BaseTool):
         merged.setdefault("cdp_auto_launch", True)
         merged.setdefault("cdp_fallback", True)
         merged.setdefault("persistent", True)
+        merged.setdefault("cdp_persist_session", True)
+        merged.setdefault("cdp_keepalive_interval", 60)
+        merged.setdefault("idle_timeout", 0)
         merged.setdefault("cdp_user_data_dir", DEFAULT_CDP_USER_DATA_DIR)
         return merged
 

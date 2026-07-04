@@ -263,7 +263,7 @@ class TestModelsHandler(unittest.TestCase):
         self.assertEqual(custom["effectiveTransportProvider"], const.CUSTOM)
         self.assertFalse(custom["isOfficialGeminiProvider"])
 
-    def test_chat_capability_treats_nonofficial_gemini_base_as_custom_transport(self):
+    def test_chat_capability_treats_nonofficial_gemini_base_as_custom_rest_endpoint(self):
         from channel.web.web_channel import ModelsHandler
         from common import const
 
@@ -276,16 +276,14 @@ class TestModelsHandler(unittest.TestCase):
         })
 
         current = next(option for option in cap["model_options"] if option["current"])
-        self.assertEqual(cap["current_provider"], const.CUSTOM)
-        self.assertEqual(cap["capabilities"]["provider"], const.CUSTOM)
-        self.assertEqual(current["provider"], const.CUSTOM)
+        self.assertEqual(cap["current_provider"], const.GEMINI)
+        self.assertEqual(cap["capabilities"]["provider"], const.GEMINI)
+        self.assertEqual(current["provider"], const.GEMINI)
         self.assertEqual(current["model"], const.GEMINI_31_PRO_PRE)
         self.assertEqual(current["modelAliasFamily"], "gemini")
         self.assertFalse(current["isOfficialGeminiProvider"])
-        self.assertFalse(any(
-            option["provider"] == const.GEMINI and option["configured"]
-            for option in cap["model_options"]
-        ))
+        self.assertTrue(current["isCustomGeminiEndpoint"])
+        self.assertEqual(current["geminiEndpointFamily"], "custom-rest")
 
     def test_chat_options_keep_legacy_custom_gemini_when_current_model_is_other_provider(self):
         from channel.web.web_channel import ModelsHandler
@@ -301,20 +299,21 @@ class TestModelsHandler(unittest.TestCase):
         }
         cap = ModelsHandler._chat_capability(local_config)
 
-        custom = next(
+        gemini = next(
             option
             for option in cap["model_options"]
-            if option["provider"] == const.CUSTOM and option["model"] == const.GEMINI_31_PRO_PRE
+            if option["provider"] == const.GEMINI and option["model"] == const.GEMINI_31_PRO_PRE
         )
-        valid, message = ModelsHandler._validate_chat_selection(local_config, const.CUSTOM, const.GEMINI_31_PRO_PRE)
+        valid, message = ModelsHandler._validate_chat_selection(local_config, const.GEMINI, const.GEMINI_31_PRO_PRE)
 
         self.assertEqual(cap["current_provider"], "deepseek")
-        self.assertTrue(custom["configured"])
-        self.assertEqual(custom["modelAliasFamily"], "gemini")
-        self.assertFalse(custom["isOfficialGeminiProvider"])
+        self.assertTrue(gemini["configured"])
+        self.assertEqual(gemini["modelAliasFamily"], "gemini")
+        self.assertFalse(gemini["isOfficialGeminiProvider"])
+        self.assertTrue(gemini["isCustomGeminiEndpoint"])
         self.assertTrue(valid, message)
 
-    def test_set_chat_migrates_legacy_custom_gemini_transport_without_exposing_secret(self):
+    def test_set_chat_keeps_nonofficial_gemini_on_gemini_rest_without_migration(self):
         from channel.web.web_channel import ModelsHandler
         from common import const
 
@@ -338,23 +337,21 @@ class TestModelsHandler(unittest.TestCase):
                     }):
                         result = json.loads(handler._handle_set_capability({
                             "capability": "chat",
-                            "provider_id": const.CUSTOM,
+                            "provider_id": const.GEMINI,
                             "model": const.GEMINI_31_PRO_PRE,
                         }))
 
         self.assertEqual(result["status"], "success")
-        self.assertEqual(result["provider"], const.CUSTOM)
-        self.assertEqual(local_config["bot_type"], const.CUSTOM)
-        self.assertEqual(file_config["bot_type"], const.CUSTOM)
-        self.assertEqual(local_config["custom_api_key"], "legacy-custom-gemini-key")
-        self.assertEqual(local_config["custom_api_base"], "https://custom-gemini.test/v1")
-        self.assertEqual(file_config["custom_api_key"], "legacy-custom-gemini-key")
-        self.assertEqual(file_config["custom_api_base"], "https://custom-gemini.test/v1")
-        self.assertTrue(result["applied"]["custom_transport_migrated"])
+        self.assertEqual(result["provider"], const.GEMINI)
+        self.assertEqual(local_config["bot_type"], const.GEMINI)
+        self.assertEqual(file_config["bot_type"], const.GEMINI)
+        self.assertNotIn("custom_api_key", local_config)
+        self.assertNotIn("custom_api_base", local_config)
+        self.assertTrue(result["isCustomGeminiEndpoint"])
         self.assertNotIn("legacy-custom-gemini-key", json.dumps(result))
         write_file.assert_called_once_with(file_config)
 
-    def test_set_chat_migrates_legacy_custom_gemini_when_switching_from_gpt(self):
+    def test_set_chat_switches_nonofficial_gemini_from_gpt_without_custom_migration(self):
         from channel.web.web_channel import ModelsHandler
         from common import const
 
@@ -378,17 +375,17 @@ class TestModelsHandler(unittest.TestCase):
                     }):
                         result = json.loads(handler._handle_set_capability({
                             "capability": "chat",
-                            "provider_id": const.CUSTOM,
+                            "provider_id": const.GEMINI,
                             "model": const.GEMINI_31_PRO_PRE,
                         }))
 
         self.assertEqual(result["status"], "success")
-        self.assertEqual(result["provider"], const.CUSTOM)
-        self.assertEqual(local_config["bot_type"], const.CUSTOM)
+        self.assertEqual(result["provider"], const.GEMINI)
+        self.assertEqual(local_config["bot_type"], const.GEMINI)
         self.assertEqual(local_config["model"], const.GEMINI_31_PRO_PRE)
-        self.assertEqual(local_config["custom_api_key"], "legacy-custom-gemini-key")
-        self.assertEqual(local_config["custom_api_base"], "http://custom-gemini.test:8080/v1")
-        self.assertEqual(file_config["custom_api_base"], "http://custom-gemini.test:8080/v1")
+        self.assertNotIn("custom_api_key", local_config)
+        self.assertNotIn("custom_api_base", local_config)
+        self.assertTrue(result["isCustomGeminiEndpoint"])
         self.assertTrue(result["contextContinuity"]["agentBridgePreserved"])
         self.assertNotIn("legacy-custom-gemini-key", json.dumps(result))
         write_file.assert_called_once_with(file_config)
@@ -522,6 +519,19 @@ class TestModelsHandler(unittest.TestCase):
         self.assertEqual(local_config["model"], "gemini-custom-proxy")
         write_file.assert_called_once_with(file_config)
         reset_bridge.assert_called_once()
+
+    def test_web_config_writers_respect_ecorex_config_path(self):
+        import tempfile
+        from pathlib import Path
+
+        from channel.web.web_channel import ChannelsHandler, ConfigHandler, ModelsHandler
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = str(Path(tmp) / "runtime-config.json")
+            with patch.dict(os.environ, {"ECOREX_CONFIG_PATH": config_path}):
+                self.assertEqual(ConfigHandler._config_path(), os.path.abspath(config_path))
+                self.assertEqual(ModelsHandler._config_path(), os.path.abspath(config_path))
+                self.assertEqual(ChannelsHandler._config_path(), os.path.abspath(config_path))
 
     def test_generic_config_model_change_refreshes_chat_routing_without_full_agent_reset(self):
         with open("channel/web/web_channel.py", "r", encoding="utf-8") as handle:

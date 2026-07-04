@@ -3,6 +3,7 @@ import argparse
 import base64
 import hashlib
 import hmac
+import html
 import json
 import os
 import pathlib
@@ -18,10 +19,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 
-VERSION = "0.2.7.1"
+VERSION = "0.2.7.2"
 PASSWORD_ITERATIONS = 180000
 SESSION_DAYS = 7
-DEFAULT_CLIENT_EVENT_KEY = "ecorex-web-v0.2.7.1-web.1"
+DEFAULT_CLIENT_EVENT_KEY = "ecorex-web-v0.2.7.2-web.1"
 DEFAULT_COMPAT_CLIENT_EVENT_KEYS = (
     "ecorex-web-v0.2.7.1-web.1",
     "ecorex-web-v0.2.7-web.1",
@@ -98,6 +99,7 @@ SYNC_MESSAGE_MAX_CONTENT_BYTES_ENV = "ECOREX_SYNC_MESSAGE_MAX_CONTENT_BYTES"
 RUNTIME_AUDIT_EVENT_TYPES = {
     "approval.requested",
     "artifact.created",
+    "artifact.feedback",
     "artifact.limit",
     "artifact.updated",
     "assistant.delta",
@@ -118,6 +120,7 @@ RUNTIME_AUDIT_EVENT_TYPES = {
     "run.completed",
     "run.failed",
     "run.interrupted",
+    "run.paused",
     "run.phase",
     "run.started",
     "stream.replay_gap",
@@ -147,12 +150,15 @@ RUNTIME_AUDIT_STATUSES = {
     "denied",
     "failed",
     "interrupted",
+    "invalid",
     "pending",
+    "paused",
     "queued",
     "ready",
     "running",
     "stream_lost",
     "timeout",
+    "valid",
 }
 RUNTIME_AUDIT_SOURCES = {
     "admin",
@@ -170,6 +176,7 @@ RUNTIME_AUDIT_SOURCES = {
 }
 RUNTIME_AUDIT_DETAIL_KEYS = {
     "action",
+    "artifact_hash",
     "artifact_count",
     "error_type",
     "install_allowed",
@@ -182,6 +189,8 @@ RUNTIME_AUDIT_DETAIL_KEYS = {
     "status",
     "terminal_reason",
     "tool",
+    "artifact_validity",
+    "artifact_feedback_signal",
 }
 
 
@@ -251,6 +260,19 @@ def compact_text(value, limit=500):
     if value is None:
         return ""
     text = str(value).strip()
+    return text[:limit]
+
+
+def redact_share_text(value, limit=500):
+    text = compact_text(value, limit)
+    text = re.sub(r"\b[A-Za-z]:[\\/][^\s<>'\"]+", "[local-path]", text)
+    text = re.sub(r"(?<!\w)/(?:Users|Volumes|home|tmp|var|mnt|opt|srv|Applications)/[^\s<>'\"]+", "[local-path]", text)
+    text = re.sub(r"file://[^\s<>'\"]+", "[local-file-url]", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"(?i)\b(api[_-]?key|token|secret|password|passwd|authorization)\b\s*[:=]\s*[^\s,;]+",
+        lambda match: f"{match.group(1)}=[redacted]",
+        text,
+    )
     return text[:limit]
 
 
@@ -728,6 +750,19 @@ class AdminStore:
                     available_at_ms INTEGER NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS session_shares (
+                    id TEXT PRIMARY KEY,
+                    org_id TEXT,
+                    user_email TEXT,
+                    user_key TEXT,
+                    device_id TEXT,
+                    title TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    message_count INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT,
+                    revoked_at TEXT
+                );
                 """
             )
             self.migrate(conn)
@@ -786,6 +821,7 @@ class AdminStore:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sync_artifact_files_request ON sync_artifact_files(request_id, artifact_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sync_artifact_files_content ON sync_artifact_files(content_sha256, status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sync_artifact_chunks_content ON sync_artifact_file_chunks(content_sha256, chunk_index)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_session_shares_user_time ON session_shares(user_key, created_at)")
         conn.commit()
 
     def seed(self, conn):
@@ -1120,7 +1156,7 @@ class AdminStore:
             return {}
         version = compact_text(notice.get("version") or fallback_version, 80)
         message = compact_text(
-            notice.get("message") or (f"EcoreX {version} 已发布，请刷新当前页面或前往下载页安装。" if version else ""),
+            notice.get("message") or (f"EcoreX {version} 已发布，已安装用户可在本机检查更新。" if version else ""),
             240,
         )
         return {
@@ -1177,14 +1213,14 @@ class AdminStore:
             payload = {
                 "product": "EcoreX WebUI",
                 "version": version,
-                "mode": "background",
-                "status": "installed",
+                "mode": "manual",
+                "status": "ready",
                 "reason": "admin-release-notify",
-                "message": notice.get("message") or f"EcoreX {version} 已发布，请刷新或前往下载页安装。",
-                "browserAction": "defer-to-existing-tab-soft-refresh",
-                "activationPolicy": "prompt-soft-refresh-existing-tab",
+                "message": notice.get("message") or f"EcoreX {version} 已发布，已安装用户可在本机检查更新。",
+                "browserAction": "none",
+                "activationPolicy": "manual-update-check",
                 "autoLaunchBrowser": "never-in-background",
-                "healthCheck": {"endpoint": "/api/version", "status": "pass", "passed": True},
+                "healthCheck": {"endpoint": "/api/version", "status": "pending", "passed": False},
                 "generatedAt": notice.get("publishedAt") or now_iso(),
                 "noticeRevision": notice.get("revision") or "",
             }
@@ -1218,7 +1254,7 @@ class AdminStore:
         revision = f"{version}-{int(time.time())}-{uuid.uuid4().hex[:8]}"
         message = compact_text(
             payload.get("message")
-            or f"EcoreX {version} 已发布，请刷新当前页面或前往下载页安装。",
+            or f"EcoreX {version} 已发布，已安装用户可在本机检查更新。",
             240,
         )
         notice = {
@@ -1475,6 +1511,46 @@ class AdminStore:
             for row in rows
         ]
 
+    def artifact_feedback_counts(self, conn, where="", params=None):
+        rows = conn.execute(
+            f"SELECT metadata FROM sync_artifacts {where or ''}",
+            params or [],
+        ).fetchall()
+        counts = {
+            "validArtifacts": 0,
+            "invalidArtifacts": 0,
+            "defaultValidArtifacts": 0,
+            "thumbsUpArtifacts": 0,
+            "thumbsDownArtifacts": 0,
+        }
+        for row in rows:
+            metadata = json_loads(row["metadata"], {}) if row and row["metadata"] else {}
+            validity = compact_text(
+                metadata.get("artifactValidity")
+                or metadata.get("artifact_validity")
+                or metadata.get("validity")
+                or "",
+                40,
+            ).lower()
+            signal = compact_text(
+                metadata.get("artifactFeedbackSignal")
+                or metadata.get("artifact_feedback_signal")
+                or metadata.get("feedbackSignal")
+                or metadata.get("feedback_signal")
+                or "",
+                40,
+            ).lower()
+            if signal == "thumbs_down" or validity == "invalid":
+                counts["invalidArtifacts"] += 1
+                counts["thumbsDownArtifacts"] += 1
+                continue
+            counts["validArtifacts"] += 1
+            if signal == "thumbs_up":
+                counts["thumbsUpArtifacts"] += 1
+            else:
+                counts["defaultValidArtifacts"] += 1
+        return counts
+
     def sync_summary(self, conn):
         event_row = conn.execute(
             """
@@ -1529,9 +1605,11 @@ class AdminStore:
             )
             if value
         ]
+        artifact_feedback = self.artifact_feedback_counts(conn)
         return {
             "events": int(event_row["count"] or 0) if event_row else 0,
             "artifacts": int(artifact_row["count"] or 0) if artifact_row else 0,
+            **artifact_feedback,
             "messages": int(message_row["count"] or 0) if message_row else 0,
             "artifactFiles": int(artifact_file_row["count"] or 0) if artifact_file_row else 0,
             "artifactFilesComplete": int(artifact_file_row["complete_count"] or 0) if artifact_file_row else 0,
@@ -1712,6 +1790,7 @@ class AdminStore:
         scoped_event_requests = self._runtime_audit_scoped_request_count(conn, "sync_events", event_where, event_params)
         scoped_artifact_requests = self._runtime_audit_scoped_request_count(conn, "sync_artifacts", shared_where, shared_params)
         scoped_message_requests = self._runtime_audit_scoped_request_count(conn, "sync_messages", shared_where, shared_params)
+        artifact_feedback = self.artifact_feedback_counts(conn, shared_where, shared_params)
 
         event_type_counts = {}
         unknown_event_type_count = 0
@@ -1818,6 +1897,7 @@ class AdminStore:
                 "requests": scoped_event_requests,
                 "sessions": int(event_row["sessions"] or 0) if event_row else 0,
                 "artifacts": int(artifact_row["count"] or 0) if artifact_row else 0,
+                **artifact_feedback,
                 "artifactRequests": scoped_artifact_requests,
                 "messages": int(message_row["count"] or 0) if message_row else 0,
                 "messageRequests": scoped_message_requests,
@@ -1924,6 +2004,113 @@ class AdminStore:
             "ok": True,
             "messagesAccepted": len(message_rows),
         }
+
+    def _share_message_payload(self, item):
+        if not isinstance(item, dict):
+            return None
+        role = compact_text(item.get("role") or "message", 20).lower()
+        if role not in {"user", "assistant"}:
+            return None
+        content = redact_share_text(item.get("content") or item.get("text") or "", 8000)
+        artifacts = []
+        raw_artifacts = item.get("artifacts") if isinstance(item.get("artifacts"), list) else []
+        for artifact in raw_artifacts[:24]:
+            if not isinstance(artifact, dict):
+                continue
+            signal = compact_text(artifact.get("artifactFeedbackSignal") or artifact.get("artifact_feedback_signal") or "default", 40).lower()
+            validity = compact_text(artifact.get("artifactValidity") or artifact.get("artifact_validity") or ("invalid" if signal == "thumbs_down" else "valid"), 40).lower()
+            artifacts.append({
+                "title": redact_share_text(artifact.get("title") or artifact.get("fileName") or artifact.get("file_name") or artifact.get("name") or "artifact", 240),
+                "kind": compact_text(artifact.get("kind") or artifact.get("type") or "file", 40),
+                "status": compact_text(artifact.get("status") or "ready", 40),
+                "artifactValidity": "invalid" if validity == "invalid" or signal == "thumbs_down" else "valid",
+                "artifactFeedbackSignal": signal if signal in {"default", "thumbs_up", "thumbs_down"} else "default",
+            })
+        return {
+            "role": role,
+            "content": content,
+            "createdAt": compact_text(item.get("createdAt") or item.get("created_at") or "", 80),
+            "artifacts": artifacts,
+        }
+
+    def create_session_share(self, payload, token="", device_id="", require_user=True):
+        identity = self._sync_identity(payload, token=token, device_id=device_id, require_user=require_user)
+        raw_messages = payload.get("messages") if isinstance(payload.get("messages"), list) else []
+        messages = [
+            message
+            for message in (self._share_message_payload(item) for item in raw_messages[:200])
+            if message and (message["content"] or message["artifacts"])
+        ]
+        if not messages:
+            raise ValueError("share messages are required")
+        created_at = now_iso()
+        share_id = "sh_" + secrets.token_urlsafe(12).replace("-", "").replace("_", "")[:18]
+        title = redact_share_text(payload.get("title") or "EcoreX shared session", 160)
+        share_payload = {
+            "schemaVersion": "ecorex-session-share-v1",
+            "title": title,
+            "messages": messages,
+            "messageCount": len(messages),
+            "createdAt": created_at,
+            "privacy": {
+                "redacted": True,
+                "includesLocalPaths": False,
+                "includesArtifactFiles": False,
+            },
+        }
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO session_shares
+                (id, org_id, user_email, user_key, device_id, title, payload, message_count, created_at, expires_at, revoked_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                """,
+                (
+                    share_id,
+                    identity["org_id"],
+                    identity["user_email"],
+                    identity["user_key"],
+                    identity["device_id"],
+                    title,
+                    json_dumps(share_payload),
+                    len(messages),
+                    created_at,
+                    compact_text(payload.get("expiresAt") or payload.get("expires_at") or "", 80),
+                ),
+            )
+            self.audit(
+                conn,
+                "session.share.create",
+                identity["user_email"] or "client",
+                share_id,
+                {"messages": len(messages), "redacted": True},
+            )
+            conn.commit()
+        return {"ok": True, "shareId": share_id, "messageCount": len(messages), "title": title}
+
+    def get_session_share(self, share_id):
+        share_id = compact_text(share_id, 80)
+        if not re.fullmatch(r"sh_[A-Za-z0-9]{8,40}", share_id or ""):
+            return None
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, title, payload, message_count, created_at, expires_at, revoked_at
+                FROM session_shares
+                WHERE id=?
+                """,
+                (share_id,),
+            ).fetchone()
+        if not row or row["revoked_at"]:
+            return None
+        if row["expires_at"]:
+            try:
+                if datetime.fromisoformat(str(row["expires_at"]).replace("Z", "+00:00")) < datetime.now(timezone.utc):
+                    return None
+            except Exception:
+                pass
+        payload = json_loads(row["payload"], {})
+        return payload if isinstance(payload, dict) else None
 
     def _normalize_sha256(self, value, field_name, required=True):
         text = compact_text(value, 80).lower()
@@ -3174,6 +3361,24 @@ class AdminStore:
         session_id = compact_text(item.get("sessionId") or item.get("session_id") or payload.get("sessionId") or payload.get("session_id"), 180)
         request_id = compact_text(item.get("requestId") or item.get("request_id") or payload.get("requestId") or payload.get("request_id"), 180)
         title = compact_text(item.get("title") or item.get("fileName") or item.get("file_name") or item.get("name") or "artifact", 240)
+        feedback_signal = compact_text(
+            item.get("artifactFeedbackSignal")
+            or item.get("artifact_feedback_signal")
+            or item.get("feedbackSignal")
+            or item.get("feedback_signal")
+            or "default",
+            40,
+        ).lower()
+        if feedback_signal not in {"default", "thumbs_up", "thumbs_down"}:
+            feedback_signal = "default"
+        artifact_validity = compact_text(
+            item.get("artifactValidity")
+            or item.get("artifact_validity")
+            or item.get("validity")
+            or ("invalid" if feedback_signal == "thumbs_down" else "valid"),
+            40,
+        ).lower()
+        artifact_validity = "invalid" if artifact_validity == "invalid" or feedback_signal == "thumbs_down" else "valid"
         raw_path = ""
         for key in ("path", "file_path", "filePath", "relativePath", "relative_path", "url", "previewUrl", "preview_url"):
             if item.get(key):
@@ -3183,8 +3388,13 @@ class AdminStore:
         artifact_id = compact_text(item.get("safeArtifactId") or item.get("safe_artifact_id") or f"artifact:{short_hash(raw_artifact_id, 40)}", 180)
         path_hash = compact_text(item.get("pathHash") or item.get("path_hash") or (short_hash(raw_path, 64) if raw_path else ""), 80)
         path_ext = compact_text(item.get("pathExt") or item.get("path_ext") or sync_artifact_path_ext(raw_path), 32)
+        metadata_item = dict(item or {})
+        metadata_item["artifactValidity"] = artifact_validity
+        metadata_item["artifactFeedbackSignal"] = feedback_signal
+        if item.get("artifactFeedbackAt") or item.get("artifact_feedback_at"):
+            metadata_item["artifactFeedbackAt"] = compact_text(item.get("artifactFeedbackAt") or item.get("artifact_feedback_at"), 80)
         metadata = sync_safe_json(
-            item,
+            metadata_item,
             deny_keys=(
                 SYNC_DETAIL_DENY_KEYS
                 | SYNC_ARTIFACT_PATH_KEYS
@@ -3561,6 +3771,81 @@ class AdminHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _html(self, status, body):
+        data = str(body or "").encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "public, max-age=60")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _public_origin(self):
+        proto = (self.headers.get("X-Forwarded-Proto") or "").split(",", 1)[0].strip()
+        host = (self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or "").split(",", 1)[0].strip()
+        if not proto:
+            proto = "https" if self.headers.get("X-Forwarded-Ssl", "").lower() == "on" else "http"
+        return f"{proto}://{host}" if host else ""
+
+    def _share_url(self, share_id):
+        raw_path = urlparse(self.path).path.rstrip("/") or "/"
+        marker = "/session-shares"
+        prefix = raw_path.split(marker, 1)[0] if marker in raw_path else "/client"
+        if not prefix.endswith("/client"):
+            prefix = prefix.rstrip("/") + "/client"
+        origin = self._public_origin()
+        return f"{origin}{prefix}/session-shares/{quote(share_id)}" if origin else f"{prefix}/session-shares/{quote(share_id)}"
+
+    def _share_html(self, share_id, payload):
+        title = html.escape(redact_share_text((payload or {}).get("title") or "EcoreX shared session", 180))
+        messages = (payload or {}).get("messages") if isinstance((payload or {}).get("messages"), list) else []
+        rendered = []
+        for item in messages[:200]:
+            if not isinstance(item, dict):
+                continue
+            role = "assistant" if item.get("role") == "assistant" else "user"
+            content = html.escape(redact_share_text(item.get("content") or "", 8000))
+            artifacts = item.get("artifacts") if isinstance(item.get("artifacts"), list) else []
+            artifact_html = "".join(
+                f'<li><span>{html.escape(compact_text(artifact.get("kind") or "file", 40))}</span>'
+                f'<strong>{html.escape(redact_share_text(artifact.get("title") or "artifact", 240))}</strong>'
+                f'<em>{html.escape(compact_text(artifact.get("artifactValidity") or "valid", 40))}</em></li>'
+                for artifact in artifacts[:24]
+                if isinstance(artifact, dict)
+            )
+            rendered.append(
+                f'<article class="msg {role}"><b>{"EcoreX" if role == "assistant" else "User"}</b>'
+                f'<div>{content.replace(chr(10), "<br>")}</div>'
+                f'{"<ul>" + artifact_html + "</ul>" if artifact_html else ""}</article>'
+            )
+        body = "\n".join(rendered) or '<p class="empty">This shared session is empty.</p>'
+        return f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{title}</title>
+  <style>
+    body{{margin:0;background:#f7f4ef;color:#201a16;font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}
+    header{{position:sticky;top:0;background:rgba(247,244,239,.92);backdrop-filter:blur(16px);border-bottom:1px solid #e5d8ca;padding:18px min(6vw,64px)}}
+    h1{{margin:0;font-size:22px;letter-spacing:0}}
+    main{{max-width:920px;margin:0 auto;padding:24px min(5vw,42px) 64px}}
+    .msg{{margin:16px 0;padding:14px 16px;border:1px solid #e2d3c3;background:#fff;border-radius:8px}}
+    .msg.assistant{{background:#fffaf4}}
+    .msg b{{display:block;margin-bottom:8px;color:#6f5c4a}}
+    ul{{margin:12px 0 0;padding:0;list-style:none;display:grid;gap:8px}}
+    li{{display:flex;gap:10px;align-items:center;border-top:1px solid #eee2d5;padding-top:8px}}
+    li span,li em{{color:#897565;font-size:12px;font-style:normal}}
+    li strong{{font-weight:650;flex:1}}
+    .privacy{{color:#897565;font-size:13px;margin-top:8px}}
+  </style>
+</head>
+<body>
+  <header><h1>{title}</h1><div class="privacy">Shared from EcoreX. Local file paths and artifact files are not included.</div></header>
+  <main>{body}</main>
+</body>
+</html>"""
+
     def _read_json(self):
         length = int(self.headers.get("Content-Length") or "0")
         if length > self._json_body_limit():
@@ -3774,6 +4059,13 @@ class AdminHandler(BaseHTTPRequestHandler):
                     self._json(403, {"ok": False, "error": "invalid client key"})
                     return
                 self._json(200, {"ok": True, "syncPolicy": self.store.sync_policy()})
+            elif path.startswith("/client/session-shares/"):
+                share_id = unquote(path.rsplit("/", 1)[-1])
+                share = self.store.get_session_share(share_id)
+                if not share:
+                    self._html(404, "<!doctype html><meta charset='utf-8'><title>Not found</title><p>Shared session not found.</p>")
+                    return
+                self._html(200, self._share_html(share_id, share))
             elif path in ("/client/tongxin/auth", "/tongxin/auth/client"):
                 if not self._client_key_valid():
                     self._json(403, {"ok": False, "error": "invalid client key"})
@@ -3890,6 +4182,17 @@ class AdminHandler(BaseHTTPRequestHandler):
                         require_user=True,
                     ),
                 )
+            elif path in ("/client/session-shares", "/session-shares/client"):
+                if not self._client_key_valid():
+                    self._json(403, {"ok": False, "error": "invalid client key"})
+                    return
+                result = self.store.create_session_share(
+                    {**payload, "actor": "desktop-client"},
+                    token=self._user_token(),
+                    device_id=self.headers.get("X-EcoreX-Device-Id", ""),
+                    require_user=True,
+                )
+                self._json(200, {**result, "shareUrl": self._share_url(result["shareId"])})
             elif path in ("/client/sync/artifact-files", "/client/sync/artifact-blobs"):
                 if not self._client_key_valid():
                     self._json(403, {"ok": False, "error": "invalid client key"})

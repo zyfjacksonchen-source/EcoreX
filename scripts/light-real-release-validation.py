@@ -104,6 +104,7 @@ REQUIRED_HEAVY_MARKERS = [
     "v027-integrated-capabilities",
     "modelAliasFamily",
     "isOfficialGeminiProvider",
+    "isCustomGeminiEndpoint",
     "contextContinuity",
     "artifactHistoryRefs",
     "custom Gemini switched model produces content",
@@ -112,6 +113,7 @@ REQUIRED_HEAVY_MARKERS = [
     "model-switch-message",
     "IMAGEGEN_SHELL_SEMANTIC_SIGNAL_REGEXES",
     "_emit_batch_image_ready",
+    "session-summary-send-time",
     "admin release page exposes one-click publish controls",
     "mpi_accuracy",
     "cacheFallbackAllowedForMpi",
@@ -119,6 +121,7 @@ REQUIRED_HEAVY_MARKERS = [
     "tools/tongxin/xin_agent_cli.py",
     "public manifest is promoted to current stable version",
     "update-check endpoint exposes WebUI update policy and artifacts",
+    "CDP action hit stale connection; reconnecting once",
     "--focus-groups",
     "production-agent-product-focused-rerun",
 ]

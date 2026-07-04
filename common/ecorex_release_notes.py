@@ -7,15 +7,15 @@ from typing import Any, Dict
 
 
 CURRENT_RELEASE_NOTES: Dict[str, Any] = {
-    "version": "0.2.7",
-    "revision": "2026-07-02-v027-gate-r1",
-    "title": "EcoreX 0.2.7 模型切换、开箱能力与真实数据校验说明",
+    "version": "0.2.7.2",
+    "revision": "2026-07-03-v0272-gemini-update-r1",
+    "title": "EcoreX 0.2.7.2 Gemini 联通与在线更新提示修复",
     "summary": (
-        "本次发布聚焦真实使用链路：自定义 Gemini 可切换、同一会话切模型不失忆、"
+        "本次发布聚焦真实使用链路：自定义 Gemini 可切换并真实联通、同一会话切模型不失忆、"
         "Vision/OCR 与浏览器 CDP 默认可用、芯助手 CLI 按 MPI 做准确性对照，并降低大量本地文件历史带来的卡顿。"
     ),
     "highlights": [
-        "自定义 Gemini 按 OpenAI-compatible custom provider 路由，`gemini-*` 不再误切到官方 Google Gemini REST。",
+        "自定义 Gemini 支持非官方 Gemini REST endpoint，`gemini-*` 不再被误打到 OpenAI-compatible `/chat/completions`。",
         "同一会话切换模型只刷新聊天模型路由，不清空 AgentBridge 的 agents/messages 缓存。",
         "进程级重建时会把用户附件和 assistant 产物的标题、类型、路径恢复为模型可见历史引用，方便继续飞书图文、轮播图等任务。",
         "模型切换提示改为分页分隔线样式，保持 `contextExcluded=true`，不会占用普通消息卡片、复制按钮或恢复入口。",
@@ -39,8 +39,8 @@ CURRENT_RELEASE_NOTES: Dict[str, Any] = {
         "修复长历史中大量附件/产物引用和工具步骤造成 token 估算与上下文恢复过重的问题。"
     ],
     "howTo": [
-        "重新打开 WebUI 后，左上角应显示 v0.2.7；首次进入会弹出本更新说明。",
-        "自定义 Gemini 仍在自定义模型配置中维护 key/base/model；模型列表中会标识为自定义 Gemini，不会走官方 Google Gemini provider。",
+        "重新打开 WebUI 后，左上角应显示 v0.2.7.2；首次进入会弹出本更新说明。",
+        "自定义 Gemini 仍维护 Gemini key/base/model；模型列表中会标识为自定义 Gemini endpoint，但运行时使用 Gemini REST 传输。",
         "同一会话内可从自定义 Gemini 切回 GPT-5.5 继续任务，历史附件和 assistant 产物引用会尽量保留给新模型。",
         "切换模型后会出现一条分页分隔线，后续聊天会自然把它顶上去；它不会进入模型上下文。",
         "需要浏览器自动化时保持默认配置即可优先使用 CDP；CDP 不可用时会自动 fallback。",
@@ -49,8 +49,8 @@ CURRENT_RELEASE_NOTES: Dict[str, Any] = {
         "如果长会话仍出现卡顿，请优先检查单条消息是否携带异常大的工具结果或非常多前端附件预览。"
     ],
     "updatePolicy": {
-        "windows": "v0.2.7 继续以 WebUI 本地包交付；Windows 使用 manifest 校验包安装和更新。",
-        "macos": "v0.2.7 继续以 WebUI 本地包交付；macOS 使用 manifest 校验包安装和更新。",
+        "windows": "v0.2.7.2 继续以 WebUI 本地包交付；Windows 使用 manifest 校验包安装和更新。",
+        "macos": "v0.2.7.2 继续以 WebUI 本地包交付；macOS 使用 manifest 校验包安装和更新。",
         "webui": "WebUI 通过 manifest 校验下载包、Web 服务包和静态资源；后台更新只在空闲时安装，不强制拉起新浏览器，健康检查通过后由已有页面提示刷新生效。",
     },
 }

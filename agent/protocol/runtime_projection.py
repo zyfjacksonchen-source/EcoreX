@@ -425,6 +425,7 @@ class RuntimeProjectionService:
         terminal_message = ""
         tools_by_id: Dict[str, Dict[str, Any]] = {}
         image_jobs_by_id: Dict[str, Dict[str, Any]] = {}
+        task_observations_by_id: Dict[str, Dict[str, Any]] = {}
         skill_drafts_by_id: Dict[str, Dict[str, Any]] = {}
         external_connections_by_platform: Dict[str, Dict[str, Any]] = {}
         action_plans_by_id: Dict[str, Dict[str, Any]] = {}
@@ -436,7 +437,9 @@ class RuntimeProjectionService:
             session_id = session_id or str(event.get("session_id") or "")
             turn_id = turn_id or str(event.get("turn_id") or payload.get("turn_id") or "")
 
-            if event_type == "run.accepted":
+            if event_type == "run.queued":
+                state = "queued"
+            elif event_type in {"run.accepted", "run.started"}:
                 state = "running"
             elif event_type == "message.user.accepted":
                 user_message = {
@@ -525,6 +528,42 @@ class RuntimeProjectionService:
             elif event_type.startswith("image_job."):
                 assistant_started = True
                 _reduce_image_job_event(image_jobs_by_id, event_type, payload, event.get("event_id"))
+            elif event_type.startswith("task."):
+                assistant_started = True
+                task_id = _safe_projection_identifier(payload.get("task_id")) or f"task-{_safe_projection_nonnegative_int(event.get('event_seq')) or 0}"
+                record = task_observations_by_id.setdefault(task_id, {
+                    "task_id": task_id,
+                    "kind": _safe_projection_identifier(payload.get("kind")) or "task",
+                    "title": str(payload.get("title") or "")[:120],
+                    "events": [],
+                })
+                record["status"] = str(payload.get("status") or "").strip()[:80]
+                record["health"] = str(payload.get("health") or record.get("health") or record.get("status") or "").strip()[:80]
+                record["elapsed_seconds"] = _safe_projection_nonnegative_number(payload.get("elapsed_seconds"))
+                record["soft_deadline_seconds"] = _safe_projection_nonnegative_int(payload.get("soft_deadline_seconds"))
+                record["hard_deadline_seconds"] = _safe_projection_nonnegative_int(payload.get("hard_deadline_seconds"))
+                record["lease_count"] = _safe_projection_nonnegative_int(payload.get("lease_count"))
+                record["last_event_type"] = event_type
+                record["last_event_id"] = event.get("event_id")
+                if event_type == "task.intervention_requested":
+                    record["intervention"] = {
+                        "status": "waiting_user_decision",
+                        "next_actions": [
+                            str(item)[:40]
+                            for item in (payload.get("next_actions") if isinstance(payload.get("next_actions"), list) else [])
+                            if str(item or "").strip()
+                        ][:4],
+                    }
+                events = record.setdefault("events", [])
+                if isinstance(events, list):
+                    events.append({
+                        "event_type": event_type,
+                        "event_id": event.get("event_id"),
+                        "status": record.get("status") or "",
+                        "health": record.get("health") or "",
+                        "elapsed_seconds": record.get("elapsed_seconds"),
+                    })
+                    del events[:-8]
             elif (
                 event_type.startswith("skill_learning.")
                 or event_type.startswith("skill_draft.")
@@ -598,6 +637,7 @@ class RuntimeProjectionService:
             "event_count": len(ordered),
             "messages": [message for message in [user_message, assistant if assistant_started else {}] if message.get("role")],
             "image_jobs": list(image_jobs_by_id.values()),
+            "task_observations": list(task_observations_by_id.values()),
             "skill_drafts": list(skill_drafts_by_id.values()),
             "external_connections": list(external_connections_by_platform.values()),
             "action_plans": action_plans,

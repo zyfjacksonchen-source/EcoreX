@@ -20,6 +20,7 @@ from .run_event_ledger import (
     reset_run_event_ledger_for_tests,
 )
 from .runtime_projection import RuntimeProjectionService
+from .task_observer import TaskObserver
 from .image_job_service import (
     ImageJobCancelled,
     ImageJobService,
@@ -52,6 +53,7 @@ __all__ = [
     'get_run_event_ledger',
     'reset_run_event_ledger_for_tests',
     'RuntimeProjectionService',
+    'TaskObserver',
     'ImageJobCancelled',
     'ImageJobService',
     'get_image_job_service',

@@ -172,8 +172,10 @@ class AdminReleaseStateTest(unittest.TestCase):
         self.assertTrue(payload["manifestNoticeWritten"])
         self.assertEqual(notice["revision"], payload["noticeRevision"])
         self.assertEqual(update_state["noticeRevision"], payload["noticeRevision"])
-        self.assertEqual(update_state["mode"], "background")
-        self.assertEqual(update_state["browserAction"], "defer-to-existing-tab-soft-refresh")
+        self.assertEqual(update_state["mode"], "manual")
+        self.assertEqual(update_state["status"], "ready")
+        self.assertEqual(update_state["browserAction"], "none")
+        self.assertEqual(update_state["activationPolicy"], "manual-update-check")
 
     def test_notify_release_succeeds_when_manifest_is_not_writable(self):
         temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
@@ -219,7 +221,7 @@ class AdminReleaseStateTest(unittest.TestCase):
         notice = {
             "revision": "0.2.7.1-unit",
             "version": "0.2.7.1",
-            "message": "EcoreX 0.2.7.1 已发布，请刷新当前页面或前往下载页安装。",
+            "message": "EcoreX 0.2.7.1 已发布，已安装用户可在本机检查更新。",
             "publishedAt": "2026-07-03T00:00:00Z",
             "reason": "admin-release-notify",
             "redacted": True,
@@ -481,6 +483,127 @@ class Phase1SyncIngestTest(unittest.TestCase):
         self.assertTrue(failed["createdAtHash"])
         self.assertTrue(audit["requests"][0]["requestHash"])
         self.assertEqual(audit["requests"][0]["artifactCount"], 1)
+
+    def test_artifact_feedback_defaults_valid_and_thumbs_down_marks_invalid(self):
+        store, session = self._store_with_session()
+        base_artifact = {
+            "idempotencyKey": "artifact:feedback:one",
+            "safeArtifactId": "artifact:safe-one",
+            "sessionId": "sess-feedback",
+            "requestId": "req-feedback",
+            "title": "final-cover.png",
+            "kind": "image",
+            "status": "ready",
+        }
+
+        store.ingest_sync_events(
+            {"artifacts": [base_artifact]},
+            token=session["token"],
+            device_id="device-1",
+        )
+        self.assertEqual(store.state()["syncSummary"]["validArtifacts"], 1)
+        self.assertEqual(store.state()["syncSummary"]["defaultValidArtifacts"], 1)
+        self.assertEqual(store.state()["syncSummary"]["invalidArtifacts"], 0)
+
+        store.ingest_sync_events(
+            {
+                "events": [
+                    {
+                        "idempotencyKey": "event:feedback:one:down",
+                        "eventType": "artifact.feedback",
+                        "status": "invalid",
+                        "sessionId": "sess-feedback",
+                        "requestId": "req-feedback",
+                        "detail": {
+                            "artifact_hash": "safe-hash",
+                            "artifact_validity": "invalid",
+                            "artifact_feedback_signal": "thumbs_down",
+                        },
+                    }
+                ],
+                "artifacts": [
+                    {
+                        **base_artifact,
+                        "artifactValidity": "invalid",
+                        "artifactFeedbackSignal": "thumbs_down",
+                    }
+                ],
+            },
+            token=session["token"],
+            device_id="device-1",
+        )
+        summary = store.state()["syncSummary"]
+
+        self.assertEqual(summary["artifacts"], 1)
+        self.assertEqual(summary["validArtifacts"], 0)
+        self.assertEqual(summary["defaultValidArtifacts"], 0)
+        self.assertEqual(summary["invalidArtifacts"], 1)
+        self.assertEqual(summary["thumbsDownArtifacts"], 1)
+        self.assertEqual(store.state()["runtimeAudit"]["eventTypeCounts"]["artifact.feedback"], 1)
+
+    def test_run_paused_is_not_counted_as_failed_terminal_event(self):
+        store, session = self._store_with_session()
+        store.ingest_sync_events(
+            {
+                "events": [
+                    {
+                        "idempotencyKey": "event:paused:one",
+                        "eventType": "run.paused",
+                        "status": "paused",
+                        "source": "runtime",
+                        "sessionId": "sess-paused",
+                        "requestId": "req-paused",
+                    }
+                ]
+            },
+            token=session["token"],
+            device_id="device-1",
+        )
+        audit = store.state()["runtimeAudit"]
+
+        self.assertEqual(audit["eventTypeCounts"]["run.paused"], 1)
+        self.assertEqual(audit["statusCounts"]["paused"], 1)
+        self.assertEqual(audit["summary"]["terminalEvents"], 0)
+        self.assertNotIn("run.failed", audit["eventTypeCounts"])
+
+    def test_session_share_redacts_local_paths_and_renders_public_html(self):
+        store, session = self._store_with_session()
+        result = store.create_session_share(
+            {
+                "title": r"Review C:\Users\Alice\secret-plan.md",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": r"请看 C:\Users\Alice\secret-plan.md token=abc123",
+                    },
+                    {
+                        "role": "assistant",
+                        "content": "已生成封面。",
+                        "artifacts": [
+                            {
+                                "title": r"C:\Users\Alice\output\cover.png",
+                                "kind": "image",
+                                "artifactValidity": "valid",
+                                "artifactFeedbackSignal": "default",
+                            }
+                        ],
+                    },
+                ],
+            },
+            token=session["token"],
+            device_id="device-1",
+        )
+        share = store.get_session_share(result["shareId"])
+        handler = object.__new__(admin_api.AdminHandler)
+        rendered = handler._share_html(result["shareId"], share)
+
+        self.assertIn("[local-path]", json.dumps(share, ensure_ascii=False))
+        self.assertIn("已生成封面", rendered)
+        self.assertIn("Shared from EcoreX", rendered)
+        self.assertNotIn("C:\\Users\\Alice", json.dumps(share, ensure_ascii=False))
+        self.assertNotIn("C:\\Users\\Alice", rendered)
+        self.assertNotIn("abc123", json.dumps(share, ensure_ascii=False))
+        self.assertNotIn("abc123", rendered)
 
     def test_runtime_audit_request_counts_are_scoped_by_identity_for_shared_request_id(self):
         store, session_a = self._store_with_session()

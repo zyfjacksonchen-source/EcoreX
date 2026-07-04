@@ -825,6 +825,7 @@ def test_v025_public_zip_rejects_externalized_local_artifact_href(tmp_path):
         archive.writestr("site/admin/index.html", "<html></html>")
         archive.writestr("admin-api/ecorex_admin_api.py", "print('ok')\n")
         archive.writestr("server/install-ecorex-public-release.sh", "#!/bin/sh\n")
+        archive.writestr("server/install-ecorex-web.sh", "#!/bin/sh\nECOREX_TONGXIN_DATABASE=1\n")
         archive.writestr("server/check-ecorex-server-release.sh", "#!/bin/sh\n")
         archive.writestr("site/assets/icon.png", b"x")
         archive.writestr("site/assets/ecorex-app-preview.png", b"x")
@@ -878,6 +879,7 @@ def test_v027_public_zip_accepts_externalized_downloads_contract(tmp_path):
         archive.writestr("site/admin/index.html", "<html></html>")
         archive.writestr("admin-api/ecorex_admin_api.py", "print('ok')\n")
         archive.writestr("server/install-ecorex-public-release.sh", "#!/bin/sh\n")
+        archive.writestr("server/install-ecorex-web.sh", "#!/bin/sh\nECOREX_TONGXIN_DATABASE=1\n")
         archive.writestr("server/check-ecorex-server-release.sh", "#!/bin/sh\n")
         archive.writestr("site/assets/icon.png", b"x")
         archive.writestr("site/assets/ecorex-app-preview.png", b"x")
@@ -980,6 +982,33 @@ def test_v027_public_release_updates_are_admin_promotion_gated():
     assert "data-release-promote" in admin_js
     assert 'request("/release/state")' in admin_js
     assert 'mutate("/release/promote"' in admin_js
+
+
+def test_v027_default_release_flow_externalizes_downloads_with_public_installer_mirror():
+    root = Path(__file__).resolve().parents[1]
+    public_packager = (root / "scripts" / "prepare-ecorex-public-release.ps1").read_text(encoding="utf-8")
+    default_release = (root / "scripts" / "release-ecorex-default.ps1").read_text(encoding="utf-8")
+    desktop_package = json.loads((root / "desktop" / "package.json").read_text(encoding="utf-8"))
+    release_doc = (root / "docs" / "ecorex-default-release-flow.md").read_text(encoding="utf-8")
+
+    assert '[switch]$EmbedDownloads' in public_packager
+    assert '$downloadsExternalized = -not [bool]$EmbedDownloads' in public_packager
+    assert 'if ($downloadsExternalized)' in public_packager
+    assert 'downloadsExternalized = [bool]$downloadsExternalized' in public_packager
+    assert 'EcoreX-installers/releases/download/v$Version' in public_packager
+    assert r'\d+\.\d+\.\d+(?:\.\d+)?' in (root / "scripts" / "validate-ecorex-release-artifacts.py").read_text(encoding="utf-8")
+    assert 'release-ecorex-default.ps1' in desktop_package["scripts"]["webui:stage-public"]
+    assert 'release-ecorex-default.ps1' in desktop_package["scripts"]["release:default"]
+    assert '-EmbedDownloads' in desktop_package["scripts"]["release:embed-downloads"]
+    assert 'prepare-ecorex-public-release.ps1' in default_release
+    assert 'update-ecorex-desktop-release-manifest.ps1' in default_release
+    assert '$webLinuxService = Join-Path $repoRoot "release-artifacts\\EcoreX_${Version}-web-linux-service.tar.gz"' in default_release
+    assert '"-WebLinuxServicePath", $webLinuxService' in default_release
+    assert 'function Set-DefaultDownloadMirror' in default_release
+    assert 'github-release-v$Version' in default_release
+    assert 'EcoreX-installers/releases/download/v$Version' in default_release
+    assert 'npm run release:default' in release_doc
+    assert '-EmbedDownloads' in release_doc
 
 
 def test_v027_webui_installers_keep_windows_macos_user_flow_consistent():

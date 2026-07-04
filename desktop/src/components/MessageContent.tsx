@@ -10,9 +10,11 @@ import {
   Image as ImageIcon,
   MoreHorizontal,
   MonitorUp,
+  ThumbsDown,
+  ThumbsUp,
   TriangleAlert
 } from "lucide-react";
-import type { AgentArtifact, LocalJsonResult, LocalPathStat, QualityEvidence } from "../services/ecorexApi";
+import type { AgentArtifact, AgentArtifactValidity, LocalJsonResult, LocalPathStat, QualityEvidence } from "../services/ecorexApi";
 import { redactInternalPromptText, redactToolDisclosureValue } from "../utils/redaction";
 
 export type ToolCallDisclosure = {
@@ -736,7 +738,8 @@ function ArtifactShelf({
   localFileJson,
   localFileStat,
   onOpenLocalFile,
-  onLocalFileContextMenu
+  onLocalFileContextMenu,
+  onArtifactFeedback
 }: {
   artifacts?: AgentArtifact[];
   legacyArtifacts?: ArtifactItem[];
@@ -745,11 +748,13 @@ function ArtifactShelf({
   localFileStat?: (filePath: string) => Promise<LocalPathStat>;
   onOpenLocalFile?: (file: LocalFilePayload) => void;
   onLocalFileContextMenu?: LocalFileContextHandler;
+  onArtifactFeedback?: (artifact: AgentArtifact, validity: AgentArtifactValidity) => void | Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [openMenu, setOpenMenu] = useState<{ id: string; x: number; y: number; width: number; height: number } | null>(null);
   const openMenuElementRef = useRef<HTMLSpanElement | null>(null);
   const [availability, setAvailability] = useState<Record<string, ArtifactAvailability>>({});
+  const [pendingFeedback, setPendingFeedback] = useState<Record<string, AgentArtifactValidity | "">>({});
   const statRetryCounts = useRef<Record<string, number>>({});
   const statRetryTimers = useRef<Record<string, number>>({});
   const statusRetryCounts = useRef<Record<string, number>>({});
@@ -938,6 +943,21 @@ function ArtifactShelf({
     setOpenMenu(null);
   };
 
+  const submitArtifactFeedback = async (artifact: DisplayArtifact, validity: AgentArtifactValidity) => {
+    if (!onArtifactFeedback) return;
+    const key = artifactSourceKey(artifact);
+    setPendingFeedback((current) => ({ ...current, [key]: validity }));
+    try {
+      await onArtifactFeedback(artifact, validity);
+    } finally {
+      setPendingFeedback((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+    }
+  };
+
   return (
     <section className="artifact-shelf" aria-label={title}>
       <div className="artifact-section-head">
@@ -975,6 +995,9 @@ function ArtifactShelf({
           const menuOpen = openMenu?.id === artifact.id;
           const menuStyle = openMenu && menuOpen ? artifactMenuStyle(openMenu) : undefined;
           const payload = source ? localFilePayloadFromArtifact(artifact, source, displayPreviewUrl || previewUrl) : null;
+          const feedbackSignal = artifact.artifactFeedbackSignal || "default";
+          const feedbackValidity = artifact.artifactValidity || "valid";
+          const feedbackPending = pendingFeedback[artifactKey] || "";
           return (
             <div
               className={`artifact-row is-${artifact.kind}${blocked ? ` is-${availabilityStatus}` : ""}`}
@@ -1001,6 +1024,32 @@ function ArtifactShelf({
                 </span>
               )}
               <span className="artifact-row-actions">
+                {onArtifactFeedback && (
+                  <>
+                    <button
+                      type="button"
+                      className={`artifact-icon-button artifact-feedback-button${feedbackSignal === "thumbs_up" ? " is-selected is-valid" : ""}`}
+                      title="标记为有效产物"
+                      aria-label={`标记为有效产物 ${name}`}
+                      aria-pressed={feedbackValidity === "valid" && feedbackSignal === "thumbs_up"}
+                      disabled={Boolean(feedbackPending)}
+                      onClick={() => void submitArtifactFeedback(artifact, "valid")}
+                    >
+                      <ThumbsUp aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className={`artifact-icon-button artifact-feedback-button${feedbackSignal === "thumbs_down" ? " is-selected is-invalid" : ""}`}
+                      title="标记为无效产物"
+                      aria-label={`标记为无效产物 ${name}`}
+                      aria-pressed={feedbackValidity === "invalid"}
+                      disabled={Boolean(feedbackPending)}
+                      onClick={() => void submitArtifactFeedback(artifact, "invalid")}
+                    >
+                      <ThumbsDown aria-hidden="true" />
+                    </button>
+                  </>
+                )}
                 {isPreviewableImage && (
                   <button type="button" className="artifact-icon-button" title="预览图片" aria-label={`预览图片 ${name}`} onClick={() => void runAction(artifact, "preview")}>
                     <Eye aria-hidden="true" />
@@ -2083,7 +2132,7 @@ function splitSteps(steps: AgentStepDisclosure[], content: string) {
   return { mainContent, visibleSteps };
 }
 
-function MainAnswer({ content, pending, collapsible, artifacts = [], extraArtifacts = [], localFilePreviewUrl, localFileJson, localFileStat, onOpenLocalFile, onLocalFileContextMenu }: {
+function MainAnswer({ content, pending, collapsible, artifacts = [], extraArtifacts = [], localFilePreviewUrl, localFileJson, localFileStat, onOpenLocalFile, onLocalFileContextMenu, onArtifactFeedback }: {
   content: string;
   pending?: boolean;
   collapsible?: boolean;
@@ -2094,13 +2143,14 @@ function MainAnswer({ content, pending, collapsible, artifacts = [], extraArtifa
   localFileStat?: (filePath: string) => Promise<LocalPathStat>;
   onOpenLocalFile?: (file: LocalFilePayload) => void;
   onLocalFileContextMenu?: LocalFileContextHandler;
+  onArtifactFeedback?: (artifact: AgentArtifact, validity: AgentArtifactValidity) => void | Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const legacyArtifacts = useMemo(
     () => pending ? mergeArtifacts(extraArtifacts) : mergeArtifacts(extractArtifacts(content, { allowBareFiles: false }), extraArtifacts),
     [content, pending, extraArtifacts]
   );
-  const artifactShelf = <ArtifactShelf artifacts={artifacts} legacyArtifacts={legacyArtifacts} localFilePreviewUrl={localFilePreviewUrl} localFileJson={localFileJson} localFileStat={localFileStat} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} />;
+  const artifactShelf = <ArtifactShelf artifacts={artifacts} legacyArtifacts={legacyArtifacts} localFilePreviewUrl={localFilePreviewUrl} localFileJson={localFileJson} localFileStat={localFileStat} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} onArtifactFeedback={onArtifactFeedback} />;
   if (!content) return artifactShelf;
   if (!collapsible || pending || content.length <= LONG_REPLY_COLLAPSE_CHARS) {
     return (
@@ -2159,6 +2209,7 @@ export const MessageContent = memo(function MessageContent(props: {
   localFilePreviewUrl?: (filePath: string) => string;
   localFileJson?: (filePath: string) => Promise<LocalJsonResult>;
   localFileStat?: (filePath: string) => Promise<LocalPathStat>;
+  onArtifactFeedback?: (artifact: AgentArtifact, validity: AgentArtifactValidity) => void | Promise<void>;
 }) {
   const steps = props.steps || [];
   const visibleContent = useThrottledStreamingContent(props.content, props.pending);
@@ -2186,7 +2237,7 @@ export const MessageContent = memo(function MessageContent(props: {
         onLocalFileContextMenu={props.onLocalFileContextMenu}
         localFilePreviewUrl={props.localFilePreviewUrl}
       />
-      <MainAnswer content={mainContent} pending={props.pending} collapsible={props.role !== "user"} artifacts={props.artifacts} extraArtifacts={stepArtifacts} localFilePreviewUrl={props.localFilePreviewUrl} localFileJson={props.localFileJson} localFileStat={props.localFileStat} onOpenLocalFile={props.onOpenLocalFile} onLocalFileContextMenu={props.onLocalFileContextMenu} />
+      <MainAnswer content={mainContent} pending={props.pending} collapsible={props.role !== "user"} artifacts={props.artifacts} extraArtifacts={stepArtifacts} localFilePreviewUrl={props.localFilePreviewUrl} localFileJson={props.localFileJson} localFileStat={props.localFileStat} onOpenLocalFile={props.onOpenLocalFile} onLocalFileContextMenu={props.onLocalFileContextMenu} onArtifactFeedback={props.onArtifactFeedback} />
       {props.cancelled ? (
         <div className="agent-cancelled-tag">已中止</div>
       ) : props.pending ? (

@@ -321,7 +321,10 @@ available_setting = {
             "cdp_endpoint": DEFAULT_CDP_ENDPOINT,
             "cdp_auto_launch": True,
             "cdp_fallback": True,
-            "persistent": True
+            "persistent": True,
+            "cdp_persist_session": True,
+            "cdp_keepalive_interval": 60,
+            "idle_timeout": 0
         },
         "feishu_cli": {
             "package": "@larksuite/cli@1.0.56",
@@ -661,6 +664,9 @@ def _ensure_ecorex_runtime_defaults(cfg: dict):
         "cdp_auto_launch": True,
         "cdp_fallback": True,
         "persistent": True,
+        "cdp_persist_session": True,
+        "cdp_keepalive_interval": 60,
+        "idle_timeout": 0,
     }
     for key, value in browser_defaults.items():
         if browser.get(key) in (None, ""):
@@ -681,6 +687,12 @@ def _ensure_ecorex_runtime_defaults(cfg: dict):
         browser["cdp_auto_launch"] = _web_bool_env("ECOREX_BROWSER_CDP_AUTO_LAUNCH")
         browser["cdp_fallback"] = _web_bool_env("ECOREX_BROWSER_CDP_FALLBACK")
         browser["persistent"] = _web_bool_env("ECOREX_BROWSER_PERSISTENT")
+        browser["cdp_persist_session"] = _web_bool_env("ECOREX_BROWSER_CDP_PERSIST_SESSION")
+        try:
+            browser["idle_timeout"] = int(os.environ.get("ECOREX_BROWSER_IDLE_TIMEOUT", "0") or "0")
+        except ValueError:
+            logger.warning("[INIT] invalid ECOREX_BROWSER_IDLE_TIMEOUT value; using 0")
+            browser["idle_timeout"] = 0
 
     feishu_cli = tools.get("feishu_cli")
     if not isinstance(feishu_cli, dict):

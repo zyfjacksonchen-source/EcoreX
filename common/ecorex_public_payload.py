@@ -13,6 +13,16 @@ _SENSITIVE_KEY_RE = re.compile(
 _CONTENT_KEY_RE = re.compile(
     r"(?i)^(content|contents|body|file_content|file_contents|source|script|code|markdown|prompt|instructions?)$"
 )
+
+
+def _redact_windows_path_keep_name(match: re.Match[str]) -> str:
+    raw = match.group(0)
+    name = raw.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    if name and name not in {".", ".."}:
+        return rf"C:\[redacted-path]\{name}"
+    return r"C:\[redacted-path]"
+
+
 _SENSITIVE_TEXT_PATTERNS = [
     (re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_\-]{8,}"), "sk-***"),
     (re.compile(r"github_pat_[A-Za-z0-9_]{12,}"), "github_pat_***"),
@@ -25,7 +35,7 @@ _SENSITIVE_TEXT_PATTERNS = [
     (re.compile(r"\b(?:ou|oc|om)_[A-Za-z0-9_-]{8,}\b"), "feishu-id-***"),
     (re.compile(r"\b(?:file|img)_v\d+_[A-Za-z0-9_-]{8,}\b"), "feishu-resource-***"),
     (re.compile(r"(?i)\b[A-Z]:\\Users\\[^\\\s]+(?:\\[^\s\"')<>]+)*"), r"C:\\Users\\[redacted]"),
-    (re.compile(r"(?i)\b[A-Z]:\\(?:[^\s\"')<>]+\\)*[^\s\"')<>]+"), r"C:\\[redacted-path]"),
+    (re.compile(r"(?i)\b[A-Z]:\\(?:[^\s\"')<>]+\\)*[^\s\"')<>]+"), _redact_windows_path_keep_name),
     (re.compile(r"(?i)\b/(?:Users|home|tmp|var|private)/[^\s\"')<>]+"), "/[redacted-path]"),
     (re.compile(r"(?i)https://open\.feishu\.cn/[^\s\"')<>]+"), "https://open.feishu.cn/[redacted]"),
     (re.compile(r"(?i)data:image/(?:png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]{32,}"), "data:image/[redacted]"),

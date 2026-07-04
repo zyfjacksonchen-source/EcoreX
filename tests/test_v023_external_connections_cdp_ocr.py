@@ -50,15 +50,23 @@ class V023CdpOcrExternalConnectionsTests(unittest.TestCase):
         browser_defaults = config.available_setting["tools"]["browser"]
         self.assertIs(browser_defaults["cdp_auto_launch"], True)
         self.assertIs(browser_defaults["cdp_fallback"], True)
+        self.assertIs(browser_defaults["cdp_persist_session"], True)
+        self.assertEqual(browser_defaults["idle_timeout"], 0)
 
         diagnostics = browser_automation_diagnostics({
             "cdp_endpoint": "http://127.0.0.1:9",
             "cdp_auto_launch": True,
             "cdp_fallback": True,
+            "cdp_persist_session": True,
+            "cdp_keepalive_interval": 60,
+            "idle_timeout": 0,
         })
         self.assertEqual(diagnostics["mode"], "cdp-first")
         self.assertTrue(diagnostics["autoLaunch"])
         self.assertTrue(diagnostics["fallbackEnabled"])
+        self.assertTrue(diagnostics["cdpPersistSession"])
+        self.assertEqual(diagnostics["cdpKeepaliveIntervalSeconds"], 60)
+        self.assertEqual(diagnostics["idleTimeoutSeconds"], 0)
         self.assertFalse(diagnostics["cdp"]["ready"])
 
     def test_browser_executable_discovery_does_not_return_missing_linux_command(self):
@@ -116,10 +124,45 @@ class V023CdpOcrExternalConnectionsTests(unittest.TestCase):
         source = Path("agent/tools/browser/browser_service.py").read_text(encoding="utf-8")
 
         fallback_idx = source.index('fallback_launch_mode = "persistent" if self._user_data_dir else "fresh"')
-        shutdown_idx = source.index("self._shutdown_browser()", fallback_idx)
+        shutdown_idx = source.index("self._shutdown_browser(force_cdp_process_cleanup=True)", fallback_idx)
         switch_idx = source.index("self._launch_mode = fallback_launch_mode", shutdown_idx)
         self.assertLess(fallback_idx, shutdown_idx)
         self.assertLess(shutdown_idx, switch_idx)
+
+    def test_cdp_session_persists_across_idle_and_reconnects_once(self):
+        source = Path("agent/tools/browser/browser_service.py").read_text(encoding="utf-8")
+
+        self.assertIn('self._cdp_persist_session: bool = self._config.get("cdp_persist_session", True) is not False', source)
+        self.assertIn('self._idle_timeout = 0.0', source)
+        self.assertIn("def _maybe_cdp_keepalive(self) -> None:", source)
+        self.assertIn('self._page.evaluate("() => document.readyState")', source)
+        self.assertIn("for attempt in range(2):", source)
+        self.assertIn("CDP action hit stale connection; reconnecting once", source)
+
+    def test_cdp_persistent_shutdown_keeps_auto_launched_browser_unless_forced(self):
+        from agent.tools.browser.browser_service import BrowserService
+
+        class FakeProcess:
+            def __init__(self):
+                self.terminated = False
+
+            def terminate(self):
+                self.terminated = True
+
+            def wait(self, timeout=None):
+                return 0
+
+        service = BrowserService({"cdp_endpoint": "http://127.0.0.1:9222", "cdp_persist_session": True})
+        first = FakeProcess()
+        service._cdp_process = first
+        service._shutdown_browser()
+        self.assertFalse(first.terminated)
+        self.assertIsNone(service._cdp_process)
+
+        second = FakeProcess()
+        service._cdp_process = second
+        service._shutdown_browser(force_cdp_process_cleanup=True)
+        self.assertTrue(second.terminated)
 
     def test_chrome_devtools_mcp_defaults_use_full_cdp_profile(self):
         import config

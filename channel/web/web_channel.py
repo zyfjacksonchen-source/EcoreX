@@ -72,7 +72,7 @@ from channel.messaging_adapter_contract import (
     test_messaging_adapter,
 )
 from channel.web.routes import WEB_ROUTES
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from common import const
 from common import i18n
 from common.feishu_register_credentials import (
@@ -834,6 +834,9 @@ def _web_app_bridge_script() -> str:
       pathExt: artifact.pathExt || artifact.path_ext || phase1ArtifactExt(source, title),
       mimeType: artifact.mimeType || artifact.mime_type || "",
       sizeBytes: Number(artifact.sizeBytes || artifact.size_bytes || 0) || 0,
+      artifactValidity: artifact.artifactValidity || artifact.artifact_validity || "valid",
+      artifactFeedbackSignal: artifact.artifactFeedbackSignal || artifact.artifact_feedback_signal || "default",
+      artifactFeedbackAt: artifact.artifactFeedbackAt || artifact.artifact_feedback_at || "",
       stats: phase1SafeJson(artifact.stats || {}),
       source: {
         toolName: sourceInfo.toolName || sourceInfo.tool_name || artifact.toolName || artifact.tool || "",
@@ -1151,6 +1154,17 @@ def _web_app_bridge_script() -> str:
         detail: phase1SafeJson({ acknowledged: true }),
         createdAt: phase1Now()
       });
+    } else if (item.type === "paused") {
+      events.push({
+        idempotencyKey: await phase1SyncKey(["event", sid, rid, "run.paused", "paused"]),
+        eventType: "run.paused",
+        status: "paused",
+        source: "WebUI",
+        sessionId: sid,
+        requestId: rid,
+        detail: phase1SafeJson({ reason: item.terminal_reason || item.reason || "paused" }),
+        createdAt: phase1Now()
+      });
     } else if (item.type === "done") {
       events.push({
         idempotencyKey: await phase1SyncKey(["event", sid, rid, "run.completed", "completed"]),
@@ -1192,6 +1206,17 @@ def _web_app_bridge_script() -> str:
         sessionId: sid,
         requestId: rid,
         detail: phase1SafeJson({ errorCode: item.error_code || "", errorType: item.error_type || "", statusCode: item.status_code || "" }),
+        createdAt: phase1Now()
+      });
+    } else if (item.type === "interrupted") {
+      events.push({
+        idempotencyKey: await phase1SyncKey(["event", sid, rid, "run.interrupted", "interrupted"]),
+        eventType: "run.interrupted",
+        status: "interrupted",
+        source: "WebUI",
+        sessionId: sid,
+        requestId: rid,
+        detail: phase1SafeJson({ terminalReason: item.terminal_reason || "interrupted", errorCode: item.error_code || "" }),
         createdAt: phase1Now()
       });
     }
@@ -1379,7 +1404,9 @@ def _web_app_bridge_script() -> str:
         currentVersion: payload.currentVersion || "0.2.6-web.1",
         version: payload.latestVersion || payload.version,
         downloadUrl: payload.downloadUrl,
-        message: payload.message || (payload.hasUpdate ? "发现新版本，请前往下载页安装" : "当前已经是最新版本"),
+        releasePageUrl: payload.releasePageUrl,
+        artifactDownloadUrl: payload.artifactDownloadUrl,
+        message: payload.message || (payload.hasUpdate ? "发现新版本，可在本机检查更新" : "当前已经是最新版本"),
         checkedAt: new Date().toISOString()
       };
       return updateStatus;
@@ -2305,6 +2332,7 @@ class WebChannel(ChatChannel):
     ARTIFACT_METADATA_MAX_ITEMS = 8
     ARTIFACT_METADATA_STRING_CHAR_LIMIT = 512
     ARTIFACT_METADATA_PATH_CHAR_LIMIT = 4096
+    SESSION_QUEUE_LIMIT = 8
 
     # def __new__(cls):
     #     if cls._instance is None:
@@ -2328,6 +2356,9 @@ class WebChannel(ChatChannel):
         self.backpressure_lock = threading.RLock()
         self.same_session_replacement_lock = threading.RLock()
         self.same_session_replacement_tickets = {}  # session_id -> latest rapid-resend ticket
+        self.session_run_queue_lock = threading.RLock()
+        self.session_run_queues = {}  # session_id -> deque(request_id) for queued /message runs
+        self.queued_request_payloads = {}  # request_id -> in-memory request payload for delayed start
         self.request_artifacts = {}  # request_id -> list of structured artifact dicts
         self.request_project_contexts = {}  # request_id -> structured project binding
         self.sse_stream_tokens = {}  # legacy field; no longer used to supersede streams
@@ -2367,6 +2398,9 @@ class WebChannel(ChatChannel):
                     use_azure_chatgpt=bool(local_config.get("use_azure_chatgpt", False)),
                     gemini_api_base=local_config.get("gemini_api_base") or "",
                     has_gemini_key=bool(local_config.get("gemini_api_key")),
+                    gemini_api_key=local_config.get("gemini_api_key") or "",
+                    custom_api_base=local_config.get("custom_api_base") or "",
+                    custom_api_key=local_config.get("custom_api_key") or "",
                 )
             except Exception:
                 provider = str(local_config.get("bot_type") or "")
@@ -2673,6 +2707,8 @@ class WebChannel(ChatChannel):
             self._mark_run_phase(request_id, "tool_running", status="running")
         elif etype == "tool_execution_end":
             self._mark_run_phase(request_id, "tool_completed", status="running")
+        elif etype == "phase" and (event.get("queue_position") or "排队" in str(event.get("content") or event.get("message") or "")):
+            self._mark_run_phase(request_id, "queued", status="queued")
         elif etype in ("agent_start", "turn_start", "message_start", "phase"):
             self._mark_run_phase(request_id, etype, status="running")
         elif etype == "message_end":
@@ -2794,6 +2830,553 @@ class WebChannel(ChatChannel):
             payload=base_payload,
             idempotency_key=f"request:{request_id}:message.assistant.created",
         )
+
+    def _record_request_queued_events(
+        self,
+        request_id: str,
+        session_id: str,
+        *,
+        visible_message: str = "",
+        client_attempt_id: str = "",
+        retry_of_request_id: str = "",
+        interrupts_request_id: str = "",
+        project_context_meta: Optional[Dict[str, Any]] = None,
+        queued_after_request_ids: Optional[List[str]] = None,
+        queue_position: int = 0,
+    ) -> None:
+        turn_id = request_id
+        base_payload = {
+            "request_id": request_id,
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "client_attempt_id": client_attempt_id,
+            "retry_of_request_id": retry_of_request_id,
+            "interrupts_request_id": interrupts_request_id,
+            "queued_after_request_ids": list(queued_after_request_ids or []),
+            "queue_position": int(queue_position or 0),
+        }
+        self._append_runtime_event(
+            request_id,
+            "run.queued",
+            session_id=session_id,
+            turn_id=turn_id,
+            payload={**base_payload, "project_context": _project_context_event_summary(project_context_meta)},
+            idempotency_key=f"request:{request_id}:run.queued",
+        )
+        self._append_runtime_event(
+            request_id,
+            "message.user.accepted",
+            session_id=session_id,
+            turn_id=turn_id,
+            payload={**base_payload, "content": visible_message or ""},
+            idempotency_key=f"request:{request_id}:message.user.accepted",
+        )
+
+    def _record_request_started_events(self, request_id: str, session_id: str) -> None:
+        turn_id = request_id
+        base_payload = {
+            "request_id": request_id,
+            "session_id": session_id,
+            "turn_id": turn_id,
+        }
+        self._append_runtime_event(
+            request_id,
+            "run.started",
+            session_id=session_id,
+            turn_id=turn_id,
+            payload=base_payload,
+            idempotency_key=f"request:{request_id}:run.started",
+        )
+        self._append_runtime_event(
+            request_id,
+            "message.assistant.created",
+            session_id=session_id,
+            turn_id=turn_id,
+            payload=base_payload,
+            idempotency_key=f"request:{request_id}:message.assistant.created",
+        )
+
+    def _build_web_message_context(
+        self,
+        request_id: str,
+        session_id: str,
+        *,
+        prompt: str,
+        visible_prompt: str,
+        visible_message: str,
+        hidden_context: Any = "",
+        project_context_meta: Optional[Dict[str, Any]] = None,
+        internal_action: bool = False,
+        use_sse: bool = True,
+        attachments: Any = None,
+        is_voice_input: bool = False,
+        session_lock=None,
+        client_attempt_id: str = "",
+        pre_persisted_user_message: bool = False,
+    ) -> Optional[Context]:
+        attachments = attachments if isinstance(attachments, list) else []
+        next_prompt = str(prompt or "")
+        if attachments:
+            file_refs = []
+            for att in attachments:
+                if not isinstance(att, dict):
+                    continue
+                ftype = att.get("file_type", "file")
+                fpath = att.get("file_path", "")
+                if not fpath:
+                    continue
+                if ftype == "image":
+                    file_refs.append(f"[{i18n.t('图片', 'Image')}: {fpath}]")
+                elif ftype == "video":
+                    file_refs.append(f"[{i18n.t('视频', 'Video')}: {fpath}]")
+                elif ftype == "directory":
+                    file_refs.append(f"[{i18n.t('目录', 'Directory')}: {fpath}]")
+                else:
+                    file_refs.append(f"[{i18n.t('文件', 'File')}: {fpath}]")
+            if file_refs:
+                next_prompt = next_prompt + "\n" + "\n".join(file_refs)
+                logger.info(f"[WebChannel] Attached {len(file_refs)} file(s) to message")
+
+        if isinstance(hidden_context, str) and hidden_context.strip():
+            next_prompt = hidden_context.strip() + "\n\nUser request:\n" + (next_prompt or "Please handle these attachments.")
+
+        trigger_prefixs = conf().get("single_chat_prefix", [""])
+        if check_prefix(next_prompt, trigger_prefixs) is None and trigger_prefixs:
+            next_prompt = trigger_prefixs[0] + next_prompt
+            logger.debug(f"[WebChannel] Added prefix to message summary: {_web_body_log_summary(next_prompt)}")
+
+        msg = WebMessage(self._generate_msg_id(), next_prompt)
+        msg.from_user_id = session_id
+
+        context = self._compose_context(ContextType.TEXT, next_prompt, msg=msg, isgroup=False)
+        if context is None:
+            return None
+
+        context["session_id"] = session_id
+        context["receiver"] = session_id
+        context["channel_type"] = "web"
+        context["request_id"] = request_id
+        context["session_lock"] = session_lock
+        context["cancel_token_owner"] = "web_channel"
+        context["visible_message"] = (visible_message or "Please handle these attachments.").strip()
+        if project_context_meta:
+            context["project_context_meta"] = project_context_meta
+        if internal_action:
+            context["internal_action"] = True
+        context["attachments"] = attachments
+        if is_voice_input:
+            context["is_voice_input"] = True
+        if use_sse:
+            context["on_event"] = self._make_sse_callback(request_id)
+
+        if pre_persisted_user_message:
+            context["pre_persisted_user_message"] = True
+        elif self._pre_persist_web_user_message(
+            session_id,
+            visible_message or visible_prompt or "Please handle these attachments.",
+            request_id=request_id,
+            client_attempt_id=client_attempt_id,
+            attachments=attachments,
+            project_context=project_context_meta,
+        ):
+            context["pre_persisted_user_message"] = True
+        return context
+
+    def _accept_queued_message(
+        self,
+        session_id: str,
+        *,
+        visible_prompt: str,
+        visible_message: str,
+        prompt: str,
+        hidden_context: Any = "",
+        project_context_meta: Optional[Dict[str, Any]] = None,
+        internal_action: bool = False,
+        use_sse: bool = True,
+        attachments: Any = None,
+        client_attempt_id: str = "",
+        interrupts_request_id: str = "",
+        retry_of_request_id: str = "",
+        lang: str = "zh",
+        is_voice_input: bool = False,
+        queued_after_request_ids: Optional[List[str]] = None,
+        reason: str = "session_busy",
+    ) -> Dict[str, Any]:
+        queued_after_request_ids = list(queued_after_request_ids or [])
+        attachments = attachments if isinstance(attachments, list) else []
+        with self.session_run_queue_lock:
+            existing_queue = self.session_run_queues.setdefault(session_id, deque())
+            queue_limit = self._session_queue_limit()
+            if queue_limit and len(existing_queue) >= queue_limit:
+                return {
+                    "status": "error",
+                    "code": BACKPRESSURE_SESSION_LIMIT_CODE,
+                    "error_type": "backpressure_limit",
+                    "state": "queue_full",
+                    "recoverable": True,
+                    "retryable": True,
+                    "retry_after_ms": BACKPRESSURE_RETRY_AFTER_MS,
+                    "reason": "session_queue_full",
+                    "session_id": session_id,
+                    "active_request_ids": queued_after_request_ids,
+                    "message": "This session already has too many queued runs. Please retry shortly.",
+                    "same_session": self._same_session_decision_payload(
+                        "retryable_conflict",
+                        active_request_ids=queued_after_request_ids,
+                        reason="session_queue_full",
+                    ),
+                }
+            request_id = self._generate_request_id()
+            existing_queue.append(request_id)
+            queue_position = len(existing_queue)
+
+        self.request_to_session[request_id] = session_id
+        self.request_project_contexts[request_id] = project_context_meta or {}
+        pre_persisted = self._pre_persist_web_user_message(
+            session_id,
+            visible_message or visible_prompt or "Please handle these attachments.",
+            request_id=request_id,
+            client_attempt_id=client_attempt_id,
+            attachments=attachments,
+            project_context=project_context_meta,
+        )
+        payload = {
+            "request_id": request_id,
+            "session_id": session_id,
+            "visible_prompt": visible_prompt,
+            "visible_message": visible_message,
+            "prompt": prompt,
+            "hidden_context": hidden_context,
+            "project_context_meta": project_context_meta or {},
+            "internal_action": bool(internal_action),
+            "use_sse": bool(use_sse),
+            "attachments": attachments,
+            "client_attempt_id": client_attempt_id,
+            "interrupts_request_id": interrupts_request_id,
+            "retry_of_request_id": retry_of_request_id,
+            "lang": lang,
+            "is_voice_input": bool(is_voice_input),
+            "queued_after_request_ids": queued_after_request_ids,
+            "pre_persisted_user_message": bool(pre_persisted),
+        }
+        self.queued_request_payloads[request_id] = payload
+
+        try:
+            from agent.protocol import get_run_ledger
+
+            chat_route = self._current_chat_route_snapshot()
+            retry_visible_message, _retry_visible_trunc = self._limit_text_with_marker(
+                visible_message or visible_prompt or "",
+                64 * 1024,
+            )
+            get_run_ledger().create_run(
+                request_id,
+                session_id,
+                run_type="message",
+                phase="queued",
+                status="queued",
+                model=chat_route.get("model", ""),
+                provider=chat_route.get("provider", ""),
+                metadata={
+                    "stream": bool(use_sse),
+                    "internal_action": bool(internal_action),
+                    "attachments": len(attachments),
+                    "attachment_items": self._retry_attachment_snapshot(attachments),
+                    "visible_message": retry_visible_message,
+                    "model": chat_route.get("model", ""),
+                    "provider": chat_route.get("provider", ""),
+                    "client_attempt_id": client_attempt_id,
+                    "interrupts_request_id": interrupts_request_id,
+                    "retry_of_request_id": retry_of_request_id,
+                    "project_context": project_context_meta,
+                    "queue_position": queue_position,
+                    "queued_after_request_ids": queued_after_request_ids,
+                    "queue_reason": reason,
+                },
+            )
+        except Exception as e:
+            logger.error(f"[WebChannel] queued run ledger unavailable for {request_id}: {_web_body_log_summary(e)}")
+            with self.session_run_queue_lock:
+                queue = self.session_run_queues.get(session_id)
+                if queue:
+                    try:
+                        queue.remove(request_id)
+                    except ValueError:
+                        pass
+            self.queued_request_payloads.pop(request_id, None)
+            self.request_to_session.pop(request_id, None)
+            return {
+                "status": "error",
+                "code": "RUN_LEDGER_UNAVAILABLE",
+                "error_type": "runtime_state_unavailable",
+                "message": "Runtime run ledger is unavailable; request was not queued. Please retry shortly.",
+                "retryable": True,
+                "recoverable": True,
+                "request_id": "",
+            }
+
+        self._record_request_queued_events(
+            request_id,
+            session_id,
+            visible_message=visible_message or visible_prompt or "",
+            client_attempt_id=client_attempt_id,
+            retry_of_request_id=retry_of_request_id,
+            interrupts_request_id=interrupts_request_id,
+            project_context_meta=project_context_meta,
+            queued_after_request_ids=queued_after_request_ids,
+            queue_position=queue_position,
+        )
+
+        if session_id not in self.session_queues:
+            self.session_queues[session_id] = Queue()
+        if use_sse:
+            self._ensure_sse_state(request_id)
+            self._push_sse_event(request_id, {
+                "type": "phase",
+                "content": f"已排队，当前会话第 {queue_position} 位等待执行",
+                "request_id": request_id,
+                "timestamp": time.time(),
+                "queue_position": queue_position,
+            })
+
+        logger.info(
+            f"[WebChannel] queued same-session message: session={session_id}, "
+            f"request={request_id}, position={queue_position}, active={queued_after_request_ids}"
+        )
+        return {
+            "status": "success",
+            "request_id": request_id,
+            "stream": use_sse,
+            "queued": True,
+            "queue_position": queue_position,
+            "same_session": self._same_session_decision_payload(
+                "queued",
+                active_request_ids=queued_after_request_ids,
+                reason=reason,
+                queue_position=queue_position,
+                queued_request_id=request_id,
+            ),
+        }
+
+    def _start_next_queued_request(self, session_id: str, *, completed_request_id: str = "") -> bool:
+        if not session_id:
+            return False
+        with self.session_run_queue_lock:
+            queue = self.session_run_queues.get(session_id)
+            if not queue:
+                return False
+            request_id = queue[0]
+            payload = self.queued_request_payloads.get(request_id)
+            if not payload:
+                queue.popleft()
+                return False
+
+        try:
+            from common.ecorex_workspace import SessionBusyError, SessionLock
+
+            session_lock = SessionLock(_get_workspace_root(), session_id).acquire()
+        except SessionBusyError:
+            return False
+        except Exception as e:
+            logger.warning(f"[WebChannel] queued request lock acquisition failed: {_web_body_log_summary(e)}")
+            return False
+
+        with self.session_run_queue_lock:
+            queue = self.session_run_queues.get(session_id)
+            if not queue or queue[0] != request_id:
+                try:
+                    session_lock.release()
+                except Exception:
+                    pass
+                return False
+            queue.popleft()
+            if not queue:
+                self.session_run_queues.pop(session_id, None)
+            payload = self.queued_request_payloads.pop(request_id, payload)
+
+        self.request_to_session[request_id] = session_id
+        try:
+            from agent.protocol import get_cancel_registry
+
+            get_cancel_registry().register(request_id, session_id=session_id)
+        except Exception as e:
+            logger.debug(f"[WebChannel] queued request cancel token register skipped: {_web_body_log_summary(e)}")
+        self._mark_run_phase(request_id, "starting", status="running")
+        self._record_request_started_events(request_id, session_id)
+        if self._sse_request_exists(request_id):
+            self._push_sse_event(request_id, {
+                "type": "phase",
+                "content": "已轮到此消息，正在准备响应",
+                "request_id": request_id,
+                "timestamp": time.time(),
+                "queued_after_request_id": completed_request_id,
+            })
+
+        context = self._build_web_message_context(
+            request_id,
+            session_id,
+            prompt=str(payload.get("prompt") or ""),
+            visible_prompt=str(payload.get("visible_prompt") or ""),
+            visible_message=str(payload.get("visible_message") or ""),
+            hidden_context=payload.get("hidden_context") or "",
+            project_context_meta=payload.get("project_context_meta") if isinstance(payload.get("project_context_meta"), dict) else {},
+            internal_action=bool(payload.get("internal_action")),
+            use_sse=bool(payload.get("use_sse")),
+            attachments=payload.get("attachments") if isinstance(payload.get("attachments"), list) else [],
+            is_voice_input=bool(payload.get("is_voice_input")),
+            session_lock=session_lock,
+            client_attempt_id=str(payload.get("client_attempt_id") or ""),
+            pre_persisted_user_message=bool(payload.get("pre_persisted_user_message")),
+        )
+        if context is None:
+            logger.warning(f"[WebChannel] queued context filtered: session={session_id}, request={request_id}")
+            self._abort_pre_worker_request(
+                request_id,
+                session_id,
+                message="Message was filtered",
+                reason="context_filtered",
+                error_code="CONTEXT_FILTERED",
+                session_lock=session_lock,
+            )
+            self._start_next_queued_request(session_id, completed_request_id=request_id)
+            return False
+
+        threading.Thread(target=self._produce_with_session_lock, args=(context, session_lock), daemon=True).start()
+        logger.info(f"[WebChannel] started queued request: session={session_id}, request={request_id}")
+        return True
+
+    def queue_action_request(self, request_id: str) -> Dict[str, Any]:
+        request_id = str(request_id or "").strip()
+        if not request_id:
+            return {"status": "error", "message": "missing request_id"}
+        try:
+            data = web.data()
+            try:
+                body = json.loads(data) if data else {}
+            except Exception:
+                body = {}
+            action = str(body.get("action") or body.get("queue_action") or "").strip().lower()
+            session_id = str(body.get("session_id") or "").strip()
+            if action in {"cancel", "cancel_queued", "remove"}:
+                return self._cancel_queued_request(request_id, expected_session_id=session_id)
+            if action in {"run_now", "stop_current_and_run"}:
+                promoted = self._promote_queued_request(request_id, expected_session_id=session_id)
+                if promoted.get("status") != "success":
+                    return promoted
+                active_request_ids = self._active_request_ids_for_session(promoted.get("session_id") or session_id)
+                try:
+                    from agent.protocol import get_cancel_registry
+
+                    cancelled = get_cancel_registry().cancel_session(promoted.get("session_id") or session_id)
+                except Exception:
+                    cancelled = 0
+                if active_request_ids:
+                    self._push_cancelled_events_for_session(promoted.get("session_id") or session_id, active_request_ids, lang="zh")
+                return {
+                    **promoted,
+                    "action": action,
+                    "cancelled_current_requests": cancelled,
+                    "active_request_ids": active_request_ids,
+                }
+            return {
+                "status": "error",
+                "message": "unsupported queue action",
+                "request_id": request_id,
+                "supported_actions": ["cancel_queued", "run_now"],
+            }
+        except Exception as e:
+            logger.error(f"[WebChannel] queue action error: {_web_body_log_summary(e)}")
+            return _public_error_payload("Queue action failed.", e)
+
+    def _cancel_queued_request(self, request_id: str, *, expected_session_id: str = "") -> Dict[str, Any]:
+        session_id = expected_session_id or self.request_to_session.get(request_id, "")
+        removed = False
+        with self.session_run_queue_lock:
+            payload = self.queued_request_payloads.pop(request_id, None)
+            session_id = session_id or str((payload or {}).get("session_id") or "")
+            queue = self.session_run_queues.get(session_id)
+            if queue:
+                try:
+                    queue.remove(request_id)
+                    removed = True
+                except ValueError:
+                    pass
+                if not queue:
+                    self.session_run_queues.pop(session_id, None)
+        if not removed and not payload:
+            return {
+                "status": "error",
+                "message": "queued request was not found",
+                "request_id": request_id,
+                "session_id": session_id,
+            }
+        if expected_session_id and session_id and expected_session_id != session_id:
+            return {
+                "status": "error",
+                "message": "request belongs to a different session",
+                "request_id": request_id,
+                "session_id": session_id,
+            }
+        self._mark_run_terminal(request_id, "cancelled", reason="queued_cancelled")
+        if self._sse_request_exists(request_id):
+            self._push_cancelled_event_once(request_id, {
+                "type": "cancelled",
+                "content": "已从队列移除",
+                "request_id": request_id,
+                "timestamp": time.time(),
+                "terminal_reason": "queued_cancelled",
+            })
+        else:
+            self.request_to_session.pop(request_id, None)
+        logger.info(f"[WebChannel] queued request cancelled: session={session_id}, request={request_id}")
+        return {
+            "status": "success",
+            "request_id": request_id,
+            "session_id": session_id,
+            "cancelled": 1,
+            "state": "cancelled",
+        }
+
+    def _promote_queued_request(self, request_id: str, *, expected_session_id: str = "") -> Dict[str, Any]:
+        session_id = expected_session_id or self.request_to_session.get(request_id, "")
+        with self.session_run_queue_lock:
+            payload = self.queued_request_payloads.get(request_id)
+            session_id = session_id or str((payload or {}).get("session_id") or "")
+            queue = self.session_run_queues.get(session_id)
+            if not payload or not queue or request_id not in queue:
+                return {
+                    "status": "error",
+                    "message": "queued request was not found",
+                    "request_id": request_id,
+                    "session_id": session_id,
+                }
+            if expected_session_id and session_id and expected_session_id != session_id:
+                return {
+                    "status": "error",
+                    "message": "request belongs to a different session",
+                    "request_id": request_id,
+                    "session_id": session_id,
+                }
+            try:
+                queue.remove(request_id)
+            except ValueError:
+                pass
+            queue.appendleft(request_id)
+        if self._sse_request_exists(request_id):
+            self._push_sse_event(request_id, {
+                "type": "phase",
+                "content": "已移到队首，正在停止当前任务",
+                "request_id": request_id,
+                "timestamp": time.time(),
+                "queue_position": 1,
+            })
+        return {
+            "status": "success",
+            "request_id": request_id,
+            "session_id": session_id,
+            "state": "queued",
+            "queue_position": 1,
+        }
 
     def _safe_runtime_artifact_payload(self, event: Dict[str, Any], base_payload: Dict[str, Any]) -> Dict[str, Any]:
         safe: Dict[str, Any] = {}
@@ -2945,6 +3528,14 @@ class WebChannel(ChatChannel):
                 "payload": base_payload,
                 "idempotency_key": f"{base_key}:permission.requested",
             }]
+        if legacy_type == "task_observation":
+            task_event_type = str(event.get("task_event_type") or "")
+            if task_event_type.startswith("task."):
+                return [{
+                    "event_type": task_event_type,
+                    "payload": base_payload,
+                    "idempotency_key": f"{base_key}:{task_event_type}",
+                }]
         if legacy_type == "tool_start":
             return [{
                 "event_type": "tool.started",
@@ -3108,6 +3699,8 @@ class WebChannel(ChatChannel):
             run_type = str(row.get("run_type") or "message").lower()
             if run_type != "message":
                 continue
+            if str(row.get("status") or row.get("phase") or "").lower() == "queued":
+                continue
             if self._sse_request_exists(request_id):
                 continue
             session_id = str(row.get("session_id") or self.request_to_session.get(request_id, "") or "")
@@ -3211,6 +3804,10 @@ class WebChannel(ChatChannel):
                 failed = "fail" in state or "error" in state or "interrupt" in state
                 cancelling = bool(row.get("cancelled")) or "cancell" in state
                 metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+                if state == "queued" or str(row.get("phase") or "").lower() == "queued":
+                    row["queue_position"] = int(metadata.get("queue_position") or self._queue_position_for_request(session_id, request_id) or 0)
+                    row["queued_after_request_ids"] = list(metadata.get("queued_after_request_ids") or [])
+                    row["queue_reason"] = metadata.get("queue_reason") or ""
                 terminal_code = "{} {}".format(
                     row.get("error_code") or metadata.get("error_code") or "",
                     row.get("terminal_reason") or metadata.get("terminal_reason") or "",
@@ -3271,6 +3868,7 @@ class WebChannel(ChatChannel):
                         and not (is_subagent and not request_id)
                     ),
                     "collect": bool(is_subagent and terminal),
+                    "cancelQueue": bool(state == "queued" or str(row.get("phase") or "").lower() == "queued"),
                     "diagnostics": True,
                 }
                 if cancelling and not terminal:
@@ -4071,10 +4669,12 @@ class WebChannel(ChatChannel):
         cancelled_requests: int = 0,
         cancelled_subagents: int = 0,
         reason: str = "",
+        queue_position: int = 0,
+        queued_request_id: str = "",
     ) -> Dict[str, Any]:
         return {
-            "policy": "interrupt_previous",
-            "queue": "disabled",
+            "policy": "queue",
+            "queue": "enabled",
             "decision": decision,
             "active_request_ids": list(active_request_ids or []),
             "replaced_request_ids": list(replaced_request_ids or []),
@@ -4082,7 +4682,26 @@ class WebChannel(ChatChannel):
             "cancelled_subagents": int(cancelled_subagents or 0),
             "retry_after_ms": REQUEST_CONFLICT_RETRY_AFTER_MS if decision == "retryable_conflict" else 0,
             "reason": reason,
+            "queue_position": int(queue_position or 0),
+            "queued_request_id": queued_request_id,
         }
+
+    def _session_queue_limit(self) -> int:
+        return self._coerce_positive_int(conf().get("web_max_queued_requests_per_session", self.SESSION_QUEUE_LIMIT), self.SESSION_QUEUE_LIMIT)
+
+    def _queue_position_for_request(self, session_id: str, request_id: str) -> int:
+        with self.session_run_queue_lock:
+            queue = list(self.session_run_queues.get(session_id) or [])
+        try:
+            return queue.index(request_id) + 1
+        except ValueError:
+            return 0
+
+    def _queued_request_ids_for_session(self, session_id: str) -> List[str]:
+        if not session_id:
+            return []
+        with self.session_run_queue_lock:
+            return list(self.session_run_queues.get(session_id) or [])
 
     @staticmethod
     def _retry_attachment_snapshot(attachments: Any) -> List[Dict[str, Any]]:
@@ -5228,6 +5847,8 @@ class WebChannel(ChatChannel):
 
         def callback(worker):
             worker_exception = None
+            next_session_id = ""
+            completed_request_id = ""
             try:
                 try:
                     worker_exception = worker.exception()
@@ -5235,8 +5856,16 @@ class WebChannel(ChatChannel):
                     worker_exception = e
                 parent_callback(worker)
             finally:
+                try:
+                    next_session_id = str(context.get("session_id") or "") if context else ""
+                    completed_request_id = str(context.get("request_id") or "") if context else ""
+                except Exception:
+                    next_session_id = ""
+                    completed_request_id = ""
                 self._finalize_request_after_worker(context, worker_exception)
                 self._release_context_session_lock(context)
+                if next_session_id:
+                    self._start_next_queued_request(next_session_id, completed_request_id=completed_request_id)
 
         return callback
 
@@ -5607,6 +6236,15 @@ class WebChannel(ChatChannel):
                 delta = data.get("delta", "")
                 if delta:
                     push_stream_delta("delta", delta)
+
+            elif event_type.startswith("task."):
+                flush_stream_pending()
+                payload = dict(data or {})
+                payload["type"] = "task_observation"
+                payload["task_event_type"] = event_type
+                payload["request_id"] = request_id
+                payload["timestamp"] = time.time()
+                self._push_sse_event(request_id, payload)
 
             elif event_type == "tool_execution_start":
                 flush_stream_pending()
@@ -6353,30 +6991,26 @@ class WebChannel(ChatChannel):
                         ensure_ascii=False,
                     )
             except SessionBusyError:
-                try:
-                    interrupt_result = self._interrupt_and_wait_for_session_lock(
-                        session_id,
-                        lang=lang,
-                        replacement_ticket=same_session_ticket,
-                    )
-                    if isinstance(interrupt_result, dict):
-                        session_lock = interrupt_result.get("lock")
-                        same_session_decision = interrupt_result.get("same_session") or same_session_decision
-                    else:
-                        session_lock = interrupt_result
-                    if same_session_decision.get("decision") == "replacement_accepted":
-                        replacement_request_ids = list(same_session_decision.get("replaced_request_ids") or [])
-                except SessionBusyError as e:
-                    logger.warning(f"[WebChannel] session conflict remains retryable: session={session_id}")
-                    reason = (
-                        "same_session_replacement_superseded"
-                        if "same_session_replacement_superseded" in str(e)
-                        else "session_lock_unavailable"
-                    )
-                    return json.dumps(
-                        self._session_conflict_retry_payload(session_id, reason=reason),
-                        ensure_ascii=False,
-                    )
+                active_request_ids = self._active_request_ids_for_session(session_id)
+                result = self._accept_queued_message(
+                    session_id,
+                    visible_prompt=visible_prompt,
+                    visible_message=visible_message,
+                    prompt=prompt,
+                    hidden_context=hidden_context,
+                    project_context_meta=project_context_meta,
+                    internal_action=internal_action,
+                    use_sse=use_sse,
+                    attachments=attachments,
+                    client_attempt_id=client_attempt_id,
+                    interrupts_request_id=interrupts_request_id,
+                    retry_of_request_id=retry_of_request_id,
+                    lang=lang,
+                    is_voice_input=is_voice_input,
+                    queued_after_request_ids=active_request_ids,
+                    reason="session_lock_busy",
+                )
+                return json.dumps(result, ensure_ascii=False)
 
             same_session_snapshot = self._backpressure_snapshot(
                 session_id,
@@ -6385,7 +7019,7 @@ class WebChannel(ChatChannel):
             residual_same_session_active_ids = list(same_session_snapshot.get("active_request_ids") or [])
             if residual_same_session_active_ids:
                 logger.warning(
-                    f"[WebChannel] same-session active request remains without replacement admission: "
+                    f"[WebChannel] same-session active request remains; queueing new message: "
                     f"session={session_id}, active={residual_same_session_active_ids}, "
                     f"decision={same_session_decision.get('decision')}"
                 )
@@ -6395,21 +7029,25 @@ class WebChannel(ChatChannel):
                     except Exception as e:
                         logger.debug(f"[WebChannel] conflict session lock release skipped: {_web_body_log_summary(e)}")
                     session_lock = None
-                session_limit = int(same_session_snapshot.get("session_active_limit") or 0)
-                session_active = int(same_session_snapshot.get("session_active") or 0)
-                if session_limit and session_active >= session_limit:
-                    return json.dumps(
-                        self._backpressure_payload("session", same_session_snapshot),
-                        ensure_ascii=False,
-                    )
-                return json.dumps(
-                    self._session_conflict_retry_payload(
-                        session_id,
-                        reason="same_session_active_request",
-                        active_request_ids=residual_same_session_active_ids,
-                    ),
-                    ensure_ascii=False,
+                result = self._accept_queued_message(
+                    session_id,
+                    visible_prompt=visible_prompt,
+                    visible_message=visible_message,
+                    prompt=prompt,
+                    hidden_context=hidden_context,
+                    project_context_meta=project_context_meta,
+                    internal_action=internal_action,
+                    use_sse=use_sse,
+                    attachments=attachments,
+                    client_attempt_id=client_attempt_id,
+                    interrupts_request_id=interrupts_request_id,
+                    retry_of_request_id=retry_of_request_id,
+                    lang=lang,
+                    is_voice_input=is_voice_input,
+                    queued_after_request_ids=residual_same_session_active_ids,
+                    reason="same_session_active_request",
                 )
+                return json.dumps(result, ensure_ascii=False)
 
             # Append file references to the prompt (same format as QQ channel)
             if attachments:
@@ -6627,7 +7265,11 @@ class WebChannel(ChatChannel):
             return json.dumps({"status": "error", "message": public_message, **public_extra})
 
     def _produce_with_session_lock(self, context: Context, session_lock):
+        session_id = ""
+        request_id = ""
         try:
+            session_id = str(context.get("session_id") or "") if context else ""
+            request_id = str(context.get("request_id") or "") if context else ""
             self.produce(context)
         except Exception as e:
             logger.error(f"[WebChannel] produce failed before worker start: {_web_body_log_summary(e)}")
@@ -6637,6 +7279,8 @@ class WebChannel(ChatChannel):
                     session_lock.release()
             except Exception as e:
                 logger.debug(f"[WebChannel] session lock release skipped: {_web_body_log_summary(e)}")
+            if session_id:
+                self._start_next_queued_request(session_id, completed_request_id=request_id)
 
     def stream_response(self, request_id: str, session_id: str = ""):
         """
@@ -6836,6 +7480,21 @@ class WebChannel(ChatChannel):
             lang = (json_data.get("lang") or "zh").lower()
             if request_id and not session_id:
                 session_id = self.request_to_session.get(request_id, "")
+            if request_id:
+                queued_payload = self.queued_request_payloads.get(request_id)
+                queued_row = None
+                if not queued_payload:
+                    try:
+                        from agent.protocol import get_run_ledger
+
+                        queued_row = get_run_ledger().get_run(request_id)
+                    except Exception:
+                        queued_row = None
+                if queued_payload or str((queued_row or {}).get("status") or (queued_row or {}).get("phase") or "").lower() == "queued":
+                    return json.dumps(
+                        self._cancel_queued_request(request_id, expected_session_id=session_id),
+                        ensure_ascii=False,
+                    )
             active_request_ids = self._active_request_ids_for_session(session_id) if session_id else []
 
             registry = get_cancel_registry()
@@ -7370,6 +8029,13 @@ class CancelHandler:
     def POST(self):
         _require_auth()
         return WebChannel().cancel_request()
+
+
+class RequestQueueActionHandler:
+    def POST(self, request_id: str):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        return json.dumps(WebChannel().queue_action_request(request_id), ensure_ascii=False)
 
 
 def _runtime_projection_public_payload(value: Any, *, include_events: bool = False, _depth: int = 0) -> Any:
@@ -8012,16 +8678,15 @@ class UpdateCheckHandler:
             version_compare = self._compare_versions(latest_version, __version__) if latest_version else 0
             installed_artifact = self._installed_artifact_metadata(platform, artifact)
             artifact_changed = bool(artifact and version_compare == 0 and self._artifact_changed(artifact, installed_artifact))
-            notice_active = bool(latest_version and notice_revision)
-            has_update = bool(latest_version and (version_compare > 0 or artifact_changed or notice_active))
-            download_url = self._absolute_download_url(artifact.get("href") if artifact else "")
-            update_reason = "version" if version_compare > 0 else ("artifact" if artifact_changed else ("notice" if notice_active else ""))
-            if notice_active and update_reason == "notice":
-                message = notice.get("message") or f"EcoreX {latest_version} 已发布，请刷新当前页面或前往下载页安装"
-            elif has_update and update_reason == "artifact":
-                message = f"发现 {latest_version} 同版本更新，请前往下载页安装"
+            notice_active = bool(latest_version and notice_revision and version_compare > 0)
+            has_update = bool(latest_version and (version_compare > 0 or artifact_changed))
+            artifact_download_url = self._absolute_download_url(artifact.get("href") if artifact else "")
+            release_page_url = self._release_page_url()
+            update_reason = "version" if version_compare > 0 else ("artifact" if artifact_changed else "")
+            if has_update and update_reason == "artifact":
+                message = f"发现 {latest_version} 同版本更新，本机更新器可在空闲时检查并安装"
             else:
-                message = f"发现新版本 {latest_version}，请前往下载页安装" if has_update else "当前已经是最新版本"
+                message = f"发现新版本 {latest_version}，本机更新器可在空闲时检查并安装" if has_update else "当前已经是最新版本"
             return json.dumps({
                 "status": "success",
                 "platform": platform,
@@ -8033,7 +8698,9 @@ class UpdateCheckHandler:
                 "noticeRevision": notice_revision,
                 "notice": notice,
                 "message": message,
-                "downloadUrl": download_url,
+                "downloadUrl": release_page_url,
+                "releasePageUrl": release_page_url,
+                "artifactDownloadUrl": artifact_download_url,
                 "artifact": artifact,
                 "installedArtifact": installed_artifact,
                 "recommendedDownloads": manifest.get("recommendedDownloads", {}),
@@ -8197,6 +8864,23 @@ class UpdateCheckHandler:
             return href
         return "https://mvdcm.ecoremedia.net/ecorex-agent/" + href.lstrip("./")
 
+    def _release_page_url(self) -> str:
+        configured = (
+            os.environ.get("ECOREX_RELEASE_MANIFEST_URL")
+            or conf().get("release_manifest_url")
+            or self.DEFAULT_MANIFEST_URL
+        )
+        manifest_url = str(configured or "").strip()
+        if not manifest_url:
+            return "https://mvdcm.ecoremedia.net/ecorex-agent/"
+        if manifest_url.endswith("/manifest.json"):
+            return manifest_url[: -len("manifest.json")]
+        if manifest_url.endswith("manifest.json"):
+            return manifest_url[: -len("manifest.json")]
+        if manifest_url.endswith("/"):
+            return manifest_url
+        return manifest_url.rsplit("/", 1)[0] + "/"
+
     def _compare_versions(self, left: str, right: str) -> int:
         def parts(value: str) -> List[int]:
             return [int(part) if part.isdigit() else 0 for part in str(value or "0").replace("-", ".").split(".")]
@@ -8280,6 +8964,340 @@ class OpenPathHandler:
         else:
             command = ["open", path_value] if sys.platform == "darwin" else ["xdg-open", path_value]
         subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _artifact_feedback_text(value: Any, limit: int = 240) -> str:
+    return str(value or "").strip()[:limit]
+
+
+def _artifact_feedback_digest(value: Any, length: int = 40) -> str:
+    text = str(value or "")
+    return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:length] if text else ""
+
+
+def _artifact_feedback_source(artifact: Dict[str, Any]) -> str:
+    for key in (
+        "path",
+        "filePath",
+        "file_path",
+        "relativePath",
+        "relative_path",
+        "previewUrl",
+        "preview_url",
+        "statusPath",
+        "status_path",
+        "thumbnailUrl",
+        "thumbnail_url",
+        "url",
+    ):
+        value = _artifact_feedback_text(artifact.get(key), 4096)
+        if value:
+            return value
+    return ""
+
+
+def _artifact_feedback_ext(source: str, title: str = "") -> str:
+    candidate = str(source or title or "").split("?", 1)[0].split("#", 1)[0].replace("\\", "/")
+    match = re.search(r"(\.[A-Za-z0-9]{1,12})$", candidate)
+    return match.group(1).lower() if match else ""
+
+
+def _artifact_feedback_title(artifact: Dict[str, Any], source: str) -> str:
+    explicit = artifact.get("title") or artifact.get("name") or artifact.get("fileName") or artifact.get("file_name")
+    if explicit:
+        return _artifact_feedback_text(explicit, 240)
+    clean = str(source or "").split("?", 1)[0].split("#", 1)[0].replace("\\", "/")
+    return _artifact_feedback_text(clean.rsplit("/", 1)[-1] or "artifact", 240)
+
+
+def _artifact_feedback_phase1_key(parts: List[Any]) -> str:
+    return "phase1:" + _artifact_feedback_digest("|".join(str(part or "") for part in parts), 40)
+
+
+def _artifact_feedback_safe_id(artifact: Dict[str, Any], title: str, source: str, request_id: str) -> str:
+    explicit = _artifact_feedback_text(
+        artifact.get("safeArtifactId")
+        or artifact.get("safe_artifact_id")
+        or artifact.get("artifactId")
+        or artifact.get("artifact_id"),
+        180,
+    )
+    if explicit:
+        return explicit
+    raw_identity = "|".join(
+        item
+        for item in (
+            _artifact_feedback_text(artifact.get("id"), 4096),
+            title,
+            source,
+            request_id,
+        )
+        if item
+    )
+    return "artifact:" + _artifact_feedback_digest(raw_identity or title or request_id or "artifact", 40)
+
+
+class ArtifactFeedbackHandler:
+    def POST(self):
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            raw = web.data() or b"{}"
+            if len(raw) > 128 * 1024:
+                return json.dumps({"status": "error", "message": "payload too large"}, ensure_ascii=False)
+            payload = json.loads(raw)
+            artifact = payload.get("artifact") if isinstance(payload.get("artifact"), dict) else {}
+            source = _artifact_feedback_source(artifact)
+            session_id = _artifact_feedback_text(
+                payload.get("sessionId")
+                or payload.get("session_id")
+                or artifact.get("sessionId")
+                or artifact.get("session_id"),
+                180,
+            )
+            request_id = _artifact_feedback_text(
+                payload.get("requestId")
+                or payload.get("request_id")
+                or artifact.get("requestId")
+                or artifact.get("request_id"),
+                180,
+            )
+            title = _artifact_feedback_title(artifact, source)
+            signal = _artifact_feedback_text(
+                payload.get("signal")
+                or artifact.get("artifactFeedbackSignal")
+                or artifact.get("artifact_feedback_signal")
+                or "",
+                40,
+            ).lower()
+            if signal not in {"thumbs_up", "thumbs_down"}:
+                signal = "thumbs_down" if _artifact_feedback_text(payload.get("validity")).lower() == "invalid" else "thumbs_up"
+            validity = "invalid" if signal == "thumbs_down" else "valid"
+            safe_artifact_id = _artifact_feedback_safe_id(artifact, title, source, request_id)
+            path_hash = _artifact_feedback_text(
+                artifact.get("pathHash")
+                or artifact.get("path_hash")
+                or (_artifact_feedback_digest(source, 64) if source else ""),
+                80,
+            )
+            created_at = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+            artifact_payload = {
+                "idempotencyKey": _artifact_feedback_phase1_key(["artifact", session_id, request_id, safe_artifact_id]),
+                "safeArtifactId": safe_artifact_id,
+                "sessionId": session_id,
+                "requestId": request_id,
+                "kind": _artifact_feedback_text(artifact.get("kind") or artifact.get("type") or "file", 40),
+                "intent": _artifact_feedback_text(artifact.get("intent") or "deliverable", 60),
+                "operation": _artifact_feedback_text(artifact.get("operation") or "created", 60),
+                "status": _artifact_feedback_text(artifact.get("status") or "ready", 60),
+                "title": title,
+                "pathHash": path_hash,
+                "pathExt": _artifact_feedback_text(artifact.get("pathExt") or artifact.get("path_ext") or _artifact_feedback_ext(source, title), 32),
+                "mimeType": _artifact_feedback_text(artifact.get("mimeType") or artifact.get("mime_type"), 120),
+                "sizeBytes": max(0, int(artifact.get("sizeBytes") or artifact.get("size_bytes") or 0)),
+                "artifactValidity": validity,
+                "artifactFeedbackSignal": signal,
+                "artifactFeedbackAt": created_at,
+                "feedbackSource": "web_user_artifact_feedback",
+                "createdAt": created_at,
+            }
+            event_payload = {
+                "idempotencyKey": _artifact_feedback_phase1_key(["event", session_id, request_id, "artifact.feedback", safe_artifact_id, signal]),
+                "eventType": "artifact.feedback",
+                "status": validity,
+                "source": "WebUI",
+                "sessionId": session_id,
+                "requestId": request_id,
+                "detail": {
+                    "artifact_hash": _artifact_feedback_digest(safe_artifact_id, 16),
+                    "artifact_validity": validity,
+                    "artifact_feedback_signal": signal,
+                },
+                "createdAt": created_at,
+            }
+
+            token = _enterprise_user_token_from_request()
+            if not token:
+                return json.dumps({"status": "success", "synced": False, "reason": "enterprise_login_required"}, ensure_ascii=False)
+
+            device_id = _request_header("X-EcoreX-Device-Id").strip()
+            sync_body = json.dumps({
+                "type": "phase1_sync",
+                "source": "WebUI",
+                "sessionId": session_id,
+                "requestId": request_id,
+                "events": [event_payload],
+                "artifacts": [artifact_payload],
+            }).encode("utf-8")
+            last_error = ""
+            for client_key in _enterprise_client_keys_for_request():
+                request = urllib.request.Request(
+                    f"{_web_enterprise_client_base()}/sync/events",
+                    data=sync_body,
+                    headers={
+                        "Accept": "application/json",
+                        "Content-Type": "application/json",
+                        "X-EcoreX-Client-Key": client_key,
+                        "X-EcoreX-User-Token": token,
+                        "Authorization": f"Bearer {token}",
+                        "X-EcoreX-Device-Id": device_id,
+                        "User-Agent": "EcoreX-WebArtifactFeedback/0.2.7.2",
+                    },
+                    method="POST",
+                )
+                try:
+                    with urllib.request.urlopen(request, timeout=8) as response:
+                        admin_payload = json.loads(response.read(512_000).decode("utf-8", errors="replace") or "{}")
+                    return json.dumps({
+                        "status": "success",
+                        "synced": True,
+                        "admin": {
+                            "eventsAccepted": admin_payload.get("eventsAccepted", 0),
+                            "artifactsAccepted": admin_payload.get("artifactsAccepted", 0),
+                        },
+                    }, ensure_ascii=False)
+                except urllib.error.HTTPError as exc:
+                    body = exc.read(512).decode("utf-8", errors="replace")
+                    last_error = f"HTTP {exc.code}: {body[:160]}"
+                    if exc.code in (401, 403):
+                        continue
+                    break
+            return json.dumps({"status": "error", "message": "artifact feedback sync failed", "detail": last_error}, ensure_ascii=False)
+        except Exception as exc:
+            logger.warning(f"[WebChannel] artifact feedback sync failed: {_web_body_log_summary(exc)}")
+            return json.dumps(_public_error_payload("Artifact feedback sync failed.", exc), ensure_ascii=False)
+
+
+def _session_share_redact_text(value: Any, limit: int = 8000) -> str:
+    text = mask_sensitive_text(str(value or ""), max_chars=limit)
+    text = re.sub(r"\b[A-Za-z]:[\\/][^\s<>'\"]+", "[local-path]", text)
+    text = re.sub(r"(?<!\w)/(?:Users|Volumes|home|tmp|var|mnt|opt|srv|Applications)/[^\s<>'\"]+", "[local-path]", text)
+    text = re.sub(r"file://[^\s<>'\"]+", "[local-file-url]", text, flags=re.IGNORECASE)
+    return text[:limit]
+
+
+def _session_share_artifact_payload(artifact: Dict[str, Any]) -> Dict[str, Any]:
+    signal = _artifact_feedback_text(
+        artifact.get("artifactFeedbackSignal")
+        or artifact.get("artifact_feedback_signal")
+        or "default",
+        40,
+    ).lower()
+    validity = _artifact_feedback_text(
+        artifact.get("artifactValidity")
+        or artifact.get("artifact_validity")
+        or ("invalid" if signal == "thumbs_down" else "valid"),
+        40,
+    ).lower()
+    title = _session_share_redact_text(
+        artifact.get("title")
+        or artifact.get("fileName")
+        or artifact.get("file_name")
+        or artifact.get("name")
+        or "artifact",
+        240,
+    )
+    return {
+        "title": title,
+        "kind": _artifact_feedback_text(artifact.get("kind") or artifact.get("type") or "file", 40),
+        "status": _artifact_feedback_text(artifact.get("status") or "ready", 40),
+        "artifactValidity": "invalid" if validity == "invalid" or signal == "thumbs_down" else "valid",
+        "artifactFeedbackSignal": signal if signal in {"default", "thumbs_up", "thumbs_down"} else "default",
+    }
+
+
+def _session_share_message_payload(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    role = _artifact_feedback_text(item.get("role") or "", 20).lower()
+    if role not in {"user", "assistant"}:
+        return None
+    content = _session_share_redact_text(item.get("content") or item.get("text") or "", 8000)
+    artifacts = item.get("artifacts") if isinstance(item.get("artifacts"), list) else []
+    safe_artifacts = [
+        _session_share_artifact_payload(artifact)
+        for artifact in artifacts[:24]
+        if isinstance(artifact, dict)
+    ]
+    if not content and not safe_artifacts:
+        return None
+    return {
+        "role": role,
+        "content": content,
+        "createdAt": _artifact_feedback_text(item.get("createdAt") or item.get("created_at"), 80),
+        "artifacts": safe_artifacts,
+    }
+
+
+class SessionShareHandler:
+    def POST(self, session_id: str):
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            raw = web.data() or b"{}"
+            if len(raw) > 2 * 1024 * 1024:
+                return json.dumps({"status": "error", "message": "payload too large"}, ensure_ascii=False)
+            body = json.loads(raw)
+            title = _session_share_redact_text(body.get("title") or "EcoreX shared session", 160)
+            raw_messages = body.get("messages") if isinstance(body.get("messages"), list) else []
+            if not raw_messages:
+                from agent.memory import get_conversation_store
+
+                page = get_conversation_store().load_history_page(session_id=session_id, page=1, page_size=120)
+                raw_messages = page.get("messages") if isinstance(page, dict) else []
+            messages = [
+                message
+                for message in (_session_share_message_payload(item) for item in raw_messages[:200] if isinstance(item, dict))
+                if message
+            ]
+            if not messages:
+                return json.dumps({"status": "error", "message": "当前会话没有可分享内容"}, ensure_ascii=False)
+
+            token = _enterprise_user_token_from_request()
+            if not token:
+                return json.dumps({"status": "error", "message": "请先登录企业账号后再分享会话"}, ensure_ascii=False)
+            device_id = _request_header("X-EcoreX-Device-Id").strip()
+            share_body = json.dumps({
+                "title": title,
+                "sessionId": _artifact_feedback_text(session_id, 180),
+                "messages": messages,
+                "privacy": {
+                    "redacted": True,
+                    "includesLocalPaths": False,
+                    "includesArtifactFiles": False,
+                },
+            }).encode("utf-8")
+            last_error = ""
+            for client_key in _enterprise_client_keys_for_request():
+                request = urllib.request.Request(
+                    f"{_web_enterprise_client_base()}/session-shares",
+                    data=share_body,
+                    headers={
+                        "Accept": "application/json",
+                        "Content-Type": "application/json",
+                        "X-EcoreX-Client-Key": client_key,
+                        "X-EcoreX-User-Token": token,
+                        "Authorization": f"Bearer {token}",
+                        "X-EcoreX-Device-Id": device_id,
+                        "User-Agent": "EcoreX-WebSessionShare/0.2.7.2",
+                    },
+                    method="POST",
+                )
+                try:
+                    with urllib.request.urlopen(request, timeout=12) as response:
+                        result = json.loads(response.read(512_000).decode("utf-8", errors="replace") or "{}")
+                    return json.dumps({
+                        "status": "success",
+                        "shareId": result.get("shareId", ""),
+                        "shareUrl": result.get("shareUrl", ""),
+                        "messageCount": result.get("messageCount", len(messages)),
+                    }, ensure_ascii=False)
+                except urllib.error.HTTPError as exc:
+                    body_text = exc.read(512).decode("utf-8", errors="replace")
+                    last_error = f"HTTP {exc.code}: {body_text[:160]}"
+                    if exc.code in (401, 403):
+                        continue
+                    break
+            return json.dumps({"status": "error", "message": "创建分享链接失败", "detail": last_error}, ensure_ascii=False)
+        except Exception as exc:
+            logger.warning(f"[WebChannel] session share failed: {_web_body_log_summary(exc)}")
+            return json.dumps(_public_error_payload("Session share failed.", exc), ensure_ascii=False)
 
 
 def _stable_project_id(path_value: str) -> str:
@@ -8999,6 +10017,16 @@ class ConfigHandler:
     }
 
     @staticmethod
+    def _config_path() -> str:
+        configured = os.environ.get("ECOREX_CONFIG_PATH", "").strip()
+        if configured:
+            return os.path.abspath(os.path.expanduser(configured))
+        return os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "config.json",
+        )
+
+    @staticmethod
     def _mask_key(value: str) -> str:
         """Mask the middle part of an API key for display."""
         if not value or len(value) <= 8:
@@ -9092,8 +10120,7 @@ class ConfigHandler:
             if not applied:
                 return json.dumps({"status": "error", "message": "no valid keys to update"})
 
-            config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-                os.path.abspath(__file__)))), "config.json")
+            config_path = self._config_path()
             if os.path.exists(config_path):
                 with open(config_path, "r", encoding="utf-8") as f:
                     file_cfg = json.load(f)
@@ -9518,10 +10545,7 @@ class ModelsHandler:
 
     @staticmethod
     def _config_path() -> str:
-        return os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-            "config.json",
-        )
+        return ConfigHandler._config_path()
 
     @classmethod
     def _read_file_config(cls) -> dict:
@@ -9622,30 +10646,38 @@ class ModelsHandler:
 
     @classmethod
     def _is_legacy_custom_gemini_config(cls, local_config: dict, model: str = "") -> bool:
-        from models.model_capabilities import is_custom_gemini_transport
+        from models.model_capabilities import should_route_custom_gemini_as_rest
 
-        return is_custom_gemini_transport(
+        return should_route_custom_gemini_as_rest(
             model or (local_config or {}).get("model") or "",
-            configured_bot_type=const.GEMINI,
+            configured_bot_type=(local_config or {}).get("bot_type") or "",
             gemini_api_base=(local_config or {}).get("gemini_api_base") or "",
-            has_gemini_key=cls._is_real_key((local_config or {}).get("gemini_api_key", "")),
+            gemini_api_key=(local_config or {}).get("gemini_api_key") or "",
+            custom_api_base=(local_config or {}).get("custom_api_base") or "",
+            custom_api_key=(local_config or {}).get("custom_api_key") or "",
         )
 
     @classmethod
-    def _has_legacy_custom_gemini_transport(cls, local_config: dict) -> bool:
-        from models.model_capabilities import is_custom_gemini_transport
+    def _has_custom_gemini_rest_endpoint(cls, local_config: dict) -> bool:
+        from models.model_capabilities import is_official_gemini_api_base
 
-        return is_custom_gemini_transport(
-            const.GEMINI_31_PRO_PRE,
-            configured_bot_type=const.GEMINI,
-            gemini_api_base=(local_config or {}).get("gemini_api_base") or "",
-            has_gemini_key=cls._is_real_key((local_config or {}).get("gemini_api_key", "")),
+        return bool(
+            cls._is_real_key((local_config or {}).get("gemini_api_key", ""))
+            and (local_config or {}).get("gemini_api_base")
+            and not is_official_gemini_api_base((local_config or {}).get("gemini_api_base") or "")
         )
 
     @classmethod
-    def _chat_route_metadata(cls, provider_id: str, model: str) -> dict:
+    def _chat_route_metadata(cls, provider_id: str, model: str, local_config: Optional[dict] = None) -> dict:
+        from models.model_capabilities import is_official_gemini_api_base
+
         alias_family = cls._model_alias_family(model)
-        official_gemini = bool(provider_id == const.GEMINI and alias_family == "gemini")
+        gemini_rest_route = bool(provider_id == const.GEMINI and alias_family == "gemini")
+        official_gemini = bool(
+            gemini_rest_route
+            and is_official_gemini_api_base((local_config or {}).get("gemini_api_base") or "")
+        )
+        custom_gemini_endpoint = bool(gemini_rest_route and not official_gemini)
         return {
             "modelAliasFamily": alias_family,
             "model_alias_family": alias_family,
@@ -9655,6 +10687,10 @@ class ModelsHandler:
             "is_official_gemini_provider": official_gemini,
             "officialGeminiApiUsed": official_gemini,
             "official_gemini_api_used": official_gemini,
+            "isCustomGeminiEndpoint": custom_gemini_endpoint,
+            "is_custom_gemini_endpoint": custom_gemini_endpoint,
+            "geminiEndpointFamily": "custom-rest" if custom_gemini_endpoint else ("google-official" if gemini_rest_route else ""),
+            "gemini_endpoint_family": "custom-rest" if custom_gemini_endpoint else ("google-official" if gemini_rest_route else ""),
         }
 
     @staticmethod
@@ -9686,18 +10722,16 @@ class ModelsHandler:
     def _chat_model_options(cls, local_config: dict, current_provider: str, current_model: str) -> List[dict]:
         options = []
         seen = set()
-        has_legacy_custom_gemini = cls._has_legacy_custom_gemini_transport(local_config)
+        has_custom_gemini_rest = cls._has_custom_gemini_rest_endpoint(local_config)
         for provider_id, provider in ConfigHandler.PROVIDER_MODELS.items():
             key_field = provider.get("api_key_field")
             configured = cls._is_real_key(local_config.get(key_field, "")) if key_field else False
-            if provider_id == const.GEMINI and has_legacy_custom_gemini:
-                configured = False
-            if provider_id == const.CUSTOM and not configured and has_legacy_custom_gemini:
-                configured = True
             preserve_unconfigured = provider_id == "openai" or provider_id == current_provider
             if not configured and not preserve_unconfigured:
                 continue
             provider_label = cls._provider_label_text(provider.get("label")) or provider_id
+            if provider_id == const.GEMINI and has_custom_gemini_rest:
+                provider_label = "自定义 Gemini"
             entries = list(provider.get("models") or [])
             selected_entry = entries[0] if entries else current_model
             selected_index = 0
@@ -9723,6 +10757,8 @@ class ModelsHandler:
                     hint = "needs credentials"
                 elif provider_id == current_provider and model == current_model:
                     hint = "current"
+                elif provider_id == const.GEMINI and has_custom_gemini_rest:
+                    hint = "Gemini REST endpoint"
                 else:
                     hint = "top-tier"
             options.append({
@@ -9734,19 +10770,16 @@ class ModelsHandler:
                 "configured": configured,
                 "current": provider_id == current_provider and model == current_model,
                 "contextPolicy": cls._chat_context_policy(model, provider_id),
-                **cls._chat_route_metadata(provider_id, model),
+                **cls._chat_route_metadata(provider_id, model, local_config),
             })
 
         custom_provider = ConfigHandler.PROVIDER_MODELS.get(const.CUSTOM) or {}
         custom_key_field = custom_provider.get("api_key_field")
         custom_configured = cls._is_real_key(local_config.get(custom_key_field, "")) if custom_key_field else False
         custom_model = str(current_model or "").strip()
-        if has_legacy_custom_gemini and cls._model_alias_family(custom_model) != "gemini":
-            custom_model = const.GEMINI_31_PRO_PRE
-        legacy_custom_gemini = has_legacy_custom_gemini and cls._model_alias_family(custom_model) == "gemini"
         if (
             custom_model
-            and (custom_configured or legacy_custom_gemini)
+            and custom_configured
             and cls._model_alias_family(custom_model) == "gemini"
             and (const.CUSTOM, custom_model) not in seen
         ):
@@ -9760,7 +10793,7 @@ class ModelsHandler:
                 "configured": True,
                 "current": current_provider == const.CUSTOM and custom_model == current_model,
                 "contextPolicy": cls._chat_context_policy(custom_model, const.CUSTOM),
-                **cls._chat_route_metadata(const.CUSTOM, custom_model),
+                **cls._chat_route_metadata(const.CUSTOM, custom_model, local_config),
             })
 
         if current_model and (current_provider, current_model) not in seen:
@@ -9777,7 +10810,7 @@ class ModelsHandler:
                 "configured": configured,
                 "current": True,
                 "contextPolicy": cls._chat_context_policy(current_model, current_provider),
-                **cls._chat_route_metadata(current_provider, current_model),
+                **cls._chat_route_metadata(current_provider, current_model, local_config),
             })
         provider_order = {provider_id: index for index, provider_id in enumerate(ConfigHandler.PROVIDER_MODELS.keys())}
         options.sort(key=lambda option: (
@@ -9792,7 +10825,7 @@ class ModelsHandler:
     def _chat_route_provider(cls, local_config: dict, capability_provider: str) -> str:
         bot_type = str((local_config or {}).get("bot_type") or "").strip()
         if cls._is_legacy_custom_gemini_config(local_config):
-            return const.CUSTOM
+            return const.GEMINI
         if bot_type:
             if bot_type == const.OPENAI:
                 return "openai"
@@ -9859,8 +10892,6 @@ class ModelsHandler:
             provider = ConfigHandler.PROVIDER_MODELS.get(provider_id) or {}
             key_field = provider.get("api_key_field")
             if key_field and cls._is_real_key((local_config or {}).get(key_field, "")):
-                return True, ""
-            if cls._model_alias_family(model) == "gemini" and cls._has_legacy_custom_gemini_transport(local_config):
                 return True, ""
             return False, "model provider credentials are required"
         return False, "model is not available in configured model options"
@@ -10468,10 +11499,6 @@ class ModelsHandler:
                 "code": "CHAT_MODEL_NOT_CONFIGURED",
             })
 
-        legacy_custom_gemini = (
-            provider_id == const.CUSTOM
-            and self._is_legacy_custom_gemini_config(local_config, model or local_config.get("model", ""))
-        )
         if provider_id:
             bot_type_value = const.OPENAI if provider_id == "openai" else provider_id
             local_config["bot_type"] = bot_type_value
@@ -10481,23 +11508,6 @@ class ModelsHandler:
             local_config["use_linkai"] = use_linkai
             file_cfg["use_linkai"] = use_linkai
             applied["use_linkai"] = use_linkai
-            if legacy_custom_gemini:
-                from models.model_capabilities import normalize_openai_compatible_api_base
-
-                migrated = False
-                for source_key, target_key in (
-                    ("gemini_api_key", "custom_api_key"),
-                    ("gemini_api_base", "custom_api_base"),
-                ):
-                    if not self._is_real_key(local_config.get(target_key, "")) and local_config.get(source_key):
-                        source_value = local_config.get(source_key, "")
-                        if source_key == "gemini_api_base":
-                            source_value = normalize_openai_compatible_api_base(source_value)
-                        local_config[target_key] = source_value
-                        file_cfg[target_key] = source_value
-                        migrated = True
-                if migrated:
-                    applied["custom_transport_migrated"] = True
         if model:
             local_config["model"] = model
             file_cfg["model"] = model
@@ -10552,7 +11562,7 @@ class ModelsHandler:
             "context_policy": context_policy,
             "contextContinuity": context_continuity,
             "context_continuity": context_continuity,
-            **self._chat_route_metadata(effective_provider, local_config.get("model", "")),
+            **self._chat_route_metadata(effective_provider, local_config.get("model", ""), local_config),
             "applied": applied,
         })
 
@@ -10788,8 +11798,7 @@ class ChannelsHandler:
 
     @staticmethod
     def _config_path() -> str:
-        return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__)))), "config.json")
+        return ConfigHandler._config_path()
 
     @classmethod
     def _read_file_config(cls) -> Dict[str, Any]:
@@ -13058,6 +14067,7 @@ _DIAGNOSTIC_TERMINAL_STATUSES = {
 _DIAGNOSTIC_EVENT_TYPES = {
     "approval.requested",
     "artifact.created",
+    "artifact.feedback",
     "artifact.limit",
     "artifact.updated",
     "assistant.delta",
@@ -13079,9 +14089,18 @@ _DIAGNOSTIC_EVENT_TYPES = {
     "run.completed",
     "run.failed",
     "run.interrupted",
+    "run.paused",
     "run.phase",
+    "run.queued",
     "run.started",
     "stream.replay_gap",
+    "task.cancelled",
+    "task.completed",
+    "task.failed",
+    "task.health_changed",
+    "task.heartbeat",
+    "task.intervention_requested",
+    "task.started",
     "subagent.cancelled",
     "subagent.completed",
     "subagent.failed",
@@ -13187,7 +14206,7 @@ def _diagnostic_event_payload_summary(event_type: str, payload: Any) -> Dict[str
             "parallelismPolicyVersion": "v1" if raw_policy_version == "v1" else "",
             "parallelismPolicyVersionHash": _diagnostic_hash(raw_policy_version) if raw_policy_version and raw_policy_version != "v1" else "",
         })
-    elif event_type in {"run.started", "run.completed", "run.failed", "run.cancelled", "message.assistant.finalized"}:
+    elif event_type in {"run.queued", "run.started", "run.completed", "run.failed", "run.cancelled", "message.assistant.finalized"}:
         raw_status = payload.get("status") or payload.get("terminal_reason")
         raw_error_type = payload.get("error_type") or payload.get("errorType")
         result.update({
@@ -13527,7 +14546,7 @@ def _normalize_release_notice_payload(value: Any, fallback_version: str = "") ->
     version = str(raw.get("version") or fallback_version or "").strip()[:40]
     message = str(
         raw.get("message")
-        or (f"EcoreX {version} 已发布，请刷新当前页面或前往下载页安装。" if version else "")
+        or (f"EcoreX {version} 已发布，已安装用户可在本机检查更新。" if version else "")
     ).strip()[:240]
     return {
         "revision": revision[:120],
@@ -13544,20 +14563,36 @@ def _release_notice_update_state_payload(notice: Dict[str, Any], source: str = "
     if not notice:
         return {}
     version = notice.get("version") or ""
+    current_version = ""
+    try:
+        from cli import __version__
+        current_version = str(__version__ or "")
+    except Exception:
+        current_version = ""
+    same_or_older = bool(
+        version
+        and current_version
+        and UpdateCheckHandler()._compare_versions(version, current_version) <= 0
+    )
+    message = notice.get("message") or (
+        f"EcoreX {version} 已是当前 stable，无需重复下载。"
+        if same_or_older
+        else f"EcoreX {version} 已发布，本机更新器可在空闲时检查并安装。"
+    )
     return {
         "stateAvailable": True,
         "source": source,
         "product": "EcoreX WebUI",
         "version": version,
-        "mode": "background",
-        "status": "installed",
+        "mode": "manual",
+        "status": "ready",
         "reason": notice.get("reason") or "admin-release-notify",
-        "message": notice.get("message") or f"EcoreX {version} 已发布，请刷新当前页面或前往下载页安装。",
-        "browserAction": "defer-to-existing-tab-soft-refresh",
-        "activationPolicy": "prompt-soft-refresh-existing-tab",
-        "healthCheck": {"endpoint": "/api/version", "status": "pass", "passed": True},
+        "message": message,
+        "browserAction": "none",
+        "activationPolicy": "manual-update-check",
+        "healthCheck": {"endpoint": "/api/version", "status": "pending", "passed": False},
         "generatedAt": notice.get("publishedAt") or datetime.datetime.now(datetime.timezone.utc).astimezone().isoformat(timespec="seconds"),
-        "refreshRequired": True,
+        "refreshRequired": False,
         "noticeRevision": notice.get("revision"),
         "redacted": True,
     }
@@ -13579,7 +14614,7 @@ def _enterprise_release_notice_payload() -> Dict[str, Any]:
                     headers={
                         "Accept": "application/json",
                         "X-EcoreX-Client-Key": client_key,
-                        "User-Agent": "EcoreX-WebReleaseNotice/0.2.7.1",
+                        "User-Agent": "EcoreX-WebReleaseNotice/0.2.7.2",
                     },
                     method="GET",
                 )
@@ -13776,7 +14811,17 @@ def _local_runtime_update_state_payload() -> Dict[str, Any]:
 
 def _runtime_update_state_payload() -> Dict[str, Any]:
     local_payload = _local_runtime_update_state_payload()
-    if local_payload.get("noticeRevision"):
+    local_status = str(local_payload.get("status") or "")
+    local_mode = str(local_payload.get("mode") or "")
+    if (
+        local_payload.get("noticeRevision")
+        or local_payload.get("refreshRequired")
+        or (
+            local_payload.get("stateAvailable")
+            and local_mode == "background"
+            and local_status in {"installed", "installing", "ready"}
+        )
+    ):
         return local_payload
     notice_payload = _release_manifest_notice_state_payload()
     if notice_payload:

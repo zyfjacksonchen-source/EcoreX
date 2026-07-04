@@ -73,6 +73,7 @@ class RunLedger:
         if not request_id or not session_id:
             return False
         now = time.time()
+        started_at = now if status != "queued" else None
         payload = self._json(metadata or {})
         with self._lock, self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -106,7 +107,7 @@ class RunLedger:
                         run_type or "message",
                         status,
                         phase or "",
-                        now,
+                        started_at,
                         payload,
                         model or None,
                         provider or None,
@@ -167,8 +168,18 @@ class RunLedger:
             if row["phase"] == phase and row["status"] == next_status:
                 return
             conn.execute(
-                "UPDATE agent_runs SET phase=?, status=?, updated_at=? WHERE request_id=?",
-                (phase, next_status, now, request_id),
+                """
+                UPDATE agent_runs
+                   SET phase=?,
+                       status=?,
+                       updated_at=?,
+                       started_at=CASE
+                           WHEN ? NOT IN ('queued', 'accepted') AND started_at IS NULL THEN ?
+                           ELSE started_at
+                       END
+                 WHERE request_id=?
+                """,
+                (phase, next_status, now, next_status, now, request_id),
             )
             conn.commit()
 
@@ -258,6 +269,27 @@ class RunLedger:
                  LIMIT ?
                 """,
                 (cutoff, capped_limit),
+            ).fetchall()
+            return [self._row_to_dict(row) for row in rows]
+
+    def queued_snapshot(self, session_id: str = "", *, max_age_seconds: int = 60 * 60 * 24) -> List[Dict[str, Any]]:
+        cutoff = time.time() - max(1, max_age_seconds)
+        with self._lock, self._connection() as conn:
+            params: List[Any] = [cutoff]
+            session_clause = ""
+            if session_id:
+                session_clause = "AND session_id=?"
+                params.append(session_id)
+            rows = conn.execute(
+                f"""
+                SELECT * FROM agent_runs
+                 WHERE terminal_at IS NULL
+                   AND status='queued'
+                   AND updated_at >= ?
+                   {session_clause}
+                 ORDER BY created_at ASC, updated_at ASC
+                """,
+                tuple(params),
             ).fetchall()
             return [self._row_to_dict(row) for row in rows]
 

@@ -79,6 +79,9 @@ def _exception_diagnostic_snapshot(value: BaseException, *, session_id: str = ""
             use_azure_chatgpt=bool(conf().get("use_azure_chatgpt", False)),
             gemini_api_base=conf().get("gemini_api_base") or "",
             has_gemini_key=bool(conf().get("gemini_api_key")),
+            gemini_api_key=conf().get("gemini_api_key") or "",
+            custom_api_base=conf().get("custom_api_base") or "",
+            custom_api_key=conf().get("custom_api_key") or "",
         )
     except Exception:
         provider = str(conf().get("bot_type") or "")
@@ -249,6 +252,9 @@ class AgentLLMModel(LLMModel):
             use_azure_chatgpt=bool(conf().get("use_azure_chatgpt", False)),
             gemini_api_base=conf().get("gemini_api_base") or "",
             has_gemini_key=bool(conf().get("gemini_api_key")),
+            gemini_api_key=conf().get("gemini_api_key") or "",
+            custom_api_base=conf().get("custom_api_base") or "",
+            custom_api_key=conf().get("custom_api_key") or "",
         )
 
     @property
@@ -864,6 +870,7 @@ class AgentBridge:
 
             # Store session_id on agent so executor can clear DB on fatal errors
             agent._current_session_id = session_id
+            agent._current_request_id = request_id or ""
 
             # Bound the in-memory context for scheduler sessions before each run.
             # Scheduler sessions are stable per-task and append every trigger,

@@ -70,6 +70,24 @@ class RequestRetryPrepareHandler:
             }, ensure_ascii=False)
 
 
+class RequestQueueActionHandler:
+    def POST(self, request_id):
+        require_auth()
+        web.header("Content-Type", "application/json; charset=utf-8")
+        try:
+            return json.dumps(
+                _legacy_web_channel().WebChannel().queue_action_request(str(request_id or "")),
+                ensure_ascii=False,
+            )
+        except Exception as exc:
+            logger.error(f"[WebChannel] queue action error: {web_body_log_summary(exc)}")
+            return json.dumps({
+                "status": "error",
+                "message": public_exception_message("Queue action failed.", exc),
+                **public_exception_summary(exc),
+            }, ensure_ascii=False)
+
+
 class RuntimeProjectionHandler:
     def GET(self):
         require_auth()

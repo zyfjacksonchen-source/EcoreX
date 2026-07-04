@@ -15,6 +15,7 @@ from typing import List, Dict, Any, Optional, Callable, Tuple
 from agent.protocol.cancel import AgentCancelledError
 from agent.protocol.models import LLMRequest, LLMModel
 from agent.protocol.message_utils import sanitize_claude_messages, compress_turn_to_text_only
+from agent.protocol.task_observer import TaskObserver
 from agent.skills.tool_bridge import SKILL_CALLABLE_TOOL_ALIASES
 from agent.tools.base_tool import BaseTool, ToolResult
 from common.ecorex_public_payload import mask_sensitive_text, redact_public_tool_value
@@ -701,6 +702,31 @@ class AgentStreamExecutor:
                 })
             except Exception as e:
                 logger.error(f"Event callback error: {_public_agent_exception_message('Event callback failed.', e)}")
+
+    def _image_artifact_naming_context(self) -> Dict[str, Any]:
+        """Build a small, user-visible naming context for generated image files."""
+        session_id = str(getattr(self.agent, "_current_session_id", "") or "").strip()
+        request_id = str(getattr(self.agent, "_current_request_id", "") or "").strip()
+        summary = ""
+        if session_id:
+            try:
+                from agent.memory.conversation_store import get_conversation_store
+
+                store = get_conversation_store()
+                title_state = store.get_session_title_state(session_id)
+                if isinstance(title_state, dict):
+                    summary = str(title_state.get("title") or "").strip()
+                if not summary:
+                    latest_user = store.get_visible_user_message(session_id)
+                    summary = str(latest_user.get("text") or "").strip()
+            except Exception as exc:
+                logger.debug("[Agent] image artifact naming context unavailable: %s", exc.__class__.__name__)
+        return {
+            "sessionId": session_id,
+            "requestId": request_id,
+            "summary": summary or "图片产物",
+            "source": "conversation-summary",
+        }
 
     def _authorize_tool_execution(self, tool_name: str, tool_id: str, arguments: dict) -> dict:
         """Ask the desktop permission broker before high-risk local tools run."""
@@ -3185,6 +3211,7 @@ class AgentStreamExecutor:
         tool_start_emitted = False
         tool_heartbeat_stop: Optional[threading.Event] = None
         tool_heartbeat_thread: Optional[threading.Thread] = None
+        task_observer: Optional[TaskObserver] = None
 
         def emit_tool_start() -> None:
             nonlocal tool_start_emitted
@@ -3204,9 +3231,14 @@ class AgentStreamExecutor:
                 "tool_name": tool_name,
                 **result_payload
             })
+            if task_observer is not None:
+                task_observer.end(
+                    str(result_payload.get("status") or ""),
+                    execution_time=result_payload.get("execution_time", 0),
+                )
 
         def start_tool_heartbeat() -> None:
-            nonlocal tool_heartbeat_stop, tool_heartbeat_thread
+            nonlocal tool_heartbeat_stop, tool_heartbeat_thread, task_observer
             emit_tool_start()
             if tool_heartbeat_thread is not None:
                 return
@@ -3216,6 +3248,18 @@ class AgentStreamExecutor:
             max_seconds = float(policy["max_seconds"])
             extension_seconds = float(policy["extension_seconds"])
             extension_count = 0
+            task_observer = TaskObserver(
+                self._emit_event,
+                task_id=f"tool-{tool_id}",
+                kind="tool",
+                title=tool_name,
+                parent_id=tool_id,
+                soft_deadline_seconds=int(deadline_seconds),
+                hard_deadline_seconds=int(max_seconds),
+                metadata={"tool_call_id": tool_id, "tool_name": tool_name, "timeout_reason": policy["reason"]},
+                started_at=started_at,
+            )
+            task_observer.start()
             stop_event = threading.Event()
             tool_heartbeat_stop = stop_event
 
@@ -3239,6 +3283,14 @@ class AgentStreamExecutor:
                                 "reason": policy["reason"],
                                 "status": "running",
                             })
+                            if task_observer is not None:
+                                task_observer.extended(
+                                    elapsed_seconds=elapsed_seconds,
+                                    previous_deadline_seconds=int(previous_deadline),
+                                    deadline_seconds=int(deadline_seconds),
+                                    max_seconds=int(max_seconds),
+                                    reason=policy["reason"],
+                                )
                             self._emit_event("tool_execution_heartbeat", {
                                 "tool_call_id": tool_id,
                                 "tool_name": tool_name,
@@ -3248,6 +3300,13 @@ class AgentStreamExecutor:
                                 "extension_count": extension_count,
                                 "status": "running",
                             })
+                            if task_observer is not None:
+                                task_observer.heartbeat(
+                                    elapsed_seconds=elapsed_seconds,
+                                    deadline_seconds=int(deadline_seconds),
+                                    max_seconds=int(max_seconds),
+                                    extension_count=extension_count,
+                                )
                             continue
                         logger.warning(
                             "[Agent] tool execution timeout: tool=%s id=%s elapsed=%ss deadline=%ss max=%ss adaptive=%s",
@@ -3273,6 +3332,22 @@ class AgentStreamExecutor:
                                 "For legitimately longer work, retry with a larger tool timeout or split the task."
                             ),
                         })
+                        if task_observer is not None:
+                            task_observer.intervention_requested(
+                                elapsed_seconds=elapsed_seconds,
+                                timeout_seconds=int(deadline_seconds),
+                                max_seconds=int(max_seconds),
+                                extension_count=extension_count,
+                                reason="tool_timeout",
+                                next_actions=["continue", "stop", "background"],
+                            )
+                            task_observer.timeout(
+                                elapsed_seconds=elapsed_seconds,
+                                timeout_seconds=int(deadline_seconds),
+                                max_seconds=int(max_seconds),
+                                extension_count=extension_count,
+                                reason="tool_timeout",
+                            )
                         if self.cancel_event is not None:
                             self.cancel_event.set()
                         break
@@ -3285,6 +3360,13 @@ class AgentStreamExecutor:
                         "extension_count": extension_count,
                         "status": "running",
                     })
+                    if task_observer is not None:
+                        task_observer.heartbeat(
+                            elapsed_seconds=elapsed_seconds,
+                            deadline_seconds=int(deadline_seconds),
+                            max_seconds=int(max_seconds),
+                            extension_count=extension_count,
+                        )
 
             tool_heartbeat_thread = threading.Thread(
                 target=heartbeat_loop,
@@ -3409,6 +3491,8 @@ class AgentStreamExecutor:
             tool.cancel_event = self.cancel_event
             tool.emit_event = self._emit_event
             tool.tool_call_id = tool_id
+            if tool_name == "imagegen":
+                tool.artifact_naming_context = self._image_artifact_naming_context()
 
             # Execute tool
             start_time = time.time()
@@ -3454,11 +3538,7 @@ class AgentStreamExecutor:
                     self.agent.refresh_skills()
                     logger.info(f"Skills refreshed! Now have {len(self.agent.skill_manager.skills)} skills")
 
-            self._emit_event("tool_execution_end", {
-                "tool_call_id": tool_id,
-                "tool_name": tool_name,
-                **result_dict
-            })
+            emit_tool_end(result_dict)
 
             return result_dict
 
@@ -3468,11 +3548,7 @@ class AgentStreamExecutor:
             # Record failure
             self._record_tool_result(tool_name, arguments, False)
             
-            self._emit_event("tool_execution_end", {
-                "tool_call_id": tool_id,
-                "tool_name": tool_name,
-                **error_result
-            })
+            emit_tool_end(error_result)
             return error_result
         finally:
             stop_tool_heartbeat()

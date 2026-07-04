@@ -2142,6 +2142,20 @@ html[data-platform="web"] .window-brand {
   height: 14px;
 }
 
+.artifact-feedback-button.is-selected {
+  border-color: var(--color-border);
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+}
+
+.artifact-feedback-button.is-valid {
+  color: var(--color-success);
+}
+
+.artifact-feedback-button.is-invalid {
+  color: var(--color-danger);
+}
+
 .artifact-menu-wrap {
   position: relative;
   display: inline-flex;

@@ -13,12 +13,17 @@ param(
     [string]$GitHubReleaseMirrorUrl = "",
     [switch]$KeepStaging,
     [switch]$SkipValidation,
-    [switch]$ExternalizeDownloads
+    [switch]$ExternalizeDownloads,
+    [switch]$EmbedDownloads
 )
 
 $ErrorActionPreference = "Stop"
 
 Write-Warning "This script prepares the internal/site public-release bundle and is NOT safe for the open installer-only GitHub repository. Use scripts/prepare-ecorex-installer-repo.ps1 for the public GitHub installer repo; that repo must not contain source code."
+
+if ($ExternalizeDownloads -and $EmbedDownloads) {
+    throw "Use either -ExternalizeDownloads or -EmbedDownloads, not both."
+}
 
 function Resolve-RequiredPath {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -134,6 +139,7 @@ function Get-ConfiguredDownloadMirrors {
     Add-DownloadBaseUrls -List $assetBases -Values $env:ECOREX_GITHUB_RELEASE_MIRROR_URL
     Add-DownloadBaseUrls -List $assetBases -Values $AssetDownloadBaseUrls
     Add-DownloadBaseUrls -List $assetBases -Values $env:ECOREX_DOWNLOAD_ASSET_BASE_URLS
+    Add-DownloadBaseUrls -List $assetBases -Values "https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v$Version"
     foreach ($base in $assetBases) {
         $kind = if ([string]$base -match 'github\.com/.+/releases/download/') { "github-release" } else { "asset-base" }
         $id = if ($kind -eq "github-release") { "github-release-v$Version" } else { "asset-mirror" }
@@ -224,6 +230,7 @@ if (-not $Version) {
     $desktopPackage = Get-Content -Raw -Encoding UTF8 -LiteralPath $desktopPackagePath | ConvertFrom-Json
     $Version = [string]$desktopPackage.version
 }
+$downloadsExternalized = -not [bool]$EmbedDownloads
 if (-not $InstallerPath) {
     $InstallerPath = Join-Path "desktop/release" "EcoreX_${Version}_x64-setup.exe"
 }
@@ -582,7 +589,7 @@ foreach ($ready in $readyArtifacts) {
     if ($ready.External) {
         continue
     }
-    if ($ExternalizeDownloads) {
+    if ($downloadsExternalized) {
         continue
     }
     Copy-Item -LiteralPath $ready.Path -Destination (Join-Path $downloadOut $ready.Artifact.fileName) -Force
@@ -643,7 +650,7 @@ foreach ($ready in $readyArtifacts) {
     }
 }
 
-if ($ExternalizeDownloads) {
+if ($downloadsExternalized) {
     $publicManifestPath = Join-Path $siteOut "manifest.json"
     $publicManifest = Get-Content -Raw -Encoding UTF8 -LiteralPath $publicManifestPath | ConvertFrom-Json
     foreach ($ready in $readyArtifacts) {
@@ -716,7 +723,7 @@ foreach ($ready in $readyArtifacts) {
         continue
     }
 
-    if ($ExternalizeDownloads) {
+    if ($downloadsExternalized) {
         $checksumArtifacts[$ready.Artifact.id] = [ordered]@{
             fileName = $ready.Artifact.fileName
             relativePath = "site/downloads/$($ready.Artifact.fileName)"
@@ -756,8 +763,8 @@ $checksums = [ordered]@{
     product = "EcoreX"
     version = $Version
     generatedAt = (Get-Date).ToString("o")
-    downloadsExternalized = [bool]$ExternalizeDownloads
-    downloadsSource = if ($ExternalizeDownloads) { "public-release-downloads-source" } else { "embedded" }
+    downloadsExternalized = [bool]$downloadsExternalized
+    downloadsSource = if ($downloadsExternalized) { "public-release-downloads-source" } else { "embedded" }
     siteRoot = "site"
     adminApiRoot = "admin-api"
     serverHelperRoot = "server"

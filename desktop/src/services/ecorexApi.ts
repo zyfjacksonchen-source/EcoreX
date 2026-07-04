@@ -123,6 +123,8 @@ export type ChatModelOption = {
   effectiveTransportProvider?: string;
   isOfficialGeminiProvider?: boolean;
   officialGeminiApiUsed?: boolean;
+  isCustomGeminiEndpoint?: boolean;
+  geminiEndpointFamily?: string;
 };
 
 export type ChatContextPolicy = {
@@ -595,7 +597,27 @@ export type RuntimeRequestProjection = {
   event_count?: number;
   messages?: RuntimeMessage[];
   image_jobs?: RuntimeImageJobProjection[];
+  task_observations?: RuntimeTaskObservationProjection[];
   events?: RuntimeProjectionEvent[];
+};
+
+export type RuntimeTaskObservationProjection = {
+  task_id?: string;
+  kind?: string;
+  title?: string;
+  status?: string;
+  health?: string;
+  elapsed_seconds?: number;
+  soft_deadline_seconds?: number;
+  hard_deadline_seconds?: number;
+  lease_count?: number;
+  last_event_type?: string;
+  last_event_id?: number;
+  intervention?: {
+    status?: string;
+    next_actions?: string[];
+  };
+  events?: Array<Record<string, unknown>>;
 };
 
 export type RuntimeImageJobProjection = {
@@ -687,6 +709,8 @@ export type AgentArtifactIntent = "deliverable" | "changed-file" | "preview";
 export type AgentArtifactOperation = "created" | "modified" | "exported" | "downloaded" | "deployed";
 export type AgentArtifactStatus = "pending" | "ready" | "failed" | "superseded";
 export type OpenPathAction = "open" | "reveal" | "openWith";
+export type AgentArtifactValidity = "valid" | "invalid";
+export type AgentArtifactFeedbackSignal = "default" | "thumbs_up" | "thumbs_down";
 
 export type QualityEvidenceStatus = "pass" | "fail" | "warn" | "pending" | "skipped" | "unknown";
 export type QualityEvidenceCheck = {
@@ -717,6 +741,7 @@ export type QualityEvidence = {
 
 export type AgentArtifact = {
   id: string;
+  safeArtifactId?: string;
   requestId?: string;
   kind: AgentArtifactKind;
   intent: AgentArtifactIntent;
@@ -731,6 +756,9 @@ export type AgentArtifact = {
   previewUrl?: string;
   thumbnailUrl?: string;
   statusPath?: string;
+  artifactValidity?: AgentArtifactValidity;
+  artifactFeedbackSignal?: AgentArtifactFeedbackSignal;
+  artifactFeedbackAt?: string;
   qualityEvidence?: QualityEvidence;
   stats?: {
     addedLines?: number;
@@ -784,6 +812,8 @@ export type RuntimeUpdateCheck = {
   noticeRevision?: string;
   message?: string;
   downloadUrl?: string;
+  releasePageUrl?: string;
+  artifactDownloadUrl?: string;
   artifact?: {
     id?: string;
     fileName?: string;
@@ -1006,17 +1036,21 @@ export type ChatSendResult = {
   request_id?: string;
   stream?: boolean;
   inline_reply?: string;
+  queued?: boolean;
+  queue_position?: number;
   usage?: TokenUsage;
   same_session?: {
     policy?: string;
     queue?: string;
-    decision?: "accepted" | "replacement_accepted" | "accepted_after_recovery" | "accepted_after_finalize_wait" | "retryable_conflict" | string;
+    decision?: "accepted" | "queued" | "replacement_accepted" | "accepted_after_recovery" | "accepted_after_finalize_wait" | "retryable_conflict" | string;
     active_request_ids?: string[];
     replaced_request_ids?: string[];
     cancelled_requests?: number;
     cancelled_subagents?: number;
     retry_after_ms?: number;
     reason?: string;
+    queue_position?: number;
+    queued_request_id?: string;
   };
 };
 
@@ -1528,7 +1562,9 @@ function normalizeChatModelOption(value: unknown): ChatModelOption | null {
     modelAliasFamily: pickString(data.modelAliasFamily) || pickString(data.model_alias_family),
     effectiveTransportProvider: pickString(data.effectiveTransportProvider) || pickString(data.effective_transport_provider),
     isOfficialGeminiProvider: data.isOfficialGeminiProvider === true || data.is_official_gemini_provider === true,
-    officialGeminiApiUsed: data.officialGeminiApiUsed === true || data.official_gemini_api_used === true
+    officialGeminiApiUsed: data.officialGeminiApiUsed === true || data.official_gemini_api_used === true,
+    isCustomGeminiEndpoint: data.isCustomGeminiEndpoint === true || data.is_custom_gemini_endpoint === true,
+    geminiEndpointFamily: pickString(data.geminiEndpointFamily) || pickString(data.gemini_endpoint_family)
   };
 }
 
@@ -1700,6 +1736,18 @@ export async function cancelChatRequest(input: { requestId?: string; sessionId?:
   });
 }
 
+export async function queueChatRequestAction(input: { requestId: string; sessionId?: string; action: "cancel_queued" | "run_now" }) {
+  return apiJson<{ status?: string; message?: string; cancelled?: number; queue_position?: number }>(
+    `/api/requests/${encodeURIComponent(input.requestId)}/queue-action`,
+    "POST",
+    {
+      request_id: input.requestId,
+      session_id: input.sessionId,
+      action: input.action
+    }
+  );
+}
+
 export async function cancelSubagentTask(taskId: string) {
   return apiJson<{ status?: string; cancelled?: number; task?: unknown }>(
     `/api/subagents/${encodeURIComponent(taskId)}/cancel`,
@@ -1831,6 +1879,24 @@ export async function clearRuntimeContext(sessionId: string) {
   return typeof result.context_start_seq === "number" ? result.context_start_seq : 0;
 }
 
+export async function shareRuntimeSession(input: { sessionId: string; title?: string; messages?: unknown[] }) {
+  if (!input.sessionId) {
+    throw new Error("session_id required");
+  }
+  const result = await apiJson<{ status?: string; shareId?: string; shareUrl?: string; messageCount?: number; message?: string }>(
+    `/api/sessions/${encodeURIComponent(input.sessionId)}/share`,
+    "POST",
+    {
+      title: input.title || "",
+      messages: input.messages || []
+    }
+  );
+  if (result.status && result.status !== "success") {
+    throw new Error(result.message || "share session failed");
+  }
+  return result;
+}
+
 export async function chooseLocalFiles(webPort = 9899): Promise<FileAttachment[]> {
   if (!window.ecorexDesktop?.chooseFiles) {
     return [];
@@ -1916,6 +1982,17 @@ export async function readLocalJson(filePath: string): Promise<LocalJsonResult> 
     return { status: "error", path: "", message: "path is required" };
   }
   return apiJson<LocalJsonResult>("/api/file-json", "POST", { path: trimmedPath });
+}
+
+export async function reportArtifactFeedback(input: {
+  sessionId?: string;
+  requestId?: string;
+  messageId?: string;
+  artifact: AgentArtifact;
+  validity: AgentArtifactValidity;
+  signal: AgentArtifactFeedbackSignal;
+}) {
+  return apiJson<{ status?: string; synced?: boolean; message?: string }>("/api/artifacts/feedback", "POST", input);
 }
 
 export async function loadPermissionState(): Promise<PermissionState | null> {

@@ -504,6 +504,14 @@ def normalize_model_name(model: Optional[str]) -> str:
     return str(model or "").strip()
 
 
+def is_official_gemini_api_base(api_base: Optional[str]) -> bool:
+    """Return whether a Gemini REST base is the public Google endpoint."""
+    base = str(api_base or "").strip().rstrip("/")
+    if not base:
+        return True
+    return base == _OFFICIAL_GEMINI_API_BASE.rstrip("/")
+
+
 def is_custom_gemini_transport(
     model: Optional[str],
     *,
@@ -511,22 +519,55 @@ def is_custom_gemini_transport(
     gemini_api_base: Optional[str] = "",
     has_gemini_key: bool = False,
 ) -> bool:
-    """Detect legacy custom Gemini configs stored under gemini_* fields.
+    """Detect Gemini-named models explicitly configured as custom OpenAI API.
 
-    v0.2.7 routes official ``provider=gemini`` only to Google Gemini REST.
-    If a Gemini-named model uses a non-Google base URL, treat it as an
-    OpenAI-compatible custom transport so ``gemini-*`` does not override
-    ``bot_type=custom`` or accidentally hit the Google REST shape.
+    A non-Google ``gemini_api_base`` is still a Gemini REST endpoint in the
+    deployed EcoreX environment; routing it through OpenAI-compatible
+    ``/chat/completions`` causes the provider to fail. Only an explicit
+    ``bot_type=custom`` should use the custom OpenAI-compatible transport.
     """
     model_name = normalize_model_name(model).lower()
     if not model_name.startswith("gemini"):
         return False
     route = str(configured_bot_type or "").strip()
-    if route and route not in (const.GEMINI, const.CUSTOM):
+    return bool(route == const.CUSTOM and has_gemini_key)
+
+
+def should_route_custom_gemini_as_rest(
+    model: Optional[str],
+    *,
+    configured_bot_type: Optional[str] = "",
+    gemini_api_base: Optional[str] = "",
+    gemini_api_key: Optional[str] = "",
+    custom_api_base: Optional[str] = "",
+    custom_api_key: Optional[str] = "",
+) -> bool:
+    """Repair v0.2.7.1 custom-Gemini configs that copied Gemini REST fields.
+
+    The failed v0.2.7.1 path migrated ``gemini_*`` credentials into
+    ``custom_*`` and then called ``/chat/completions``. If the custom fields
+    are absent or exactly mirror the Gemini REST fields, route back to the
+    Gemini REST bot. Real custom OpenAI-compatible Gemini deployments keep
+    distinct ``custom_*`` credentials and remain on ``provider=custom``.
+    """
+    model_name = normalize_model_name(model).lower()
+    if not model_name.startswith("gemini"):
         return False
-    base = str(gemini_api_base or "").strip().rstrip("/")
-    official = _OFFICIAL_GEMINI_API_BASE.rstrip("/")
-    return bool(has_gemini_key and base and base != official)
+    if str(configured_bot_type or "").strip() != const.CUSTOM:
+        return False
+    gemini_key = str(gemini_api_key or "").strip()
+    gemini_base = str(gemini_api_base or "").strip()
+    if not gemini_key or not gemini_base:
+        return False
+    custom_key = str(custom_api_key or "").strip()
+    custom_base = str(custom_api_base or "").strip()
+    if not custom_key and not custom_base:
+        return True
+    normalized_gemini_base = normalize_openai_compatible_api_base(gemini_base).rstrip("/")
+    normalized_custom_base = custom_base.rstrip("/")
+    key_matches = not custom_key or custom_key == gemini_key
+    base_matches = not normalized_custom_base or normalized_custom_base == normalized_gemini_base
+    return bool(key_matches and base_matches)
 
 
 def normalize_openai_compatible_api_base(api_base: Optional[str]) -> str:
@@ -559,10 +600,22 @@ def infer_provider_id(
     use_azure_chatgpt: bool = False,
     gemini_api_base: Optional[str] = "",
     has_gemini_key: bool = False,
+    gemini_api_key: Optional[str] = "",
+    custom_api_base: Optional[str] = "",
+    custom_api_key: Optional[str] = "",
 ) -> str:
     """Infer the provider id used by the local runtime for a chat model."""
     if use_linkai and has_linkai_key:
         return const.LINKAI
+    if should_route_custom_gemini_as_rest(
+        model,
+        configured_bot_type=configured_bot_type,
+        gemini_api_base=gemini_api_base,
+        gemini_api_key=gemini_api_key,
+        custom_api_base=custom_api_base,
+        custom_api_key=custom_api_key,
+    ):
+        return const.GEMINI
     if is_custom_gemini_transport(
         model,
         configured_bot_type=configured_bot_type,
@@ -641,6 +694,9 @@ def capabilities_for_config(local_config: Dict[str, Any]) -> ModelCapabilities:
         use_azure_chatgpt=bool((local_config or {}).get("use_azure_chatgpt", False)),
         gemini_api_base=(local_config or {}).get("gemini_api_base") or "",
         has_gemini_key=bool((local_config or {}).get("gemini_api_key")),
+        gemini_api_key=(local_config or {}).get("gemini_api_key") or "",
+        custom_api_base=(local_config or {}).get("custom_api_base") or "",
+        custom_api_key=(local_config or {}).get("custom_api_key") or "",
     )
     api_base = (local_config or {}).get("open_ai_api_base")
     provider = resolve_capability_provider_for_base(provider, api_base)

@@ -77,7 +77,7 @@ class TestModelCapabilities(unittest.TestCase):
         self.assertFalse(capabilities.supports_stream_usage)
         self.assertEqual(capabilities.max_tokens_param, "max_tokens")
 
-    def test_nonofficial_gemini_base_routes_as_custom_transport(self):
+    def test_nonofficial_gemini_base_routes_as_gemini_rest_transport(self):
         from common import const
         from models.model_capabilities import (
             capabilities_for_config,
@@ -92,7 +92,7 @@ class TestModelCapabilities(unittest.TestCase):
                 gemini_api_base="https://custom-gemini.test/v1",
                 has_gemini_key=True,
             ),
-            const.CUSTOM,
+            const.GEMINI,
         )
         self.assertEqual(
             infer_provider_id(
@@ -111,7 +111,7 @@ class TestModelCapabilities(unittest.TestCase):
             "gemini_api_base": "https://custom-gemini.test/v1",
         })
 
-        self.assertEqual(capabilities.provider, const.CUSTOM)
+        self.assertEqual(capabilities.provider, const.GEMINI)
         self.assertEqual(capabilities.max_tokens_param, "max_tokens")
         self.assertEqual(
             infer_provider_id(
@@ -119,8 +119,11 @@ class TestModelCapabilities(unittest.TestCase):
                 configured_bot_type=const.CUSTOM,
                 gemini_api_base="https://custom-gemini.test/v1",
                 has_gemini_key=True,
+                gemini_api_key="legacy-custom-gemini-key",
+                custom_api_base="https://custom-gemini.test/v1",
+                custom_api_key="legacy-custom-gemini-key",
             ),
-            const.CUSTOM,
+            const.GEMINI,
         )
         self.assertEqual(
             normalize_openai_compatible_api_base("http://custom-gemini.test:8080"),
@@ -130,6 +133,58 @@ class TestModelCapabilities(unittest.TestCase):
             normalize_openai_compatible_api_base("https://custom-gemini.test/v1/chat/completions"),
             "https://custom-gemini.test/v1",
         )
+
+    def test_gemini_rest_tool_schema_sanitizer_adds_missing_array_items(self):
+        from models.gemini.google_gemini_bot import GoogleGeminiBot
+
+        schema = {
+            "type": "object",
+            "title": "private tool schema",
+            "$defs": {"secret": {"type": "string"}},
+            "additionalProperties": False,
+            "properties": {
+                "files": {"type": "array", "description": "local files"},
+                "reviews": {"type": ["array", "null"]},
+                "sources": {"type": "array", "items": {"anyOf": [{"type": "null"}, {"type": "string"}]}},
+                "mode": {"enum": ["fast", "safe"], "default": "safe"},
+            },
+            "required": ["files"],
+        }
+
+        sanitized = GoogleGeminiBot._sanitize_gemini_schema(schema)
+
+        self.assertNotIn("$defs", sanitized)
+        self.assertNotIn("additionalProperties", sanitized)
+        self.assertNotIn("title", sanitized)
+        self.assertEqual(sanitized["type"], "object")
+        self.assertEqual(sanitized["properties"]["files"]["items"], {"type": "object"})
+        self.assertTrue(sanitized["properties"]["reviews"]["nullable"])
+        self.assertEqual(sanitized["properties"]["reviews"]["items"], {"type": "object"})
+        self.assertEqual(sanitized["properties"]["sources"]["items"]["type"], "string")
+        self.assertNotIn("default", sanitized["properties"]["mode"])
+
+    def test_gemini_rest_tool_conversion_uses_sanitized_schema(self):
+        from models.gemini.google_gemini_bot import GoogleGeminiBot
+
+        bot = GoogleGeminiBot.__new__(GoogleGeminiBot)
+        converted = bot._convert_tools_to_gemini_rest_format([{
+            "type": "function",
+            "function": {
+                "name": "emit_artifacts",
+                "description": "return artifacts",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "files": {"type": "array"},
+                        "metadata": {"type": "object", "additionalProperties": True},
+                    },
+                },
+            },
+        }])
+
+        parameters = converted[0]["functionDeclarations"][0]["parameters"]
+        self.assertEqual(parameters["properties"]["files"]["items"], {"type": "object"})
+        self.assertNotIn("additionalProperties", parameters["properties"]["metadata"])
 
     def test_provider_aware_token_estimator_is_available(self):
         from common import const
@@ -582,7 +637,7 @@ class TestModelCapabilities(unittest.TestCase):
         self.assertEqual(bot.args["frequency_penalty"], 0.2)
         self.assertEqual(bot.args["presence_penalty"], 0.1)
 
-    def test_chatgpt_custom_route_uses_normalized_legacy_gemini_base(self):
+    def test_chatgpt_custom_route_does_not_borrow_gemini_rest_credentials(self):
         from common import const
         from models.chatgpt.chat_gpt_bot import ChatGPTBot
 
@@ -601,9 +656,9 @@ class TestModelCapabilities(unittest.TestCase):
             api_config = bot.get_api_config()
 
         self.assertEqual(api_config["provider"], const.CUSTOM)
-        self.assertEqual(api_config["api_key"], "legacy-custom-gemini-key")
-        self.assertEqual(api_config["api_base"], "http://custom-gemini.test:8080/v1")
-        self.assertEqual(bot._get_http_client().api_base, "http://custom-gemini.test:8080/v1")
+        self.assertEqual(api_config["api_key"], "")
+        self.assertIsNone(api_config["api_base"])
+        self.assertNotEqual(bot._get_http_client().api_base, "http://custom-gemini.test:8080")
 
     def test_model_fallback_config_parses_explicit_routes(self):
         from models.model_fallback import configured_model_fallback_routes

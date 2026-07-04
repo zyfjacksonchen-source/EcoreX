@@ -207,7 +207,7 @@ echo "Fetching EcoreX manifest: $MANIFEST_URL"
 curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 "$MANIFEST_URL" -o "$MANIFEST_JSON"
 
 VERSION="$(manifest_value "version")"
-echo "EcoreX WebUI installer script: 0.2.7.1"
+echo "EcoreX WebUI installer script: 0.2.7.2"
 echo "EcoreX WebUI manifest version: $VERSION"
 if [[ -n "$REQUESTED_VERSION" && "$REQUESTED_VERSION" != "$VERSION" ]]; then
   echo "Manifest version '$VERSION' does not match requested '$REQUESTED_VERSION'." >&2
