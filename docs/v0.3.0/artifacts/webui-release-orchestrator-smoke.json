@@ -1,7 +1,7 @@
 {
     "schema":  "ecorex.webui-release-smoke.v1",
     "version":  "0.3.0",
-    "generatedAt":  "2026-07-08T00:08:37.4719405Z",
+    "generatedAt":  "2026-07-08T00:33:30.0582417Z",
     "status":  "pass",
     "command":  "scripts/release-ecorex-webui-orchestrator.ps1",
     "checks":  [
