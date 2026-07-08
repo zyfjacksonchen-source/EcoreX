@@ -72,6 +72,11 @@ function Set-JsonObjectProperty {
     }
 }
 
+function Test-DeploymentExternalOnlyArtifactId {
+    param([string]$ArtifactId)
+    return @("webui-windows-x64", "webui-macos-universal", "webui-win-mac") -contains ([string]$ArtifactId)
+}
+
 function Add-DownloadBaseUrl {
     param(
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.ArrayList]$List,
@@ -138,7 +143,7 @@ function Get-ConfiguredDownloadMirrors {
     Add-DownloadBaseUrls -List $assetBases -Values $AssetDownloadBaseUrls
     Add-DownloadBaseUrls -List $assetBases -Values $env:ECOREX_DOWNLOAD_ASSET_BASE_URLS
     foreach ($base in $assetBases) {
-        $kind = if ([string]$base -match '^https://gh-proxy\.com/https://github\.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v') { "github-release-cn-mirror" } elseif ([string]$base -match '^https://dl\.ecoremedia\.net/ecorex-agent/downloads$') { "asset-cdn" } elseif ([string]$base -match '^https://mvdcm\.ecoremedia\.net/ecorex-agent/downloads$') { "asset-cache" } elseif ([string]$base -match '/ecorex-agent/downloads$') { "asset-cache" } else { "asset-base" }
+        $kind = if ([string]$base -match '^https://(gh-proxy\.com|ghproxy\.net|ghfast\.top)/https://github\.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v') { "github-release-cn-mirror" } elseif ([string]$base -match '^https://dl\.ecoremedia\.net/ecorex-agent/downloads$') { "asset-cdn" } elseif ([string]$base -match '^https://mvdcm\.ecoremedia\.net/ecorex-agent/downloads$') { "asset-cache" } elseif ([string]$base -match '/ecorex-agent/downloads$') { "asset-cache" } else { "asset-base" }
         $id = if ($kind -eq "github-release-cn-mirror") { "ecorex-github-cn-mirror-v$Version" } elseif ($kind -eq "asset-cdn") { "ecorex-download-cdn-v$Version" } elseif ([string]$base -match '^https://mvdcm\.ecoremedia\.net/ecorex-agent/downloads$') { "ecorex-download-origin-v$Version" } elseif ($kind -eq "asset-cache") { "ecorex-download-cache-v$Version" } else { "asset-mirror-v$Version" }
         Add-DownloadMirror -List $mirrors -Id $id -Kind $kind -BaseUrl $base -PathMode "fileName"
     }
@@ -661,6 +666,11 @@ if ($downloadsExternalized) {
                 continue
             }
             Set-JsonObjectProperty -Object $publicArtifact -Name "href" -Value "downloads/$fileName"
+            if (Test-DeploymentExternalOnlyArtifactId -ArtifactId $artifactId) {
+                Set-JsonObjectProperty -Object $publicArtifact -Name "external" -Value $true
+                Set-JsonObjectProperty -Object $publicArtifact -Name "deploymentExternalOnly" -Value $true
+                Set-JsonObjectProperty -Object $publicArtifact -Name "deploymentSource" -Value "manifest-mirrors"
+            }
             break
         }
     }
@@ -720,7 +730,8 @@ foreach ($ready in $readyArtifacts) {
     }
 
     if ($downloadsExternalized) {
-        $checksumArtifacts[$ready.Artifact.id] = [ordered]@{
+        $deploymentExternalOnly = Test-DeploymentExternalOnlyArtifactId -ArtifactId $ready.Artifact.id
+        $entry = [ordered]@{
             fileName = $ready.Artifact.fileName
             relativePath = "site/downloads/$($ready.Artifact.fileName)"
             href = "downloads/$($ready.Artifact.fileName)"
@@ -729,8 +740,14 @@ foreach ($ready in $readyArtifacts) {
             status = $ready.Artifact.status
             authenticode = $ready.Signature
             external = $true
-            deploymentSourceFileName = $ready.Artifact.fileName
         }
+        if ($deploymentExternalOnly) {
+            $entry.deploymentExternalOnly = $true
+            $entry.deploymentSource = "manifest-mirrors"
+        } else {
+            $entry.deploymentSourceFileName = $ready.Artifact.fileName
+        }
+        $checksumArtifacts[$ready.Artifact.id] = $entry
         continue
     }
 

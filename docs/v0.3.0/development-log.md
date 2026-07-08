@@ -400,3 +400,55 @@
   - `docs/v0.3.0/artifacts/webui-release-cdp-smoke.json`
   - `docs/v0.3.0/artifacts/webui-release-cdp-smoke.png`
   - `docs/v0.3.0/artifacts/github-release-v030.json`
+
+## S12 User-Observed Hotfix: Image Preview, Update Notice, And Multi-Image Count
+
+- Entry:
+  - User reported in the installed v0.3.0 WebUI that image generation could take about 10 minutes without visible return, then the generated image row rendered broken.
+  - The update banner kept showing an older `EcoreX 0.2.9.2` admin notice after the runtime was already on `0.3.0`.
+  - Generated/retouch artifacts showed a duplicate `preview only` row with only the filename; choosing that row could open an empty precision-retouch canvas.
+  - User also reported that imagegen used to support generating two images at once, but the new build only produced images one by one.
+- Root causes:
+  - Provider HTTP waits still used 300s per provider route and fallback could compound the perceived wait.
+  - Runtime-generated images under `runtime-*/images` were valid PNGs but outside `/api/file` preview roots, so the frontend could not load them.
+  - The artifact shelf merged legacy filename-only image detections beside absolute-path artifacts and allowed retouch from preview-only rows.
+  - `OpenAIProvider._create` hard-coded `n: 1`; direct imagegen schema did not expose `n/count/output_count`, and Web image-job API expanded `output_count=2` into two one-image tasks.
+  - Admin release notices were shown as update-state banners even when the notice version was older than or equal to the running version.
+- Changes:
+  - Added dismissible update-state banners and filtered stale `admin-release-notice` versions at or below the running app version.
+  - Added runtime `images/` as an internal read-only preview root, with file-stat/file-serve bypassing the workspace permission broker only for that internal generated-image root.
+  - New relative `output_dir=images` resolves to the user workspace rather than the runtime install directory.
+  - Artifact shelf now removes bare filename-only duplicate image rows when a concrete local/absolute image artifact with the same basename exists, hides missing source-only images after verification, and only enables precision retouch for verified ready images.
+  - Restored native multi-image count: direct `imagegen` schema accepts `n`, `count`, `output_count`, and `num_images`; provider runner and standalone script pass the count; OpenAI sends `n` to generations/edits; non-native providers are looped inside imagegen rather than routed through bash.
+  - Imagegen output files from OpenAI multi-image responses now include ordered `01`, `02`, etc. filename segments and artifact indexes.
+  - Web image-job no-tasks API now creates one task with `output_count=count` instead of splitting the request into many one-image tasks.
+- Verification:
+  - `python -m py_compile desktop\runtime\ecorex-runtime\channel\web\web_channel.py desktop\runtime\ecorex-runtime\channel\web\files.py desktop\runtime\ecorex-runtime\agent\tools\imagegen\imagegen.py desktop\runtime\ecorex-runtime\agent\tools\imagegen\provider_runner.py desktop\runtime\ecorex-runtime\skills\image-generation\scripts\generate.py` -> pass.
+  - `npm run build:renderer` -> pass.
+  - Mocked OpenAI provider smoke with `n=2` -> pass, generated two files named with ordered `01` and `02` segments.
+  - Internal preview-root import smoke -> pass for `runtime/images`.
+  - `git diff --check` -> pass.
+- Residual:
+  - The currently running installed runtime must be refreshed through the rebuilt package or update flow before these source fixes affect that live browser tab.
+
+## S13 Public Release Mirror Re-seal
+
+- Entry:
+  - User requested the download first source to prefer domestic GitHub mirrors for faster WebUI package updates.
+  - Online manifest still exposed the domestic mirror URLs as generic `asset-base` entries, so the user-facing update chain could not clearly treat them as the primary mirror tier.
+- Changes:
+  - Extended public-release mirror classification so `ghproxy.net` and `ghfast.top` are recognized as `github-release-cn-mirror`, alongside the previous `gh-proxy.com` pattern.
+  - Repacked `release-artifacts/EcoreX_0.3.0-public-release.zip` with download mode `github-cn-primary` and mirror order: `ghproxy.net`, `ghfast.top`, GitHub origin fallback.
+  - Redeployed the public release with WebUI large package upload skipped, preserving manifest-mirror delivery for Windows/macOS WebUI packages.
+- Published public zip:
+  - `release-artifacts/EcoreX_0.3.0-public-release.zip`
+    - Size: `2874502`
+    - SHA256: `F1A9E84796E13020EBEF6884F3662FAE5E531F0AB96DF671382295844DF8AB69`
+- Verification:
+  - `tar -xOf release-artifacts\EcoreX_0.3.0-public-release.zip site/manifest.json` -> `download.mode = github-cn-primary`; mirrors are `ghproxy.net`, `ghfast.top`, GitHub origin fallback.
+  - `python scripts\deploy-v024-production.py --promote-public-release` with `ECOREX_SKIP_WEBUI_DOWNLOAD_UPLOAD=1` -> `PASS`.
+  - Online `https://mvdcm.ecoremedia.net/ecorex-agent/manifest.json` -> version `0.3.0`, `download.mode = github-cn-primary`.
+  - Online mirror HEAD checks -> `ghproxy.net` and `ghfast.top` return HTTP `200` and expected `Content-Length` for both `webui-windows-x64` and `webui-macos-universal`.
+- Evidence:
+  - `docs/v0.3.0/artifacts/public-release-mirror-online-check.json`
+  - `docs/v0.3.0/artifacts/production-deploy-online.json`

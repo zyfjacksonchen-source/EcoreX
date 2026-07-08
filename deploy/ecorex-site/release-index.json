@@ -4,11 +4,11 @@
     "version":  "0.3.0",
     "channel":  "stable",
     "status":  "ready",
-    "generatedAt":  "2026-07-08T00:33:30.0926040Z",
-    "commit":  "f0750d247bfe52ffb95c137cadc9983a03010690",
+    "generatedAt":  "2026-07-08T05:16:17.4206046Z",
+    "commit":  "d96fd6ec7c0d39677a39aecf59f1ea79e7d617bb",
     "manifest":  {
                      "path":  "manifest.json",
-                     "sha256":  "68D835383A4DE820B5D839262CEEFCFDBA478BD0F12A2CAA771EFE2D494EE9DC"
+                     "sha256":  "C0C7C24F7ED7804FB5FAD8FA8286211F7768AF3DA7A89DC097B33EA429067847"
                  },
     "artifacts":  [
                       {
@@ -17,8 +17,8 @@
                           "platform":  "win32-x64",
                           "fileName":  "EcoreX_0.3.0-webui-windows-x64.zip",
                           "href":  "downloads/EcoreX_0.3.0-webui-windows-x64.zip",
-                          "size":  551265386,
-                          "sha256":  "3BF9A6546A294C2A96AC32786B7B893848BF3DC6A30897F228AD13CCDC49A48C",
+                          "size":  551267218,
+                          "sha256":  "B5845638264377BAF1DC685709957E836A0035DF9EE647491524CC31B149BFA8",
                           "signature":  {
                                             "required":  false,
                                             "status":  "not-required",
@@ -36,8 +36,8 @@
                           "platform":  "darwin-universal",
                           "fileName":  "EcoreX_0.3.0-webui-macos-universal.zip",
                           "href":  "downloads/EcoreX_0.3.0-webui-macos-universal.zip",
-                          "size":  652441190,
-                          "sha256":  "1E7EC8295EEE2736A711AD1C152CB7EABF32A12D61C27DF5CC8EF060A211AA28",
+                          "size":  652443004,
+                          "sha256":  "78C2B096A6BE5F9DBBB12BA5C029748AAA8054608F8D18B2F068AB19CA551C28",
                           "signature":  {
                                             "required":  false,
                                             "status":  "not-required",

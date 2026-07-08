@@ -426,6 +426,43 @@ function artifactPath(artifact: AgentArtifact) {
   return artifact.path || artifact.relativePath || artifact.url || "";
 }
 
+function artifactImageBasename(artifact: AgentArtifact) {
+  if (artifact.kind !== "image") return "";
+  const source = artifactPath(artifact) || artifact.previewUrl || artifact.thumbnailUrl || artifact.title || "";
+  const name = basenameFromPath(source).toLowerCase();
+  return /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(name) ? name : "";
+}
+
+function isBareArtifactSource(value?: string) {
+  const source = String(value || "").trim();
+  if (!source) return false;
+  if (/^(?:https?:|file:|data:|blob:|\/api\/file|\/uploads\/)/i.test(source)) return false;
+  if (/^[a-zA-Z]:[\\/]/.test(source) || source.startsWith("\\\\") || source.startsWith("/")) return false;
+  return !/[\\/]/.test(source);
+}
+
+function hasConcreteArtifactSource(artifact: AgentArtifact) {
+  const source = artifactPath(artifact);
+  if (!source) return Boolean(artifact.previewUrl || artifact.thumbnailUrl);
+  return !isBareArtifactSource(source);
+}
+
+function dropBarePreviewDuplicateArtifacts(artifacts: DisplayArtifact[]) {
+  const concreteImageNames = new Set<string>();
+  artifacts.forEach((artifact) => {
+    const name = artifactImageBasename(artifact);
+    if (name && hasConcreteArtifactSource(artifact)) {
+      concreteImageNames.add(name);
+    }
+  });
+  if (!concreteImageNames.size) return artifacts;
+  return artifacts.filter((artifact) => {
+    const name = artifactImageBasename(artifact);
+    if (!name || !concreteImageNames.has(name)) return true;
+    return !isBareArtifactSource(artifactPath(artifact));
+  });
+}
+
 function normalizeArtifactSource(value?: string) {
   return String(value || "")
     .trim()
@@ -503,7 +540,7 @@ function mergeAgentArtifacts(primary: AgentArtifact[] = [], legacy: ArtifactItem
   };
   primary.forEach((artifact) => add(artifact));
   legacy.map(legacyArtifactToAgentArtifact).forEach(add);
-  return items;
+  return dropBarePreviewDuplicateArtifacts(items);
 }
 
 function mergeArtifacts(...groups: ArtifactItem[][]) {
@@ -967,7 +1004,7 @@ function ArtifactShelf({
     if (statStatus === "ready" || statStatus === "preview") return true;
     if (statStatus === "pending") return true;
     if (statStatus === "missing" && String(artifact.status || "").toLowerCase() === "pending" && attempts < ARTIFACT_PENDING_MAX_RETRIES) return true;
-    if (artifact.kind === "image" && (artifact.previewUrl || artifact.thumbnailUrl || source)) return true;
+    if (artifact.kind === "image" && (artifact.previewUrl || artifact.thumbnailUrl)) return true;
     return !source;
   });
   if (!items.length && !hiddenImplementationItems.length) return null;
@@ -1064,7 +1101,7 @@ function ArtifactShelf({
           const blocked = openBlocked && !(artifact.kind === "image" && availabilityStatus === "preview");
           const displayPreviewUrl = artifactPreviewAllowed(availabilityStatus) ? previewUrl : "";
           const isPreviewableImage = artifact.kind === "image" && Boolean(displayPreviewUrl);
-          const canRetouchImage = Boolean(onImageRetouchRequest && isPreviewableImage && source && !blocked);
+          const canRetouchImage = Boolean(onImageRetouchRequest && isPreviewableImage && source && availabilityStatus === "ready" && !blocked);
           const markdownArtifact = isMarkdownArtifact(artifact);
           const menuOpen = openMenu?.id === artifact.id;
           const menuStyle = openMenu && menuOpen ? artifactMenuStyle(openMenu) : undefined;

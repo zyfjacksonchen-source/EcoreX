@@ -1,0 +1,50 @@
+{
+  "version": "0.3.0",
+  "slice": "S12-user-observed-hotfix",
+  "status": "PASS",
+  "generatedAt": "2026-07-08T04:39:11Z",
+  "checks": [
+    {
+      "name": "python compile changed runtime files",
+      "status": "PASS"
+    },
+    {
+      "name": "renderer production build",
+      "status": "PASS",
+      "command": "npm run build:renderer"
+    },
+    {
+      "name": "direct imagegen n=2 mock",
+      "status": "PASS",
+      "details": {
+        "count": 2,
+        "orderedFilenameSegments": [
+          "01",
+          "02"
+        ],
+        "networkUsed": false
+      }
+    },
+    {
+      "name": "runtime images preview root",
+      "status": "PASS",
+      "details": {
+        "rootSuffix": "runtime/images",
+        "accessMode": "read-only-preview"
+      }
+    },
+    {
+      "name": "diff whitespace check",
+      "status": "PASS",
+      "command": "git diff --check"
+    }
+  ],
+  "fixes": [
+    "stale admin update-state notice hidden for versions at or below current runtime",
+    "update-state notice can be dismissed",
+    "runtime generated images are previewable through /api/file",
+    "bare filename-only preview duplicate image artifacts are removed when a concrete artifact exists",
+    "precision retouch only opens from verified ready image artifacts",
+    "direct imagegen and web image jobs preserve output_count/n semantics"
+  ]
+}

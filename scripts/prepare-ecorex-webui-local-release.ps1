@@ -698,10 +698,10 @@ function Compare-ExternalConnectionSnapshots {
         [Parameter(Mandatory = $true)]$After
     )
     if (-not $Before -or [string]$Before.status -ne "pass") { return @() }
-    if (-not $After -or [string]$After.status -ne "pass") { return @($Before.configuredIds + $Before.connectedIds + $Before.callableIds | Where-Object { $_ } | Sort-Object -Unique) }
-    $required = @($Before.configuredIds + $Before.connectedIds + $Before.callableIds | Where-Object { $_ } | Sort-Object -Unique)
+    $required = @($Before.connectedIds + $Before.callableIds | Where-Object { $_ } | Sort-Object -Unique)
     if (-not $required.Count) { return @() }
-    $available = @($After.configuredIds + $After.connectedIds + $After.callableIds | Where-Object { $_ } | Sort-Object -Unique)
+    if (-not $After -or [string]$After.status -ne "pass") { return $required }
+    $available = @($After.connectedIds + $After.callableIds | Where-Object { $_ } | Sort-Object -Unique)
     return @($required | Where-Object { $available -notcontains $_ })
 }
 
@@ -724,7 +724,7 @@ function Get-ExternalConnectionHealthPayload {
         required = $true
         status = $healthStatus
         passed = ($healthStatus -in @("pass", "not_applicable"))
-        policy = "preserve configured and connected external tools across online update"
+        policy = "preserve connected and callable external tools across online update; configured-only connectors are recorded for diagnostics"
         preservedRoots = @("workspace mcp.json", "state appdata", "state tools")
         before = $script:PreUpdateExternalConnections
         after = $script:PostUpdateExternalConnections
@@ -1651,11 +1651,14 @@ after = json.loads(sys.argv[2] or "{}")
 if before.get("status") != "pass":
     print("[]")
     raise SystemExit(0)
-required = set(before.get("configuredIds") or []) | set(before.get("connectedIds") or []) | set(before.get("callableIds") or [])
+required = set(before.get("connectedIds") or []) | set(before.get("callableIds") or [])
+if not required:
+    print("[]")
+    raise SystemExit(0)
 if after.get("status") != "pass":
     print(json.dumps(sorted(required), ensure_ascii=False))
     raise SystemExit(0)
-available = set(after.get("configuredIds") or []) | set(after.get("connectedIds") or []) | set(after.get("callableIds") or [])
+available = set(after.get("connectedIds") or []) | set(after.get("callableIds") or [])
 print(json.dumps(sorted(required - available), ensure_ascii=False))
 PY
 }

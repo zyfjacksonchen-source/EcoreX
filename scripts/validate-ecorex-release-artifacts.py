@@ -422,6 +422,14 @@ def is_external_artifact(artifact: dict) -> bool:
     return bool(artifact.get("external")) or href.startswith(("http://", "https://"))
 
 
+def is_deployment_external_only_artifact(artifact_id: str, artifact: dict, downloads_externalized: bool = False) -> bool:
+    return bool(artifact.get("deploymentExternalOnly")) or (
+        downloads_externalized
+        and artifact_id in {"webui-windows-x64", "webui-macos-universal", "webui-win-mac"}
+        and bool(artifact.get("external"))
+    )
+
+
 def is_macos_artifact(artifact_id: str) -> bool:
     return artifact_id.startswith("macos-")
 
@@ -1233,6 +1241,12 @@ def validate_public_zip(
         for required in REQUIRED_SITE_ASSETS:
             require(required in names, f"public zip missing image asset {required}")
             require(archive.getinfo(required).file_size > 0, f"public zip image asset is empty: {required}")
+        for shell_script in (
+            "server/install-ecorex-public-release.sh",
+            "server/install-ecorex-web.sh",
+            "server/check-ecorex-server-release.sh",
+        ):
+            require(b"\r\n" not in archive.read(shell_script), f"public zip {shell_script} must use LF line endings")
         public_manifest = read_zip_json_no_bom(archive, "site/manifest.json")
         site_js = archive.read("site/site.js").decode("utf-8", errors="replace")
         require_contains(
@@ -1344,7 +1358,23 @@ def validate_public_zip(
                 f"public manifest {artifact_id} sha256 mismatch",
             )
             if not is_external_artifact(artifact):
-                require(not is_external_artifact(public_artifact), f"public manifest {artifact_id} must not mark local artifact external")
+                deployment_external_only = is_deployment_external_only_artifact(
+                    artifact_id,
+                    public_artifact,
+                    downloads_externalized,
+                )
+                if deployment_external_only:
+                    require(is_external_artifact(public_artifact), f"public manifest {artifact_id} must mark deployment-external artifact external")
+                    require(
+                        str(public_artifact.get("deploymentSource") or "") == "manifest-mirrors",
+                        f"public manifest {artifact_id} deploymentSource mismatch",
+                    )
+                    require(
+                        bool((public_manifest.get("download") or {}).get("mirrors")),
+                        f"public manifest {artifact_id} requires download mirrors",
+                    )
+                else:
+                    require(not is_external_artifact(public_artifact), f"public manifest {artifact_id} must not mark local artifact external")
                 require(str(public_artifact.get("href") or "") == f"downloads/{file_name}", f"public manifest {artifact_id} href must be downloads/{file_name}")
 
         download_files = {
@@ -1397,10 +1427,20 @@ def validate_public_zip(
                 require(bool(checksum.get("external")), f"checksums externalized marker missing for {artifact_id}")
                 require(str(checksum.get("relativePath") or "") == rel, f"checksums relativePath mismatch for {artifact_id}")
                 require(str(checksum.get("href") or "") == f"downloads/{file_name}", f"checksums href mismatch for {artifact_id}")
-                require(
-                    str(checksum.get("deploymentSourceFileName") or file_name) == file_name,
-                    f"checksums deployment source mismatch for {artifact_id}",
-                )
+                if is_deployment_external_only_artifact(artifact_id, checksum, downloads_externalized):
+                    require(
+                        str(checksum.get("deploymentSource") or "") == "manifest-mirrors",
+                        f"checksums deployment source mismatch for {artifact_id}",
+                    )
+                    require(
+                        not checksum.get("deploymentSourceFileName"),
+                        f"checksums deployment source file should be omitted for external-only {artifact_id}",
+                    )
+                else:
+                    require(
+                        str(checksum.get("deploymentSourceFileName") or file_name) == file_name,
+                        f"checksums deployment source mismatch for {artifact_id}",
+                    )
                 require(int(checksum.get("size") or 0) == expected_size, f"checksums size mismatch for {artifact_id}")
                 require(str(checksum.get("sha256") or "").upper() == expected_digest, f"checksums sha mismatch for {artifact_id}")
                 continue

@@ -165,8 +165,8 @@
                           "variant":  "WebUI one-click local package",
                           "fileName":  "EcoreX_0.3.0-webui-windows-x64.zip",
                           "href":  "downloads/EcoreX_0.3.0-webui-windows-x64.zip",
-                          "size":  551265386,
-                          "sha256":  "3BF9A6546A294C2A96AC32786B7B893848BF3DC6A30897F228AD13CCDC49A48C",
+                          "size":  551267218,
+                          "sha256":  "B5845638264377BAF1DC685709957E836A0035DF9EE647491524CC31B149BFA8",
                           "status":  "ready",
                           "source":  "Local v0.3.0 WebUI Windows artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
                           "updatedAt":  "2026-07-08",
@@ -186,8 +186,8 @@
                           "variant":  "WebUI one-click local package",
                           "fileName":  "EcoreX_0.3.0-webui-macos-universal.zip",
                           "href":  "downloads/EcoreX_0.3.0-webui-macos-universal.zip",
-                          "size":  652441190,
-                          "sha256":  "1E7EC8295EEE2736A711AD1C152CB7EABF32A12D61C27DF5CC8EF060A211AA28",
+                          "size":  652443004,
+                          "sha256":  "78C2B096A6BE5F9DBBB12BA5C029748AAA8054608F8D18B2F068AB19CA551C28",
                           "status":  "ready",
                           "source":  "Local v0.3.0 WebUI macOS artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
                           "updatedAt":  "2026-07-08",
@@ -315,18 +315,19 @@
                           "variant":  "Web service deployment package",
                           "fileName":  "EcoreX_0.3.0-web-linux-service.tar.gz",
                           "href":  "downloads/EcoreX_0.3.0-web-linux-service.tar.gz",
-                          "size":  0,
-                          "sha256":  "pending",
-                          "status":  "pending",
+                          "size":  4249090,
+                          "sha256":  "6ECC081E3C97CEBB4C6098B8C58B666873B9A4F6111F82E357953EE72E1B054B",
+                          "status":  "ready",
                           "visible":  false,
-                          "source":  "v0.3.0 Web service tarball must be produced by release orchestrator and validated before promotion.",
-                          "updatedAt":  "2026-07-07",
+                          "source":  "Local v0.3.0 Web service tarball built by prepare-ecorex-web-release.ps1 and validated by release artifact checks.",
+                          "updatedAt":  "2026-07-08",
                           "signature":  {
                                             "algorithm":  "optional-minisign",
                                             "status":  "not-required"
                                         },
                           "smoke":  {
-                                        "status":  "pending"
+                                        "status":  "pass",
+                                        "evidence":  "docs/v0.3.0/artifacts/webui-release-orchestrator-smoke.json"
                                     }
                       }
                   ],

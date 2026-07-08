@@ -35,6 +35,7 @@ WEB_TAR = ROOT / "release-artifacts" / f"EcoreX_{VERSION}-web-linux-service.tar.
 PUBLIC_ZIP = ROOT / "release-artifacts" / f"EcoreX_{VERSION}-public-release.zip"
 WEBUI_WINDOWS = ROOT / "release-artifacts" / f"EcoreX_{VERSION}-webui-windows-x64.zip"
 WEBUI_MACOS = ROOT / "release-artifacts" / f"EcoreX_{VERSION}-webui-macos-universal.zip"
+LOCAL_MANIFEST = ROOT / "deploy" / "ecorex-site" / "manifest.json"
 DOWNLOAD_CHUNKS_ROOT = ROOT / "release-artifacts" / "download-chunks"
 INSTALL_WEB = ROOT / "scripts" / "install-ecorex-web.sh"
 CHECK_WEB = ROOT / "scripts" / "check-ecorex-web-release.sh"
@@ -117,8 +118,32 @@ class ProductionDeploy:
             if promote_public_release is None
             else bool(promote_public_release)
         )
+        self.skip_webui_download_upload = (
+            truthy(os.environ.get("ECOREX_SKIP_WEBUI_DOWNLOAD_UPLOAD"))
+            or self.manifest_webui_downloads_externalized()
+        )
         self.remote_dir = f"/srv/ecorex-agent-download/upload-staging/ecorex-v{VERSION.replace('.', '')}-release-{int(time.time())}"
         self.commands: list[dict[str, Any]] = []
+
+    def manifest_webui_downloads_externalized(self) -> bool:
+        if not LOCAL_MANIFEST.is_file():
+            return False
+        try:
+            payload = json.loads(LOCAL_MANIFEST.read_text(encoding="utf-8-sig"))
+        except Exception:
+            return False
+        download = payload.get("download") if isinstance(payload.get("download"), dict) else {}
+        artifacts = {
+            str(item.get("id") or ""): item
+            for item in (payload.get("artifacts") or [])
+            if isinstance(item, dict)
+        }
+        required = ("webui-windows-x64", "webui-macos-universal")
+        return (
+            bool(payload.get("downloadsExternalized"))
+            and bool(download.get("mirrors"))
+            and all(artifact_id in artifacts for artifact_id in required)
+        )
 
     def secret_hash(self, value: str) -> str:
         return sha256_text(value)[:16]
@@ -494,17 +519,31 @@ PY
                 (CHECK_SERVER, remote_check_server, "upload_check_server"),
             ):
                 self.upload(local, remote, name)
-            for local, name in (
-                (WEBUI_WINDOWS, "webui_windows_download"),
-                (WEBUI_MACOS, "webui_macos_download"),
-            ):
-                cache_name = f"{self.download_artifact_meta[local.name]['sha256']}-{local.name}"
-                self.ensure_download_source(
-                    local,
-                    posixpath.join(remote_downloads_source, local.name),
-                    posixpath.join(remote_cache_dir, cache_name),
-                    name,
-                )
+            if self.skip_webui_download_upload:
+                for local, name in (
+                    (WEBUI_WINDOWS, "webui_windows_download"),
+                    (WEBUI_MACOS, "webui_macos_download"),
+                ):
+                    meta = self.download_artifact_meta[local.name]
+                    self.record(
+                        f"{name}_externalized_skipped",
+                        f"deployment-external-only:{local.name}:{meta['size']}:{meta['sha256']}",
+                        0,
+                        "webui download is served by manifest mirrors; server-local upload skipped",
+                        "",
+                    )
+            else:
+                for local, name in (
+                    (WEBUI_WINDOWS, "webui_windows_download"),
+                    (WEBUI_MACOS, "webui_macos_download"),
+                ):
+                    cache_name = f"{self.download_artifact_meta[local.name]['sha256']}-{local.name}"
+                    self.ensure_download_source(
+                        local,
+                        posixpath.join(remote_downloads_source, local.name),
+                        posixpath.join(remote_cache_dir, cache_name),
+                        name,
+                    )
             self.remote(
                 "stage_web_tar_download_source",
                 f"cp -p {shlex.quote(remote_web_tar)} {shlex.quote(posixpath.join(remote_downloads_source, WEB_TAR.name))}",

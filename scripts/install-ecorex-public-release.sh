@@ -141,6 +141,13 @@ def require_download_source(artifact_id, rel, artifact):
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, target)
 
+def is_deployment_external_only(artifact_id, artifact):
+    return bool(artifact.get("deploymentExternalOnly")) or (
+        str(artifact_id).startswith("webui-")
+        and bool(artifact.get("external"))
+        and str(artifact.get("deploymentSource") or "") == "manifest-mirrors"
+    )
+
 for artifact_id, artifact in artifacts.items():
     rel = artifact.get("relativePath", "")
     if not rel:
@@ -151,6 +158,8 @@ for artifact_id, artifact in artifacts.items():
         if len(str(artifact.get("sha256") or "")) != 64:
             raise SystemExit(f"External artifact {artifact_id} has no SHA256")
         if rel.startswith("site/downloads/"):
+            if is_deployment_external_only(artifact_id, artifact):
+                continue
             require_download_source(artifact_id, rel, artifact)
         continue
     path = root / rel

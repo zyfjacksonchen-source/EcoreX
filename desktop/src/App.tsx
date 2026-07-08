@@ -504,6 +504,7 @@ const SKILL_DEFAULTS_STORAGE_KEY = "ecorex-skill-defaults-v1";
 const RELEASE_NOTES_SEEN_STORAGE_KEY = "ecorex-release-notes-seen-version";
 const BACKGROUND_UPDATE_APPLIED_STORAGE_KEY = "ecorex-background-update-applied";
 const UPDATE_NOTICE_DISMISSED_STORAGE_KEY = "ecorex-update-notice-dismissed";
+const UPDATE_STATE_NOTICE_DISMISSED_STORAGE_KEY = "ecorex-update-state-notice-dismissed";
 const SIDEBAR_COLLAPSE_STORAGE_KEY = "ecorex-sidebar-collapse-state-v1";
 const RUN_CENTER_DEV_GATE_STORAGE_KEY = "ecorex-dev-run-center";
 const NEW_SESSION_START_TITLE = "和小芯一起开始工作";
@@ -530,6 +531,42 @@ function releaseNotesSeenId(notes?: RuntimeReleaseNotes | null, fallbackVersion?
 function backgroundUpdateSeenId(state?: RuntimeUpdateState | null) {
   if (!state?.version) return "";
   return `${state.version}:${state.noticeRevision || state.generatedAt || "installed"}`;
+}
+
+function runtimeUpdateStateSeenId(state?: RuntimeUpdateState | null) {
+  if (!state?.stateAvailable) return "";
+  return [
+    state.source || "runtime-update-state",
+    state.status || "unknown",
+    state.version || "",
+    state.noticeRevision || state.generatedAt || state.reason || "state"
+  ].filter(Boolean).join(":");
+}
+
+function compareRuntimeVersions(left?: string, right?: string) {
+  const parse = (value?: string) => {
+    const parts = String(value || "")
+      .split(/[^0-9]+/)
+      .filter(Boolean)
+      .map((part) => Number.parseInt(part, 10))
+      .filter((part) => Number.isFinite(part));
+    return parts.length ? parts : [0];
+  };
+  const a = parse(left);
+  const b = parse(right);
+  const length = Math.max(a.length, b.length);
+  for (let index = 0; index < length; index += 1) {
+    const diff = (a[index] || 0) - (b[index] || 0);
+    if (diff) return diff > 0 ? 1 : -1;
+  }
+  return 0;
+}
+
+function isStaleAdminReleaseNotice(state: RuntimeUpdateState | null | undefined, currentVersion: string) {
+  if (!state?.stateAvailable) return false;
+  if (String(state.source || "") !== "admin-release-notice") return false;
+  if (!state.version || !currentVersion) return false;
+  return compareRuntimeVersions(state.version, currentVersion) <= 0;
 }
 
 function backgroundUpdateReadyForRefresh(state?: RuntimeUpdateState | null) {
@@ -4159,6 +4196,13 @@ export function App() {
       return "";
     }
   });
+  const [updateStateNoticeDismissed, setUpdateStateNoticeDismissed] = useState(() => {
+    try {
+      return window.localStorage.getItem(UPDATE_STATE_NOTICE_DISMISSED_STORAGE_KEY) || "";
+    } catch {
+      return "";
+    }
+  });
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
@@ -5422,11 +5466,15 @@ export function App() {
     && backgroundUpdateReadyForRefresh(runtimeSnapshot.updateState)
   );
   const runtimeUpdateStateInfo = runtimeUpdateStateDetails(runtimeSnapshot.updateState);
+  const runtimeUpdateStateKey = runtimeUpdateStateSeenId(runtimeSnapshot.updateState);
   const showRuntimeUpdateStateBanner = Boolean(
     runtimeSnapshot.updateState?.stateAvailable
+    && runtimeUpdateStateKey
+    && runtimeUpdateStateKey !== updateStateNoticeDismissed
     && runtimeUpdateStateInfo.status
     && runtimeUpdateStateInfo.status !== "activated"
     && !showBackgroundUpdateDialog
+    && !isStaleAdminReleaseNotice(runtimeSnapshot.updateState, appVersion)
   );
   const runtimeUpdateKey = updateNoticeSeenId(runtimeUpdateCheck);
   const runtimeUpdatePageActionLabel = "查看更新";
@@ -10338,6 +10386,16 @@ export function App() {
     }
   }
 
+  function dismissRuntimeUpdateStateNotice(key: string) {
+    if (!key) return;
+    setUpdateStateNoticeDismissed(key);
+    try {
+      window.localStorage.setItem(UPDATE_STATE_NOTICE_DISMISSED_STORAGE_KEY, key);
+    } catch {
+      // The banner can still close for this render even if storage is unavailable.
+    }
+  }
+
   function openRuntimeUpdatePage() {
     const url = runtimeUpdateCheck?.releasePageUrl || runtimeUpdateCheck?.downloadUrl || "https://mvdcm.ecoremedia.net/ecorex-agent/";
     window.open(url, "_blank", "noopener,noreferrer");
@@ -11764,6 +11822,15 @@ export function App() {
                   <RefreshCw aria-hidden="true" />重试
                 </button>
               )}
+              <button
+                type="button"
+                className="icon-button"
+                title="关闭提示"
+                aria-label="关闭更新状态提示"
+                onClick={() => dismissRuntimeUpdateStateNotice(runtimeUpdateStateKey)}
+              >
+                <X aria-hidden="true" />
+              </button>
             </div>
           </section>
         )}

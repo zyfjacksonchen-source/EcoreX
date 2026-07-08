@@ -186,6 +186,14 @@ def is_external(artifact):
     href = str(artifact.get("href") or "").lower()
     return bool(artifact.get("external")) or href.startswith(("http://", "https://"))
 
+def is_deployment_external_only(artifact):
+    artifact_id = str(artifact.get("id") or artifact.get("fileName") or "")
+    return bool(artifact.get("deploymentExternalOnly")) or (
+        artifact_id.startswith("webui-")
+        and bool(payload.get("downloadsExternalized"))
+        and bool(artifact.get("external"))
+    )
+
 def is_publishable(artifact):
     status = artifact.get("status") or ""
     artifact_id = str(artifact.get("id") or artifact.get("fileName") or "")
@@ -285,7 +293,7 @@ for artifact in payload.get("artifacts") or []:
         href = artifact.get("href") or ""
         expected_size = int(artifact.get("size") or 0)
         expected_sha = str(artifact.get("sha256") or "").upper()
-        if not str(href).lower().startswith(("http://", "https://")):
+        if not str(href).lower().startswith(("http://", "https://")) and not is_deployment_external_only(artifact):
             fail(f"external artifact {artifact_id} href is not HTTP(S)")
         elif expected_size <= 0:
             fail(f"external artifact {artifact_id} has no positive size")
@@ -423,6 +431,8 @@ def status_for(url):
     except urllib.error.HTTPError as exc:
         if exc.code != 405:
             return exc.code
+    except Exception as exc:
+        return f"error:{type(exc).__name__}:{exc}"
     request = urllib.request.Request(url, method="GET")
     request.add_header("Range", "bytes=0-0")
     try:
@@ -431,7 +441,7 @@ def status_for(url):
     except urllib.error.HTTPError as exc:
         return exc.code
     except Exception as exc:
-        return f"error:{exc}"
+        return f"error:{type(exc).__name__}:{exc}"
 
 def text_for(url):
     try:
@@ -439,6 +449,36 @@ def text_for(url):
             return response.read().decode("utf-8", errors="replace")
     except Exception as exc:
         return f"__error__:{exc}"
+
+def is_deployment_external_only(artifact):
+    artifact_id = str(artifact.get("id") or artifact.get("fileName") or "")
+    return bool(artifact.get("deploymentExternalOnly")) or (
+        artifact_id.startswith("webui-")
+        and bool(payload.get("downloadsExternalized"))
+        and bool(artifact.get("external"))
+    )
+
+def join_url(base, path):
+    return urllib.parse.urljoin(str(base).rstrip("/") + "/", str(path).lstrip("/"))
+
+def artifact_urls(artifact):
+    href = artifact.get("href") or f"downloads/{artifact.get('fileName', '')}"
+    if str(href).lower().startswith(("http://", "https://")):
+        return [str(href)]
+    urls = []
+    download = payload.get("download") if isinstance(payload.get("download"), dict) else {}
+    for mirror in download.get("mirrors") or []:
+        if not isinstance(mirror, dict):
+            continue
+        base = mirror.get("baseUrl") or ""
+        if not str(base).lower().startswith(("http://", "https://")):
+            continue
+        path = artifact.get("fileName") if str(mirror.get("pathMode") or "").lower() == "filename" else href
+        if path:
+            urls.append(join_url(base, path))
+    if not is_deployment_external_only(artifact) or not urls:
+        urls.append(join_url(base_url, href))
+    return list(dict.fromkeys(urls))
 
 def is_publishable(artifact):
     global failures
@@ -549,16 +589,12 @@ for artifact in payload.get("artifacts") or []:
         ready_windows[str(artifact_id)] = artifact
     if status == "ready-unsigned":
         failures += validate_macos_unsigned_install_smoke(artifact)
-    href = artifact.get("href") or f"downloads/{artifact.get('fileName', '')}"
-    if str(href).lower().startswith(("http://", "https://")):
-        url = href
+    attempts = [(url, status_for(url)) for url in artifact_urls(artifact)]
+    ok = next(((url, code) for url, code in attempts if code in (200, 206)), None)
+    if ok:
+        print(f"PASS http artifact {artifact_id} {ok[0]} -> {ok[1]}")
     else:
-        url = f"{base_url}/{href.lstrip('/')}"
-    status_code = status_for(url)
-    if status_code in (200, 206):
-        print(f"PASS http artifact {artifact_id} {url} -> {status_code}")
-    else:
-        print(f"FAIL http artifact {artifact_id} {url} -> {status_code}")
+        print(f"FAIL http artifact {artifact_id} {attempts}")
         failures += 1
 
 def validate_public_windows_feed(artifact_id, rel_dir):

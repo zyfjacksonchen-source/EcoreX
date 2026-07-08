@@ -2,29 +2,29 @@
     "schema":  "ecorex.v0.3.0.user-online-update-local-smoke.v1",
     "status":  "PASS",
     "version":  "0.3.0",
-    "generatedAt":  "2026-07-08T00:09:22.2339084Z",
+    "generatedAt":  "2026-07-08T05:09:23.2518686Z",
     "baseUrl":  "http://127.0.0.1:9970",
     "sourcePort":  9970,
     "runtimePort":  9939,
     "package":  {
                     "fileName":  "EcoreX_0.3.0-webui-windows-x64.zip",
-                    "size":  551265386,
-                    "sha256":  "3BF9A6546A294C2A96AC32786B7B893848BF3DC6A30897F228AD13CCDC49A48C"
+                    "size":  551267218,
+                    "sha256":  "B5845638264377BAF1DC685709957E836A0035DF9EE647491524CC31B149BFA8"
                 },
     "redacted":  true,
-    "sourceProcessId":  30428,
-    "installerProcessId":  2740,
+    "sourceProcessId":  6096,
+    "installerProcessId":  37468,
     "installerWrapperStoppedAfterRuntimeReady":  true,
     "installExitCode":  -1,
     "webuiUrl":  "http://127.0.0.1:9939/app/",
-    "currentRuntimeLeaf":  "runtime-0.3.0-df3d0b53",
+    "currentRuntimeLeaf":  "runtime-0.3.0-127ee687",
     "updateState":  {
                         "status":  "installed",
                         "externalConnections":  {
                                                     "required":  true,
                                                     "status":  "not_applicable",
                                                     "passed":  true,
-                                                    "policy":  "preserve configured and connected external tools across online update",
+                                                    "policy":  "preserve connected and callable external tools across online update; configured-only connectors are recorded for diagnostics",
                                                     "preservedRoots":  [
                                                                            "workspace mcp.json",
                                                                            "state appdata",
@@ -56,7 +56,7 @@
                                                                   "callableIds":  [
 
                                                                                   ],
-                                                                  "checkedAt":  "2026-07-08T00:14:03.2600988Z",
+                                                                  "checkedAt":  "2026-07-08T05:12:21.2058672Z",
                                                                   "redacted":  true
                                                               },
                                                     "missingIds":  [
@@ -93,8 +93,8 @@
                        "name":  "downloaded package matches manifest",
                        "status":  "PASS",
                        "detail":  {
-                                      "sha256":  "3BF9A6546A294C2A96AC32786B7B893848BF3DC6A30897F228AD13CCDC49A48C",
-                                      "size":  551265386,
+                                      "sha256":  "B5845638264377BAF1DC685709957E836A0035DF9EE647491524CC31B149BFA8",
+                                      "size":  551267218,
                                       "exists":  true
                                   }
                    },
@@ -102,7 +102,7 @@
                        "name":  "installed runtime responds with v0.3.0",
                        "status":  "PASS",
                        "detail":  {
-                                      "runtimeLeaf":  "runtime-0.3.0-df3d0b53",
+                                      "runtimeLeaf":  "runtime-0.3.0-127ee687",
                                       "url":  "http://127.0.0.1:9939/api/version",
                                       "version":  "0.3.0"
                                   }
@@ -155,11 +155,11 @@
                ],
     "install":  {
                     "stderrTail":  "\n",
-                    "traceTail":  "[2026-07-08T00:09:17.4704476Z] prepared smoke directories\r\n[2026-07-08T00:09:23.1674346Z] local source ready\r\n[2026-07-08T00:09:23.1744508Z] starting installer\r\n[2026-07-08T00:14:04.4336461Z] installer reached installed state exit=-1 wrapperStopped=True\r\n[2026-07-08T00:14:04.4648925Z] download exists=True size=551265386\r\n[2026-07-08T00:14:06.3146801Z] download hash complete\r\n[2026-07-08T00:14:06.3525896Z] checking version http://127.0.0.1:9939/api/version\r\n[2026-07-08T00:14:06.3936300Z] version ok 0.3.0\r\n[2026-07-08T00:14:06.3986315Z] update-state loaded\r\n[2026-07-08T00:14:06.7848901Z] browser process check count=0\r\n[2026-07-08T00:14:06.7971759Z] checking update endpoint http://127.0.0.1:9939/api/update-check?platform=win32\r\n[2026-07-08T00:14:09.9443121Z] update endpoint ok latest=0.3.0\r\n[2026-07-08T00:14:09.9727782Z] report payload populated\r\n[2026-07-08T00:14:09.9747796Z] entering finally\r\n[2026-07-08T00:14:10.6170934Z] finally complete\r\n",
+                    "traceTail":  "[2026-07-08T05:09:20.8155864Z] prepared smoke directories\r\n[2026-07-08T05:09:24.9800181Z] local source ready\r\n[2026-07-08T05:09:24.9845449Z] starting installer\r\n[2026-07-08T05:12:21.5636715Z] installer reached installed state exit=-1 wrapperStopped=True\r\n[2026-07-08T05:12:21.5916708Z] download exists=True size=551267218\r\n[2026-07-08T05:12:22.4556270Z] download hash complete\r\n[2026-07-08T05:12:22.5171686Z] checking version http://127.0.0.1:9939/api/version\r\n[2026-07-08T05:12:22.5588887Z] version ok 0.3.0\r\n[2026-07-08T05:12:22.5648796Z] update-state loaded\r\n[2026-07-08T05:12:22.9386342Z] browser process check count=0\r\n[2026-07-08T05:12:22.9469889Z] checking update endpoint http://127.0.0.1:9939/api/update-check?platform=win32\r\n[2026-07-08T05:12:28.7822153Z] update endpoint ok latest=0.3.0\r\n[2026-07-08T05:12:28.8090497Z] report payload populated\r\n[2026-07-08T05:12:28.8111806Z] entering finally\r\n[2026-07-08T05:12:29.3283149Z] finally complete\r\n",
                     "stdoutTail":  "Installer output is intentionally not redirected because the installed runtime keeps inherited redirection handles open on Windows. This smoke validates the user path through package hash, update-state, runtime /api/version, and /api/update-check.\n\n",
-                    "sourceStderrTail":  "127.0.0.1 - - [08/Jul/2026 08:09:23] \"GET /manifest.json HTTP/1.1\" 200 -\r\n127.0.0.1 - - [08/Jul/2026 08:09:23] \"GET /manifest.json HTTP/1.1\" 200 -\r\n127.0.0.1 - - [08/Jul/2026 08:09:24] \"HEAD /downloads/EcoreX_0.3.0-webui-windows-x64.zip HTTP/1.1\" 200 -\r\n127.0.0.1 - - [08/Jul/2026 08:09:24] \"GET /downloads/EcoreX_0.3.0-webui-windows-x64.zip HTTP/1.1\" 200 -\r\n127.0.0.1 - - [08/Jul/2026 08:14:06] \"GET /manifest.json HTTP/1.1\" 200 -\r\n"
+                    "sourceStderrTail":  "127.0.0.1 - - [08/Jul/2026 13:09:24] \"GET /manifest.json HTTP/1.1\" 200 -\r\n127.0.0.1 - - [08/Jul/2026 13:09:26] \"GET /manifest.json HTTP/1.1\" 200 -\r\n127.0.0.1 - - [08/Jul/2026 13:09:26] \"HEAD /downloads/EcoreX_0.3.0-webui-windows-x64.zip HTTP/1.1\" 200 -\r\n127.0.0.1 - - [08/Jul/2026 13:09:26] \"GET /downloads/EcoreX_0.3.0-webui-windows-x64.zip HTTP/1.1\" 200 -\r\n127.0.0.1 - - [08/Jul/2026 13:12:22] \"GET /manifest.json HTTP/1.1\" 200 -\r\n"
                 },
-    "smokeRoot":  "C:\\EcoreX-Agent生产版\\tmp\\v030-user-online-update-smoke",
+    "smokeRoot":  "C:\\EcoreX-Agent生产版\\tmp\\v030-user-online-update-smoke-hotfix",
     "smokeRootKept":  false,
     "cleanup":  {
                     "reason":  "removed",
