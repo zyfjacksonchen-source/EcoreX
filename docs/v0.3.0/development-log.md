@@ -385,6 +385,11 @@
   - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-ecorex-webui-orchestrator.ps1 -Version 0.3.0 -SkipBuild -SkipPackage -AllowDirtyTree -Force` -> pass; `deploy/ecorex-site/release-index.json` status `ready`.
   - Synced Windows, macOS, and combined v0.3.0 WebUI packages into `deploy/ecorex-site/downloads/` and wrote `.sha256` sidecars.
   - Verified `deploy/ecorex-site/downloads/` package size/SHA256 against `deploy/ecorex-site/manifest.json` and `deploy/ecorex-site/release-index.json` for `webui-windows-x64` and `webui-macos-universal`.
+  - Pushed branch `codex/ecorex-v0.3.0-hardening` to `origin`.
+  - Created source release `https://github.com/zhangyifanjackson-dotcom/EcoreX/releases/tag/v0.3.0`.
+  - Created installer asset release `https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/tag/v0.3.0`.
+  - Uploaded Windows, macOS, combined WebUI packages and `.sha256` sidecars to the installer asset release.
+  - Verified the manifest primary mirror (`ghproxy.net` -> `EcoreX-installers/releases/download/v0.3.0`) returns HTTP 200 and expected `Content-Length` for all three packages.
   - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-v030-webui-package-runtime.ps1 -PackagePath release-artifacts\EcoreX_0.3.0-webui-windows-x64.zip -OutputPath docs\v0.3.0\artifacts\webui-package-runtime-smoke.json -SmokeRoot tmp\v030-webui-package-runtime-smoke -ExpectedVersion 0.3.0 -Port 9929` -> pass.
   - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-v030-webui-online-update-local.ps1 -PackagePath release-artifacts\EcoreX_0.3.0-webui-windows-x64.zip -OutputPath docs\v0.3.0\artifacts\user-online-update-local-smoke.json -SmokeRoot tmp\v030-user-online-update-smoke -Version 0.3.0 -SourcePort 9970 -RuntimePort 9939 -TimeoutSeconds 600` -> `PASS`, `7/7`.
   - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-v030-webui-release-cdp.ps1 -PackagePath release-artifacts\EcoreX_0.3.0-webui-windows-x64.zip -OutputPath docs\v0.3.0\artifacts\webui-release-cdp-smoke.json -ScreenshotPath docs\v0.3.0\artifacts\webui-release-cdp-smoke.png -SmokeRoot tmp\v030-webui-release-cdp-smoke -Port 9949 -TimeoutSeconds 300` -> `PASS`.
@@ -394,3 +399,4 @@
   - `docs/v0.3.0/artifacts/user-online-update-local-smoke.json`
   - `docs/v0.3.0/artifacts/webui-release-cdp-smoke.json`
   - `docs/v0.3.0/artifacts/webui-release-cdp-smoke.png`
+  - `docs/v0.3.0/artifacts/github-release-v030.json`

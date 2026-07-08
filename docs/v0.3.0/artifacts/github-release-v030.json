@@ -1,0 +1,62 @@
+{
+  "schema": "ecorex.v0.3.0.github-release.v1",
+  "version": "0.3.0",
+  "generatedAt": "2026-07-08T09:18:00+08:00",
+  "status": "pass",
+  "sourceRelease": {
+    "repo": "zhangyifanjackson-dotcom/EcoreX",
+    "tag": "v0.3.0",
+    "url": "https://github.com/zhangyifanjackson-dotcom/EcoreX/releases/tag/v0.3.0",
+    "targetCommitish": "938e16546a7d6b5ce06151f9fbd6ed58415e97f7",
+    "isDraft": false,
+    "isPrerelease": false
+  },
+  "installerRelease": {
+    "repo": "zhangyifanjackson-dotcom/EcoreX-installers",
+    "tag": "v0.3.0",
+    "url": "https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/tag/v0.3.0",
+    "isDraft": false,
+    "isPrerelease": false,
+    "assets": [
+      {
+        "name": "EcoreX_0.3.0-webui-windows-x64.zip",
+        "size": 551265386,
+        "sha256": "3BF9A6546A294C2A96AC32786B7B893848BF3DC6A30897F228AD13CCDC49A48C",
+        "state": "uploaded",
+        "url": "https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.3.0/EcoreX_0.3.0-webui-windows-x64.zip"
+      },
+      {
+        "name": "EcoreX_0.3.0-webui-macos-universal.zip",
+        "size": 652441190,
+        "sha256": "1E7EC8295EEE2736A711AD1C152CB7EABF32A12D61C27DF5CC8EF060A211AA28",
+        "state": "uploaded",
+        "url": "https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.3.0/EcoreX_0.3.0-webui-macos-universal.zip"
+      },
+      {
+        "name": "EcoreX_0.3.0-webui-win-mac.zip",
+        "size": 1204953245,
+        "sha256": "D4E9E0D2EDE0AA200818F9D20E628AB7A9456A962E00EDA1C7DC4A69714543AF",
+        "state": "uploaded",
+        "url": "https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.3.0/EcoreX_0.3.0-webui-win-mac.zip"
+      }
+    ]
+  },
+  "primaryMirrorHeadChecks": [
+    {
+      "url": "https://ghproxy.net/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.3.0/EcoreX_0.3.0-webui-windows-x64.zip",
+      "status": 200,
+      "contentLength": 551265386
+    },
+    {
+      "url": "https://ghproxy.net/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.3.0/EcoreX_0.3.0-webui-macos-universal.zip",
+      "status": 200,
+      "contentLength": 652441190
+    },
+    {
+      "url": "https://ghproxy.net/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.3.0/EcoreX_0.3.0-webui-win-mac.zip",
+      "status": 200,
+      "contentLength": 1204953245
+    }
+  ],
+  "redacted": true
+}

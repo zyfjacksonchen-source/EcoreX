@@ -61,6 +61,13 @@
       "detail": "deploy/ecorex-site/downloads contains the Windows, macOS, and combined v0.3.0 WebUI packages with sha256 sidecar files. Manifest/release-index package size and SHA256 match the actual site download files."
     },
     {
+      "name": "GitHub release primary mirror assets",
+      "command": "gh release create/upload v0.3.0 and HEAD-check ghproxy.net EcoreX-installers release asset URLs",
+      "status": "pass",
+      "detail": "Source release exists in zhangyifanjackson-dotcom/EcoreX. Client primary asset release exists in zhangyifanjackson-dotcom/EcoreX-installers. ghproxy.net HEAD checks returned 200 with expected Content-Length for Windows, macOS, and combined packages.",
+      "evidence": "docs/v0.3.0/artifacts/github-release-v030.json"
+    },
+    {
       "name": "real external connector catalog and stable MCP discovery",
       "command": "source implementation in WebUI + /api/external-connections + ToolManager.ensure_mcp_configured_loaded",
       "status": "pass-with-credentialed-gate",
