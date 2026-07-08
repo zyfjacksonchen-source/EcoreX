@@ -995,7 +995,7 @@ def test_v027_default_release_flow_externalizes_downloads_with_public_installer_
     assert '$downloadsExternalized = -not [bool]$EmbedDownloads' in public_packager
     assert 'if ($downloadsExternalized)' in public_packager
     assert 'downloadsExternalized = [bool]$downloadsExternalized' in public_packager
-    assert 'EcoreX-installers/releases/download/v$Version' in public_packager
+    assert 'https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v$Version' not in public_packager
     assert r'\d+\.\d+\.\d+(?:\.\d+)?' in (root / "scripts" / "validate-ecorex-release-artifacts.py").read_text(encoding="utf-8")
     assert 'release-ecorex-default.ps1' in desktop_package["scripts"]["webui:stage-public"]
     assert 'release-ecorex-default.ps1' in desktop_package["scripts"]["release:default"]
@@ -1005,8 +1005,11 @@ def test_v027_default_release_flow_externalizes_downloads_with_public_installer_
     assert '$webLinuxService = Join-Path $repoRoot "release-artifacts\\EcoreX_${Version}-web-linux-service.tar.gz"' in default_release
     assert '"-WebLinuxServicePath", $webLinuxService' in default_release
     assert 'function Set-DefaultDownloadMirror' in default_release
-    assert 'github-release-v$Version' in default_release
-    assert 'EcoreX-installers/releases/download/v$Version' in default_release
+    assert 'ecorex-github-cn-mirror-v$Version' in default_release
+    assert 'ecorex-download-cdn-v$Version' in default_release
+    assert 'https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v$Version' in default_release
+    assert 'https://dl.ecoremedia.net/ecorex-agent/downloads' in default_release
+    assert 'github-release-v$Version' not in default_release
     assert 'npm run release:default' in release_doc
     assert '-EmbedDownloads' in release_doc
 
@@ -1027,17 +1030,18 @@ def test_v027_webui_installers_keep_windows_macos_user_flow_consistent():
     assert 'Get-DownloadUrls -Manifest $manifest -Artifact $artifact -OriginBaseUrl $BaseUrl' in win_installer
     assert 'Save-UrlWithFallback -Urls $downloadUrls' in win_installer
     assert "ECOREX_DOWNLOAD_ASSET_BASE_URLS" in win_installer
-    assert 'download_file_from_urls "$ZIP_PATH" "$ARTIFACT_SHA"' in mac_installer
+    assert 'download_file_from_urls "$ZIP_PATH" "$ARTIFACT_SHA" "$ARTIFACT_SIZE"' in mac_installer
     assert 'manifest_value "download.mirrors.$index.baseUrl"' in mac_installer
     assert "ECOREX_DOWNLOAD_ASSET_BASE_URLS" in mac_installer
     assert 'Test-ExpectedHash -Path $CachePath -ExpectedSha256 $ExpectedSha256' in win_installer
+    assert '[System.Security.Cryptography.SHA256]::Create()' in win_installer
     assert 'sha256_file "$destination")" == "$expected_sha"' in mac_installer
     assert '"--continue-at", "-"' in win_installer
     assert 'resume_args' not in mac_installer
     assert 'should_resume=1' in mac_installer
-    assert "EcoreX-WebUI-Installer/0.2.7" in win_installer
-    assert "EcoreX WebUI installer script: 0.2.7" in win_installer
-    assert "EcoreX WebUI installer script: 0.2.7" in mac_installer
+    assert "EcoreX-WebUI-Installer/0.2.9" in win_installer
+    assert "EcoreX WebUI installer script: 0.2.9" in win_installer
+    assert "EcoreX WebUI installer script: 0.2.9" in mac_installer
     assert "install-ecorex-webui-win.ps1" in win_installer
     assert "install-ecorex-webui-mac.sh" in mac_installer
     webui_policy = manifest["update"]["webui"]
@@ -1049,13 +1053,26 @@ def test_v027_webui_installers_keep_windows_macos_user_flow_consistent():
     assert webui_policy["backgroundUpdate"]["healthCheck"] == "/api/version"
     assert webui_policy["backgroundUpdate"]["stateFile"] == "update-state.json"
     assert webui_policy["backgroundUpdate"]["autoLaunchBrowser"] == "never-in-background"
-    assert manifest["download"]["mode"] == "mirror-first-origin-fallback"
-    assert manifest["download"]["minimumTargetBytesPerSecond"] >= 1048576
+    assert manifest["download"]["mode"] == "github-cn-primary"
+    assert manifest["download"]["mirrors"][0]["kind"] == "github-release-cn-mirror"
+    assert "minimumTargetBytesPerSecond" not in manifest["download"]
+    assert "fallback" not in manifest["download"]
     assert isinstance(manifest["download"]["mirrors"], list)
     assert 'ValidateSet("manual", "background")' in local_packager
     assert '$backgroundUpdate = $UpdateMode -ieq "background"' in local_packager
     assert 'Get-ActiveRequestCount -StateDir $stateDir' in local_packager
     assert 'Write-UpdateState -StateDir $stateDir -Status "deferred" -Reason "active_requests"' in local_packager
+    assert '"runtime-__ECOREX_VERSION__-" + [Guid]::NewGuid().ToString("N").Substring(0, 8)' in local_packager
+    assert 'Get-WebUiPythonProcesses -RuntimeDir $runtimeDir -InstallRoot $installRoot' in local_packager
+    assert 'Stop-ExistingWebUi -RuntimeDir $runtimeDir -InstallRoot $installRoot' in local_packager
+    assert 'current-runtime.txt' in local_packager
+    assert 'ecorex-webui.url' in local_packager
+    assert 'Launch EcoreX WebUI.ps1' in local_packager
+    assert 'EcoreX WebUI.lnk' in local_packager
+    assert 'EcoreX WebUI.command' in local_packager
+    assert 'Start or reopen EcoreX WebUI' in local_packager
+    assert 'write_launch_script' in local_packager
+    assert 'Remove-OldRuntimeDirs -InstallRoot $installRoot -CurrentRuntimeDir $runtimeDir' in local_packager
     assert 'activationPolicy = if ($backgroundUpdate) { "prompt-soft-refresh-existing-tab" }' in local_packager
     assert 'autoLaunchBrowser = if ($backgroundUpdate) { "never-in-background" }' in local_packager
     assert 'healthCheck = [ordered]@{' in local_packager

@@ -345,6 +345,10 @@ function Update-ReadyFileArtifact {
     Set-ArtifactProperty $artifact "status" "ready"
     Set-ArtifactProperty $artifact "updatedAt" $UpdatedAt
     Set-ArtifactProperty $artifact "source" $Source
+    Set-ArtifactProperty $artifact "smoke" ([ordered]@{
+        status = "pass"
+        evidence = "docs/v0.3.0/artifacts/webui-release-orchestrator-smoke.json"
+    })
 }
 
 function Update-MacArtifact {

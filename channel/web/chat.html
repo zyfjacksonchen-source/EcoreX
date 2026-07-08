@@ -391,6 +391,10 @@
                                         <i class="fas fa-folder-plus"></i>
                                         <span data-i18n="attach_menu_folder">上传文件夹</span>
                                     </button>
+                                    <button id="attach-tencent-docs-option" type="button" class="attach-menu-item" onclick="openTencentDocsFlow()">
+                                        <img src="assets/logos/tencent-docs.png" alt="" class="tencent-docs-logo">
+                                        <span data-i18n="attach_menu_tencent_docs">腾讯文档</span>
+                                    </button>
                                 </div>
                                 <div id="slash-menu" class="slash-menu hidden"></div>
                                 <div class="flex-1 min-w-0 relative flex items-center">
@@ -429,7 +433,7 @@
                 <!-- ====================================================== -->
                 <div id="view-config" class="view">
                     <div class="flex-1 overflow-y-auto p-6">
-                        <div class="max-w-4xl mx-auto">
+                        <div class="w-full max-w-[1600px] mx-auto">
                             <div class="flex items-center justify-between mb-6">
                                 <div>
                                     <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100" data-i18n="config_title">配置管理</h2>
@@ -726,6 +730,10 @@
                                                 class="memory-tab px-3 py-1.5 rounded-md text-xs font-medium cursor-pointer transition-colors duration-150">
                                             <i class="fas fa-seedling mr-1.5"></i><span data-i18n="memory_tab_dreams">自主进化</span>
                                         </button>
+                                        <button id="memory-tab-graph" onclick="switchMemoryTab('graph')"
+                                                class="memory-tab px-3 py-1.5 rounded-md text-xs font-medium cursor-pointer transition-colors duration-150">
+                                            <i class="fas fa-satellite-dish mr-1.5"></i><span data-i18n="memory_tab_graph">星空图谱</span>
+                                        </button>
                                     </div>
                                 </div>
                                 <div id="memory-empty" class="flex flex-col items-center justify-center py-20">
@@ -750,6 +758,26 @@
                                         </table>
                                     </div>
                                     <div id="memory-pagination" class="flex items-center justify-between mt-4 text-sm text-slate-500 dark:text-slate-400"></div>
+                                </div>
+                                <div id="memory-graph-panel" class="hidden">
+                                    <div class="memory-starry-page">
+                                        <div class="memory-starry-header">
+                                            <div>
+                                                <span data-i18n="memory_graph_kicker">Memory Galaxy</span>
+                                                <h3 data-i18n="memory_graph_title">记忆星空图谱</h3>
+                                                <p data-i18n="memory_graph_desc">项目记忆与知识节点的关联全景</p>
+                                            </div>
+                                            <div id="memory-graph-stats" class="memory-starry-stats"></div>
+                                            <button type="button" onclick="loadMemoryGraph(true)" class="memory-starry-refresh">
+                                                <i class="fas fa-rotate"></i>
+                                                <span data-i18n="tasks_refresh">刷新</span>
+                                            </button>
+                                        </div>
+                                        <div class="memory-starry-layout">
+                                            <div id="memory-graph-container" class="memory-starry-canvas"></div>
+                                            <aside id="memory-graph-detail" class="memory-starry-detail"></aside>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
 

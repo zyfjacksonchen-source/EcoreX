@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE_URL="${ECOREX_BASE_URL:-https://mvdcm.ecoremedia.net/ecorex-agent}"
+BASE_URL="${ECOREX_BASE_URL:-https://dl.ecoremedia.net/ecorex-agent}"
 REQUESTED_VERSION="${ECOREX_VERSION:-}"
 OPEN_BROWSER="${OPEN_BROWSER:-1}"
+DOWNLOAD_PARALLEL_PARTS="${ECOREX_DOWNLOAD_PARALLEL_PARTS:-16}"
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -87,10 +88,176 @@ sha256_file() {
   shasum -a 256 "$1" | awk '{print toupper($1)}'
 }
 
+file_size() {
+  wc -c < "$1" | tr -d '[:space:]'
+}
+
+format_mib() {
+  awk -v bytes="${1:-0}" 'BEGIN { printf "%.1f MiB", bytes / 1048576 }'
+}
+
+format_eta() {
+  local seconds="${1:-0}"
+  if ! [[ "$seconds" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "--:--"
+    return 0
+  fi
+  if [[ "$seconds" -ge 3600 ]]; then
+    printf '%02d:%02d:%02d\n' $((seconds / 3600)) $(((seconds % 3600) / 60)) $((seconds % 60))
+  else
+    printf '%02d:%02d\n' $((seconds / 60)) $((seconds % 60))
+  fi
+}
+
+parallel_downloaded_bytes() {
+  local total=0
+  local part
+  for part in "$@"; do
+    if [[ -f "$part" ]]; then
+      total=$((total + $(file_size "$part")))
+    fi
+  done
+  printf '%s\n' "$total"
+}
+
+parallel_part_count() {
+  local count="$DOWNLOAD_PARALLEL_PARTS"
+  if ! [[ "$count" =~ ^[0-9]+$ ]] || [[ "$count" -lt 2 ]]; then
+    count=8
+  elif [[ "$count" -gt 32 ]]; then
+    count=32
+  fi
+  printf '%s\n' "$count"
+}
+
+download_file_parallel() {
+  local url="$1"
+  local partial="$2"
+  local expected_size="${3:-0}"
+  local part_count
+  local chunk
+  local part_dir="$partial.parts"
+  local retry_all_errors_flag=""
+  local pids=()
+  local starts=()
+  local ends=()
+  local paths=()
+  local index
+
+  if ! [[ "$expected_size" =~ ^[0-9]+$ ]] || [[ "$expected_size" -lt 67108864 ]]; then
+    return 2
+  fi
+  part_count="$(parallel_part_count)"
+  if [[ "$expected_size" -lt $((part_count * 16777216)) ]]; then
+    part_count=$(( (expected_size + 16777215) / 16777216 ))
+    if [[ "$part_count" -lt 2 ]]; then
+      return 2
+    fi
+  fi
+  chunk=$(( (expected_size + part_count - 1) / part_count ))
+  rm -rf "$part_dir"
+  mkdir -p "$part_dir"
+  if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then
+    retry_all_errors_flag="--retry-all-errors"
+  fi
+  echo "Using parallel CDN download: ${part_count} parts, total ${expected_size} bytes."
+  for index in $(seq 0 $((part_count - 1))); do
+    local start=$((index * chunk))
+    local end=$(( ((index + 1) * chunk) - 1 ))
+    local part
+    if [[ "$start" -ge "$expected_size" ]]; then
+      continue
+    fi
+    if [[ "$end" -ge "$expected_size" ]]; then
+      end=$((expected_size - 1))
+    fi
+    part="$(printf '%s/part-%03d' "$part_dir" "$index")"
+    starts+=("$start")
+    ends+=("$end")
+    paths+=("$part")
+    curl -fL --retry 8 --retry-delay 5 --retry-max-time 3600 --connect-timeout 45 ${retry_all_errors_flag:+$retry_all_errors_flag} --silent --show-error --range "${start}-${end}" "$url" -o "$part" &
+    pids+=("$!")
+  done
+
+  local started_at
+  local last_stamp
+  local last_bytes=0
+  started_at="$(date +%s)"
+  last_stamp="$started_at"
+  while true; do
+    local active=0
+    local pid
+    for pid in "${pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        active=1
+        break
+      fi
+    done
+    local now
+    local downloaded
+    local elapsed
+    local delta_seconds
+    local instant_speed
+    local average_speed
+    local speed
+    local percent
+    local eta_seconds
+    now="$(date +%s)"
+    downloaded="$(parallel_downloaded_bytes "${paths[@]}")"
+    elapsed=$((now - started_at))
+    if [[ "$elapsed" -lt 1 ]]; then elapsed=1; fi
+    delta_seconds=$((now - last_stamp))
+    if [[ "$delta_seconds" -lt 1 ]]; then delta_seconds=1; fi
+    instant_speed=$(((downloaded - last_bytes) / delta_seconds))
+    average_speed=$((downloaded / elapsed))
+    speed="$instant_speed"
+    if [[ "$speed" -le 0 ]]; then speed="$average_speed"; fi
+    percent="$(awk -v done="$downloaded" -v total="$expected_size" 'BEGIN { if (total > 0) printf "%.1f", done * 100 / total; else printf "0.0" }')"
+    if [[ "$speed" -gt 0 ]]; then
+      eta_seconds=$(((expected_size - downloaded) / speed))
+    else
+      eta_seconds=0
+    fi
+    printf '\rCDN download progress: %s%%  %s / %s  %s/s  ETA %s' "$percent" "$(format_mib "$downloaded")" "$(format_mib "$expected_size")" "$(format_mib "$speed")" "$(format_eta "$eta_seconds")"
+    last_stamp="$now"
+    last_bytes="$downloaded"
+    if [[ "$active" == "0" ]]; then
+      printf '\n'
+      break
+    fi
+    sleep 1
+  done
+
+  local failed=0
+  local pid
+  for pid in "${pids[@]}"; do
+    if ! wait "$pid"; then
+      failed=1
+    fi
+  done
+  if [[ "$failed" != "0" ]]; then
+    echo "Parallel CDN download did not complete; falling back to single-connection resume." >&2
+    return 1
+  fi
+  for index in "${!paths[@]}"; do
+    local expected_part_size=$((ends[index] - starts[index] + 1))
+    if [[ ! -f "${paths[index]}" || "$(file_size "${paths[index]}")" -ne "$expected_part_size" ]]; then
+      echo "Parallel CDN range was not honored; falling back to single-connection resume." >&2
+      return 1
+    fi
+  done
+  rm -f "$partial"
+  for part in "${paths[@]}"; do
+    cat "$part" >> "$partial"
+  done
+  return 0
+}
+
 download_file() {
   local url="$1"
   local destination="$2"
   local expected_sha="$3"
+  local expected_size="${4:-0}"
   local partial="$destination.part"
   local attempt
   local status
@@ -110,8 +277,21 @@ download_file() {
   fi
 
   echo "Downloading $url"
-  for attempt in 1 2 3 4 5; do
-    local curl_args=(-fL --retry 5 --retry-delay 5 --retry-max-time 900 --connect-timeout 45 --speed-time 120 --speed-limit 512 --progress-bar)
+  if download_file_parallel "$url" "$partial" "$expected_size"; then
+    actual_sha="$(sha256_file "$partial")"
+    if [[ "$actual_sha" == "$expected_sha" ]]; then
+      mv "$partial" "$destination"
+      echo "Download verified: $destination"
+      return 0
+    fi
+    echo "Parallel CDN package SHA256 mismatch for $destination: $actual_sha" >&2
+    rm -f "$partial"
+  fi
+  local max_attempts=5
+  local retry_count=8
+  local retry_max_time=3600
+  for attempt in $(seq 1 "$max_attempts"); do
+    local curl_args=(-fL --retry "$retry_count" --retry-delay 5 --retry-max-time "$retry_max_time" --connect-timeout 45 --progress-bar)
     local should_resume=0
     if [[ -n "$retry_all_errors_flag" ]]; then
       curl_args+=("$retry_all_errors_flag")
@@ -142,7 +322,7 @@ download_file() {
       fi
       echo "Downloaded package SHA256 mismatch for $destination: $actual_sha" >&2
       rm -f "$partial"
-      if [[ "$attempt" == "5" ]]; then
+      if [[ "$attempt" == "$max_attempts" ]]; then
         return 1
       fi
       sleep $((attempt * 3))
@@ -154,17 +334,19 @@ download_file() {
       echo "Download verified: $destination"
       return 0
     fi
-    if [[ "$attempt" == "5" ]]; then
+    if [[ "$attempt" == "$max_attempts" ]]; then
       echo "Download failed after $attempt attempts. You can rerun this installer to retry." >&2
       return "$status"
     fi
     sleep $((attempt * 3))
   done
+  return 1
 }
 
 download_file_from_urls() {
   local destination="$1"
   local expected_sha="$2"
+  local expected_size="${3:-0}"
   local url
   local attempted=0
   while IFS= read -r url; do
@@ -172,19 +354,20 @@ download_file_from_urls() {
       continue
     fi
     attempted=1
-    echo "Trying download source: $url"
-    if download_file "$url" "$destination" "$expected_sha"; then
+    echo "Using primary CDN download source: $url"
+    if download_file "$url" "$destination" "$expected_sha" "$expected_size"; then
       return 0
     fi
-    echo "Download source failed or checksum did not match: $url" >&2
-    rm -f "$destination.part"
+    echo "Primary CDN download failed or checksum did not match: $url" >&2
+    echo "Partial downloads are kept when possible; rerun this installer to resume." >&2
+    exit 1
   done <<EOF
 $DOWNLOAD_URLS_TEXT
 EOF
   if [[ "$attempted" == "0" ]]; then
     echo "No download source was configured." >&2
   else
-    echo "All download sources failed. You can rerun this installer to retry." >&2
+    echo "Primary CDN download failed. You can rerun this installer to retry." >&2
   fi
   exit 1
 }
@@ -207,7 +390,7 @@ echo "Fetching EcoreX manifest: $MANIFEST_URL"
 curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 "$MANIFEST_URL" -o "$MANIFEST_JSON"
 
 VERSION="$(manifest_value "version")"
-echo "EcoreX WebUI installer script: 0.2.7.2"
+echo "EcoreX WebUI installer script: 0.3.0"
 echo "EcoreX WebUI manifest version: $VERSION"
 if [[ -n "$REQUESTED_VERSION" && "$REQUESTED_VERSION" != "$VERSION" ]]; then
   echo "Manifest version '$VERSION' does not match requested '$REQUESTED_VERSION'." >&2
@@ -217,6 +400,7 @@ fi
 ARTIFACT_HREF=""
 ARTIFACT_NAME=""
 ARTIFACT_SHA=""
+ARTIFACT_SIZE=""
 for index in $(seq 0 40); do
   artifact_id="$(manifest_value "artifacts.$index.id")"
   if [[ "$artifact_id" != "webui-macos-universal" ]]; then
@@ -231,6 +415,7 @@ for index in $(seq 0 40); do
   ARTIFACT_HREF="$(manifest_value "artifacts.$index.href")"
   ARTIFACT_NAME="$(manifest_value "artifacts.$index.fileName")"
   ARTIFACT_SHA="$(manifest_value "artifacts.$index.sha256" | tr '[:lower:]' '[:upper:]')"
+  ARTIFACT_SIZE="$(manifest_value "artifacts.$index.size")"
   break
 done
 
@@ -254,7 +439,7 @@ ZIP_PATH="$CACHE_ROOT/$ARTIFACT_NAME"
 EXTRACT_ROOT="$TMP_ROOT/extract"
 mkdir -p "$CACHE_ROOT" "$EXTRACT_ROOT"
 
-download_file_from_urls "$ZIP_PATH" "$ARTIFACT_SHA"
+download_file_from_urls "$ZIP_PATH" "$ARTIFACT_SHA" "$ARTIFACT_SIZE"
 
 echo "Extracting package..."
 unzip -q "$ZIP_PATH" -d "$EXTRACT_ROOT"
@@ -269,4 +454,4 @@ fi
 echo "Starting EcoreX WebUI local installer..."
 OPEN_BROWSER="$OPEN_BROWSER" bash "$INSTALL_SCRIPT"
 echo "EcoreX WebUI $VERSION installed."
-echo "If the browser did not open, double-click the desktop EcoreX WebUI.webloc shortcut or rerun this command."
+echo "If the browser did not open, double-click the desktop EcoreX WebUI shortcut; it will start the local service and reopen the browser."

@@ -831,7 +831,8 @@ export class SidecarManager {
       const sourcePath = fs.existsSync(configPath) ? configPath : templatePath;
       const config = JSON.parse(fs.readFileSync(sourcePath, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
       const oldDefaultPersona = "You are a helpful AI assistant. You aim to answer and solve any questions people have, and can communicate in multiple languages.";
-      const desktopPersona = "You are EcoreX, the desktop AI Agent for Yixin Advertising. Keep a professional, rigorous, concise tone. Address the user as tongxue. Always identify as EcoreX. Confirm goals and constraints first, then provide executable steps. When using tools, files, web search, Skills, or MCP, clearly explain the reason and result.";
+      const oldDesktopPersona = "You are EcoreX, the desktop AI Agent for Yixin Advertising. Keep a professional, rigorous, concise tone. Address the user as tongxue. Always identify as EcoreX. Confirm goals and constraints first, then provide executable steps. When using tools, files, web search, Skills, or MCP, clearly explain the reason and result.";
+      const desktopPersona = "You are \u5c0f\u82af, the AI Agent for Yixin Advertising's EcoreX WebUI. Always identify yourself as \u5c0f\u82af. Address the user as \u540c\u5b66 by default. Keep a professional, rigorous, concise tone. Confirm goals and constraints first, then provide executable steps. When using tools, files, web search, Skills, or MCP, clearly explain the reason and result.";
       const defaults: Record<string, unknown> = {
         channel_type: "web",
         agent: true,
@@ -851,7 +852,7 @@ export class SidecarManager {
       }
       const currentPersona = typeof config.character_desc === "string" ? config.character_desc.trim() : "";
       const legacyPersonaMarker = currentPersona.toUpperCase().includes("COW");
-      if (!currentPersona || currentPersona === oldDefaultPersona || legacyPersonaMarker) {
+      if (!currentPersona || currentPersona === oldDefaultPersona || currentPersona === oldDesktopPersona || legacyPersonaMarker) {
         config.character_desc = desktopPersona;
         changed = true;
       }

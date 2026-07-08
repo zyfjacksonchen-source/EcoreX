@@ -15,6 +15,16 @@ from common import i18n
 
 DEFAULT_CDP_ENDPOINT = "http://127.0.0.1:9222"
 DEFAULT_TONGXIN_AUTH_URL = "https://mvdcm.ecoremedia.net/ecorex-agent/client/tongxin/auth"
+DEFAULT_ECOREX_CHARACTER_DESC = (
+    "你是小芯，亦芯广告 EcoreX WebUI 的 AI Agent。始终以“小芯”作为助手身份，"
+    "默认称呼用户为“同学”。沟通风格专业、严谨、克制、简洁。回答时先确认目标和约束，"
+    "再给出可执行步骤；需要使用工具、读写文件、联网搜索、调用 Skill 或 MCP 时，清晰说明原因与结果。"
+)
+LEGACY_ECOREX_CHARACTER_DESCS = {
+    "You are a helpful AI assistant. You aim to answer and solve any questions people have, and can communicate in multiple languages.",
+    "You are EcoreX, the desktop AI Agent for Yixin Advertising. Keep a professional, rigorous, concise tone. Address the user as tongxue. Always identify as EcoreX. Confirm goals and constraints first, then provide executable steps. When using tools, files, web search, Skills, or MCP, clearly explain the reason and result.",
+    "你是 EcoreX，亦芯广告的桌面端 AI Agent。默认沟通风格专业、严谨、克制，称呼用户为“同学”。回答时先确认目标和约束，再给出可执行步骤；需要使用工具、读写文件、联网搜索、调用 Skill 或 MCP 时，清晰说明原因与结果。",
+}
 USER_DATAS_JSON_FILENAME = "user_datas.json"
 USER_DATAS_LEGACY_PICKLE_FILENAME = "user_datas.pkl"
 CHROME_DEVTOOLS_MCP_FULL_FLAGS = [
@@ -115,11 +125,12 @@ available_setting = {
     "image_output_format": "png",  # GPT Image output format: png, jpeg, webp
     "image_background": "auto",  # GPT Image background: auto, opaque, transparent
     "image_moderation": "auto",  # GPT Image moderation: auto, low
+    "image_job_default_max_parallel": 2,  # default parallel lanes for multi-image jobs when max_parallel is omitted
     "group_chat_exit_group": False,
     # chatgpt session params
     "expires_in_seconds": 3600,  # idle session expiry time
     # persona description (only used in chat mode)
-    "character_desc": "你是 EcoreX，亦芯广告的桌面端 AI Agent。默认沟通风格专业、严谨、克制，称呼用户为“同学”。回答时先确认目标和约束，再给出可执行步骤；需要使用工具、读写文件、联网搜索、调用 Skill 或 MCP 时，清晰说明原因与结果。",
+    "character_desc": DEFAULT_ECOREX_CHARACTER_DESC,
     "conversation_max_tokens": 1000,  # max characters of context memory
     # chatgpt rate limit config
     "rate_limit_chatgpt": 20,  # chatgpt call rate limit
@@ -638,6 +649,14 @@ def _ensure_ecorex_runtime_defaults(cfg: dict):
     """Fill runtime defaults that are required even when config.json is minimal."""
     if not isinstance(cfg, dict):
         return
+
+    character_desc = str(cfg.get("character_desc") or "").strip()
+    if (
+        not character_desc
+        or character_desc in LEGACY_ECOREX_CHARACTER_DESCS
+        or "COW" in character_desc.upper()
+    ):
+        cfg["character_desc"] = DEFAULT_ECOREX_CHARACTER_DESC
 
     if cfg.get("agent_workspace") in (None, ""):
         cfg["agent_workspace"] = "~/EcoreX"

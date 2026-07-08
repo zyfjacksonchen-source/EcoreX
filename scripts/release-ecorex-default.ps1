@@ -43,11 +43,31 @@ function Set-DefaultDownloadMirror {
         throw "Download manifest is missing: $manifestPath"
     }
     $manifest = Get-Content -Raw -Encoding UTF8 -LiteralPath $manifestPath | ConvertFrom-Json
-    $mirror = [ordered]@{
-        id = "github-release-v$Version"
-        kind = "github-release"
-        baseUrl = "https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v$Version"
+    $githubCnMirrorUrl = "https://gh-proxy.com/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v$Version"
+    $originUrl = "https://mvdcm.ecoremedia.net/ecorex-agent/downloads"
+    $downloadCdnUrl = "https://dl.ecoremedia.net/ecorex-agent/downloads"
+    $githubCnMirror = [ordered]@{
+        id = "ecorex-github-cn-mirror-v$Version"
+        kind = "github-release-cn-mirror"
+        baseUrl = $githubCnMirrorUrl
         pathMode = "fileName"
+    }
+    $originMirror = [ordered]@{
+        id = "ecorex-download-origin-v$Version"
+        kind = "asset-cache"
+        baseUrl = $originUrl
+        pathMode = "fileName"
+    }
+    $downloadCdnMirror = [ordered]@{
+        id = "ecorex-download-cdn-v$Version"
+        kind = "asset-cdn"
+        baseUrl = $downloadCdnUrl
+        pathMode = "fileName"
+    }
+    foreach ($artifact in @($manifest.artifacts)) {
+        if ($artifact.PSObject.Properties.Name -contains "chunked") {
+            $artifact.PSObject.Properties.Remove("chunked")
+        }
     }
     $download = $manifest.download
     if (-not $download) {
@@ -55,16 +75,19 @@ function Set-DefaultDownloadMirror {
         Add-Member -InputObject $manifest -NotePropertyName "download" -NotePropertyValue $download -Force
     }
     foreach ($entry in @(
-        @{ Name = "mode"; Value = "mirror-first-origin-fallback" },
-        @{ Name = "mirrors"; Value = @($mirror) },
-        @{ Name = "minimumTargetBytesPerSecond"; Value = 1048576 },
-        @{ Name = "integrity"; Value = "sha256" },
-        @{ Name = "fallback"; Value = "origin" }
+        @{ Name = "mode"; Value = "github-cn-primary" },
+        @{ Name = "mirrors"; Value = @($githubCnMirror, $originMirror, $downloadCdnMirror) },
+        @{ Name = "integrity"; Value = "sha256" }
     )) {
         if ($download.PSObject.Properties.Name -contains $entry.Name) {
             $download.PSObject.Properties[$entry.Name].Value = $entry.Value
         } else {
             Add-Member -InputObject $download -NotePropertyName $entry.Name -NotePropertyValue $entry.Value -Force
+        }
+    }
+    foreach ($obsolete in @("minimumTargetBytesPerSecond", "fallback")) {
+        if ($download.PSObject.Properties.Name -contains $obsolete) {
+            $download.PSObject.Properties.Remove($obsolete)
         }
     }
     Write-Utf8NoBom -Path $manifestPath -Value (($manifest | ConvertTo-Json -Depth 12) + [Environment]::NewLine)
@@ -80,7 +103,14 @@ if (-not $Version) {
 }
 
 if (-not $SkipWebuiPackage) {
-    Invoke-CheckedCommand -FilePath "npm" -ArgumentList @("run", "webui:package") -WorkingDirectory $desktopRoot
+    Invoke-CheckedCommand -FilePath "npm" -ArgumentList @("run", "build:renderer") -WorkingDirectory $desktopRoot
+    Invoke-CheckedCommand -FilePath "powershell" -ArgumentList @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", (Join-Path $repoRoot "scripts\prepare-ecorex-webui-local-release.ps1"),
+        "-Version", $Version,
+        "-SkipCombinedPackage"
+    )
     Invoke-CheckedCommand -FilePath "powershell" -ArgumentList @(
         "-NoProfile",
         "-ExecutionPolicy", "Bypass",
@@ -112,13 +142,15 @@ if (-not $SkipManifestPromotion) {
     Set-DefaultDownloadMirror -Version $Version
 }
 
-$mirrorUrl = "https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v$Version"
+$githubCnMirrorUrl = "https://gh-proxy.com/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v$Version"
+$originUrl = "https://mvdcm.ecoremedia.net/ecorex-agent/downloads"
+$downloadCdnUrl = "https://dl.ecoremedia.net/ecorex-agent/downloads"
 $prepareArgs = @(
     "-NoProfile",
     "-ExecutionPolicy", "Bypass",
     "-File", (Join-Path $repoRoot "scripts\prepare-ecorex-public-release.ps1"),
     "-Version", $Version,
-    "-GitHubReleaseMirrorUrl", $mirrorUrl
+    "-AssetDownloadBaseUrls", "$githubCnMirrorUrl,$originUrl,$downloadCdnUrl"
 )
 if ($EmbedDownloads) {
     $prepareArgs += "-EmbedDownloads"
@@ -128,4 +160,4 @@ Invoke-CheckedCommand -FilePath "powershell" -ArgumentList $prepareArgs
 Write-Host "EcoreX default release package is ready."
 Write-Host "version: $Version"
 Write-Host "publicRelease: release-artifacts/EcoreX_${Version}-public-release.zip"
-Write-Host "downloadMirror: $mirrorUrl"
+Write-Host "downloadPrimary: $githubCnMirrorUrl"

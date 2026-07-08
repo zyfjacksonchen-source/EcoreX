@@ -12,8 +12,20 @@ location = /ecorex-agent/admin {
     return 301 /ecorex-agent/admin/;
 }
 
+location = /ecorex-agent/usage-panel {
+    return 301 /ecorex-agent/usage-panel/;
+}
+
 location = /ecorex-agent/app {
     return 301 /ecorex-agent/app/;
+}
+
+location ^~ /ecorex-agent/usage-panel/api/ {
+    proxy_pass $ecorex_admin_api/usage-panel/api/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 }
 
 location ^~ /ecorex-agent/admin/api/ {
@@ -37,6 +49,16 @@ location ^~ /ecorex-agent/client/ {
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Prefix /ecorex-agent;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+
+location ^~ /client/session-shares/ {
+    proxy_pass $ecorex_admin_api/client/session-shares/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Prefix /ecorex-agent;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 }
 
@@ -216,6 +238,14 @@ location = /ecorex-agent/config {
 }
 
 location ^~ /ecorex-agent/admin/ {
+    auth_basic "EcoreX Admin";
+    auth_basic_user_file /etc/nginx/ecorex-admin.htpasswd;
+    alias /srv/ecorex-agent-download/current/admin/;
+    index index.html;
+    autoindex off;
+}
+
+location ^~ /ecorex-agent/usage-panel/ {
     auth_basic "EcoreX Admin";
     auth_basic_user_file /etc/nginx/ecorex-admin.htpasswd;
     alias /srv/ecorex-agent-download/current/admin/;

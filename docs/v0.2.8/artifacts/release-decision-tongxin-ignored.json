@@ -1,0 +1,71 @@
+{
+  "schemaVersion": "ecorex.v0.2.8.release-decision.v1",
+  "generatedAt": "2026-07-04T18:45:00+08:00",
+  "version": "0.2.8",
+  "status": "PASS_WITH_IGNORED_EXTERNAL_TONGXIN",
+  "decision": "release-complete-with-user-approved-tongxin-waiver",
+  "userDirective": "Tongxin先忽略；完成后清理本地/服务器存储空间。",
+  "rawProductGate": {
+    "artifact": "docs/v0.2.8/artifacts/production-agent-product-acceptance.json",
+    "status": "FAIL",
+    "checkCount": 577,
+    "passCount": 575,
+    "failCount": 2
+  },
+  "ignoredFailures": [
+    {
+      "caseId": "v028-agent-v027-integrated-capabilities-100",
+      "group": "v027-integrated-capabilities",
+      "name": "Tongxin MPI accuracy action succeeds",
+      "errorType": "tongxin_mpi_accuracy_zero_project_samples",
+      "reason": "External Tongxin data-volume database is not mounted/configured in production and is explicitly ignored for this release decision."
+    },
+    {
+      "caseId": "v028-agent-v027-integrated-capabilities-102",
+      "group": "v027-integrated-capabilities",
+      "name": "Tongxin MPI accuracy has samples without fallback or drift",
+      "errorType": "tongxin_mpi_accuracy_zero_project_samples",
+      "reason": "External Tongxin data-volume database is not mounted/configured in production and is explicitly ignored for this release decision."
+    }
+  ],
+  "blockerEvidenceRetained": {
+    "finalGateBlocker": "docs/v0.2.8/artifacts/final-gate-blocked-tongxin-data-volume.json",
+    "remoteProbe": "docs/v0.2.8/artifacts/remote-tongxin-data-volume-probe.json"
+  },
+  "releaseEvidence": {
+    "productionDeploy": {
+      "artifact": "docs/v0.2.8/artifacts/production-deploy-online.json",
+      "status": "PASS"
+    },
+    "legacyWebuiOnlineUpgrade": {
+      "artifact": "docs/v0.2.8/artifacts/legacy-webui-online-upgrade.json",
+      "status": "PASS",
+      "checkCount": 7,
+      "passCount": 7
+    },
+    "focusedInstallerSlotFix": {
+      "artifact": "docs/v0.2.8/artifacts/focused-v028-installer-slot-fix.json",
+      "status": "PASS",
+      "checkCount": 89,
+      "passCount": 89
+    },
+    "lightReleaseValidation": {
+      "artifact": "docs/v0.2.8/artifacts/real-release-light-validation.json",
+      "status": "PASS",
+      "checkCount": 142,
+      "passCount": 142
+    },
+    "githubRelease": {
+      "repository": "zhangyifanjackson-dotcom/EcoreX-installers",
+      "tag": "v0.2.8",
+      "windowsSha256": "C8017FB0370C2DA1E2D9895250734E8E9BBB87D489D85888BF55832EB4836363",
+      "macosSha256": "BEC15B9711C7AF597BDB633B798CBDDDC113B7586B06FDF48C1559BCE0174806"
+    },
+    "productionManifest": {
+      "url": "https://mvdcm.ecoremedia.net/ecorex-agent/manifest.json",
+      "version": "0.2.8",
+      "firstMirror": "https://ghproxy.net/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.8"
+    }
+  },
+  "followUpRequired": "Before claiming Tongxin product acceptance, mount/configure a non-empty read-only Tongxin data-volume SQLite database and rerun python scripts/真实发布校验.py without this waiver."
+}

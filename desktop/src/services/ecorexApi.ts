@@ -50,6 +50,8 @@ export type RuntimeActiveRequest = {
   cancel_age_seconds?: number | null;
   stream_available?: boolean;
   metadata?: Record<string, unknown>;
+  task_observations?: RuntimeTaskObservationProjection[];
+  image_jobs?: RuntimeImageJobProjection[];
 };
 
 export type RuntimeSessionLock = {
@@ -328,6 +330,11 @@ export type ExternalConnection = {
   homeChannel?: { id?: string; idHash?: string; configured?: boolean; name?: string; [key: string]: unknown };
   configSchema?: { fields?: ExternalConnectionField[]; [key: string]: unknown };
   actions?: ExternalConnectionAction[];
+  product?: { rank?: number; group?: string; category?: string; connectStyle?: string; workbuddyStyle?: boolean; [key: string]: unknown };
+  rank?: number;
+  group?: string;
+  connectStyle?: string;
+  workbuddyStyle?: boolean;
   source?: string;
 };
 
@@ -367,8 +374,54 @@ export type ExternalConnectionsPayload = {
   status?: string;
   connections?: ExternalConnection[];
   summary?: Record<string, number>;
+  catalog?: {
+    schema?: string;
+    style?: string;
+    implemented?: Array<Record<string, unknown>>;
+    featured?: Array<Record<string, unknown>>;
+  };
   updatedAt?: number;
   message?: string;
+};
+
+export type TencentDocsCapability = {
+  id?: string;
+  displayName?: string;
+  endpoint?: string;
+  configured?: boolean;
+  connected?: boolean;
+  runtimeStatus?: string;
+  toolCount?: number;
+  contentToolCount?: number;
+  redacted?: boolean;
+};
+
+export type TencentDocsStatusPayload = {
+  status?: string;
+  message?: string;
+  capability?: TencentDocsCapability;
+};
+
+export type TencentDocsFile = {
+  key: string;
+  provider?: "tencent-docs" | string;
+  source?: string;
+  file_id?: string;
+  node_id?: string;
+  title?: string;
+  file_name?: string;
+  file_type?: string;
+  doc_type?: string;
+  url?: string;
+  owner?: string;
+  updated_at?: string;
+};
+
+export type TencentDocsFilesPayload = {
+  status?: string;
+  message?: string;
+  files?: TencentDocsFile[];
+  redacted?: boolean;
 };
 
 export type RuntimeSchedulerDeliveryTarget = {
@@ -490,7 +543,7 @@ export type RuntimeUpdateState = {
   product?: string;
   version?: string;
   mode?: "manual" | "background" | string;
-  status?: "installed" | "deferred" | "failed" | "rollback" | "started" | "ready" | string;
+  status?: "available" | "downloading" | "verified" | "staged" | "deferred" | "installed" | "activated" | "failed" | "rollback" | string;
   reason?: string;
   message?: string;
   url?: string;
@@ -500,6 +553,16 @@ export type RuntimeUpdateState = {
     endpoint?: string;
     status?: "pass" | "pending" | "failed" | string;
     passed?: boolean;
+  };
+  externalConnections?: {
+    required?: boolean;
+    status?: "pass" | "pending" | "failed" | string;
+    passed?: boolean;
+    policy?: string;
+    before?: Record<string, unknown>;
+    after?: Record<string, unknown>;
+    missingIds?: string[];
+    redacted?: boolean;
   };
   generatedAt?: string;
   noticeRevision?: string;
@@ -603,10 +666,15 @@ export type RuntimeRequestProjection = {
 
 export type RuntimeTaskObservationProjection = {
   task_id?: string;
+  job_id?: string;
   kind?: string;
   title?: string;
   status?: string;
   health?: string;
+  progress?: number;
+  image_job_status?: string;
+  backgrounded?: boolean;
+  reason?: string;
   elapsed_seconds?: number;
   soft_deadline_seconds?: number;
   hard_deadline_seconds?: number;
@@ -684,6 +752,21 @@ export type FileAttachment = {
   file_type: "image" | "video" | "audio" | "file" | "directory";
   previewDataUrl?: string;
   preview_url?: string;
+  provider?: "tencent-docs" | string;
+  source?: string;
+  key?: string;
+  file_id?: string;
+  node_id?: string;
+  doc_type?: string;
+  url?: string;
+  owner?: string;
+  updated_at?: string;
+  remote?: boolean;
+};
+
+export type ImageRetouchUploadResult = FileAttachment & {
+  status?: string;
+  message?: string;
 };
 
 export type LocalPathStat = {
@@ -759,7 +842,14 @@ export type AgentArtifact = {
   artifactValidity?: AgentArtifactValidity;
   artifactFeedbackSignal?: AgentArtifactFeedbackSignal;
   artifactFeedbackAt?: string;
+  feedbackShareId?: string;
+  feedbackShareUrl?: string;
   qualityEvidence?: QualityEvidence;
+  taskIndex?: number;
+  artifactIndex?: number;
+  task_id?: string;
+  task_index?: number;
+  artifact_index?: number;
   stats?: {
     addedLines?: number;
     removedLines?: number;
@@ -1010,6 +1100,27 @@ export type MemoryFile = {
   preview?: string;
 };
 
+export type KnowledgeGraphNode = {
+  id: string;
+  label?: string;
+  category?: string;
+};
+
+export type KnowledgeGraphLink = {
+  source: string;
+  target: string;
+};
+
+export type KnowledgeGraphPayload = {
+  nodes: KnowledgeGraphNode[];
+  links: KnowledgeGraphLink[];
+};
+
+export type KnowledgeReadPayload = {
+  path?: string;
+  content?: string;
+};
+
 export type PermissionMode = "full-access" | "smart-ask" | "always-ask" | "read-only" | "custom";
 
 export type PermissionState = {
@@ -1051,8 +1162,11 @@ export type ChatSendResult = {
     reason?: string;
     queue_position?: number;
     queued_request_id?: string;
+    interrupt_mode?: ChatInterruptMode | string;
   };
 };
+
+export type ChatInterruptMode = "replace" | "amend" | "queue" | "branch";
 
 export type RetryPrepareResult = {
   status?: string;
@@ -1119,6 +1233,14 @@ export type StreamItem = {
   status?: string;
   execution_time?: number;
   elapsed_seconds?: number;
+  progress?: number;
+  health?: string;
+  lease_count?: number;
+  kind?: string;
+  task_event_type?: string;
+  task_id?: string;
+  job_id?: string;
+  image_job_status?: string;
   timeout_seconds?: number;
   previous_deadline_seconds?: number;
   deadline_seconds?: number;
@@ -1684,6 +1806,7 @@ export async function sendChatMessage(input: {
   internalAction?: boolean;
   clientAttemptId?: string;
   interruptsRequestId?: string;
+  interruptMode?: ChatInterruptMode;
   retryOfRequestId?: string;
 }): Promise<ChatSendResult> {
   if (!window.ecorexDesktop?.apiJson) {
@@ -1709,6 +1832,7 @@ export async function sendChatMessage(input: {
       lang: input.lang || "zh",
       client_attempt_id: input.clientAttemptId || "",
       interrupts_request_id: input.interruptsRequestId || "",
+      interrupt_mode: input.interruptMode || "replace",
       retry_of_request_id: input.retryOfRequestId || ""
     }
   });
@@ -1736,14 +1860,132 @@ export async function cancelChatRequest(input: { requestId?: string; sessionId?:
   });
 }
 
-export async function queueChatRequestAction(input: { requestId: string; sessionId?: string; action: "cancel_queued" | "run_now" }) {
-  return apiJson<{ status?: string; message?: string; cancelled?: number; queue_position?: number }>(
+export async function queueChatRequestAction(input: { requestId: string; sessionId?: string; action: "cancel_queued" | "run_now" | "guide_queue" }) {
+  return apiJson<{ status?: string; state?: string; message?: string; cancelled?: number; queue_position?: number }>(
     `/api/requests/${encodeURIComponent(input.requestId)}/queue-action`,
     "POST",
     {
       request_id: input.requestId,
       session_id: input.sessionId,
       action: input.action
+    }
+  );
+}
+
+export async function imageJobAction(input: {
+  jobId: string;
+  requestId?: string;
+  action: "cancel" | "status" | "collect" | "continue" | "extend" | "background";
+  reason?: string;
+  wait?: boolean;
+  timeout?: number;
+}) {
+  return apiJson<{ status?: string; message?: string; job?: RuntimeImageJobProjection; projection?: RuntimeRequestProjection }>(
+    `/api/image-jobs/${encodeURIComponent(input.jobId)}`,
+    "POST",
+    {
+      request_id: input.requestId || "",
+      action: input.action,
+      reason: input.reason || "",
+      wait: Boolean(input.wait),
+      timeout: input.timeout || 0
+    }
+  );
+}
+
+function currentHttpPort() {
+  if (!/^https?:$/i.test(window.location.protocol)) return 0;
+  return Number(window.location.port || (window.location.protocol === "https:" ? 443 : 80));
+}
+
+function runtimePathPrefix() {
+  const path = window.location.pathname || "";
+  const markers = ["/app", "/chat", "/auth", "/message", "/upload", "/uploads", "/api", "/poll", "/stream", "/cancel", "/config", "/assets"];
+  for (const marker of markers) {
+    const index = path.indexOf(marker);
+    if (index >= 0) return path.slice(0, index);
+  }
+  return "";
+}
+
+function runtimeBaseUrl(webPort: number) {
+  const currentPort = currentHttpPort();
+  if (window.ecorexDesktop && webPort > 0 && currentPort !== webPort) {
+    return `http://127.0.0.1:${webPort}`;
+  }
+  return `${window.location.origin}${runtimePathPrefix()}`;
+}
+
+function runtimeUploadUrl(webPort: number) {
+  return `${runtimeBaseUrl(webPort)}/upload`;
+}
+
+function webRuntimeAuthHeaders(): HeadersInit {
+  const headers: Record<string, string> = {};
+  try {
+    const runtimeWindow = window as Window & { ECOREX_WEB_CLIENT_KEY?: string };
+    const raw = window.localStorage.getItem("ecorex-web-enterprise-session");
+    const session = raw ? JSON.parse(raw) : null;
+    const clientKey = String(session?.clientKey || runtimeWindow.ECOREX_WEB_CLIENT_KEY || "ecorex-web-v0.2.6-web.1").trim();
+    if (clientKey) headers["X-EcoreX-Client-Key"] = clientKey;
+    if (session?.token) {
+      const token = String(session.token);
+      headers["X-EcoreX-User-Token"] = token;
+      headers.Authorization = `Bearer ${token}`;
+      headers["X-EcoreX-Device-Id"] = String(session.deviceId || window.localStorage.getItem("ecorex-web-device-id") || "");
+    }
+  } catch {
+    headers["X-EcoreX-Client-Key"] = "ecorex-web-v0.2.6-web.1";
+  }
+  return headers;
+}
+
+export async function uploadImageEditMarker(input: { blob: Blob; fileName: string; webPort: number }): Promise<ImageRetouchUploadResult> {
+  const form = new FormData();
+  form.append("file", input.blob, input.fileName || `retouch-marker-${Date.now()}.png`);
+  const response = await fetch(runtimeUploadUrl(input.webPort), {
+    method: "POST",
+    credentials: "same-origin",
+    headers: webRuntimeAuthHeaders(),
+    body: form
+  });
+  const payload = await response.json().catch(() => ({})) as ImageRetouchUploadResult;
+  if (!response.ok || payload.status === "error") {
+    throw new Error(payload.message || `标注图上传失败 (${response.status})`);
+  }
+  if (!payload.file_path) {
+    throw new Error("标注图上传结果缺少 file_path");
+  }
+  return payload;
+}
+
+export async function startImageJob(input: {
+  sessionId: string;
+  requestId?: string;
+  prompt: string;
+  originalImagePath: string;
+  markerImagePath: string;
+}) {
+  const requestId = input.requestId || `retouch-${Date.now()}`;
+  return apiJson<{ status?: string; message?: string; job?: RuntimeImageJobProjection; projection?: RuntimeRequestProjection }>(
+    "/api/image-jobs",
+    "POST",
+    {
+      action: "start",
+      request_id: requestId,
+      session_id: input.sessionId || "",
+      operation: "edit",
+      include_events: true,
+      tasks: [
+        {
+          prompt: input.prompt,
+          operation: "edit",
+          image_url: [input.originalImagePath, input.markerImagePath],
+          input_image_count: 2,
+          quality_retry_max: 1,
+          output_count: 1
+        }
+      ]
     }
   );
 }
@@ -1991,6 +2233,8 @@ export async function reportArtifactFeedback(input: {
   artifact: AgentArtifact;
   validity: AgentArtifactValidity;
   signal: AgentArtifactFeedbackSignal;
+  feedbackShareId?: string;
+  feedbackShareUrl?: string;
 }) {
   return apiJson<{ status?: string; synced?: boolean; message?: string }>("/api/artifacts/feedback", "POST", input);
 }
@@ -2193,6 +2437,26 @@ export async function updateExternalConnection(platform: string, input: Record<s
   return result;
 }
 
+export async function loadTencentDocsStatus(start = false): Promise<TencentDocsStatusPayload> {
+  return apiJson<TencentDocsStatusPayload>(`/api/tencent-docs/status${start ? "?start=1" : ""}`);
+}
+
+export async function connectTencentDocs(token: string): Promise<TencentDocsStatusPayload> {
+  return apiJson<TencentDocsStatusPayload>("/api/tencent-docs/connect", "POST", { token });
+}
+
+export async function disconnectTencentDocs(): Promise<TencentDocsStatusPayload> {
+  return apiJson<TencentDocsStatusPayload>("/api/tencent-docs/disconnect", "POST", {});
+}
+
+export async function listTencentDocsFiles(input: { tab?: string; q?: string; limit?: number } = {}): Promise<TencentDocsFilesPayload> {
+  const params = new URLSearchParams();
+  params.set("tab", input.tab || "recent");
+  if (input.q) params.set("q", input.q);
+  if (input.limit) params.set("limit", String(input.limit));
+  return apiJson<TencentDocsFilesPayload>(`/api/tencent-docs/files?${params.toString()}`);
+}
+
 export async function enableDefaultSkills(skills: RuntimeSkill[]) {
   const disabledBuiltIns = skills.filter((skill) => {
     if (!skill.name || skill.enabled !== false) return false;
@@ -2214,6 +2478,31 @@ export async function loadMemoryFiles(category = "memory"): Promise<MemoryFile[]
     // Memory listing is best-effort for the desktop settings panel.
   }
   return [];
+}
+
+export async function loadKnowledgeGraph(): Promise<KnowledgeGraphPayload> {
+  try {
+    const result = await apiJson<KnowledgeGraphPayload & { status?: string }>("/api/knowledge/graph");
+    return {
+      nodes: Array.isArray(result.nodes) ? result.nodes : [],
+      links: Array.isArray(result.links) ? result.links : [],
+    };
+  } catch {
+    return { nodes: [], links: [] };
+  }
+}
+
+export async function readKnowledgeFile(path: string): Promise<KnowledgeReadPayload | null> {
+  const trimmedPath = String(path || "").trim();
+  if (!trimmedPath) return null;
+  try {
+    const result = await apiJson<KnowledgeReadPayload & { status?: string; message?: string }>(
+      `/api/knowledge/read?path=${encodeURIComponent(trimmedPath)}`
+    );
+    return result.status && result.status !== "success" ? null : result;
+  } catch {
+    return null;
+  }
 }
 
 export async function reportDesktopEvent(event: {
@@ -2248,9 +2537,9 @@ export async function exportDiagnosticsBundle(input: { sessionId?: string; reque
 export function filePreviewUrl(filePath: string, webPort: number) {
   if (/^https?:\/\//i.test(filePath)) return filePath;
   if (/^\/(?:uploads|static|app)(?:\/|$)|^\/api\/file(?:[/?#]|$)/.test(filePath)) {
-    return `http://127.0.0.1:${webPort}${filePath}`;
+    return `${runtimeBaseUrl(webPort)}${filePath}`;
   }
-  return `http://127.0.0.1:${webPort}/api/file?path=${encodeURIComponent(filePath)}`;
+  return `${runtimeBaseUrl(webPort)}/api/file?path=${encodeURIComponent(filePath)}`;
 }
 
 const streamLastEventIds = new Map<string, string>();
@@ -2298,10 +2587,9 @@ export function openMessageStream(input: {
   if (input.sessionId) params.set("session_id", input.sessionId);
   const lastEventId = streamLastEventIds.get(input.requestId);
   if (lastEventId) params.set("last_event_id", lastEventId);
-  // Electron injects X-EcoreX-Runtime-Token for loopback EventSource
-  // requests. Keeping the runtime token out of the URL avoids leaking it via
-  // request logs, devtools, or copied stream URLs.
-  const url = `http://127.0.0.1:${input.webPort}/stream?${params.toString()}`;
+  // Electron uses loopback while WebUI uses the current origin. Keeping the
+  // runtime token out of the URL avoids leaking it via logs/devtools.
+  const url = `${runtimeBaseUrl(input.webPort)}/stream?${params.toString()}`;
   const events = new EventSource(url);
   let lastEventAt = Date.now();
   let firstTransientErrorAt = 0;

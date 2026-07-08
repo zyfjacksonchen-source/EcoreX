@@ -1,0 +1,85 @@
+{
+  "schemaVersion": "ecorex.v0.2.8.final-release-summary.v1",
+  "generatedAt": "2026-07-04T13:11:19.468234+00:00",
+  "version": "0.2.8",
+  "status": "PASS",
+  "githubRelease": "https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/tag/v0.2.8",
+  "downloadMirrorPriority": [
+    {
+      "id": "asset-mirror-v0.2.8",
+      "kind": "asset-base",
+      "baseUrl": "https://ghproxy.net/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.8",
+      "pathMode": "fileName"
+    },
+    {
+      "id": "github-release-v0.2.8",
+      "kind": "github-release",
+      "baseUrl": "https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.8",
+      "pathMode": "fileName"
+    }
+  ],
+  "artifactHashes": {
+    "webui-windows-x64": {
+      "size": 550785032,
+      "sha256": "3B810B8C5112E5DE3F860F338A88C449E2EC76BFA9E27002B2EAB122E3B238BD"
+    },
+    "webui-macos-universal": {
+      "size": 652243744,
+      "sha256": "ACD25F27C26F61F8F5CCC9DD97F74009597F646503AD08DF7B998930078464F2"
+    },
+    "web-linux-service": {
+      "size": 4128453,
+      "sha256": "4F1E0997C081203EC4AD1B3D166F96105FB6FA47091772C5D3D216EA70BD783F"
+    },
+    "public-release": {
+      "artifactId": "EcoreX_0.2.8-public-release.zip",
+      "sha256": "F789DDF7C54A9796568361C6C0BB4105212743FA31373508B056A08D916F37DD",
+      "size": 2856487
+    }
+  },
+  "validation": {
+    "lightRealRelease": {
+      "status": "PASS",
+      "passCount": 158,
+      "checkCount": 158
+    },
+    "productionDeploy": {
+      "status": "PASS",
+      "onlineChecks": {
+        "installationManifestVersion": "0.2.8",
+        "publicManifestVersion": "0.2.8",
+        "serviceActive": true,
+        "serviceEnabled": true,
+        "stagedPublicManifestVersion": "0.2.8",
+        "webServiceVersion": "0.2.8",
+        "webVersionBodyHasExpectedVersion": true,
+        "webVersionStatus": 200
+      }
+    },
+    "legacyUpgrade": {
+      "status": "PASS",
+      "passCount": 7,
+      "checkCount": 7,
+      "durationSeconds": 884.13
+    },
+    "shareLinks": [
+      {
+        "url": "https://mvdcm.ecoremedia.net/client/session-shares/sh_AVwExibMPbUAJek1",
+        "status": 200,
+        "contentType": "text/html; charset=utf-8",
+        "nginxDefault404": false
+      },
+      {
+        "url": "https://mvdcm.ecoremedia.net/ecorex-agent/client/session-shares/sh_AVwExibMPbUAJek1",
+        "status": 200,
+        "contentType": "text/html; charset=utf-8",
+        "nginxDefault404": false
+      }
+    ]
+  },
+  "notes": [
+    "Tongxin final-gate data-volume checks intentionally ignored for this release slice per user instruction.",
+    "Image generation now uses 120s single-image observation baseline and default two-lane bounded batch parallelism when max_parallel is omitted.",
+    "Queued same-session messages expose guide_queue without interrupting the running request."
+  ]
+}

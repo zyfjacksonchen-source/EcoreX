@@ -84,9 +84,9 @@ def test_agent_product_registry_declares_declared_new_cases():
 
     assert len(module.DECLARED_CASE_REGISTRY) == module.TARGET_NEW_CHECKS
     assert sum(row[1] for row in module.NEW_CASE_GROUPS) == module.TARGET_NEW_CHECKS
-    assert module.TARGET_NEW_CHECKS == 308
-    assert module.TARGET_TOTAL_CHECKS == 540
-    assert module.MIN_ENABLED_CHECKS == 380
+    assert module.TARGET_NEW_CHECKS == 345
+    assert module.TARGET_TOTAL_CHECKS == 577
+    assert module.MIN_ENABLED_CHECKS == 400
     p0_cases = [case for case in module.DECLARED_CASE_REGISTRY if case["priority"] == "P0"]
     p2_cases = [case for case in module.DECLARED_CASE_REGISTRY if case["priority"] == "P2"]
     assert len(p0_cases) >= 200
@@ -139,7 +139,7 @@ def test_agent_product_suite_payload_has_required_report_fields():
         pressure_turns=3,
     )
 
-    assert payload["schemaVersion"] == "v0.2.7-agent-product-acceptance-v1"
+    assert payload["schemaVersion"] == "v0.2.8-agent-product-acceptance-v1"
     assert payload["status"] == "PASS"
     assert payload["checkCount"] == module.TARGET_TOTAL_CHECKS
     assert payload["enabledCheckCount"] == module.TARGET_TOTAL_CHECKS
@@ -158,7 +158,7 @@ def test_agent_product_suite_payload_surfaces_child_matrix_without_checks_as_fai
         [
             {"scope": "legacy", "checks": checks},
             {
-                "scope": "production-agent-product-fresh-user-305",
+                "scope": "production-agent-product-fresh-user-345",
                 "status": "FAIL",
                 "errorType": "RuntimeError",
                 "remoteExitCode": 1,
@@ -284,6 +284,12 @@ def test_agent_product_focused_rerun_expands_dependencies_and_compiles():
     assert "/srv/ecorex-agent-download/current/checksums.json" not in remote
     assert "DATABASE_CONFIG_KEYS" in remote
     assert "XIN_AGENT_DATABASE" in remote
+    assert "v028-runtime-observability-queue" in remote
+    assert "phase_v028_runtime_observability_queue" in remote
+    assert "QueuedRequestPayloadStore" in remote
+    assert "claim_queued_run" in remote
+    assert "task_observations" in remote
+    assert "cancel_queued" in remote
 
 
 def test_legacy_200_behavior_manifest_date_is_not_hardcoded():
@@ -325,8 +331,10 @@ def test_multi_agent_strategy_contract_passes():
     assert lanes["coordinator-final-real-release-gate"]["command"] == "python scripts/真实发布校验.py"
     assert lanes["agent-g-concurrency-pressure"]["parallelSafe"] is False
     assert lanes["agent-h-v027-integrated-capabilities"]["parallelSafe"] is False
+    assert lanes["agent-i-v028-runtime-observability-queue"]["parallelSafe"] is False
     assert lanes["agent-f-multi-model-image-route"]["wave"] < lanes["agent-g-concurrency-pressure"]["wave"]
     assert "v027-integrated-capabilities" in lanes["coordinator-final-real-release-gate"]["groups"]
+    assert "v028-runtime-observability-queue" in lanes["coordinator-final-real-release-gate"]["groups"]
     assert "gpt-image-2-pro native route" in " ".join(lanes["agent-f-multi-model-image-route"]["evidenceRequired"])
 
 
@@ -362,7 +370,7 @@ def test_failed_gate_rerun_strategy_targets_failed_groups_before_final_gate():
     assert strategy["action"] == "FOCUSED_RERUN_THEN_FINAL_GATE"
     assert strategy["runFullGateImmediatelyAfterEachFix"] is False
     assert strategy["mustRunFullGateBeforePromotion"] is True
-    assert strategy["reportPath"] == "docs/v0.2.7/artifacts/production-agent-product-acceptance.json"
+    assert strategy["reportPath"] == "docs/v0.2.8/artifacts/production-agent-product-acceptance.json"
     assert str(ROOT) not in strategy["reportPath"]
     assert strategy["needsImageRouteRerun"] is True
     assert {"fresh-env", "auth-first-use", "stream-state-machine", "multi-model-image-route"}.issubset(set(strategy["selectedGroups"]))

@@ -26,10 +26,11 @@ from typing import Any, Dict, List, Optional
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.2.7"
+VERSION = "0.2.8"
 DEFAULT_OUTPUT = ROOT / "docs" / f"v{VERSION}" / "artifacts" / "real-release-light-validation.json"
 HEAVY_SCRIPT = ROOT / "scripts" / "smoke-v026-production-agent-product-acceptance.py"
 HEAVY_WRAPPER = ROOT / "scripts" / "真实发布校验.py"
+LEGACY_UPGRADE_SCRIPT = ROOT / "scripts" / "smoke-v028-legacy-webui-online-upgrade.ps1"
 LIGHT_WRAPPER = ROOT / "scripts" / "真实发布轻量校验.py"
 MULTI_AGENT_STRATEGY = ROOT / "scripts" / "real-release-multi-agent-strategy.py"
 MULTI_AGENT_WRAPPER = ROOT / "scripts" / "真实发布多Agent分工策略.py"
@@ -41,6 +42,7 @@ RERUN_DOC = ROOT / "docs" / f"v{VERSION}" / "real-release-rerun-strategy.md"
 REQUIRED_FILES = [
     HEAVY_SCRIPT,
     HEAVY_WRAPPER,
+    LEGACY_UPGRADE_SCRIPT,
     MULTI_AGENT_STRATEGY,
     MULTI_AGENT_WRAPPER,
     MULTI_AGENT_DOC,
@@ -50,11 +52,16 @@ REQUIRED_FILES = [
     ROOT / "scripts" / "smoke-v026-production-200-user-behavior.py",
     ROOT / "scripts" / "smoke-v026-production-30-image-ocr-vision-toolchain.py",
     ROOT / "tests" / "test_v026_agent_product_acceptance.py",
+    ROOT / "tests" / "test_v028_runtime_queue_observation.py",
     ROOT / "channel" / "web" / "routes.py",
     ROOT / "channel" / "web" / "web_channel.py",
     ROOT / "channel" / "web" / "sessions.py",
     ROOT / "channel" / "web" / "sse.py",
     ROOT / "channel" / "web" / "image_jobs.py",
+    ROOT / "agent" / "protocol" / "task_observer.py",
+    ROOT / "agent" / "protocol" / "run_ledger.py",
+    ROOT / "agent" / "protocol" / "runtime_projection.py",
+    ROOT / "agent" / "protocol" / "image_job_service.py",
     ROOT / "agent" / "protocol" / "agent_stream.py",
     ROOT / "agent" / "memory" / "conversation_store.py",
     ROOT / "agent" / "tools" / "imagegen" / "imagegen.py",
@@ -69,6 +76,15 @@ REQUIRED_FILES = [
     ROOT / "desktop" / "scripts" / "stage-runtime-mac.sh",
     ROOT / "scripts" / "validate-ecorex-release-artifacts.py",
     ROOT / "scripts" / "scan-session-artifacts-privacy.py",
+    ROOT / "config.py",
+    ROOT / "config-template.json",
+    ROOT / "deploy" / "ecorex-admin-api" / "ecorex_admin_api.py",
+    ROOT / "deploy" / "ecorex-site" / "nginx" / "ecorex-agent.conf.example",
+    ROOT / "deploy" / "ecorex-site" / "nginx" / "ecorex-web.conf.example",
+    ROOT / "deploy" / "ecorex-site" / "caddy" / "ecorex-agent.routes.caddy",
+    ROOT / "deploy" / "ecorex-site" / "caddy" / "ecorex-web.routes.caddy",
+    ROOT / "docs" / "v0.2.8" / "development-log.md",
+    ROOT / "docs" / "v0.2.8" / "runtime-observability-and-queue-architecture.md",
 ]
 
 REQUIRED_ROUTES = [
@@ -99,9 +115,20 @@ REQUIRED_HEAVY_MARKERS = [
     "EcoreXCli",
     "list_mcp_status",
     "PRESSURE_USERS_DEFAULT = 20",
-    "TARGET_NEW_CHECKS = 308",
-    "TARGET_TOTAL_CHECKS = 540",
+    "TARGET_NEW_CHECKS = 345",
+    "TARGET_TOTAL_CHECKS = 577",
     "v027-integrated-capabilities",
+    "v028-runtime-observability-queue",
+    "TaskObserver",
+    "QueuedRequestPayloadStore",
+    "claim_queued_run",
+    "task_observations",
+    "queue-action",
+    "guide_queue",
+    "Image job observer uses 120s per-image baseline with status leases",
+    "Image jobs default multi-image work to two bounded lanes",
+    "Native imagegen batch runs through bounded parallel executor",
+    "continue extend background",
     "modelAliasFamily",
     "isOfficialGeminiProvider",
     "isCustomGeminiEndpoint",
@@ -124,6 +151,21 @@ REQUIRED_HEAVY_MARKERS = [
     "CDP action hit stale connection; reconnecting once",
     "--focus-groups",
     "production-agent-product-focused-rerun",
+]
+
+REQUIRED_WRAPPER_MARKERS = [
+    "smoke-v028-legacy-webui-online-upgrade.ps1",
+    "--skip-legacy-upgrade",
+    "LEGACY_UPGRADE_TARGET",
+]
+
+REQUIRED_LEGACY_UPGRADE_MARKERS = [
+    "legacy-webui-online-upgrade",
+    "current-runtime.txt",
+    "0.2.7.1",
+    "0.2.7.2",
+    "legacy runtime receives v0.2.8 update notification",
+    "legacy runtime upgrades online to v0.2.8",
 ]
 
 REQUIRED_DOC_MARKERS = [
@@ -225,7 +267,7 @@ def _check_compilation(checks: List[Dict[str, Any]]) -> None:
         module = _load_script(HEAVY_SCRIPT)
         remote = (
             module.REMOTE_SCRIPT
-            .replace("__VERSION__", "0.2.7")
+            .replace("__VERSION__", VERSION)
             .replace("__BUDGET_MODE__", "tiered")
             .replace("__PRESSURE_USERS__", "20")
             .replace("__PRESSURE_TURNS__", "3")
@@ -299,6 +341,14 @@ def _check_markers(checks: List[Dict[str, Any]]) -> None:
     for marker in REQUIRED_HEAVY_MARKERS:
         _add(checks, "real-release-contract", f"heavy gate contains marker: {marker}", marker in heavy)
 
+    heavy_wrapper = _read_text(HEAVY_WRAPPER)
+    for marker in REQUIRED_WRAPPER_MARKERS:
+        _add(checks, "real-release-contract", f"heavy wrapper contains marker: {marker}", marker in heavy_wrapper)
+
+    legacy_upgrade = _read_text(LEGACY_UPGRADE_SCRIPT)
+    for marker in REQUIRED_LEGACY_UPGRADE_MARKERS:
+        _add(checks, "real-release-contract", f"legacy upgrade smoke contains marker: {marker}", marker in legacy_upgrade)
+
     docs_text = "\n".join(
         [
             _read_text(ROOT / "docs" / "ecorex-dev-log.md"),
@@ -310,6 +360,72 @@ def _check_markers(checks: List[Dict[str, Any]]) -> None:
     )
     for marker in REQUIRED_DOC_MARKERS:
         _add(checks, "development-standard", f"development standard records: {marker}", marker in docs_text)
+
+
+def _check_v028_local_markers(checks: List[Dict[str, Any]]) -> None:
+    app_source = _read_text(ROOT / "desktop" / "src" / "App.tsx")
+    api_source = _read_text(ROOT / "desktop" / "src" / "services" / "ecorexApi.ts")
+    web_channel = _read_text(ROOT / "channel" / "web" / "web_channel.py")
+    image_job_service = _read_text(ROOT / "agent" / "protocol" / "image_job_service.py")
+    imagegen_tool = _read_text(ROOT / "agent" / "tools" / "imagegen" / "imagegen.py")
+    runtime_projection = _read_text(ROOT / "agent" / "protocol" / "runtime_projection.py")
+    config_source = _read_text(ROOT / "config.py")
+    config_template = _read_text(ROOT / "config-template.json")
+    admin_api = _read_text(ROOT / "deploy" / "ecorex-admin-api" / "ecorex_admin_api.py")
+    nginx_agent = _read_text(ROOT / "deploy" / "ecorex-site" / "nginx" / "ecorex-agent.conf.example")
+    nginx_web = _read_text(ROOT / "deploy" / "ecorex-site" / "nginx" / "ecorex-web.conf.example")
+    caddy_agent = _read_text(ROOT / "deploy" / "ecorex-site" / "caddy" / "ecorex-agent.routes.caddy")
+    caddy_web = _read_text(ROOT / "deploy" / "ecorex-site" / "caddy" / "ecorex-web.routes.caddy")
+    admin_tests = _read_text(ROOT / "tests" / "test_ecorex_admin_device_id.py")
+    image_tests = "\n".join(
+        [
+            _read_text(ROOT / "tests" / "test_v028_runtime_queue_observation.py"),
+            _read_text(ROOT / "tests" / "test_v024_image_quality_runtime.py"),
+        ]
+    )
+
+    _add(
+        checks,
+        "v028-local-contract",
+        "queued message surface exposes user-triggered guide action",
+        all(marker in app_source for marker in ("handleGuideQueuedMessage", "queuedGuidancePhase", "重新观测并确认是否插入队列"))
+        and '"guide_queue"' in api_source
+        and all(marker in web_channel for marker in ("def _guide_queued_request", '"guide_queue"', '"inserted"')),
+    )
+    _add(
+        checks,
+        "v028-local-contract",
+        "image observation uses 120s baseline and status-driven deadline extensions",
+        all(marker in image_job_service for marker in ("IMAGE_JOB_BASELINE_SECONDS = 120.0", "image_job_observation_per_image_baseline_seconds", "provider_polling", "deadline_extended"))
+        and all(marker in image_tests for marker in ("test_image_job_observation_uses_two_minute_single_image_baseline", "test_image_job_status_events_extend_observation_deadline")),
+    )
+    _add(
+        checks,
+        "v028-local-contract",
+        "image generation defaults batch speed to two bounded lanes",
+        all(marker in image_job_service for marker in ("image_job_default_max_parallel", "parallelism_defaulted", "default_max_parallel"))
+        and all(marker in imagegen_tool for marker in ("ThreadPoolExecutor", "resolve_image_job_parallelism_policy", '"maxParallel"', '"parallelismPolicy"'))
+        and '"image_job_default_max_parallel": 2' in config_source
+        and '"image_job_default_max_parallel": 2' in config_template
+        and all(marker in image_tests for marker in ("test_image_job_parallelism_defaults_batch_to_two_lanes", "test_imagegen_tool_batches_tasks_with_default_parallel_lanes")),
+    )
+    _add(
+        checks,
+        "v028-local-contract",
+        "runtime projection preserves image parallelism default fields",
+        all(marker in runtime_projection for marker in ("default_max_parallel", "parallelism_defaulted", "parallelism_clamped")),
+    )
+    _add(
+        checks,
+        "v028-local-contract",
+        "session share public URL and reverse-proxy routes avoid bare 404",
+        all(marker in admin_api for marker in ("ECOREX_PUBLIC_CLIENT_BASE_URL", "ECOREX_PUBLIC_BASE_URL", "X-Forwarded-Prefix", "/client/session-shares/"))
+        and all(marker in nginx_agent for marker in ("location ^~ /client/session-shares/", "proxy_pass $ecorex_admin_api/client/session-shares/", "X-Forwarded-Prefix /ecorex-agent"))
+        and all(marker in nginx_web for marker in ("location ^~ /client/session-shares/", "proxy_pass http://127.0.0.1:18084/client/session-shares/", "X-Forwarded-Prefix /ecorex-agent"))
+        and "handle /client/session-shares/*" in caddy_agent
+        and "handle /client/session-shares/*" in caddy_web
+        and all(marker in admin_tests for marker in ("test_session_share_url_uses_public_ecorex_agent_client_prefix", "test_session_share_url_infers_public_prefix_for_forwarded_production_host")),
+    )
 
 
 def _check_multi_agent_strategy(checks: List[Dict[str, Any]]) -> None:
@@ -401,6 +517,7 @@ def build_report() -> Dict[str, Any]:
     _check_matrix(checks)
     _check_routes(checks)
     _check_markers(checks)
+    _check_v028_local_markers(checks)
     _check_multi_agent_strategy(checks)
     _check_rerun_strategy(checks)
     _check_wrapper_commands(checks)

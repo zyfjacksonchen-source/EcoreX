@@ -1,8 +1,9 @@
 param(
-    [string]$BaseUrl = "https://mvdcm.ecoremedia.net/ecorex-agent",
+    [string]$BaseUrl = "https://dl.ecoremedia.net/ecorex-agent",
     [string[]]$DownloadBaseUrls = @(),
     [string[]]$AssetDownloadBaseUrls = @(),
     [string]$Version = "",
+    [int]$Port = 9909,
     [switch]$NoBrowser
 )
 
@@ -105,6 +106,33 @@ function Get-DownloadUrls {
     return $urls.ToArray([string])
 }
 
+function Get-ArtifactChunkBaseUrls {
+    param(
+        [Parameter(Mandatory = $true)]$Manifest,
+        [Parameter(Mandatory = $true)]$Artifact,
+        [Parameter(Mandatory = $true)][string]$OriginBaseUrl
+    )
+    $urls = New-Object System.Collections.ArrayList
+    if (-not ($Artifact.PSObject.Properties.Name -contains "chunked") -or -not $Artifact.chunked) {
+        return $urls.ToArray([string])
+    }
+    $baseHref = ([string]$Artifact.chunked.baseHref).Trim().Trim("/")
+    if (-not $baseHref) {
+        return $urls.ToArray([string])
+    }
+    if ($Manifest.download -and $Manifest.download.mirrors) {
+        foreach ($mirror in @($Manifest.download.mirrors)) {
+            $base = [string]$mirror.baseUrl
+            $pathMode = [string]$mirror.pathMode
+            if (-not $base) { continue }
+            $path = if ($pathMode -ieq "fileName") { $baseHref } else { "downloads/$baseHref" }
+            Add-DownloadUrlForBase -List $urls -BaseUrl $base -PathMode "href" -Artifact ([pscustomobject]@{ href = $path; fileName = $path })
+        }
+    }
+    Add-DownloadUrlForBase -List $urls -BaseUrl $OriginBaseUrl -PathMode "href" -Artifact ([pscustomobject]@{ href = "downloads/$baseHref"; fileName = $baseHref })
+    return $urls.ToArray([string])
+}
+
 function Format-Mib {
     param([int64]$Bytes)
     return ("{0:N1} MiB" -f ($Bytes / 1MB))
@@ -112,7 +140,20 @@ function Format-Mib {
 
 function Get-Sha256 {
     param([string]$Path)
-    return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToUpperInvariant()
+    if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) {
+        return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToUpperInvariant()
+    }
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            return (($sha.ComputeHash($stream) | ForEach-Object { $_.ToString("x2") }) -join "").ToUpperInvariant()
+        } finally {
+            $sha.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
 }
 
 function Test-ExpectedHash {
@@ -164,7 +205,7 @@ function Try-SaveUrlWithCurl {
 
     $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
     if (-not $curl) {
-        return $false
+        return $null
     }
 
     Write-Host "Using curl.exe accelerated download with resume support."
@@ -175,12 +216,10 @@ function Try-SaveUrlWithCurl {
     $curlArgs = @(
         "--fail",
         "--location",
-        "--retry", "5",
+        "--retry", "8",
         "--retry-delay", "2",
-        "--retry-max-time", "1800",
+        "--retry-max-time", "3600",
         "--connect-timeout", "20",
-        "--speed-time", "120",
-        "--speed-limit", "1024",
         "--progress-bar",
         "--continue-at", "-",
         "--output", $PartialPath,
@@ -205,6 +244,509 @@ function Try-SaveUrlWithCurl {
     Move-Item -LiteralPath $PartialPath -Destination $CachePath -Force
     Write-Host "Download verified: $CachePath"
     return $true
+}
+
+function Get-ParallelPartCount {
+    $value = $env:ECOREX_DOWNLOAD_PARALLEL_PARTS
+    $parsed = 0
+    if ([int]::TryParse([string]$value, [ref]$parsed) -and $parsed -gt 0) {
+        return [Math]::Max(2, [Math]::Min(32, $parsed))
+    }
+    return 16
+}
+
+function Format-Duration {
+    param([double]$Seconds)
+    if ($Seconds -lt 0 -or [double]::IsInfinity($Seconds) -or [double]::IsNaN($Seconds)) {
+        return "--:--"
+    }
+    $span = [TimeSpan]::FromSeconds([Math]::Max(0, [Math]::Round($Seconds)))
+    if ($span.TotalHours -ge 1) {
+        return $span.ToString("hh\:mm\:ss")
+    }
+    return $span.ToString("mm\:ss")
+}
+
+function Get-ParallelDownloadedBytes {
+    param($Jobs)
+    $total = [int64]0
+    foreach ($job in @($Jobs)) {
+        if (Test-Path -LiteralPath $job.Path) {
+            try {
+                $total += (Get-Item -LiteralPath $job.Path).Length
+            } catch {
+            }
+        }
+    }
+    return $total
+}
+
+function Get-DownloadChunkSize {
+    $value = $env:ECOREX_DOWNLOAD_CHUNK_MIB
+    $parsed = 0
+    if ([int]::TryParse([string]$value, [ref]$parsed) -and $parsed -gt 0) {
+        return [int64]([Math]::Max(1, [Math]::Min(32, $parsed)) * 1MB)
+    }
+    return [int64](4MB)
+}
+
+function Start-CurlProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$CurlPath,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $CurlPath
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.RedirectStandardOutput = $true
+    $usedArgumentList = $false
+    try {
+        if ($null -ne $startInfo.ArgumentList) {
+            foreach ($argument in $Arguments) {
+                [void]$startInfo.ArgumentList.Add($argument)
+            }
+            $usedArgumentList = $true
+        }
+    } catch {
+        $usedArgumentList = $false
+    }
+    if (-not $usedArgumentList) {
+        $quoted = foreach ($argument in $Arguments) {
+            $value = [string]$argument
+            if ($value -notmatch '[\s"]') {
+                $value
+            } else {
+                '"' + ($value -replace '"', '\"') + '"'
+            }
+        }
+        $startInfo.Arguments = ($quoted -join " ")
+    }
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    [void]$process.Start()
+    return $process
+}
+
+function Stop-ParallelCurlJobs {
+    param($Jobs)
+    foreach ($job in @($Jobs)) {
+        try {
+            if ($job.Process -and -not $job.Process.HasExited) {
+                $job.Process.Kill()
+            }
+        } catch {
+        }
+    }
+}
+
+function Try-SaveUrlWithParallelCurl {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [Parameter(Mandatory = $true)][string]$CachePath,
+        [Parameter(Mandatory = $true)][string]$PartialPath,
+        [Parameter(Mandatory = $true)][string]$ExpectedSha256,
+        [int64]$ExpectedSize = 0
+    )
+
+    if ($env:ECOREX_DOWNLOAD_DISABLE_PARALLEL -in @("1", "true", "yes", "on")) {
+        return $null
+    }
+    try {
+        $hostName = ([Uri]$Uri).Host.ToLowerInvariant()
+        if ($hostName -in @("127.0.0.1", "localhost", "::1")) {
+            return $null
+        }
+    } catch {
+        return $null
+    }
+
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if (-not $curl -or $ExpectedSize -lt 67108864) {
+        return $null
+    }
+    $workerCount = Get-ParallelPartCount
+    $chunkSize = Get-DownloadChunkSize
+    $chunkCount = [int][Math]::Ceiling($ExpectedSize / [double]$chunkSize)
+    if ($chunkCount -lt 2) {
+        return $null
+    }
+    $partDir = "$PartialPath.parts"
+    Remove-Item -LiteralPath $partDir -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $partDir | Out-Null
+
+    $retryAll = Test-CurlRetryAllErrors -CurlPath $curl.Source
+    $chunks = New-Object System.Collections.ArrayList
+    Write-Host ("Using adaptive CDN download: {0} workers, {1} chunks x {2}, total {3}." -f $workerCount, $chunkCount, (Format-Mib $chunkSize), (Format-Mib $ExpectedSize))
+    for ($index = 0; $index -lt $chunkCount; $index++) {
+        $start = [int64]($index * $chunkSize)
+        $end = [int64]([Math]::Min($ExpectedSize - 1, (($index + 1) * $chunkSize) - 1))
+        if ($start -gt $end) { continue }
+        $partPath = Join-Path $partDir ("part-{0:D3}" -f $index)
+        [void]$chunks.Add([pscustomobject]@{
+            Index = $index
+            Start = $start
+            End = $end
+            Path = $partPath
+            Attempts = 0
+            Process = $null
+            Status = "queued"
+            LastSize = [int64]0
+            LastProgressAt = [DateTime]::UtcNow
+        })
+    }
+
+    function Start-NextChunk {
+        param($Chunk)
+        Remove-Item -LiteralPath $Chunk.Path -Force -ErrorAction SilentlyContinue
+        $Chunk.Attempts += 1
+        $Chunk.Status = "running"
+        $Chunk.LastSize = [int64]0
+        $Chunk.LastProgressAt = [DateTime]::UtcNow
+        $args = @(
+            "--fail",
+            "--location",
+            "--retry", "2",
+            "--retry-delay", "1",
+            "--retry-max-time", "180",
+            "--connect-timeout", "15",
+            "--silent",
+            "--show-error",
+            "--range", "$($Chunk.Start)-$($Chunk.End)",
+            "--output", $Chunk.Path,
+            $Uri
+        )
+        if ($retryAll) {
+            $args = @("--retry-all-errors") + $args
+        }
+        $Chunk.Process = Start-CurlProcess -CurlPath $curl.Source -Arguments $args
+    }
+
+    $startedAt = [DateTime]::UtcNow
+    $lastStamp = $startedAt
+    $lastBytes = [int64]0
+    $lastPrintedAt = $startedAt.AddSeconds(-10)
+    while (@($chunks | Where-Object { $_.Status -ne "done" }).Count -gt 0) {
+        while (@($chunks | Where-Object { $_.Status -eq "running" }).Count -lt $workerCount) {
+            $next = $chunks | Where-Object { $_.Status -eq "queued" } | Sort-Object Index | Select-Object -First 1
+            if ($null -eq $next) {
+                break
+            }
+            Start-NextChunk -Chunk $next
+        }
+        Start-Sleep -Seconds 1
+        $now = [DateTime]::UtcNow
+        foreach ($chunk in @($chunks | Where-Object { $_.Status -eq "running" })) {
+            $size = [int64]0
+            if (Test-Path -LiteralPath $chunk.Path) {
+                try {
+                    $size = (Get-Item -LiteralPath $chunk.Path).Length
+                } catch {
+                    $size = [int64]0
+                }
+            }
+            if ($size -gt $chunk.LastSize) {
+                $chunk.LastSize = $size
+                $chunk.LastProgressAt = $now
+            }
+            $expectedPartSize = [int64]($chunk.End - $chunk.Start + 1)
+            if ($chunk.Process.HasExited) {
+                if ($chunk.Process.ExitCode -eq 0 -and (Test-Path -LiteralPath $chunk.Path) -and (Get-Item -LiteralPath $chunk.Path).Length -eq $expectedPartSize) {
+                    $chunk.Status = "done"
+                } elseif ($chunk.Attempts -lt 4) {
+                    try {
+                        $err = $chunk.Process.StandardError.ReadToEnd()
+                        if ($err) {
+                            Write-Warning ("Chunk {0} retry {1}/4: {2}" -f $chunk.Index, ($chunk.Attempts + 1), $err.Trim())
+                        }
+                    } catch {
+                    }
+                    $chunk.Status = "queued"
+                    $chunk.Process = $null
+                    Remove-Item -LiteralPath $chunk.Path -Force -ErrorAction SilentlyContinue
+                } else {
+                    try {
+                        $err = $chunk.Process.StandardError.ReadToEnd()
+                        if ($err) {
+                            Write-Warning ("Chunk {0} failed: {1}" -f $chunk.Index, $err.Trim())
+                        }
+                    } catch {
+                    }
+                    Write-Progress -Activity "Downloading EcoreX WebUI from CDN" -Completed
+                    Write-Warning "Adaptive CDN download did not complete; falling back to single-connection resume."
+                    return $false
+                }
+            } elseif ($size -lt $expectedPartSize -and ($now - $chunk.LastProgressAt).TotalSeconds -ge 35) {
+                try {
+                    $chunk.Process.Kill()
+                } catch {
+                }
+                if ($chunk.Attempts -lt 4) {
+                    Write-Warning ("Chunk {0} stalled; retry {1}/4." -f $chunk.Index, ($chunk.Attempts + 1))
+                    $chunk.Status = "queued"
+                    $chunk.Process = $null
+                    Remove-Item -LiteralPath $chunk.Path -Force -ErrorAction SilentlyContinue
+                } else {
+                    Write-Progress -Activity "Downloading EcoreX WebUI from CDN" -Completed
+                    Write-Warning "Adaptive CDN download stalled; falling back to single-connection resume."
+                    return $false
+                }
+            }
+        }
+        $downloaded = [int64]0
+        foreach ($chunk in $chunks) {
+            $expectedPartSize = [int64]($chunk.End - $chunk.Start + 1)
+            if ($chunk.Status -eq "done") {
+                $downloaded += $expectedPartSize
+            } elseif (Test-Path -LiteralPath $chunk.Path) {
+                try {
+                    $downloaded += [Math]::Min($expectedPartSize, (Get-Item -LiteralPath $chunk.Path).Length)
+                } catch {
+                }
+            }
+        }
+        $elapsed = [Math]::Max(0.1, ($now - $startedAt).TotalSeconds)
+        $deltaSeconds = [Math]::Max(0.1, ($now - $lastStamp).TotalSeconds)
+        $instantSpeed = [int64](($downloaded - $lastBytes) / $deltaSeconds)
+        $averageSpeed = [int64]($downloaded / $elapsed)
+        $speed = if ($instantSpeed -gt 0) { $instantSpeed } else { $averageSpeed }
+        $percent = [Math]::Min(100, [Math]::Round(($downloaded * 100.0) / $ExpectedSize, 1))
+        $eta = if ($speed -gt 0) { Format-Duration (($ExpectedSize - $downloaded) / [double]$speed) } else { "--:--" }
+        $status = "{0}%  {1} / {2}  {3}/s  ETA {4}" -f $percent, (Format-Mib $downloaded), (Format-Mib $ExpectedSize), (Format-Mib $speed), $eta
+        Write-Progress -Activity "Downloading EcoreX WebUI from CDN" -Status $status -PercentComplete $percent
+        if ($downloaded -ne $lastBytes -or ($now - $lastPrintedAt).TotalSeconds -ge 5) {
+            Write-Host ("CDN download progress: {0}" -f $status)
+            $lastPrintedAt = $now
+        }
+        $lastStamp = $now
+        $lastBytes = $downloaded
+    }
+    Write-Progress -Activity "Downloading EcoreX WebUI from CDN" -Completed
+    foreach ($chunk in $chunks) {
+        $expectedPartSize = [int64]($chunk.End - $chunk.Start + 1)
+        if (-not (Test-Path -LiteralPath $chunk.Path) -or (Get-Item -LiteralPath $chunk.Path).Length -ne $expectedPartSize) {
+            Write-Warning "Adaptive CDN range was not honored; falling back to single-connection resume."
+            return $false
+        }
+    }
+
+    Remove-Item -LiteralPath $PartialPath -Force -ErrorAction SilentlyContinue
+    $target = [System.IO.File]::Open($PartialPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+    try {
+        foreach ($chunk in ($chunks | Sort-Object Index)) {
+            $source = [System.IO.File]::OpenRead($chunk.Path)
+            try {
+                $source.CopyTo($target)
+            } finally {
+                $source.Dispose()
+            }
+        }
+    } finally {
+        $target.Dispose()
+    }
+
+    Write-Host "Verifying SHA256..."
+    $actual = Get-Sha256 -Path $PartialPath
+    if ($actual -ne $ExpectedSha256.ToUpperInvariant()) {
+        Remove-Item -LiteralPath $PartialPath -Force -ErrorAction SilentlyContinue
+        Write-Warning "Parallel CDN download SHA256 mismatch; falling back to single-connection resume."
+        return $false
+    }
+    Move-Item -LiteralPath $PartialPath -Destination $CachePath -Force
+    Remove-Item -LiteralPath $partDir -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host "Download verified: $CachePath"
+    return $true
+}
+
+function Save-ArtifactChunks {
+    param(
+        [Parameter(Mandatory = $true)]$Manifest,
+        [Parameter(Mandatory = $true)]$Artifact,
+        [Parameter(Mandatory = $true)][string]$OriginBaseUrl,
+        [Parameter(Mandatory = $true)][string]$CachePath,
+        [Parameter(Mandatory = $true)][string]$PartialPath,
+        [Parameter(Mandatory = $true)][string]$ExpectedSha256
+    )
+    if (-not ($Artifact.PSObject.Properties.Name -contains "chunked") -or -not $Artifact.chunked) {
+        return $null
+    }
+    if ((Test-Path -LiteralPath $CachePath) -and (Get-Sha256 -Path $CachePath) -eq $ExpectedSha256.ToUpperInvariant()) {
+        Write-Host "Using cached verified package: $CachePath"
+        return $CachePath
+    }
+    $chunked = $Artifact.chunked
+    $chunkList = @($chunked.chunks)
+    if ($chunkList.Count -le 0) {
+        return $null
+    }
+    $chunkBases = Get-ArtifactChunkBaseUrls -Manifest $Manifest -Artifact $Artifact -OriginBaseUrl $OriginBaseUrl
+    $chunkBase = $chunkBases | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1
+    if (-not $chunkBase) {
+        return $null
+    }
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if (-not $curl) {
+        return $null
+    }
+
+    $chunkDir = "$CachePath.chunk-files"
+    New-Item -ItemType Directory -Force -Path $chunkDir | Out-Null
+    $workerCount = Get-ParallelPartCount
+    $expectedSize = [int64]$Artifact.size
+    $retryAll = Test-CurlRetryAllErrors -CurlPath $curl.Source
+    $items = New-Object System.Collections.ArrayList
+    Write-Host ("Using CDN chunked package download: {0} files, {1} workers, total {2}." -f $chunkList.Count, $workerCount, (Format-Mib $expectedSize))
+
+    foreach ($entry in $chunkList) {
+        $fileName = [string]$entry.fileName
+        $path = Join-Path $chunkDir $fileName
+        $item = [pscustomobject]@{
+            Index = [int]$entry.index
+            Url = (Join-Url $chunkBase $fileName)
+            Path = $path
+            TempPath = "$path.part"
+            Size = [int64]$entry.size
+            Sha256 = ([string]$entry.sha256).ToUpperInvariant()
+            Attempts = 0
+            Process = $null
+            Status = "queued"
+            LastSize = [int64]0
+            LastProgressAt = [DateTime]::UtcNow
+        }
+        if ((Test-Path -LiteralPath $path) -and (Get-Item -LiteralPath $path).Length -eq $item.Size) {
+            try {
+                if ((Get-Sha256 -Path $path) -eq $item.Sha256) {
+                    $item.Status = "done"
+                }
+            } catch {
+            }
+        }
+        [void]$items.Add($item)
+    }
+
+    function Start-ChunkDownload {
+        param($Chunk)
+        Remove-Item -LiteralPath $Chunk.TempPath -Force -ErrorAction SilentlyContinue
+        $Chunk.Attempts += 1
+        $Chunk.Status = "running"
+        $Chunk.LastSize = [int64]0
+        $Chunk.LastProgressAt = [DateTime]::UtcNow
+        $args = @(
+            "--fail",
+            "--location",
+            "--retry", "8",
+            "--retry-delay", "2",
+            "--retry-max-time", "600",
+            "--connect-timeout", "20",
+            "--silent",
+            "--show-error",
+            "--output", $Chunk.TempPath,
+            $Chunk.Url
+        )
+        if ($retryAll) {
+            $args = @("--retry-all-errors") + $args
+        }
+        $Chunk.Process = Start-CurlProcess -CurlPath $curl.Source -Arguments $args
+    }
+
+    $startedAt = [DateTime]::UtcNow
+    $lastStamp = $startedAt
+    $lastBytes = [int64]0
+    $lastPrintedAt = $startedAt.AddSeconds(-10)
+    while (@($items | Where-Object { $_.Status -ne "done" }).Count -gt 0) {
+        while (@($items | Where-Object { $_.Status -eq "running" }).Count -lt $workerCount) {
+            $next = $items | Where-Object { $_.Status -eq "queued" } | Sort-Object Index | Select-Object -First 1
+            if ($null -eq $next) { break }
+            Start-ChunkDownload -Chunk $next
+        }
+        Start-Sleep -Seconds 1
+        $now = [DateTime]::UtcNow
+        foreach ($chunk in @($items | Where-Object { $_.Status -eq "running" })) {
+            $size = [int64]0
+            if (Test-Path -LiteralPath $chunk.TempPath) {
+                try { $size = (Get-Item -LiteralPath $chunk.TempPath).Length } catch { $size = [int64]0 }
+            }
+            if ($size -gt $chunk.LastSize) {
+                $chunk.LastSize = $size
+                $chunk.LastProgressAt = $now
+            }
+            if ($chunk.Process.HasExited) {
+                $ok = $false
+                if ($chunk.Process.ExitCode -eq 0 -and (Test-Path -LiteralPath $chunk.TempPath) -and (Get-Item -LiteralPath $chunk.TempPath).Length -eq $chunk.Size) {
+                    try { $ok = ((Get-Sha256 -Path $chunk.TempPath) -eq $chunk.Sha256) } catch { $ok = $false }
+                }
+                if ($ok) {
+                    Move-Item -LiteralPath $chunk.TempPath -Destination $chunk.Path -Force
+                    $chunk.Status = "done"
+                } elseif ($chunk.Attempts -lt 6) {
+                    Write-Warning ("Chunk file {0} retry {1}/6." -f $chunk.Index, ($chunk.Attempts + 1))
+                    $chunk.Status = "queued"
+                    $chunk.Process = $null
+                    Remove-Item -LiteralPath $chunk.TempPath -Force -ErrorAction SilentlyContinue
+                } else {
+                    throw "CDN chunked download failed at chunk $($chunk.Index)."
+                }
+            } elseif ($size -lt $chunk.Size -and ($now - $chunk.LastProgressAt).TotalSeconds -ge 45) {
+                try { $chunk.Process.Kill() } catch {}
+                if ($chunk.Attempts -lt 6) {
+                    Write-Warning ("Chunk file {0} stalled; retry {1}/6." -f $chunk.Index, ($chunk.Attempts + 1))
+                    $chunk.Status = "queued"
+                    $chunk.Process = $null
+                    Remove-Item -LiteralPath $chunk.TempPath -Force -ErrorAction SilentlyContinue
+                } else {
+                    throw "CDN chunked download stalled at chunk $($chunk.Index)."
+                }
+            }
+        }
+
+        $downloaded = [int64]0
+        foreach ($chunk in $items) {
+            if ($chunk.Status -eq "done") {
+                $downloaded += $chunk.Size
+            } elseif (Test-Path -LiteralPath $chunk.TempPath) {
+                try { $downloaded += [Math]::Min($chunk.Size, (Get-Item -LiteralPath $chunk.TempPath).Length) } catch {}
+            }
+        }
+        $deltaSeconds = [Math]::Max(0.1, ($now - $lastStamp).TotalSeconds)
+        $elapsed = [Math]::Max(0.1, ($now - $startedAt).TotalSeconds)
+        $instantSpeed = [int64](($downloaded - $lastBytes) / $deltaSeconds)
+        $averageSpeed = [int64]($downloaded / $elapsed)
+        $speed = if ($instantSpeed -gt 0) { $instantSpeed } else { $averageSpeed }
+        $percent = [Math]::Min(100, [Math]::Round(($downloaded * 100.0) / $expectedSize, 1))
+        $eta = if ($speed -gt 0) { Format-Duration (($expectedSize - $downloaded) / [double]$speed) } else { "--:--" }
+        $status = "{0}%  {1} / {2}  {3}/s  ETA {4}" -f $percent, (Format-Mib $downloaded), (Format-Mib $expectedSize), (Format-Mib $speed), $eta
+        Write-Progress -Activity "Downloading EcoreX WebUI chunk files from CDN" -Status $status -PercentComplete $percent
+        if ($downloaded -ne $lastBytes -or ($now - $lastPrintedAt).TotalSeconds -ge 5) {
+            Write-Host ("CDN chunk download progress: {0}" -f $status)
+            $lastPrintedAt = $now
+        }
+        $lastStamp = $now
+        $lastBytes = $downloaded
+    }
+    Write-Progress -Activity "Downloading EcoreX WebUI chunk files from CDN" -Completed
+
+    Remove-Item -LiteralPath $PartialPath -Force -ErrorAction SilentlyContinue
+    $target = [System.IO.File]::Open($PartialPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+    try {
+        foreach ($chunk in ($items | Sort-Object Index)) {
+            $source = [System.IO.File]::OpenRead($chunk.Path)
+            try { $source.CopyTo($target) } finally { $source.Dispose() }
+        }
+    } finally {
+        $target.Dispose()
+    }
+
+    Write-Host "Verifying SHA256..."
+    $actual = Get-Sha256 -Path $PartialPath
+    if ($actual -ne $ExpectedSha256.ToUpperInvariant()) {
+        Remove-Item -LiteralPath $PartialPath -Force -ErrorAction SilentlyContinue
+        throw "SHA256 mismatch for chunked package: $actual"
+    }
+    Move-Item -LiteralPath $PartialPath -Destination $CachePath -Force
+    Remove-Item -LiteralPath $chunkDir -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host "Chunked download verified: $CachePath"
+    return $CachePath
 }
 
 function ConvertTo-EcoreXLongPath {
@@ -281,12 +823,32 @@ function Expand-EcoreXZip {
     }
 }
 
+function Find-WebUIInstaller {
+    param([Parameter(Mandatory = $true)][string]$ExtractRoot)
+
+    $relativeInstaller = Join-Path "scripts" "install-ecorex-webui-win.ps1"
+    $directInstaller = Join-Path $ExtractRoot $relativeInstaller
+    if (Test-Path -LiteralPath $directInstaller) {
+        return Get-Item -LiteralPath $directInstaller
+    }
+
+    foreach ($child in @(Get-ChildItem -LiteralPath $ExtractRoot -Directory -ErrorAction Stop)) {
+        $candidate = Join-Path $child.FullName $relativeInstaller
+        if (Test-Path -LiteralPath $candidate) {
+            return Get-Item -LiteralPath $candidate
+        }
+    }
+
+    throw "Windows WebUI installer was not found in the downloaded package."
+}
+
 function Save-UrlWithProgress {
     param(
         [Parameter(Mandatory = $true)][string]$Uri,
         [Parameter(Mandatory = $true)][string]$CachePath,
         [Parameter(Mandatory = $true)][string]$WorkDir,
         [Parameter(Mandatory = $true)][string]$ExpectedSha256,
+        [int64]$ExpectedSize = 0,
         [int]$Retries = 3
     )
 
@@ -298,7 +860,12 @@ function Save-UrlWithProgress {
     $cacheDir = Split-Path -Parent $CachePath
     New-Item -ItemType Directory -Force -Path $cacheDir, $WorkDir | Out-Null
     $partialPath = "$CachePath.part"
-    if (Try-SaveUrlWithCurl -Uri $Uri -CachePath $CachePath -PartialPath $partialPath -ExpectedSha256 $ExpectedSha256) {
+    $parallelResult = Try-SaveUrlWithParallelCurl -Uri $Uri -CachePath $CachePath -PartialPath $partialPath -ExpectedSha256 $ExpectedSha256 -ExpectedSize $ExpectedSize
+    if ($parallelResult -eq $true) {
+        return $CachePath
+    }
+    $curlResult = Try-SaveUrlWithCurl -Uri $Uri -CachePath $CachePath -PartialPath $partialPath -ExpectedSha256 $ExpectedSha256
+    if ($curlResult -eq $true) {
         return $CachePath
     }
 
@@ -316,7 +883,7 @@ function Save-UrlWithProgress {
 
             $request = [System.Net.HttpWebRequest][System.Net.WebRequest]::Create($Uri)
             $request.Method = "GET"
-            $request.UserAgent = "EcoreX-WebUI-Installer/0.2.7.2"
+            $request.UserAgent = "EcoreX-WebUI-Installer/0.3.0"
             $request.Timeout = 30000
             $request.ReadWriteTimeout = 30000
             $request.AllowAutoRedirect = $true
@@ -404,32 +971,73 @@ function Save-UrlWithProgress {
     }
 }
 
+function Test-DownloadSourceAvailable {
+    param([Parameter(Mandatory = $true)][string]$Uri)
+    try {
+        $request = [System.Net.HttpWebRequest][System.Net.WebRequest]::Create($Uri)
+        $request.Method = "HEAD"
+        $request.UserAgent = "EcoreX-WebUI-Installer/0.3.0"
+        $request.Timeout = 10000
+        $request.ReadWriteTimeout = 10000
+        $request.AllowAutoRedirect = $true
+        $response = $request.GetResponse()
+        try {
+            return ([int]$response.StatusCode -lt 400)
+        } finally {
+            $response.Dispose()
+        }
+    } catch [System.Net.WebException] {
+        $webResponse = $_.Exception.Response
+        if ($webResponse) {
+            $statusCode = [int]$webResponse.StatusCode
+            $webResponse.Dispose()
+            if ($statusCode -eq 404) { return $false }
+            if ($statusCode -eq 405) { return $true }
+        }
+        return $true
+    } catch {
+        return $true
+    }
+}
+
 function Save-UrlWithFallback {
     param(
         [Parameter(Mandatory = $true)][string[]]$Urls,
         [Parameter(Mandatory = $true)][string]$CachePath,
         [Parameter(Mandatory = $true)][string]$WorkDir,
-        [Parameter(Mandatory = $true)][string]$ExpectedSha256
+        [Parameter(Mandatory = $true)][string]$ExpectedSha256,
+        [int64]$ExpectedSize = 0
     )
-    $errors = @()
-    foreach ($artifactUrl in $Urls) {
-        Write-Host "Trying download source: $artifactUrl"
+    $cleanUrls = @($Urls | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($cleanUrls.Count -eq 0) {
+        throw "No download source was configured."
+    }
+    $failures = New-Object System.Collections.ArrayList
+    for ($i = 0; $i -lt $cleanUrls.Count; $i++) {
+        $url = [string]$cleanUrls[$i]
+        $sourceLabel = if ($i -eq 0) { "primary" } else { "fallback $($i + 1)" }
+        if (-not (Test-DownloadSourceAvailable -Uri $url)) {
+            Write-Warning "Skipping unavailable $sourceLabel download source: $url"
+            [void]$failures.Add("${url}: unavailable")
+            continue
+        }
+        Write-Host "Using $sourceLabel download source: $url"
         try {
-            return Save-UrlWithProgress -Uri $artifactUrl -CachePath $CachePath -WorkDir $WorkDir -ExpectedSha256 $ExpectedSha256
+            return Save-UrlWithProgress -Uri $url -CachePath $CachePath -WorkDir $WorkDir -ExpectedSha256 $ExpectedSha256 -ExpectedSize $ExpectedSize
         } catch {
-            $errors += ("{0}: {1}" -f $artifactUrl, $_.Exception.Message)
-            Write-Warning "Download source failed: $artifactUrl"
+            Write-Warning "$sourceLabel download failed: $url"
             Write-Warning $_.Exception.Message
-            Remove-Item -LiteralPath "$CachePath.part" -Force -ErrorAction SilentlyContinue
+            Write-Warning "Trying the next configured source when available."
+            [void]$failures.Add("${url}: $($_.Exception.Message)")
         }
     }
-    throw "All download sources failed. $($errors -join ' | ')"
+    throw "All EcoreX WebUI download sources failed: $($failures -join ' | ')"
 }
 
 $manifestUrl = Join-Url $BaseUrl "manifest.json"
 Write-Host "Fetching EcoreX manifest: $manifestUrl"
 $manifest = Invoke-RestMethod -Uri $manifestUrl -UseBasicParsing -TimeoutSec 30
-Write-Host "EcoreX WebUI installer script: 0.2.7.2"
+Write-Host "EcoreX WebUI installer script: 0.3.0"
 Write-Host "EcoreX WebUI manifest version: $($manifest.version)"
 if ($Version -and [string]$manifest.version -ne $Version) {
     throw "Manifest version '$($manifest.version)' does not match requested '$Version'."
@@ -451,26 +1059,27 @@ $extractRoot = Join-Path $tempRoot "extract"
 New-Item -ItemType Directory -Force -Path $tempRoot, $extractRoot, $cacheRoot | Out-Null
 
 try {
-    $downloadUrls = Get-DownloadUrls -Manifest $manifest -Artifact $artifact -OriginBaseUrl $BaseUrl -ExplicitBaseUrls $DownloadBaseUrls -ExplicitAssetBaseUrls $AssetDownloadBaseUrls
-    $packagePath = Save-UrlWithFallback -Urls $downloadUrls -CachePath $zipPath -WorkDir $tempRoot -ExpectedSha256 ([string]$artifact.sha256)
+    $packagePath = Save-ArtifactChunks -Manifest $manifest -Artifact $artifact -OriginBaseUrl $BaseUrl -CachePath $zipPath -PartialPath "$zipPath.part" -ExpectedSha256 ([string]$artifact.sha256)
+    if (-not $packagePath) {
+        $downloadUrls = Get-DownloadUrls -Manifest $manifest -Artifact $artifact -OriginBaseUrl $BaseUrl -ExplicitBaseUrls $DownloadBaseUrls -ExplicitAssetBaseUrls $AssetDownloadBaseUrls
+        $packagePath = Save-UrlWithFallback -Urls $downloadUrls -CachePath $zipPath -WorkDir $tempRoot -ExpectedSha256 ([string]$artifact.sha256) -ExpectedSize ([int64]$artifact.size)
+    }
 
     Write-Host "Extracting package..."
     Expand-EcoreXZip -ZipPath $packagePath -DestinationPath $extractRoot
     Write-Host "Package extracted."
 
-    $installer = Get-ChildItem -LiteralPath $extractRoot -Recurse -Filter "install-ecorex-webui-win.ps1" | Select-Object -First 1
-    if (-not $installer) {
-        throw "Windows WebUI installer was not found in the downloaded package."
-    }
+    $installer = Find-WebUIInstaller -ExtractRoot $extractRoot
 
     Write-Host "Starting EcoreX WebUI local installer..."
     $args = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $installer.FullName)
+    $args += @("-Port", $Port)
     if ($NoBrowser) { $args += "-NoBrowser" }
     & powershell @args
     if ($LASTEXITCODE -ne 0) {
         throw "EcoreX WebUI installer failed with exit code $LASTEXITCODE."
     }
-    Write-Host "EcoreX WebUI install command finished. If the browser did not open, double-click the desktop EcoreX WebUI.url shortcut or rerun this command."
+    Write-Host "EcoreX WebUI install command finished. If the browser did not open, double-click the desktop EcoreX WebUI shortcut; it will start the local service and reopen the browser."
 } finally {
     Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

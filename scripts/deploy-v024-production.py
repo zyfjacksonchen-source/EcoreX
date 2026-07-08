@@ -35,6 +35,7 @@ WEB_TAR = ROOT / "release-artifacts" / f"EcoreX_{VERSION}-web-linux-service.tar.
 PUBLIC_ZIP = ROOT / "release-artifacts" / f"EcoreX_{VERSION}-public-release.zip"
 WEBUI_WINDOWS = ROOT / "release-artifacts" / f"EcoreX_{VERSION}-webui-windows-x64.zip"
 WEBUI_MACOS = ROOT / "release-artifacts" / f"EcoreX_{VERSION}-webui-macos-universal.zip"
+DOWNLOAD_CHUNKS_ROOT = ROOT / "release-artifacts" / "download-chunks"
 INSTALL_WEB = ROOT / "scripts" / "install-ecorex-web.sh"
 CHECK_WEB = ROOT / "scripts" / "check-ecorex-web-release.sh"
 INSTALL_PUBLIC = ROOT / "scripts" / "install-ecorex-public-release.sh"
@@ -261,12 +262,12 @@ is_match() {{
 
 publish_match() {{
   local source="$1"
-  cp -f "$source" "$cache"
-  cp -f "$cache" "$target"
+  cp -p "$source" "$cache"
+  cp -p "$cache" "$target"
 }}
 
 if is_match "$cache"; then
-  cp -f "$cache" "$target"
+  cp -p "$cache" "$target"
   echo "cache-hit"
   exit 0
 fi
@@ -314,7 +315,7 @@ if [[ "$actual_size" != "$expected_size" || "$actual_sha" != "$expected_sha" ]];
   exit 1
 fi
 mv -f "$part" "$cache"
-cp -f "$cache" "$target"
+cp -p "$cache" "$target"
 echo "uploaded-cache-hit"
 """
         return "bash -lc " + shlex.quote(script)
@@ -334,6 +335,86 @@ echo "uploaded-cache-hit"
         self.upload(local, part_remote, f"{name}_cache_upload")
         promote = self.cache_promote_command(part_remote, cache_remote, target_remote, expected_sha, expected_size)
         self.remote(f"{name}_cache_promote", promote, timeout=900)
+
+    def ensure_download_chunks(self, local: Path, remote_downloads_source: str, name: str) -> None:
+        chunk_dir = DOWNLOAD_CHUNKS_ROOT / local.name
+        if not chunk_dir.is_dir():
+            self.record(f"{name}_chunks_skipped", f"download-chunks-missing:{local.name}", 0)
+            return
+        remote_chunk_dir = posixpath.join(remote_downloads_source, "chunks", local.name)
+        self.remote(f"{name}_chunks_prepare", f"mkdir -p {shlex.quote(remote_chunk_dir)}", timeout=60)
+        for chunk in sorted(chunk_dir.glob("*.part")):
+            remote_chunk = posixpath.join(remote_chunk_dir, chunk.name)
+            expected_size = chunk.stat().st_size
+            expected_sha = file_sha(chunk)
+            probe = self.cache_probe_command(chunk.name, expected_sha, expected_size, remote_chunk, remote_chunk)
+            code, out, err = self.remote(f"{name}_chunk_{chunk.stem}_probe", probe, timeout=300, check=False)
+            if code == 0:
+                continue
+            if code != 17:
+                raise RuntimeError(f"{name}_chunk_probe failed with exit code {code}: {self.redact(out + err)}")
+            self.upload(chunk, remote_chunk, f"{name}_chunk_{chunk.stem}_upload")
+
+    @staticmethod
+    def public_chunk_generation_command() -> str:
+        script = r"""
+set -euo pipefail
+python3 - <<'PY'
+import hashlib
+import json
+import pathlib
+
+root = pathlib.Path('/srv/ecorex-agent-download/current')
+manifest_path = root / 'manifest.json'
+manifest = json.loads(manifest_path.read_text(encoding='utf-8-sig'))
+
+def sha256_bytes(data):
+    return hashlib.sha256(data).hexdigest().upper()
+
+def sha256_path(path):
+    digest = hashlib.sha256()
+    with path.open('rb') as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest().upper()
+
+generated = []
+for artifact in manifest.get('artifacts') or []:
+    chunked = artifact.get('chunked') or {}
+    chunks = chunked.get('chunks') or []
+    if not chunks:
+        continue
+    file_name = artifact.get('fileName') or ''
+    source = root / 'downloads' / file_name
+    if not source.is_file():
+        raise SystemExit(f'missing chunk source artifact: {source}')
+    if source.stat().st_size != int(artifact.get('size') or 0):
+        raise SystemExit(f'chunk source size mismatch: {file_name}')
+    if sha256_path(source) != str(artifact.get('sha256') or '').upper():
+        raise SystemExit(f'chunk source sha256 mismatch: {file_name}')
+    base_href = str(chunked.get('baseHref') or '').strip('/')
+    if not base_href or '..' in pathlib.PurePosixPath(base_href).parts:
+        raise SystemExit(f'unsafe chunk baseHref: {base_href}')
+    out_dir = root / 'downloads' / base_href
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with source.open('rb') as handle:
+        for chunk in chunks:
+            data = handle.read(int(chunk.get('size') or 0))
+            expected_sha = str(chunk.get('sha256') or '').upper()
+            if len(data) != int(chunk.get('size') or 0) or sha256_bytes(data) != expected_sha:
+                raise SystemExit(f'chunk metadata mismatch: {file_name} #{chunk.get("index")}')
+            target = out_dir / str(chunk.get('fileName') or '')
+            if target.is_file() and target.stat().st_size == len(data) and sha256_path(target) == expected_sha:
+                continue
+            tmp = target.with_suffix(target.suffix + '.tmp')
+            tmp.write_bytes(data)
+            tmp.replace(target)
+    generated.append({'artifact': file_name, 'chunks': len(chunks), 'baseHref': base_href})
+
+print(json.dumps({'ok': True, 'generated': generated}, ensure_ascii=False, sort_keys=True))
+PY
+"""
+        return "bash -lc " + shlex.quote(script)
 
     @staticmethod
     def state_script() -> str:
@@ -426,7 +507,7 @@ PY
                 )
             self.remote(
                 "stage_web_tar_download_source",
-                f"cp -f {shlex.quote(remote_web_tar)} {shlex.quote(posixpath.join(remote_downloads_source, WEB_TAR.name))}",
+                f"cp -p {shlex.quote(remote_web_tar)} {shlex.quote(posixpath.join(remote_downloads_source, WEB_TAR.name))}",
                 timeout=120,
             )
             self.remote(
@@ -460,6 +541,19 @@ PY
                 f"bash {shlex.quote(remote_install_public)} {shlex.quote(remote_public_zip)}"
             )
             self.remote("install_public_site_admin", install_public, timeout=900)
+            self.remote("generate_public_download_chunks", self.public_chunk_generation_command(), timeout=1800)
+
+            self.remote(
+                "restart_admin_api_after_public_install",
+                "systemctl restart ecorex-admin-api && "
+                "for i in $(seq 1 30); do "
+                "code=$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:18084/client/model-config || true); "
+                "if [ \"$code\" = \"403\" ] || [ \"$code\" = \"401\" ] || [ \"$code\" = \"200\" ]; then echo admin-api-ready:$code; exit 0; fi; "
+                "sleep 1; "
+                "done; "
+                "systemctl status ecorex-admin-api --no-pager -l; exit 1",
+                timeout=90,
+            )
 
             if self.promote_public_release:
                 check_server = (

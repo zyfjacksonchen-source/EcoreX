@@ -18,6 +18,11 @@ const state = {
     summary: {},
     runtimeAudit: {
       summary: {},
+      actionTypeCounts: {},
+      actionTypeLabels: {},
+      userActions: [],
+      effectiveArtifacts: [],
+      feedbackTraces: [],
       eventTypeCounts: {},
       sourceCounts: {},
       statusCounts: {},
@@ -25,7 +30,7 @@ const state = {
       recentEvents: [],
       privacy: {},
     },
-    version: "0.2.7.2",
+    version: "0.3.0",
   },
   connected: false,
 };
@@ -81,6 +86,14 @@ function formatTime(value) {
   return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
+function formatBytes(value) {
+  const size = Number(value) || 0;
+  if (size <= 0) return "未记录";
+  if (size >= 1024 * 1024) return `${trimUnitDecimal((size / 1024 / 1024).toFixed(1))} MB`;
+  if (size >= 1024) return `${trimUnitDecimal((size / 1024).toFixed(1))} KB`;
+  return `${formatNumber(size)} B`;
+}
+
 function statusLabel(status) {
   return { active: "可用", invited: "待首次登录", disabled: "禁用" }[status] || status || "未知";
 }
@@ -91,6 +104,32 @@ function roleLabel(role) {
 
 function modeLabel(mode) {
   return { ask: "首次使用询问安装", preinstall: "管理员预置", disabled: "禁用普通用户安装" }[mode] || "首次使用询问安装";
+}
+
+function validationLabel(status) {
+  return status === "pass" ? "通过" : status === "not-configured" ? "未配置" : "失败";
+}
+
+function releaseIndexLabel(index) {
+  if (!index) return "未检查";
+  if (index.status === "pass") return "可信";
+  if (index.status === "not-configured" && !index.required) return "未启用";
+  return "不可信";
+}
+
+function releaseRiskStatus(risks = []) {
+  if (risks.some((item) => item.severity === "high")) return "failed";
+  if (risks.some((item) => item.severity === "medium")) return "obsolete";
+  return risks.length ? "current" : "active";
+}
+
+function releaseFailureDetails(validation, releaseIndex) {
+  const failures = [
+    ...(Array.isArray(validation?.failures) ? validation.failures : []),
+    ...(Array.isArray(releaseIndex?.failures) ? releaseIndex.failures.map((item) => `release-index: ${item}`) : []),
+  ].filter(Boolean).slice(0, 8);
+  if (!failures.length) return "";
+  return `<details class="release-failures"><summary>校验明细</summary>${failures.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</details>`;
 }
 
 const MODEL_PROVIDER_BOT_TYPES = {
@@ -233,36 +272,118 @@ function renderLogs() {
 function renderRuntimeAudit() {
   const audit = state.data.runtimeAudit || {};
   const summary = audit.summary || {};
+  const actionLabels = audit.actionTypeLabels || {};
   const summaryTarget = $("[data-runtime-audit-summary]");
   if (summaryTarget) {
     const cards = [
-      ["Events", summary.events],
-      ["Requests", summary.requests],
-      ["Sessions", summary.sessions],
-      ["Artifacts", summary.artifacts],
-      ["Valid artifacts", summary.validArtifacts],
-      ["Invalid artifacts", summary.invalidArtifacts],
-      ["Messages", summary.messages],
-      ["Terminal", summary.terminalEvents],
-      ["Policy blocked", summary.capabilityPolicyBlocked],
-      ["Unknown types", summary.unknownEventTypes],
+      ["用户动作", summary.userActions],
+      ["图片处理", summary.imageProcessingActions],
+      ["有效产物", summary.effectiveArtifacts],
+      ["下拇指", summary.thumbsDownArtifacts],
+      ["可回溯", summary.feedbackTraceCount],
+      ["策略拦截", summary.capabilityPolicyBlocked],
+      ["请求", summary.requests],
+      ["最近同步", summary.lastIngestedAt ? formatTime(summary.lastIngestedAt) : "未记录"],
     ];
     summaryTarget.innerHTML = cards
-      .map(([label, value]) => `<article><span>${escapeHtml(label)}</span><strong>${formatNumber(value || 0)}</strong></article>`)
+      .map(([label, value]) => {
+        const display = typeof value === "number" ? formatNumber(value || 0) : value || "未记录";
+        return `<article><span>${escapeHtml(label)}</span><strong>${escapeHtml(display)}</strong></article>`;
+      })
       .join("");
   }
 
   const typeTarget = $("[data-runtime-audit-types]");
   if (typeTarget) {
-    const entries = Object.entries(audit.eventTypeCounts || {}).sort((a, b) => b[1] - a[1]);
+    const entries = Object.entries(audit.actionTypeCounts || {}).sort((a, b) => b[1] - a[1]);
     typeTarget.innerHTML = entries
+      .map(([type, count]) => `
+        <article class="audit-count-row">
+          <strong>${escapeHtml(actionLabels[type] || type)}</strong>
+          <small>${escapeHtml(type)}</small>
+          <span>${formatNumber(count)}</span>
+        </article>
+      `)
+      .join("") || `<p class="empty">暂无用户动作同步。</p>`;
+  }
+
+  const actionTarget = $("[data-runtime-audit-actions]");
+  if (actionTarget) {
+    actionTarget.innerHTML = (audit.userActions || [])
+      .map((item) => `
+        <article class="audit-action-row">
+          <span class="pill" data-status="${escapeHtml(item.status || "active")}">${escapeHtml(item.actionLabel || item.actionType || "动作")}</span>
+          <div>
+            <strong>${escapeHtml(item.eventHash || "event")}</strong>
+            <span>req:${escapeHtml(item.requestHash || "none")} / session:${escapeHtml(item.sessionHash || "none")}</span>
+          </div>
+          <span>${escapeHtml(item.status || "unknown")}</span>
+          <span>${formatTime(item.ingestedAt || item.occurredAt)}</span>
+        </article>
+      `)
+      .join("") || `<p class="empty">暂无可展示的用户动作。</p>`;
+  }
+
+  const artifactTarget = $("[data-runtime-audit-effective-artifacts]");
+  if (artifactTarget) {
+    artifactTarget.innerHTML = (audit.effectiveArtifacts || [])
+      .map((item) => {
+        const title = item.artifactTitle || `${item.kind || "artifact"} ${item.pathExt || item.artifactHash || ""}`.trim();
+        const meta = [
+          item.pathExt,
+          formatBytes(item.sizeBytes),
+          item.artifactFeedbackSignal === "thumbs_up" ? "上拇指" : "默认有效",
+        ].filter(Boolean).join(" / ");
+        return `
+          <article class="audit-artifact-row">
+            <div>
+              <strong>${escapeHtml(title || "有效产物")}</strong>
+              <span>${escapeHtml(meta)}</span>
+            </div>
+            <span class="pill" data-status="${escapeHtml(item.artifactValidity || "valid")}">${escapeHtml(item.artifactValidity || "valid")}</span>
+            <span>${formatTime(item.ingestedAt || item.createdAt)}</span>
+            <code>${escapeHtml(item.artifactHash || "artifact")}</code>
+          </article>
+        `;
+      })
+      .join("") || `<p class="empty">暂无自动识别的有效产物。</p>`;
+  }
+
+  const feedbackTarget = $("[data-runtime-audit-feedback-traces]");
+  if (feedbackTarget) {
+    feedbackTarget.innerHTML = (audit.feedbackTraces || [])
+      .map((item) => {
+        const title = item.artifactTitle || `${item.kind || "artifact"} ${item.pathExt || item.artifactHash || ""}`.trim();
+        const user = [item.userName, item.userEmail].filter(Boolean).join(" / ") || "未知用户";
+        const traceLink = item.feedbackShareUrl
+          ? `<a class="soft-link compact" href="${escapeHtml(item.feedbackShareUrl)}" target="_blank" rel="noopener">回看会话</a>`
+          : `<span class="audit-muted">暂无分享链接</span>`;
+        return `
+          <article class="audit-feedback-row">
+            <div>
+              <strong>${escapeHtml(title || "下拇指产物")}</strong>
+              <span>${escapeHtml(user)}</span>
+            </div>
+            <span>${formatTime(item.artifactFeedbackAt || item.ingestedAt || item.createdAt)}</span>
+            <code>${escapeHtml(item.artifactHash || "artifact")}</code>
+            ${traceLink}
+          </article>
+        `;
+      })
+      .join("") || `<p class="empty">暂无下拇指回溯记录。</p>`;
+  }
+
+  const eventTypeTarget = $("[data-runtime-audit-event-types]");
+  if (eventTypeTarget) {
+    const entries = Object.entries(audit.eventTypeCounts || {}).sort((a, b) => b[1] - a[1]);
+    eventTypeTarget.innerHTML = entries
       .map(([type, count]) => `
         <article class="audit-count-row">
           <strong>${escapeHtml(type)}</strong>
           <span>${formatNumber(count)}</span>
         </article>
       `)
-      .join("") || `<p class="empty">No runtime events synced yet.</p>`;
+      .join("") || `<p class="empty">暂无技术事件。</p>`;
   }
 
   const requestTarget = $("[data-runtime-audit-requests]");
@@ -280,7 +401,7 @@ function renderRuntimeAudit() {
           <span>${formatTime(item.lastIngestedAt || item.lastEventAt)}</span>
         </article>
       `)
-      .join("") || `<p class="empty">No request projection available.</p>`;
+      .join("") || `<p class="empty">暂无请求投影。</p>`;
   }
 
   const eventTarget = $("[data-runtime-audit-events]");
@@ -307,7 +428,7 @@ function renderRuntimeAudit() {
           </article>
         `;
       })
-      .join("") || `<p class="empty">No recent runtime events.</p>`;
+      .join("") || `<p class="empty">暂无最近运行事件。</p>`;
   }
 }
 
@@ -367,25 +488,83 @@ function renderCapabilities() {
 function renderRelease() {
   const target = $("[data-release]");
   const summaryTarget = $("[data-release-summary]");
+  const controlsTarget = $("[data-release-controls]");
   if (!target) return;
   const release = state.data.release || {};
   const current = release.current || {};
   const staged = Array.isArray(release.staged) ? release.staged : [];
   const policy = current.updatePolicy || {};
+  const rollout = policy.rollout || {};
+  const killSwitch = policy.killSwitch || {};
+  const rollback = policy.rollback || {};
+  const backgroundUpdate = policy.backgroundUpdate || {};
+  const connectorHealthCheck = policy.connectorHealthCheck || {};
+  const releaseIndex = current.releaseIndex || {};
+  const risks = Array.isArray(release.risks) ? release.risks : [];
   if (summaryTarget) {
     summaryTarget.innerHTML = `
       <article><span>当前 stable</span><strong>${escapeHtml(current.version || "未发布")}</strong></article>
       <article><span>候选版本</span><strong>${formatNumber(staged.length)}</strong></article>
-      <article><span>更新通道</span><strong>${escapeHtml(policy.channel || "stable")}</strong></article>
-      <article><span>发布方式</span><strong>${release.promotion?.adminTriggerRequired ? "管理员确认" : "未配置"}</strong></article>
+      <article><span>Release Index</span><strong>${releaseIndexLabel(releaseIndex)}</strong></article>
+      <article><span>风险</span><strong>${risks.length ? `${formatNumber(risks.length)} 项` : "清洁"}</strong></article>
+    `;
+  }
+  if (controlsTarget) {
+    const stateMachine = Array.isArray(policy.stateMachine) && policy.stateMachine.length
+      ? policy.stateMachine.join(" → ")
+      : "available → downloading → verified → staged → deferred → installed → activated → rollback";
+    controlsTarget.innerHTML = `
+      <article>
+        <span>发布策略</span>
+        <strong>${escapeHtml(policy.channel || "stable")} / ${escapeHtml(policy.promotion || "admin-gated")}</strong>
+        <small>${escapeHtml(backgroundUpdate.activationPolicy || "prompt-soft-refresh-existing-tab")}</small>
+      </article>
+      <article>
+        <span>灰度</span>
+        <strong>${formatNumber(rollout.percent || 0)}%</strong>
+        <small>${escapeHtml(rollout.strategy || "progressive")} · 健康 ${formatNumber(rollout.minimumHealthyMinutes || 0)} 分钟</small>
+      </article>
+      <article>
+        <span>Kill-switch</span>
+        <strong class="${killSwitch.enabled ? "danger-text" : ""}">${killSwitch.enabled ? "已开启" : "关闭"}</strong>
+        <small>${escapeHtml(killSwitch.reason || killSwitch.updatedAt || "无阻断")}</small>
+      </article>
+      <article>
+        <span>回滚</span>
+        <strong>${rollback.enabled ? "可回滚" : "未配置"}</strong>
+        <small>${escapeHtml(rollback.healthCheck || backgroundUpdate.healthCheck || "/api/version")}</small>
+      </article>
+      <article class="wide">
+        <span>在线更新状态机</span>
+        <strong>${escapeHtml(stateMachine)}</strong>
+        <small>${escapeHtml(backgroundUpdate.idleGate || "/api/active-requests")} · ${escapeHtml(backgroundUpdate.stateFile || "update-state.json")}</small>
+      </article>
+      <article class="wide">
+        <span>外部连接保护</span>
+        <strong>${connectorHealthCheck.required ? "已启用" : "未启用"} · ${escapeHtml(connectorHealthCheck.failureAction || "defer-or-rollback")}</strong>
+        <small>${escapeHtml((connectorHealthCheck.preserve || ["configured", "connected", "callable"]).join(", "))} · ${escapeHtml((connectorHealthCheck.endpoints || []).join(" / ") || "/api/external-connections")}</small>
+      </article>
+      <article class="wide">
+        <span>管理风险</span>
+        ${
+          risks.length
+            ? risks.map((item) => `<b class="release-risk" data-severity="${escapeHtml(item.severity)}">${escapeHtml(item.message)}</b>`).join("")
+            : `<b class="release-risk" data-severity="ok">发布链路暂无阻断</b>`
+        }
+      </article>
     `;
   }
   const currentRow = current.exists ? `
-    <article class="release-item is-current">
+    <article class="release-item is-current" data-release-health="${escapeHtml(releaseRiskStatus(risks))}">
       <div><strong>当前 stable</strong><span>${escapeHtml(current.id || "current")}</span></div>
       <span>${escapeHtml(current.version || "未知版本")}</span>
+      <span title="${escapeHtml(current.releaseIndex?.commit || "")}">Index ${escapeHtml(releaseIndexLabel(current.releaseIndex))}</span>
       <span>${escapeHtml(current.updatedAt || "未记录")}</span>
-      <span class="pill" data-status="${current.validation?.status === "pass" ? "current" : "disabled"}">${current.validation?.status === "pass" ? "已发布" : "需检查"}</span>
+      <div class="row-actions">
+        <span class="pill" data-status="${current.validation?.status === "pass" ? "current" : "disabled"}">${current.validation?.status === "pass" ? "已发布" : "需检查"}</span>
+        <button type="button" data-release-promote="${escapeHtml(current.version || "")}" data-release-staged-id="" data-release-action="notify" data-release-can-promote="0" data-release-can-notify="${current.canNotify ? "1" : "0"}" data-release-disabled-reason="${escapeHtml(current.validation?.status === "pass" ? "" : "当前 stable 校验未通过，不能通知用户")}" aria-disabled="${current.canNotify ? "false" : "true"}" title="通知已安装用户检查更新">通知用户</button>
+      </div>
+      ${releaseFailureDetails(current.validation, current.releaseIndex)}
     </article>
   ` : "";
   const stagedRows = staged
@@ -413,11 +592,13 @@ function renderRelease() {
         <article class="release-item">
           <div><strong>${escapeHtml(item.version || "未知版本")}</strong><span>${escapeHtml(item.id || "staged")}</span></div>
           <span>${escapeHtml(item.updatedAt || "未记录")}</span>
+          <span title="${escapeHtml(item.releaseIndex?.commit || "")}">Index ${escapeHtml(releaseIndexLabel(item.releaseIndex))}</span>
           <span>${formatNumber(item.readyArtifactCount || 0)} ready</span>
           <div class="row-actions">
             <span class="pill" data-status="${pillStatus}" title="${escapeHtml(disabledReason)}">${pillText}</span>
             <button type="button" data-release-promote="${escapeHtml(item.version || "")}" data-release-staged-id="${escapeHtml(item.id || "")}" data-release-action="${action}" data-release-can-promote="${canPromote ? "1" : "0"}" data-release-can-notify="${canNotify ? "1" : "0"}" data-release-disabled-reason="${escapeHtml(disabledReason)}" aria-disabled="${canPromote || canNotify ? "false" : "true"}" title="${escapeHtml(canPromote ? "发布到 stable" : (canNotify ? "重新通知已安装用户检查更新" : disabledReason))}">${buttonText}</button>
           </div>
+          ${releaseFailureDetails(item.validation, item.releaseIndex)}
         </article>
       `;
     })
@@ -435,7 +616,7 @@ function renderMetrics() {
   setMetric("errors", formatNumber(summary.errors ?? 0));
   setMetric("capabilities", formatNumber(summary.capabilities ?? 0));
   setMetric("modelCredentials", formatNumber(summary.modelCredentials ?? (state.data.globalModel ? 1 : 0)));
-  setMetric("version", state.data.version || summary.version || "0.2.7.2");
+  setMetric("version", state.data.version || summary.version || "0.3.0");
 }
 
 function render() {
@@ -560,6 +741,10 @@ document.addEventListener("click", async (event) => {
   const stagedId = button.dataset.releaseStagedId || "";
   if (!version) {
     showNotice("候选版本缺失，刷新发布状态后再试。", "error");
+    return;
+  }
+  if (button.dataset.releaseAction === "notify" && button.dataset.releaseCanNotify !== "1") {
+    showNotice(button.dataset.releaseDisabledReason || "当前版本不能通知用户。", "warn");
     return;
   }
   if (button.dataset.releaseAction === "notify" || button.dataset.releaseCanNotify === "1") {

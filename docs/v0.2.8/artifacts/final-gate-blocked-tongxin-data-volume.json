@@ -1,0 +1,49 @@
+{
+  "schemaVersion": "ecorex.v0.2.8.final-gate-blocker.v1",
+  "generatedAt": "2026-07-04T18:20:00+08:00",
+  "status": "BLOCKED",
+  "scope": "production-agent-product-acceptance",
+  "version": "0.2.8",
+  "reason": "The final production product-acceptance gate remains fail-closed because the production Tongxin MPI accuracy check has zero data-volume project/account samples.",
+  "evidence": {
+    "artifact": "docs/v0.2.8/artifacts/production-agent-product-acceptance.json",
+    "status": "FAIL",
+    "checkCount": 577,
+    "passCount": 575,
+    "failCount": 2,
+    "failureGroup": "v027-integrated-capabilities",
+    "failureCases": [
+      "Tongxin MPI accuracy action succeeds",
+      "Tongxin MPI accuracy has samples without fallback or drift"
+    ],
+    "errorType": "tongxin_mpi_accuracy_zero_project_samples",
+    "dataVolume": {
+      "accountCount": 0,
+      "projectCount": 0
+    }
+  },
+  "v028ReleaseStatus": {
+    "installerCopyRuntimeFix": "PASS",
+    "focusedInstallerSlotValidation": "89/89 PASS",
+    "legacyWebuiOnlineUpgrade": "7/7 PASS for 0.2.7.1 and 0.2.7.2",
+    "productionDeploy": "PASS",
+    "downloadMirrorPriority": "ghproxy.net first, GitHub Release fallback"
+  },
+  "priorKnownBlocker": {
+    "artifact": "docs/v0.2.7/artifacts/S14-final-gate-blocked-after-env-override.json",
+    "status": "BLOCKED",
+    "sameCondition": true
+  },
+  "remoteProbe": {
+    "artifact": "docs/v0.2.8/artifacts/remote-tongxin-data-volume-probe.json",
+    "status": "BLOCKED",
+    "serviceActive": true,
+    "serviceEnabled": true,
+    "tongxinCliConfigured": true,
+    "tongxinDatabaseFileExists": false,
+    "sqliteCandidateCount": 4,
+    "candidateWithInterestingDataCount": 0,
+    "rawPathsPersisted": false
+  },
+  "nextUnblockAction": "Set ECOREX_TONGXIN_DATABASE or tools.tongxin_cli.database_path to a mounted read-only Tongxin SQLite database with at least one project/sub-account sample, restart/reinstall the production service, then rerun python scripts/真实发布校验.py."
+}

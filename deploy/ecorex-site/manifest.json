@@ -1,27 +1,85 @@
 {
     "product":  "EcoreX",
-    "version":  "0.2.7.2",
-    "updatedAt":  "2026-07-04",
-    "notes":  "EcoreX v0.2.7.2 WebUI-first release. Custom OpenAI-compatible Gemini routing, model-switch context continuity, paged switch divider UI, native multi-image generation routing, CDP-first browser automation, local OCR/Vision defaults, Tongxin MPI accuracy checks, performance context budgeting, mac runtime alignment, WebUI packages, Linux service package, installer scripts, /api/version, and update notes are aligned.",
+    "version":  "0.3.0",
+    "updatedAt":  "2026-07-08",
+    "notes":  "EcoreX v0.3.0 WebUI hardening release. Active turn control, explicit queue and branch choices, CDP reconnect recovery, deterministic imagegen artifact ordering, stable composer scrolling, session show-more, release-index integrity metadata, and online update state visibility are aligned.",
+    "releaseIndex":  "release-index.json",
+    "trust":  {
+                  "releaseIndex":  {
+                                       "algorithm":  "sha256",
+                                       "signature":  "not-required-webui-local",
+                                       "publicKeyId":  "ecorex-webui-release-v1",
+                                       "required":  true
+                                   },
+                  "artifactSignaturesRequired":  false,
+                  "signaturePolicy":  "not-required-for-webui-local-packages",
+                  "integrityRequired":  true
+              },
     "download":  {
-                     "mode":  "mirror-first-origin-fallback",
+                     "mode":  "github-cn-primary",
                      "mirrors":  [
                                      {
-                                         "id":  "github-release-v0.2.7.2",
-                                         "kind":  "github-release",
-                                         "baseUrl":  "https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.7.2",
+                                         "id":  "ecorex-ghproxy-net-v0.3.0",
+                                         "kind":  "github-release-cn-mirror",
+                                         "baseUrl":  "https://ghproxy.net/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.3.0",
                                          "pathMode":  "fileName"
+                                     },
+                                     {
+                                         "id":  "ecorex-origin-v0.3.0",
+                                         "kind":  "origin-cdn-fallback",
+                                         "baseUrl":  "https://dl.ecoremedia.net/ecorex-agent",
+                                         "pathMode":  "href"
                                      }
                                  ],
-                     "minimumTargetBytesPerSecond":  1048576,
-                     "integrity":  "sha256",
-                     "fallback":  "origin"
+                     "integrity":  "sha256"
                  },
     "update":  {
                    "webui":  {
                                  "mode":  "manifest-download",
                                  "channel":  "stable",
                                  "promotion":  "admin-gated",
+                                 "rollout":  {
+                                                 "strategy":  "progressive",
+                                                 "percent":  0,
+                                                 "cohortSeed":  "device-id",
+                                                 "minimumHealthyMinutes":  30
+                                             },
+                                 "killSwitch":  {
+                                                    "enabled":  false,
+                                                    "reason":  "",
+                                                    "updatedAt":  "2026-07-07"
+                                                },
+                                 "rollback":  {
+                                                  "enabled":  true,
+                                                  "healthCheck":  "/api/version",
+                                                  "maxActivationFailures":  1,
+                                                  "preservePreviousRuntime":  true
+                                              },
+                                 "stateMachine":  [
+                                                      "available",
+                                                      "downloading",
+                                                      "verified",
+                                                      "staged",
+                                                      "deferred",
+                                                      "failed",
+                                                      "installed",
+                                                      "activated",
+                                                      "rollback"
+                                                  ],
+                                 "connectorHealthCheck":  {
+                                                              "required":  true,
+                                                              "endpoints":  [
+                                                                                "/api/external-connections",
+                                                                                "/api/tencent-docs/status?start=1"
+                                                                            ],
+                                                              "preserve":  [
+                                                                               "configured",
+                                                                               "connected",
+                                                                               "callable"
+                                                                           ],
+                                                              "failureAction":  "defer-or-rollback",
+                                                              "stateField":  "externalConnections"
+                                                          },
                                  "backgroundUpdate":  {
                                                           "mode":  "staged-download-idle-install",
                                                           "idleGate":  "/api/active-requests",
@@ -30,6 +88,20 @@
                                                           "manualBrowserOpen":  "first-install-or-user-request",
                                                           "activationPolicy":  "prompt-soft-refresh-existing-tab",
                                                           "healthCheck":  "/api/version",
+                                                          "connectorHealthCheck":  {
+                                                                                       "required":  true,
+                                                                                       "endpoints":  [
+                                                                                                         "/api/external-connections",
+                                                                                                         "/api/tencent-docs/status?start=1"
+                                                                                                     ],
+                                                                                       "preserve":  [
+                                                                                                        "configured",
+                                                                                                        "connected",
+                                                                                                        "callable"
+                                                                                                    ],
+                                                                                       "failureAction":  "defer-or-rollback",
+                                                                                       "stateField":  "externalConnections"
+                                                                                   },
                                                           "stateFile":  "update-state.json",
                                                           "autoLaunchBrowser":  "never-in-background",
                                                           "rollback":  "keep-current-runtime-until-new-runtime-health-check-passes"
@@ -88,29 +160,45 @@
                       },
                       {
                           "id":  "webui-windows-x64",
-                          "version":  "0.2.7.2",
+                          "version":  "0.3.0",
                           "platform":  "Windows",
                           "variant":  "WebUI one-click local package",
-                          "fileName":  "EcoreX_0.2.7.2-webui-windows-x64.zip",
-                          "href":  "downloads/EcoreX_0.2.7.2-webui-windows-x64.zip",
-                          "size":  550757989,
-                          "sha256":  "A5A3702E7C0CA834511478B94351DB7C9DA2E0585E55318607ADB8CDF8ACD2B0",
+                          "fileName":  "EcoreX_0.3.0-webui-windows-x64.zip",
+                          "href":  "downloads/EcoreX_0.3.0-webui-windows-x64.zip",
+                          "size":  551265386,
+                          "sha256":  "3BF9A6546A294C2A96AC32786B7B893848BF3DC6A30897F228AD13CCDC49A48C",
                           "status":  "ready",
-                          "source":  "Local v0.2.7.2 WebUI Windows artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
-                          "updatedAt":  "2026-07-04"
+                          "source":  "Local v0.3.0 WebUI Windows artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
+                          "updatedAt":  "2026-07-08",
+                          "signature":  {
+                                            "algorithm":  "optional-minisign",
+                                            "status":  "not-required"
+                                        },
+                          "smoke":  {
+                                        "status":  "pass",
+                                        "evidence":  "docs/v0.3.0/artifacts/webui-release-orchestrator-smoke.json"
+                                    }
                       },
                       {
                           "id":  "webui-macos-universal",
-                          "version":  "0.2.7.2",
+                          "version":  "0.3.0",
                           "platform":  "macOS",
                           "variant":  "WebUI one-click local package",
-                          "fileName":  "EcoreX_0.2.7.2-webui-macos-universal.zip",
-                          "href":  "downloads/EcoreX_0.2.7.2-webui-macos-universal.zip",
-                          "size":  652212925,
-                          "sha256":  "01E7703FE195E17D1270C722EE4B578846BB6066C9ADDD00CAC6466B6F6334FA",
+                          "fileName":  "EcoreX_0.3.0-webui-macos-universal.zip",
+                          "href":  "downloads/EcoreX_0.3.0-webui-macos-universal.zip",
+                          "size":  652441190,
+                          "sha256":  "1E7EC8295EEE2736A711AD1C152CB7EABF32A12D61C27DF5CC8EF060A211AA28",
                           "status":  "ready",
-                          "source":  "Local v0.2.7.2 WebUI macOS artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
-                          "updatedAt":  "2026-07-04"
+                          "source":  "Local v0.3.0 WebUI macOS artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
+                          "updatedAt":  "2026-07-08",
+                          "signature":  {
+                                            "algorithm":  "optional-minisign",
+                                            "status":  "not-required"
+                                        },
+                          "smoke":  {
+                                        "status":  "pass",
+                                        "evidence":  "docs/v0.3.0/artifacts/webui-release-orchestrator-smoke.json"
+                                    }
                       },
                       {
                           "id":  "macos-arm64-dmg",
@@ -222,21 +310,29 @@
                       },
                       {
                           "id":  "web-linux-service",
-                          "version":  "0.2.7.2",
+                          "version":  "0.3.0",
                           "platform":  "Linux",
                           "variant":  "Web service deployment package",
-                          "fileName":  "EcoreX_0.2.7.2-web-linux-service.tar.gz",
-                          "href":  "downloads/EcoreX_0.2.7.2-web-linux-service.tar.gz",
-                          "size":  4108619,
-                          "sha256":  "7A5D817510FECA9D0A0E1B171E5772F066238BB924B9B1EBBD3664C3FB262546",
-                          "status":  "ready",
+                          "fileName":  "EcoreX_0.3.0-web-linux-service.tar.gz",
+                          "href":  "downloads/EcoreX_0.3.0-web-linux-service.tar.gz",
+                          "size":  0,
+                          "sha256":  "pending",
+                          "status":  "pending",
                           "visible":  false,
-                          "source":  "Local v0.2.7.2 Web service tarball built by prepare-ecorex-web-release.ps1 and validated by release artifact checks.",
-                          "updatedAt":  "2026-07-04"
+                          "source":  "v0.3.0 Web service tarball must be produced by release orchestrator and validated before promotion.",
+                          "updatedAt":  "2026-07-07",
+                          "signature":  {
+                                            "algorithm":  "optional-minisign",
+                                            "status":  "not-required"
+                                        },
+                          "smoke":  {
+                                        "status":  "pending"
+                                    }
                       }
                   ],
     "admin":  {
                   "href":  "admin/",
                   "auth":  "basic"
-              }
+              },
+    "downloadsExternalized":  true
 }

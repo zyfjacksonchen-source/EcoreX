@@ -1,0 +1,107 @@
+{
+    "schemaVersion":  "ecorex.v0.2.8.legacy-webui-online-upgrade.v1",
+    "status":  "PASS",
+    "startedAt":  "2026-07-06T14:58:28.5526988Z",
+    "finishedAt":  "2026-07-06T15:17:57.6157236Z",
+    "durationSeconds":  1169.06,
+    "baseUrl":  "https://dl.ecoremedia.net/ecorex-agent",
+    "targetVersion":  "0.2.9.2",
+    "legacyVersions":  [
+                           "0.2.9.1"
+                       ],
+    "checkCount":  4,
+    "passCount":  4,
+    "failCount":  0,
+    "checks":  [
+                   {
+                       "version":  "preflight",
+                       "name":  "configured port 19917 is free",
+                       "status":  "PASS",
+                       "detail":  {
+                                      "port":  19917
+                                  }
+                   },
+                   {
+                       "version":  "0.2.9.1",
+                       "name":  "legacy renderer includes update-check polling hook",
+                       "status":  "PASS",
+                       "detail":  {
+                                      "pollsUpdateCheck":  true,
+                                      "rendersUpdateText":  false,
+                                      "opensUpdatePage":  false,
+                                      "assetBytes":  643780
+                                  }
+                   },
+                   {
+                       "version":  "0.2.9.1",
+                       "name":  "legacy runtime receives v0.2.8 update notification",
+                       "status":  "PASS",
+                       "detail":  {
+                                      "latestVersion":  "0.2.9.2",
+                                      "message":  "发现新版本 0.2.9.2，本机更新器可在空闲时检查并安装",
+                                      "artifactId":  "webui-windows-x64",
+                                      "currentVersion":  "0.2.9.1",
+                                      "hasUpdate":  true,
+                                      "updateReason":  "version",
+                                      "artifactSha256":  "2A87D8AF7B0B3C31E45C319C1E276663B2CF49ACCA43FDA450EA9460C68A54AE"
+                                  }
+                   },
+                   {
+                       "version":  "0.2.9.1",
+                       "name":  "legacy runtime upgrades online and refreshes in place",
+                       "status":  "PASS",
+                       "detail":  {
+                                      "upgradedVersion":  "0.2.9.2",
+                                      "originalBaseUrl":  "http://127.0.0.1:19917",
+                                      "upgradedBaseUrl":  "http://127.0.0.1:19917",
+                                      "runtimeLeaf":  "runtime-0.2.9.2-d768835c",
+                                      "updateStateStatus":  "installed",
+                                      "sameUrlRefreshOk":  true,
+                                      "sameUrlRefreshVersion":  "0.2.9.2",
+                                      "upgradedPort":  19917,
+                                      "urlFileExists":  true,
+                                      "browserAction":  "defer-to-existing-tab-soft-refresh",
+                                      "preferredPort":  19917,
+                                      "updateStateMode":  "background"
+                                  }
+                   }
+               ],
+    "results":  [
+                    {
+                        "legacyVersion":  "0.2.9.1",
+                        "targetVersion":  "0.2.9.2",
+                        "testRoot":  "C:\\ecx-upgrade-smoke\\v0291-0a9eb4cc",
+                        "status":  "PASS",
+                        "legacyVersionPayload":  {
+                                                     "version":  "0.2.9.1",
+                                                     "url":  null
+                                                 },
+                        "updateCheck":  {
+                                            "latestVersion":  "0.2.9.2",
+                                            "artifactId":  "webui-windows-x64",
+                                            "currentVersion":  "0.2.9.1",
+                                            "hasUpdate":  true,
+                                            "updateReason":  "version",
+                                            "artifactSha256":  "2A87D8AF7B0B3C31E45C319C1E276663B2CF49ACCA43FDA450EA9460C68A54AE"
+                                        },
+                        "upgrade":  {
+                                        "version":  "0.2.9.2",
+                                        "sameUrlRefreshVersion":  "0.2.9.2",
+                                        "updateStateStatus":  "installed",
+                                        "sameUrlRefreshOk":  true,
+                                        "updateStateMode":  "background",
+                                        "runtime":  {
+                                                        "currentRuntimePath":  "C:\\ecx-upgrade-smoke\\v0291-0a9eb4cc\\LocalAppData\\EcoreX WebUI\\state\\current-runtime.txt",
+                                                        "currentRuntime":  "C:\\ecx-upgrade-smoke\\v0291-0a9eb4cc\\LocalAppData\\EcoreX WebUI\\runtime-0.2.9.2-d768835c",
+                                                        "currentRuntimeLeaf":  "runtime-0.2.9.2-d768835c",
+                                                        "currentRuntimeExists":  true,
+                                                        "configPath":  "C:\\ecx-upgrade-smoke\\v0291-0a9eb4cc\\LocalAppData\\EcoreX WebUI\\runtime-0.2.9.2-d768835c\\config.json",
+                                                        "port":  19917,
+                                                        "urlFile":  "C:\\ecx-upgrade-smoke\\v0291-0a9eb4cc\\LocalAppData\\EcoreX WebUI\\state\\ecorex-webui.url",
+                                                        "urlFileExists":  true,
+                                                        "url":  "http://127.0.0.1:19917/app/"
+                                                    }
+                                    }
+                    }
+                ]
+}

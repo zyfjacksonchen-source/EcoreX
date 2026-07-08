@@ -352,6 +352,7 @@ TOOL_SCHEMA_INTENT_KEYWORDS = {
         "generate image", "edit image", "生图", "图像生成", "图片生成", "文生图", "图生图",
         "生成图片", "生成图像", "改图", "修图", "出图", "多图", "批量生图",
         "批量生成图片", "一张张生成", "逐张生成", "轮播图",
+        "精准修图", "局部修图", "精修标注", "标注图", "箭头尖端", "语义图片编辑",
     ),
     "ocr": (
         "ocr", "extract text", "extract url", "screenshot link", "image link",
@@ -367,23 +368,37 @@ TOOL_SCHEMA_INTENT_KEYWORDS = {
     ),
 }
 
+IMAGEGEN_SEMANTIC_EDIT_REGEXES = (
+    re.compile(r"(?:图|图片|照片|图像|画面|海报|封面|素材).{0,32}(?:去掉|去除|删除|移除|抹掉|擦除|消除|去背景|换背景|去水印|去logo|去\s*logo|修掉|修复|补全|扩图|抠图|换成|替换|改成|改为|变成|调整|美化)"),
+    re.compile(r"(?:去掉|去除|删除|移除|抹掉|擦除|消除|去背景|换背景|去水印|去logo|去\s*logo|修掉|修复|补全|扩图|抠图|换成|替换|改成|改为|变成|调整|美化).{0,32}(?:图|图片|照片|图像|画面|海报|封面|素材|背景|路人|水印|logo|文字|人物|物体|瑕疵|污渍)"),
+    re.compile(r"(?:背景|路人|水印|logo|文字|错字|物体|人物|瑕疵|污渍).{0,20}(?:去掉|去除|删除|移除|抹掉|擦除|消除|换成|替换|改成|改为|修掉|修复)"),
+    re.compile(r"(?i)(?:remove|delete|erase|replace|change|fix|retouch|inpaint|clean up).{0,40}(?:image|photo|picture|background|person|people|watermark|logo|text|object)"),
+    re.compile(r"(?i)(?:image|photo|picture).{0,40}(?:remove|delete|erase|replace|change|fix|retouch|inpaint|clean up)"),
+)
+
 IMAGEGEN_INTENT_REGEXES = (
-    re.compile(r"(?:生成|画|出|做|设计|创作).{0,12}\d+\s*张"),
-    re.compile(r"\d+\s*张.{0,12}(?:图|图片|图像|海报|插图|插画|封面|视觉|素材)"),
+    re.compile(r"(?:生成|画|绘制|出|做|设计|创作).{0,16}(?:[一二两三四五六七八九十\d]+\s*张).{0,18}(?:图|图片|图像|海报|插图|插画|封面|视觉|素材)?"),
+    re.compile(r"(?:生成|画|绘制|出|做|设计|创作).{0,10}(?:图|图片|图像|海报|插图|插画|封面|视觉|素材)"),
+    re.compile(r"[一二两三四五六七八九十\d]+\s*张.{0,12}(?:图|图片|图像|海报|插图|插画|封面|视觉|素材)"),
     re.compile(r"(?:一张张|逐张|多图|批量).{0,12}(?:生成|生图|出图|画|做|设计|创作)"),
+    re.compile(r"(?:精准修图|局部修图|精修标注|语义图片编辑|标注图|箭头尖端)"),
+    re.compile(r"(?:单字|一个字|文字|错字).{0,20}(?:改图|修图|改成|改为|替换|换成)"),
+    re.compile(r"(?:海报|图片|图像|画面|封面|物料).{0,24}(?:改图|修图|重绘|生成|出图|改成|改为|替换|换成)"),
+    *IMAGEGEN_SEMANTIC_EDIT_REGEXES,
 )
 IMAGEGEN_PRIORITY_TOOL_NAMES = {
     "imagegen",
     "host_diagnostics",
     "optional_abilities",
     "agent_capability",
+    "ecorex_cli",
 }
 IMAGEGEN_SHELL_SEMANTIC_SIGNAL_REGEXES = (
     re.compile(r"(?i)(?:^|[\s;,{(\[])(?:prompt|instruction|description)\s*[:=]"),
     re.compile(r"(?i)--prompt(?:=|\s+)"),
     re.compile(r"(?i)\"prompt\"\s*:"),
     re.compile(r"(?:生成|生图)"),
-)
+) + IMAGEGEN_SEMANTIC_EDIT_REGEXES
 
 TOOL_SCHEMA_FOLLOWUP_CONFIRMATIONS = {
     "ok", "okay", "yes", "y", "go", "continue", "proceed", "do it", "run it", "execute",
@@ -620,6 +635,8 @@ class AgentStreamExecutor:
         self._force_text_response_reason = ""
         self._internal_hint_texts = []
         self._last_model_retry_evidence: Dict[str, Any] = {}
+        self._current_user_message_text = ""
+        self._current_turn_imagegen_success = False
         
         # Track files to send (populated by read tool)
         self.files_to_send = []  # List of file metadata dicts
@@ -961,6 +978,8 @@ class AgentStreamExecutor:
         self.tool_chain_history.append((chain_key, tool_name, success))
         if len(self.tool_chain_history) > 50:
             self.tool_chain_history = self.tool_chain_history[-50:]
+        if str(tool_name or "").strip().lower() == "imagegen" and success:
+            self._current_turn_imagegen_success = True
 
     @staticmethod
     def _cli_arg_value(cli_args: List[Any], flag: str) -> str:
@@ -1303,6 +1322,13 @@ class AgentStreamExecutor:
         if not text:
             return False
         return any(pattern.search(text) for pattern in IMAGEGEN_INTENT_REGEXES)
+
+    @staticmethod
+    def _looks_like_semantic_image_edit_user_intent(user_text: str) -> bool:
+        text = str(user_text or "").strip().lower()
+        if not text:
+            return False
+        return any(pattern.search(text) for pattern in IMAGEGEN_SEMANTIC_EDIT_REGEXES)
 
     @staticmethod
     def _intent_keyword_matches(lowered_text: str, keyword: str) -> bool:
@@ -1858,6 +1884,98 @@ class AgentStreamExecutor:
                 return True
         return False
 
+    def _current_turn_text(self) -> str:
+        candidates = [self._current_user_message_text]
+        for message in reversed(self.messages or []):
+            if not isinstance(message, dict) or message.get("role") != "user":
+                continue
+            content = message.get("content")
+            if isinstance(content, list):
+                text = "\n".join(
+                    str(part.get("text") or "")
+                    for part in content
+                    if isinstance(part, dict) and part.get("type") == "text"
+                )
+            else:
+                text = str(content or "")
+            if text.strip():
+                candidates.append(text)
+                break
+        return "\n\n".join(part for part in candidates if part)
+
+    def _current_turn_is_image_retouch(self) -> bool:
+        text = self._current_turn_text().lower()
+        if not text:
+            return False
+        retouch_markers = (
+            "精准修图",
+            "精修标注",
+            "retouch-marker",
+            "image-retouch",
+            "局部修图",
+            "标注图附件",
+            "箭头尖端",
+            "语义图片编辑",
+        )
+        if any(marker.lower() in text for marker in retouch_markers):
+            return True
+        if self._looks_like_semantic_image_edit_user_intent(text):
+            return True
+        retouch_patterns = (
+            r"(?:把|将).{0,16}(?:改成|改为|替换成|替换|换成).{0,16}(?:图|图片|图像|海报|画面|文字|错字|单字|一个字)",
+            r"(?:图|图片|图像|海报|画面).{0,24}(?:字|文字|错字|单字|一个字).{0,24}(?:改成|改为|替换成|替换|换成)",
+            r"(?:把|将).{0,8}(?:图|图片|图像|海报|画面).{0,24}(?:字|文字|错字|单字|一个字).{0,24}(?:改成|改为|替换成|替换|换成)",
+        )
+        return any(re.search(pattern, text) for pattern in retouch_patterns)
+
+    def _retouch_shell_postprocess_allowed(self, command: str) -> bool:
+        text = str(command or "").strip().lower()
+        if not text:
+            return False
+        if not self._current_turn_imagegen_success:
+            return False
+        deterministic_prefixes = (
+            "cp ", "copy ", "copy-item ", "mv ", "move ", "move-item ", "ren ", "rename ",
+            "rename-item ", "mkdir ", "new-item ", "zip ", "tar ", "7z ", "compress-archive ",
+            "sha256sum ", "shasum ", "certutil ",
+        )
+        return text.startswith(deterministic_prefixes)
+
+    @staticmethod
+    def _looks_like_semantic_image_edit_shell_command(command: str) -> bool:
+        text = str(command or "").strip().lower()
+        if not text:
+            return False
+        script_markers = (
+            "from pil import",
+            "imagedraw",
+            "image.open(",
+            "image.new(",
+            "cv2.",
+            "opencv",
+            "magick ",
+            "convert ",
+            "composite ",
+            "drawtext",
+            "fill ",
+            "annotate",
+            "inpaint",
+            "mask",
+            "crop",
+            "paste(",
+            "textbbox",
+            "truetype",
+            "canvas",
+            "svg",
+        )
+        if any(marker in text for marker in script_markers):
+            return True
+        try:
+            basename = AgentStreamExecutor._shell_token_basename(shlex.split(str(command or ""), posix=False)[0])
+        except Exception:
+            basename = ""
+        return basename in {"python", "python.exe", "python3", "py", "py.exe", "node", "node.exe"}
+
     def _sleep_cancelable(self, seconds: float) -> None:
         """Sleep in short slices so user cancel interrupts retry backoff."""
         deadline = time.time() + max(0, seconds)
@@ -1874,6 +1992,21 @@ class AgentStreamExecutor:
         command = str((args or {}).get("command") or (args or {}).get("cmd") or "").strip().lower()
         if not command:
             return ""
+        if self._current_turn_is_image_retouch() and not self._retouch_shell_postprocess_allowed(command):
+            if "imagegen" in self.tools:
+                return (
+                    "This is an EcoreX 精准修图 / semantic image-editing task. "
+                    "Do not use bash, Python, PIL, OpenCV, ImageMagick, SVG/canvas, or coordinate scripts "
+                    "to edit the picture locally. Use the native `imagegen` tool for the actual image edit, "
+                    "using the annotated marker image and the original image path as inputs. "
+                    "Shell is allowed only after a successful imagegen result for deterministic post-processing "
+                    "such as copy, rename, zip, checksum, or reveal."
+                )
+            return (
+                "This is an EcoreX 精准修图 / semantic image-editing task, but `imagegen` is not visible in the current tool table. "
+                "Do not fall back to bash/Python/PIL/OpenCV/ImageMagick local editing. Inspect capability visibility with "
+                "`host_diagnostics`, `optional_abilities`, or `agent_capability`, then report the exact blocker if image editing cannot run."
+            )
         if self._looks_like_feishu_cli_command(command):
             if "feishu_cli" in self.tools:
                 return (
@@ -2176,6 +2309,7 @@ class AgentStreamExecutor:
             user_message[:500] + f" …(+{len(user_message) - 500} chars)"
         )
         logger.info(f"🤖 {self.model.model}{thinking_label} | 👤 {_log_msg}")        
+        self._current_user_message_text = str(user_message or "")
         
         # Add user message (Claude format - use content blocks for consistency)
         self.messages.append({
@@ -2566,7 +2700,11 @@ class AgentStreamExecutor:
         # newly available MCP tools mid-conversation without a session restart.
         try:
             from agent.tools import ToolManager
-            ToolManager().sync_mcp_into_agent(self)
+            manager = ToolManager()
+            ensure_mcp = getattr(manager, "ensure_mcp_configured_loaded", None)
+            if callable(ensure_mcp):
+                ensure_mcp(wait_seconds=0.2)
+            manager.sync_mcp_into_agent(self)
         except Exception as e:
             logger.debug(f"[Agent] MCP sync skipped: {_public_agent_exception_message('MCP sync failed.', e)}")
 

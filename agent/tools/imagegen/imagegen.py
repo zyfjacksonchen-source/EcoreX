@@ -7,12 +7,14 @@ import os
 import re
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from agent.tools.base_tool import BaseTool, ToolResult
 from agent.tools.imagegen.provider_runner import image_generation_env_with_config, run_image_generation_payload
+from agent.protocol.image_job_service import resolve_image_job_parallelism_policy
 from common.image_quality_runtime import (
     aggregate_image_finalization_decisions,
     attach_image_finalization_evidence,
@@ -209,8 +211,10 @@ def _image_artifact_name(
     context: Any,
     *,
     ext: str,
-    ordinal: Optional[int] = None,
-    total: int = 1,
+    task_ordinal: Optional[int] = None,
+    artifact_ordinal: Optional[int] = None,
+    total_tasks: int = 1,
+    total_artifacts: int = 1,
 ) -> tuple[str, str]:
     if not isinstance(context, dict):
         return "", ""
@@ -219,9 +223,12 @@ def _image_artifact_name(
         limit=48,
     ) or "图片产物"
     timestamp, sent_at = _image_artifact_timestamp()
-    suffix = ""
-    if ordinal is not None and (total > 1 or ordinal >= 0):
-        suffix = f"-{ordinal + 1:02d}"
+    suffix_parts: list[str] = []
+    if task_ordinal is not None and (total_tasks > 1 or task_ordinal >= 0):
+        suffix_parts.append(f"t{task_ordinal + 1:02d}")
+    if artifact_ordinal is not None and (total_artifacts > 1 or task_ordinal is not None):
+        suffix_parts.append(f"i{artifact_ordinal + 1:02d}")
+    suffix = f"-{'-'.join(suffix_parts)}" if suffix_parts else ""
     return f"{summary}-{timestamp}{suffix}{ext}", sent_at
 
 
@@ -429,6 +436,10 @@ class ImageGenTool(BaseTool):
             "quality_retry_max": {
                 "type": "integer",
                 "description": "Maximum post-QA image regeneration attempts. Defaults to 1 and is capped at 2.",
+            },
+            "max_parallel": {
+                "type": "integer",
+                "description": "Optional maximum parallel image tasks for native batches. Defaults to 2 for multi-image batches and 1 for single-image work.",
             },
             "action": {
                 "type": "string",
@@ -681,28 +692,30 @@ class ImageGenTool(BaseTool):
             "quality_retry_max",
         )
         inherited = {key: args[key] for key in inherited_keys if args.get(key) not in (None, "")}
+        parallelism_policy = resolve_image_job_parallelism_policy(args, len(tasks))
+        max_parallel = max(1, int(parallelism_policy.get("effective_max_parallel") or 1))
+        task_results_by_index: list[Optional[Dict[str, Any]]] = [None] * len(tasks)
+        images_by_index: list[list[Dict[str, Any]]] = [[] for _ in tasks]
         task_results: list[Dict[str, Any]] = []
         images: list[Dict[str, Any]] = []
         started = time.monotonic()
 
-        for index, raw_task in enumerate(tasks):
+        def run_one(index: int, raw_task: Any) -> tuple[Dict[str, Any], list[Dict[str, Any]]]:
             cancel_event = getattr(self, "cancel_event", None)
             if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
-                task_results.append({
+                return ({
                     "index": index,
                     "status": "cancelled",
                     "error": "batch image generation cancelled",
                     "redacted": True,
-                })
-                break
+                }, [])
             if not isinstance(raw_task, dict):
-                task_results.append({
+                return ({
                     "index": index,
                     "status": "error",
                     "error": "imagegen batch task must be an object",
                     "redacted": True,
-                })
-                continue
+                }, [])
             child_args = {**inherited, **raw_task, "action": "generate"}
             child_args["_artifact_batch_index"] = index
             child_args["_artifact_batch_total"] = len(tasks)
@@ -723,13 +736,63 @@ class ImageGenTool(BaseTool):
                 "imageCount": len(payload.get("images") or []) if isinstance(payload.get("images") if isinstance(payload, dict) else None, list) else 0,
                 "redacted": True,
             }
-            task_results.append({key: value for key, value in projected.items() if value not in (None, "", [])})
+            task_result = {key: value for key, value in projected.items() if value not in (None, "", [])}
             child_images = payload.get("images") if isinstance(payload, dict) else []
+            projected_images: list[Dict[str, Any]] = []
             for image in child_images or []:
                 if isinstance(image, dict):
                     projected_image = {"taskIndex": index, **image}
-                    images.append(projected_image)
-                    self._emit_batch_image_ready(projected_image, task_index=index)
+                    projected_images.append(projected_image)
+            return task_result, projected_images
+
+        def mark_result(index: int, task_result: Dict[str, Any], projected_images: list[Dict[str, Any]]) -> None:
+            task_results_by_index[index] = task_result
+            images_by_index[index] = projected_images
+
+        if max_parallel <= 1:
+            stop_after_cancel = False
+            for index, raw_task in enumerate(tasks):
+                if stop_after_cancel:
+                    break
+                task_result, projected_images = run_one(index, raw_task)
+                mark_result(index, task_result, projected_images)
+                if task_result.get("status") == "cancelled":
+                    stop_after_cancel = True
+        else:
+            with ThreadPoolExecutor(max_workers=max_parallel, thread_name_prefix="imagegen-batch") as executor:
+                futures = {executor.submit(run_one, index, raw_task): index for index, raw_task in enumerate(tasks)}
+                next_emit_index = 0
+                for future in as_completed(futures):
+                    index = futures[future]
+                    try:
+                        task_result, projected_images = future.result()
+                    except Exception as exc:
+                        logger.warning("[ImageGen] batch task failed unexpectedly: %s", exc)
+                        task_result = {
+                            "index": index,
+                            "status": "error",
+                            "error": "imagegen batch task failed",
+                            "errorType": exc.__class__.__name__,
+                            "redacted": True,
+                        }
+                        projected_images = []
+                    mark_result(index, task_result, projected_images)
+                    while next_emit_index < len(tasks) and task_results_by_index[next_emit_index] is not None:
+                        for image in images_by_index[next_emit_index]:
+                            self._emit_batch_image_ready(image, task_index=next_emit_index)
+                        next_emit_index += 1
+
+        if max_parallel <= 1:
+            for index, task_result in enumerate(task_results_by_index):
+                if task_result is None:
+                    break
+                for image in images_by_index[index]:
+                    self._emit_batch_image_ready(image, task_index=index)
+        for index, task_result in enumerate(task_results_by_index):
+            if task_result is None:
+                continue
+            task_results.append(task_result)
+            images.extend(images_by_index[index])
 
         success_count = sum(1 for item in task_results if item.get("status") == "success")
         failed_count = sum(1 for item in task_results if item.get("status") not in {"success", "cancelled"})
@@ -738,6 +801,8 @@ class ImageGenTool(BaseTool):
             "schemaVersion": "imagegen-batch-v1",
             "batchMode": "native_imagegen_tool_loop",
             "taskCount": len(tasks),
+            "maxParallel": max_parallel,
+            "parallelismPolicy": parallelism_policy,
             "successCount": success_count,
             "failedCount": failed_count,
             "images": images,
@@ -776,6 +841,7 @@ class ImageGenTool(BaseTool):
             "tool_call_id": str(getattr(self, "tool_call_id", "") or ""),
             "status": str(image.get("status") or "ready"),
             "task_index": task_index,
+            "artifact_index": _safe_int(image.get("artifactIndex") or image.get("artifact_index")) or 0,
             "batchMode": "native_imagegen_tool_loop",
             "sentAt": str(image.get("sentAt") or ""),
             "artifactNameSource": str(image.get("artifactNameSource") or ""),
@@ -806,15 +872,24 @@ class ImageGenTool(BaseTool):
             safe_output_dir = output_dir.resolve()
         except Exception:
             safe_output_dir = output_dir
-        image_count = max(1, int(total or len(images) or 1))
+        task_count = max(1, int(total or 1))
+        image_count = max(1, len([item for item in images if isinstance(item, dict)]) or 1)
         for local_index, item in enumerate(images):
             if not isinstance(item, dict):
                 continue
             projected = dict(item)
             path = _image_result_path(projected)
             ext = _image_artifact_ext(path, output_format or projected.get("format") or projected.get("extension"))
-            item_ordinal = ordinal if ordinal is not None else (local_index if image_count > 1 else None)
-            file_name, sent_at = _image_artifact_name(context, ext=ext, ordinal=item_ordinal, total=image_count)
+            task_ordinal = ordinal if ordinal is not None else None
+            artifact_ordinal = local_index if image_count > 1 or task_ordinal is not None else None
+            file_name, sent_at = _image_artifact_name(
+                context,
+                ext=ext,
+                task_ordinal=task_ordinal,
+                artifact_ordinal=artifact_ordinal,
+                total_tasks=task_count,
+                total_artifacts=image_count,
+            )
             if not file_name:
                 named.append(projected)
                 continue
@@ -840,6 +915,10 @@ class ImageGenTool(BaseTool):
             projected["file_name"] = file_name
             projected["sentAt"] = sent_at
             projected["artifactNameSource"] = "session-summary-send-time"
+            projected["taskIndex"] = int(task_ordinal or 0)
+            projected["artifactIndex"] = local_index
+            projected["task_index"] = int(task_ordinal or 0)
+            projected["artifact_index"] = local_index
             named.append(projected)
         return named
 

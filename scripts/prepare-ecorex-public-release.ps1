@@ -135,14 +135,11 @@ function Add-DownloadMirror {
 function Get-ConfiguredDownloadMirrors {
     $mirrors = New-Object System.Collections.ArrayList
     $assetBases = New-Object System.Collections.ArrayList
-    Add-DownloadBaseUrls -List $assetBases -Values $GitHubReleaseMirrorUrl
-    Add-DownloadBaseUrls -List $assetBases -Values $env:ECOREX_GITHUB_RELEASE_MIRROR_URL
     Add-DownloadBaseUrls -List $assetBases -Values $AssetDownloadBaseUrls
     Add-DownloadBaseUrls -List $assetBases -Values $env:ECOREX_DOWNLOAD_ASSET_BASE_URLS
-    Add-DownloadBaseUrls -List $assetBases -Values "https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v$Version"
     foreach ($base in $assetBases) {
-        $kind = if ([string]$base -match 'github\.com/.+/releases/download/') { "github-release" } else { "asset-base" }
-        $id = if ($kind -eq "github-release") { "github-release-v$Version" } else { "asset-mirror" }
+        $kind = if ([string]$base -match '^https://gh-proxy\.com/https://github\.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v') { "github-release-cn-mirror" } elseif ([string]$base -match '^https://dl\.ecoremedia\.net/ecorex-agent/downloads$') { "asset-cdn" } elseif ([string]$base -match '^https://mvdcm\.ecoremedia\.net/ecorex-agent/downloads$') { "asset-cache" } elseif ([string]$base -match '/ecorex-agent/downloads$') { "asset-cache" } else { "asset-base" }
+        $id = if ($kind -eq "github-release-cn-mirror") { "ecorex-github-cn-mirror-v$Version" } elseif ($kind -eq "asset-cdn") { "ecorex-download-cdn-v$Version" } elseif ([string]$base -match '^https://mvdcm\.ecoremedia\.net/ecorex-agent/downloads$') { "ecorex-download-origin-v$Version" } elseif ($kind -eq "asset-cache") { "ecorex-download-cache-v$Version" } else { "asset-mirror-v$Version" }
         Add-DownloadMirror -List $mirrors -Id $id -Kind $kind -BaseUrl $base -PathMode "fileName"
     }
     foreach ($base in @(Get-ConfiguredDownloadBaseUrls)) {
@@ -670,12 +667,11 @@ if ($downloadsExternalized) {
     Set-JsonObjectProperty -Object $publicManifest -Name "downloadsExternalized" -Value $true
     $configuredDownloadMirrors = @(Get-ConfiguredDownloadMirrors)
     if ($configuredDownloadMirrors.Count -gt 0) {
+        $downloadMode = if ([string]$configuredDownloadMirrors[0].kind -eq "github-release-cn-mirror") { "github-cn-primary" } else { "cdn-primary" }
         Set-JsonObjectProperty -Object $publicManifest -Name "download" -Value ([ordered]@{
-            mode = "mirror-first-origin-fallback"
+            mode = $downloadMode
             mirrors = $configuredDownloadMirrors
-            minimumTargetBytesPerSecond = 1048576
             integrity = "sha256"
-            fallback = "origin"
         })
     }
     Write-Utf8NoBom -Path $publicManifestPath -Value (($publicManifest | ConvertTo-Json -Depth 12) + "`n")

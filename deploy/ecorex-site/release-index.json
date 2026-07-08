@@ -1,0 +1,75 @@
+{
+    "schema":  "ecorex.release-index.v1",
+    "product":  "EcoreX WebUI",
+    "version":  "0.3.0",
+    "channel":  "stable",
+    "status":  "ready",
+    "generatedAt":  "2026-07-08T00:08:37.4989413Z",
+    "commit":  "c6cd087df788d58a4eaebb23d64db62b9b030750",
+    "manifest":  {
+                     "path":  "manifest.json",
+                     "sha256":  "68D835383A4DE820B5D839262CEEFCFDBA478BD0F12A2CAA771EFE2D494EE9DC"
+                 },
+    "artifacts":  [
+                      {
+                          "id":  "webui-windows-x64",
+                          "version":  "0.3.0",
+                          "platform":  "win32-x64",
+                          "fileName":  "EcoreX_0.3.0-webui-windows-x64.zip",
+                          "href":  "downloads/EcoreX_0.3.0-webui-windows-x64.zip",
+                          "size":  551265386,
+                          "sha256":  "3BF9A6546A294C2A96AC32786B7B893848BF3DC6A30897F228AD13CCDC49A48C",
+                          "signature":  {
+                                            "required":  false,
+                                            "status":  "not-required",
+                                            "fileName":  "",
+                                            "sha256":  ""
+                                        },
+                          "smoke":  {
+                                        "status":  "pass",
+                                        "evidence":  "docs/v0.3.0/artifacts/webui-release-orchestrator-smoke.json"
+                                    }
+                      },
+                      {
+                          "id":  "webui-macos-universal",
+                          "version":  "0.3.0",
+                          "platform":  "darwin-universal",
+                          "fileName":  "EcoreX_0.3.0-webui-macos-universal.zip",
+                          "href":  "downloads/EcoreX_0.3.0-webui-macos-universal.zip",
+                          "size":  652441190,
+                          "sha256":  "1E7EC8295EEE2736A711AD1C152CB7EABF32A12D61C27DF5CC8EF060A211AA28",
+                          "signature":  {
+                                            "required":  false,
+                                            "status":  "not-required",
+                                            "fileName":  "",
+                                            "sha256":  ""
+                                        },
+                          "smoke":  {
+                                        "status":  "pass",
+                                        "evidence":  "docs/v0.3.0/artifacts/webui-release-orchestrator-smoke.json"
+                                    }
+                      }
+                  ],
+    "smoke":  {
+                  "status":  "pass",
+                  "evidence":  "docs/v0.3.0/artifacts/webui-release-orchestrator-smoke.json"
+              },
+    "rollout":  {
+                    "strategy":  "progressive",
+                    "percent":  0,
+                    "cohortSeed":  "device-id",
+                    "minimumHealthyMinutes":  30
+                },
+    "killSwitch":  {
+                       "enabled":  false,
+                       "reason":  "",
+                       "updatedAt":  "2026-07-07"
+                   },
+    "rollback":  {
+                     "enabled":  true,
+                     "healthCheck":  "/api/version",
+                     "maxActivationFailures":  1,
+                     "preservePreviousRuntime":  true
+                 },
+    "redacted":  true
+}

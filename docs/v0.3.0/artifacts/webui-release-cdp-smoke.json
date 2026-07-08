@@ -1,0 +1,263 @@
+{
+    "schema":  "ecorex.v0.3.0.release-package-cdp-smoke.v1",
+    "version":  "0.3.0",
+    "status":  "PASS",
+    "generatedAt":  "2026-07-08T00:21:18.1549051Z",
+    "port":  9949,
+    "package":  "release-artifacts\\EcoreX_0.3.0-webui-windows-x64.zip",
+    "packageSha256":  "3BF9A6546A294C2A96AC32786B7B893848BF3DC6A30897F228AD13CCDC49A48C",
+    "packageSizeBytes":  551265386,
+    "smokeRoot":  "tmp\\v030-webui-release-cdp-smoke",
+    "runtimeDir":  "tmp\\v030-webui-release-cdp-smoke\\runtime",
+    "stdoutLog":  "tmp\\v030-webui-release-cdp-smoke\\runtime\\run.stdout.log",
+    "stderrLog":  "tmp\\v030-webui-release-cdp-smoke\\runtime\\run.stderr.log",
+    "screenshot":  "docs\\v0.3.0\\artifacts\\webui-release-cdp-smoke.png",
+    "redacted":  true,
+    "processId":  30992,
+    "apiVersionStatus":  200,
+    "runtimeVersion":  "0.3.0",
+    "appStatus":  200,
+    "appContainsRoot":  true,
+    "runtimeManifestVersion":  "0.3.0",
+    "runtimeManifestPlatform":  "windows-x64",
+    "releaseJsonVersion":  "0.3.0",
+    "releaseJsonPlatform":  "Windows x64",
+    "cdp":  {
+                "schema":  "ecorex.v0.3.0.release-cdp-smoke.v1",
+                "status":  "PASS",
+                "version":  "0.3.0",
+                "targetUrl":  "http://127.0.0.1:9949/app/",
+                "generatedAt":  "2026-07-08T00:21:30.262Z",
+                "checks":  {
+                               "bridgeProbe":  "v0.3.0 精修发布验收",
+                               "landing":  {
+                                               "hasRuntimeConnected":  true,
+                                               "hasRetouchSession":  true,
+                                               "hasComposer":  true,
+                                               "topbarText":  ""
+                                           },
+                               "sessionList":  {
+                                                   "before":  {
+                                                                  "visibleRows":  6,
+                                                                  "hasMore":  true,
+                                                                  "moreText":  "查看更多(3)"
+                                                              },
+                                                   "expanded":  {
+                                                                    "visibleRows":  9,
+                                                                    "hasCollapse":  true
+                                                                }
+                                               },
+                               "inlinePreviews":  [
+                                                      {
+                                                          "naturalWidth":  720,
+                                                          "naturalHeight":  960,
+                                                          "complete":  true
+                                                      },
+                                                      {
+                                                          "naturalWidth":  720,
+                                                          "naturalHeight":  960,
+                                                          "complete":  true
+                                                      }
+                                                  ],
+                               "editorInitial":  {
+                                                     "hasSidePanel":  true,
+                                                     "imagePickerCount":  2,
+                                                     "hasRectTool":  true,
+                                                     "hasLassoTool":  true,
+                                                     "hasTextTool":  true,
+                                                     "countText":  "1 张图 / 0 处标注"
+                                                 },
+                               "editorAfter":  {
+                                                   "countText":  "2 张图 / 4 处标注 · 复制同一修改意图",
+                                                   "sideHead":  "本轮产物\n2/2 复制意图",
+                                                   "rectCount":  2,
+                                                   "textTargets":  1,
+                                                   "stickerCount":  1,
+                                                   "labels":  [
+                                                                  "把“地”改成“的”，字体样式不变",
+                                                                  "局部提亮，保持材质和构图",
+                                                                  "参考暖色调微调",
+                                                                  "作为局部风格、元素或替换参考"
+                                                              ]
+                                               },
+                               "draft":  {
+                                             "hasAttachment":  true,
+                                             "hasThumbnail":  true,
+                                             "attachmentText":  "精修标注-1-上海中高端设计封面 A.png",
+                                             "draft":  "请批量处理以下精准修图任务。每张标注图中的箭头尖端指向修改位置，旁边文字是修改意见；未标注区域请保持稳定。必须使用 imagegen/图像编辑能力生成最终图，禁止用 bash、Python、PIL、OpenCV、ImageMagick、SVG/canvas 或坐标脚本直接改图。每张任务只生成 1 张最终图，不要重复调用工具或重复发送同一产物。\n\n### 精准修图 1：上海中高端设计封面 A.png\n标注图附件：精修标注-1-上海中高端设计封面 A.png\n本轮选中原图：\n1. C:/EcoreX-Agent生产版/tmp/v030-webui-release-cdp-smoke/workspace/v030-cdp/image-a.svg\n2. C:/EcoreX-Agent生产版/tmp/v030-webui-release-cdp-smoke/workspace/v030-cdp/image-b.svg\n请基于所选原图进行精准局部修图。箭头尖端、框选区域、圈选区域、文字修改框和上传参考图共同构成本轮修改说明。\n\n本轮需要一并处理 2 张图片：\n1. C:/EcoreX-Agent生产版/tmp/v030-webui-release-cdp-smoke/workspace/v030-cdp/image-a.svg\n2. C:/EcoreX-Agent生产版/tmp/v030-webui-release-cdp-smoke/workspace/v030-cdp/image-b.svg\n\n多图模式：当前标注层的坐标只对应画布中显示的主图；其他选中图片请复制同一修改意图，按文字说明、参考图和语义位置进行对应处理，不要把主图坐标强行映射到不同构图的图片。\n\n标注附件是透明标注层，细边框表示原图在标注画布中的位置；请把标注层与原图对应起来理解。\n\n标注要求：\n1. 文字修改：把“地",
+                                             "draftLength":  1396,
+                                             "redacted":  true
+                                         },
+                               "activeTurn":  {
+                                                  "stopNoJump":  {
+                                                                     "clicked":  true,
+                                                                     "beforeScrollY":  0,
+                                                                     "afterScrollY":  0
+                                                                 },
+                                                  "composerAutosize":  {
+                                                                           "valueLength":  2160,
+                                                                           "beforeScrollY":  0,
+                                                                           "afterScrollY":  0,
+                                                                           "beforeHeight":  36,
+                                                                           "afterHeight":  104,
+                                                                           "maxHeight":  104,
+                                                                           "overflowY":  "auto"
+                                                                       },
+                                                  "replace":  {
+                                                                  "session_id":  "v030-active-turn",
+                                                                  "interrupt_mode":  "replace",
+                                                                  "interrupts_request_id":  "v030-active-request"
+                                                              },
+                                                  "queue":  {
+                                                                "session_id":  "v030-active-turn",
+                                                                "interrupt_mode":  "queue",
+                                                                "interrupts_request_id":  "",
+                                                                "cancelAction":  "cancel_queued"
+                                                            },
+                                                  "branch":  {
+                                                                 "session_id":  "v030-active-turn",
+                                                                 "interrupt_mode":  "branch"
+                                                             }
+                                              }
+                           },
+                "screenshot":  "C:\\EcoreX-Agent生产版\\docs\\v0.3.0\\artifacts\\webui-release-cdp-smoke.png",
+                "debug":  {
+                              "bodyText":  "EcoreX\nv0.3.0\n新对话\n项目\n添加项目文件夹\n会话\n8\n这是 v0.3.0 发布包 active t\n已处理 19s\nv0.3.0 精修发布验收\n07/08 08:21\n会话更多 01\n07/08 07:41\n会话更多 02\n07/08 07:39\n会话更多 03\n07/08 07:38\n会话更多 04\n07/08 07:36\n查看更多(2)\n设置\n发布验收\n这是 v0.3.0 发布包 active t\n已处理 19s\n\n运行中我会插入新消息。\n\nActive turn control mock ready.\n\n已在 20s 内达成目标\n正在处理 · 1 步\n已处理 0s\n正在连接后台任务\n\n已停止\n\n继续生成中\n\n这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用",
+                              "title":  "EcoreX",
+                              "artifactShelves":  0,
+                              "artifactRows":  0,
+                              "retouchButtons":  0,
+                              "messageContentHtml":  [
+                                                         "\u003cdiv class=\"markdown-content\"\u003e\u003cp\u003e运行中我会插入新消息。\u003c/p\u003e\n\u003c/div\u003e",
+                                                         "\u003cdiv class=\"markdown-content\"\u003e\u003cp\u003eActive turn control mock ready.\u003c/p\u003e\n\u003c/div\u003e",
+                                                         "\u003cdetails class=\"agent-process-disclosure is-live\"\u003e\u003csummary\u003e\u003cspan class=\"tool-status-dot is-running\" aria-hidden=\"true\"\u003e\u003c/span\u003e\u003cspan\u003e正在处理 · 1 步\u003c/span\u003e\u003cspan class=\"agent-process-timing\"\u003e已处理 0s\u003c/span\u003e\u003cspan class=\"agent-process-current\"\u003e正在连接后台任务\u003c/span\u003e\u003c/summary\u003e\u003c/details\u003e\u003cdiv class=\"streaming-markdown\"\u003e\u003cdiv class=\"markdown-content\"\u003e\u003cp\u003e已停止\u003c/p\u003e\n\u003c/div\u003e\u003c/div\u003e\u003cspan class=\"thinking-indicator\"\u003e\u003cspan class=\"thinking-ring\" aria-hidden=\"true\"\u003e\u003c/span\u003e\u003cspan\u003e继续生成中\u003c/span\u003e\u003c/span\u003e",
+                                                         "\u003cdiv class=\"markdown-content\"\u003e\u003cp\u003e这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。\u003c/p\u003e\n\u003c/div\u003e",
+                                                         "\u003cdetails class=\"agent-process-disclosure\"\u003e\u003csummary\u003e\u003cspan class=\"tool-status-dot is-done\" aria-hidden=\"true\"\u003e\u003c/span\u003e\u003cspan\u003e调用过程 · 1 步\u003c/span\u003e\u003cspan class=\"agent-process-timing\"\u003e已处理 0s 后已中止\u003c/span\u003e\u003cspan class=\"agent-process-current\"\u003e正在取消排队\u003c/span\u003e\u003c/summary\u003e\u003c/details\u003e\u003cdiv class=\"markdown-content\"\u003e\u003cp\u003e已从队列移除\u003c/p\u003e\n\u003c/div\u003e\u003cdiv class=\"agent-cancelled-tag\"\u003e已中止\u003c/div\u003e",
+                                                         "\u003cdiv class=\"markdown-content\"\u003e\u003cp\u003e请把这条新消息放到新开分支里执行，原任务继续运行。\u003c/p\u003e\n\u003c/div\u003e",
+                                                         "\u003cdiv class=\"markdown-content\"\u003e\u003cp\u003e已在新分支按最新消息执行。\u003c/p\u003e\n\u003c/div\u003e"
+                                                     ],
+                              "messageArticles":  [
+                                                      {
+                                                          "className":  "session-row is-waiting is-active",
+                                                          "text":  "这是 v0.3.0 发布包 active t\n已处理 19s",
+                                                          "html":  "\u003cbutton class=\"session-main has-leading-status\" type=\"button\" title=\"这是 v0.3.0 发布包 active t\n已处理 19s\" data-tooltip=\"这是 v0.3.0 发布包 active t\n已处理 19s\" aria-current=\"page\"\u003e\u003cspan class=\"thinking-indicator is-compact\" title=\"思考中\"\u003e\u003cspan class=\"thinking-ring\" aria-hidden=\"true\"\u003e\u003c/span\u003e\u003c/span\u003e\u003cspan class=\"session-line\"\u003e\u003cstrong\u003e这是 v0.3.0 发布包 active t\u003c/strong\u003e\u003c/span\u003e\u003cem\u003e已处理 19s\u003c/em\u003e\u003c/button\u003e\u003cdiv class=\"session-actions\"\u003e\u003cbutton type=\"button\" title=\"置顶会话\" aria-label=\"置顶会话\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-pin\" aria-hidden=\"true\"\u003e\u003cpath d=\"M12 17v5\"\u003e\u003c/path\u003e\u003cpath d=\"M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003cbutton type=\"button\" title=\"重命名会话\" aria-label=\"重命名会话\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-pencil\" aria-hidden=\"true\"\u003e\u003cpath d=\"M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z\"\u003e\u003c/path\u003e\u003cpath d=\"m15 5 4 4\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003cbutton type=\"button\" title=\"删除会话\" aria-label=\"删除会话\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-trash2 lucide-trash-2\" aria-hidden=\"true\"\u003e\u003cpath d=\"M10 11v6\"\u003e\u003c/path\u003e\u003cpath d=\"M14 11v6\"\u003e\u003c/path\u003e\u003cpath d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6\"\u003e\u003c/path\u003e\u003cpath d=\"M3 6h18\"\u003e\u003c/path\u003e\u003cpath d=\"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003c/div\u003e"
+                                                      },
+                                                      {
+                                                          "className":  "session-row is-ready",
+                                                          "text":  "v0.3.0 精修发布验收\n07/08 08:21",
+                                                          "html":  "\u003cbutton class=\"session-main\" type=\"button\" title=\"v0.3.0 精修发布验收\n07/08 08:21\" data-tooltip=\"v0.3.0 精修发布验收\n07/08 08:21\"\u003e\u003cspan class=\"session-line\"\u003e\u003cstrong\u003ev0.3.0 精修发布验收\u003c/strong\u003e\u003c/span\u003e\u003cem\u003e07/08 08:21\u003c/em\u003e\u003c/button\u003e\u003cdiv class=\"session-actions\"\u003e\u003cbutton type=\"button\" title=\"置顶会话\" aria-label=\"置顶会话\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-pin\" aria-hidden=\"true\"\u003e\u003cpath d=\"M12 17v5\"\u003e\u003c/path\u003e\u003cpath d=\"M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003cbutton type=\"button\" title=\"重命名会话\" aria-label=\"重命名会话\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-pencil\" aria-hidden=\"true\"\u003e\u003cpath d=\"M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z\"\u003e\u003c/path\u003e\u003cpath d=\"m15 5 4 4\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003cbutton type=\"button\" title=\"删除会话\" aria-label=\"删除会话\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-trash2 lucide-trash-2\" aria-hidden=\"true\"\u003e\u003cpath d=\"M10 11v6\"\u003e\u003c/path\u003e\u003cpath d=\"M14 11v6\"\u003e\u003c/path\u003e\u003cpath d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6\"\u003e\u003c/path\u003e\u003cpath d=\"M3 6h18\"\u003e\u003c/path\u003e\u003cpath d=\"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003c/div\u003e"
+                                                      },
+                                                      {
+                                                          "className":  "session-row is-ready",
+                                                          "text":  "会话更多 01\n07/08 07:41",
+                                                          "html":  "\u003cbutton class=\"session-main\" type=\"button\" title=\"会话更多 01\n07/08 07:41\" data-tooltip=\"会话更多 01\n07/08 07:41\"\u003e\u003cspan class=\"session-line\"\u003e\u003cstrong\u003e会话更多 01\u003c/strong\u003e\u003c/span\u003e\u003cem\u003e07/08 07:41\u003c/em\u003e\u003c/button\u003e\u003cdiv class=\"session-actions\"\u003e\u003cbutton type=\"button\" title=\"置顶会话\" aria-label=\"置顶会话\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-pin\" aria-hidden=\"true\"\u003e\u003cpath d=\"M12 17v5\"\u003e\u003c/path\u003e\u003cpath d=\"M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003cbutton type=\"button\" title=\"重命名会话\" aria-label=\"重命名会话\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-pencil\" aria-hidden=\"true\"\u003e\u003cpath d=\"M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z\"\u003e\u003c/path\u003e\u003cpath d=\"m15 5 4 4\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003cbutton type=\"button\" title=\"删除会话\" aria-label=\"删除会话\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-trash2 lucide-trash-2\" aria-hidden=\"true\"\u003e\u003cpath d=\"M10 11v6\"\u003e\u003c/path\u003e\u003cpath d=\"M14 11v6\"\u003e\u003c/path\u003e\u003cpath d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6\"\u003e\u003c/path\u003e\u003cpath d=\"M3 6h18\"\u003e\u003c/path\u003e\u003cpath d=\"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003c/div\u003e"
+                                                      },
+                                                      {
+                                                          "className":  "session-row is-ready",
+                                                          "text":  "会话更多 02\n07/08 07:39",
+                                                          "html":  "\u003cbutton class=\"session-main\" type=\"button\" title=\"会话更多 02\n07/08 07:39\" data-tooltip=\"会话更多 02\n07/08 07:39\"\u003e\u003cspan class=\"session-line\"\u003e\u003cstrong\u003e会话更多 02\u003c/strong\u003e\u003c/span\u003e\u003cem\u003e07/08 07:39\u003c/em\u003e\u003c/button\u003e\u003cdiv class=\"session-actions\"\u003e\u003cbutton type=\"button\" title=\"置顶会话\" aria-label=\"置顶会话\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-pin\" aria-hidden=\"true\"\u003e\u003cpath d=\"M12 17v5\"\u003e\u003c/path\u003e\u003cpath d=\"M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003cbutton type=\"button\" title=\"重命名会话\" aria-label=\"重命名会话\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-pencil\" aria-hidden=\"true\"\u003e\u003cpath d=\"M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z\"\u003e\u003c/path\u003e\u003cpath d=\"m15 5 4 4\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003cbutton type=\"button\" title=\"删除会话\" aria-label=\"删除会话\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-trash2 lucide-trash-2\" aria-hidden=\"true\"\u003e\u003cpath d=\"M10 11v6\"\u003e\u003c/path\u003e\u003cpath d=\"M14 11v6\"\u003e\u003c/path\u003e\u003cpath d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6\"\u003e\u003c/path\u003e\u003cpath d=\"M3 6h18\"\u003e\u003c/path\u003e\u003cpath d=\"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003c/div\u003e"
+                                                      },
+                                                      {
+                                                          "className":  "session-row is-ready",
+                                                          "text":  "会话更多 03\n07/08 07:38",
+                                                          "html":  "\u003cbutton class=\"session-main\" type=\"button\" title=\"会话更多 03\n07/08 07:38\" data-tooltip=\"会话更多 03\n07/08 07:38\"\u003e\u003cspan class=\"session-line\"\u003e\u003cstrong\u003e会话更多 03\u003c/strong\u003e\u003c/span\u003e\u003cem\u003e07/08 07:38\u003c/em\u003e\u003c/button\u003e\u003cdiv class=\"session-actions\"\u003e\u003cbutton type=\"button\" title=\"置顶会话\" aria-label=\"置顶会话\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-pin\" aria-hidden=\"true\"\u003e\u003cpath d=\"M12 17v5\"\u003e\u003c/path\u003e\u003cpath d=\"M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003cbutton type=\"button\" title=\"重命名会话\" aria-label=\"重命名会话\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-pencil\" aria-hidden=\"true\"\u003e\u003cpath d=\"M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z\"\u003e\u003c/path\u003e\u003cpath d=\"m15 5 4 4\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003cbutton type=\"button\" title=\"删除会话\" aria-label=\"删除会话\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-trash2 lucide-trash-2\" aria-hidden=\"true\"\u003e\u003cpath d=\"M10 11v6\"\u003e\u003c/path\u003e\u003cpath d=\"M14 11v6\"\u003e\u003c/path\u003e\u003cpath d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6\"\u003e\u003c/path\u003e\u003cpath d=\"M3 6h18\"\u003e\u003c/path\u003e\u003cpath d=\"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003c/div\u003e"
+                                                      },
+                                                      {
+                                                          "className":  "session-row is-ready",
+                                                          "text":  "会话更多 04\n07/08 07:36",
+                                                          "html":  "\u003cbutton class=\"session-main\" type=\"button\" title=\"会话更多 04\n07/08 07:36\" data-tooltip=\"会话更多 04\n07/08 07:36\"\u003e\u003cspan class=\"session-line\"\u003e\u003cstrong\u003e会话更多 04\u003c/strong\u003e\u003c/span\u003e\u003cem\u003e07/08 07:36\u003c/em\u003e\u003c/button\u003e\u003cdiv class=\"session-actions\"\u003e\u003cbutton type=\"button\" title=\"置顶会话\" aria-label=\"置顶会话\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-pin\" aria-hidden=\"true\"\u003e\u003cpath d=\"M12 17v5\"\u003e\u003c/path\u003e\u003cpath d=\"M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003cbutton type=\"button\" title=\"重命名会话\" aria-label=\"重命名会话\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-pencil\" aria-hidden=\"true\"\u003e\u003cpath d=\"M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z\"\u003e\u003c/path\u003e\u003cpath d=\"m15 5 4 4\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003cbutton type=\"button\" title=\"删除会话\" aria-label=\"删除会话\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-trash2 lucide-trash-2\" aria-hidden=\"true\"\u003e\u003cpath d=\"M10 11v6\"\u003e\u003c/path\u003e\u003cpath d=\"M14 11v6\"\u003e\u003c/path\u003e\u003cpath d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6\"\u003e\u003c/path\u003e\u003cpath d=\"M3 6h18\"\u003e\u003c/path\u003e\u003cpath d=\"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003c/div\u003e"
+                                                      },
+                                                      {
+                                                          "className":  "message user",
+                                                          "text":  "运行中我会插入新消息。",
+                                                          "html":  "\u003cdiv class=\"message-body\"\u003e\u003cdiv class=\"message-text-bubble\"\u003e\u003cbutton type=\"button\" class=\"message-copy-button\" title=\"复制文本\" aria-label=\"复制文本\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-copy\" aria-hidden=\"true\"\u003e\u003crect width=\"14\" height=\"14\" x=\"8\" y=\"8\" rx=\"2\" ry=\"2\"\u003e\u003c/rect\u003e\u003cpath d=\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003cdiv class=\"message-content\"\u003e\u003cdiv class=\"markdown-content\"\u003e\u003cp\u003e运行中我会插入新消息。\u003c/p\u003e\n\u003c/div\u003e\u003c/div\u003e\u003c/div\u003e\u003c/div\u003e"
+                                                      },
+                                                      {
+                                                          "className":  "message assistant",
+                                                          "text":  "Active turn control mock ready.\n\n已在 20s 内达成目标",
+                                                          "html":  "\u003cdiv class=\"message-body\"\u003e\u003cdiv class=\"message-content-shell\"\u003e\u003cbutton type=\"button\" class=\"message-copy-button\" title=\"复制文本\" aria-label=\"复制文本\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-copy\" aria-hidden=\"true\"\u003e\u003crect width=\"14\" height=\"14\" x=\"8\" y=\"8\" rx=\"2\" ry=\"2\"\u003e\u003c/rect\u003e\u003cpath d=\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003cdiv class=\"message-content\"\u003e\u003cdiv class=\"markdown-content\"\u003e\u003cp\u003eActive turn control mock ready.\u003c/p\u003e\n\u003c/div\u003e\u003c/div\u003e\u003cdiv class=\"message-run-timing\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-circle-check\" aria-hidden=\"true\"\u003e\u003ccircle cx=\"12\" cy=\"12\" r=\"10\"\u003e\u003c/circle\u003e\u003cpath d=\"m9 12 2 2 4-4\"\u003e\u003c/path\u003e\u003c/svg\u003e已在 20s 内达成目标\u003c/div\u003e\u003c/div\u003e\u003c/div\u003e"
+                                                      },
+                                                      {
+                                                          "className":  "message assistant",
+                                                          "text":  "正在处理 · 1 步\n已处理 0s\n正在连接后台任务\n\n已停止\n\n继续生成中",
+                                                          "html":  "\u003cdiv class=\"message-body\"\u003e\u003cdiv class=\"message-content-shell\"\u003e\u003cbutton type=\"button\" class=\"message-copy-button\" title=\"复制文本\" aria-label=\"复制文本\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-copy\" aria-hidden=\"true\"\u003e\u003crect width=\"14\" height=\"14\" x=\"8\" y=\"8\" rx=\"2\" ry=\"2\"\u003e\u003c/rect\u003e\u003cpath d=\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003cdiv class=\"message-content\" aria-live=\"polite\"\u003e\u003cdetails class=\"agent-process-disclosure is-live\"\u003e\u003csummary\u003e\u003cspan class=\"tool-status-dot is-running\" aria-hidden=\"true\"\u003e\u003c/span\u003e\u003cspan\u003e正在处理 · 1 步\u003c/span\u003e\u003cspan class=\"agent-process-timing\"\u003e已处理 0s\u003c/span\u003e\u003cspan class=\"agent-process-current\"\u003e正在连接后台任务\u003c/span\u003e\u003c/summary\u003e\u003c/details\u003e\u003cdiv class=\"streaming-markdown\"\u003e\u003cdiv class=\"markdown-content\"\u003e\u003cp\u003e已停止\u003c/p\u003e\n\u003c/div\u003e\u003c/div\u003e\u003cspan class=\"thinking-indicator\"\u003e\u003cspan class=\"thinking-ring\" aria-hidden=\"true\"\u003e\u003c/span\u003e\u003cspan\u003e继续生成中\u003c/span\u003e\u003c/span\u003e\u003c/div\u003e\u003c/div\u003e\u003c/div\u003e"
+                                                      },
+                                                      {
+                                                          "className":  "message user",
+                                                          "text":  "这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 ",
+                                                          "html":  "\u003cdiv class=\"message-body\"\u003e\u003cdiv class=\"message-text-bubble\"\u003e\u003cbutton type=\"button\" class=\"message-copy-button\" title=\"复制文本\" aria-label=\"复制文本\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-copy\" aria-hidden=\"true\"\u003e\u003crect width=\"14\" height=\"14\" x=\"8\" y=\"8\" rx=\"2\" ry=\"2\"\u003e\u003c/rect\u003e\u003cpath d=\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003cdiv class=\"message-content\"\u003e\u003cdiv class=\"markdown-content\"\u003e\u003cp\u003e这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autosize，多行输入应该稳定在最大高度内。这是 v0.3.0 发布包 active turn 验收长输入。\\n请用最新意图替换旧任务，并保持页面不跳动。\\n这段内容用于触发 autos"
+                                                      },
+                                                      {
+                                                          "className":  "message assistant",
+                                                          "text":  "调用过程 · 1 步\n已处理 0s 后已中止\n正在取消排队\n\n已从队列移除\n\n已中止",
+                                                          "html":  "\u003cdiv class=\"message-body\"\u003e\u003cdiv class=\"message-content-shell\"\u003e\u003cbutton type=\"button\" class=\"message-copy-button\" title=\"复制文本\" aria-label=\"复制文本\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-copy\" aria-hidden=\"true\"\u003e\u003crect width=\"14\" height=\"14\" x=\"8\" y=\"8\" rx=\"2\" ry=\"2\"\u003e\u003c/rect\u003e\u003cpath d=\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003cdiv class=\"message-content\"\u003e\u003cdetails class=\"agent-process-disclosure\"\u003e\u003csummary\u003e\u003cspan class=\"tool-status-dot is-done\" aria-hidden=\"true\"\u003e\u003c/span\u003e\u003cspan\u003e调用过程 · 1 步\u003c/span\u003e\u003cspan class=\"agent-process-timing\"\u003e已处理 0s 后已中止\u003c/span\u003e\u003cspan class=\"agent-process-current\"\u003e正在取消排队\u003c/span\u003e\u003c/summary\u003e\u003c/details\u003e\u003cdiv class=\"markdown-content\"\u003e\u003cp\u003e已从队列移除\u003c/p\u003e\n\u003c/div\u003e\u003cdiv class=\"agent-cancelled-tag\"\u003e已中止\u003c/div\u003e\u003c/div\u003e\u003c/div\u003e\u003c/div\u003e"
+                                                      },
+                                                      {
+                                                          "className":  "message user",
+                                                          "text":  "请把这条新消息放到新开分支里执行，原任务继续运行。",
+                                                          "html":  "\u003cdiv class=\"message-body\"\u003e\u003cdiv class=\"message-text-bubble\"\u003e\u003cbutton type=\"button\" class=\"message-copy-button\" title=\"复制文本\" aria-label=\"复制文本\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-copy\" aria-hidden=\"true\"\u003e\u003crect width=\"14\" height=\"14\" x=\"8\" y=\"8\" rx=\"2\" ry=\"2\"\u003e\u003c/rect\u003e\u003cpath d=\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003cdiv class=\"message-content\"\u003e\u003cdiv class=\"markdown-content\"\u003e\u003cp\u003e请把这条新消息放到新开分支里执行，原任务继续运行。\u003c/p\u003e\n\u003c/div\u003e\u003c/div\u003e\u003c/div\u003e\u003c/div\u003e"
+                                                      },
+                                                      {
+                                                          "className":  "message assistant",
+                                                          "text":  "已在新分支按最新消息执行。\n\n已在 0s 内达成目标",
+                                                          "html":  "\u003cdiv class=\"message-body\"\u003e\u003cdiv class=\"message-content-shell\"\u003e\u003cbutton type=\"button\" class=\"message-copy-button\" title=\"复制文本\" aria-label=\"复制文本\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-copy\" aria-hidden=\"true\"\u003e\u003crect width=\"14\" height=\"14\" x=\"8\" y=\"8\" rx=\"2\" ry=\"2\"\u003e\u003c/rect\u003e\u003cpath d=\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\"\u003e\u003c/path\u003e\u003c/svg\u003e\u003c/button\u003e\u003cdiv class=\"message-content\"\u003e\u003cdiv class=\"markdown-content\"\u003e\u003cp\u003e已在新分支按最新消息执行。\u003c/p\u003e\n\u003c/div\u003e\u003c/div\u003e\u003cdiv class=\"message-run-timing\"\u003e\u003csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-circle-check\" aria-hidden=\"true\"\u003e\u003ccircle cx=\"12\" cy=\"12\" r=\"10\"\u003e\u003c/circle\u003e\u003cpath d=\"m9 12 2 2 4-4\"\u003e\u003c/path\u003e\u003c/svg\u003e已在 0s 内达成目标\u003c/div\u003e\u003c/div\u003e\u003c/div\u003e"
+                                                      }
+                                                  ],
+                              "localFileLinks":  [
+
+                                                 ],
+                              "looseImagePathMatches":  [
+
+                                                        ],
+                              "scriptAssets":  [
+                                                   "http://127.0.0.1:9949/app/assets/index-VHJzJbCn.js"
+                                               ],
+                              "buttons":  [
+                                              "新对话 新对话 创建不绑定项目的会话",
+                                              "项目 项目 折叠项目",
+                                              "添加项目文件夹",
+                                              "添加项目文件夹 添加项目文件夹 选择一个本地文件夹作为项目",
+                                              "会话 会话 折叠通用会话",
+                                              "这是 v0.3.0 发布包 active t\n已处理 19s 这是 v0.3.0 发布包 active t已处理 19s 这是 v0.3.0 发布包 active t\n已处理 19s",
+                                              "置顶会话 置顶会话",
+                                              "重命名会话 重命名会话",
+                                              "删除会话 删除会话",
+                                              "v0.3.0 精修发布验收\n07/08 08:21 v0.3.0 精修发布验收07/08 08:21 v0.3.0 精修发布验收\n07/08 08:21",
+                                              "置顶会话 置顶会话",
+                                              "重命名会话 重命名会话",
+                                              "删除会话 删除会话",
+                                              "会话更多 01\n07/08 07:41 会话更多 0107/08 07:41 会话更多 01\n07/08 07:41",
+                                              "置顶会话 置顶会话",
+                                              "重命名会话 重命名会话",
+                                              "删除会话 删除会话",
+                                              "会话更多 02\n07/08 07:39 会话更多 0207/08 07:39 会话更多 02\n07/08 07:39",
+                                              "置顶会话 置顶会话",
+                                              "重命名会话 重命名会话",
+                                              "删除会话 删除会话",
+                                              "会话更多 03\n07/08 07:38 会话更多 0307/08 07:38 会话更多 03\n07/08 07:38",
+                                              "置顶会话 置顶会话",
+                                              "重命名会话 重命名会话",
+                                              "删除会话 删除会话",
+                                              "会话更多 04\n07/08 07:36 会话更多 0407/08 07:36 会话更多 04\n07/08 07:36",
+                                              "置顶会话 置顶会话",
+                                              "重命名会话 重命名会话",
+                                              "删除会话 删除会话",
+                                              "查看更多(2) 查看更多(2) 展开剩余 2 条会话",
+                                              "设置 设置 设置、能力包、权限和诊断",
+                                              "发布验收 发布验收 发布验收 / release-cdp@example.com",
+                                              "分享会话 分享会话",
+                                              "切换到明亮模式 切换到明亮模式",
+                                              "通知与运行状态 通知与运行状态",
+                                              "复制文本 复制文本",
+                                              "复制文本 复制文本",
+                                              "复制文本 复制文本",
+                                              "复制文本 复制文本",
+                                              "复制文本 复制文本"
+                                          ],
+                              "hasMockInstall":  true,
+                              "bridgeVersion":  "0.3.0-web.1",
+                              "bridgePlatform":  "v030-release-cdp"
+                          }
+            },
+    "cleaned":  true
+}

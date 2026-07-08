@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Production-grade Agent product acceptance suite for EcoreX v0.2.7.
+"""Production-grade Agent product acceptance suite for EcoreX v0.2.8.
 
 This suite intentionally composes the existing production release checks with a
 new fresh-user Agent product matrix.  The new matrix is run on the production
@@ -8,8 +8,8 @@ server through the same redacted SSH path used by the existing release scripts.
 Default shape:
   - 200 existing production user-behavior checks
   - 32 existing image/OCR/vision/toolchain checks
-  - 305 new Agent product checks
-  = 537 total checks
+  - 345 new Agent product checks
+  = 577 total checks
 """
 
 from __future__ import annotations
@@ -32,16 +32,16 @@ import paramiko
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = os.environ.get("ECOREX_ACCEPTANCE_VERSION", "0.2.7")
+VERSION = os.environ.get("ECOREX_ACCEPTANCE_VERSION", "0.2.8")
 ARTIFACT = ROOT / "docs" / f"v{VERSION}" / "artifacts" / "production-agent-product-acceptance.json"
-REMOTE_MARKER = "__ECOREX_V027_AGENT_PRODUCT_ACCEPTANCE_JSON__"
+REMOTE_MARKER = "__ECOREX_V028_AGENT_PRODUCT_ACCEPTANCE_JSON__"
 
 LEGACY_USER_BEHAVIOR_SCRIPT = "smoke-v026-production-200-user-behavior.py"
 LEGACY_IMAGE_TOOLCHAIN_SCRIPT = "smoke-v026-production-30-image-ocr-vision-toolchain.py"
 
-TARGET_NEW_CHECKS = 308
-TARGET_TOTAL_CHECKS = 540
-MIN_ENABLED_CHECKS = 380
+TARGET_NEW_CHECKS = 345
+TARGET_TOTAL_CHECKS = 577
+MIN_ENABLED_CHECKS = 400
 PRESSURE_USERS_DEFAULT = 20
 PRESSURE_TURNS_DEFAULT = 3
 
@@ -57,7 +57,8 @@ NEW_CASE_GROUPS = (
     ("tool-skill", 26, "P0", "model", ("tools", "skills", "toolchain")),
     ("multi-model-image-route", 32, "P0", "image", ("models", "imagegen", "image-edit")),
     ("concurrency-pressure", 18, "P0", "stress", ("concurrency", "pressure", "stability")),
-    ("v027-integrated-capabilities", 90, "P0", "model", ("v0.2.7", "model-switch", "cdp", "ocr", "tongxin", "imagegen", "update")),
+    ("v027-integrated-capabilities", 102, "P0", "model", ("v0.2.7", "model-switch", "cdp", "ocr", "tongxin", "imagegen", "update")),
+    ("v028-runtime-observability-queue", 25, "P0", "low", ("v0.2.8", "runtime-observability", "queue", "image-job")),
     ("security-observability", 6, "P0", "low", ("security", "observability", "redaction")),
 )
 
@@ -73,6 +74,7 @@ FOCUSED_RERUN_DEPENDENCIES = {
     "tool-skill": ("fresh-env", "auth-first-use"),
     "multi-model-image-route": ("fresh-env", "auth-first-use"),
     "v027-integrated-capabilities": ("fresh-env", "auth-first-use", "stream-state-machine", "context-session", "tool-skill"),
+    "v028-runtime-observability-queue": ("fresh-env", "auth-first-use", "runtime-api"),
     "security-observability": ("fresh-env", "auth-first-use", "stream-state-machine"),
 }
 
@@ -87,6 +89,7 @@ REQUIRED_DOMAIN_MINIMUMS = {
     "multi-model-image-route": 8,
     "concurrency-pressure": 10,
     "v027-integrated-capabilities": 74,
+    "v028-runtime-observability-queue": 20,
     "security-observability": 4,
 }
 
@@ -127,11 +130,11 @@ def sha_text(value: str) -> str:
 
 
 def build_declared_case_registry() -> List[Dict[str, Any]]:
-    """Return the declared shape for the new 305-case Agent product matrix."""
+    """Return the declared shape for the new Agent product matrix."""
     cases: List[Dict[str, Any]] = []
     for group, count, priority, cost, tags in NEW_CASE_GROUPS:
         for index in range(1, count + 1):
-            case_id = f"v027-agent-{group}-{index:03d}"
+            case_id = f"v028-agent-{group}-{index:03d}"
             case_priority = "P2" if index in OPTIONAL_CASE_INDICES.get(group, set()) else priority
             cases.append(
                 {
@@ -418,8 +421,8 @@ def evaluate_quality_gates(checks: List[Dict[str, Any]], *, target_total: int = 
 
 
 def _legacy_run_payload(filename: str) -> Dict[str, Any]:
-    module = _load_script(filename)
     with _temporary_env("ECOREX_DEPLOY_VERSION", VERSION):
+        module = _load_script(filename)
         payload = module.run()
     payload["sourceScript"] = filename
     return payload
@@ -442,6 +445,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -450,7 +454,7 @@ BUDGET_MODE = "__BUDGET_MODE__"
 PRESSURE_USERS = int("__PRESSURE_USERS__")
 PRESSURE_TURNS = int("__PRESSURE_TURNS__")
 LOCAL_BASE = "http://127.0.0.1:9909"
-TARGET_NEW_CHECKS = 308
+TARGET_NEW_CHECKS = 345
 CHECKS = []
 MODEL_ROUTE_EVIDENCE = []
 STATE_MACHINE_EVIDENCE = {}
@@ -475,6 +479,7 @@ GROUP_META = {
     "multi-model-image-route": {"priority": "P0", "cost": "image", "tags": ["models", "imagegen", "image-edit"]},
     "concurrency-pressure": {"priority": "P0", "cost": "stress", "tags": ["concurrency", "pressure", "stability"]},
     "v027-integrated-capabilities": {"priority": "P0", "cost": "model", "tags": ["v0.2.7", "model-switch", "cdp", "ocr", "tongxin", "imagegen", "update"]},
+    "v028-runtime-observability-queue": {"priority": "P0", "cost": "low", "tags": ["v0.2.8", "runtime-observability", "queue", "image-job"]},
     "security-observability": {"priority": "P0", "cost": "low", "tags": ["security", "observability", "redaction"]},
 }
 GROUP_COUNTS = {
@@ -487,7 +492,8 @@ GROUP_COUNTS = {
     "tool-skill": 26,
     "multi-model-image-route": 32,
     "concurrency-pressure": 18,
-    "v027-integrated-capabilities": 90,
+    "v027-integrated-capabilities": 102,
+    "v028-runtime-observability-queue": 25,
     "security-observability": 6,
 }
 GROUP_ORDER = list(GROUP_META.keys())
@@ -501,6 +507,7 @@ FOCUS_DEPENDENCIES = {
     "tool-skill": ["fresh-env", "auth-first-use"],
     "multi-model-image-route": ["fresh-env", "auth-first-use"],
     "v027-integrated-capabilities": ["fresh-env", "auth-first-use", "stream-state-machine", "context-session", "tool-skill"],
+    "v028-runtime-observability-queue": ["fresh-env", "auth-first-use", "runtime-api"],
     "security-observability": ["fresh-env", "auth-first-use", "stream-state-machine"],
 }
 GROUP_COUNTERS = {}
@@ -582,7 +589,7 @@ def add(group, name, ok=None, detail=None, *, status=None, skip_reason="", prior
     resolved_priority = priority or ("P2" if case_index in OPTIONAL_CASE_INDICES.get(group, set()) else (meta.get("priority") or "P1"))
     CHECKS.append({
         "index": len(CHECKS) + 1,
-        "caseId": f"v027-agent-{group}-{case_index:03d}",
+        "caseId": f"v028-agent-{group}-{case_index:03d}",
         "group": group,
         "name": name,
         "status": resolved_status,
@@ -738,7 +745,7 @@ def phase_fresh_env():
     service_active = run(["systemctl", "is-active", "ecorex-web"], timeout=15).stdout.strip()
     add("fresh-env", "current release directory exists", current.exists())
     add("fresh-env", "runtime directory exists", runtime.exists())
-    add("fresh-env", "release version is v0.2.7", release.get("version") == VERSION, {"version": release.get("version")})
+    add("fresh-env", "release version is v0.2.8", release.get("version") == VERSION, {"version": release.get("version")})
     add("fresh-env", "service env file exists", Path("/etc/ecorex-web/ecorex-web.env").is_file())
     add("fresh-env", "state config exists", Path("/opt/ecorex-web/state/config.json").is_file())
     add("fresh-env", "state directory exists", Path("/opt/ecorex-web/state").is_dir())
@@ -1862,7 +1869,20 @@ def phase_v027_integrated_capabilities(opener, stream_session_id):
     update_pick_block = _python_method_block(web_channel, "_pick_artifact")
     add("v027-integrated-capabilities", "update-check source maps Windows and macOS to WebUI artifacts", all(marker in update_pick_block for marker in ('preferred_ids.append("webui-windows-x64")', 'preferred_ids.append("webui-macos-universal")', 'recommended.get(key)')) and 'preferred_ids.append("windows-x64")' not in update_pick_block and 'preferred_ids.append("macos-arm64-dmg")' not in update_pick_block)
     add("v027-integrated-capabilities", "update-check can surface same-version artifact hotfixes", all(marker in web_channel for marker in ('"updateReason"', 'def _artifact_changed', 'def _installed_artifact_metadata', '发现 {latest_version} 同版本更新')))
-    add("v027-integrated-capabilities", "update-check can surface admin notice revisions", all(marker in web_channel for marker in ("_release_manifest_notice_state_payload", "noticeRevision", '"notice" if notice_active else ""')))
+    add(
+        "v027-integrated-capabilities",
+        "update-check can surface admin notice revisions",
+        all(
+            marker in web_channel
+            for marker in (
+                "_release_manifest_notice_state_payload",
+                "_release_notice_update_state_payload",
+                "_enterprise_release_notice_payload",
+                "noticeRevision",
+                "admin-release-notice",
+            )
+        ),
+    )
     update_win_artifact = update_win_payload.get("artifact") if isinstance(update_win_payload.get("artifact"), dict) else {}
     update_mac_artifact = update_mac_payload.get("artifact") if isinstance(update_mac_payload.get("artifact"), dict) else {}
     add("v027-integrated-capabilities", "update-check endpoint exposes WebUI update policy and artifacts", update_check_win.get("status") == 200 and update_check_mac.get("status") == 200 and update_win_artifact.get("id") == "webui-windows-x64" and update_mac_artifact.get("id") == "webui-macos-universal" and ((update_win_payload.get("update") or {}).get("webui") or {}).get("promotion") == "admin-gated", {"winStatus": update_check_win.get("status"), "macStatus": update_check_mac.get("status"), "winArtifact": update_win_artifact.get("id"), "macArtifact": update_mac_artifact.get("id")})
@@ -1978,6 +1998,212 @@ def phase_v027_integrated_capabilities(opener, stream_session_id):
     add("v027-integrated-capabilities", "Tongxin MPI accuracy has samples without fallback or drift", int(mpi_payload.get("sampleCount") or 0) > 0 and mpi_payload.get("cacheFallbackDetected") is False and int(mpi_payload.get("mpiUnavailableCount") or 0) == 0 and int(mpi_payload.get("comparableMetricCount") or 0) == int(mpi_payload.get("passedMetricCount") or -1), mpi_counts)
 
 
+def phase_v028_runtime_observability_queue(opener):
+    runtime = Path("/opt/ecorex-web/current/runtime")
+    public_manifest = read_json(Path("/srv/ecorex-agent-download/current/manifest.json"))
+    public_manifest_artifacts = {
+        row.get("id"): row
+        for row in (public_manifest.get("artifacts") or [])
+        if isinstance(row, dict)
+    }
+    win_artifact = public_manifest_artifacts.get("webui-windows-x64") or {}
+    win_href = str(win_artifact.get("href") or "")
+    win_zip_path = Path("/srv/ecorex-agent-download/current") / win_href
+    win_install_script = ""
+    win_installer_detail = {"hrefHash": h(win_href), "zipExists": win_zip_path.is_file()}
+    try:
+        with zipfile.ZipFile(win_zip_path) as archive:
+            installer_entry = next(
+                (
+                    name
+                    for name in archive.namelist()
+                    if name.replace("\\", "/") == "scripts/install-ecorex-webui-win.ps1"
+                ),
+                "",
+            )
+            if not installer_entry:
+                raise KeyError("scripts/install-ecorex-webui-win.ps1")
+            win_install_script = archive.read(installer_entry).decode("utf-8", errors="replace")
+            win_installer_detail["entry"] = installer_entry
+            win_installer_detail["scriptBytes"] = len(win_install_script.encode("utf-8", errors="replace"))
+    except Exception as exc:
+        win_installer_detail.update({"errorType": exc.__class__.__name__, "message": str(exc)[:160]})
+    web_channel = read_text(runtime / "channel" / "web" / "web_channel.py")
+    routes_source = read_text(runtime / "channel" / "web" / "routes.py")
+    image_jobs_api = read_text(runtime / "channel" / "web" / "image_jobs.py")
+    run_ledger_source = read_text(runtime / "agent" / "protocol" / "run_ledger.py")
+    runtime_projection = read_text(runtime / "agent" / "protocol" / "runtime_projection.py")
+    task_observer_source = read_text(runtime / "agent" / "protocol" / "task_observer.py")
+    image_job_service = read_text(runtime / "agent" / "protocol" / "image_job_service.py")
+    imagegen_tool = read_text(runtime / "agent" / "tools" / "imagegen" / "imagegen.py")
+    config_source = read_text(runtime / "config.py")
+    permission_broker = read_text(runtime / "common" / "ecorex_tool_permissions.py")
+    app_js = _joined_asset_text(runtime, "channel/web/static/app/assets/*.js")
+    app_css = _joined_asset_text(runtime, "channel/web/static/app/assets/*.css")
+
+    import_detail = {}
+    try:
+        from agent.protocol import TaskObserver, RuntimeProjectionService, get_run_event_ledger, get_run_ledger
+        import_detail = {
+            "taskObserver": bool(TaskObserver),
+            "runtimeProjectionService": bool(RuntimeProjectionService),
+            "runEventLedger": bool(get_run_event_ledger()),
+            "runLedger": bool(get_run_ledger()),
+        }
+    except Exception as exc:
+        TaskObserver = None
+        RuntimeProjectionService = None
+        get_run_event_ledger = None
+        get_run_ledger = None
+        import_detail = {"errorType": exc.__class__.__name__, "message": str(exc)[:160]}
+
+    add("v028-runtime-observability-queue", "TaskObserver imports from production runtime", bool(import_detail.get("taskObserver")), import_detail)
+    add("v028-runtime-observability-queue", "RunLedger exposes queued claim lease methods", all(marker in run_ledger_source for marker in ("def claim_queued_run", "def release_queued_claim", "lease_owner", "lease_expires_at")))
+    add("v028-runtime-observability-queue", "RunLedger queued lease clears on non-queued terminal phases", all(marker in run_ledger_source for marker in ("WHEN ? NOT IN ('queued', 'accepted') THEN NULL", "lease_owner=NULL", "lease_expires_at=NULL")))
+    add("v028-runtime-observability-queue", "WebChannel packages file-backed queued payload store", all(marker in web_channel for marker in ("class QueuedRequestPayloadStore", ".ecorex", "queued-requests", "QUEUE_PAYLOAD_SCHEMA_VERSION")))
+    add("v028-runtime-observability-queue", "WebChannel starts queued requests through durable claim", all(marker in web_channel for marker in ("claim_queued_run", "web_queue_claim_lease_seconds", "release_queued_claim", "started queued request")))
+    add("v028-runtime-observability-queue", "WebChannel cleans failed queue payload admissions", all(marker in web_channel for marker in ("QUEUE_PAYLOAD_STORE_UNAVAILABLE", "queued_request_payloads.pop(request_id, None)", "request was not queued")))
+    add("v028-runtime-observability-queue", "Runtime projection reduces task observation fields", all(marker in runtime_projection for marker in ("task_observations_by_id", '"task_observations"', "task.intervention_requested", "job_id", "progress")))
+    add("v028-runtime-observability-queue", "Active requests snapshot attaches projected observations", all(marker in web_channel for marker in ("RuntimeProjectionService", 'row["task_observations"]', 'row["image_jobs"]')))
+    add("v028-runtime-observability-queue", "Image job observer emits task lifecycle and intervention", all(marker in image_job_service for marker in ('"task.started"', '"task.heartbeat"', '"task.intervention_requested"', '"next_actions": ["continue", "stop", "background"]')))
+    add("v028-runtime-observability-queue", "Image job observer uses 120s per-image baseline with status leases", all(marker in image_job_service for marker in ("IMAGE_JOB_BASELINE_SECONDS = 120.0", "image_job_observation_per_image_baseline_seconds", "provider_polling", "deadline_extended")))
+    add("v028-runtime-observability-queue", "Image jobs default multi-image work to two bounded lanes", all(marker in image_job_service for marker in ("image_job_default_max_parallel", "parallelism_defaulted", "default_max_parallel")) and '"image_job_default_max_parallel": 2' in config_source)
+    add("v028-runtime-observability-queue", "Native imagegen batch runs through bounded parallel executor", all(marker in imagegen_tool for marker in ("ThreadPoolExecutor", "resolve_image_job_parallelism_policy", '"maxParallel"', '"parallelismPolicy"')))
+    add("v028-runtime-observability-queue", "Image job API exposes continue extend background controls", 'action in {"continue", "extend", "background"}' in image_jobs_api and all(marker in image_job_service for marker in ('safe_action == "continue"', 'safe_action == "background"', "observation_backgrounded")))
+    add("v028-runtime-observability-queue", "Permission broker allows safe image job observation controls", '_IMAGE_JOB_SAFE_CONTROL_ACTIONS = {"background", "cancel", "continue", "extend"}' in permission_broker)
+    add("v028-runtime-observability-queue", "Queue action route is declared", "/api/requests/([^/]+)/queue-action" in routes_source and "RequestQueueActionHandler" in routes_source)
+    add("v028-runtime-observability-queue", "Queued chat surface exposes guide action instead of implicit interruption", "guide_queue" in web_channel and "guide_queue" in app_js and "重新观测并确认是否插入队列" in app_js)
+    add("v028-runtime-observability-queue", "Run Center static app exposes task observation surface", "task_observations" in app_js and "run-center-observation" in app_css)
+    add("v028-runtime-observability-queue", "Windows installer copies into versioned runtime slot", all(marker in win_install_script for marker in (f'"runtime-{VERSION}-" + [Guid]::NewGuid().ToString("N").Substring(0, 8)', "current-runtime.txt", "Get-WebUiPythonProcesses -RuntimeDir $runtimeDir -InstallRoot $installRoot", "Remove-OldRuntimeDirs -InstallRoot $installRoot -CurrentRuntimeDir $runtimeDir", "Copying EcoreX WebUI runtime to $runtimeDir")), win_installer_detail)
+
+    task_request_id = "v028-task-" + RUN_ID
+    task_session_id = "accept-v028-task-" + RUN_ID
+    task_id = "image-v028-" + RUN_ID
+    job_id = "image-job-v028-" + RUN_ID
+    projection_resp = {}
+    active_resp = {}
+    task_events_ok = False
+    try:
+        ledger = get_run_event_ledger()
+        run_ledger = get_run_ledger()
+        run_ledger.create_run(task_request_id, task_session_id, phase="running", status="running", metadata={"acceptance": "v028"})
+        ledger.append_event(
+            request_id=task_request_id,
+            session_id=task_session_id,
+            event_type="task.started",
+            payload={"task_id": task_id, "kind": "image_job", "title": "v028 observation smoke", "status": "running", "health": "running", "job_id": job_id},
+            idempotency_key=task_request_id + ":task-start",
+            source="v028-release-gate",
+        )
+        ledger.append_event(
+            request_id=task_request_id,
+            session_id=task_session_id,
+            event_type="task.intervention_requested",
+            payload={
+                "task_id": task_id,
+                "kind": "image_job",
+                "title": "v028 observation smoke",
+                "status": "waiting_user_decision",
+                "health": "waiting_user_decision",
+                "job_id": job_id,
+                "progress": 0.5,
+                "image_job_status": "running",
+                "reason": "soft_deadline_exceeded",
+                "next_actions": ["continue", "background"],
+            },
+            idempotency_key=task_request_id + ":task-intervention",
+            source="v028-release-gate",
+        )
+        task_events_ok = True
+        projection_resp = request(f"/api/runtime-projection?request_id={urllib.parse.quote(task_request_id)}&session_id={urllib.parse.quote(task_session_id)}&include_events=1", opener=opener, timeout=30)
+        active_resp = request("/api/active-requests", opener=opener, timeout=30)
+    except Exception as exc:
+        projection_resp = {"status": 0, "json": {}, "errorType": exc.__class__.__name__, "text": str(exc)[:160]}
+        active_resp = {"status": 0, "json": {}}
+    projection_payload = projection_resp.get("json") if isinstance(projection_resp.get("json"), dict) else {}
+    projection = projection_payload.get("projection") if isinstance(projection_payload.get("projection"), dict) else {}
+    observations = projection.get("task_observations") if isinstance(projection.get("task_observations"), list) else []
+    first_observation = observations[0] if observations and isinstance(observations[0], dict) else {}
+    active_rows = ((active_resp.get("json") or {}).get("requests") or []) if isinstance(active_resp.get("json"), dict) else []
+    active_row = next((row for row in active_rows if isinstance(row, dict) and row.get("request_id") == task_request_id), {})
+    active_observations = active_row.get("task_observations") if isinstance(active_row.get("task_observations"), list) else []
+    add("v028-runtime-observability-queue", "Synthetic task observation events append", task_events_ok, {"requestHash": h(task_request_id), "sessionHash": h(task_session_id)})
+    add("v028-runtime-observability-queue", "Runtime projection API returns task observations", projection_resp.get("status") == 200 and projection_payload.get("status") == "success" and bool(observations), {"requestHash": h(task_request_id), "count": len(observations)})
+    add("v028-runtime-observability-queue", "Runtime projection marks intervention health", first_observation.get("health") == "waiting_user_decision" and (first_observation.get("intervention") or {}).get("status") == "waiting_user_decision", {"health": first_observation.get("health"), "status": first_observation.get("status")})
+    add("v028-runtime-observability-queue", "Runtime projection preserves image-job observation details", first_observation.get("job_id") == job_id and first_observation.get("progress") == 0.5 and "continue" in ((first_observation.get("intervention") or {}).get("next_actions") or []), {"jobHash": h(first_observation.get("job_id")), "progress": first_observation.get("progress")})
+    add("v028-runtime-observability-queue", "Active requests includes synthetic observed run", active_resp.get("status") == 200 and bool(active_row), {"requestHash": h(task_request_id), "activeCount": len(active_rows)})
+    add("v028-runtime-observability-queue", "Active request row carries task observations", bool(active_observations) and (active_observations[0] or {}).get("job_id") == job_id, {"requestHash": h(task_request_id), "observationCount": len(active_observations)})
+    try:
+        get_run_ledger().mark_terminal(task_request_id, "completed", reason="v028_release_gate_observation_smoke")
+    except Exception:
+        pass
+
+    queue_session_id = "accept-v028-queue-" + RUN_ID
+    queue_lock = None
+    queued_request_id = ""
+    queue_post = {}
+    queue_cancel = {}
+    queue_after = {}
+    lock_acquired = False
+    try:
+        from common.ecorex_workspace import SessionLock
+        from common.utils import expand_path
+        from config import conf
+
+        workspace_root = expand_path(conf().get("agent_workspace", "/srv/ecorex-agent-workspace"))
+        queue_lock = SessionLock(workspace_root, queue_session_id).acquire()
+        lock_acquired = True
+        queue_post = request(
+            "/message",
+            method="POST",
+            data={
+                "session_id": queue_session_id,
+                "message": "v0.2.8 release queue admission smoke; do not execute model work",
+                "stream": True,
+                "lang": "en",
+            },
+            opener=opener,
+            timeout=35,
+        )
+        queue_json = queue_post.get("json") if isinstance(queue_post.get("json"), dict) else {}
+        queued_request_id = str(queue_json.get("request_id") or "")
+        if queued_request_id:
+            queue_cancel = request(
+                f"/api/requests/{urllib.parse.quote(queued_request_id)}/queue-action",
+                method="POST",
+                data={"action": "cancel_queued", "session_id": queue_session_id},
+                opener=opener,
+                timeout=35,
+            )
+        queue_after = request("/api/active-requests", opener=opener, timeout=30)
+    except Exception as exc:
+        queue_post = {"status": 0, "json": {}, "errorType": exc.__class__.__name__, "text": str(exc)[:160]}
+    finally:
+        try:
+            if queued_request_id and not ((queue_cancel.get("json") or {}).get("status") == "success"):
+                request(
+                    f"/api/requests/{urllib.parse.quote(queued_request_id)}/queue-action",
+                    method="POST",
+                    data={"action": "cancel_queued", "session_id": queue_session_id},
+                    opener=opener,
+                    timeout=20,
+                )
+        except Exception:
+            pass
+        try:
+            if queue_lock:
+                queue_lock.release()
+        except Exception:
+            pass
+    queue_payload = queue_post.get("json") if isinstance(queue_post.get("json"), dict) else {}
+    queue_same = queue_payload.get("same_session") if isinstance(queue_payload.get("same_session"), dict) else {}
+    after_rows = ((queue_after.get("json") or {}).get("requests") or []) if isinstance(queue_after.get("json"), dict) else []
+    add("v028-runtime-observability-queue", "Validation session lock can be acquired", lock_acquired, {"sessionHash": h(queue_session_id)})
+    add("v028-runtime-observability-queue", "Locked same-session message is accepted as queued", queue_post.get("status") == 200 and queue_payload.get("status") == "success" and queue_payload.get("queued") is True and bool(queued_request_id), {"requestHash": h(queued_request_id), "http": queue_post.get("status")})
+    add("v028-runtime-observability-queue", "Same-session contract is queue-first not interrupt", queue_same.get("policy") == "queue" and queue_same.get("decision") == "queued" and queue_same.get("queue") == "enabled" and not queue_same.get("replaced_request_ids"), {"decision": queue_same.get("decision"), "reason": queue_same.get("reason")})
+    add("v028-runtime-observability-queue", "Queued validation request cancels and drains", (queue_cancel.get("json") or {}).get("status") == "success" and all(row.get("request_id") != queued_request_id for row in after_rows if isinstance(row, dict)), {"requestHash": h(queued_request_id), "cancelStatus": (queue_cancel.get("json") or {}).get("status"), "activeAfterCount": len(after_rows)})
+
+
 def phase_security_observability():
     diag = request("/api/diagnostics/bundle", timeout=40)
     logs = request("/api/logs/snapshot", timeout=40)
@@ -2030,6 +2256,8 @@ def main():
             phase_concurrency_pressure()
         if should_run("v027-integrated-capabilities"):
             phase_v027_integrated_capabilities(opener, stream_session_id or ("accept-stream-" + RUN_ID))
+        if should_run("v028-runtime-observability-queue"):
+            phase_v028_runtime_observability_queue(opener)
         if should_run("security-observability"):
             phase_security_observability()
     finally:
@@ -2040,7 +2268,7 @@ def main():
     payload = {
         "status": "PASS" if len(CHECKS) == EXPECTED_NEW_CHECKS and not failures and not hard_failures and not skips_without_reason else "FAIL",
         "version": VERSION,
-        "scope": "production-agent-product-focused-rerun" if FOCUS_MODE else "production-agent-product-fresh-user-305",
+            "scope": "production-agent-product-focused-rerun" if FOCUS_MODE else "production-agent-product-fresh-user-345",
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "durationSeconds": round(time.perf_counter() - started, 2),
         "budgetMode": BUDGET_MODE,
@@ -2158,7 +2386,7 @@ def run_agent_product_matrix(
         payload = {
             "status": "FAIL",
             "version": VERSION,
-            "scope": "production-agent-product-fresh-user-305",
+            "scope": "production-agent-product-fresh-user-345",
             "generatedAt": datetime.now(timezone.utc).isoformat(),
             "errorType": exc.__class__.__name__,
             "error": _public_string(str(exc), limit=1000),
@@ -2207,7 +2435,7 @@ def build_suite_payload(
     checks = normalize_checks(payloads)
     gates = evaluate_quality_gates(checks)
     redaction_violations = find_redaction_violations(_redaction_scan_payload({"checks": checks, "payloads": payloads}))
-    agent_payload = next((payload for payload in payloads if payload.get("scope") == "production-agent-product-fresh-user-305"), {})
+    agent_payload = next((payload for payload in payloads if payload.get("scope") == "production-agent-product-fresh-user-345"), {})
     status = gates["status"]
     if redaction_violations:
         status = "FAIL"
@@ -2216,7 +2444,7 @@ def build_suite_payload(
         "status": status,
         "version": VERSION,
         "scope": "production-agent-product-acceptance",
-        "schemaVersion": "v0.2.7-agent-product-acceptance-v1",
+        "schemaVersion": "v0.2.8-agent-product-acceptance-v1",
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "durationSeconds": round(time.perf_counter() - started_at, 2),
         "budgetMode": budget_mode,
@@ -2310,7 +2538,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--pressure-turns", type=int, default=int(os.environ.get("ECOREX_ACCEPTANCE_PRESSURE_TURNS", PRESSURE_TURNS_DEFAULT)))
     parser.add_argument("--output", type=Path, default=ARTIFACT)
     parser.add_argument("--list-cases", action="store_true", help="Print declared new-case registry and exit without SSH.")
-    parser.add_argument("--skip-legacy", action="store_true", help="Run only the new 305-case matrix. Intended for debugging; full gate will fail total-count requirements.")
+    parser.add_argument("--skip-legacy", action="store_true", help="Run only the new 345-case matrix. Intended for debugging; full gate will fail total-count requirements.")
     parser.add_argument(
         "--focus-groups",
         default="",

@@ -541,6 +541,108 @@ class Phase1SyncIngestTest(unittest.TestCase):
         self.assertEqual(summary["thumbsDownArtifacts"], 1)
         self.assertEqual(store.state()["runtimeAudit"]["eventTypeCounts"]["artifact.feedback"], 1)
 
+    def test_runtime_audit_projects_user_actions_effective_artifacts_and_feedback_traces(self):
+        store, session = self._store_with_session()
+        store.ingest_sync_events(
+            {
+                "events": [
+                    {
+                        "idempotencyKey": "event:v029:image-started",
+                        "eventType": "image_job.started",
+                        "status": "running",
+                        "source": "image_job",
+                        "sessionId": "sess-v029",
+                        "requestId": "req-image",
+                        "detail": {"job_id": "job-safe"},
+                    },
+                    {
+                        "idempotencyKey": "event:v029:imagegen-tool",
+                        "eventType": "tool.started",
+                        "status": "running",
+                        "source": "tool",
+                        "sessionId": "sess-v029",
+                        "requestId": "req-image",
+                        "detail": {"tool": "imagegen"},
+                    },
+                    {
+                        "idempotencyKey": "event:v029:feedback-down",
+                        "eventType": "artifact.feedback",
+                        "status": "invalid",
+                        "source": "WebUI",
+                        "sessionId": "sess-v029",
+                        "requestId": "req-bad",
+                        "detail": {
+                            "artifact_hash": "bad-safe",
+                            "artifact_validity": "invalid",
+                            "artifact_feedback_signal": "thumbs_down",
+                            "feedback_share_id": "sh_unittrace01",
+                            "feedback_share_url": "https://mvdcm.ecoremedia.net/ecorex-agent/client/session-shares/sh_unittrace01",
+                        },
+                    },
+                ],
+                "artifacts": [
+                    {
+                        "idempotencyKey": "artifact:v029:default",
+                        "safeArtifactId": "artifact:v029-default",
+                        "sessionId": "sess-v029",
+                        "requestId": "req-default",
+                        "title": "final-cover.png",
+                        "kind": "image",
+                        "status": "ready",
+                        "pathExt": ".png",
+                    },
+                    {
+                        "idempotencyKey": "artifact:v029:up",
+                        "safeArtifactId": "artifact:v029-up",
+                        "sessionId": "sess-v029",
+                        "requestId": "req-up",
+                        "title": "approved-report.pdf",
+                        "kind": "file",
+                        "status": "ready",
+                        "pathExt": ".pdf",
+                        "artifactFeedbackSignal": "thumbs_up",
+                    },
+                    {
+                        "idempotencyKey": "artifact:v029:down",
+                        "safeArtifactId": "artifact:v029-down",
+                        "sessionId": "sess-v029",
+                        "requestId": "req-bad",
+                        "title": "bad-output.png",
+                        "kind": "image",
+                        "status": "ready",
+                        "pathExt": ".png",
+                        "artifactValidity": "invalid",
+                        "artifactFeedbackSignal": "thumbs_down",
+                        "artifactFeedbackAt": "2026-07-04T21:20:00Z",
+                        "feedbackShareId": "sh_unittrace01",
+                        "feedbackShareUrl": "https://mvdcm.ecoremedia.net/ecorex-agent/client/session-shares/sh_unittrace01",
+                    },
+                ],
+            },
+            token=session["token"],
+            device_id="device-1",
+        )
+
+        audit = store.state()["runtimeAudit"]
+        rendered = json.dumps(audit, ensure_ascii=False)
+
+        self.assertEqual(audit["summary"]["effectiveArtifacts"], 2)
+        self.assertEqual(audit["summary"]["thumbsDownArtifacts"], 1)
+        self.assertEqual(audit["actionTypeCounts"]["image_processing"], 2)
+        self.assertEqual(audit["actionTypeCounts"]["artifact_feedback"], 1)
+        self.assertGreaterEqual(len(audit["userActions"]), 3)
+        self.assertEqual(len(audit["effectiveArtifacts"]), 2)
+        self.assertEqual({item["artifactFeedbackSignal"] for item in audit["effectiveArtifacts"]}, {"default", "thumbs_up"})
+        self.assertEqual(len(audit["feedbackTraces"]), 1)
+        trace = audit["feedbackTraces"][0]
+        self.assertEqual(trace["userName"], "Sync User")
+        self.assertEqual(trace["userEmail"], "sync@example.com")
+        self.assertEqual(trace["feedbackShareId"], "sh_unittrace01")
+        self.assertIn("/ecorex-agent/client/session-shares/sh_unittrace01", trace["feedbackShareUrl"])
+        self.assertNotIn("request_id", rendered)
+        self.assertNotIn("sess-v029", rendered)
+        self.assertNotIn("req-bad", rendered)
+
     def test_run_paused_is_not_counted_as_failed_terminal_event(self):
         store, session = self._store_with_session()
         store.ingest_sync_events(
@@ -574,17 +676,29 @@ class Phase1SyncIngestTest(unittest.TestCase):
                 "messages": [
                     {
                         "role": "user",
-                        "content": r"请看 C:\Users\Alice\secret-plan.md token=abc123",
+                        "content": [{"type": "text", "text": r"请看 C:\Users\Alice\secret-plan.md token=abc123"}],
                     },
                     {
                         "role": "assistant",
-                        "content": "已生成封面。",
+                        "content": [{"type": "text", "text": "已生成封面。"}],
                         "artifacts": [
                             {
                                 "title": r"C:\Users\Alice\output\cover.png",
                                 "kind": "image",
+                                "fileName": "cover.png",
+                                "mimeType": "image/png",
+                                "sizeBytes": 2048,
+                                "mediaUrl": "https://mvdcm.ecoremedia.net/ecorex-agent/client/artifacts/cover.png",
                                 "artifactValidity": "valid",
                                 "artifactFeedbackSignal": "default",
+                            },
+                            {
+                                "title": "brief.pdf",
+                                "kind": "file",
+                                "fileName": "brief.pdf",
+                                "mimeType": "application/pdf",
+                                "sizeBytes": 40960,
+                                "url": "https://mvdcm.ecoremedia.net/ecorex-agent/client/artifacts/brief.pdf",
                             }
                         ],
                     },
@@ -598,12 +712,76 @@ class Phase1SyncIngestTest(unittest.TestCase):
         rendered = handler._share_html(result["shareId"], share)
 
         self.assertIn("[local-path]", json.dumps(share, ensure_ascii=False))
+        self.assertIn("请看 [local-path] token=[redacted]", rendered)
         self.assertIn("已生成封面", rendered)
+        self.assertIn("<b>User</b>", rendered)
+        self.assertIn("<b>Agent</b>", rendered)
+        self.assertTrue(share["privacy"]["includesArtifactFiles"])
+        self.assertIn("https://mvdcm.ecoremedia.net/ecorex-agent/client/artifacts/cover.png", json.dumps(share, ensure_ascii=False))
+        self.assertIn('<img class="artifact-preview"', rendered)
+        self.assertIn('class="artifact-preview-button"', rendered)
+        self.assertIn('id="image-lightbox"', rendered)
+        self.assertIn("保存图片", rendered)
+        self.assertIn("cover.png", rendered)
+        self.assertIn("https://mvdcm.ecoremedia.net/ecorex-agent/client/artifacts/brief.pdf", rendered)
+        self.assertIn('class="artifact-file-link"', rendered)
+        self.assertIn("打开产物", rendered)
         self.assertIn("Shared from EcoreX", rendered)
         self.assertNotIn("C:\\Users\\Alice", json.dumps(share, ensure_ascii=False))
         self.assertNotIn("C:\\Users\\Alice", rendered)
         self.assertNotIn("abc123", json.dumps(share, ensure_ascii=False))
         self.assertNotIn("abc123", rendered)
+
+    def test_session_share_url_uses_public_ecorex_agent_client_prefix(self):
+        handler = object.__new__(admin_api.AdminHandler)
+        handler.path = "/client/session-shares"
+        handler.headers = {"Host": "mvdcm.ecoremedia.net", "X-Forwarded-Proto": "https"}
+
+        with mock.patch.dict(admin_api.os.environ, {"ECOREX_PUBLIC_BASE_URL": "https://mvdcm.ecoremedia.net/ecorex-agent"}, clear=False):
+            self.assertEqual(
+                handler._share_url("sh_unit"),
+                "https://mvdcm.ecoremedia.net/ecorex-agent/client/session-shares/sh_unit",
+            )
+
+    def test_session_share_url_infers_public_prefix_for_forwarded_production_host(self):
+        handler = object.__new__(admin_api.AdminHandler)
+        handler.path = "/client/session-shares"
+        handler.headers = {"Host": "mvdcm.ecoremedia.net", "X-Forwarded-Proto": "https"}
+
+        with mock.patch.dict(
+            admin_api.os.environ,
+            {
+                "ECOREX_PUBLIC_CLIENT_BASE_URL": "",
+                "ECOREX_PUBLIC_BASE_URL": "",
+                "ECOREX_AGENT_PUBLIC_BASE_URL": "",
+                "PUBLIC_BASE_URL": "",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                handler._share_url("sh_unit"),
+                "https://mvdcm.ecoremedia.net/ecorex-agent/client/session-shares/sh_unit",
+            )
+
+    def test_session_share_url_keeps_localhost_client_prefix(self):
+        handler = object.__new__(admin_api.AdminHandler)
+        handler.path = "/client/session-shares"
+        handler.headers = {"Host": "127.0.0.1:18084", "X-Forwarded-Proto": "http"}
+
+        with mock.patch.dict(
+            admin_api.os.environ,
+            {
+                "ECOREX_PUBLIC_CLIENT_BASE_URL": "",
+                "ECOREX_PUBLIC_BASE_URL": "",
+                "ECOREX_AGENT_PUBLIC_BASE_URL": "",
+                "PUBLIC_BASE_URL": "",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                handler._share_url("sh_unit"),
+                "http://127.0.0.1:18084/client/session-shares/sh_unit",
+            )
 
     def test_runtime_audit_request_counts_are_scoped_by_identity_for_shared_request_id(self):
         store, session_a = self._store_with_session()
@@ -710,6 +888,62 @@ class Phase1SyncIngestTest(unittest.TestCase):
         self.assertEqual(sorted(row["artifactCount"] for row in audit_all["requests"]), [0, 1])
         self.assertEqual(sorted(row["messageCount"] for row in audit_all["requests"]), [0, 1])
 
+    def test_runtime_audit_filters_by_user_and_created_range(self):
+        store, session = self._store_with_session()
+        store.ingest_sync_events(
+            {
+                "events": [
+                    {
+                        "idempotencyKey": "event:range:old",
+                        "eventType": "run.completed",
+                        "status": "completed",
+                        "sessionId": "sess-range-old",
+                        "requestId": "req-range-old",
+                        "createdAt": "2026-07-01T12:00:00+08:00",
+                    },
+                    {
+                        "idempotencyKey": "event:range:inside",
+                        "eventType": "run.completed",
+                        "status": "completed",
+                        "sessionId": "sess-range-inside",
+                        "requestId": "req-range-inside",
+                        "createdAt": "2026-07-02T12:00:00+08:00",
+                    },
+                ],
+                "artifacts": [
+                    {
+                        "idempotencyKey": "artifact:range:inside",
+                        "sessionId": "sess-range-inside",
+                        "requestId": "req-range-inside",
+                        "id": "artifact-range-inside",
+                        "title": "inside.txt",
+                        "kind": "file",
+                        "status": "ready",
+                        "createdAt": "2026-07-02T12:01:00+08:00",
+                    }
+                ],
+            },
+            token=session["token"],
+            device_id="device-1",
+        )
+
+        with store.connect() as conn:
+            audit = store.runtime_audit(
+                conn,
+                {
+                    "userEmail": "sync@example.com",
+                    "start": "2026-07-02T00:00:00+08:00",
+                    "end": "2026-07-03T00:00:00+08:00",
+                },
+            )
+
+        self.assertEqual(audit["summary"]["events"], 1)
+        self.assertEqual(audit["summary"]["artifacts"], 1)
+        self.assertEqual(audit["summary"]["requests"], 1)
+        self.assertEqual(len(audit["recentEvents"]), 1)
+        self.assertEqual(len(audit["effectiveArtifacts"]), 1)
+        self.assertEqual(audit["recentEvents"][0]["eventType"], "run.completed")
+
     def test_phase1_sync_requires_valid_user_session_when_requested(self):
         store, _session = self._store_with_session()
         with self.assertRaises(PermissionError):
@@ -785,13 +1019,27 @@ class Phase1SyncIngestTest(unittest.TestCase):
         root = pathlib.Path(__file__).resolve().parents[1]
         admin_html = (root / "deploy" / "ecorex-site" / "admin" / "index.html").read_text(encoding="utf-8")
         admin_js = (root / "deploy" / "ecorex-site" / "admin" / "admin.js").read_text(encoding="utf-8")
+        admin_api_source = (root / "deploy" / "ecorex-admin-api" / "ecorex_admin_api.py").read_text(encoding="utf-8")
+        web_channel_source = (root / "channel" / "web" / "web_channel.py").read_text(encoding="utf-8")
+        caddy_source = (root / "deploy" / "ecorex-site" / "caddy" / "ecorex-agent.routes.caddy").read_text(encoding="utf-8")
+        nginx_source = (root / "deploy" / "ecorex-site" / "nginx" / "ecorex-agent.conf.example").read_text(encoding="utf-8")
 
         self.assertIn('data-panel="runtime-audit"', admin_html)
         self.assertIn("data-runtime-audit-summary", admin_html)
+        self.assertIn("data-runtime-audit-actions", admin_html)
+        self.assertIn("data-runtime-audit-effective-artifacts", admin_html)
+        self.assertIn("data-runtime-audit-feedback-traces", admin_html)
         self.assertIn("data-runtime-audit-events", admin_html)
         self.assertIn("runtimeAudit", admin_js)
         self.assertIn("function renderRuntimeAudit()", admin_js)
+        self.assertIn("actionTypeCounts", admin_js)
+        self.assertIn("effectiveArtifacts", admin_js)
+        self.assertIn("feedbackTraces", admin_js)
         self.assertIn("eventTypeCounts", admin_js)
+        self.assertIn("/ecorex-agent/usage-panel/api", admin_api_source)
+        self.assertIn("feedbackShareUrl", web_channel_source)
+        self.assertIn("/ecorex-agent/usage-panel/", caddy_source)
+        self.assertIn("/ecorex-agent/usage-panel/", nginx_source)
         self.assertNotIn("sync_events", admin_js)
         self.assertNotIn("request_id", admin_js)
 

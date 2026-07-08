@@ -1,0 +1,153 @@
+{
+  "status": "PASS",
+  "schemaVersion": "real-release-rerun-strategy-v1",
+  "version": "0.2.8",
+  "scope": "real-release-rerun-strategy",
+  "generatedAt": "2026-07-04T10:34:03.561894+00:00",
+  "action": "FOCUSED_RERUN_THEN_FINAL_GATE",
+  "reportPath": "docs/v0.2.8/artifacts/production-agent-product-acceptance.json",
+  "failureCount": 2,
+  "failureGroups": [
+    "v027-integrated-capabilities"
+  ],
+  "selectedGroups": [
+    "fresh-env",
+    "auth-first-use",
+    "stream-state-machine",
+    "context-session",
+    "tool-skill",
+    "v027-integrated-capabilities"
+  ],
+  "priorityCounts": {
+    "P0": 2,
+    "P1": 0,
+    "P2": 0,
+    "unknown": 0
+  },
+  "needsStatefulRerun": true,
+  "needsImageRouteRerun": true,
+  "needsSerialPressureRerun": true,
+  "mustRunFullGateBeforePromotion": true,
+  "runFullGateImmediatelyAfterEachFix": false,
+  "recommendedBatching": {
+    "maxFocusedAttemptsBeforeInvestigation": 2,
+    "batchFixesBeforeFinalGate": true,
+    "finalGatePolicy": "Run full real release validation once after all P0/P1 focused reruns pass."
+  },
+  "commands": [
+    {
+      "step": 1,
+      "name": "local contract preflight",
+      "command": "python scripts/真实发布轻量校验.py",
+      "reason": "Catch syntax, matrix, wrapper, docs, and strategy regressions before touching production.",
+      "releaseBlocking": false
+    },
+    {
+      "step": 2,
+      "name": "focused proof-of-fix rerun",
+      "command": "python scripts/真实发布校验.py --focus-groups fresh-env,auth-first-use,stream-state-machine,context-session,tool-skill,v027-integrated-capabilities --skip-legacy --output docs/v0.2.8/artifacts/real-release-focused-rerun.json",
+      "reason": "Rerun only failed groups plus required setup/dependency groups.",
+      "releaseBlocking": false
+    },
+    {
+      "step": 3,
+      "name": "serial pressure confirmation",
+      "command": "python scripts/真实发布校验.py --focus-groups concurrency-pressure --skip-legacy --output docs/v0.2.8/artifacts/real-release-focused-pressure-rerun.json",
+      "reason": "Pressure tests must be serial and must prove active requests drain to zero.",
+      "releaseBlocking": false
+    },
+    {
+      "step": 4,
+      "name": "final full real release gate",
+      "command": "python scripts/真实发布校验.py",
+      "reason": "Run once after fixes are batched and focused proof-of-fix evidence is green.",
+      "releaseBlocking": true
+    }
+  ],
+  "rules": [
+    "Do not rerun the full gate after every single fix.",
+    "Freeze and keep the failed artifact; do not overwrite it until a rerun plan is generated.",
+    "Run lightweight validation first after code changes.",
+    "Run focused groups plus dependencies as proof-of-fix evidence.",
+    "If the focused rerun fails twice, stop and debug evidence instead of retrying blindly.",
+    "Run the full real release gate once at the end, before promotion."
+  ],
+  "failurePreview": [
+    {
+      "index": 544,
+      "source": "production-agent-product-fresh-user-345",
+      "sourceIndex": 312,
+      "caseId": "v028-agent-v027-integrated-capabilities-100",
+      "group": "v027-integrated-capabilities",
+      "name": "Tongxin MPI accuracy action succeeds",
+      "status": "FAIL",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "sampleCount": null,
+        "comparableMetricCount": null,
+        "passedMetricCount": null,
+        "mpiUnavailableCount": null,
+        "cacheFallbackDetected": null,
+        "dataVolume": {
+          "accountCount": 0,
+          "projectCount": 0
+        },
+        "errorType": "tongxin_mpi_accuracy_zero_project_samples",
+        "errorHash": null,
+        "message": "No data-volume projects were available for MPI accuracy sampling."
+      }
+    },
+    {
+      "index": 546,
+      "source": "production-agent-product-fresh-user-345",
+      "sourceIndex": 314,
+      "caseId": "v028-agent-v027-integrated-capabilities-102",
+      "group": "v027-integrated-capabilities",
+      "name": "Tongxin MPI accuracy has samples without fallback or drift",
+      "status": "FAIL",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "v0.2.7",
+        "model-switch",
+        "cdp",
+        "ocr",
+        "tongxin",
+        "imagegen",
+        "update"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "sampleCount": null,
+        "comparableMetricCount": null,
+        "passedMetricCount": null,
+        "mpiUnavailableCount": null,
+        "cacheFallbackDetected": null,
+        "dataVolume": {
+          "accountCount": 0,
+          "projectCount": 0
+        },
+        "errorType": "tongxin_mpi_accuracy_zero_project_samples",
+        "errorHash": null,
+        "message": "No data-volume projects were available for MPI accuracy sampling."
+      }
+    }
+  ]
+}

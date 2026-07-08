@@ -18,15 +18,15 @@ from typing import Any, Dict, Iterable, List, Optional, Set
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.2.7"
+VERSION = "0.2.8"
 DEFAULT_REPORT = ROOT / "docs" / f"v{VERSION}" / "artifacts" / "production-agent-product-acceptance.json"
 DEFAULT_OUTPUT = ROOT / "docs" / f"v{VERSION}" / "artifacts" / "real-release-rerun-strategy.json"
 HEAVY_SCRIPT = ROOT / "scripts" / "smoke-v026-production-agent-product-acceptance.py"
 
-HIGH_COST_GROUPS = {"stream-state-machine", "tool-skill", "multi-model-image-route", "concurrency-pressure", "v027-integrated-capabilities"}
-SERIAL_GROUPS = {"concurrency-pressure", "v027-integrated-capabilities"}
+HIGH_COST_GROUPS = {"stream-state-machine", "tool-skill", "multi-model-image-route", "concurrency-pressure", "v027-integrated-capabilities", "v028-runtime-observability-queue"}
+SERIAL_GROUPS = {"concurrency-pressure", "v027-integrated-capabilities", "v028-runtime-observability-queue"}
 IMAGE_ROUTE_GROUPS = {"multi-model-image-route", "v027-integrated-capabilities"}
-STATEFUL_GROUPS = {"runtime-api", "stream-state-machine", "context-session", "concurrency-pressure", "v027-integrated-capabilities"}
+STATEFUL_GROUPS = {"runtime-api", "stream-state-machine", "context-session", "concurrency-pressure", "v027-integrated-capabilities", "v028-runtime-observability-queue"}
 
 
 def _load_heavy_module():
@@ -104,7 +104,7 @@ def _focused_command(groups: List[str], output_name: str) -> str:
         "python scripts/真实发布校验.py "
         f"--focus-groups {','.join(groups)} "
         "--skip-legacy "
-        f"--output docs/v0.2.7/artifacts/{output_name}"
+        f"--output docs/v0.2.8/artifacts/{output_name}"
     )
 
 

@@ -1037,15 +1037,17 @@ class AgentBridge:
         so any cost (file stat, hash, server boot) never adds to user latency.
         Failures are isolated and never raise into the message pipeline.
         """
-        if not conf().get("mcp_auto_start", False):
-            return
         import threading
         from agent.tools import ToolManager
 
         def _run():
             try:
                 tm = ToolManager()
-                tm.refresh_mcp_if_changed()
+                ensure_mcp = getattr(tm, "ensure_mcp_configured_loaded", None)
+                if callable(ensure_mcp):
+                    ensure_mcp(wait_seconds=0.0)
+                else:
+                    tm.refresh_mcp_if_changed()
                 added, removed = tm.sync_mcp_into_agent(agent)
                 if added or removed:
                     logger.info(

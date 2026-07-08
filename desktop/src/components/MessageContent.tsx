@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type Mo
 import { createPortal } from "react-dom";
 import MarkdownIt from "markdown-it";
 import {
+  Brain,
   CircleCheck,
   ExternalLink,
   Eye,
@@ -10,9 +11,12 @@ import {
   Image as ImageIcon,
   MoreHorizontal,
   MonitorUp,
+  Search,
+  Sparkles,
   ThumbsDown,
   ThumbsUp,
-  TriangleAlert
+  TriangleAlert,
+  Wrench
 } from "lucide-react";
 import type { AgentArtifact, AgentArtifactValidity, LocalJsonResult, LocalPathStat, QualityEvidence } from "../services/ecorexApi";
 import { redactInternalPromptText, redactToolDisclosureValue } from "../utils/redaction";
@@ -254,6 +258,14 @@ const ARTIFACT_FILE_EXTENSIONS = [
   "md", "txt", "csv", "json", "html", "zip"
 ].join("|");
 
+const OFFICE_HIDDEN_IMPLEMENTATION_EXTENSIONS = new Set([
+  "py", "pyw", "js", "jsx", "ts", "tsx", "mjs", "cjs",
+  "sh", "bash", "zsh", "fish", "ps1", "bat", "cmd",
+  "go", "rs", "java", "kt", "swift", "c", "cc", "cpp", "cxx", "h", "hpp",
+  "css", "scss", "sass", "less", "vue", "svelte",
+  "sql", "sqlite", "db", "toml", "yaml", "yml", "lock", "log"
+]);
+
 type ArtifactFileType = NonNullable<LocalFilePayload["file_type"]>;
 
 type ArtifactItem = {
@@ -325,6 +337,7 @@ function isRemoteArtifactSource(value: string) {
 
 function shouldVerifyArtifact(artifact: AgentArtifact) {
   const source = artifactPath(artifact);
+  if (artifact.kind === "image" && (artifact.previewUrl || artifact.thumbnailUrl)) return false;
   return Boolean(source) && artifact.kind !== "url" && artifact.kind !== "diff" && !isRemoteArtifactSource(source);
 }
 
@@ -520,6 +533,31 @@ function artifactFileTypeFromPath(value: string): ArtifactFileType {
   return "file";
 }
 
+function artifactExtension(value?: string) {
+  const source = String(value || "").split(/[?#]/, 1)[0].trim();
+  const fileName = basenameFromPath(source).toLowerCase();
+  const match = /\.([a-z0-9]+)$/.exec(fileName);
+  return match?.[1] || "";
+}
+
+function isOfficeVisibleArtifact(artifact: AgentArtifact) {
+  if (artifact.kind === "url" || artifact.kind === "image" || artifact.kind === "video" || artifact.kind === "audio" || artifact.kind === "directory") {
+    return true;
+  }
+  if (artifact.kind === "diff") return false;
+  const ext = artifactExtension(artifactPath(artifact) || artifact.title || "");
+  if (!ext) return true;
+  return !OFFICE_HIDDEN_IMPLEMENTATION_EXTENSIONS.has(ext);
+}
+
+function isOfficeImplementationArtifact(artifact: AgentArtifact) {
+  return !isOfficeVisibleArtifact(artifact);
+}
+
+function isMarkdownArtifact(artifact: AgentArtifact) {
+  return artifactExtension(artifactPath(artifact) || artifact.title || "") === "md";
+}
+
 function isArtifactFilePath(value: string) {
   const source = cleanArtifactCandidate(value);
   if (!source || /^https?:\/\//i.test(source) || /[{}]/.test(source)) return false;
@@ -557,18 +595,32 @@ type ImageArtifact = {
 
 function extractImageArtifacts(content: string) {
   const source = redactInternalPromptText(content || "");
-  const pattern = new RegExp(`(${ARTIFACT_PATH_PREFIX}[^\\\`\\r\\n<>]*?\\.(?:png|jpe?g|gif|webp|bmp|svg))(?:[)\\]'"\\\`,.;:!?]|$)`, "gi");
+  const scopedPattern = new RegExp(`(${ARTIFACT_PATH_PREFIX}[^\\\`\\r\\n<>]*?\\.(?:png|jpe?g|gif|webp|bmp|svg))(?:[\\s)\\]'"\\\`,.;:!?]|$)`, "gi");
+  const looseLocalPattern = /((?:[A-Za-z]:[\\/]|\\\\|\/)[^\s`<>]*?\.(?:png|jpe?g|gif|webp|bmp|svg))(?:[\s)\]'"`,.;:!?]|$)/gi;
   const items: ImageArtifact[] = [];
   const seen = new Set<string>();
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(source)) && items.length < 12) {
-    const raw = cleanArtifactCandidate(match[1] || "");
+  const add = (rawValue: string) => {
+    const raw = cleanArtifactCandidate(rawValue || "");
     const path = localPathFromSource(raw) || relativeArtifactPathFromSource(raw);
-    if (!path || seen.has(path)) continue;
+    if (!path || seen.has(path)) return;
     seen.add(path);
     items.push({ path, name: basenameFromPath(path) });
+  };
+  for (const pattern of [scopedPattern, looseLocalPattern]) {
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(source)) && items.length < 12) {
+      add(match[1] || "");
+    }
   }
   return items;
+}
+
+function imageArtifactsToLegacyArtifacts(artifacts: ImageArtifact[]): ArtifactItem[] {
+  return artifacts.map((artifact) => ({
+    path: artifact.path,
+    name: artifact.name,
+    fileType: "image"
+  }));
 }
 
 function ImageArtifactGrid({
@@ -629,7 +681,7 @@ function extractArtifacts(content: string, options?: { allowBareFiles?: boolean 
   }
 
   const filePattern = new RegExp(
-    `(${ARTIFACT_PATH_PREFIX}[^\\\`\\r\\n<>]*?\\.(${ARTIFACT_FILE_EXTENSIONS}))(?:[)\\]'"\\\`,.;:!?]|$)`,
+    `(${ARTIFACT_PATH_PREFIX}[^\\\`\\r\\n<>]*?\\.(${ARTIFACT_FILE_EXTENSIONS}))(?:[\\s)\\]'"\\\`,.;:!?]|$)`,
     "gi"
   );
   let fileMatch: RegExpExecArray | null;
@@ -739,7 +791,8 @@ function ArtifactShelf({
   localFileStat,
   onOpenLocalFile,
   onLocalFileContextMenu,
-  onArtifactFeedback
+  onArtifactFeedback,
+  onImageRetouchRequest
 }: {
   artifacts?: AgentArtifact[];
   legacyArtifacts?: ArtifactItem[];
@@ -749,6 +802,7 @@ function ArtifactShelf({
   onOpenLocalFile?: (file: LocalFilePayload) => void;
   onLocalFileContextMenu?: LocalFileContextHandler;
   onArtifactFeedback?: (artifact: AgentArtifact, validity: AgentArtifactValidity) => void | Promise<void>;
+  onImageRetouchRequest?: (artifact: AgentArtifact, meta: { source: string; previewUrl: string; title: string }) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [openMenu, setOpenMenu] = useState<{ id: string; x: number; y: number; width: number; height: number } | null>(null);
@@ -759,7 +813,19 @@ function ArtifactShelf({
   const statRetryTimers = useRef<Record<string, number>>({});
   const statusRetryCounts = useRef<Record<string, number>>({});
   const statusRetryTimers = useRef<Record<string, number>>({});
-  const rawItems = useMemo(() => mergeAgentArtifacts(artifacts, legacyArtifacts), [artifacts, legacyArtifacts]);
+  const [showImplementationFiles, setShowImplementationFiles] = useState(false);
+  const mergedItems = useMemo(
+    () => mergeAgentArtifacts(artifacts, legacyArtifacts),
+    [artifacts, legacyArtifacts]
+  );
+  const hiddenImplementationItems = useMemo(
+    () => mergedItems.filter(isOfficeImplementationArtifact),
+    [mergedItems]
+  );
+  const rawItems = useMemo(
+    () => showImplementationFiles ? mergedItems : mergedItems.filter(isOfficeVisibleArtifact),
+    [mergedItems, showImplementationFiles]
+  );
   const verificationItems = useMemo(
     () => expanded ? rawItems : rawItems.slice(0, ARTIFACT_PREVIEW_LIMIT),
     [expanded, rawItems]
@@ -901,9 +967,10 @@ function ArtifactShelf({
     if (statStatus === "ready" || statStatus === "preview") return true;
     if (statStatus === "pending") return true;
     if (statStatus === "missing" && String(artifact.status || "").toLowerCase() === "pending" && attempts < ARTIFACT_PENDING_MAX_RETRIES) return true;
+    if (artifact.kind === "image" && (artifact.previewUrl || artifact.thumbnailUrl || source)) return true;
     return !source;
   });
-  if (!items.length) return null;
+  if (!items.length && !hiddenImplementationItems.length) return null;
 
   const visibleArtifacts = expanded ? items : items.slice(0, 3);
   const hiddenCount = Math.max(items.length - visibleArtifacts.length, 0);
@@ -983,15 +1050,22 @@ function ArtifactShelf({
           const pendingRetryExhausted = artifactStatus === "pending"
             && statStatus === "missing"
             && (statRetryCounts.current[artifactKey] || 0) >= ARTIFACT_PENDING_MAX_RETRIES;
-          const availabilityStatus = artifactStatus === "failed"
+          const rawAvailabilityStatus = artifactStatus === "failed"
             ? "error"
             : artifactStatus === "pending" && (statStatus === "pending" || statStatus === "missing") && !pendingRetryExhausted
               ? "pending"
               : statStatus;
+          const imagePreviewFallback = artifact.kind === "image"
+            && Boolean(previewUrl)
+            && (rawAvailabilityStatus === "missing" || rawAvailabilityStatus === "error" || rawAvailabilityStatus === "denied");
+          const availabilityStatus = imagePreviewFallback ? "preview" : rawAvailabilityStatus;
           const availabilityText = artifactAvailabilityLabel(availabilityStatus);
-          const blocked = !artifactActionAllowed(availabilityStatus);
+          const openBlocked = !artifactActionAllowed(availabilityStatus);
+          const blocked = openBlocked && !(artifact.kind === "image" && availabilityStatus === "preview");
           const displayPreviewUrl = artifactPreviewAllowed(availabilityStatus) ? previewUrl : "";
           const isPreviewableImage = artifact.kind === "image" && Boolean(displayPreviewUrl);
+          const canRetouchImage = Boolean(onImageRetouchRequest && isPreviewableImage && source && !blocked);
+          const markdownArtifact = isMarkdownArtifact(artifact);
           const menuOpen = openMenu?.id === artifact.id;
           const menuStyle = openMenu && menuOpen ? artifactMenuStyle(openMenu) : undefined;
           const payload = source ? localFilePayloadFromArtifact(artifact, source, displayPreviewUrl || previewUrl) : null;
@@ -1023,7 +1097,7 @@ function ArtifactShelf({
                   {typeof artifact.stats.removedLines === "number" && <em className="is-removed">-{artifact.stats.removedLines}</em>}
                 </span>
               )}
-              <span className="artifact-row-actions">
+              <span className={`artifact-row-actions${markdownArtifact ? " is-pinned" : ""}`}>
                 {onArtifactFeedback && (
                   <>
                     <button
@@ -1055,7 +1129,18 @@ function ArtifactShelf({
                     <Eye aria-hidden="true" />
                   </button>
                 )}
-                <button type="button" className="artifact-icon-button" title="本地打开" aria-label={`本地打开 ${name}`} disabled={blocked} onClick={() => void runAction(artifact, "open")}>
+                {canRetouchImage && (
+                  <button
+                    type="button"
+                    className="artifact-icon-button"
+                    title="精准修图"
+                    aria-label={`精准修图 ${name}`}
+                    onClick={() => onImageRetouchRequest?.(artifact, { source, previewUrl: displayPreviewUrl || previewUrl, title: name })}
+                  >
+                    <Sparkles aria-hidden="true" />
+                  </button>
+                )}
+                <button type="button" className="artifact-icon-button" title={markdownArtifact ? "本地打开 Markdown" : "本地打开"} aria-label={`本地打开 ${name}`} disabled={openBlocked} onClick={() => void runAction(artifact, "open")}>
                   <MonitorUp aria-hidden="true" />
                 </button>
                 <span className="artifact-menu-wrap">
@@ -1081,9 +1166,9 @@ function ArtifactShelf({
                   </button>
                   {menuOpen && menuStyle && createPortal(
                     <span ref={openMenuElementRef} className="artifact-action-menu artifact-action-menu-portal" role="menu" style={menuStyle} onMouseDown={(event) => event.stopPropagation()}>
-                      <button type="button" role="menuitem" disabled={blocked} onClick={() => void runAction(artifact, "open")}>本地打开</button>
-                      <button type="button" role="menuitem" disabled={blocked} onClick={() => void runAction(artifact, "reveal")}>在文件夹中显示</button>
-                      <button type="button" role="menuitem" disabled={blocked} onClick={() => void runAction(artifact, "openWith")}>选择应用打开</button>
+                      <button type="button" role="menuitem" disabled={openBlocked} onClick={() => void runAction(artifact, "open")}>本地打开</button>
+                      <button type="button" role="menuitem" disabled={openBlocked} onClick={() => void runAction(artifact, "reveal")}>在文件夹中显示</button>
+                      <button type="button" role="menuitem" disabled={openBlocked} onClick={() => void runAction(artifact, "openWith")}>选择应用打开</button>
                       <button type="button" role="menuitem" onClick={() => void runAction(artifact, "copy")}>复制路径</button>
                     </span>,
                     document.body
@@ -1094,11 +1179,18 @@ function ArtifactShelf({
           );
         })}
       </div>
-      {items.length > 3 && (
-        <button className="artifact-grid-toggle" type="button" onClick={() => setExpanded((current) => !current)}>
-          {expanded ? "收起产物" : `显示另外 ${hiddenCount} 个`}
-        </button>
-      )}
+      <div className="artifact-shelf-footer">
+        {items.length > 3 && (
+          <button className="artifact-grid-toggle" type="button" onClick={() => setExpanded((current) => !current)}>
+            {expanded ? "收起产物" : `显示另外 ${hiddenCount} 个`}
+          </button>
+        )}
+        {hiddenImplementationItems.length > 0 && (
+          <button className="artifact-grid-toggle is-muted" type="button" onClick={() => setShowImplementationFiles((current) => !current)}>
+            {showImplementationFiles ? "隐藏实现文件" : `显示实现文件 ${hiddenImplementationItems.length} 个`}
+          </button>
+        )}
+      </div>
     </section>
   );
 }
@@ -1909,13 +2001,48 @@ function StreamingMarkdownBlock({
   );
 }
 
+type StepVisualKind = "thinking" | "search" | "tool" | "artifact" | "phase";
+
+function stepVisualKindFromText(text?: string): StepVisualKind {
+  const value = String(text || "").toLowerCase();
+  if (/(search|web_search|web fetch|browser|browse|联网|搜索|检索|查找|浏览器|网页)/i.test(value)) return "search";
+  if (/(image|artifact|media|file|生成产物|产物|图片|图像|保存|文件|导出)/i.test(value)) return "artifact";
+  if (/(tool|bash|shell|mcp|skill|call|execute|工具|调用|执行|命令)/i.test(value)) return "tool";
+  if (/(think|reason|推理|思考|分析)/i.test(value)) return "thinking";
+  return "phase";
+}
+
+function toolStepVisualKind(step: ToolCallDisclosure): StepVisualKind {
+  const name = String(step.name || "").toLowerCase();
+  if (/(search|fetch|browser|chrome|web)/.test(name)) return "search";
+  if (/(image|artifact|media|file|office|pdf|slides|sheet)/.test(name)) return "artifact";
+  return "tool";
+}
+
+function StepIcon({ kind, running = false }: { kind: StepVisualKind; running?: boolean }) {
+  const icon = kind === "thinking"
+    ? <Brain aria-hidden="true" />
+    : kind === "search"
+      ? <Search aria-hidden="true" />
+      : kind === "artifact"
+        ? <Sparkles aria-hidden="true" />
+        : kind === "tool"
+          ? <Wrench aria-hidden="true" />
+          : <CircleCheck aria-hidden="true" />;
+  return (
+    <span className={`agent-step-icon is-${kind}${running ? " is-running" : ""}`} aria-hidden="true">
+      {icon}
+    </span>
+  );
+}
+
 function ThinkingStep({ content = "", running }: { content?: string; running?: boolean }) {
   const trimmed = redactInternalPromptText(content).trim();
   const shown = truncateReasoning(trimmed);
   return (
     <details className={`agent-step agent-thinking-step${running ? " is-running" : ""}`}>
       <summary title={running ? "EcoreX 正在推理，完成后可展开查看思考摘要" : "展开查看本轮思考摘要"}>
-        <span className="thinking-ring" aria-hidden="true" />
+        <StepIcon kind="thinking" running={running} />
         <span>{running ? "思考中" : "思考完成"}</span>
       </summary>
       <div className="thinking-full">
@@ -1931,8 +2058,8 @@ function ToolStep({ step }: { step: ToolCallDisclosure }) {
   const isError = !isInterrupted && (step.is_error === true || step.status === "error" || step.status === "failed" || step.status === "timeout");
   const running = step.running === true || step.status === "running";
   const extensionCount = typeof step.extension_count === "number" ? step.extension_count : 0;
-  const statusClass = running ? " is-running" : isInterrupted ? " is-cancelled" : isError ? " is-error" : " is-done";
   const qualityEvidence = step.qualityEvidence || qualityEvidenceFromUnknown(step.result);
+  const visualKind = toolStepVisualKind(step);
   return (
     <details
       className={`agent-step agent-tool-step${isError ? " tool-failed" : ""}${isInterrupted ? " tool-cancelled" : ""}`}
@@ -1940,7 +2067,7 @@ function ToolStep({ step }: { step: ToolCallDisclosure }) {
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
       <summary title={running ? "工具正在执行，完成后可查看输入和结果" : isInterrupted ? "工具调用已中止，可展开查看已返回的信息" : "展开查看工具输入和结果"}>
-        <span className={`tool-status-dot${statusClass}`} aria-hidden="true" />
+        <StepIcon kind={visualKind} running={running} />
         <span className="tool-name">{step.name || "工具调用"}</span>
         {typeof step.execution_time === "number" && <span className="tool-time">{step.execution_time}s</span>}
         {running && extensionCount > 0 && <span className="tool-time">lease x{extensionCount}</span>}
@@ -2028,6 +2155,16 @@ function compactToolSteps(steps: AgentStepDisclosure[]) {
   });
 }
 
+function PhaseStep({ content = "" }: { content?: string }) {
+  const safeContent = redactInternalPromptText(content || "");
+  return (
+    <div className="agent-step agent-phase-step ecorex-activity-status">
+      <StepIcon kind={stepVisualKindFromText(safeContent)} running />
+      <span>{safeContent}</span>
+    </div>
+  );
+}
+
 function renderStep(
   step: AgentStepDisclosure,
   index: number,
@@ -2045,9 +2182,16 @@ function renderStep(
     );
   }
   if (step.type === "phase") {
-    return <div className="agent-step agent-phase-step ecorex-activity-status" key={index}>{redactInternalPromptText(step.content || "")}</div>;
+    return <PhaseStep key={index} content={step.content} />;
   }
-  return <MediaStep key={index} step={step} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} localFilePreviewUrl={localFilePreviewUrl} />;
+  return (
+    <div className="agent-step agent-media-step" key={index}>
+      <StepIcon kind="artifact" />
+      <div className="agent-media-step-body">
+        <MediaStep step={step} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} localFilePreviewUrl={localFilePreviewUrl} />
+      </div>
+    </div>
+  );
 }
 
 function stepIsRunning(step: AgentStepDisclosure) {
@@ -2132,7 +2276,7 @@ function splitSteps(steps: AgentStepDisclosure[], content: string) {
   return { mainContent, visibleSteps };
 }
 
-function MainAnswer({ content, pending, collapsible, artifacts = [], extraArtifacts = [], localFilePreviewUrl, localFileJson, localFileStat, onOpenLocalFile, onLocalFileContextMenu, onArtifactFeedback }: {
+function MainAnswer({ content, pending, collapsible, artifacts = [], extraArtifacts = [], localFilePreviewUrl, localFileJson, localFileStat, onOpenLocalFile, onLocalFileContextMenu, onArtifactFeedback, onImageRetouchRequest }: {
   content: string;
   pending?: boolean;
   collapsible?: boolean;
@@ -2144,13 +2288,21 @@ function MainAnswer({ content, pending, collapsible, artifacts = [], extraArtifa
   onOpenLocalFile?: (file: LocalFilePayload) => void;
   onLocalFileContextMenu?: LocalFileContextHandler;
   onArtifactFeedback?: (artifact: AgentArtifact, validity: AgentArtifactValidity) => void | Promise<void>;
+  onImageRetouchRequest?: (artifact: AgentArtifact, meta: { source: string; previewUrl: string; title: string }) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const legacyArtifacts = useMemo(
-    () => pending ? mergeArtifacts(extraArtifacts) : mergeArtifacts(extractArtifacts(content, { allowBareFiles: false }), extraArtifacts),
+    () => {
+      if (pending) return mergeArtifacts(extraArtifacts);
+      return mergeArtifacts(
+        extractArtifacts(content, { allowBareFiles: false }),
+        imageArtifactsToLegacyArtifacts(extractImageArtifacts(content)),
+        extraArtifacts
+      );
+    },
     [content, pending, extraArtifacts]
   );
-  const artifactShelf = <ArtifactShelf artifacts={artifacts} legacyArtifacts={legacyArtifacts} localFilePreviewUrl={localFilePreviewUrl} localFileJson={localFileJson} localFileStat={localFileStat} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} onArtifactFeedback={onArtifactFeedback} />;
+  const artifactShelf = <ArtifactShelf artifacts={artifacts} legacyArtifacts={legacyArtifacts} localFilePreviewUrl={localFilePreviewUrl} localFileJson={localFileJson} localFileStat={localFileStat} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} onArtifactFeedback={onArtifactFeedback} onImageRetouchRequest={onImageRetouchRequest} />;
   if (!content) return artifactShelf;
   if (!collapsible || pending || content.length <= LONG_REPLY_COLLAPSE_CHARS) {
     return (
@@ -2210,6 +2362,7 @@ export const MessageContent = memo(function MessageContent(props: {
   localFileJson?: (filePath: string) => Promise<LocalJsonResult>;
   localFileStat?: (filePath: string) => Promise<LocalPathStat>;
   onArtifactFeedback?: (artifact: AgentArtifact, validity: AgentArtifactValidity) => void | Promise<void>;
+  onImageRetouchRequest?: (artifact: AgentArtifact, meta: { source: string; previewUrl: string; title: string }) => void;
 }) {
   const steps = props.steps || [];
   const visibleContent = useThrottledStreamingContent(props.content, props.pending);
@@ -2237,7 +2390,7 @@ export const MessageContent = memo(function MessageContent(props: {
         onLocalFileContextMenu={props.onLocalFileContextMenu}
         localFilePreviewUrl={props.localFilePreviewUrl}
       />
-      <MainAnswer content={mainContent} pending={props.pending} collapsible={props.role !== "user"} artifacts={props.artifacts} extraArtifacts={stepArtifacts} localFilePreviewUrl={props.localFilePreviewUrl} localFileJson={props.localFileJson} localFileStat={props.localFileStat} onOpenLocalFile={props.onOpenLocalFile} onLocalFileContextMenu={props.onLocalFileContextMenu} onArtifactFeedback={props.onArtifactFeedback} />
+      <MainAnswer content={mainContent} pending={props.pending} collapsible={props.role !== "user"} artifacts={props.artifacts} extraArtifacts={stepArtifacts} localFilePreviewUrl={props.localFilePreviewUrl} localFileJson={props.localFileJson} localFileStat={props.localFileStat} onOpenLocalFile={props.onOpenLocalFile} onLocalFileContextMenu={props.onLocalFileContextMenu} onArtifactFeedback={props.onArtifactFeedback} onImageRetouchRequest={props.onImageRetouchRequest} />
       {props.cancelled ? (
         <div className="agent-cancelled-tag">已中止</div>
       ) : props.pending ? (

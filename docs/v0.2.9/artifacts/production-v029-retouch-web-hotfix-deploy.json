@@ -1,0 +1,965 @@
+{
+  "commands": [
+    {
+      "argvHash": "FDAADBF4C3CAC267304693ABBDD5B6C75ACF03FF7D58389B48F903284C602CBF",
+      "exitCode": 0,
+      "name": "inspect_current_targets",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "/opt/ecorex-web/releases/20260705001635-v0.2.9\n/srv/ecorex-agent-admin/app\n/srv/ecorex-agent-usage-panel/releases/20260705003507-v0.2.9-audit-panel\n",
+      "stdoutHash": "F539647B69BDF9969C460B7EA7A46DD3A90B1DFADC37B2478D453A5FE5004A3A"
+    },
+    {
+      "argvHash": "5F797CB2841655CCD69F4665B73D578767EDF8EB9ACF090512E67107E6C1ACA3",
+      "exitCode": 0,
+      "name": "mkdir_3AF9E5FA",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "DB19018873EA2AC1AA30B0E3621F8B91EBECD13AF4CFC9E6D67F53583B75AB84",
+      "exitCode": 0,
+      "name": "backup_web_channel.py",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "422BD2A1A67B96F8CE02149107648E7B0F6A2CDA6CE9671AFAA265E3869E8C26",
+      "exitCode": 0,
+      "name": "publish_web_channel.py",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "5F797CB2841655CCD69F4665B73D578767EDF8EB9ACF090512E67107E6C1ACA3",
+      "exitCode": 0,
+      "name": "mkdir_3AF9E5FA",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "0AB287ED1A02CFEACE8F034F5E77160A0178E6F664A690D06C2ED7F567D3C29B",
+      "exitCode": 0,
+      "name": "backup_auth.py",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "2A991B6B25D28EBFF233ADACD41BC84AA2A41F834D1C269CBAD452A60C69860E",
+      "exitCode": 0,
+      "name": "publish_auth.py",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "5F797CB2841655CCD69F4665B73D578767EDF8EB9ACF090512E67107E6C1ACA3",
+      "exitCode": 0,
+      "name": "mkdir_3AF9E5FA",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "C3ACB7A626CF9843CD2B7CCFF7A4DC131A729A31C4C21E2BA014FC979FB79B13",
+      "exitCode": 0,
+      "name": "backup_image_jobs.py",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "980A7E44FFC555A03C1BAC2CEFEDBDA59D7D5A821DFACC5AD0702053B6A16507",
+      "exitCode": 0,
+      "name": "publish_image_jobs.py",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "5F797CB2841655CCD69F4665B73D578767EDF8EB9ACF090512E67107E6C1ACA3",
+      "exitCode": 0,
+      "name": "mkdir_3AF9E5FA",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "5A0EDD3CDE44356467FD2CB3AF19C48C7EE79041C56A31EC89D613CA3662CF28",
+      "exitCode": 0,
+      "name": "backup_routes.py",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "7D4FF89F18403BC0CDC045B923FBAAB9630212FB22C86D00685E7784B495B68F",
+      "exitCode": 0,
+      "name": "publish_routes.py",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "5F797CB2841655CCD69F4665B73D578767EDF8EB9ACF090512E67107E6C1ACA3",
+      "exitCode": 0,
+      "name": "mkdir_3AF9E5FA",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "B8070A10C5A19F24F4C2AD548CAF89E1BF70BF871C7FF51A569AF25CAA29712B",
+      "exitCode": 0,
+      "name": "backup_chat.html",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "BC16A3A059BC20DDC79BD4AE0F1F24A2C61F2DAFF1F13F0556CADBDD998B9C6F",
+      "exitCode": 0,
+      "name": "publish_chat.html",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "A69B73C79267742035496894C9CD8A791E46E8BE978D787ED728A452795774E9",
+      "exitCode": 0,
+      "name": "mkdir_125EAB54",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "B9160319D495224224EE681C284C2315B78C5C23F63925842AD3A6C4BB2AFBB1",
+      "exitCode": 0,
+      "name": "backup_console.js",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "DB8F584CC522B519910BC4DDC21B6750C7B951C2B3AAD9829308A5414534A808",
+      "exitCode": 0,
+      "name": "publish_console.js",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "03CBA8C8C7C7F40998DD5CE6DA73FB0A26C8900BF0E2942637A79066FC1D0D05",
+      "exitCode": 0,
+      "name": "mkdir_2D71BACE",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "E029900186B613EE25009011243C80257A8D6354D085A151AB6378F26CD72075",
+      "exitCode": 0,
+      "name": "backup_console.css",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "234B64C0CE680907C1405A08EBB37ACFAEA0259790FE8A0C4347D71ABF76C0F4",
+      "exitCode": 0,
+      "name": "publish_console.css",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "F7BCA7F2CF0C6B943A8E4512ED87666BCB194B509F176C35F1D20B5C4C0A7B55",
+      "exitCode": 0,
+      "name": "mkdir_42FAA76F",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "8306E88A28A022D47342064AF3B686D0B3962CE0FD10CEABD51C98CF951ABD23",
+      "exitCode": 0,
+      "name": "backup_tencent-docs.png",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "FCA45758CDCC4140337FAC6B6890E017EDBBE22B1A244E0BD4E8003D65B0D8F4",
+      "exitCode": 0,
+      "name": "publish_tencent-docs.png",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "1801B06E3337BA27C73A875752DEE7E7EA42FC42AD6304F620C4B480FF89C3AF",
+      "exitCode": 0,
+      "name": "mkdir_02D5BAED",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "842DDA31AD5F4BEE88B61BA46624487612861A3DFBD910780D5D9CBE72C118EA",
+      "exitCode": 0,
+      "name": "backup_index.html",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "F80633728402C4296970FC27F1019500BC6DC63021FAAE0E3890CDB455A5ABB6",
+      "exitCode": 0,
+      "name": "publish_index.html",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "0A697B6F151F035A8A5CE1188E7FDAEEC13B3624FCD8DBD51874331A7CE61B52",
+      "exitCode": 0,
+      "name": "mkdir_575E1351",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "B2E4162B4CD4A4FE5A757675A28DE4B430A1F41D5C01FAAC1A6A517EE5947E34",
+      "exitCode": 0,
+      "name": "backup_index-CfNm2sqZ.js",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "27C3BEF8DC249823ED0FC29C7AE3AA1C2AD130BDFD70C3B14DF4B9CE39E27AA4",
+      "exitCode": 0,
+      "name": "publish_index-CfNm2sqZ.js",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "0A697B6F151F035A8A5CE1188E7FDAEEC13B3624FCD8DBD51874331A7CE61B52",
+      "exitCode": 0,
+      "name": "mkdir_575E1351",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "E0332F88CD22C12193280DAA8D26A640AAB5109B4FBC0349607C95BD619DAFA7",
+      "exitCode": 0,
+      "name": "backup_index-DL97OYvU.css",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "3F78C768916CC9105669A880D9AE2B6A022F42C4B80722F01FF94CFC2B4754C6",
+      "exitCode": 0,
+      "name": "publish_index-DL97OYvU.css",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "0A697B6F151F035A8A5CE1188E7FDAEEC13B3624FCD8DBD51874331A7CE61B52",
+      "exitCode": 0,
+      "name": "mkdir_575E1351",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "13AD342C3C808367D52ECE450580C4A808BEA776188FFF635BAE4AADF03714FD",
+      "exitCode": 0,
+      "name": "backup_icon-CtIderUP.png",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "94347259CC56C739E8A0B5C1B6116DCC04D796EC461BDDE8FE2FEEA1C019E28D",
+      "exitCode": 0,
+      "name": "publish_icon-CtIderUP.png",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "0A697B6F151F035A8A5CE1188E7FDAEEC13B3624FCD8DBD51874331A7CE61B52",
+      "exitCode": 0,
+      "name": "mkdir_575E1351",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "CB7F90D6FA3F50EE6F3B04D23EAECD1C3C71B18DB09B85B9558779E9E737EAE4",
+      "exitCode": 0,
+      "name": "backup_ecorex-v029-overlay.js",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "761FE7F2B4EA471475535CF84EDC1843E2C7F329B0E5044F657E4CA5EF888FFE",
+      "exitCode": 0,
+      "name": "publish_ecorex-v029-overlay.js",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "0A697B6F151F035A8A5CE1188E7FDAEEC13B3624FCD8DBD51874331A7CE61B52",
+      "exitCode": 0,
+      "name": "mkdir_575E1351",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "939D618827F71BACDD9684894BE721444894EB8DE28F128FFB208C76FFA9311A",
+      "exitCode": 0,
+      "name": "backup_ecorex-v029-overlay.css",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "D115AB9810B7428FA765E4A2469510BFF331053A620D77EB3EBFC9F005BC4CCA",
+      "exitCode": 0,
+      "name": "publish_ecorex-v029-overlay.css",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "A6E827FDDE2E646E712CFCBC2AF8CACBA1AC2F2CA9FDEA1FF458114432F5979A",
+      "exitCode": 0,
+      "name": "mkdir_01B6E3CC",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "47C4E0CAC799760504DC9F8FAA911C8D99E44F1DE63AF9B5076870E3015311C1",
+      "exitCode": 0,
+      "name": "backup_tencent-docs.png",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "B5B3B92AF5B5CBBFA14B41A9212AF47BD3EAE399C373822BA9A4987E97FAA276",
+      "exitCode": 0,
+      "name": "publish_tencent-docs.png",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "4F799D4F6B6809D4A690A895A857C01F9D23F067FD7312EF781FF821F9174CE5",
+      "exitCode": 0,
+      "name": "mkdir_92093EFD",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "E4524D0C1CFD1D606A1115D89B9D52B65B691B78DF44846D658840322524EC5F",
+      "exitCode": 0,
+      "name": "backup_ecorex_admin_api.py",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "5A54C0EFB988CCD1048D0D635705ED43544AA5645244C2917C4FB1F01C81B0FF",
+      "exitCode": 0,
+      "name": "publish_ecorex_admin_api.py",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "4A96B0E6B0ED2C04C80DD721135C1D93C6C4D37BA4BC8BE5D5A54EDDBF4B1B4B",
+      "exitCode": 0,
+      "name": "usage_prepare",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "EEA986523840514E0600E1A79EB47C312255FF008A5C7CFE9080D2868B60DCB7",
+      "exitCode": 0,
+      "name": "mkdir_93F17CEC",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "1BB9237002415D9DFFA4256BCE56CD3D7EC710D9BEBF528DCB44891F577E6986",
+      "exitCode": 0,
+      "name": "publish_index.html",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "EEA986523840514E0600E1A79EB47C312255FF008A5C7CFE9080D2868B60DCB7",
+      "exitCode": 0,
+      "name": "mkdir_93F17CEC",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "A8424F833CF769377BFD94FA74E0348AC4127B6DA9DA2EDEDF8436943E931E1E",
+      "exitCode": 0,
+      "name": "publish_styles.css",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "EEA986523840514E0600E1A79EB47C312255FF008A5C7CFE9080D2868B60DCB7",
+      "exitCode": 0,
+      "name": "mkdir_93F17CEC",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "ABE9391002A6119CE7CBA5711190139C4F7CB09C3388C318D541091E9291C833",
+      "exitCode": 0,
+      "name": "publish_app.js",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "EEA986523840514E0600E1A79EB47C312255FF008A5C7CFE9080D2868B60DCB7",
+      "exitCode": 0,
+      "name": "mkdir_93F17CEC",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "9362F57819F64C96160BBAB9E549E439E29EFC058A95FF3CF8532CA99398AE5B",
+      "exitCode": 0,
+      "name": "publish_data.js",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "EEA986523840514E0600E1A79EB47C312255FF008A5C7CFE9080D2868B60DCB7",
+      "exitCode": 0,
+      "name": "mkdir_93F17CEC",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "81CA1A7D265D5673F31EB02EB0880380FFDB5F770076425F8AE584EDDE1BAE52",
+      "exitCode": 0,
+      "name": "publish_usage_panel_api.py",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "4E423A93A05176D05EA89AF1CB3B990353C448166B20C2EE37707DD5865BA0E8",
+      "exitCode": 0,
+      "name": "usage_activate",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "7C6CFBF6ECDB0A89D608442F5650762CDBDF5526C86B9FE47D0E781C4B81B868",
+      "exitCode": 0,
+      "name": "remote_py_compile",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "D846E177358CA704A71898E575781DB9DC06718A343409C7F4EF19413CC17DB4",
+      "exitCode": 0,
+      "name": "restart_services",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "E9D65C3ED1BB1F7DBE94BEDD3719E4A48579B246A0C1F4E83788A8CF5F1DF203",
+      "exitCode": 0,
+      "name": "postdeploy_probe",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "{\"markers\": {\"tencentLogo\": {\"exists\": true, \"hasNewBundleRef\": false, \"hasRetouch\": false, \"hasV029Audit\": false, \"size\": 1584}, \"usageApp\": {\"exists\": true, \"hasNewBundleRef\": false, \"hasRetouch\": false, \"hasV029Audit\": true, \"size\": 85441}, \"usageIndex\": {\"exists\": true, \"hasNewBundleRef\": false, \"hasRetouch\": false, \"hasV029Audit\": true, \"size\": 7567}, \"webBundle\": {\"exists\": true, \"hasNewBundleRef\": true, \"hasRetouch\": true, \"hasV029Audit\": false, \"size\": 627025}, \"webCss\": {\"exists\": true, \"hasNewBundleRef\": true, \"hasRetouch\": true, \"hasV029Audit\": false, \"size\": 98379}, \"webIndex\": {\"exists\": true, \"hasNewBundleRef\": true, \"hasRetouch\": false, \"hasV029Audit\": false, \"size\": 920}}, \"publicUsageUnauthStatus\": 401, \"services\": {\"ecorex-admin-api\": \"active\", \"ecorex-usage-panel-api\": \"active\", \"ecorex-web\": \"active\"}, \"usageAuditHasFields\": false, \"usageAuditStatus\": 500, \"usageHealthStatus\": 200, \"webAppNewBundle\": false, \"webAppStatus\": 0, \"webVersionHas029\": false, \"webVersionStatus\": 0}\n",
+      "stdoutHash": "C9B452533C3803C76ECBE4BA78C9F88D99D22E3031D16A31ADC9637A33F1D21C"
+    },
+    {
+      "argvHash": "774DD18E4339AA686660F1D4E7FF2D59821AB78347FE453F9C8BAC8D51D88D61",
+      "exitCode": 0,
+      "name": "mkdir_6D69CA98",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "210A153A500EC5FADE08102516880160ACDF1D752CE9333D61860FC921511D9A",
+      "exitCode": 0,
+      "name": "backup_usage_panel_api.py",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "EC8E9898D203BBAC351AC4B2460D5BA95478433EB31BA53046B2E6609352C069",
+      "exitCode": 0,
+      "name": "publish_usage_panel_api.py",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "A755FB24EDC7B0CA7BA62BFCCF8FAB6CDE95541096032BEC80027D3221FE027C",
+      "exitCode": 0,
+      "name": "mkdir_1F5BBEFB",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "309BA45C47D0441F54794511788631CA583D335017F50D69F9B65B43C8F08880",
+      "exitCode": 0,
+      "name": "backup_usage_panel_api.py",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "9ADB720F47D3155743B3E954339346344A33D3549A2E900EE976C92B147A805D",
+      "exitCode": 0,
+      "name": "publish_usage_panel_api.py",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "3DA75D6591E30F4BEDC2BF6F410154B0B863EF56F6ED43C686D6C783CE180F11",
+      "exitCode": 0,
+      "name": "usage_py_compile",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "0BCD82CFD43263F85C18A512C701FD90B80D5F559F196DA09CC381FBD9D349EA",
+      "exitCode": 0,
+      "name": "restart_usage_panel",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "E9D65C3ED1BB1F7DBE94BEDD3719E4A48579B246A0C1F4E83788A8CF5F1DF203",
+      "exitCode": 0,
+      "name": "postdeploy_probe_after_usage_fix",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "{\"markers\": {\"tencentLogo\": {\"exists\": true, \"hasNewBundleRef\": false, \"hasRetouch\": false, \"hasV029Audit\": false, \"size\": 1584}, \"usageApp\": {\"exists\": true, \"hasNewBundleRef\": false, \"hasRetouch\": false, \"hasV029Audit\": true, \"size\": 85441}, \"usageIndex\": {\"exists\": true, \"hasNewBundleRef\": false, \"hasRetouch\": false, \"hasV029Audit\": true, \"size\": 7567}, \"webBundle\": {\"exists\": true, \"hasNewBundleRef\": true, \"hasRetouch\": true, \"hasV029Audit\": false, \"size\": 627025}, \"webCss\": {\"exists\": true, \"hasNewBundleRef\": true, \"hasRetouch\": true, \"hasV029Audit\": false, \"size\": 98379}, \"webIndex\": {\"exists\": true, \"hasNewBundleRef\": true, \"hasRetouch\": false, \"hasV029Audit\": false, \"size\": 920}}, \"publicUsageUnauthStatus\": 401, \"services\": {\"ecorex-admin-api\": \"active\", \"ecorex-usage-panel-api\": \"active\", \"ecorex-web\": \"active\"}, \"usageAuditHasFields\": true, \"usageAuditStatus\": 200, \"usageHealthStatus\": 200, \"webAppNewBundle\": false, \"webAppStatus\": 200, \"webVersionHas029\": true, \"webVersionStatus\": 200}\n",
+      "stdoutHash": "41627D3BDC778A58F09FB69FC45E9EC96A5FF2F0CA01248B2413D10A8FFF01B6"
+    },
+    {
+      "name": "postdeploy_probe_corrected",
+      "argvHash": "AE058B15084CAAE147779C814A5F5608C8545FFB1427098A30C5D620160BCB37",
+      "exitCode": 0,
+      "stdoutHash": "5EDF4D4E5A2F74417D02424CDB81E0CC2D765A41F3AA4969250D4A1FFADD6558",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "{\"checks\": {\"publicUsageProtected\": true, \"publicWebBundleServed\": true, \"remoteMarkers\": true, \"servicesActive\": true, \"usageAudit\": false, \"usageHealth\": false, \"webAppServed\": true, \"webBundleServed\": true, \"webCssServed\": true, \"webVersion029\": true}, \"markers\": {\"tencentLogo\": {\"exists\": true, \"hasNewBundleRef\": false, \"hasRetouch\": false, \"hasV029Audit\": false, \"size\": 1584}, \"usageApp\": {\"exists\": true, \"hasNewBundleRef\": false, \"hasRetouch\": false, \"hasV029Audit\": true, \"size\": 85441}, \"usageIndex\": {\"exists\": true, \"hasNewBundleRef\": false, \"hasRetouch\": false, \"hasV029Audit\": true, \"size\": 7567}, \"webBundle\": {\"exists\": true, \"hasNewBundleRef\": false, \"hasRetouch\": true, \"hasV029Audit\": false, \"size\": 627025}, \"webCss\": {\"exists\": true, \"hasNewBundleRef\": false, \"hasRetouch\": true, \"hasV029Audit\": false, \"size\": 98379}, \"webIndex\": {\"exists\": true, \"hasNewBundleRef\": true, \"hasRetouch\": false, \"hasV029Audit\": false, \"size\": 920}}, \"publicUsageUnauthStatus\": 401, \"publicWebBundleHasRetouch\": true, \"publicWebBundleStatus\": 200, \"services\": {\"ecorex-admin-api\": \"active\", \"ecorex-usage-panel-api\": \"active\", \"ecorex-web\": \"active\"}, \"status\": \"FAIL\", \"usageAuditHasFields\": false, \"usageAuditStatus\": 404, \"usageHealthStatus\": 404, \"webAppNewBundle\": true, \"webAppStatus\": 200, \"webBundleHasRetouch\": true, \"webBundleStatus\": 200, \"webCssHasRetouch\": true, \"webCssStatus\": 200, \"webVersionHas029\": true, \"webVersionStatus\": 200}\n",
+      "stderrExcerptRedacted": ""
+    },
+    {
+      "name": "postdeploy_probe_corrected_usage_18105",
+      "argvHash": "F3C5A347C31C8C961820E50F306BCB63386F1BD1B0D2DB628823A93B1E884A6B",
+      "exitCode": 0,
+      "stdoutHash": "8C1D18B5F9805A1714D61B311FCAD163C007FD6AE05DDCFFDEE0347E8A3122AC",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "{\"checks\": {\"publicUsageProtected\": true, \"publicWebBundleServed\": true, \"remoteMarkers\": true, \"servicesActive\": true, \"usageAudit\": true, \"usageHealth\": true, \"webAppServed\": true, \"webBundleServed\": true, \"webCssServed\": true, \"webVersion029\": true}, \"markers\": {\"tencentLogo\": {\"exists\": true, \"hasNewBundleRef\": false, \"hasRetouch\": false, \"hasV029Audit\": false, \"size\": 1584}, \"usageApp\": {\"exists\": true, \"hasNewBundleRef\": false, \"hasRetouch\": false, \"hasV029Audit\": true, \"size\": 85441}, \"usageIndex\": {\"exists\": true, \"hasNewBundleRef\": false, \"hasRetouch\": false, \"hasV029Audit\": true, \"size\": 7567}, \"webBundle\": {\"exists\": true, \"hasNewBundleRef\": false, \"hasRetouch\": true, \"hasV029Audit\": false, \"size\": 627025}, \"webCss\": {\"exists\": true, \"hasNewBundleRef\": false, \"hasRetouch\": true, \"hasV029Audit\": false, \"size\": 98379}, \"webIndex\": {\"exists\": true, \"hasNewBundleRef\": true, \"hasRetouch\": false, \"hasV029Audit\": false, \"size\": 920}}, \"publicUsageUnauthStatus\": 401, \"publicWebBundleHasRetouch\": true, \"publicWebBundleStatus\": 200, \"services\": {\"ecorex-admin-api\": \"active\", \"ecorex-usage-panel-api\": \"active\", \"ecorex-web\": \"active\"}, \"status\": \"PASS\", \"usageAuditHasFields\": true, \"usageAuditStatus\": 200, \"usageHealthStatus\": 200, \"usagePort\": 18105, \"usageSummary\": {\"effectiveArtifacts\": 744, \"events\": 12246, \"feedbackTraceCount\": 0, \"imageProcessingActions\": 109, \"userActions\": 11442}, \"webAppNewBundle\": true, \"webAppStatus\": 200, \"webBundleHasRetouch\": true, \"webBundleStatus\": 200, \"webCssHasRetouch\": true, \"webCssStatus\": 200, \"webVersionHas029\": true, \"webVersionStatus\": 200}\n",
+      "stderrExcerptRedacted": ""
+    }
+  ],
+  "generatedAt": "2026-07-05T04:13:37.666978+00:00",
+  "redaction": {
+    "rawOutputPersisted": false,
+    "rawPasswordPersisted": false,
+    "rawSecretPersisted": false,
+    "rawTargetPersisted": false
+  },
+  "scope": "production-v029-retouch-web-hotfix-deploy",
+  "status": "PASS",
+  "summary": {
+    "probe": {
+      "checks": {
+        "publicUsageProtected": true,
+        "publicWebBundleServed": true,
+        "remoteMarkers": true,
+        "servicesActive": true,
+        "usageAudit": true,
+        "usageHealth": true,
+        "webAppServed": true,
+        "webBundleServed": true,
+        "webCssServed": true,
+        "webVersion029": true
+      },
+      "markers": {
+        "tencentLogo": {
+          "exists": true,
+          "hasNewBundleRef": false,
+          "hasRetouch": false,
+          "hasV029Audit": false,
+          "size": 1584
+        },
+        "usageApp": {
+          "exists": true,
+          "hasNewBundleRef": false,
+          "hasRetouch": false,
+          "hasV029Audit": true,
+          "size": 85441
+        },
+        "usageIndex": {
+          "exists": true,
+          "hasNewBundleRef": false,
+          "hasRetouch": false,
+          "hasV029Audit": true,
+          "size": 7567
+        },
+        "webBundle": {
+          "exists": true,
+          "hasNewBundleRef": false,
+          "hasRetouch": true,
+          "hasV029Audit": false,
+          "size": 627025
+        },
+        "webCss": {
+          "exists": true,
+          "hasNewBundleRef": false,
+          "hasRetouch": true,
+          "hasV029Audit": false,
+          "size": 98379
+        },
+        "webIndex": {
+          "exists": true,
+          "hasNewBundleRef": true,
+          "hasRetouch": false,
+          "hasV029Audit": false,
+          "size": 920
+        }
+      },
+      "publicUsageUnauthStatus": 401,
+      "publicWebBundleHasRetouch": true,
+      "publicWebBundleStatus": 200,
+      "services": {
+        "ecorex-admin-api": "active",
+        "ecorex-usage-panel-api": "active",
+        "ecorex-web": "active"
+      },
+      "status": "PASS",
+      "usageAuditHasFields": true,
+      "usageAuditStatus": 200,
+      "usageHealthStatus": 200,
+      "usagePort": 18105,
+      "usageSummary": {
+        "effectiveArtifacts": 744,
+        "events": 12246,
+        "feedbackTraceCount": 0,
+        "imageProcessingActions": 109,
+        "userActions": 11442
+      },
+      "webAppNewBundle": true,
+      "webAppStatus": 200,
+      "webBundleHasRetouch": true,
+      "webBundleStatus": 200,
+      "webCssHasRetouch": true,
+      "webCssStatus": 200,
+      "webVersionHas029": true,
+      "webVersionStatus": 200
+    },
+    "uploaded": [
+      {
+        "fileName": "web_channel.py",
+        "local": "channel/web/web_channel.py",
+        "remoteHash": "7D4152234DFB0B5D",
+        "sha256": "336E6F256A75E9330EEEC4E3537DE478502A274A49E52D2A1E48F8774524FFB9",
+        "size": 731158
+      },
+      {
+        "fileName": "auth.py",
+        "local": "channel/web/auth.py",
+        "remoteHash": "748AB40038AA9A31",
+        "sha256": "BC3B866176780C1C3D44B1430F10AA0ED4DA0C287A17194866DF20FE3A94DBCC",
+        "size": 4394
+      },
+      {
+        "fileName": "image_jobs.py",
+        "local": "channel/web/image_jobs.py",
+        "remoteHash": "D081F0C21CF03955",
+        "sha256": "BFF8E3D1880E1A372A77502253E55F1ADB52DE9CBD849B57FB6F3AAD46F9A15B",
+        "size": 10131
+      },
+      {
+        "fileName": "routes.py",
+        "local": "channel/web/routes.py",
+        "remoteHash": "A51F9B59818712EA",
+        "sha256": "4F9C4309D109F629B8F5AF64F462A5634DCC54BE3F5A7CEB6D6B15A91E696E2B",
+        "size": 3711
+      },
+      {
+        "fileName": "chat.html",
+        "local": "channel/web/chat.html",
+        "remoteHash": "41DADB8F56DECBC4",
+        "sha256": "9D891E59D485D38053AAE856BD3076F07B44183D458BE86FCBB1FE7F0D894647",
+        "size": 91537
+      },
+      {
+        "fileName": "console.js",
+        "local": "channel/web/static/js/console.js",
+        "remoteHash": "1A8683206013B241",
+        "sha256": "2FECF27A59A1637CFC700BA1865D0C233695DE16D89C448F9552DEF925ECBB16",
+        "size": 518435
+      },
+      {
+        "fileName": "console.css",
+        "local": "channel/web/static/css/console.css",
+        "remoteHash": "481D3E5C3E49919F",
+        "sha256": "46A57C39C45A9561D252FED1176ACBBB5E22C0F4D5D151AB7C2FB79E6D8FBD66",
+        "size": 76957
+      },
+      {
+        "fileName": "tencent-docs.png",
+        "local": "channel/web/static/logos/tencent-docs.png",
+        "remoteHash": "8024A61A4B9EA699",
+        "sha256": "7138DCE2E7FBF99B6BE6278C68B3530FBAEBF74FC7D31127C3D60B20C724C125",
+        "size": 1584
+      },
+      {
+        "fileName": "index.html",
+        "local": "channel/web/static/app/index.html",
+        "remoteHash": "4FCA37C11F7F5279",
+        "sha256": "3AD3B161FA3CA7C1621AC89C88AFFF38156515808A4BDADA7D3DC2588E438ABA",
+        "size": 920
+      },
+      {
+        "fileName": "index-CfNm2sqZ.js",
+        "local": "channel/web/static/app/assets/index-CfNm2sqZ.js",
+        "remoteHash": "DB87B95B1C208A31",
+        "sha256": "ACD647409F0CC681F24749C20E251D6696329C2AC2F266153968FE4D561AC75E",
+        "size": 627025
+      },
+      {
+        "fileName": "index-DL97OYvU.css",
+        "local": "channel/web/static/app/assets/index-DL97OYvU.css",
+        "remoteHash": "A23148D8BCCF8B1E",
+        "sha256": "53E63C81036C874E40197FFB82D4261B60B3C6107E5DB6F305F7132C47C8EE49",
+        "size": 98379
+      },
+      {
+        "fileName": "icon-CtIderUP.png",
+        "local": "channel/web/static/app/assets/icon-CtIderUP.png",
+        "remoteHash": "9C1CF3301C1EA263",
+        "sha256": "56F9C1DECEE00EF8EA74A26C3AB405117BE7574A6D381ACDA453B92198C1F88A",
+        "size": 57100
+      },
+      {
+        "fileName": "ecorex-v029-overlay.js",
+        "local": "channel/web/static/app/assets/ecorex-v029-overlay.js",
+        "remoteHash": "CCE0BD188215D3BA",
+        "sha256": "BCDB513F549FCFD37B30B2B40E01085CA2BB337D6654F26445D88E046051964E",
+        "size": 27300
+      },
+      {
+        "fileName": "ecorex-v029-overlay.css",
+        "local": "channel/web/static/app/assets/ecorex-v029-overlay.css",
+        "remoteHash": "D19D074500DDBD1B",
+        "sha256": "C7B3A73BE0D326382F0C019B70F9FB68BFD3C6109414113C6E857D1E15F459EC",
+        "size": 10577
+      },
+      {
+        "fileName": "tencent-docs.png",
+        "local": "channel/web/static/app/assets/logos/tencent-docs.png",
+        "remoteHash": "7BD923C5CF05B56F",
+        "sha256": "7138DCE2E7FBF99B6BE6278C68B3530FBAEBF74FC7D31127C3D60B20C724C125",
+        "size": 1584
+      },
+      {
+        "fileName": "ecorex_admin_api.py",
+        "local": "deploy/ecorex-admin-api/ecorex_admin_api.py",
+        "remoteHash": "60BFCA3046D8768B",
+        "sha256": "2B5684378C5EE4886EDF9A783637F1A572705955739F48C438935B5CD52DE288",
+        "size": 215180
+      },
+      {
+        "fileName": "index.html",
+        "local": "deploy/ecorex-usage-panel/index.html",
+        "remoteHash": "1CB501BC12DCAE7E",
+        "sha256": "B52C740F33B210C72973E686AC5C865EFD599A15C9E26C7FBB0EAAC4437312A5",
+        "size": 7567
+      },
+      {
+        "fileName": "styles.css",
+        "local": "deploy/ecorex-usage-panel/styles.css",
+        "remoteHash": "5A5E7768D650BD87",
+        "sha256": "D2E8DCF4EF891638B17BBF5442D649F0911C579F8C37796795ECE87DAF931AA2",
+        "size": 17624
+      },
+      {
+        "fileName": "app.js",
+        "local": "deploy/ecorex-usage-panel/app.js",
+        "remoteHash": "CA623154D08EBBEF",
+        "sha256": "3BB3308296FDF8C16DB85D78E872D73FFCB044BCD4212C2182BE5A981F491830",
+        "size": 85441
+      },
+      {
+        "fileName": "data.js",
+        "local": "deploy/ecorex-usage-panel/data.js",
+        "remoteHash": "7E15ACE8A148CD15",
+        "sha256": "F80CE34EC6582F8CBCB4F47AF49639E8B7DF10C7FA62CFDE8E4B265FE79BFA74",
+        "size": 490
+      },
+      {
+        "fileName": "usage_panel_api.py",
+        "local": "deploy/ecorex-usage-panel/usage_panel_api.py",
+        "remoteHash": "DFDF0948D6CD9B65",
+        "sha256": "1D8F57F4201ECF50DD644F43BECE548A4C43FD740D0758903E75312D5882BD5D",
+        "size": 26806
+      },
+      {
+        "fileName": "usage_panel_api.py",
+        "local": "deploy/ecorex-usage-panel/usage_panel_api.py",
+        "remoteHash": "D73BE03525A01B45",
+        "sha256": "FE983D9B440841FC0DDE265C946B3BB9C746C2D3EE46A16A491C5D30D2326E77",
+        "size": 26841
+      },
+      {
+        "fileName": "usage_panel_api.py",
+        "local": "deploy/ecorex-usage-panel/usage_panel_api.py",
+        "remoteHash": "18FD9F5BA620D44F",
+        "sha256": "FE983D9B440841FC0DDE265C946B3BB9C746C2D3EE46A16A491C5D30D2326E77",
+        "size": 26841
+      }
+    ],
+    "uploadedCount": 23,
+    "usageApiHotfixUploaded": [
+      {
+        "fileName": "usage_panel_api.py",
+        "local": "deploy/ecorex-usage-panel/usage_panel_api.py",
+        "remoteHash": "D73BE03525A01B45",
+        "sha256": "FE983D9B440841FC0DDE265C946B3BB9C746C2D3EE46A16A491C5D30D2326E77",
+        "size": 26841
+      },
+      {
+        "fileName": "usage_panel_api.py",
+        "local": "deploy/ecorex-usage-panel/usage_panel_api.py",
+        "remoteHash": "18FD9F5BA620D44F",
+        "sha256": "FE983D9B440841FC0DDE265C946B3BB9C746C2D3EE46A16A491C5D30D2326E77",
+        "size": 26841
+      }
+    ],
+    "usageRelease": "/srv/ecorex-agent-usage-panel/releases/20260705040317-v0.2.9-retouch-audit-panel",
+    "correctedProbeReason": "Validated deployed Web bundle/CSS assets directly and checked the independent usage-panel API on its systemd port 18105."
+  },
+  "target": {
+    "domainHash": "A753D877497CBE35",
+    "rawTargetPersisted": false,
+    "sshHostHash": "CDF1CF905198CA97",
+    "sshUserHash": "4813494D137E1631"
+  },
+  "version": "0.2.9"
+}

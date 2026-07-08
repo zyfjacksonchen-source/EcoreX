@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -14,9 +15,9 @@ import paramiko
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.2.7"
+VERSION = os.environ.get("ECOREX_ACCEPTANCE_VERSION") or os.environ.get("ECOREX_DEPLOY_VERSION") or "0.2.8"
 ARTIFACT = ROOT / "docs" / f"v{VERSION}" / "artifacts" / "production-32-image-ocr-vision-toolchain.json"
-REMOTE_MARKER = "__ECOREX_V027_32_IMAGE_OCR_VISION_JSON__"
+REMOTE_MARKER = "__ECOREX_PRODUCTION_32_IMAGE_OCR_VISION_JSON__"
 
 
 def _load_deploy_module():

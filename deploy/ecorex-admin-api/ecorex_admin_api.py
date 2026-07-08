@@ -19,11 +19,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 
-VERSION = "0.2.7.2"
+VERSION = "0.3.0"
 PASSWORD_ITERATIONS = 180000
 SESSION_DAYS = 7
-DEFAULT_CLIENT_EVENT_KEY = "ecorex-web-v0.2.7.2-web.1"
+DEFAULT_CLIENT_EVENT_KEY = "ecorex-web-v0.3.0-web.1"
 DEFAULT_COMPAT_CLIENT_EVENT_KEYS = (
+    "ecorex-web-v0.2.9.2-web.1",
+    "ecorex-web-v0.2.9.1-web.1",
+    "ecorex-web-v0.2.9-web.1",
+    "ecorex-web-v0.2.8-web.1",
+    "ecorex-web-v0.2.7.2-web.1",
     "ecorex-web-v0.2.7.1-web.1",
     "ecorex-web-v0.2.7-web.1",
     "ecorex-web-v0.2.6-web.1",
@@ -191,6 +196,19 @@ RUNTIME_AUDIT_DETAIL_KEYS = {
     "tool",
     "artifact_validity",
     "artifact_feedback_signal",
+    "feedback_share_id",
+    "feedback_share_url",
+}
+RUNTIME_AUDIT_ACTION_LABELS = {
+    "image_processing": "图片处理",
+    "artifact_generation": "产物生成",
+    "artifact_feedback": "产物反馈",
+    "tool_execution": "工具调用",
+    "agent_run": "任务运行",
+    "permission_review": "权限审批",
+    "policy_blocked": "策略拦截",
+    "assistant_response": "最终回复",
+    "subagent_work": "子任务",
 }
 
 
@@ -274,6 +292,51 @@ def redact_share_text(value, limit=500):
         text,
     )
     return text[:limit]
+
+
+def share_content_text(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content") or item.get("message") or ""
+                if text:
+                    parts.append(str(text))
+        return "\n".join(part for part in parts if part)
+    if isinstance(value, dict):
+        for key in ("text", "content", "message", "title"):
+            if value.get(key):
+                return share_content_text(value.get(key))
+    return str(value)
+
+
+def safe_share_url(value, limit=700_000):
+    raw = str(value or "").strip()
+    if re.match(r"(?i)^data:image/(?:png|jpe?g|gif|webp);base64,", raw) and len(raw) <= limit:
+        return raw
+    text = redact_share_text(value, limit).strip()
+    if not text or "[local-path]" in text or "[local-file-url]" in text:
+        return ""
+    parsed = urlparse(text)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return text
+    if text.startswith(("/client/", "/ecorex-agent/client/")) and not text.startswith("//"):
+        return text
+    return ""
+
+
+def positive_int(value):
+    try:
+        number = int(float(value))
+        return number if number > 0 else 0
+    except Exception:
+        return 0
 
 
 def normalize_image_model(value):
@@ -934,15 +997,181 @@ class AdminStore:
         webui = (update.get("webui") if isinstance(update, dict) else {}) or {}
         if not isinstance(webui, dict):
             webui = {}
+        rollout = webui.get("rollout") if isinstance(webui.get("rollout"), dict) else {}
+        kill_switch = webui.get("killSwitch") if isinstance(webui.get("killSwitch"), dict) else {}
+        rollback = webui.get("rollback") if isinstance(webui.get("rollback"), dict) else {}
+        background_update = webui.get("backgroundUpdate") if isinstance(webui.get("backgroundUpdate"), dict) else {}
+        connector_health = webui.get("connectorHealthCheck") if isinstance(webui.get("connectorHealthCheck"), dict) else {}
+        background_connector_health = background_update.get("connectorHealthCheck") if isinstance(background_update.get("connectorHealthCheck"), dict) else {}
+        if not connector_health and background_connector_health:
+            connector_health = background_connector_health
         return {
             "mode": compact_text(webui.get("mode") or "", 80),
             "channel": compact_text(webui.get("channel") or "", 80),
             "promotion": compact_text(webui.get("promotion") or "", 80),
+            "rollout": {
+                "strategy": compact_text(rollout.get("strategy") or "", 80),
+                "percent": as_int(rollout.get("percent"), 0, 0, 100),
+                "minimumHealthyMinutes": as_int(rollout.get("minimumHealthyMinutes"), 0, 0, 24 * 60),
+            },
+            "killSwitch": {
+                "enabled": bool(kill_switch.get("enabled")),
+                "reason": compact_text(kill_switch.get("reason") or "", 180),
+                "updatedAt": compact_text(kill_switch.get("updatedAt") or "", 80),
+            },
+            "rollback": {
+                "enabled": bool(rollback.get("enabled")),
+                "healthCheck": compact_text(rollback.get("healthCheck") or "", 120),
+                "maxActivationFailures": as_int(rollback.get("maxActivationFailures"), 0, 0, 10),
+            },
+            "stateMachine": [
+                compact_text(item, 80)
+                for item in (webui.get("stateMachine") if isinstance(webui.get("stateMachine"), list) else [])
+                if item
+            ][:16],
+            "backgroundUpdate": {
+                "mode": compact_text(background_update.get("mode") or "", 120),
+                "idleGate": compact_text(background_update.get("idleGate") or "", 120),
+                "activationPolicy": compact_text(background_update.get("activationPolicy") or "", 120),
+                "healthCheck": compact_text(background_update.get("healthCheck") or "", 120),
+                "stateFile": compact_text(background_update.get("stateFile") or "", 120),
+            },
+            "connectorHealthCheck": {
+                "required": bool(connector_health.get("required")),
+                "failureAction": compact_text(connector_health.get("failureAction") or "", 120),
+                "stateField": compact_text(connector_health.get("stateField") or "", 120),
+                "endpoints": [
+                    compact_text(item, 180)
+                    for item in (connector_health.get("endpoints") if isinstance(connector_health.get("endpoints"), list) else [])
+                    if item
+                ][:8],
+                "preserve": [
+                    compact_text(item, 80)
+                    for item in (connector_health.get("preserve") if isinstance(connector_health.get("preserve"), list) else [])
+                    if item
+                ][:8],
+            },
             "artifactIds": [
                 compact_text(item, 120)
                 for item in (webui.get("artifactIds") if isinstance(webui.get("artifactIds"), list) else [])
                 if item
             ][:16],
+        }
+
+    def _release_index_required(self, manifest):
+        if not isinstance(manifest, dict):
+            return False
+        trust = manifest.get("trust") if isinstance(manifest.get("trust"), dict) else {}
+        release_index_trust = trust.get("releaseIndex") if isinstance(trust.get("releaseIndex"), dict) else {}
+        if release_index_trust.get("required") is True:
+            return True
+        if compact_text(manifest.get("releaseIndex") or "", 255):
+            return True
+        return self._compare_release_versions(compact_text(manifest.get("version") or "", 80), "0.3.0") >= 0
+
+    def _release_index_path(self, release_dir, manifest):
+        rel = compact_text(manifest.get("releaseIndex") or "release-index.json", 255).replace("\\", "/").lstrip("./")
+        if not rel or rel.startswith("/") or ".." in pathlib.PurePosixPath(rel).parts:
+            return None, "unsafe-release-index-path"
+        path = (release_dir / rel).resolve(strict=False)
+        try:
+            path.relative_to(release_dir.resolve(strict=False))
+        except ValueError:
+            return None, "release-index escapes release root"
+        return path, ""
+
+    def _release_index_validation(self, release_dir, manifest, *, verify_sha=False):
+        failures = []
+        required = self._release_index_required(manifest)
+        path, path_error = self._release_index_path(release_dir, manifest)
+        if path_error:
+            failures.append(path_error)
+        if path is None or not path.is_file():
+            if required:
+                failures.append("release-index.json is required for v0.3.0 WebUI releases")
+            return {
+                "status": "fail" if failures else "not-configured",
+                "required": bool(required),
+                "checkedSha256": bool(verify_sha),
+                "failureCount": len(failures),
+                "failures": failures[:8],
+                "version": "",
+                "channel": "",
+                "commit": "",
+                "generatedAt": "",
+                "artifactCount": 0,
+                "smokeStatus": "",
+                "signatureStatus": "",
+            }
+        index = json_loads(path.read_text(encoding="utf-8-sig"), {})
+        if not isinstance(index, dict):
+            failures.append("release-index.json must be a JSON object")
+            index = {}
+        version = compact_text(index.get("version") or "", 80)
+        manifest_version = compact_text(manifest.get("version") or "", 80)
+        if version != manifest_version:
+            failures.append("release-index version must match manifest version")
+        if compact_text(index.get("status") or "", 40) != "ready":
+            failures.append("release-index status must be ready")
+        smoke = index.get("smoke") if isinstance(index.get("smoke"), dict) else {}
+        smoke_status = compact_text(smoke.get("status") or "", 40)
+        if smoke_status != "pass":
+            failures.append("release-index smoke status must be pass")
+        indexed_artifacts = index.get("artifacts") if isinstance(index.get("artifacts"), list) else []
+        indexed_by_id = {
+            compact_text(item.get("id") or "", 120): item
+            for item in indexed_artifacts
+            if isinstance(item, dict) and compact_text(item.get("id") or "", 120)
+        }
+        ready = self._release_ready_artifacts(manifest)
+        policy = self._release_webui_policy(manifest)
+        required_ids = set(policy["artifactIds"])
+        required_ids.update(
+            compact_text(item.get("id") or "", 120)
+            for item in ready
+            if compact_text(item.get("id") or "", 120).startswith(("webui-", "web-"))
+        )
+        artifact_signatures_required = bool((manifest.get("trust") if isinstance(manifest.get("trust"), dict) else {}).get("artifactSignaturesRequired"))
+        missing_signature_count = 0
+        for artifact_id in sorted(required_ids):
+            manifest_artifact = next((item for item in ready if compact_text(item.get("id") or "", 120) == artifact_id), None)
+            index_artifact = indexed_by_id.get(artifact_id)
+            if not manifest_artifact:
+                failures.append(f"release-index required artifact missing from manifest: {artifact_id}")
+                continue
+            if not index_artifact:
+                failures.append(f"release-index artifact missing: {artifact_id}")
+                continue
+            if compact_text(index_artifact.get("sha256") or "", 80).upper() != compact_text(manifest_artifact.get("sha256") or "", 80).upper():
+                failures.append(f"release-index artifact sha256 mismatch: {artifact_id}")
+            if as_int(index_artifact.get("size"), 0, 0, 10_000_000_000) != as_int(manifest_artifact.get("size"), 0, 0, 10_000_000_000):
+                failures.append(f"release-index artifact size mismatch: {artifact_id}")
+            signature = index_artifact.get("signature") if isinstance(index_artifact.get("signature"), dict) else {}
+            if artifact_signatures_required and compact_text(signature.get("status") or "", 40) not in {"present", "valid", "signed"}:
+                missing_signature_count += 1
+                failures.append(f"release-index artifact signature missing: {artifact_id}")
+        manifest_entry = index.get("manifest") if isinstance(index.get("manifest"), dict) else {}
+        manifest_sha = compact_text(manifest_entry.get("sha256") or "", 80).upper()
+        if verify_sha and manifest_sha and re.fullmatch(r"[A-F0-9]{64}", manifest_sha):
+            manifest_path = release_dir / "manifest.json"
+            if manifest_path.is_file() and self._release_file_sha256(manifest_path) != manifest_sha:
+                failures.append("release-index manifest sha256 mismatch")
+        elif verify_sha and manifest_sha:
+            failures.append("release-index manifest sha256 is invalid")
+        signature_status = "missing" if missing_signature_count else ("present" if artifact_signatures_required else "not-required")
+        return {
+            "status": "pass" if not failures else "fail",
+            "required": bool(required),
+            "checkedSha256": bool(verify_sha),
+            "failureCount": len(failures),
+            "failures": failures[:8],
+            "version": version,
+            "channel": compact_text(index.get("channel") or "", 80),
+            "commit": compact_text(index.get("commit") or "", 80),
+            "generatedAt": compact_text(index.get("generatedAt") or "", 80),
+            "artifactCount": len(indexed_artifacts),
+            "smokeStatus": smoke_status,
+            "signatureStatus": signature_status,
         }
 
     def _release_manifest_fingerprint(self, manifest):
@@ -1033,6 +1262,9 @@ class AdminStore:
                     failures.append(f"{artifact_id} sha256 mismatch")
             elif verify_sha:
                 failures.append(f"{artifact_id} sha256 missing")
+        release_index = self._release_index_validation(release_dir, manifest, verify_sha=verify_sha)
+        if release_index["status"] == "fail":
+            failures.extend([f"release-index: {item}" for item in release_index.get("failures", [])])
 
         return {
             "status": "pass" if not failures else "fail",
@@ -1041,6 +1273,7 @@ class AdminStore:
             "failures": failures[:8],
             "readyArtifactCount": len(ready),
             "artifactCount": len(manifest.get("artifacts") or []) if isinstance(manifest.get("artifacts"), list) else 0,
+            "releaseIndex": release_index,
         }
 
     def _release_entry(self, pointer, root, role):
@@ -1056,8 +1289,10 @@ class AdminStore:
             "artifactCount": 0,
             "readyArtifactCount": 0,
             "updatePolicy": {},
+            "releaseIndex": {"status": "fail", "required": False, "failureCount": 1, "failures": ["release pointer missing"]},
             "validation": {"status": "fail", "checkedSha256": False, "failureCount": 1, "failures": ["release pointer missing"]},
             "canPromote": False,
+            "canNotify": False,
             "sameVersionHotfix": False,
             "promoteDisabledReason": "release pointer missing",
         }
@@ -1081,10 +1316,37 @@ class AdminStore:
             "artifactCount": len(manifest.get("artifacts") or []) if isinstance(manifest.get("artifacts"), list) else 0,
             "readyArtifactCount": len(self._release_ready_artifacts(manifest)),
             "updatePolicy": self._release_webui_policy(manifest),
+            "releaseIndex": self._release_index_validation(resolved, manifest, verify_sha=False),
             "validation": self._validate_release_dir(resolved, manifest, verify_sha=False),
             "promoteDisabledReason": "",
         })
+        entry["canNotify"] = bool(entry["validation"].get("status") == "pass" and entry["version"])
         return entry
+
+    def _release_risks(self, release_state):
+        risks = []
+        current = release_state.get("current") if isinstance(release_state, dict) else {}
+        if not release_state.get("releaseRootConfigured"):
+            risks.append({"severity": "high", "message": "发布根目录未配置，无法管理 stable 与 staged。"})
+        elif not current.get("exists"):
+            risks.append({"severity": "high", "message": "当前 stable 指针不存在，用户无法获得可信默认发布。"})
+        if current.get("exists") and current.get("validation", {}).get("status") != "pass":
+            risks.append({"severity": "high", "message": "当前 stable 校验未通过，先不要通知用户更新。"})
+        release_index = current.get("releaseIndex") if isinstance(current, dict) else {}
+        if release_index and release_index.get("required") and release_index.get("status") != "pass":
+            risks.append({"severity": "high", "message": "当前 stable 的 release-index 未通过，发布可信链不完整。"})
+        policy = current.get("updatePolicy") if isinstance(current, dict) else {}
+        kill_switch = policy.get("killSwitch") if isinstance(policy, dict) else {}
+        rollout = policy.get("rollout") if isinstance(policy, dict) else {}
+        if kill_switch.get("enabled"):
+            risks.append({"severity": "medium", "message": "当前 release 启用了 kill-switch，客户端应停止自动更新。"})
+        if as_int(rollout.get("percent"), 0, 0, 100) == 0:
+            risks.append({"severity": "medium", "message": "当前灰度比例为 0%，用户不会自动进入新版更新。"})
+        staged = release_state.get("staged") if isinstance(release_state.get("staged"), list) else []
+        blocked = [item for item in staged if item.get("promoteDisabledReason")]
+        if blocked:
+            risks.append({"severity": "low", "message": f"{len(blocked)} 个候选版本不可发布，需要查看校验原因。"})
+        return risks[:8]
 
     def release_state(self):
         root = self.release_root()
@@ -1102,6 +1364,11 @@ class AdminStore:
             },
         }
         if not root.exists():
+            payload["risks"] = self._release_risks(payload)
+            payload["nextActions"] = [
+                "配置 ECOREX_RELEASE_ROOT，并先用 release orchestrator 生成 staged 发布目录。",
+                "不要手工拼接 current 指针；通过 admin 发布动作完成 promote。"
+            ]
             return payload
         staged = []
         for child in root.iterdir():
@@ -1135,6 +1402,12 @@ class AdminStore:
         staged.sort(key=lambda item: (item.get("version") or "", item.get("id") or ""), reverse=True)
         payload["staged"] = staged
         payload["latestStaged"] = next((item for item in staged if item.get("canPromote")), staged[0] if staged else None)
+        payload["risks"] = self._release_risks(payload)
+        payload["nextActions"] = [
+            "只发布 release-index、hash、烟测都通过的 staged 候选；本轮 WebUI 本地包不要求桌面端签名。",
+            "同版本热修必须依赖 artifact fingerprint 变化，不允许静默覆盖 current。",
+            "通知用户只写 admin release notice，不改不可变 release-index 包。"
+        ]
         return payload
 
     def _write_release_json(self, path, payload):
@@ -1214,7 +1487,7 @@ class AdminStore:
                 "product": "EcoreX WebUI",
                 "version": version,
                 "mode": "manual",
-                "status": "ready",
+                "status": "available",
                 "reason": "admin-release-notify",
                 "message": notice.get("message") or f"EcoreX {version} 已发布，已安装用户可在本机检查更新。",
                 "browserAction": "none",
@@ -1274,15 +1547,19 @@ class AdminStore:
         update["webui"] = webui
         manifest["update"] = update
         manifest["noticeUpdatedAt"] = published_at
+        immutable_release = bool(self._release_index_required(manifest))
         manifest_notice_written = False
         manifest_notice_error = ""
         manifest_notice_error_hash = ""
-        try:
-            self._write_release_json(manifest_path, manifest)
-            manifest_notice_written = True
-        except Exception as exc:
-            manifest_notice_error = type(exc).__name__
-            manifest_notice_error_hash = short_hash(str(exc), 16)
+        if immutable_release:
+            manifest_notice_error = "immutable_release_index"
+        else:
+            try:
+                self._write_release_json(manifest_path, manifest)
+                manifest_notice_written = True
+            except Exception as exc:
+                manifest_notice_error = type(exc).__name__
+                manifest_notice_error_hash = short_hash(str(exc), 16)
         update_state_written = self._write_runtime_update_notice(version, notice)
 
         with self.connect() as conn:
@@ -1511,12 +1788,64 @@ class AdminStore:
             for row in rows
         ]
 
+    def _artifact_feedback_signal(self, metadata):
+        return compact_text(
+            metadata.get("artifactFeedbackSignal")
+            or metadata.get("artifact_feedback_signal")
+            or metadata.get("feedbackSignal")
+            or metadata.get("feedback_signal")
+            or "default",
+            40,
+        ).lower()
+
+    def _artifact_validity(self, metadata):
+        signal = self._artifact_feedback_signal(metadata)
+        validity = compact_text(
+            metadata.get("artifactValidity")
+            or metadata.get("artifact_validity")
+            or metadata.get("validity")
+            or ("invalid" if signal == "thumbs_down" else "valid"),
+            40,
+        ).lower()
+        return "invalid" if validity == "invalid" or signal == "thumbs_down" else "valid"
+
+    def _artifact_is_invalid(self, metadata):
+        return self._artifact_validity(metadata) == "invalid" or self._artifact_feedback_signal(metadata) == "thumbs_down"
+
+    def _artifact_is_final(self, status, metadata=None):
+        metadata = metadata or {}
+        raw_status = compact_text(
+            status
+            or metadata.get("status")
+            or metadata.get("artifactStatus")
+            or metadata.get("artifact_status")
+            or "",
+            60,
+        ).lower()
+        if raw_status in {"failed", "pending", "superseded", "cancelled", "canceled"}:
+            return False
+        if raw_status in {"ready", "complete", "completed", "success", "succeeded", "created", "modified", "exported"}:
+            return True
+        final_flag = metadata.get("finalArtifact")
+        if final_flag is None:
+            final_flag = metadata.get("final_artifact")
+        if final_flag is not None:
+            return bool(final_flag)
+        return True
+
+    def _artifact_is_effective(self, status, metadata):
+        if self._artifact_is_invalid(metadata):
+            return False
+        signal = self._artifact_feedback_signal(metadata)
+        return signal == "thumbs_up" or self._artifact_is_final(status, metadata)
+
     def artifact_feedback_counts(self, conn, where="", params=None):
         rows = conn.execute(
-            f"SELECT metadata FROM sync_artifacts {where or ''}",
+            f"SELECT status, metadata FROM sync_artifacts {where or ''}",
             params or [],
         ).fetchall()
         counts = {
+            "effectiveArtifacts": 0,
             "validArtifacts": 0,
             "invalidArtifacts": 0,
             "defaultValidArtifacts": 0,
@@ -1525,26 +1854,14 @@ class AdminStore:
         }
         for row in rows:
             metadata = json_loads(row["metadata"], {}) if row and row["metadata"] else {}
-            validity = compact_text(
-                metadata.get("artifactValidity")
-                or metadata.get("artifact_validity")
-                or metadata.get("validity")
-                or "",
-                40,
-            ).lower()
-            signal = compact_text(
-                metadata.get("artifactFeedbackSignal")
-                or metadata.get("artifact_feedback_signal")
-                or metadata.get("feedbackSignal")
-                or metadata.get("feedback_signal")
-                or "",
-                40,
-            ).lower()
-            if signal == "thumbs_down" or validity == "invalid":
+            signal = self._artifact_feedback_signal(metadata)
+            if self._artifact_is_invalid(metadata):
                 counts["invalidArtifacts"] += 1
                 counts["thumbsDownArtifacts"] += 1
                 continue
             counts["validArtifacts"] += 1
+            if self._artifact_is_effective(row["status"], metadata):
+                counts["effectiveArtifacts"] += 1
             if signal == "thumbs_up":
                 counts["thumbsUpArtifacts"] += 1
             else:
@@ -1672,14 +1989,38 @@ class AdminStore:
         clauses = []
         params = []
         user_email = compact_text(filters.get("userEmail") or filters.get("user_email"), 180).lower()
+        user_key = compact_text(filters.get("userKey") or filters.get("user_key"), 180)
         device_id = compact_text(filters.get("deviceId") or filters.get("device_id"), 180)
         event_type = compact_text(filters.get("eventType") or filters.get("event_type"), 120)
+        start_at = compact_text(
+            filters.get("start")
+            or filters.get("from")
+            or filters.get("createdFrom")
+            or filters.get("created_from"),
+            80,
+        )
+        end_at = compact_text(
+            filters.get("end")
+            or filters.get("to")
+            or filters.get("createdTo")
+            or filters.get("created_to"),
+            80,
+        )
         if user_email:
             clauses.append("lower(user_email) = lower(?)")
             params.append(user_email)
+        if user_key:
+            clauses.append("user_key = ?")
+            params.append(user_key)
         if device_id:
             clauses.append("device_id = ?")
             params.append(device_id)
+        if start_at:
+            clauses.append("datetime(created_at) >= datetime(?)")
+            params.append(start_at)
+        if end_at:
+            clauses.append("datetime(created_at) < datetime(?)")
+            params.append(end_at)
         if include_event_type and event_type:
             if runtime_audit_enum(event_type, RUNTIME_AUDIT_EVENT_TYPES, 120):
                 clauses.append("event_type = ?")
@@ -1755,6 +2096,188 @@ class AdminStore:
         ).fetchone()
         return int(row["count"] or 0) if row else 0
 
+    def _runtime_audit_event_action(self, row):
+        event_type = compact_text(row["event_type"], 120)
+        source = compact_text(row["source"], 80).lower()
+        status = compact_text(row["status"], 80).lower()
+        detail = json_loads(row["detail"], {}) if row and row["detail"] else {}
+        detail_text = " ".join(
+            compact_text(value, 120).lower()
+            for key, value in (detail.items() if isinstance(detail, dict) else [])
+            if str(key or "").lower().replace("-", "_") in {"tool", "action", "source", "status"}
+        )
+        image_hint = (
+            event_type.startswith("image_job.")
+            or source == "image_job"
+            or "imagegen" in detail_text
+            or "image_job" in detail_text
+        )
+        if image_hint:
+            return "image_processing"
+        if event_type == "artifact.feedback":
+            return "artifact_feedback"
+        if event_type in {"artifact.created", "artifact.updated", "image_job.artifact"}:
+            return "artifact_generation"
+        if event_type == "capability.policy_blocked" or status in {"blocked", "denied"}:
+            return "policy_blocked"
+        if event_type in {"approval.requested", "permission.requested"}:
+            return "permission_review"
+        if event_type.startswith("tool.") and event_type not in {"tool.heartbeat", "tool.deadline_extended"}:
+            return "tool_execution"
+        if event_type in {"run.started", "run.completed", "run.failed", "run.cancelled", "run.interrupted", "run.paused"}:
+            return "agent_run"
+        if event_type == "message.assistant.finalized":
+            return "assistant_response"
+        if event_type.startswith("subagent.") and event_type not in {"subagent.updated"}:
+            return "subagent_work"
+        return ""
+
+    def _runtime_audit_action_projection(self, row):
+        action_type = self._runtime_audit_event_action(row)
+        if not action_type:
+            return None
+        result = {
+            "actionType": action_type,
+            "actionLabel": RUNTIME_AUDIT_ACTION_LABELS.get(action_type, action_type),
+            "eventHash": runtime_audit_hash("|".join([
+                str(row["sync_key"] or ""),
+                str(row["event_type"] or ""),
+                str(row["created_at"] or ""),
+            ])),
+            "eventType": runtime_audit_enum(row["event_type"], RUNTIME_AUDIT_EVENT_TYPES, 120) or "unknown",
+            "status": runtime_audit_enum(row["status"], RUNTIME_AUDIT_STATUSES, 80) or "unknown",
+            "requestHash": runtime_audit_hash(row["request_id"]),
+            "sessionHash": runtime_audit_hash(row["session_id"]),
+            "userHash": runtime_audit_hash(row["user_key"] or row["user_email"]),
+            "deviceHash": runtime_audit_hash(row["device_id"]),
+            **runtime_audit_timestamp_summary(row["created_at"], "occurredAt"),
+            "ingestedAt": row["ingested_at"] or "",
+            "redacted": True,
+        }
+        return {key: value for key, value in result.items() if value not in ("", None)}
+
+    def _runtime_audit_user_names(self, conn):
+        rows = conn.execute("SELECT name, email FROM users WHERE deleted_at IS NULL").fetchall()
+        return {
+            compact_text(row["email"], 180).lower(): compact_text(row["name"], 120)
+            for row in rows
+            if row["email"]
+        }
+
+    def _runtime_audit_safe_artifact_title(self, title):
+        redacted = redact_share_text(title, 240)
+        lowered = redacted.lower()
+        if not redacted or "[local-path]" in redacted or "[local-file-url]" in redacted:
+            return ""
+        sensitive_terms = ("prompt", "secret", "token", "password", "passwd", "authorization", "private")
+        if any(term in lowered for term in sensitive_terms):
+            return ""
+        return redacted
+
+    def _runtime_audit_feedback_share_id(self, metadata):
+        share_id = compact_text(
+            metadata.get("feedbackShareId")
+            or metadata.get("feedback_share_id")
+            or metadata.get("shareId")
+            or metadata.get("share_id"),
+            80,
+        )
+        return share_id if re.fullmatch(r"sh_[A-Za-z0-9]{8,40}", share_id or "") else ""
+
+    def _runtime_audit_feedback_share_url(self, metadata):
+        raw_url = compact_text(
+            metadata.get("feedbackShareUrl")
+            or metadata.get("feedback_share_url")
+            or metadata.get("shareUrl")
+            or metadata.get("share_url"),
+            500,
+        )
+        if raw_url and ("session-shares/" in raw_url or raw_url.startswith("/")):
+            return raw_url
+        share_id = self._runtime_audit_feedback_share_id(metadata)
+        if share_id:
+            return f"/ecorex-agent/client/session-shares/{quote(share_id)}"
+        return ""
+
+    def _runtime_audit_artifact_projection(self, row, metadata, user_names=None, include_feedback_trace=False):
+        signal = self._artifact_feedback_signal(metadata)
+        validity = self._artifact_validity(metadata)
+        safe_title = self._runtime_audit_safe_artifact_title(row["title"])
+        projected = {
+            "artifactHash": runtime_audit_hash(row["artifact_id"]),
+            "artifactTitle": safe_title,
+            "artifactTitleHash": runtime_audit_hash(row["title"]),
+            "kind": compact_text(row["kind"] or "file", 40),
+            "intent": compact_text(row["intent"] or "deliverable", 60),
+            "operation": compact_text(row["operation"] or "created", 60),
+            "status": compact_text(row["status"] or "ready", 60),
+            "pathExt": compact_text(row["path_ext"] or "", 32),
+            "mimeType": compact_text(row["mime_type"] or "", 120),
+            "sizeBytes": as_int(row["size_bytes"], 0),
+            "artifactValidity": validity,
+            "artifactFeedbackSignal": signal if signal in {"default", "thumbs_up", "thumbs_down"} else "default",
+            "artifactFeedbackAt": compact_text(
+                metadata.get("artifactFeedbackAt") or metadata.get("artifact_feedback_at"),
+                80,
+            ),
+            "requestHash": runtime_audit_hash(row["request_id"]),
+            "sessionHash": runtime_audit_hash(row["session_id"]),
+            "userHash": runtime_audit_hash(row["user_key"] or row["user_email"]),
+            "deviceHash": runtime_audit_hash(row["device_id"]),
+            **runtime_audit_timestamp_summary(row["created_at"], "createdAt"),
+            "ingestedAt": row["ingested_at"] or "",
+            "redacted": True,
+        }
+        if include_feedback_trace:
+            user_email = compact_text(row["user_email"], 180).lower()
+            projected.update({
+                "userName": (user_names or {}).get(user_email) or "",
+                "userEmail": user_email,
+                "feedbackShareId": self._runtime_audit_feedback_share_id(metadata),
+                "feedbackShareUrl": self._runtime_audit_feedback_share_url(metadata),
+            })
+        return {key: value for key, value in projected.items() if value not in ("", None)}
+
+    def _runtime_audit_artifact_rows(self, conn, where, params, limit):
+        return conn.execute(
+            f"""
+            SELECT artifact_id, user_email, user_key, device_id, session_id, request_id,
+                   kind, intent, operation, status, title, path_hash, path_ext, mime_type,
+                   size_bytes, metadata, created_at, ingested_at
+            FROM sync_artifacts
+            {where}
+            ORDER BY ingested_at DESC, created_at DESC
+            LIMIT ?
+            """,
+            [*(params or []), limit],
+        ).fetchall()
+
+    def _runtime_audit_effective_artifacts(self, conn, where, params, limit):
+        result = []
+        for row in self._runtime_audit_artifact_rows(conn, where, params, max(limit * 5, 80)):
+            metadata = json_loads(row["metadata"], {}) if row["metadata"] else {}
+            if self._artifact_is_effective(row["status"], metadata):
+                result.append(self._runtime_audit_artifact_projection(row, metadata))
+            if len(result) >= min(limit, 50):
+                break
+        return result
+
+    def _runtime_audit_feedback_traces(self, conn, where, params, limit):
+        user_names = self._runtime_audit_user_names(conn)
+        result = []
+        for row in self._runtime_audit_artifact_rows(conn, where, params, max(limit * 5, 80)):
+            metadata = json_loads(row["metadata"], {}) if row["metadata"] else {}
+            if self._artifact_is_invalid(metadata):
+                result.append(self._runtime_audit_artifact_projection(
+                    row,
+                    metadata,
+                    user_names=user_names,
+                    include_feedback_trace=True,
+                ))
+            if len(result) >= min(limit, 50):
+                break
+        return result
+
     def runtime_audit(self, conn, filters=None):
         filters = filters or {}
         limit = as_int(filters.get("auditLimit") or filters.get("limit"), 50, 1, 200)
@@ -1820,6 +2343,15 @@ class AdminStore:
             safe_status = runtime_audit_enum(row["status"], RUNTIME_AUDIT_STATUSES, 80) or "unknown"
             status_counts[safe_status] = status_counts.get(safe_status, 0) + int(row["count"] or 0)
 
+        action_type_counts = {}
+        for row in conn.execute(
+            f"SELECT event_type, status, source, detail FROM sync_events {event_where}",
+            event_params,
+        ).fetchall():
+            action_type = self._runtime_audit_event_action(row)
+            if action_type:
+                action_type_counts[action_type] = action_type_counts.get(action_type, 0) + 1
+
         terminal_literals = ",".join(f"'{item}'" for item in sorted(RUNTIME_AUDIT_TERMINAL_EVENT_TYPES))
         request_rows = conn.execute(
             f"""
@@ -1882,6 +2414,13 @@ class AdminStore:
             """,
             [*event_params, limit],
         ).fetchall()
+        user_actions = [
+            action
+            for action in (self._runtime_audit_action_projection(row) for row in recent_rows)
+            if action
+        ][:limit]
+        effective_artifacts = self._runtime_audit_effective_artifacts(conn, shared_where, shared_params, limit)
+        feedback_traces = self._runtime_audit_feedback_traces(conn, shared_where, shared_params, limit)
 
         event_count = int(event_row["count"] or 0) if event_row else 0
         terminal_count = sum(
@@ -1901,11 +2440,19 @@ class AdminStore:
                 "artifactRequests": scoped_artifact_requests,
                 "messages": int(message_row["count"] or 0) if message_row else 0,
                 "messageRequests": scoped_message_requests,
+                "userActions": sum(action_type_counts.values()),
+                "imageProcessingActions": int(action_type_counts.get("image_processing", 0)),
+                "feedbackTraceCount": len(feedback_traces),
                 "terminalEvents": terminal_count,
                 "capabilityPolicyBlocked": capability_block_count,
                 "unknownEventTypes": unknown_event_type_count,
                 "lastIngestedAt": event_row["last_ingested_at"] if event_row else "",
             },
+            "actionTypeCounts": dict(sorted(action_type_counts.items())),
+            "actionTypeLabels": dict(RUNTIME_AUDIT_ACTION_LABELS),
+            "userActions": user_actions,
+            "effectiveArtifacts": effective_artifacts,
+            "feedbackTraces": feedback_traces,
             "eventTypeCounts": dict(sorted(event_type_counts.items())),
             "sourceCounts": dict(sorted(source_counts.items())),
             "statusCounts": dict(sorted(status_counts.items())),
@@ -2011,7 +2558,10 @@ class AdminStore:
         role = compact_text(item.get("role") or "message", 20).lower()
         if role not in {"user", "assistant"}:
             return None
-        content = redact_share_text(item.get("content") or item.get("text") or "", 8000)
+        content = redact_share_text(
+            share_content_text(item.get("content") if "content" in item else item.get("text")),
+            8000,
+        )
         artifacts = []
         raw_artifacts = item.get("artifacts") if isinstance(item.get("artifacts"), list) else []
         for artifact in raw_artifacts[:24]:
@@ -2019,13 +2569,33 @@ class AdminStore:
                 continue
             signal = compact_text(artifact.get("artifactFeedbackSignal") or artifact.get("artifact_feedback_signal") or "default", 40).lower()
             validity = compact_text(artifact.get("artifactValidity") or artifact.get("artifact_validity") or ("invalid" if signal == "thumbs_down" else "valid"), 40).lower()
-            artifacts.append({
-                "title": redact_share_text(artifact.get("title") or artifact.get("fileName") or artifact.get("file_name") or artifact.get("name") or "artifact", 240),
+            title = redact_share_text(artifact.get("title") or artifact.get("fileName") or artifact.get("file_name") or artifact.get("name") or "artifact", 240)
+            file_name = redact_share_text(artifact.get("fileName") or artifact.get("file_name") or artifact.get("name") or title, 240)
+            url = safe_share_url(artifact.get("url") or artifact.get("href"))
+            preview_url = safe_share_url(artifact.get("previewUrl") or artifact.get("preview_url"))
+            thumbnail_url = safe_share_url(artifact.get("thumbnailUrl") or artifact.get("thumbnail_url"))
+            media_url = safe_share_url(artifact.get("mediaUrl") or artifact.get("media_url")) or preview_url or thumbnail_url or url
+            artifact_payload = {
+                "title": title,
                 "kind": compact_text(artifact.get("kind") or artifact.get("type") or "file", 40),
                 "status": compact_text(artifact.get("status") or "ready", 40),
                 "artifactValidity": "invalid" if validity == "invalid" or signal == "thumbs_down" else "valid",
                 "artifactFeedbackSignal": signal if signal in {"default", "thumbs_up", "thumbs_down"} else "default",
-            })
+                "fileName": file_name,
+                "mimeType": compact_text(artifact.get("mimeType") or artifact.get("mime_type") or "", 120),
+                "sizeBytes": positive_int(artifact.get("sizeBytes") or artifact.get("size_bytes")),
+                "pathExt": compact_text(artifact.get("pathExt") or artifact.get("path_ext") or "", 24),
+                "safeArtifactId": compact_text(artifact.get("safeArtifactId") or artifact.get("safe_artifact_id") or artifact.get("id") or "", 120),
+            }
+            if url:
+                artifact_payload["url"] = url
+            if preview_url:
+                artifact_payload["previewUrl"] = preview_url
+            if thumbnail_url:
+                artifact_payload["thumbnailUrl"] = thumbnail_url
+            if media_url:
+                artifact_payload["mediaUrl"] = media_url
+            artifacts.append(artifact_payload)
         return {
             "role": role,
             "content": content,
@@ -2043,6 +2613,12 @@ class AdminStore:
         ]
         if not messages:
             raise ValueError("share messages are required")
+        includes_artifact_files = any(
+            artifact.get("mediaUrl") or artifact.get("url")
+            for message in messages
+            for artifact in (message.get("artifacts") or [])
+            if isinstance(artifact, dict)
+        )
         created_at = now_iso()
         share_id = "sh_" + secrets.token_urlsafe(12).replace("-", "").replace("_", "")[:18]
         title = redact_share_text(payload.get("title") or "EcoreX shared session", 160)
@@ -2055,7 +2631,7 @@ class AdminStore:
             "privacy": {
                 "redacted": True,
                 "includesLocalPaths": False,
-                "includesArtifactFiles": False,
+                "includesArtifactFiles": includes_artifact_files,
             },
         }
         with self.connect() as conn:
@@ -3393,6 +3969,24 @@ class AdminStore:
         metadata_item["artifactFeedbackSignal"] = feedback_signal
         if item.get("artifactFeedbackAt") or item.get("artifact_feedback_at"):
             metadata_item["artifactFeedbackAt"] = compact_text(item.get("artifactFeedbackAt") or item.get("artifact_feedback_at"), 80)
+        feedback_share_id = compact_text(
+            item.get("feedbackShareId")
+            or item.get("feedback_share_id")
+            or item.get("shareId")
+            or item.get("share_id"),
+            80,
+        )
+        feedback_share_url = compact_text(
+            item.get("feedbackShareUrl")
+            or item.get("feedback_share_url")
+            or item.get("shareUrl")
+            or item.get("share_url"),
+            500,
+        )
+        if feedback_share_id:
+            metadata_item["feedbackShareId"] = feedback_share_id
+        if feedback_share_url:
+            metadata_item["feedbackShareUrl"] = feedback_share_url
         metadata = sync_safe_json(
             metadata_item,
             deny_keys=(
@@ -3701,7 +4295,14 @@ class AdminHandler(BaseHTTPRequestHandler):
 
     def _path(self):
         path = urlparse(self.path).path.rstrip("/") or "/"
-        for prefix in ("/ecorex-agent/admin/api", "/ecorex-agent/api/admin", "/admin/api", "/api/admin"):
+        for prefix in (
+            "/ecorex-agent/usage-panel/api",
+            "/ecorex-agent/admin/api",
+            "/ecorex-agent/api/admin",
+            "/usage-panel/api",
+            "/admin/api",
+            "/api/admin",
+        ):
             if path == prefix:
                 return "/"
             if path.startswith(prefix + "/"):
@@ -3788,13 +4389,82 @@ class AdminHandler(BaseHTTPRequestHandler):
         return f"{proto}://{host}" if host else ""
 
     def _share_url(self, share_id):
+        configured_base = (
+            os.environ.get("ECOREX_PUBLIC_CLIENT_BASE_URL")
+            or os.environ.get("ECOREX_PUBLIC_BASE_URL")
+            or os.environ.get("ECOREX_AGENT_PUBLIC_BASE_URL")
+            or os.environ.get("PUBLIC_BASE_URL")
+            or ""
+        ).strip().rstrip("/")
+        if configured_base:
+            base = configured_base
+            if "/session-shares" in base:
+                base = base.split("/session-shares", 1)[0].rstrip("/")
+            if not base.endswith("/client"):
+                base = base.rstrip("/") + "/client"
+            return f"{base}/session-shares/{quote(share_id)}"
+
         raw_path = urlparse(self.path).path.rstrip("/") or "/"
         marker = "/session-shares"
         prefix = raw_path.split(marker, 1)[0] if marker in raw_path else "/client"
+        forwarded_prefix = (self.headers.get("X-Forwarded-Prefix") or "").split(",", 1)[0].strip().rstrip("/")
+        if forwarded_prefix and prefix == "/client":
+            prefix = f"{forwarded_prefix}/client"
+        elif prefix == "/client":
+            host = (self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or "").split(",", 1)[0].strip().lower()
+            if host and not host.startswith(("127.0.0.1", "localhost", "[::1]")):
+                prefix = "/ecorex-agent/client"
         if not prefix.endswith("/client"):
             prefix = prefix.rstrip("/") + "/client"
         origin = self._public_origin()
         return f"{origin}{prefix}/session-shares/{quote(share_id)}" if origin else f"{prefix}/session-shares/{quote(share_id)}"
+
+    def _share_artifact_html(self, artifact):
+        if not isinstance(artifact, dict):
+            return ""
+        title = redact_share_text(artifact.get("title") or artifact.get("fileName") or "artifact", 240)
+        kind = compact_text(artifact.get("kind") or "file", 40)
+        mime_type = compact_text(artifact.get("mimeType") or "", 120)
+        size = positive_int(artifact.get("sizeBytes"))
+        size_label = ""
+        if size:
+            size_label = f"{size} B" if size < 1024 else f"{size / 1024:.1f} KB" if size < 1024 * 1024 else f"{size / (1024 * 1024):.1f} MB"
+        media_url = safe_share_url(artifact.get("mediaUrl") or artifact.get("previewUrl") or artifact.get("thumbnailUrl") or artifact.get("url"))
+        open_url = safe_share_url(artifact.get("url") or media_url)
+        is_image = kind == "image" or mime_type.startswith("image/") or re.search(r"\.(?:png|jpe?g|gif|webp)(?:[?#]|$)", media_url, re.I)
+        meta = " · ".join(part for part in [kind, mime_type, size_label] if part)
+        preview = ""
+        actions = ""
+        file_name = redact_share_text(artifact.get("fileName") or title or "artifact", 240)
+        if media_url and is_image:
+            escaped_media = html.escape(media_url, quote=True)
+            escaped_title = html.escape(title, quote=True)
+            escaped_file_name = html.escape(file_name, quote=True)
+            preview = (
+                f'<button type="button" class="artifact-preview-button" data-image-src="{escaped_media}" '
+                f'data-image-title="{escaped_title}" data-image-file="{escaped_file_name}" aria-label="放大查看 {escaped_title}">'
+                f'<img class="artifact-preview" src="{escaped_media}" alt="{escaped_title}" loading="lazy">'
+                '</button>'
+            )
+            actions = (
+                '<div class="artifact-actions">'
+                f'<a href="{escaped_media}" download="{escaped_file_name}">保存图片</a>'
+                f'<a href="{escaped_media}" target="_blank" rel="noopener noreferrer">打开原图</a>'
+                '</div>'
+            )
+        elif open_url:
+            preview = f'<a class="artifact-file-link" href="{html.escape(open_url)}" target="_blank" rel="noopener noreferrer">打开产物</a>'
+        return (
+            '<li class="artifact-item">'
+            f'{preview}'
+            '<div class="artifact-body">'
+            f'<span>{html.escape(kind)}</span>'
+            f'<strong>{html.escape(title)}</strong>'
+            f'<em>{html.escape(meta or compact_text(artifact.get("artifactValidity") or "valid", 40))}</em>'
+            f'{actions}'
+            '</div>'
+            '</li>'
+        )
 
     def _share_html(self, share_id, payload):
         title = html.escape(redact_share_text((payload or {}).get("title") or "EcoreX shared session", 180))
@@ -3804,17 +4474,15 @@ class AdminHandler(BaseHTTPRequestHandler):
             if not isinstance(item, dict):
                 continue
             role = "assistant" if item.get("role") == "assistant" else "user"
-            content = html.escape(redact_share_text(item.get("content") or "", 8000))
+            content = html.escape(redact_share_text(share_content_text(item.get("content") or ""), 8000))
             artifacts = item.get("artifacts") if isinstance(item.get("artifacts"), list) else []
             artifact_html = "".join(
-                f'<li><span>{html.escape(compact_text(artifact.get("kind") or "file", 40))}</span>'
-                f'<strong>{html.escape(redact_share_text(artifact.get("title") or "artifact", 240))}</strong>'
-                f'<em>{html.escape(compact_text(artifact.get("artifactValidity") or "valid", 40))}</em></li>'
+                self._share_artifact_html(artifact)
                 for artifact in artifacts[:24]
                 if isinstance(artifact, dict)
             )
             rendered.append(
-                f'<article class="msg {role}"><b>{"EcoreX" if role == "assistant" else "User"}</b>'
+                f'<article class="msg {role}"><b>{"Agent" if role == "assistant" else "User"}</b>'
                 f'<div>{content.replace(chr(10), "<br>")}</div>'
                 f'{"<ul>" + artifact_html + "</ul>" if artifact_html else ""}</article>'
             )
@@ -3834,15 +4502,70 @@ class AdminHandler(BaseHTTPRequestHandler):
     .msg.assistant{{background:#fffaf4}}
     .msg b{{display:block;margin-bottom:8px;color:#6f5c4a}}
     ul{{margin:12px 0 0;padding:0;list-style:none;display:grid;gap:8px}}
-    li{{display:flex;gap:10px;align-items:center;border-top:1px solid #eee2d5;padding-top:8px}}
+    li.artifact-item{{display:grid;grid-template-columns:minmax(80px,160px) minmax(0,1fr);gap:10px;align-items:center;border-top:1px solid #eee2d5;padding-top:8px}}
+    .artifact-body{{min-width:0;display:grid;gap:2px}}
     li span,li em{{color:#897565;font-size:12px;font-style:normal}}
     li strong{{font-weight:650;flex:1}}
+    .artifact-preview-button{{display:block;border:0;padding:0;background:transparent;cursor:zoom-in;text-align:left}}
+    .artifact-preview{{width:100%;max-height:140px;object-fit:contain;border:1px solid #eee2d5;border-radius:8px;background:#fff}}
+    .artifact-file-link{{display:inline-flex;width:max-content;max-width:100%;align-items:center;gap:6px;padding:7px 10px;border:1px solid #d8c7b6;border-radius:8px;color:#5a4635;background:#fff;text-decoration:none;font-size:13px}}
+    .artifact-actions{{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}}
+    .artifact-actions a,.lightbox-actions a{{display:inline-flex;align-items:center;justify-content:center;padding:6px 9px;border:1px solid #d8c7b6;border-radius:8px;color:#5a4635;background:#fff;text-decoration:none;font-size:12px;font-weight:650}}
+    .image-lightbox{{position:fixed;inset:0;z-index:50;display:grid;grid-template-rows:auto minmax(0,1fr);background:rgba(20,16,12,.78);backdrop-filter:blur(8px);padding:18px}}
+    .image-lightbox[hidden]{{display:none}}
+    .lightbox-head{{display:flex;align-items:center;justify-content:space-between;gap:12px;color:#fff;margin-bottom:12px}}
+    .lightbox-head strong{{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+    .lightbox-actions{{display:flex;gap:8px;align-items:center}}
+    .lightbox-actions button{{border:1px solid rgba(255,255,255,.34);border-radius:8px;background:rgba(255,255,255,.12);color:#fff;padding:6px 10px;cursor:pointer}}
+    .lightbox-frame{{min-height:0;display:grid;place-items:center}}
+    .lightbox-frame img{{max-width:100%;max-height:100%;object-fit:contain;border-radius:8px;background:#fff;box-shadow:0 18px 80px rgba(0,0,0,.3)}}
     .privacy{{color:#897565;font-size:13px;margin-top:8px}}
+    @media(max-width:640px){{li.artifact-item{{grid-template-columns:1fr}}}}
   </style>
 </head>
 <body>
-  <header><h1>{title}</h1><div class="privacy">Shared from EcoreX. Local file paths and artifact files are not included.</div></header>
+  <header><h1>{title}</h1><div class="privacy">Shared from EcoreX. Local file paths are redacted; public artifact previews and links are shown when available.</div></header>
   <main>{body}</main>
+  <div class="image-lightbox" id="image-lightbox" hidden>
+    <div class="lightbox-head">
+      <strong id="lightbox-title">图片预览</strong>
+      <div class="lightbox-actions">
+        <a id="lightbox-download" href="#" download="image.png">保存图片</a>
+        <button type="button" id="lightbox-close">关闭</button>
+      </div>
+    </div>
+    <div class="lightbox-frame"><img id="lightbox-image" alt=""></div>
+  </div>
+  <script>
+    (() => {{
+      const box = document.getElementById("image-lightbox");
+      const image = document.getElementById("lightbox-image");
+      const titleEl = document.getElementById("lightbox-title");
+      const download = document.getElementById("lightbox-download");
+      const close = () => {{
+        box.hidden = true;
+        image.removeAttribute("src");
+      }};
+      document.addEventListener("click", (event) => {{
+        const target = event.target;
+        const trigger = target && target.closest ? target.closest(".artifact-preview-button") : null;
+        if (!trigger) return;
+        const src = trigger.getAttribute("data-image-src") || "";
+        const title = trigger.getAttribute("data-image-title") || "图片预览";
+        const file = trigger.getAttribute("data-image-file") || "image.png";
+        if (!src) return;
+        image.src = src;
+        image.alt = title;
+        titleEl.textContent = title;
+        download.href = src;
+        download.download = file;
+        box.hidden = false;
+      }});
+      document.getElementById("lightbox-close").addEventListener("click", close);
+      box.addEventListener("click", (event) => {{ if (event.target === box) close(); }});
+      document.addEventListener("keydown", (event) => {{ if (event.key === "Escape" && !box.hidden) close(); }});
+    }})();
+  </script>
 </body>
 </html>"""
 

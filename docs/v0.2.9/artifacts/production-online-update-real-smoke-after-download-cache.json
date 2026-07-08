@@ -1,0 +1,84 @@
+{
+  "status": "PASS",
+  "scope": "production-online-update-real-smoke",
+  "note": "Original harness timed out after the installer completed; this evidence was reconstructed from the isolated WorkRoot, stdout, downloaded package, update-state, and live /api/version response.",
+  "version": "0.2.9",
+  "generatedAt": "2026-07-05T15:26:55.7738986Z",
+  "baseUrl": "https://mvdcm.ecoremedia.net/ecorex-agent",
+  "manifest": {
+    "version": "0.2.9",
+    "downloadMode": "mirror-first-origin-fallback",
+    "firstMirrorBaseUrl": "https://mvdcm.ecoremedia.net/ecorex-agent/downloads",
+    "mirrors": [
+      {
+        "id": "ecorex-download-cache-v0.2.9",
+        "kind": "asset-cache",
+        "baseUrl": "https://mvdcm.ecoremedia.net/ecorex-agent/downloads",
+        "pathMode": "fileName"
+      },
+      {
+        "id": "asset-mirror-v0.2.9",
+        "kind": "asset-base",
+        "baseUrl": "https://ghproxy.net/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.9",
+        "pathMode": "fileName"
+      },
+      {
+        "id": "github-release-v0.2.9",
+        "kind": "github-release",
+        "baseUrl": "https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.9",
+        "pathMode": "fileName"
+      }
+    ]
+  },
+  "artifact": {
+    "id": "webui-windows-x64",
+    "fileName": "EcoreX_0.2.9-webui-windows-x64.zip",
+    "href": "downloads/EcoreX_0.2.9-webui-windows-x64.zip",
+    "size": 550836551,
+    "sha256": "39E5DA8C1A4477AE09D14261125F88A2BC861BD1E561AF58DFB805EE51D4AA06"
+  },
+  "install": {
+    "firstDownloadSourceIsDownloadCache": true,
+    "stdoutTail": "Fetching EcoreX manifest: https://mvdcm.ecoremedia.net/ecorex-agent/manifest.json\nEcoreX WebUI installer script: 0.2.9\nEcoreX WebUI manifest version: 0.2.9\nTrying download source: https://mvdcm.ecoremedia.net/ecorex-agent/downloads/EcoreX_0.2.9-webui-windows-x64.zip\nUsing cached package: C:\\EcoreX-Agent������\\tmp\\online-update-smoke-final-20260705230040\\LocalAppData\\EcoreX WebUI\\downloads\\EcoreX_0.2.9-webui-windows-x64.zip\nExtracting package...\nPackage extracted.\nStarting EcoreX WebUI local installer...\nEcoreX WebUI package installer: 0.2.9\nCopying EcoreX WebUI runtime to C:\\EcoreX-Agent������\\tmp\\online-update-smoke-final-20260705230040\\LocalAppData\\EcoreX WebUI\\runtime-0.2.9-0445ed14...\nStarting EcoreX WebUI local service: http://127.0.0.1:9910/app/\nWaiting for EcoreX WebUI to become ready...\nDesktop shortcut updated: C:\\EcoreX-Agent������\\tmp\\online-update-smoke-final-20260705230040\\UserProfile\\Desktop\\EcoreX WebUI.lnk\nEcoreX WebUI is ready: http://127.0.0.1:9910/app/\nBackground update installed. Existing browser tabs should soft-refresh after they observe the new runtime version.\nEcoreX WebUI install command finished. If the browser did not open, double-click the desktop EcoreX WebUI shortcut; it will start the local service and reopen the browser.\n",
+    "stderrTail": null
+  },
+  "downloadedPackage": {
+    "exists": true,
+    "size": 550836551,
+    "sha256": "39E5DA8C1A4477AE09D14261125F88A2BC861BD1E561AF58DFB805EE51D4AA06",
+    "sizeMatchesManifest": true,
+    "sha256MatchesManifest": true
+  },
+  "runtime": {
+    "webuiUrl": "http://127.0.0.1:9910/app/",
+    "runtimeDirHash": "847BC09F80D39F542DF686C424377DF0E002BB85483A9CFF57D27C492993B7D8",
+    "apiVersion": "0.2.9",
+    "updateState": {
+      "product": "EcoreX WebUI",
+      "version": "0.2.9",
+      "mode": "background",
+      "status": "installed",
+      "reason": "",
+      "url": "http://127.0.0.1:9910/app/",
+      "browserAction": "defer-to-existing-tab-soft-refresh",
+      "activationPolicy": "prompt-soft-refresh-existing-tab",
+      "autoLaunchBrowser": "never-in-background",
+      "healthCheck": {
+        "endpoint": "/api/version",
+        "status": "pass",
+        "passed": true
+      },
+      "generatedAt": "2026-07-05T15:22:50.135122Z"
+    }
+  },
+  "checks": {
+    "manifestVersion": true,
+    "firstMirrorIsDownloadCache": true,
+    "firstDownloadSourceIsDownloadCache": true,
+    "downloadedPackageSizeMatchesManifest": true,
+    "downloadedPackageShaMatchesManifest": true,
+    "runtimeReady": true,
+    "updateStateInstalled": true,
+    "healthCheckPassed": true
+  }
+}

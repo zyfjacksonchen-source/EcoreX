@@ -67,7 +67,9 @@ function isAllowedPath(pathname: string, method: string) {
     "GET /api/tool-permissions",
     "POST /api/tool-permissions",
     "GET /api/active-requests",
+    "GET /api/image-jobs",
     "POST /upload",
+    "POST /api/image-jobs",
     "GET /api/sessions",
     "GET /api/history",
     "POST /api/messages/delete",
@@ -117,6 +119,9 @@ function isAllowedPath(pathname: string, method: string) {
     return true;
   }
   if (upperMethod === "POST" && /^\/api\/subagents\/[^/]+\/(?:cancel|collect)$/.test(cleanPath)) {
+    return true;
+  }
+  if (upperMethod === "POST" && /^\/api\/image-jobs\/[^/]+$/.test(cleanPath)) {
     return true;
   }
   if (upperMethod === "GET" && cleanPath.startsWith("/uploads/")) {

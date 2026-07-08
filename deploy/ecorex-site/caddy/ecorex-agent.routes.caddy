@@ -3,7 +3,12 @@
 
 redir /ecorex-agent /ecorex-agent/
 redir /ecorex-agent/admin /ecorex-agent/admin/
+redir /ecorex-agent/usage-panel /ecorex-agent/usage-panel/
 redir /ecorex-agent/app /ecorex-agent/app/
+
+handle /ecorex-agent/usage-panel/api/* {
+    reverse_proxy 127.0.0.1:18084
+}
 
 handle /ecorex-agent/admin/api/* {
     reverse_proxy 127.0.0.1:18084
@@ -14,6 +19,10 @@ handle /ecorex-agent/api/admin/* {
 }
 
 handle /ecorex-agent/client/* {
+    reverse_proxy 127.0.0.1:18084
+}
+
+handle /client/session-shares/* {
     reverse_proxy 127.0.0.1:18084
 }
 
@@ -34,6 +43,14 @@ handle @ecorex_web_runtime {
 }
 
 handle_path /ecorex-agent/admin/* {
+    basic_auth {
+        admin <replace-with-caddy-hash>
+    }
+    root * /srv/ecorex-agent-download/current/admin
+    file_server
+}
+
+handle_path /ecorex-agent/usage-panel/* {
     basic_auth {
         admin <replace-with-caddy-hash>
     }

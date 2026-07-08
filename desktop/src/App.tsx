@@ -17,13 +17,17 @@ import {
   FolderPlus,
   FolderOpen,
   FolderX,
+  GitBranch,
   Globe2,
   HardDrive,
   Image as ImageIcon,
   KeyRound,
+  Link2,
   LogOut,
+  ListPlus,
   Moon,
   MoreHorizontal,
+  Network,
   Paperclip,
   Pencil,
   Pin,
@@ -49,11 +53,13 @@ import {
 } from "lucide-react";
 import { FormEvent, KeyboardEvent, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { ClipboardEvent, CSSProperties, DragEvent, MouseEvent, ReactNode } from "react";
+import { ImageRetouchCanvas, type ImageRetouchRelatedImage, type ImageRetouchSubmitPayload } from "./components/ImageRetouchCanvas";
 import { MessageContent, type AgentStepDisclosure, type LocalFilePayload, type ToolCallDisclosure } from "./components/MessageContent";
 import {
   cancelChatRequest,
   cancelSubagentTask,
   clearRuntimeContext,
+  connectTencentDocs,
   enterpriseChangePassword,
   checkEnterpriseQuota,
   chooseProjectFolder,
@@ -68,25 +74,31 @@ import {
   generateSessionTitle,
   getEnterpriseSession,
   hasMessageStreamCursor,
+  imageJobAction,
   listCapabilityPacks,
+  listTencentDocsFiles,
   loadExternalConnections,
+  loadKnowledgeGraph,
   loadSchedulerProjection,
   loadPermissionState,
   loadRuntimeProjection,
   loadMemoryFiles,
   loadRuntimeUiState,
   loadRuntimeSnapshot,
+  loadTencentDocsStatus,
   loadChatModelOptions,
   loadSessionHistoryWithMeta,
   openLocalPath,
   openMessageStream,
   prepareRequestRetry,
   queueChatRequestAction,
+  readKnowledgeFile,
   readLocalJson,
   reportArtifactFeedback,
   reportDesktopEvent,
   requestAgentInstallRequest,
   resetPermissionGrants,
+  disconnectTencentDocs,
   deleteRuntimeSession,
   renameRuntimeSession,
   registerProjectFolderPath,
@@ -100,7 +112,9 @@ import {
   updateScheduler,
   updateExternalConnection,
   updatePermissionMode,
+  uploadImageEditMarker,
   type CapabilityPack,
+  type ChatInterruptMode,
   type ChatSendResult,
   type ChatModelOption,
   type ChatContextPolicy,
@@ -115,6 +129,8 @@ import {
   type FileAttachment,
   type LocalJsonResult,
   type LocalPathStat,
+  type KnowledgeGraphLink,
+  type KnowledgeGraphNode,
   type MemoryFile,
   type PermissionMode,
   type PermissionState,
@@ -126,6 +142,7 @@ import {
   type RuntimeExtension,
   type RuntimeMessage,
   type RuntimeRequestProjection,
+  type RuntimeTaskObservationProjection,
   type RuntimeSkill,
   type RuntimeStep,
   type RuntimeToolCall,
@@ -137,6 +154,8 @@ import {
   type RuntimeSchedulerProjection,
   type RuntimeSchedulerTask,
   type StreamItem,
+  type TencentDocsFile,
+  type TencentDocsStatusPayload,
   type TokenUsage,
   type UsageQuota,
   type QualityEvidence,
@@ -147,6 +166,10 @@ import { redactInternalPromptText, redactToolDisclosureValue } from "./utils/red
 import { projectionRecoveryDecision, type ProjectionTerminalPhase } from "./utils/runtimeProjectionRecovery";
 
 type ThemeMode = "light" | "dark";
+type ActiveTurnMode = ChatInterruptMode;
+
+const FEATURED_EXTERNAL_CONNECTOR_IDS = ["tencent-docs", "feishu", "dingtalk", "wechatcom_app", "wecom_bot", "qq"];
+
 type SidecarStatus = {
   state: "starting" | "running" | "stopped" | "failed" | "skipped";
   phase?: "idle" | "spawning" | "probing" | "ready" | "degraded" | "restarting" | "failed" | "stopped" | "skipped";
@@ -222,11 +245,12 @@ type ChatItem = {
   contextExcluded?: boolean;
   sendAttempt?: {
     id: string;
-    state: "queued" | "stopping-previous" | "sending" | "accepted" | "restore-available";
+    state: "queued" | "stopping-previous" | "updating-current" | "branching" | "sending" | "accepted" | "restore-available";
     interruptsRequestId?: string;
+    interruptMode?: ActiveTurnMode;
   };
   recovery?: {
-    kind: "stalled" | "failed" | "interrupted" | "replay_gap" | "retryable_conflict" | "reconnecting";
+    kind: "stalled" | "failed" | "interrupted" | "replay_gap" | "retryable_conflict" | "reconnecting" | "queued";
     requestId?: string;
     message: string;
     retryable?: boolean;
@@ -243,6 +267,21 @@ type ChatRunTiming = {
   startedAtMs?: number;
   updatedAtMs?: number;
   terminalAtMs?: number;
+};
+type PendingPreflightTurn = {
+  userId: string;
+  assistantId: string;
+  attemptId: string;
+  createdAtMs: number;
+};
+type ImageRetouchTarget = {
+  sessionId: string;
+  requestId?: string;
+  sourcePath: string;
+  previewUrl: string;
+  title: string;
+  artifact: AgentArtifact;
+  relatedImages: ImageRetouchRelatedImage[];
 };
 type ApprovalState =
   | {
@@ -264,7 +303,7 @@ type ApprovalState =
       message: string;
       actions?: Array<{ label: string; primary?: boolean; onClick: () => void }>;
     };
-type SettingsSection = "account" | "projects" | "abilities" | "external-connections" | "scheduler" | "permissions" | "memory" | "diagnostics";
+type SettingsSection = "account" | "projects" | "abilities" | "external-connections" | "scheduler" | "permissions" | "memory" | "knowledge-graph" | "diagnostics";
 type SessionProjectMap = Record<string, string>;
 type SessionProjectBindingMap = Record<string, ProjectSessionBinding>;
 type StringBoolMap = Record<string, boolean>;
@@ -381,6 +420,44 @@ function isImageAttachment(file: FileAttachment) {
   return file.file_type === "image" || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(file.file_name || file.file_path || "");
 }
 
+function isTencentDocsAttachment(file: FileAttachment) {
+  return file.provider === "tencent-docs" || file.source === "tencent-docs" || file.remote === true || /^tencent-docs:\/\//i.test(file.file_path || "");
+}
+
+function tencentDocsFileStableKey(file: TencentDocsFile | FileAttachment) {
+  const raw = String(
+    ("key" in file && file.key)
+    || ("file_id" in file && file.file_id)
+    || ("node_id" in file && file.node_id)
+    || ("file_path" in file && file.file_path)
+    || ("url" in file && file.url)
+    || ("file_name" in file && file.file_name)
+    || ""
+  ).trim();
+  if (!raw) return "";
+  return raw.startsWith("tencent-docs://") ? raw : `tencent-docs://${raw}`;
+}
+
+function tencentDocsAttachmentFromFile(file: TencentDocsFile): FileAttachment {
+  const filePath = tencentDocsFileStableKey(file) || `tencent-docs://${Date.now()}`;
+  const title = String(file.file_name || file.title || file.file_id || "腾讯文档").trim();
+  return {
+    file_path: filePath,
+    file_name: title,
+    file_type: "file",
+    provider: "tencent-docs",
+    source: "tencent-docs",
+    key: filePath,
+    file_id: file.file_id,
+    node_id: file.node_id,
+    doc_type: file.doc_type,
+    url: file.url,
+    owner: file.owner,
+    updated_at: file.updated_at,
+    remote: true
+  };
+}
+
 function normalizeAttachmentDedupeKey(file: FileAttachment) {
   const raw = normalizeLocalSource(file.file_path || file.preview_url || file.file_name || "");
   const compact = raw.replace(/[\\/]+$/g, "").replace(/\\/g, "/");
@@ -390,6 +467,7 @@ function normalizeAttachmentDedupeKey(file: FileAttachment) {
 
 function isDurableLocalAttachment(file: FileAttachment) {
   const path = normalizeLocalSource(file.file_path || "");
+  if (isTencentDocsAttachment(file) || /^[a-z][a-z0-9+.-]*:\/\//i.test(path)) return false;
   if (!path || /^data:/i.test(path) || /^https?:\/\//i.test(path) || isRuntimePreviewPath(path)) return false;
   return true;
 }
@@ -428,8 +506,9 @@ const BACKGROUND_UPDATE_APPLIED_STORAGE_KEY = "ecorex-background-update-applied"
 const UPDATE_NOTICE_DISMISSED_STORAGE_KEY = "ecorex-update-notice-dismissed";
 const SIDEBAR_COLLAPSE_STORAGE_KEY = "ecorex-sidebar-collapse-state-v1";
 const RUN_CENTER_DEV_GATE_STORAGE_KEY = "ecorex-dev-run-center";
-const NEW_SESSION_START_TITLE = "和EcoreX一起开始工作";
-const SESSION_UI_RETAINED_SESSIONS = 10;
+const NEW_SESSION_START_TITLE = "和小芯一起开始工作";
+const SESSION_UI_RETAINED_SESSIONS = 36;
+const SESSION_UI_PROJECT_RETAINED_SESSIONS = 80;
 const SESSION_UI_MESSAGE_LIMIT = 10;
 const SESSION_UI_FALLBACK_MESSAGE_LIMIT = 4;
 const SESSION_UI_SESSION_SOFT_BYTES = 36_000;
@@ -439,6 +518,7 @@ const SESSION_UI_STEP_CHARS = 600;
 const SESSION_UI_THINKING_STEP_CHARS = 12_000;
 const SESSION_UI_TOOL_CHARS = 800;
 const SESSION_UI_REASONING_CHARS = 900;
+const SIDEBAR_SESSION_PREVIEW_LIMIT = 6;
 
 function releaseNotesSeenId(notes?: RuntimeReleaseNotes | null, fallbackVersion?: string) {
   if (notes?.version) {
@@ -453,14 +533,48 @@ function backgroundUpdateSeenId(state?: RuntimeUpdateState | null) {
 }
 
 function backgroundUpdateReadyForRefresh(state?: RuntimeUpdateState | null) {
+  if (!state) return false;
+  const readyStatus = state.status === "installed" || state.status === "activated";
+  const healthCheckPassed = state.healthCheck?.passed === true || state.healthCheck?.status === "pass";
+  const externalConnectionsPassed = !state.externalConnections?.required
+    || state.externalConnections?.passed === true
+    || state.externalConnections?.status === "pass";
   return Boolean(
-    state?.refreshRequired
+    readyStatus
+    && healthCheckPassed
+    && externalConnectionsPassed
+    && (
+      state.refreshRequired
     || (
-      state?.mode === "background"
-      && state.status === "installed"
+      state.mode === "background"
       && state.browserAction === "defer-to-existing-tab-soft-refresh"
     )
+    )
   );
+}
+
+function runtimeUpdateStateDetails(state?: RuntimeUpdateState | null) {
+  const status = String(state?.status || "").toLowerCase();
+  const version = state?.version || "";
+  const product = state?.product || "EcoreX WebUI";
+  const statusMap: Record<string, { title: string; label: string }> = {
+    available: { title: "发现 EcoreX 更新", label: "可用" },
+    downloading: { title: "正在下载更新", label: "下载中" },
+    verified: { title: "更新包已校验", label: "已校验" },
+    staged: { title: "更新已暂存", label: "待安装" },
+    deferred: { title: "更新已延迟", label: "已延迟" },
+    installed: { title: "更新已安装", label: "待切换" },
+    activated: { title: "更新已切换", label: "已生效" },
+    failed: { title: "更新失败", label: "失败" },
+    rollback: { title: "已回滚到稳定版本", label: "已回滚" }
+  };
+  const fallback = statusMap[status] || { title: "EcoreX 更新状态", label: status || "状态" };
+  const missingExternalIds = state?.externalConnections?.missingIds || [];
+  const externalFailure = state?.externalConnections?.status === "failed" && missingExternalIds.length > 0;
+  const message = state?.message
+    || (externalFailure ? `外部连接健康检查失败：${missingExternalIds.join("、")}` : "")
+    || (version ? `${product} ${version} ${fallback.label}` : `${product} ${fallback.label}`);
+  return { ...fallback, status, message };
 }
 
 function runtimeUpdatePlatform() {
@@ -496,12 +610,13 @@ const coreAbilityNames = new Set([
   "web_search",
   "web_fetch",
   "browser",
+  "imagegen",
   "ecorex_cli",
   "memory_search",
   "memory_get"
 ]);
 
-const skillAbilityNames = new Set(["find", "image-generation", "knowledge-wiki", "skill-creator"]);
+const skillAbilityNames = new Set(["find", "image-generation", "imagegen", "knowledge-wiki", "skill-creator"]);
 
 function readStorage<T>(key: string, fallback: T): T {
   try {
@@ -833,6 +948,16 @@ function slimPersistedAttachment(file: FileAttachment): FileAttachment {
     file_name: file.file_name,
     file_type: file.file_type,
     preview_url: file.preview_url,
+    provider: file.provider,
+    source: file.source,
+    key: file.key,
+    file_id: file.file_id,
+    node_id: file.node_id,
+    doc_type: file.doc_type,
+    url: file.url,
+    owner: file.owner,
+    updated_at: file.updated_at,
+    remote: file.remote,
     ...(previewDataUrl ? { previewDataUrl } : {})
   };
 }
@@ -860,6 +985,8 @@ function slimPersistedArtifact(artifact: AgentArtifact): AgentArtifact {
     artifactValidity: artifact.artifactValidity,
     artifactFeedbackSignal: artifact.artifactFeedbackSignal,
     artifactFeedbackAt: artifact.artifactFeedbackAt,
+    feedbackShareId: artifact.feedbackShareId,
+    feedbackShareUrl: artifact.feedbackShareUrl,
     qualityEvidence: compactPersistedQualityEvidence(artifact.qualityEvidence),
     stats: artifact.stats,
     source: artifact.source ? {
@@ -1042,11 +1169,32 @@ function initialSidebarCollapseState(): SidebarCollapseState {
   };
 }
 
+function sessionUiActivityValue(value: SessionUiState) {
+  return timeMs(value.lastActivityAt) || latestMessageMs(value.messages || []) || 0;
+}
+
+function isProjectSessionUiState(sessionId: string, value: SessionUiState) {
+  return Boolean(
+    value.projectId
+    || value.projectBinding?.projectId
+    || value.projectBinding?.projectPath
+    || sessionId.startsWith("ecorex-project-")
+  );
+}
+
 function pruneSessionUiState(state: Record<string, SessionUiState>) {
   const entries = Object.entries(state);
   const liveEntries = entries.filter(([, value]) => hasLivePersistedMessages(value.messages || []));
+  const recentEntries = [...entries]
+    .sort(([, left], [, right]) => sessionUiActivityValue(left) - sessionUiActivityValue(right))
+    .slice(-SESSION_UI_RETAINED_SESSIONS);
+  const projectEntries = entries
+    .filter(([sessionId, value]) => isProjectSessionUiState(sessionId, value))
+    .sort(([, left], [, right]) => sessionUiActivityValue(left) - sessionUiActivityValue(right))
+    .slice(-SESSION_UI_PROJECT_RETAINED_SESSIONS);
   const retained = new Map<string, SessionUiState>();
-  for (const [sessionId, value] of entries.slice(-SESSION_UI_RETAINED_SESSIONS)) retained.set(sessionId, value);
+  for (const [sessionId, value] of recentEntries) retained.set(sessionId, value);
+  for (const [sessionId, value] of projectEntries) retained.set(sessionId, value);
   for (const [sessionId, value] of liveEntries) retained.set(sessionId, value);
   const next = Object.fromEntries(
     [...retained.entries()].map(([sessionId, value]) => [
@@ -1055,9 +1203,15 @@ function pruneSessionUiState(state: Record<string, SessionUiState>) {
     ])
   );
   while (serializedStateSize(next) > SESSION_UI_TOTAL_SOFT_BYTES && Object.keys(next).length > 1) {
-    const candidates = Object.entries(next)
+    let candidates = Object.entries(next)
       .filter(([, value]) => !hasLivePersistedMessages(value.messages || []))
-      .sort(([, left], [, right]) => (timeMs(left.lastActivityAt) || latestMessageMs(left.messages || [])) - (timeMs(right.lastActivityAt) || latestMessageMs(right.messages || [])));
+      .filter(([sessionId, value]) => !isProjectSessionUiState(sessionId, value))
+      .sort(([, left], [, right]) => sessionUiActivityValue(left) - sessionUiActivityValue(right));
+    if (!candidates.length) {
+      candidates = Object.entries(next)
+        .filter(([, value]) => !hasLivePersistedMessages(value.messages || []))
+        .sort(([, left], [, right]) => sessionUiActivityValue(left) - sessionUiActivityValue(right));
+    }
     const removeId = candidates[0]?.[0] || Object.keys(next)[0];
     delete next[removeId];
   }
@@ -1100,7 +1254,16 @@ function sameAttachments(left: FileAttachment[] = [], right: FileAttachment[] = 
       && item.file_name === other.file_name
       && item.file_type === other.file_type
       && item.preview_url === other.preview_url
-      && item.previewDataUrl === other.previewDataUrl;
+      && item.previewDataUrl === other.previewDataUrl
+      && item.provider === other.provider
+      && item.source === other.source
+      && item.file_id === other.file_id
+      && item.node_id === other.node_id
+      && item.doc_type === other.doc_type
+      && item.url === other.url
+      && item.owner === other.owner
+      && item.updated_at === other.updated_at
+      && item.remote === other.remote;
   });
 }
 
@@ -1239,6 +1402,20 @@ function runCenterStateClass(request?: RuntimeActiveRequest | null) {
   return "is-running";
 }
 
+function queuedGuidancePhase(queuePosition = 0) {
+  const position = Number.isFinite(queuePosition) && queuePosition > 1
+    ? `已进入队列，第 ${Math.round(queuePosition)} 位等待执行`
+    : "已进入队列，等待当前任务完成";
+  return `当前任务仍在运行；这条消息${position}。可提到队首立即切换，也可以取消排队。`;
+}
+
+function queuedGuidanceStatus(queuePosition = 0) {
+  if (Number.isFinite(queuePosition) && queuePosition > 1) {
+    return `队列中，第 ${Math.round(queuePosition)} 位；可提到队首或取消排队。`;
+  }
+  return "队列中；当前任务完成后自动继续，可提到队首或取消排队。";
+}
+
 function isRunCenterFailedRequest(request?: RuntimeActiveRequest | null) {
   return runCenterState(request) === "failed";
 }
@@ -1284,6 +1461,64 @@ function formatRunAge(seconds?: number | null) {
   if (minutes < 60) return `${minutes}m ${rest}s`;
   const hours = Math.floor(minutes / 60);
   return `${hours}h ${minutes % 60}m ${rest}s`;
+}
+
+function runCenterTaskObservations(request?: RuntimeActiveRequest | null): RuntimeTaskObservationProjection[] {
+  return Array.isArray(request?.task_observations) ? request.task_observations : [];
+}
+
+function runCenterPrimaryObservation(request?: RuntimeActiveRequest | null): RuntimeTaskObservationProjection | null {
+  const observations = runCenterTaskObservations(request);
+  if (!observations.length) return null;
+  return observations.find((item) => String(item.health || item.status || "").toLowerCase().includes("decision"))
+    || observations.find((item) => String(item.kind || "") === "image_job")
+    || observations[0];
+}
+
+function runCenterObservationNeedsDecision(observation?: RuntimeTaskObservationProjection | null) {
+  const health = String(observation?.health || observation?.status || "").toLowerCase();
+  return Boolean(observation && (health.includes("decision") || observation.intervention?.status === "waiting_user_decision"));
+}
+
+function runCenterObservationJobId(observation?: RuntimeTaskObservationProjection | null) {
+  return String(observation?.job_id || (observation?.kind === "image_job" ? observation?.task_id : "") || "").trim();
+}
+
+function imageJobStatusLabel(status?: string) {
+  const value = String(status || "").trim().toLowerCase();
+  const labels: Record<string, string> = {
+    provider_request: "请求生图服务",
+    provider_polling: "等待生图服务返回",
+    provider_waiting: "等待生图服务",
+    polling: "轮询结果",
+    waiting: "等待返回",
+    provider_response: "处理生图返回",
+    download: "下载生成结果",
+    saving: "保存生成结果",
+    quality_check: "质检生成结果",
+    qa: "质检生成结果",
+    qa_check: "质检生成结果",
+    retry: "按质检结果重试",
+    rate_limited: "等待限流恢复",
+    fallback: "切换备用路线",
+    postprocess: "后处理结果",
+    completed: "完成",
+    failed: "失败",
+    cancelled: "已停止"
+  };
+  return labels[value] || value;
+}
+
+function runCenterObservationLabel(observation?: RuntimeTaskObservationProjection | null) {
+  if (!observation) return "";
+  const title = String(observation.title || observation.kind || "task");
+  const health = String(observation.health || observation.status || "running");
+  const imageStatus = imageJobStatusLabel(observation.image_job_status);
+  const elapsed = formatRunAge(observation.elapsed_seconds);
+  const progress = typeof observation.progress === "number" && Number.isFinite(observation.progress) && observation.progress > 0 && observation.progress < 1
+    ? `${Math.round(observation.progress * 100)}%`
+    : "";
+  return [title, imageStatus || health, progress, elapsed].filter(Boolean).join(" · ");
 }
 
 function epochMs(value?: string | number | null) {
@@ -1627,6 +1862,59 @@ function shortTitle(text: string) {
   return clean ? clean.slice(0, 22) : NEW_SESSION_START_TITLE;
 }
 
+function cleanGeneratedSessionTitle(value: string) {
+  return String(value || "")
+    .replace(/^[-*\s]*(User|Assistant|用户|助手)\s*[:：]\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+}
+
+function usableGeneratedSessionTitle(title: string, userMessage: string) {
+  const clean = cleanGeneratedSessionTitle(title);
+  if (!clean) return "";
+  if (/^(User|Assistant|用户|助手)\s*[:：]/i.test(String(title || "").trim())) return "";
+  if (clean === NEW_SESSION_START_TITLE || clean === "新对话") return "";
+  const userClean = String(userMessage || "").replace(/\s+/g, " ").trim();
+  if (userClean && clean === userClean && userClean.length > 18) return "";
+  return clean;
+}
+
+function sessionTitleReadableText(value: string) {
+  return /[A-Za-z0-9\u3400-\u9fff]/.test(value);
+}
+
+function cleanSessionTitleForDisplay(value: unknown) {
+  const clean = String(value || "")
+    .replace(/<img\b[^>]*>/gi, "")
+    .replace(/!\[[^\]]*]\([^)]*\)/g, "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!clean || !sessionTitleReadableText(clean)) return "";
+  return clean.slice(0, 80);
+}
+
+function sessionTitleForDisplay(...candidates: unknown[]) {
+  for (const candidate of candidates) {
+    const clean = cleanSessionTitleForDisplay(candidate);
+    if (clean) return clean;
+  }
+  return "未命名会话";
+}
+
+function outgoingTitleSeed(text: string, attachments: FileAttachment[], projectName?: string | null) {
+  const cleanText = String(text || "").replace(/\s+/g, " ").trim();
+  if (cleanText) return cleanText;
+  const firstTencentDoc = attachments.find(isTencentDocsAttachment);
+  if (firstTencentDoc) {
+    return `腾讯文档：${firstTencentDoc.file_name || firstTencentDoc.file_id || firstTencentDoc.node_id || "远程文档"}`;
+  }
+  const firstAttachment = attachments[0];
+  if (firstAttachment) return `附件：${firstAttachment.file_name || "待处理文件"}`;
+  return projectName || "项目会话";
+}
+
 function isPendingProjectSessionId(sessionId: string) {
   return String(sessionId || "").startsWith("ecorex-pending-project-");
 }
@@ -1675,7 +1963,7 @@ function mapSessions(
     const sortKeyMs = timeMs(activityAt) || timeMs(session.created_at) || 0;
     return {
       id,
-      title: sessionTitles[id] || session.title || session.session_id || "未命名会话",
+      title: sessionTitleForDisplay(sessionTitles[id], session.title, cached?.title, session.session_id, "未命名会话"),
       detail: project ? project.name : "",
       activityAt,
       createdAt: session.created_at || cachedActivity || activityAt,
@@ -1716,7 +2004,7 @@ function mapSessions(
       activityAt,
       createdAt: activityAt,
       sortKeyMs,
-      title: sessionTitles[sessionId] || cached.title || "未命名会话",
+      title: sessionTitleForDisplay(sessionTitles[sessionId], cached.title, sessionId, "未命名会话"),
       detail: project ? project.name : "",
       updatedAt: activeRequestId
         ? (isCancelling ? `正在停止${activeElapsed ? ` · 已处理 ${activeElapsed}` : ""}` : activeElapsed ? `已处理 ${activeElapsed}` : "运行中")
@@ -1745,7 +2033,7 @@ function mapSessions(
       activityAt,
       createdAt: activityAt,
       sortKeyMs,
-      title: sessionTitles[sessionId] || sessionUiState[sessionId]?.title || sessionId,
+      title: sessionTitleForDisplay(sessionTitles[sessionId], sessionUiState[sessionId]?.title, sessionId),
       detail: project ? project.name : "",
       updatedAt: isCancelling ? `正在停止${activeElapsed ? ` · 已处理 ${activeElapsed}` : ""}` : activeElapsed ? `已处理 ${activeElapsed}` : "运行中",
       status: isCancelling ? "cancelling" : "waiting",
@@ -1772,7 +2060,7 @@ function mapSessions(
       activityAt,
       createdAt: activityAt,
       sortKeyMs,
-      title: sessionTitles[activeSessionId] || localTitle || NEW_SESSION_START_TITLE,
+      title: sessionTitleForDisplay(sessionTitles[activeSessionId], localTitle, sessionUiState[activeSessionId]?.title, NEW_SESSION_START_TITLE),
       detail: project ? project.name : "",
       updatedAt: activeRequestId
         ? (isCancelling ? `正在停止${activeElapsed ? ` · 已处理 ${activeElapsed}` : ""}` : activeElapsed ? `已处理 ${activeElapsed}` : "运行中")
@@ -2069,6 +2357,7 @@ function detectNeededPack(text: string, files: FileAttachment[], packs: Capabili
 }
 
 function fileIcon(file: FileAttachment) {
+  if (isTencentDocsAttachment(file)) return <FileText aria-hidden="true" />;
   if (file.file_type === "image") return <Upload aria-hidden="true" />;
   return <FileText aria-hidden="true" />;
 }
@@ -2239,6 +2528,15 @@ function normalizeArtifactKeySource(value?: string) {
 
 function artifactMergeKey(artifact: AgentArtifact) {
   const kind = artifact.kind || "artifact";
+  if (kind === "image") {
+    const imageNameKey = normalizeArtifactKeySource(artifact.title)
+      .split("/")
+      .filter(Boolean)
+      .pop() || "";
+    if (/\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(imageNameKey)) {
+      return `${kind}:file:${imageNameKey}`;
+    }
+  }
   const sourceKey = [
     artifact.path,
     artifact.relativePath,
@@ -2291,6 +2589,8 @@ function mergeAgentArtifactRecord(existing: AgentArtifact, incoming: AgentArtifa
     merged.artifactFeedbackSignal = existing.artifactFeedbackSignal;
     merged.artifactFeedbackAt = existing.artifactFeedbackAt;
   }
+  merged.feedbackShareId = incoming.feedbackShareId || existing.feedbackShareId;
+  merged.feedbackShareUrl = incoming.feedbackShareUrl || existing.feedbackShareUrl;
   return merged;
 }
 
@@ -2444,6 +2744,9 @@ function mergeLocalLiveAssistantDisclosure(historyMessage: ChatItem, localMessag
   }
 
   const historyHasVisibleAnswer = assistantVisibleAnswerWeight(historyMessage) > 0;
+  const historyText = redactInternalPromptText(historyMessage.content || "").trim();
+  const localText = redactInternalPromptText(localMessage.content || "").trim();
+  const localHasRicherVisibleAnswer = Boolean(localText && localText.length > historyText.length + 64);
   const localWithHistoryArtifacts = mergeArtifactsIntoMessage(localMessage, historyMessage.artifacts || []);
   const localReasoning = redactInternalPromptText(localMessage.reasoning || "");
   const historyReasoning = redactInternalPromptText(historyMessage.reasoning || "");
@@ -2454,12 +2757,12 @@ function mergeLocalLiveAssistantDisclosure(historyMessage: ChatItem, localMessag
     ...baseMessage,
     id: localMessage.id || historyMessage.id,
     createdAt: localMessage.createdAt || historyMessage.createdAt,
-    content: historyHasVisibleAnswer ? historyMessage.content : (localMessage.content || historyMessage.content),
+    content: historyHasVisibleAnswer && !localHasRicherVisibleAnswer ? historyMessage.content : (localMessage.content || historyMessage.content),
     pending: historyHasVisibleAnswer ? false : localMessage.pending,
     paused: historyHasVisibleAnswer ? false : localMessage.paused,
     visibleOutputSettled: historyHasVisibleAnswer ? undefined : localMessage.visibleOutputSettled,
     cancelled: historyHasVisibleAnswer ? historyMessage.cancelled : localMessage.cancelled,
-    recovery: historyHasVisibleAnswer ? historyMessage.recovery : localMessage.recovery,
+    recovery: historyHasVisibleAnswer && !localHasRicherVisibleAnswer ? historyMessage.recovery : localMessage.recovery,
     requestId: localMessage.requestId || historyMessage.requestId,
     userSeq: typeof historyMessage.userSeq === "number" ? historyMessage.userSeq : localMessage.userSeq,
     botSeq: typeof historyMessage.botSeq === "number" ? historyMessage.botSeq : localMessage.botSeq,
@@ -2735,20 +3038,52 @@ function plainTextForMessage(message: ChatItem) {
   return parts.join("\n\n").trim();
 }
 
-function shareArtifactEntry(artifact: AgentArtifact) {
+const SHARE_IMAGE_DATA_URL_LIMIT = 180_000;
+const SHARE_PAYLOAD_SOFT_LIMIT = 1_200_000;
+const SHARE_MESSAGE_LIMIT = 120;
+const SHARE_ARTIFACT_LIMIT = 12;
+
+function shareSafeUrl(value?: string) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (/^data:image\/(?:png|jpe?g|gif|webp);base64,/i.test(text) && text.length <= SHARE_IMAGE_DATA_URL_LIMIT) return text;
+  if (/^https?:\/\//i.test(text)) return text;
+  if (/^(?:\/client\/|\/ecorex-agent\/client\/)/.test(text) && !text.startsWith("//")) return text;
+  return "";
+}
+
+function artifactShareFileName(artifact: AgentArtifact) {
+  const source = artifact.title || artifact.path || artifact.relativePath || artifact.url || "artifact";
+  return source.split(/[\\/]/).filter(Boolean).pop() || source || "artifact";
+}
+
+function shareArtifactEntry(artifact: AgentArtifact, mediaUrl = "") {
+  const safeMediaUrl = shareSafeUrl(mediaUrl || artifact.thumbnailUrl || artifact.previewUrl || artifact.url);
+  const safeOpenUrl = shareSafeUrl(artifact.url || safeMediaUrl);
   return {
     title: artifact.title || "未命名产物",
     kind: artifact.kind || "file",
     status: artifact.status || "ready",
+    fileName: artifactShareFileName(artifact),
+    mimeType: artifact.mimeType || (artifact.kind === "image" ? "image/png" : ""),
+    sizeBytes: artifact.sizeBytes || 0,
+    pathExt: artifact.path || artifact.relativePath || artifact.url
+      ? `.${(artifact.path || artifact.relativePath || artifact.url || "").split(/[?#]/, 1)[0].split(".").pop() || ""}`.slice(0, 24)
+      : "",
+    safeArtifactId: artifact.safeArtifactId || artifact.id,
     artifactValidity: artifact.artifactValidity || "valid",
-    artifactFeedbackSignal: artifact.artifactFeedbackSignal || "default"
+    artifactFeedbackSignal: artifact.artifactFeedbackSignal || "default",
+    ...(safeMediaUrl ? { mediaUrl: safeMediaUrl, previewUrl: safeMediaUrl, thumbnailUrl: safeMediaUrl } : {}),
+    ...(safeOpenUrl ? { url: safeOpenUrl } : {})
   };
 }
+
+type ShareArtifactEntry = ReturnType<typeof shareArtifactEntry>;
 
 function shareMessageEntry(message: ChatItem) {
   if (message.kind || (message.role !== "user" && message.role !== "assistant")) return null;
   const content = redactInternalPromptText(message.content || "").trim();
-  const artifacts = (message.artifacts || []).map(shareArtifactEntry).slice(0, 24);
+  const artifacts = (message.artifacts || []).map((artifact) => shareArtifactEntry(artifact)).slice(0, SHARE_ARTIFACT_LIMIT);
   if (!content && !artifacts.length) return null;
   return {
     role: message.role,
@@ -2758,11 +3093,152 @@ function shareMessageEntry(message: ChatItem) {
   };
 }
 
+type ShareMessageEntry = NonNullable<ReturnType<typeof shareMessageEntry>>;
+
+function sharePayloadByteLength(messages: ShareMessageEntry[]) {
+  try {
+    return new TextEncoder().encode(JSON.stringify({ messages })).length;
+  } catch {
+    return JSON.stringify({ messages }).length;
+  }
+}
+
+function stripShareArtifactMedia(artifact: ShareArtifactEntry): ShareArtifactEntry {
+  const next = { ...artifact };
+  delete (next as Record<string, unknown>).mediaUrl;
+  delete (next as Record<string, unknown>).previewUrl;
+  delete (next as Record<string, unknown>).thumbnailUrl;
+  if (typeof next.url === "string" && next.url.startsWith("data:image/")) {
+    delete (next as Record<string, unknown>).url;
+  }
+  return next;
+}
+
+function stripShareMessageMedia(message: ShareMessageEntry): ShareMessageEntry {
+  return {
+    ...message,
+    artifacts: (message.artifacts || []).map(stripShareArtifactMedia)
+  };
+}
+
+function boundShareMessagesPayload(entries: ShareMessageEntry[]) {
+  const kept: ShareMessageEntry[] = [];
+  for (const entry of entries.slice(-SHARE_MESSAGE_LIMIT).reverse()) {
+    const artifactLimited: ShareMessageEntry = {
+      ...entry,
+      artifacts: (entry.artifacts || []).slice(0, SHARE_ARTIFACT_LIMIT)
+    };
+    const variants = [
+      artifactLimited,
+      stripShareMessageMedia(artifactLimited),
+      { ...artifactLimited, artifacts: [] }
+    ].filter((item) => item.content || item.artifacts.length);
+    for (const variant of variants) {
+      const candidate = [variant, ...kept];
+      if (sharePayloadByteLength(candidate) <= SHARE_PAYLOAD_SOFT_LIMIT) {
+        kept.unshift(variant);
+        break;
+      }
+    }
+  }
+  return kept;
+}
+
 function shareMessagesPayload(messages: ChatItem[]) {
-  return messages
+  return boundShareMessagesPayload(messages
     .map(shareMessageEntry)
     .filter((entry): entry is NonNullable<ReturnType<typeof shareMessageEntry>> => Boolean(entry))
-    .slice(-200);
+    .slice(-SHARE_MESSAGE_LIMIT));
+}
+
+async function shareArtifactEntryWithMedia(
+  artifact: AgentArtifact,
+  sessionId: string,
+  webPort: number,
+  resolveArtifactPathForSession: (sessionId: string, filePath: string) => string
+) {
+  let mediaUrl = shareSafeUrl(artifact.thumbnailUrl || artifact.previewUrl || artifact.url);
+  if (!mediaUrl && artifact.kind === "image") {
+    const previewSource = artifact.thumbnailUrl || artifact.previewUrl || artifact.path || artifact.relativePath || artifact.url;
+    const resolved = resolveArtifactPathForSession(sessionId, previewSource || "");
+    const previewUrl = resolved ? filePreviewUrl(resolved, webPort) : "";
+    if (previewUrl) {
+      mediaUrl = await imageUrlToShareThumbnail(previewUrl).catch(() => "");
+      if (!mediaUrl) mediaUrl = shareSafeUrl(previewUrl);
+    }
+  }
+  return shareArtifactEntry(artifact, mediaUrl);
+}
+
+async function shareMessageEntryWithMedia(
+  message: ChatItem,
+  sessionId: string,
+  webPort: number,
+  resolveArtifactPathForSession: (sessionId: string, filePath: string) => string
+) {
+  if (message.kind || (message.role !== "user" && message.role !== "assistant")) return null;
+  const content = redactInternalPromptText(message.content || "").trim();
+  const artifacts = await Promise.all(
+    (message.artifacts || [])
+      .slice(0, SHARE_ARTIFACT_LIMIT)
+      .map((artifact) => shareArtifactEntryWithMedia(artifact, sessionId, webPort, resolveArtifactPathForSession))
+  );
+  if (!content && !artifacts.length) return null;
+  return {
+    role: message.role,
+    content,
+    createdAt: message.createdAt,
+    artifacts
+  };
+}
+
+async function shareMessagesPayloadWithMedia(
+  messages: ChatItem[],
+  sessionId: string,
+  webPort: number,
+  resolveArtifactPathForSession: (sessionId: string, filePath: string) => string
+) {
+  const selected = messages.slice(-SHARE_MESSAGE_LIMIT);
+  const entries = await Promise.all(
+    selected.map((message) => shareMessageEntryWithMedia(message, sessionId, webPort, resolveArtifactPathForSession))
+  );
+  return boundShareMessagesPayload(entries.filter((entry): entry is NonNullable<typeof entry> => Boolean(entry)));
+}
+
+function imageLoad(src: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.decoding = "async";
+    image.crossOrigin = "anonymous";
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("image preview unavailable"));
+    image.src = src;
+  });
+}
+
+async function imageUrlToShareThumbnail(src: string) {
+  const direct = shareSafeUrl(src);
+  if (direct.startsWith("data:image/")) return direct;
+  const image = await imageLoad(src);
+  const naturalWidth = image.naturalWidth || image.width;
+  const naturalHeight = image.naturalHeight || image.height;
+  if (!naturalWidth || !naturalHeight) return "";
+  for (const maxSide of [420, 320, 240, 180]) {
+    const scale = Math.min(1, maxSide / Math.max(naturalWidth, naturalHeight));
+    const width = Math.max(1, Math.round(naturalWidth * scale));
+    const height = Math.max(1, Math.round(naturalHeight * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) continue;
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, width, height);
+    context.drawImage(image, 0, 0, width, height);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.72);
+    if (dataUrl.length <= SHARE_IMAGE_DATA_URL_LIMIT) return dataUrl;
+  }
+  return "";
 }
 
 function isLiveAssistantMessage(message: ChatItem) {
@@ -2896,6 +3372,25 @@ function runtimeExtrasAttachments(item: RuntimeMessage): FileAttachment[] | unde
       if (typeof entry.preview_url === "string" && entry.preview_url) {
         attachment.preview_url = entry.preview_url;
       }
+      const provider = String(entry.provider || "").trim();
+      const source = String(entry.source || "").trim();
+      const key = String(entry.key || "").trim();
+      const fileId = String(entry.file_id || entry.fileId || "").trim();
+      const nodeId = String(entry.node_id || entry.nodeId || "").trim();
+      const docType = String(entry.doc_type || entry.docType || "").trim();
+      const url = String(entry.url || "").trim();
+      const owner = String(entry.owner || "").trim();
+      const updatedAt = String(entry.updated_at || entry.updatedAt || "").trim();
+      if (provider) attachment.provider = provider;
+      if (source) attachment.source = source;
+      if (key) attachment.key = key;
+      if (fileId) attachment.file_id = fileId;
+      if (nodeId) attachment.node_id = nodeId;
+      if (docType) attachment.doc_type = docType;
+      if (url) attachment.url = url;
+      if (owner) attachment.owner = owner;
+      if (updatedAt) attachment.updated_at = updatedAt;
+      if (entry.remote === true || provider === "tencent-docs" || /^tencent-docs:\/\//i.test(filePath)) attachment.remote = true;
       return attachment;
     })
     .filter((entry): entry is FileAttachment => Boolean(entry));
@@ -2938,6 +3433,16 @@ function normalizeArtifactEntry(entry: unknown, index: number, requestId?: strin
   const source = raw.source && typeof raw.source === "object" ? raw.source as Record<string, unknown> : {};
   const stats = raw.stats && typeof raw.stats === "object" ? raw.stats as Record<string, unknown> : {};
   const qualityEvidence = normalizeQualityEvidence(raw.qualityEvidence || raw.quality_evidence);
+  const taskIndex = typeof raw.taskIndex === "number"
+    ? raw.taskIndex
+    : typeof raw.task_index === "number"
+      ? raw.task_index
+      : undefined;
+  const artifactIndex = typeof raw.artifactIndex === "number"
+    ? raw.artifactIndex
+    : typeof raw.artifact_index === "number"
+      ? raw.artifact_index
+      : undefined;
   const rawSignal = String(raw.artifactFeedbackSignal || raw.artifact_feedback_signal || raw.feedbackSignal || raw.feedback_signal || "").trim().toLowerCase();
   const artifactFeedbackSignal: AgentArtifact["artifactFeedbackSignal"] = rawSignal === "thumbs_down"
     ? "thumbs_down"
@@ -2968,7 +3473,14 @@ function normalizeArtifactEntry(entry: unknown, index: number, requestId?: strin
     artifactValidity,
     artifactFeedbackSignal,
     artifactFeedbackAt: String(raw.artifactFeedbackAt || raw.artifact_feedback_at || "").trim() || undefined,
+    feedbackShareId: String(raw.feedbackShareId || raw.feedback_share_id || raw.shareId || raw.share_id || "").trim() || undefined,
+    feedbackShareUrl: String(raw.feedbackShareUrl || raw.feedback_share_url || raw.shareUrl || raw.share_url || "").trim() || undefined,
     qualityEvidence,
+    taskIndex,
+    artifactIndex,
+    task_id: String(raw.task_id || raw.taskId || "").trim() || undefined,
+    task_index: taskIndex,
+    artifact_index: artifactIndex,
     stats: Object.keys(stats).length ? {
       addedLines: typeof stats.addedLines === "number" ? stats.addedLines : typeof stats.added_lines === "number" ? stats.added_lines : undefined,
       removedLines: typeof stats.removedLines === "number" ? stats.removedLines : typeof stats.removed_lines === "number" ? stats.removed_lines : undefined,
@@ -2983,13 +3495,36 @@ function normalizeArtifactEntry(entry: unknown, index: number, requestId?: strin
   };
 }
 
+function sortNormalizedArtifacts(artifacts: AgentArtifact[]) {
+  const key = (artifact: AgentArtifact) => ({
+    taskIndex: typeof artifact.taskIndex === "number"
+      ? artifact.taskIndex
+      : typeof artifact.task_index === "number"
+        ? artifact.task_index
+        : 999999,
+    artifactIndex: typeof artifact.artifactIndex === "number"
+      ? artifact.artifactIndex
+      : typeof artifact.artifact_index === "number"
+        ? artifact.artifact_index
+        : 999999,
+    tieBreaker: artifact.safeArtifactId || artifact.id || artifact.path || artifact.relativePath || artifact.url || artifact.title || ""
+  });
+  return [...artifacts].sort((left, right) => {
+    const a = key(left);
+    const b = key(right);
+    if (a.taskIndex !== b.taskIndex) return a.taskIndex - b.taskIndex;
+    if (a.artifactIndex !== b.artifactIndex) return a.artifactIndex - b.artifactIndex;
+    return a.tieBreaker.localeCompare(b.tieBreaker);
+  });
+}
+
 function runtimeExtrasArtifacts(item: RuntimeMessage): AgentArtifact[] | undefined {
   const raw = Array.isArray(item.artifacts) ? item.artifacts : item.extras?.artifacts;
   if (!Array.isArray(raw)) return undefined;
   const artifacts = raw
     .map((entry, index) => normalizeArtifactEntry(entry, index, item.request_id))
     .filter((entry): entry is AgentArtifact => Boolean(entry));
-  return artifacts.length ? artifacts : undefined;
+  return artifacts.length ? sortNormalizedArtifacts(artifacts) : undefined;
 }
 
 function mapRuntimeMessage(item: RuntimeMessage, sessionId: string, index: number, contextStartSeq = 0, turnSeq?: number): ChatItem {
@@ -3438,6 +3973,97 @@ function memoryFileTime(file: MemoryFile) {
   return file.updated_at || file.updatedAt || "";
 }
 
+type KnowledgeGraphViewNode = KnowledgeGraphNode & {
+  x: number;
+  y: number;
+  radius: number;
+  degree: number;
+};
+
+const KNOWLEDGE_GRAPH_COLORS = ["#2563eb", "#0f766e", "#b45309", "#7c3aed", "#be123c", "#4d7c0f", "#0e7490", "#a21caf"];
+const KNOWLEDGE_CATEGORY_LABELS: Record<string, string> = {
+  root: "根节点",
+  memory: "记忆",
+  session: "会话",
+  image: "图片",
+  external: "外部连接",
+  project: "项目",
+  document: "文档",
+  file: "文件"
+};
+
+function normalizeKnowledgeLinkId(value: string | KnowledgeGraphNode | undefined) {
+  if (!value) return "";
+  return typeof value === "string" ? value : value.id || "";
+}
+
+function knowledgeCategoryColor(category: string, categories: string[]) {
+  const index = Math.max(0, categories.indexOf(category));
+  return KNOWLEDGE_GRAPH_COLORS[index % KNOWLEDGE_GRAPH_COLORS.length];
+}
+
+function knowledgeCategoryLabel(category?: string) {
+  const key = String(category || "root").trim() || "root";
+  return KNOWLEDGE_CATEGORY_LABELS[key] || key;
+}
+
+function layoutKnowledgeGraph(nodes: KnowledgeGraphNode[], links: KnowledgeGraphLink[], width = 720, height = 360) {
+  const safeNodes = nodes.slice(0, 160);
+  const ids = new Set(safeNodes.map((node) => node.id));
+  const safeLinks = links
+    .map((link) => ({
+      source: normalizeKnowledgeLinkId(link.source),
+      target: normalizeKnowledgeLinkId(link.target)
+    }))
+    .filter((link) => link.source && link.target && ids.has(link.source) && ids.has(link.target));
+  const degree = new Map<string, number>();
+  safeNodes.forEach((node) => degree.set(node.id, 0));
+  safeLinks.forEach((link) => {
+    degree.set(link.source, (degree.get(link.source) || 0) + 1);
+    degree.set(link.target, (degree.get(link.target) || 0) + 1);
+  });
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const radiusX = Math.max(120, width * 0.38);
+  const radiusY = Math.max(80, height * 0.32);
+  const sorted = [...safeNodes].sort((a, b) => (degree.get(b.id) || 0) - (degree.get(a.id) || 0) || a.id.localeCompare(b.id));
+  const positioned = sorted.map((node, index) => {
+    const nodeDegree = degree.get(node.id) || 0;
+    const ring = index < 8 ? 0.74 : 1;
+    const angle = (Math.PI * 2 * index) / Math.max(sorted.length, 1) - Math.PI / 2;
+    return {
+      ...node,
+      x: centerX + Math.cos(angle) * radiusX * ring,
+      y: centerY + Math.sin(angle) * radiusY * ring,
+      radius: Math.max(8, Math.min(18, 8 + nodeDegree * 2)),
+      degree: nodeDegree
+    };
+  });
+  return {
+    nodes: positioned,
+    links: safeLinks,
+    categories: Array.from(new Set(positioned.map((node) => node.category || "root"))),
+    truncated: nodes.length > safeNodes.length,
+  };
+}
+
+function knowledgeExcerpt(content = "", limit = 220) {
+  return content
+    .replace(/^#\s+.+$/gm, "")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, limit);
+}
+
+function knowledgeNodeLabel(node: KnowledgeGraphNode | KnowledgeGraphViewNode | null | undefined) {
+  return node?.label || node?.id?.split(/[\\/]/).pop()?.replace(/\.md$/, "") || "未命名知识页";
+}
+
+function shortKnowledgeLabel(value: string, maxLength = 16) {
+  return value.length > maxLength ? `${value.slice(0, Math.max(1, maxLength - 1))}…` : value;
+}
+
 function AuthGate(props: { onLogin: (session: EnterpriseSession) => void; version?: string }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -3536,16 +4162,30 @@ export function App() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [activeTurnMenuOpen, setActiveTurnMenuOpen] = useState(false);
   const [chatModelOptions, setChatModelOptions] = useState<ChatModelOption[]>([]);
   const [chatContextPolicy, setChatContextPolicy] = useState<ChatContextPolicy | null>(null);
   const [chatModelBusy, setChatModelBusy] = useState(false);
   const [showJumpLatest, setShowJumpLatest] = useState(false);
   const [previewFile, setPreviewFile] = useState<FileAttachment | null>(null);
   const [previewZoom, setPreviewZoom] = useState(1);
+  const [imageRetouchTarget, setImageRetouchTarget] = useState<ImageRetouchTarget | null>(null);
+  const [imageRetouchBusy, setImageRetouchBusy] = useState(false);
+  const [imageRetouchError, setImageRetouchError] = useState("");
   const [packs, setPacks] = useState<CapabilityPack[]>([]);
   const [externalConnections, setExternalConnections] = useState<ExternalConnection[]>([]);
   const [externalConnectionDrafts, setExternalConnectionDrafts] = useState<Record<string, Record<string, unknown>>>({});
   const [externalConnectionsBusy, setExternalConnectionsBusy] = useState(false);
+  const [externalConnectionsAdvancedOpen, setExternalConnectionsAdvancedOpen] = useState(false);
+  const [tencentDocsStatus, setTencentDocsStatus] = useState<TencentDocsStatusPayload | null>(null);
+  const [tencentDocsBusy, setTencentDocsBusy] = useState(false);
+  const [tencentDocsConnectOpen, setTencentDocsConnectOpen] = useState(false);
+  const [tencentDocsPickerOpen, setTencentDocsPickerOpen] = useState(false);
+  const [tencentDocsTokenDraft, setTencentDocsTokenDraft] = useState("");
+  const [tencentDocsTab, setTencentDocsTab] = useState<"recent" | "mine" | "search">("recent");
+  const [tencentDocsQuery, setTencentDocsQuery] = useState("");
+  const [tencentDocsFiles, setTencentDocsFiles] = useState<TencentDocsFile[]>([]);
+  const [selectedTencentDocsKeys, setSelectedTencentDocsKeys] = useState<Record<string, boolean>>({});
   const [permissionState, setPermissionState] = useState<PermissionState | null>(null);
   const [projects, setProjects] = useState<ProjectFolder[]>(() => bootProjects);
   const [sessionProjects, setSessionProjects] = useState<SessionProjectMap>(() => bootSessionProjects);
@@ -3553,6 +4193,7 @@ export function App() {
   const [projectPickerBusy, setProjectPickerBusy] = useState(false);
   const [projectStartMenuOpen, setProjectStartMenuOpen] = useState(false);
   const [projectStartSearch, setProjectStartSearch] = useState("");
+  const [expandedSessionBuckets, setExpandedSessionBuckets] = useState<StringBoolMap>({});
   const [sessionTitles, setSessionTitles] = useState<StringMap>(() => readStorage<StringMap>(SESSION_TITLES_STORAGE_KEY, {}));
   const [lockedSessionTitles, setLockedSessionTitles] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(LOCKED_SESSION_TITLES_STORAGE_KEY, {}));
   const [pinnedSessions, setPinnedSessions] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(PINNED_SESSIONS_STORAGE_KEY, {}));
@@ -3574,6 +4215,11 @@ export function App() {
   const [installNotice, setInstallNotice] = useState<InstallNotice>(null);
   const [memoryFiles, setMemoryFiles] = useState<MemoryFile[]>([]);
   const [dreamFiles, setDreamFiles] = useState<MemoryFile[]>([]);
+  const [knowledgeGraph, setKnowledgeGraph] = useState<{ nodes: KnowledgeGraphNode[]; links: KnowledgeGraphLink[] }>({ nodes: [], links: [] });
+  const [knowledgeGraphBusy, setKnowledgeGraphBusy] = useState(false);
+  const [selectedKnowledgeNodeId, setSelectedKnowledgeNodeId] = useState("");
+  const [selectedKnowledgeContent, setSelectedKnowledgeContent] = useState<{ path: string; content: string } | null>(null);
+  const [selectedKnowledgeBusy, setSelectedKnowledgeBusy] = useState(false);
   const [schedulerBusy, setSchedulerBusy] = useState(false);
   const [toast, setToast] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState("");
@@ -3584,6 +4230,7 @@ export function App() {
   const chatFileMenuRef = useRef<HTMLDivElement | null>(null);
   const projectStartMenuRef = useRef<HTMLDivElement | null>(null);
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
+  const activeTurnMenuRef = useRef<HTMLDivElement | null>(null);
   const composerDragDepth = useRef(0);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const streamCleanup = useRef<null | (() => void)>(null);
@@ -3596,6 +4243,7 @@ export function App() {
   const composerDraftCommitTimer = useRef<number | null>(null);
   const sessionRequestIdsRef = useRef<StringMap>({});
   const latestSendAttemptRef = useRef<Record<string, string>>({});
+  const pendingPreflightTurnsRef = useRef<Record<string, PendingPreflightTurn>>({});
   const installWatchers = useRef<Record<string, number>>({});
   const queuedInstallRef = useRef<Array<{ pack: CapabilityPack; onInstalled?: () => void; sessionId: string }>>([]);
   const activeSessionIdRef = useRef(activeSessionId);
@@ -3618,6 +4266,8 @@ export function App() {
   const updateNoticeToastShownRef = useRef("");
   const streamRetryCounts = useRef<Record<string, number>>({});
   const streamRequestStates = useRef<Record<string, StreamRequestState>>({});
+  const knowledgeGraphLoadedRef = useRef(false);
+  const knowledgeReadSeqRef = useRef(0);
   const streamStallTimers = useRef<Record<string, number>>({});
   const streamReconnectTimers = useRef<Record<string, number>>({});
   const streamReconnectChecks = useRef<StringBoolMap>({});
@@ -4224,6 +4874,49 @@ export function App() {
   }, [sidecarStatus.state, sidecarStatus.webPort, activeSessionId, messages]);
 
   useEffect(() => {
+    if (sidecarStatus.state !== "running") return;
+    if (runtimeSnapshot.status !== "ready") return;
+    if (runtimeSnapshot.activeRequestsStatus === "unavailable") return;
+    (runtimeSnapshot.activeRequests || [])
+      .filter(isPrimaryChatActiveRequest)
+      .forEach((request) => {
+        const sessionId = String(request.session_id || "").trim();
+        const requestId = String(request.request_id || "").trim();
+        if (!sessionId || !requestId) return;
+        if (completedRequestIds.current[requestId] || locallyCompletedRequestIdsRef.current[requestId]) return;
+
+        const cachedMessages = activeSessionIdRef.current === sessionId
+          ? messagesRef.current
+          : sessionUiState[sessionId]?.messages || [];
+        const existing = cachedMessages.find((message) => (
+          message.role === "assistant"
+          && message.requestId === requestId
+          && !message.cancelled
+        ));
+        if (existing && isTerminalAssistantMessage(existing)) {
+          markRequestLocallyCompleted(requestId);
+          clearSessionRequestState(sessionId, requestId);
+          return;
+        }
+
+        if (runCenterState(request) === "queued") {
+          if (existing?.pending) {
+            const queueMeta = request as RuntimeActiveRequest & { queue_position?: number | string; position?: number | string };
+            const queuePosition = Number(queueMeta.queue_position || queueMeta.position || request.metadata?.queue_position || request.metadata?.position || 0);
+            updateAssistantMessageForRequest(sessionId, existing.id, requestId, (message) => (
+              replaceCurrentPhase(message, queuedGuidancePhase(queuePosition))
+            ));
+          }
+          return;
+        }
+        if (request.cancelled) return;
+        if (streamCleanupRequestIds.current[sessionId] === requestId && streamCleanups.current[sessionId]) return;
+        if (sessionRequestIdsRef.current[sessionId] === requestId && existing?.pending && request.stream_available === false) return;
+        resumeRuntimeRequest(sessionId, requestId, request.stream_available !== false);
+      });
+  }, [sidecarStatus.state, sidecarStatus.webPort, runtimeSnapshot.status, runtimeSnapshot.activeRequestsStatus, runtimeSnapshot.activeRequests, sessionUiState]);
+
+  useEffect(() => {
     if (bootHistoryRefreshDone.current) return;
     if (sidecarStatus.state !== "running") return;
     if (!bootSession?.id) return;
@@ -4313,6 +5006,19 @@ export function App() {
   }, [sidecarStatus.state]);
 
   useEffect(() => {
+    if (sidecarStatus.state !== "running") return;
+    let cancelled = false;
+    loadTencentDocsStatus(false)
+      .then((payload) => {
+        if (!cancelled) setTencentDocsStatus(payload);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [sidecarStatus.state]);
+
+  useEffect(() => {
     if (!session) return;
     let cancelled = false;
     async function refresh() {
@@ -4342,6 +5048,12 @@ export function App() {
       window.clearInterval(timer);
     };
   }, [session]);
+
+  useEffect(() => {
+    if (!session || !settingsOpen || settingsSection !== "knowledge-graph" || knowledgeGraphLoadedRef.current) return;
+    knowledgeGraphLoadedRef.current = true;
+    void refreshKnowledgeGraph(false);
+  }, [session, settingsOpen, settingsSection]);
 
   useEffect(() => {
     if (!packs.length) return;
@@ -4435,6 +5147,24 @@ export function App() {
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [modelMenuOpen]);
+
+  useEffect(() => {
+    if (!activeTurnMenuOpen) return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target instanceof Node ? event.target : null;
+      if (target && activeTurnMenuRef.current?.contains(target)) return;
+      setActiveTurnMenuOpen(false);
+    };
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setActiveTurnMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [activeTurnMenuOpen]);
 
   useEffect(() => {
     if (runtimeSnapshot.status !== "ready") return;
@@ -4684,20 +5414,28 @@ export function App() {
     )) || null
   ), [runtimeSnapshot.activeRequests, activeSessionId, locallyCompletedRequestIds]);
   const activeRuntimeElapsed = runtimeRequestElapsedLabel(activeRuntimeRequest, runClockTick);
-  const appVersion = runtimeSnapshot.version || runtimeSnapshot.releaseNotes?.version || "0.2.6";
+  const appVersion = runtimeSnapshot.version || runtimeSnapshot.releaseNotes?.version || "0.3.0";
   const backgroundUpdateKey = backgroundUpdateSeenId(runtimeSnapshot.updateState);
-  const showBackgroundUpdateBanner = Boolean(
+  const showBackgroundUpdateDialog = Boolean(
     backgroundUpdateKey
     && backgroundUpdateKey !== backgroundUpdateApplied
     && backgroundUpdateReadyForRefresh(runtimeSnapshot.updateState)
   );
+  const runtimeUpdateStateInfo = runtimeUpdateStateDetails(runtimeSnapshot.updateState);
+  const showRuntimeUpdateStateBanner = Boolean(
+    runtimeSnapshot.updateState?.stateAvailable
+    && runtimeUpdateStateInfo.status
+    && runtimeUpdateStateInfo.status !== "activated"
+    && !showBackgroundUpdateDialog
+  );
   const runtimeUpdateKey = updateNoticeSeenId(runtimeUpdateCheck);
+  const runtimeUpdatePageActionLabel = "查看更新";
   const showRuntimeUpdateBanner = Boolean(runtimeUpdateCheck?.hasUpdate && runtimeUpdateKey && runtimeUpdateKey !== updateNoticeDismissed);
   useEffect(() => {
     if (!showRuntimeUpdateBanner || !runtimeUpdateKey || updateNoticeToastShownRef.current === runtimeUpdateKey) return;
     updateNoticeToastShownRef.current = runtimeUpdateKey;
-    setToast(runtimeUpdateCheck?.message || "发现 EcoreX 新版本");
-  }, [showRuntimeUpdateBanner, runtimeUpdateKey, runtimeUpdateCheck?.message]);
+    setToast("发现 EcoreX 新版本，正在后台准备更新");
+  }, [showRuntimeUpdateBanner, runtimeUpdateKey]);
   const deferredComposerText = useDeferredValue(composerText);
   const skillDisplayRows = useMemo(() => buildSkillDisplayRows(runtimeSnapshot), [runtimeSnapshot]);
   const mentionableSkillRows = useMemo(() => skillDisplayRows.filter((skill) => skill.mentionable), [skillDisplayRows]);
@@ -4864,10 +5602,37 @@ export function App() {
     const textarea = composerRef.current;
     if (!textarea) return;
     const maxHeight = Number.parseFloat(window.getComputedStyle(textarea).maxHeight) || 168;
-    textarea.style.height = "auto";
-    const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
-    textarea.style.height = `${nextHeight}px`;
-    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+    const list = messageListRef.current;
+    const previousScrollTop = list?.scrollTop ?? 0;
+    const previousHeight = Number.parseFloat(textarea.style.height || "") || textarea.offsetHeight || 0;
+    const needsShrinkMeasure = textarea.value.length < (textarea.dataset.autosizeValueLength ? Number(textarea.dataset.autosizeValueLength) : textarea.value.length);
+    if (needsShrinkMeasure) {
+      textarea.style.height = "0px";
+    }
+    const measuredScrollHeight = textarea.scrollHeight;
+    const nextHeight = Math.min(measuredScrollHeight, maxHeight);
+    const nextHeightPx = `${nextHeight}px`;
+    if (Math.abs(previousHeight - nextHeight) > 1 || textarea.style.height !== nextHeightPx) {
+      textarea.style.height = nextHeightPx;
+    }
+    textarea.dataset.autosizeValueLength = String(textarea.value.length);
+    textarea.style.overflowY = measuredScrollHeight > maxHeight ? "auto" : "hidden";
+    if (list && !autoScrollRef.current) {
+      list.scrollTop = previousScrollTop;
+    }
+  }
+
+  function preserveMessageListScroll(work: () => void) {
+    const list = messageListRef.current;
+    const previousScrollTop = list?.scrollTop ?? 0;
+    const shouldPreserve = Boolean(list && !autoScrollRef.current);
+    work();
+    if (shouldPreserve) {
+      suppressNextAutoScrollRef.current = true;
+      window.requestAnimationFrame(() => {
+        if (list) list.scrollTop = previousScrollTop;
+      });
+    }
   }
 
   function updateJumpLatestState() {
@@ -4996,7 +5761,7 @@ export function App() {
     setMessages(nextMessages);
     setComposerDraft(cached.composerText || "", { immediate: true });
     setAttachments(cached.attachments);
-    setActiveSessionTitle(sessionTitles[sessionId] || cached.title || NEW_SESSION_START_TITLE);
+    setActiveSessionTitle(sessionTitleForDisplay(sessionTitles[sessionId], cached.title, NEW_SESSION_START_TITLE));
     setActiveProjectId(projectId);
     setSessionUiState((current) => ({
       ...current,
@@ -5058,9 +5823,62 @@ export function App() {
     });
   }
 
+  function persistActiveSessionUiStateNow() {
+    const sessionId = activeSessionIdRef.current;
+    if (!sessionId) return;
+    const binding = projectBindingForSession(sessionId, sessionProjectBindingsRef.current, sessionProjectsRef.current, sessionUiState, projectCatalog);
+    const projectId = binding?.projectId || sessionProjectIdFromState(sessionId, sessionProjectsRef.current, sessionUiState);
+    const currentMessages = messagesRef.current;
+    const mergedState: Record<string, SessionUiState> = {
+      ...sessionUiState,
+      [sessionId]: {
+        ...(sessionUiState[sessionId] || {}),
+        title: activeSessionTitle,
+        projectId,
+        projectBinding: binding,
+        messages: currentMessages,
+        composerText: composerTextRef.current,
+        attachments: attachmentsRef.current,
+        contextStartSeq: sessionUiState[sessionId]?.contextStartSeq,
+        lastActivityAt: latestMessageMs(currentMessages) || sessionUiState[sessionId]?.lastActivityAt || Date.now()
+      }
+    };
+    const projectSyncedState = Object.fromEntries(
+      Object.entries(mergedState).map(([entrySessionId, state]) => [
+        entrySessionId,
+        {
+          ...state,
+          projectId: sessionProjectIdFromState(entrySessionId, sessionProjectsRef.current, mergedState),
+          projectBinding: sessionProjectBindingsRef.current[entrySessionId] || state.projectBinding || null
+        }
+      ])
+    );
+    const pruned = pruneSessionUiState(projectSyncedState);
+    pendingUiStateStorage.current = null;
+    writeStorage(SESSION_UI_STORAGE_KEY, pruned);
+  }
+
+  useEffect(() => {
+    const persist = () => persistActiveSessionUiStateNow();
+    const persistWhenHidden = () => {
+      if (document.visibilityState === "hidden") persist();
+    };
+    window.addEventListener("pagehide", persist);
+    window.addEventListener("beforeunload", persist);
+    document.addEventListener("visibilitychange", persistWhenHidden);
+    return () => {
+      window.removeEventListener("pagehide", persist);
+      window.removeEventListener("beforeunload", persist);
+      document.removeEventListener("visibilitychange", persistWhenHidden);
+    };
+  }, [activeSessionTitle, sessionUiState, projectCatalog]);
+
   async function selectSession(row: SessionRow) {
     if (row.id === activeSessionIdRef.current) {
       clearSessionUnread(row.id);
+      if (!messagesRef.current.length) {
+        void refreshSessionFromHistory(row.id);
+      }
       focusComposerSoon();
       return;
     }
@@ -5072,9 +5890,10 @@ export function App() {
     const nextProjectId = nextBinding?.projectId || null;
     autoScrollRef.current = true;
     setShowJumpLatest(false);
+    const nextSessionTitle = sessionTitleForDisplay(row.title, sessionTitles[row.id], sessionUiState[row.id]?.title, row.id);
     activeSessionIdRef.current = row.id;
     setActiveSessionId(row.id);
-    setActiveSessionTitle(row.title);
+    setActiveSessionTitle(nextSessionTitle);
     setActiveProjectId(nextProjectId);
     setPreviewFile(null);
     setApproval(null);
@@ -5087,7 +5906,7 @@ export function App() {
     setSessionUiState((current) => ({
       ...current,
       [row.id]: {
-        title: row.title,
+        title: nextSessionTitle,
         projectId: nextProjectId,
         projectBinding: nextBinding,
         messages: [],
@@ -5111,7 +5930,7 @@ export function App() {
         ...current,
         [row.id]: {
           ...(current[row.id] || {
-            title: row.title,
+            title: nextSessionTitle,
             composerText: "",
             attachments: []
           }),
@@ -5694,14 +6513,71 @@ export function App() {
         ))
       };
     }));
+    let feedbackArtifact = updatedArtifact;
+    let feedbackShareId = "";
+    let feedbackShareUrl = "";
+    if (validity === "invalid") {
+      try {
+        flushPendingSessionMessagesSnapshot(sessionId);
+        const sourceMessages = sessionId === activeSessionIdRef.current
+          ? messagesRef.current
+          : (sessionUiState[sessionId]?.messages || []);
+        const shareMessages = await shareMessagesPayloadWithMedia(
+          sourceMessages,
+          sessionId,
+          sidecarStatus.webPort,
+          resolveArtifactPathForSession
+        );
+        if (shareMessages.length) {
+          const share = await shareRuntimeSession({
+            sessionId,
+            title: `下拇指产物回溯 - ${updatedArtifact.title || "产物"}`,
+            messages: shareMessages
+          });
+          feedbackShareId = share.shareId || "";
+          feedbackShareUrl = share.shareUrl || "";
+          feedbackArtifact = {
+            ...updatedArtifact,
+            feedbackShareId,
+            feedbackShareUrl
+          };
+          updateSessionMessages(sessionId, (current) => current.map((message) => {
+            if (message.id !== messageId || !message.artifacts?.length) return message;
+            return {
+              ...message,
+              artifacts: message.artifacts.map((item) => (
+                item.id === artifact.id || (targetKey && artifactMergeKey(item) === targetKey)
+                  ? { ...updateArtifactFeedbackRecord(item, validity), feedbackShareId, feedbackShareUrl }
+                  : item
+              ))
+            };
+          }));
+        }
+      } catch (error) {
+        void reportDesktopEvent({
+          type: "warn",
+          source: "Desktop",
+          category: "artifact_feedback",
+          label: "share_failed",
+          sessionId,
+          detail: {
+            requestId: artifact.requestId || "",
+            validity,
+            error: error instanceof Error ? error.message : String(error)
+          }
+        });
+      }
+    }
     try {
       await reportArtifactFeedback({
         sessionId,
         requestId: artifact.requestId || "",
         messageId,
-        artifact: updatedArtifact,
+        artifact: feedbackArtifact,
         validity,
-        signal: updatedArtifact.artifactFeedbackSignal || "default"
+        signal: feedbackArtifact.artifactFeedbackSignal || "default",
+        feedbackShareId,
+        feedbackShareUrl
       });
     } catch (error) {
       void reportDesktopEvent({
@@ -5725,16 +6601,31 @@ export function App() {
     const sourceMessages = sessionId === activeSessionIdRef.current
       ? messagesRef.current
       : (sessionUiState[sessionId]?.messages || []);
-    const shareMessages = shareMessagesPayload(sourceMessages);
+    const shareMessages = await shareMessagesPayloadWithMedia(
+      sourceMessages,
+      sessionId,
+      sidecarStatus.webPort,
+      resolveArtifactPathForSession
+    );
     if (!shareMessages.length) {
       setToast("当前会话没有可分享内容");
       return;
     }
     try {
-      const result = await shareRuntimeSession({
+      let result = await shareRuntimeSession({
         sessionId,
         title: sessionTitles[sessionId] || activeSessionTitle,
         messages: shareMessages
+      }).catch(async (error) => {
+        const message = error instanceof Error ? error.message : String(error || "");
+        if (!/payload too large|过大/i.test(message)) throw error;
+        const compactMessages = boundShareMessagesPayload(shareMessages.map(stripShareMessageMedia));
+        if (!compactMessages.length) throw error;
+        return shareRuntimeSession({
+          sessionId,
+          title: sessionTitles[sessionId] || activeSessionTitle,
+          messages: compactMessages
+        });
       });
       if (result.shareUrl) {
         await navigator.clipboard?.writeText(result.shareUrl).catch(() => undefined);
@@ -6238,7 +7129,10 @@ export function App() {
       "正在建立响应通道",
       "正在组织上下文",
       "正在连接模型响应",
-      "正在恢复响应通道"
+      "正在恢复响应通道",
+      "正在用新消息更新当前任务",
+      "正在把补充说明合入当前任务",
+      "已新开分支，正在发送"
     ].some((prefix) => value === prefix || value.startsWith(`${prefix} `) || value.startsWith(`${prefix} ·`))
       || value.startsWith("等待本机工具授权");
   }
@@ -6278,6 +7172,58 @@ export function App() {
     Object.keys(phaseTimersRef.current).forEach((assistantId) => clearAssistantPhaseTimers(assistantId));
   }
 
+  function rememberPendingPreflightTurn(sessionId: string, turn: PendingPreflightTurn) {
+    pendingPreflightTurnsRef.current = { ...pendingPreflightTurnsRef.current, [sessionId]: turn };
+  }
+
+  function currentPendingPreflightTurn(sessionId: string) {
+    const turn = pendingPreflightTurnsRef.current[sessionId];
+    if (!turn) return null;
+    const source = sessionId === activeSessionIdRef.current
+      ? messagesRef.current
+      : sessionUiState[sessionId]?.messages || [];
+    const assistant = source.find((message) => message.id === turn.assistantId);
+    if (!assistant || !assistant.pending || assistant.requestId || assistant.cancelled || assistant.paused) return null;
+    return turn;
+  }
+
+  function clearPendingPreflightTurn(sessionId: string, attemptId?: string) {
+    const current = pendingPreflightTurnsRef.current[sessionId];
+    if (!current || (attemptId && current.attemptId !== attemptId)) return;
+    const next = { ...pendingPreflightTurnsRef.current };
+    delete next[sessionId];
+    pendingPreflightTurnsRef.current = next;
+  }
+
+  function supersedePendingPreflightTurn(sessionId: string, turn: PendingPreflightTurn, message = "已被新消息替换，正在按最新消息重新执行。") {
+    clearAssistantPhaseTimers(turn.assistantId);
+    clearPendingPreflightTurn(sessionId, turn.attemptId);
+    preserveMessageListScroll(() => {
+      updateSessionMessages(sessionId, (current) => current.map((item) => {
+        if (item.id === turn.assistantId && item.pending && !item.requestId) {
+          return {
+            ...finishRunningSteps(item, "cancelled"),
+            content: item.content || message,
+            pending: false,
+            paused: false,
+            cancelled: true,
+            sendAttempt: undefined,
+            runTiming: {
+              ...(item.runTiming || { startedAtMs: turn.createdAtMs }),
+              state: "cancelled",
+              updatedAtMs: Date.now(),
+              terminalAtMs: Date.now()
+            }
+          };
+        }
+        if (item.id === turn.userId) {
+          return { ...item, sendAttempt: undefined };
+        }
+        return item;
+      }));
+    });
+  }
+
   function queuePreflightPhase(sessionId: string, assistantId: string, generation: number, delayMs: number, content: string) {
     const timer = window.setTimeout(() => {
       if (sendGenerationRef.current[sessionId] !== generation) return;
@@ -6290,13 +7236,15 @@ export function App() {
   }
 
   function markSessionRequestsPaused(sessionId: string) {
-    updateSessionMessages(sessionId, (current) => current.map((message) => message.pending ? {
-      ...finishRunningSteps(message, "paused"),
-      content: pausedMessageContent(message.content),
-      pending: false,
-      paused: true,
-      cancelled: false
-    } : message));
+    preserveMessageListScroll(() => {
+      updateSessionMessages(sessionId, (current) => current.map((message) => message.pending ? {
+        ...finishRunningSteps(message, "paused"),
+        content: pausedMessageContent(message.content),
+        pending: false,
+        paused: true,
+        cancelled: false
+      } : message));
+    });
   }
 
   function appendReasoningStep(message: ChatItem, chunk: string): ChatItem {
@@ -6457,6 +7405,11 @@ export function App() {
     const health = String(item.health || item.status || "").toLowerCase();
     const elapsed = Number(item.elapsed_seconds || 0);
     const elapsedLabel = elapsed > 0 ? ` · 已等待 ${formatRunAge(elapsed)}` : "";
+    const imageJobStatus = String(item.image_job_status || "").trim();
+    const progress = Number(item.progress);
+    const progressLabel = Number.isFinite(progress) && progress > 0 && progress < 1
+      ? ` · ${Math.round(progress * 100)}%`
+      : "";
     if (String(item.task_event_type || "") === "task.intervention_requested" || health.includes("decision")) {
       return `${title} 需要决策${elapsedLabel}`;
     }
@@ -6469,6 +7422,7 @@ export function App() {
     if (String(item.task_event_type || "") === "task.completed") return `${title} 已完成`;
     if (String(item.task_event_type || "") === "task.failed") return `${title} 失败${elapsedLabel}`;
     if (String(item.task_event_type || "") === "task.cancelled") return `${title} 已停止`;
+    if (imageJobStatus) return `${title} 正在${imageJobStatus ? ` ${imageJobStatusLabel(imageJobStatus)}` : ""}${progressLabel}${elapsedLabel}`;
     return `正在观测 ${title}${elapsedLabel}`;
   }
 
@@ -6501,6 +7455,10 @@ export function App() {
     return artifactMergeKey(artifact);
   }
 
+  function sortAgentArtifacts(artifacts: AgentArtifact[]) {
+    return sortNormalizedArtifacts(artifacts);
+  }
+
   function streamItemArtifacts(item: StreamItem, requestId?: string) {
     const sourceRequestId = item.request_id || requestId;
     const incoming = item.artifact
@@ -6524,7 +7482,7 @@ export function App() {
         nextArtifacts.push(artifact);
       }
     }
-    return { ...message, pending, paused: false, artifacts: nextArtifacts };
+    return { ...message, pending, paused: false, artifacts: sortAgentArtifacts(nextArtifacts) };
   }
 
   function settleVisibleStreamOutput(message: ChatItem, options: { awaitingStreamDone?: boolean } = {}): ChatItem {
@@ -6549,7 +7507,7 @@ export function App() {
     };
     postDoneTailArtifactsRef.current = {
       ...postDoneTailArtifactsRef.current,
-      [requestId]: mergeArtifactsIntoMessage(currentMessage, artifacts).artifacts || artifacts
+      [requestId]: sortAgentArtifacts(mergeArtifactsIntoMessage(currentMessage, artifacts).artifacts || artifacts)
     };
   }
 
@@ -6929,7 +7887,18 @@ export function App() {
   }
 
   function doneItemContent(item: StreamItem, currentContent: string) {
-    return redactInternalPromptText(streamItemExplicitText(item, ["final_text", "content", "text", "message"]) ?? currentContent);
+    const current = redactInternalPromptText(currentContent || "");
+    const finalText = streamItemExplicitText(item, ["final_text"]);
+    const explicitText = finalText !== null ? finalText : streamItemExplicitText(item, ["content", "text", "message"]);
+    if (explicitText === null) return current;
+    const done = redactInternalPromptText(explicitText);
+    if (!done.trim()) return current;
+    const currentTrimmed = current.trim();
+    const doneTrimmed = done.trim();
+    if (currentTrimmed && currentTrimmed.length > doneTrimmed.length + 64) {
+      return current;
+    }
+    return done;
   }
 
   function isReplayGapStreamItem(item: StreamItem) {
@@ -7539,12 +8508,27 @@ export function App() {
     }
   }
 
-  async function sendNow(skipCapabilityCheck = false) {
+  async function sendNow(skipCapabilityCheck = false, interruptMode: ActiveTurnMode = "replace") {
     commitComposerDraft(composerTextRef.current);
     const text = composerTextRef.current.trim();
     if (!text && !attachments.length) return;
-    const previousRequestId = activeSessionRequestId;
-    const previousSessionId = activeSessionId;
+    const sourceSessionId = activeSessionId;
+    const sourceRequestId = activeSessionRequestId;
+    const sourcePendingPreflight = currentPendingPreflightTurn(sourceSessionId);
+    const sourceHasLocalPreflight = Boolean(sourcePendingPreflight && !sourceRequestId);
+    const branchFromRequestId = interruptMode === "branch"
+      ? (sourceRequestId || (sourceHasLocalPreflight ? sourcePendingPreflight?.attemptId || "" : ""))
+      : "";
+    let previousRequestId = branchFromRequestId ? "" : sourceRequestId;
+    const previousLocalAttemptId = !branchFromRequestId && !previousRequestId && sourcePendingPreflight
+      ? sourcePendingPreflight.attemptId
+      : "";
+    let effectiveInterruptMode = interruptMode;
+    if (previousLocalAttemptId && interruptMode === "queue") {
+      effectiveInterruptMode = "replace";
+      setToast("上一条消息还在准备，已按更新任务处理");
+    }
+    const previousSessionId = sourceSessionId;
 
     if (isCompactCommand(text) && !attachments.length) {
       await runCompactCommand(text);
@@ -7555,6 +8539,52 @@ export function App() {
     const neededPack = skipCapabilityCheck ? null : detectNeededPack(text, attachments, enabledPacks);
 
     let requestSessionId = activeSessionId;
+    if (branchFromRequestId) {
+      const branchProject = activeProject || null;
+      const branchSessionId = `ecorex-branch-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+      const branchTitle = branchProject ? `${branchProject.name} · 分支会话` : "分支会话";
+      const branchProjectBinding = branchProject ? projectBindingFromProject(branchProject, "project-new-session") : null;
+      sessionSwitchSeq.current += 1;
+      protectBlankDraftSession(branchSessionId);
+      activeSessionIdRef.current = branchSessionId;
+      messagesRef.current = [];
+      committedSessionMessageSnapshots.current[branchSessionId] = [];
+      pendingSessionMessageSnapshots.current[branchSessionId] = [];
+      setActiveSessionId(branchSessionId);
+      setActiveProjectId(branchProject?.id || null);
+      setActiveSessionTitle(branchTitle);
+      setSessionTitles((current) => ({ ...current, [branchSessionId]: branchTitle }));
+      setMessages([]);
+      setActiveRequestId("");
+      const nextSessionRequestIds = { ...sessionRequestIdsRef.current };
+      delete nextSessionRequestIds[branchSessionId];
+      sessionRequestIdsRef.current = nextSessionRequestIds;
+      setSessionRequestIds((current) => {
+        if (!(branchSessionId in current)) return current;
+        const next = { ...current };
+        delete next[branchSessionId];
+        return next;
+      });
+      if (branchProject && branchProjectBinding) {
+        sessionProjectsRef.current = { ...sessionProjectsRef.current, [branchSessionId]: branchProjectBinding.projectId };
+        sessionProjectBindingsRef.current = { ...sessionProjectBindingsRef.current, [branchSessionId]: branchProjectBinding };
+        setSessionProjects((current) => ({ ...current, [branchSessionId]: branchProjectBinding.projectId }));
+        setSessionProjectBindings((current) => ({ ...current, [branchSessionId]: branchProjectBinding }));
+      }
+      setSessionUiState((current) => ({
+        ...current,
+        [branchSessionId]: {
+          title: branchTitle,
+          projectId: branchProjectBinding?.projectId || null,
+          projectBinding: branchProjectBinding,
+          messages: [],
+          composerText: "",
+          attachments: []
+        }
+      }));
+      requestSessionId = branchSessionId;
+      setToast("已新开分支，原任务继续运行");
+    }
     const pendingProject = pendingProjectStartRef.current || (isPendingProjectSessionId(activeSessionId) ? activeProject : null);
     const pendingProjectSessionId = isPendingProjectSessionId(requestSessionId) ? requestSessionId : "";
     let projectBindingForRequest = projectBindingForSession(requestSessionId, sessionProjectBindingsRef.current, sessionProjectsRef.current, sessionUiState, projectCatalog);
@@ -7611,6 +8641,7 @@ export function App() {
       ? [projectAttachment, ...attachments.filter((file) => file.file_path !== projectAttachment.file_path)]
       : attachments;
     const displayText = text || "请处理这些附件";
+    const titleSeed = outgoingTitleSeed(text, outboundAttachments, projectForRequest?.name);
     let hiddenContext = "";
 
     let estimatedTokens = estimateTokens(`${hiddenContext}\n\n${displayText}`.trim(), outboundAttachments);
@@ -7653,9 +8684,27 @@ export function App() {
     const clientAttemptId = `attempt-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     latestSendAttemptRef.current[requestSessionId] = clientAttemptId;
     const { generation: sendGeneration, controller: preflightController } = beginSessionPreflight(requestSessionId);
+    if (previousLocalAttemptId && sourcePendingPreflight && requestSessionId === previousSessionId && effectiveInterruptMode !== "queue") {
+      supersedePendingPreflightTurn(previousSessionId, sourcePendingPreflight);
+    }
+    const sendAttemptState = branchFromRequestId
+      ? "branching"
+      : (previousRequestId || previousLocalAttemptId)
+        ? (effectiveInterruptMode === "queue" ? "queued" : "updating-current")
+        : "sending";
+    const sendPhase = branchFromRequestId
+      ? "已新开分支，正在发送"
+      : (previousRequestId || previousLocalAttemptId)
+        ? (effectiveInterruptMode === "queue"
+          ? queuedGuidancePhase()
+          : effectiveInterruptMode === "amend"
+            ? "正在把补充说明合入当前任务"
+            : "正在用新消息更新当前任务")
+        : "正在发送";
     const restoreUnacceptedDraft = (message: string, result?: ChatSendResult) => {
       if (latestSendAttemptRef.current[requestSessionId] !== clientAttemptId) return;
       clearAssistantPhaseTimers(assistantId);
+      clearPendingPreflightTurn(requestSessionId, clientAttemptId);
       clearSessionPreflight(requestSessionId, preflightController);
       updateSessionMessages(requestSessionId, (current) => current.filter((item) => item.id !== userMessage.id && item.id !== assistantId));
       setComposerDraft(text, { immediate: true });
@@ -7697,8 +8746,9 @@ export function App() {
         ...userMessage,
         sendAttempt: {
           id: clientAttemptId,
-          state: previousRequestId ? "queued" : "sending",
-          interruptsRequestId: previousRequestId || undefined
+          state: sendAttemptState,
+          interruptsRequestId: previousRequestId || previousLocalAttemptId || branchFromRequestId || undefined,
+          interruptMode: effectiveInterruptMode
         }
       },
       {
@@ -7708,18 +8758,25 @@ export function App() {
         pending: true,
         createdAt: new Date().toISOString(),
         runTiming: {
-          state: "sending",
+          state: sendAttemptState,
           startedAtMs: runStartedAtMs,
           updatedAtMs: runStartedAtMs
         },
         sendAttempt: {
           id: clientAttemptId,
-          state: previousRequestId ? "queued" : "sending",
-          interruptsRequestId: previousRequestId || undefined
+          state: sendAttemptState,
+          interruptsRequestId: previousRequestId || previousLocalAttemptId || branchFromRequestId || undefined,
+          interruptMode: effectiveInterruptMode
         },
-        steps: [{ type: "phase", content: "正在发送" }]
+        steps: [{ type: "phase", content: sendPhase }]
       }
     ]);
+    rememberPendingPreflightTurn(requestSessionId, {
+      userId: userMessage.id,
+      assistantId,
+      attemptId: clientAttemptId,
+      createdAtMs: runStartedAtMs
+    });
     queuePreflightPhase(requestSessionId, assistantId, sendGeneration, 800, "已收到，正在准备响应");
     queuePreflightPhase(requestSessionId, assistantId, sendGeneration, 1800, "正在检查额度");
     queuePreflightPhase(requestSessionId, assistantId, sendGeneration, 3600, "正在建立响应通道");
@@ -7727,7 +8784,7 @@ export function App() {
     if (!lockedSessionTitlesRef.current[requestSessionId]) {
       setActiveSessionTitle((current) => {
         const nextTitle = current === NEW_SESSION_START_TITLE || current === "新对话" || current.endsWith(`· ${NEW_SESSION_START_TITLE}`) || current.endsWith("· 新会话") || current.endsWith("· 项目会话")
-          ? shortTitle(text || projectForRequest?.name || "项目会话")
+          ? shortTitle(titleSeed)
           : current;
         setSessionTitles((titles) => ({ ...titles, [requestSessionId]: nextTitle }));
         return nextTitle;
@@ -7875,18 +8932,25 @@ export function App() {
         projectContext: projectBindingForRequest || null,
         attachments: outboundAttachments,
         clientAttemptId,
-        interruptsRequestId: previousRequestId || undefined
+        interruptsRequestId: previousRequestId || undefined,
+        interruptMode: effectiveInterruptMode
       });
       if (latestSendAttemptRef.current[requestSessionId] !== clientAttemptId) {
         clearAssistantPhaseTimers(assistantId);
+        clearPendingPreflightTurn(requestSessionId, clientAttemptId);
         if (result.request_id) {
           void cancelChatRequest({ requestId: result.request_id, sessionId: requestSessionId }).catch(() => undefined);
         }
-        updateSessionMessages(requestSessionId, (current) => current.filter((item) => item.id !== userMessage.id && item.id !== assistantId));
+        updateSessionMessages(requestSessionId, (current) => current.filter((item) => {
+          if (item.id === userMessage.id) return item.sendAttempt?.id !== clientAttemptId;
+          if (item.id === assistantId) return !(item.pending && item.sendAttempt?.id === clientAttemptId);
+          return true;
+        }));
         return;
       }
       if (!isSessionPreflightCurrent(requestSessionId, sendGeneration, preflightController)) {
         clearAssistantPhaseTimers(assistantId);
+        clearPendingPreflightTurn(requestSessionId, clientAttemptId);
         if (result.request_id) {
           void cancelChatRequest({ requestId: result.request_id, sessionId: requestSessionId }).catch(() => undefined);
         }
@@ -7915,6 +8979,7 @@ export function App() {
         return;
       }
       const acceptedRequestId = result.request_id || "";
+      clearPendingPreflightTurn(requestSessionId, clientAttemptId);
       updateSessionMessages(requestSessionId, (current) => current.map((item) => (
         item.id === userMessage.id || item.id === assistantId
           ? {
@@ -7924,7 +8989,7 @@ export function App() {
             }
           : item
       )));
-      const replacedRequestIds = result.same_session?.decision === "replacement_accepted" || result.same_session?.decision === "accepted_after_recovery"
+      const replacedRequestIds = result.same_session?.decision === "replacement_accepted" || result.same_session?.decision === "accepted_after_recovery" || result.same_session?.decision === "accepted_after_finalize_wait"
         ? Array.from(new Set([previousRequestId, ...(result.same_session?.replaced_request_ids || [])].filter(Boolean)))
         : [];
       if (replacedRequestIds.length) {
@@ -7969,11 +9034,28 @@ export function App() {
         const queuePosition = Number(result.queue_position || result.same_session?.queue_position || 0);
         clearAssistantPhaseTimers(assistantId);
         clearSessionPreflight(requestSessionId, preflightController);
+        setActiveRequestId(requestId);
+        sessionRequestIdsRef.current = { ...sessionRequestIdsRef.current, [requestSessionId]: requestId };
+        setSessionRequestIds((current) => ({ ...current, [requestSessionId]: requestId }));
         updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => ({
-          ...replaceCurrentPhase(message, queuePosition > 0 ? `已排队，第 ${queuePosition} 位等待执行` : "已排队，等待当前任务完成"),
+          ...replaceCurrentPhase(message, queuedGuidancePhase(queuePosition)),
           requestId,
           pending: true,
-          sendAttempt: message.sendAttempt ? { ...message.sendAttempt, state: "queued" } : undefined,
+          sendAttempt: message.sendAttempt
+            ? { ...message.sendAttempt, state: "queued" }
+            : {
+              id: clientAttemptId,
+              state: "queued",
+              interruptsRequestId: previousRequestId || previousLocalAttemptId || undefined,
+              interruptMode: "queue"
+            },
+          recovery: {
+            kind: "queued",
+            requestId,
+            message: queuedGuidanceStatus(queuePosition),
+            recoverable: true,
+            stopAllowed: false
+          },
           runTiming: {
             ...(message.runTiming || { startedAtMs: Date.now() }),
             requestId,
@@ -8237,12 +9319,14 @@ export function App() {
       } else if (!result.inline_reply) {
         reportChatUsage(result.usage, usageTotal(result.usage) ? "provider" : "estimated");
         clearAssistantPhaseTimers(assistantId);
+        clearPendingPreflightTurn(requestSessionId, clientAttemptId);
         clearSessionPreflight(requestSessionId, preflightController);
       }
       if (!lockedSessionTitlesRef.current[requestSessionId]) {
-        generateSessionTitle({ sessionId: requestSessionId, userMessage: text || projectForRequest?.name || "项目会话" }).then((title) => {
-          if (!title || lockedSessionTitlesRef.current[requestSessionId]) return;
-          setSessionTitles((current) => ({ ...current, [requestSessionId]: title }));
+        generateSessionTitle({ sessionId: requestSessionId, userMessage: titleSeed }).then((title) => {
+          const nextTitle = usableGeneratedSessionTitle(title, titleSeed);
+          if (!nextTitle || lockedSessionTitlesRef.current[requestSessionId]) return;
+          setSessionTitles((current) => ({ ...current, [requestSessionId]: nextTitle }));
           setSessionUiState((current) => ({
             ...current,
             [requestSessionId]: {
@@ -8253,11 +9337,11 @@ export function App() {
               }),
               projectId: projectBindingForRequest?.projectId || sessionProjectIdFromState(requestSessionId, sessionProjectsRef.current, current),
               projectBinding: projectBindingForRequest,
-              title
+              title: nextTitle
             }
           }));
           if (activeSessionIdRef.current === requestSessionId) {
-            setActiveSessionTitle(title);
+            setActiveSessionTitle(nextTitle);
           }
         }).catch(() => undefined);
       }
@@ -8265,6 +9349,7 @@ export function App() {
       const message = error instanceof Error ? error.message : "发送失败";
       if (!isSessionPreflightCurrent(requestSessionId, sendGeneration, preflightController)) {
         clearAssistantPhaseTimers(assistantId);
+        clearPendingPreflightTurn(requestSessionId, clientAttemptId);
         return;
       }
       restoreUnacceptedDraft(message);
@@ -8274,6 +9359,10 @@ export function App() {
   }
 
   async function stopActiveRequest() {
+    const localPreflight = currentPendingPreflightTurn(activeSessionId);
+    if (localPreflight) {
+      clearPendingPreflightTurn(activeSessionId, localPreflight.attemptId);
+    }
     abortSessionPreflight(activeSessionId);
     clearAllPhaseTimers();
     const requestId = activeSessionRequestId;
@@ -8287,13 +9376,20 @@ export function App() {
       setApproval(null);
       closeSessionStream(activeSessionId, requestId);
       clearSessionRequestState(activeSessionId, requestId);
-      updateSessionMessages(activeSessionId, (current) => current.map((message) => message.pending ? {
-        ...finishRunningSteps(message, "cancelled"),
-        content: message.content || "已停止",
-        pending: false,
-        cancelled: true
-      } : message));
+      preserveMessageListScroll(() => {
+        updateSessionMessages(activeSessionId, (current) => current.map((message) => message.pending ? {
+          ...finishRunningSteps(message, "cancelled"),
+          content: message.content || "已停止",
+          pending: false,
+          cancelled: true
+        } : message));
+      });
     }
+  }
+
+  function sendWithActiveTurnMode(mode: ActiveTurnMode) {
+    setActiveTurnMenuOpen(false);
+    void sendNow(false, mode);
   }
 
   function handleComposerKey(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -8580,6 +9676,15 @@ export function App() {
   }
 
   function previewOrOpenFile(file: FileAttachment) {
+    if (isTencentDocsAttachment(file)) {
+      if (file.url) {
+        window.open(file.url, "_blank", "noopener,noreferrer");
+        setToast("已打开腾讯文档");
+      } else {
+        setToast("腾讯文档已作为远程上下文添加");
+      }
+      return;
+    }
     if (!isImageAttachment(file)) {
       requestOpenFile(file);
       return;
@@ -8850,7 +9955,7 @@ export function App() {
         return false;
       }
       setComposerDraft(result.prompt, { immediate: true });
-      setAttachments((result.attachments || []).filter(isDurableLocalAttachment));
+      setAttachments((result.attachments || []).filter((file) => isDurableLocalAttachment(file) || isTencentDocsAttachment(file)));
       focusComposerSoon();
       setToast(result.exactReplay || result.exact_replay ? "已准备好重试草稿，请确认后发送。" : "已基于最新记录准备好重试草稿，请确认后发送。");
       return true;
@@ -8894,6 +9999,29 @@ export function App() {
       setToast(isRunCenterSchedulerRequest(request) ? "Scheduler stop requested" : "Stop requested");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Stop request failed");
+    }
+  }
+
+  async function actOnRunCenterImageObservation(
+    request: RuntimeActiveRequest,
+    observation: RuntimeTaskObservationProjection | null,
+    action: "continue" | "background"
+  ) {
+    const jobId = runCenterObservationJobId(observation);
+    if (!jobId) {
+      setToast("Image job id unavailable");
+      return;
+    }
+    try {
+      await imageJobAction({
+        jobId,
+        requestId: String(request.request_id || ""),
+        action
+      });
+      setRuntimeSnapshot(await loadRuntimeSnapshot());
+      setToast(action === "background" ? "Image job moved to background observation" : "Image job observation extended");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Image job action failed");
     }
   }
 
@@ -9021,6 +10149,127 @@ export function App() {
   const messageLocalJson = useCallback((filePath: string) => (
     readArtifactStatusJson(filePath, activeSessionId)
   ), [activeSessionId, sessionProjects, projects]);
+
+  const openImageRetouchCanvas = useCallback((
+    messageSessionId: string,
+    artifact: AgentArtifact,
+    meta: { source: string; previewUrl: string; title: string }
+  ) => {
+    const source = normalizeLocalSource(meta.source);
+    if (!source) {
+      setToast("图片产物缺少可用路径");
+      return;
+    }
+    const resolvedSource = resolveArtifactPathForSession(messageSessionId, source);
+    const previewUrl = meta.previewUrl || filePreviewUrl(resolvedSource || source, sidecarStatus.webPort);
+    const sourceKey = normalizeArtifactKeySource(artifact.path || artifact.relativePath || artifact.url || artifact.previewUrl || artifact.id || meta.source);
+    const sourceMessage = messagesRef.current.find((message) => (
+      (message.artifacts || []).some((item) => normalizeArtifactKeySource(item.path || item.relativePath || item.url || item.previewUrl || item.id) === sourceKey)
+    ));
+    const relatedImages = (sourceMessage?.artifacts || [artifact])
+      .filter((item) => item.kind === "image")
+      .map((item, index): ImageRetouchRelatedImage | null => {
+        const raw = normalizeLocalSource(item.path || item.relativePath || item.url || item.previewUrl || "");
+        const resolved = raw ? resolveArtifactPathForSession(messageSessionId, raw) || raw : "";
+        const imagePreview = item.thumbnailUrl || item.previewUrl || (resolved ? filePreviewUrl(resolved, sidecarStatus.webPort) : "");
+        const key = normalizeArtifactKeySource(resolved || raw || item.id || item.title || `image-${index}`);
+        if (!key) return null;
+        return {
+          key,
+          title: item.title || `图片 ${index + 1}`,
+          sourcePath: resolved || raw,
+          previewUrl: imagePreview
+        };
+      })
+      .filter((item): item is ImageRetouchRelatedImage => Boolean(item));
+    setImageRetouchError("");
+    setImageRetouchTarget({
+      sessionId: messageSessionId,
+      requestId: artifact.requestId,
+      sourcePath: resolvedSource || source,
+      previewUrl,
+      title: meta.title || artifact.title || "图片精准修图",
+      artifact,
+      relatedImages: relatedImages.length ? relatedImages : [{
+        key: normalizeArtifactKeySource(resolvedSource || source || artifact.id || "current-image") || "current-image",
+        title: meta.title || artifact.title || "图片精准修图",
+        sourcePath: resolvedSource || source,
+        previewUrl
+      }]
+    });
+  }, [sidecarStatus.webPort, sessionProjects, projects]);
+
+  function imageRetouchDraftBlock(target: ImageRetouchTarget, marker: FileAttachment, payload: ImageRetouchSubmitPayload, index: number) {
+    const title = target.title || marker.file_name || `精修图片 ${index}`;
+    const selectedSourceLines = payload.selectedSources.length
+      ? payload.selectedSources.map((source, sourceIndex) => `${sourceIndex + 1}. ${source}`).join("\n")
+      : target.sourcePath;
+    return [
+      `### 精准修图 ${index}：${title}`,
+      `标注图附件：${marker.file_name}`,
+      selectedSourceLines ? `本轮选中原图：\n${selectedSourceLines}` : "",
+      payload.prompt,
+      payload.selectedCount > 1 ? "多图处理说明：本标注图坐标只对应画布中的主图；其他选中图片请复制同一修改意图，按文字说明、参考图和语义位置对应处理，不要把主图坐标强行映射到不同构图的图片。" : "",
+      payload.textEditCount ? "文字修改约束：T 标注框中的文字替换必须保持原字体风格、颜色、阴影、透视和排版位置。" : "",
+      "工具约束：这是语义图片编辑任务，必须走 imagegen/图像编辑能力；不要使用 bash、Python、PIL、OpenCV、ImageMagick、SVG/canvas 或坐标脚本直接改图。",
+      "执行约束：每张任务只生成 1 张最终干净成图；工具返回已完成或已有产物后直接汇总，不要对同一标注图重复调用、重复状态检查或重复发送同一产物。",
+      "请按标注图中的箭头和备注完成局部修图，最终输出干净成图，不要保留箭头、备注文字或标注背景。"
+    ].filter(Boolean).join("\n");
+  }
+
+  function appendImageRetouchDraft(block: string) {
+    setComposerDraft((current) => {
+      const text = current.trim();
+      const prefix = "请批量处理以下精准修图任务。每张标注图中的箭头尖端指向修改位置，旁边文字是修改意见；未标注区域请保持稳定。必须使用 imagegen/图像编辑能力生成最终图，禁止用 bash、Python、PIL、OpenCV、ImageMagick、SVG/canvas 或坐标脚本直接改图。每张任务只生成 1 张最终图，不要重复调用工具或重复发送同一产物。";
+      if (!text) return `${prefix}\n\n${block}`;
+      return `${text}\n\n${block}`;
+    }, { immediate: true });
+  }
+
+  async function submitImageRetouch(payload: ImageRetouchSubmitPayload) {
+    const target = imageRetouchTarget;
+    if (!target) return;
+    setImageRetouchBusy(true);
+    setImageRetouchError("");
+    try {
+      const marker = await uploadImageEditMarker({
+        blob: payload.annotatedBlob,
+        fileName: payload.fileName,
+        webPort: sidecarStatus.webPort
+      });
+      const existingRetouchAttachments = attachmentsRef.current.filter((file) => file.source === "image-retouch").length;
+      const retouchIndex = existingRetouchAttachments + 1;
+      const displayTitle = target.title || marker.file_name || `精修标注 ${retouchIndex}`;
+      const safeMarkerTitle = displayTitle
+        .replace(/\.(?:png|jpe?g|gif|webp|svg)$/i, "")
+        .replace(/[\\/:*?"<>|]+/g, "-")
+        .slice(0, 100) || `标注-${retouchIndex}`;
+      const markerAttachment: FileAttachment = {
+        file_path: marker.file_path,
+        file_name: `精修标注-${retouchIndex}-${safeMarkerTitle}.png`,
+        file_type: "image",
+        preview_url: marker.preview_url,
+        source: "image-retouch",
+        key: `${target.sessionId}:${target.requestId || target.sourcePath}:retouch:${Date.now()}`
+      };
+      const attachmentKey = normalizeAttachmentDedupeKey(markerAttachment);
+      setAttachments((current) => {
+        if (current.some((file) => normalizeAttachmentDedupeKey(file) === attachmentKey)) return current;
+        const next = [...current, markerAttachment];
+        attachmentsRef.current = next;
+        return next;
+      });
+      appendImageRetouchDraft(imageRetouchDraftBlock(target, markerAttachment, payload, retouchIndex));
+      setImageRetouchTarget(null);
+      focusComposerSoon();
+      setToast(`已加入聊天框，可继续添加图片或一次性发送（${payload.annotationCount} 处标注）`);
+    } catch (error) {
+      setImageRetouchError(error instanceof Error ? error.message : "精准修图加入聊天框失败");
+      throw error;
+    } finally {
+      setImageRetouchBusy(false);
+    }
+  }
 
   async function logout() {
     await enterpriseLogout();
@@ -9292,6 +10541,8 @@ export function App() {
 
   function externalConnectionActionIcon(actionId: string) {
     if (actionId === "save_config") return <KeyRound aria-hidden="true" />;
+    if (actionId === "agent_auth") return <KeyRound aria-hidden="true" />;
+    if (actionId === "configure") return <Settings aria-hidden="true" />;
     if (actionId === "test") return <Activity aria-hidden="true" />;
     if (actionId === "stop" || actionId === "disable") return <Square aria-hidden="true" />;
     if (actionId === "set_home_channel") return <AtSign aria-hidden="true" />;
@@ -9299,7 +10550,7 @@ export function App() {
   }
 
   function externalConnectionActionTone(actionId: string) {
-    if (actionId === "start" || actionId === "enable" || actionId === "save_config") return "primary";
+    if (actionId === "start" || actionId === "enable" || actionId === "save_config" || actionId === "agent_auth" || actionId === "configure") return "primary";
     if (actionId === "stop" || actionId === "disable") return "danger";
     if (actionId === "test") return "check";
     return "neutral";
@@ -9312,6 +10563,48 @@ export function App() {
       { id: "test", label: "状态检查" },
       { id: connected ? "stop" : "start", label: connected ? "断开" : "连接" }
     ];
+  }
+
+  function externalConnectionHasAction(connection: ExternalConnection, actionId: string) {
+    return Boolean((connection.actions || []).some((action) => action.id === actionId && action.enabled !== false));
+  }
+
+  function externalConnectionPrimaryActionId(connection: ExternalConnection) {
+    const cardState = externalConnectionCardState(connection);
+    if (externalConnectionDependencyMissing(connection)) return "test";
+    if (cardState === "connected") return "stop";
+    if (externalConnectionNeedsAuthorization(connection) && externalConnectionHasAction(connection, "agent_auth")) return "agent_auth";
+    if (externalConnectionHasAction(connection, "agent_auth") && String(connection.id || "") === "feishu") return "agent_auth";
+    if (externalConnectionNeedsConfiguration(connection)) return "configure";
+    if (externalConnectionHasAction(connection, "start")) return "start";
+    if (externalConnectionHasAction(connection, "enable")) return "enable";
+    return "test";
+  }
+
+  function externalConnectionPrimaryActionLabel(connection: ExternalConnection) {
+    const action = externalConnectionPrimaryActionId(connection);
+    if (action === "stop") return "断开";
+    if (action === "agent_auth") return "授权";
+    if (action === "configure") return "配置";
+    if (action === "test") return "检查";
+    return "连接";
+  }
+
+  function externalConnectionQuickLabel(connection: ExternalConnection) {
+    const id = String(connection.id || connection.platform || "");
+    if (id === "wechatcom_app" || id === "wecom_bot") return "企业微信";
+    const label = connection.displayName || connection.label?.zh || connection.label?.en || id;
+    return id === "qq" ? "QQ" : label;
+  }
+
+  async function applyExternalConnectionPrimaryAction(connection: ExternalConnection) {
+    const action = externalConnectionPrimaryActionId(connection);
+    if (action === "configure") {
+      setExternalConnectionsAdvancedOpen(true);
+      setToast(`请先补全 ${externalConnectionQuickLabel(connection)} 的连接配置`);
+      return;
+    }
+    await applyExternalConnectionAction(connection, action);
   }
 
   function externalConnectionFieldValue(connection: ExternalConnection, key: string) {
@@ -9418,6 +10711,139 @@ export function App() {
     }
   }
 
+  async function refreshTencentDocsStatus(start = false, showToast = false) {
+    setTencentDocsBusy(true);
+    try {
+      const payload = await loadTencentDocsStatus(start);
+      setTencentDocsStatus(payload);
+      if (showToast) setToast(payload.message || "腾讯文档状态已刷新");
+      return payload;
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "腾讯文档状态刷新失败");
+      return null;
+    } finally {
+      setTencentDocsBusy(false);
+    }
+  }
+
+  async function refreshTencentDocsFiles(tab = tencentDocsTab, query = tencentDocsQuery, showToast = false) {
+    setTencentDocsBusy(true);
+    try {
+      const payload = await listTencentDocsFiles({
+        tab,
+        q: tab === "search" ? query.trim() : "",
+        limit: 30
+      });
+      if (payload.status === "error") {
+        throw new Error(payload.message || "腾讯文档列表读取失败");
+      }
+      setTencentDocsFiles(payload.files || []);
+      if (showToast) setToast(payload.message || "腾讯文档列表已刷新");
+      return payload.files || [];
+    } catch (error) {
+      setTencentDocsFiles([]);
+      setToast(error instanceof Error ? error.message : "腾讯文档列表读取失败");
+      return [];
+    } finally {
+      setTencentDocsBusy(false);
+    }
+  }
+
+  async function openTencentDocsFlow() {
+    const payload = await refreshTencentDocsStatus(false);
+    const configured = Boolean(payload?.capability?.configured);
+    if (!configured) {
+      setTencentDocsConnectOpen(true);
+      return;
+    }
+    setTencentDocsPickerOpen(true);
+    void refreshTencentDocsFiles(tencentDocsTab, tencentDocsQuery);
+  }
+
+  async function connectTencentDocsFromDialog() {
+    const token = tencentDocsTokenDraft.trim();
+    if (!token) {
+      setToast("请填写腾讯文档 Token");
+      return;
+    }
+    setTencentDocsBusy(true);
+    try {
+      const payload = await connectTencentDocs(token);
+      setTencentDocsStatus(payload);
+      setTencentDocsTokenDraft("");
+      setTencentDocsConnectOpen(false);
+      setTencentDocsPickerOpen(true);
+      setTencentDocsTab("recent");
+      setTencentDocsQuery("");
+      setSelectedTencentDocsKeys({});
+      setToast("腾讯文档已连接");
+      await refreshTencentDocsFiles("recent", "");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "腾讯文档连接失败");
+    } finally {
+      setTencentDocsBusy(false);
+    }
+  }
+
+  async function disconnectTencentDocsFromDialog() {
+    setTencentDocsBusy(true);
+    try {
+      const payload = await disconnectTencentDocs();
+      setTencentDocsStatus(payload);
+      setTencentDocsFiles([]);
+      setSelectedTencentDocsKeys({});
+      setTencentDocsTokenDraft("");
+      setTencentDocsPickerOpen(false);
+      setToast("腾讯文档已断开");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "腾讯文档断开失败");
+    } finally {
+      setTencentDocsBusy(false);
+    }
+  }
+
+  function selectTencentDocsTab(tab: "recent" | "mine" | "search") {
+    setTencentDocsTab(tab);
+    setSelectedTencentDocsKeys({});
+    void refreshTencentDocsFiles(tab, tab === "search" ? tencentDocsQuery : "");
+  }
+
+  function toggleTencentDocsSelection(file: TencentDocsFile) {
+    const key = tencentDocsFileStableKey(file);
+    if (!key) return;
+    setSelectedTencentDocsKeys((current) => ({
+      ...current,
+      [key]: !current[key]
+    }));
+  }
+
+  function addSelectedTencentDocsToChat() {
+    const selected = tencentDocsFiles.filter((file) => selectedTencentDocsKeys[tencentDocsFileStableKey(file)]);
+    if (!selected.length) {
+      setToast("请选择腾讯文档");
+      return;
+    }
+    let addedCount = 0;
+    setAttachments((current) => {
+      const seen = new Set(current.map(normalizeAttachmentDedupeKey));
+      const next = [...current];
+      selected.forEach((file) => {
+        const attachment = tencentDocsAttachmentFromFile(file);
+        const key = normalizeAttachmentDedupeKey(attachment);
+        if (!seen.has(key)) {
+          seen.add(key);
+          next.push(attachment);
+          addedCount += 1;
+        }
+      });
+      return next;
+    });
+    setSelectedTencentDocsKeys({});
+    setTencentDocsPickerOpen(false);
+    focusComposerSoon();
+    setToast(addedCount ? `已添加 ${addedCount} 个腾讯文档` : "选中的腾讯文档已在附件中");
+  }
+
   const schedulerProjection: RuntimeSchedulerProjection = runtimeSnapshot.scheduler || {
     enabled: false,
     initialized: false,
@@ -9475,6 +10901,56 @@ export function App() {
     }
   }
 
+  async function refreshKnowledgeGraph(showToast = true) {
+    setKnowledgeGraphBusy(true);
+    try {
+      const graph = await loadKnowledgeGraph();
+      setKnowledgeGraph(graph);
+      setSelectedKnowledgeNodeId((current) => {
+        if (current && graph.nodes.some((node) => node.id === current)) return current;
+        setSelectedKnowledgeContent(null);
+        return "";
+      });
+      if (showToast) setToast("知识图谱已刷新");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "知识图谱刷新失败");
+    } finally {
+      setKnowledgeGraphBusy(false);
+    }
+  }
+
+  async function selectKnowledgeNode(node: KnowledgeGraphViewNode) {
+    const path = node.id;
+    const readSeq = knowledgeReadSeqRef.current + 1;
+    knowledgeReadSeqRef.current = readSeq;
+    setSelectedKnowledgeNodeId(path);
+    setSelectedKnowledgeBusy(true);
+    setSelectedKnowledgeContent(null);
+    try {
+      const result = await readKnowledgeFile(path);
+      if (knowledgeReadSeqRef.current !== readSeq) return;
+      setSelectedKnowledgeContent({
+        path,
+        content: result?.content || ""
+      });
+    } catch (error) {
+      if (knowledgeReadSeqRef.current === readSeq) {
+        setToast(error instanceof Error ? error.message : "知识页读取失败");
+      }
+    } finally {
+      if (knowledgeReadSeqRef.current === readSeq) {
+        setSelectedKnowledgeBusy(false);
+      }
+    }
+  }
+
+  function clearSelectedKnowledgeNode() {
+    knowledgeReadSeqRef.current += 1;
+    setSelectedKnowledgeNodeId("");
+    setSelectedKnowledgeContent(null);
+    setSelectedKnowledgeBusy(false);
+  }
+
   async function applySchedulerAction(input: Record<string, unknown>, successText: string) {
     setSchedulerBusy(true);
     try {
@@ -9519,6 +10995,7 @@ export function App() {
   const fileToolsReady = ["read", "write", "edit", "ls"].every((name) => runtimeToolReady(runtimeSnapshot, name));
   const ocrReady = runtimeToolReady(runtimeSnapshot, "ocr");
   const visionReady = runtimeToolReady(runtimeSnapshot, "vision");
+  const imagegenReady = runtimeToolReady(runtimeSnapshot, "imagegen") || extensionSkillEnabled(runtimeSnapshot, "image-generation") || extensionSkillEnabled(runtimeSnapshot, "imagegen");
   const schedulerToolReady = runtimeToolReady(runtimeSnapshot, "scheduler");
   const feishuToolReady = runtimeToolReady(runtimeSnapshot, "feishu_cli");
   const browserToolReady = runtimeToolReady(runtimeSnapshot, "browser");
@@ -9566,9 +11043,9 @@ export function App() {
     {
       id: "image-generation",
       name: "Image Gen",
-      detail: extensionSkillEnabled(runtimeSnapshot, "image-generation") ? "图像生成 Skill 已开启" : "等待开启图像生成 Skill",
-      enabled: extensionSkillEnabled(runtimeSnapshot, "image-generation"),
-      statusLabel: extensionSkillEnabled(runtimeSnapshot, "image-generation") ? "已启用" : "未启用",
+      detail: imagegenReady ? "图像生成/精准修图工具已加载" : "等待开启 imagegen 图像生成工具",
+      enabled: imagegenReady,
+      statusLabel: imagegenReady ? "已启用" : "未启用",
       icon: <WandSparkles aria-hidden="true" />
     },
     {
@@ -9617,7 +11094,18 @@ export function App() {
     }
   ];
   const activeProjectMemoryPath = activeProject?.memoryPath || (activeProject ? `${activeProject.path}\\.ecorex\\project-memory.md` : "");
+  const knowledgeGraphLayoutData = useMemo(
+    () => layoutKnowledgeGraph(knowledgeGraph.nodes, knowledgeGraph.links, 920, 520),
+    [knowledgeGraph.nodes, knowledgeGraph.links]
+  );
+  const knowledgeGraphNodeMap = useMemo(
+    () => new Map(knowledgeGraphLayoutData.nodes.map((node) => [node.id, node])),
+    [knowledgeGraphLayoutData.nodes]
+  );
+  const selectedKnowledgeNode = selectedKnowledgeNodeId ? knowledgeGraphNodeMap.get(selectedKnowledgeNodeId) || null : null;
+  const selectedKnowledgeExcerpt = selectedKnowledgeContent?.content ? knowledgeExcerpt(selectedKnowledgeContent.content, 980) : "";
   const hasPendingAssistantMessage = messages.some(isUiLiveAssistantMessage);
+  const hasActiveTurnControl = Boolean(activeSessionRequestId || hasPendingAssistantMessage);
   const visibleMessages = messages.filter((message) => !isSilentPausedAssistantMessage(message));
   const isNewSessionView = visibleMessages.length === 0 && !hasPendingAssistantMessage;
   const composerHasPayload = Boolean(composerHasText || attachments.length);
@@ -9626,6 +11114,26 @@ export function App() {
   const generalSessionsCollapsed = sidebarCollapse.generalSessions && !sessionSearchActive;
   const currentComposerPermissionMode: PermissionMode = permissionState?.mode || "smart-ask";
   const releaseNotes = runtimeSnapshot.releaseNotes;
+  const tencentDocsCapability = tencentDocsStatus?.capability;
+  const tencentDocsConfigured = Boolean(tencentDocsCapability?.configured);
+  const tencentDocsToolCount = Number(tencentDocsCapability?.contentToolCount || tencentDocsCapability?.toolCount || 0);
+  const tencentDocsConnected = Boolean(tencentDocsCapability?.connected || tencentDocsToolCount > 0);
+  const tencentDocsStatusLabel = tencentDocsConfigured
+    ? tencentDocsConnected
+      ? tencentDocsToolCount ? `已连接 · ${tencentDocsToolCount} 个工具` : "已连接"
+      : "已配置，待启动"
+    : "未连接";
+  const externalConnectionById = new Map(externalConnections.map((connection) => [connection.id, connection]));
+  const featuredChannelRows = FEATURED_EXTERNAL_CONNECTOR_IDS
+    .filter((id) => id !== "tencent-docs")
+    .map((id) => externalConnectionById.get(id))
+    .filter((connection): connection is ExternalConnection => Boolean(connection))
+    .filter((connection, _index, rows) => connection.id !== "wecom_bot" || !rows.some((item) => item.id === "wechatcom_app"));
+  const visibleFeaturedConnectorCount = 1 + featuredChannelRows.length;
+  const selectedTencentDocsFiles = useMemo(
+    () => tencentDocsFiles.filter((file) => selectedTencentDocsKeys[tencentDocsFileStableKey(file)]),
+    [tencentDocsFiles, selectedTencentDocsKeys]
+  );
   const settingsNav: Array<{ id: SettingsSection; label: string; icon: ReactNode }> = [
     { id: "account", label: "账号", icon: <UserRound aria-hidden="true" /> },
     { id: "projects", label: "项目", icon: <FolderOpen aria-hidden="true" /> },
@@ -9634,6 +11142,7 @@ export function App() {
     { id: "scheduler", label: "定时", icon: <Bell aria-hidden="true" /> },
     { id: "permissions", label: "权限", icon: <ShieldCheck aria-hidden="true" /> },
     { id: "memory", label: "记忆", icon: <Brain aria-hidden="true" /> },
+    { id: "knowledge-graph", label: "知识图谱", icon: <Network aria-hidden="true" /> },
     { id: "diagnostics", label: "诊断", icon: <Database aria-hidden="true" /> }
   ];
 
@@ -9669,14 +11178,41 @@ export function App() {
             const retryPolicy = runCenterRetryPolicy(request);
             const openAllowed = request.actions?.open ?? !diagnosticsOnly;
             const stopAllowed = request.actions?.stop ?? !(runCenterState(request) === "failed" || (isSubagent && !subagentTaskId));
+            const observation = runCenterPrimaryObservation(request);
+            const observationLabel = runCenterObservationLabel(observation);
+            const observationJobId = runCenterObservationJobId(observation);
+            const observationActionAllowed = Boolean(
+              observationJobId
+              && observation?.kind === "image_job"
+              && runCenterObservationNeedsDecision(observation)
+              && !["failed", "cancelled", "completed"].includes(runCenterState(request))
+            );
             return (
               <article className={`run-center-row ${runCenterStateClass(request)}`} key={requestId || `${sessionId}-${request.source || "request"}`}>
                 <div className="run-center-row-main">
                   <span className="run-center-state">{runCenterStateLabel(request)}</span>
                   <strong>{sessionId || request.run_type || request.source || "runtime run"}</strong>
                   <small>{shortRequestId(requestId)}{request.phase ? ` · ${request.phase}` : ""}{age ? ` · ${age}` : ""}</small>
+                  {observationLabel ? (
+                    <span className={`run-center-observation${runCenterObservationNeedsDecision(observation) ? " is-waiting" : ""}`} title={observationLabel}>
+                      <Activity aria-hidden="true" />
+                      {observationLabel}
+                    </span>
+                  ) : null}
                 </div>
                 <div className="run-center-actions">
+                  {observationActionAllowed ? (
+                    <>
+                      <button type="button" onClick={() => void actOnRunCenterImageObservation(request, observation, "continue")} title="Continue observing this image job">
+                        <RefreshCw aria-hidden="true" />
+                        Continue
+                      </button>
+                      <button type="button" onClick={() => void actOnRunCenterImageObservation(request, observation, "background")} title="Move this image job observation to background">
+                        <ImageIcon aria-hidden="true" />
+                        Background
+                      </button>
+                    </>
+                  ) : null}
                   <button type="button" onClick={() => void openRunCenterSession(request, { closeSurface: surface === "primary" })} disabled={!openAllowed} title={!openAllowed ? diagnosticsOnlyTitle : "Open or recover session"}>
                     <FolderOpen aria-hidden="true" />
                     Open
@@ -9771,6 +11307,37 @@ export function App() {
     );
   };
 
+  function renderSessionRowsWithMore(rows: SessionRow[], bucketKey: string) {
+    const expanded = Boolean(expandedSessionBuckets[bucketKey]) || sessionSearchActive;
+    const visibleRows = expanded ? rows : rows.slice(0, SIDEBAR_SESSION_PREVIEW_LIMIT);
+    const remaining = Math.max(0, rows.length - visibleRows.length);
+    return (
+      <>
+        {visibleRows.map(renderSessionRow)}
+        {remaining > 0 && (
+          <button
+            type="button"
+            className="session-list-more"
+            onClick={() => setExpandedSessionBuckets((current) => ({ ...current, [bucketKey]: true }))}
+            title={`展开剩余 ${remaining} 条会话`}
+          >
+            查看更多({remaining})
+          </button>
+        )}
+        {expanded && !sessionSearchActive && rows.length > SIDEBAR_SESSION_PREVIEW_LIMIT && (
+          <button
+            type="button"
+            className="session-list-more is-collapse"
+            onClick={() => setExpandedSessionBuckets((current) => ({ ...current, [bucketKey]: false }))}
+            title="收起会话列表"
+          >
+            收起
+          </button>
+        )}
+      </>
+    );
+  }
+
   const renderGeneralSessionGroup = (label: string, rows: SessionRow[], kind: "pinned" | "regular") => (
     <section className={`session-group is-${kind}`} aria-label={label} key={kind}>
       {kind === "pinned" ? (
@@ -9780,7 +11347,7 @@ export function App() {
         </div>
       ) : null}
       <div className="session-group-rows">
-        {rows.map(renderSessionRow)}
+        {renderSessionRowsWithMore(rows, `general:${kind}`)}
       </div>
     </section>
   );
@@ -9805,15 +11372,106 @@ export function App() {
     return `已在 ${elapsed} 内达成目标`;
   }
 
+  async function handleQueuedRequestAction(message: ChatItem, sessionId: string, action: "run_now" | "cancel_queued") {
+    const requestId = message.requestId || message.runTiming?.requestId || "";
+    if (!requestId) {
+      setToast("这条队列消息尚未分配运行时请求号");
+      return;
+    }
+    const nextPhase = action === "run_now" ? "已提到队首，正在停止当前任务" : "正在取消排队";
+    updateAssistantMessageForRequest(sessionId, message.id, requestId, (entry) => replaceCurrentPhase(entry, nextPhase));
+    try {
+      const result = await queueChatRequestAction({ requestId, sessionId, action });
+      await refreshRunCenter(false).catch(() => undefined);
+      if (result.status !== "success") {
+        throw new Error(result.message || "队列操作失败");
+      }
+      if (action === "cancel_queued") {
+        const terminalAtMs = Date.now();
+        updateSessionMessages(sessionId, (current) => current.map((entry) => (
+          entry.id === message.id
+            ? {
+                ...finishRunningSteps(entry, "cancelled"),
+                content: entry.content || "已从队列移除",
+                pending: false,
+                cancelled: true,
+                sendAttempt: undefined,
+                recovery: undefined,
+                runTiming: {
+                  ...(entry.runTiming || { startedAtMs: terminalAtMs }),
+                  requestId,
+                  state: "cancelled",
+                  updatedAtMs: terminalAtMs,
+                  terminalAtMs
+                }
+              }
+            : entry.sendAttempt?.id && entry.sendAttempt.id === message.sendAttempt?.id
+              ? { ...entry, sendAttempt: undefined }
+              : entry
+        )));
+        clearSessionRequestState(sessionId, requestId);
+        setToast("已取消排队");
+        return;
+      }
+      updateAssistantMessageForRequest(sessionId, message.id, requestId, (entry) => ({
+        ...replaceCurrentPhase(entry, "已提到队首，当前任务停止后立即执行"),
+        sendAttempt: entry.sendAttempt
+          ? { ...entry.sendAttempt, state: "queued" }
+          : { id: `queue-action-${requestId}`, state: "queued", interruptsRequestId: requestId, interruptMode: "queue" },
+        recovery: {
+          kind: "queued",
+          requestId,
+          message: "已提到队首，当前任务停止后立即执行",
+          recoverable: true,
+          stopAllowed: false
+        },
+        runTiming: {
+          ...(entry.runTiming || { startedAtMs: Date.now() }),
+          requestId,
+          state: "queued",
+          updatedAtMs: Date.now()
+        }
+      }));
+      setToast("已提到队首");
+    } catch (error) {
+      updateAssistantMessageForRequest(sessionId, message.id, requestId, (entry) => (
+        replaceCurrentPhase(entry, `${nextPhase}失败：${error instanceof Error ? error.message : "请稍后重试"}`)
+      ));
+      setToast(error instanceof Error ? error.message : "队列操作失败");
+    }
+  }
+
   function renderRecoveryActions(message: ChatItem, sessionId: string) {
     const recovery = message.recovery;
     const requestId = recovery?.requestId || message.requestId || "";
     if (!recovery && !message.sendAttempt) return null;
+    if (message.sendAttempt?.state === "queued" || recovery?.kind === "queued") {
+      const label = recovery?.message || queuedGuidanceStatus();
+      return (
+        <div className="message-recovery-actions is-queued">
+          <span>{label}</span>
+          {message.role === "assistant" && (
+            <button type="button" className="primary-action" onClick={() => void handleQueuedRequestAction(message, sessionId, "run_now")} title="移到队首并停止当前任务">
+              <ArrowDownToLine aria-hidden="true" />
+              提到队首
+            </button>
+          )}
+          {message.role === "assistant" && (
+            <button type="button" onClick={() => void handleQueuedRequestAction(message, sessionId, "cancel_queued")} title="取消这条排队消息">
+              <X aria-hidden="true" />
+              取消排队
+            </button>
+          )}
+        </div>
+      );
+    }
     if (message.sendAttempt && message.sendAttempt.state !== "accepted") {
-      const label = message.sendAttempt.state === "queued"
-        ? (message.role === "user" ? "已排队，等待当前任务完成" : "队列中，稍后自动响应")
-        : message.sendAttempt.state === "stopping-previous"
+      const label = message.sendAttempt.state === "stopping-previous"
         ? (message.role === "user" ? "正在发送新消息" : "正在切换到这条新消息")
+        : message.sendAttempt.state === "updating-current"
+        ? (message.role === "user" ? "正在更新当前任务" : "正在按最新消息切换任务")
+        : message.sendAttempt.state === "branching"
+        ? (message.role === "user" ? "正在新分支发送" : "正在新分支准备响应")
         : message.sendAttempt.state === "restore-available"
           ? "消息未发出，可在输入框中重试"
           : (message.role === "user" ? "正在发送" : "正在准备响应");
@@ -9878,7 +11536,7 @@ export function App() {
       <WindowBrand version={appVersion} />
       <aside className="session-sidebar">
         <div className="sidebar-actions">
-          <button onClick={() => startNewSession(null)} title="创建不绑定项目的通用会话" data-tooltip="创建不绑定项目的通用会话" data-tooltip-position="bottom-left"><Plus aria-hidden="true" />新对话</button>
+          <button onClick={() => startNewSession(null)} title="创建不绑定项目的会话" data-tooltip="创建不绑定项目的会话" data-tooltip-position="bottom-left"><Plus aria-hidden="true" />新对话</button>
           <label className="search-box" title="搜索会话标题和摘要">
             <Search aria-hidden="true" />
             <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索会话" />
@@ -9891,7 +11549,7 @@ export function App() {
               {projectsSectionCollapsed ? <ChevronRight aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
               <span>项目</span>
             </button>
-            <button className="icon-button" type="button" onClick={() => void addProject()} title={projectPickerBusy ? "正在选择项目文件夹" : "添加项目文件夹"} disabled={projectPickerBusy} aria-busy={projectPickerBusy}>
+            <button className="icon-button sidebar-plain-icon" type="button" onClick={() => void addProject()} title={projectPickerBusy ? "正在选择项目文件夹" : "添加项目文件夹"} disabled={projectPickerBusy} aria-busy={projectPickerBusy}>
               <FolderPlus aria-hidden="true" />
             </button>
           </div>
@@ -9930,7 +11588,7 @@ export function App() {
                   </div>
                   {!groupCollapsed && <div className="project-session-list" aria-label={`${project.name} 的会话`}>
                     {sessions.length ? (
-                      sessions.map(renderSessionRow)
+                      renderSessionRowsWithMore(sessions, `project:${project.id}`)
                     ) : (
                       <button className="project-session-empty" type="button" onClick={() => startNewSession(project)} title={`为 ${project.name} 创建项目会话`}>
                         新建项目会话
@@ -9948,16 +11606,16 @@ export function App() {
           <div className="sidebar-section-title">
             <button className="sidebar-collapse-button" type="button" onClick={() => setSidebarCollapse((current) => ({ ...current, generalSessions: !current.generalSessions }))} aria-expanded={!generalSessionsCollapsed} title={generalSessionsCollapsed ? "展开通用会话" : "折叠通用会话"}>
               {generalSessionsCollapsed ? <ChevronRight aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
-              <span>通用会话</span>
+              <span>会话</span>
             </button>
             <small>{generalSessions.length}</small>
           </div>
           {generalSessionsCollapsed ? null : generalSessions.length ? (
             <div className="session-groups">
-              {pinnedGeneralSessions.length ? renderGeneralSessionGroup("置顶任务", pinnedGeneralSessions, "pinned") : null}
-              {regularGeneralSessions.length ? renderGeneralSessionGroup("通用会话", regularGeneralSessions, "regular") : null}
+              {pinnedGeneralSessions.length ? renderGeneralSessionGroup("置顶会话", pinnedGeneralSessions, "pinned") : null}
+              {regularGeneralSessions.length ? renderGeneralSessionGroup("会话", regularGeneralSessions, "regular") : null}
             </div>
-          ) : <div className="session-empty">暂无通用会话</div>}
+          ) : <div className="session-empty">暂无会话</div>}
         </div>
 
         <div className="sidebar-footer">
@@ -10007,11 +11665,23 @@ export function App() {
             {activeProject && <small className="project-path" title={activeProject.path}>{activeProject.path}</small>}
           </div>
           <div className="chat-status">
-            <span title={runtimeSnapshot.message}><Bot aria-hidden="true" />{runtimeSnapshot.status === "ready" ? "运行时已连接" : "等待运行时"}</span>
+            <span
+              className={`chat-status-icon is-runtime${runtimeSnapshot.status === "ready" ? " is-ready" : ""}`}
+              title={runtimeSnapshot.message || (runtimeSnapshot.status === "ready" ? "运行时已连接" : "等待运行时")}
+              aria-label={runtimeSnapshot.status === "ready" ? "运行时已连接" : "等待运行时"}
+            >
+              <Bot aria-hidden="true" />
+            </span>
             {activeRuntimeElapsed && (
               <span className="chat-run-timing" title={`当前任务已处理 ${activeRuntimeElapsed}`}><Activity aria-hidden="true" />已处理 {activeRuntimeElapsed}</span>
             )}
-            <span title="当前企业账号"><CheckCircle2 aria-hidden="true" />{session.user.email}</span>
+            <span
+              className="chat-status-icon is-account"
+              title={`当前企业账号：${session.user.email}`}
+              aria-label={`当前企业账号：${session.user.email}`}
+            >
+              <CheckCircle2 aria-hidden="true" />
+            </span>
             <button
               className="icon-button"
               title="分享会话"
@@ -10046,26 +11716,54 @@ export function App() {
           )}
         </header>
 
-        {showBackgroundUpdateBanner && (
-          <section className="update-banner" role="status" aria-live="polite">
+        {showBackgroundUpdateDialog && (
+          <div className="update-ready-backdrop" role="presentation">
+            <section className="update-ready-dialog" role="dialog" aria-modal="false" aria-labelledby="update-ready-title">
+              <div>
+                <strong id="update-ready-title">新版本已安装完成</strong>
+                <span>{runtimeSnapshot.updateState?.message || `EcoreX ${runtimeSnapshot.updateState?.version || appVersion} 已在本机准备就绪，点击立即更新即可切换到新版。`}</span>
+              </div>
+              <div className="update-actions update-ready-actions">
+                <em>健康检查通过</em>
+                <button type="button" className="primary-action" onClick={reloadIntoBackgroundUpdate} title="立即切换到已安装的新版本">
+                  <RefreshCw aria-hidden="true" />立即更新
+                </button>
+                <button
+                  type="button"
+                  className="icon-button"
+                  title="稍后再说"
+                  aria-label="关闭更新提示"
+                  onClick={() => markBackgroundUpdateApplied(backgroundUpdateKey)}
+                >
+                  <X aria-hidden="true" />
+                </button>
+              </div>
+            </section>
+          </div>
+        )}
+
+        {showRuntimeUpdateStateBanner && (
+          <section className={`update-banner update-state-banner is-${runtimeUpdateStateInfo.status}`} role="status" aria-live="polite">
             <div>
-              <strong>新版本已就绪</strong>
-              <span>{runtimeSnapshot.updateState?.message || `后台更新已安装，刷新当前页面即可使用 EcoreX ${runtimeSnapshot.updateState?.version || appVersion}`}</span>
+              <strong>{runtimeUpdateStateInfo.title}</strong>
+              <span>{runtimeUpdateStateInfo.message}</span>
             </div>
             <div className="update-actions">
-              <em>{runtimeSnapshot.updateState?.healthCheck?.passed ? "健康检查通过" : "等待生效"}</em>
-              <button type="button" onClick={reloadIntoBackgroundUpdate} title="刷新当前页面使用新版本">
-                <RefreshCw aria-hidden="true" />刷新
-              </button>
-              <button
-                type="button"
-                className="icon-button"
-                title="关闭提示"
-                aria-label="关闭更新提示"
-                onClick={() => markBackgroundUpdateApplied(backgroundUpdateKey)}
-              >
-                <X aria-hidden="true" />
-              </button>
+              <em>{runtimeUpdateStateInfo.label}</em>
+              {backgroundUpdateReadyForRefresh(runtimeSnapshot.updateState) ? (
+                <button type="button" onClick={reloadIntoBackgroundUpdate} title="立即切换到已通过健康检查的新版本">
+                  <RefreshCw aria-hidden="true" />立即切换
+                </button>
+              ) : (
+                <button type="button" onClick={() => setNotificationsOpen(true)} title="查看运行时日志和更新状态">
+                  <Bell aria-hidden="true" />查看日志
+                </button>
+              )}
+              {(runtimeUpdateStateInfo.status === "failed" || runtimeUpdateStateInfo.status === "rollback" || runtimeUpdateStateInfo.status === "deferred") && (
+                <button type="button" onClick={openRuntimeUpdatePage} title="重新打开更新页">
+                  <RefreshCw aria-hidden="true" />重试
+                </button>
+              )}
             </div>
           </section>
         )}
@@ -10079,7 +11777,7 @@ export function App() {
             <div className="update-actions">
               <em>{runtimeUpdateCheck?.updateReason === "notice" ? "管理员通知" : (runtimeUpdateCheck?.updateReason === "artifact" ? "同版本热修" : `当前 ${runtimeUpdateCheck?.currentVersion || appVersion}`)}</em>
               <button type="button" onClick={openRuntimeUpdatePage} title="查看更新说明并检查本机更新">
-                <Globe2 aria-hidden="true" />查看更新
+                <Globe2 aria-hidden="true" />{runtimeUpdatePageActionLabel}
               </button>
               <button
                 type="button"
@@ -10216,6 +11914,7 @@ export function App() {
                       localFileStat={messageLocalFileStat}
                       onLocalFileContextMenu={showChatFileMenu}
                       onArtifactFeedback={(artifact, validity) => handleArtifactFeedback(messageSessionId, message.id, artifact, validity)}
+                      onImageRetouchRequest={(artifact, meta) => openImageRetouchCanvas(messageSessionId, artifact, meta)}
                     />
                     {message.role !== "user" ? messageFileList : null}
                     {renderRecoveryActions(message, messageSessionId)}
@@ -10284,23 +11983,26 @@ export function App() {
           >
             {attachments.length > 0 && (
               <div className="attachment-tray">
-                {attachments.map((file) => (
-                  <article key={file.file_path}>
-                    <button className="attachment-preview" type="button" onClick={() => previewOrOpenFile(file)} title={isImageAttachment(file) ? "点击预览图片" : "点击在本地打开"}>
-                      {file.previewDataUrl ? <img src={file.previewDataUrl} alt="" /> : fileIcon(file)}
-                      <span>{file.file_name}</span>
-                    </button>
-                    <button
-                      className="attachment-remove"
-                      type="button"
-                      aria-label={`移除 ${file.file_name}`}
-                      title="移除附件"
-                      onClick={() => setAttachments((current) => current.filter((item) => item.file_path !== file.file_path))}
-                    >
-                      <X aria-hidden="true" />
-                    </button>
-                  </article>
-                ))}
+                {attachments.map((file) => {
+                  const previewUrl = attachmentPreviewUrl(file);
+                  return (
+                    <article key={file.file_path}>
+                      <button className="attachment-preview" type="button" onClick={() => previewOrOpenFile(file)} title={isTencentDocsAttachment(file) ? "点击打开腾讯文档" : isImageAttachment(file) ? "点击预览图片" : "点击在本地打开"}>
+                        {previewUrl ? <img src={previewUrl} alt="" /> : fileIcon(file)}
+                        <span>{file.file_name}</span>
+                      </button>
+                      <button
+                        className="attachment-remove"
+                        type="button"
+                        aria-label={`移除 ${file.file_name}`}
+                        title="移除附件"
+                        onClick={() => setAttachments((current) => current.filter((item) => item.file_path !== file.file_path))}
+                      >
+                        <X aria-hidden="true" />
+                      </button>
+                    </article>
+                  );
+                })}
               </div>
             )}
             {(skillMentions.length > 0 || skillMentionNoResults) && (
@@ -10330,7 +12032,7 @@ export function App() {
             <textarea
               ref={composerRef}
               defaultValue={composerText}
-              placeholder="给 EcoreX 发送消息，支持粘贴图片或文件"
+              placeholder="给小芯发送消息，支持粘贴图片或文件"
               onChange={(event) => handleComposerDraftInput(event.target.value)}
               onKeyDown={handleComposerKey}
               onPaste={(event) => void handlePaste(event)}
@@ -10393,10 +12095,49 @@ export function App() {
                 </div>
               )}
             </div>
-            {(activeSessionRequestId || hasPendingAssistantMessage) && !composerHasPayload ? (
+            {hasActiveTurnControl && composerHasPayload && (
+              <div className="active-turn-menu" ref={activeTurnMenuRef}>
+                <button
+                  type="button"
+                  className="active-turn-trigger"
+                  aria-haspopup="menu"
+                  aria-expanded={activeTurnMenuOpen}
+                  title="选择这条新消息如何处理当前任务"
+                  onClick={() => setActiveTurnMenuOpen((open) => !open)}
+                >
+                  <ChevronDown aria-hidden="true" />
+                </button>
+                {activeTurnMenuOpen && (
+                  <div className="active-turn-popover" role="menu" aria-label="运行中发送方式">
+                    <button type="button" role="menuitem" onClick={() => sendWithActiveTurnMode("replace")}>
+                      <SendHorizontal aria-hidden="true" />
+                      <span>
+                        <strong>更新任务</strong>
+                        <small>停止旧回复，按最新消息重新执行</small>
+                      </span>
+                    </button>
+                    <button type="button" role="menuitem" onClick={() => sendWithActiveTurnMode("queue")}>
+                      <ListPlus aria-hidden="true" />
+                      <span>
+                        <strong>排队稍后执行</strong>
+                        <small>保留当前任务，完成后再运行</small>
+                      </span>
+                    </button>
+                    <button type="button" role="menuitem" onClick={() => sendWithActiveTurnMode("branch")}>
+                      <GitBranch aria-hidden="true" />
+                      <span>
+                        <strong>新开分支</strong>
+                        <small>旧任务继续，新会话执行这条消息</small>
+                      </span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+            {hasActiveTurnControl && !composerHasPayload ? (
               <button type="button" className="send-button stop" onClick={stopActiveRequest} title="停止当前回复"><Square aria-hidden="true" /></button>
             ) : (
-              <button type="submit" className="send-button" disabled={!composerHasPayload} title={activeSessionRequestId || hasPendingAssistantMessage ? "发送并暂停上一条回复" : "发送，Enter 也可以发送"}>
+              <button type="submit" className="send-button" disabled={!composerHasPayload} title={hasActiveTurnControl ? "更新当前任务，Enter 也会按最新消息切换" : "发送，Enter 也可以发送"}>
                 <SendHorizontal aria-hidden="true" />
               </button>
             )}
@@ -10477,6 +12218,140 @@ export function App() {
           </form>
         </div>
       </section>
+
+      {tencentDocsConnectOpen && (
+        <div className="modal-backdrop tencent-docs-backdrop" onClick={() => setTencentDocsConnectOpen(false)}>
+          <section className="tencent-docs-sheet is-connect" role="dialog" aria-modal="true" aria-labelledby="tencent-docs-connect-title" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <span>{tencentDocsStatusLabel}</span>
+                <h2 id="tencent-docs-connect-title">腾讯文档</h2>
+              </div>
+              <button className="icon-button" type="button" title="关闭" aria-label="关闭" onClick={() => setTencentDocsConnectOpen(false)}><X aria-hidden="true" /></button>
+            </header>
+            <form className="tencent-docs-connect-form" onSubmit={(event) => { event.preventDefault(); void connectTencentDocsFromDialog(); }}>
+              <label>
+                <span>Access Token</span>
+                <input
+                  type="password"
+                  value={tencentDocsTokenDraft}
+                  onChange={(event) => setTencentDocsTokenDraft(event.currentTarget.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </label>
+              <div className="tencent-docs-status-line">
+                <KeyRound aria-hidden="true" />
+                <span>{tencentDocsStatus?.message || tencentDocsStatusLabel}</span>
+              </div>
+              <footer>
+                {tencentDocsConfigured && (
+                  <button type="button" onClick={() => void disconnectTencentDocsFromDialog()} disabled={tencentDocsBusy}>
+                    <LogOut aria-hidden="true" />
+                    断开
+                  </button>
+                )}
+                <button className="primary-action" type="submit" disabled={tencentDocsBusy}>
+                  <CheckCircle2 aria-hidden="true" />
+                  连接
+                </button>
+              </footer>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {tencentDocsPickerOpen && (
+        <div className="modal-backdrop tencent-docs-backdrop" onClick={() => setTencentDocsPickerOpen(false)}>
+          <section className="tencent-docs-sheet is-picker" role="dialog" aria-modal="true" aria-labelledby="tencent-docs-picker-title" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <span>{tencentDocsStatusLabel}</span>
+                <h2 id="tencent-docs-picker-title">选择腾讯文档</h2>
+              </div>
+              <button className="icon-button" type="button" title="关闭" aria-label="关闭" onClick={() => setTencentDocsPickerOpen(false)}><X aria-hidden="true" /></button>
+            </header>
+            <div className="tencent-docs-toolbar">
+              <div className="tencent-docs-tabs" role="tablist" aria-label="腾讯文档列表">
+                {([
+                  ["recent", "最近"],
+                  ["mine", "我的"],
+                  ["search", "搜索"]
+                ] as Array<["recent" | "mine" | "search", string]>).map(([tab, label]) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    role="tab"
+                    aria-selected={tencentDocsTab === tab}
+                    className={tencentDocsTab === tab ? "is-active" : ""}
+                    onClick={() => selectTencentDocsTab(tab)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <button type="button" onClick={() => void refreshTencentDocsFiles(tencentDocsTab, tencentDocsQuery, true)} disabled={tencentDocsBusy} title="刷新腾讯文档列表">
+                <RefreshCw aria-hidden="true" />
+                刷新
+              </button>
+            </div>
+            {tencentDocsTab === "search" && (
+              <form className="tencent-docs-search" onSubmit={(event) => { event.preventDefault(); void refreshTencentDocsFiles("search", tencentDocsQuery, true); }}>
+                <Search aria-hidden="true" />
+                <input
+                  value={tencentDocsQuery}
+                  onChange={(event) => setTencentDocsQuery(event.currentTarget.value)}
+                  placeholder="搜索文档"
+                />
+                <button type="submit" disabled={tencentDocsBusy}>搜索</button>
+              </form>
+            )}
+            <div className="tencent-docs-status-line">
+              <FileText aria-hidden="true" />
+              <span>{tencentDocsBusy ? "刷新中" : tencentDocsStatus?.message || `${tencentDocsFiles.length} 个文档`}</span>
+            </div>
+            <div className="tencent-docs-list" role="listbox" aria-label="腾讯文档">
+              {tencentDocsFiles.map((file) => {
+                const key = tencentDocsFileStableKey(file);
+                const selected = Boolean(selectedTencentDocsKeys[key]);
+                const title = file.file_name || file.title || file.file_id || "腾讯文档";
+                const meta = [file.doc_type || file.file_type, file.owner, file.updated_at].filter(Boolean).join(" · ");
+                return (
+                  <button
+                    key={key || title}
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    className={`tencent-docs-row${selected ? " is-selected" : ""}`}
+                    onClick={() => toggleTencentDocsSelection(file)}
+                    title={title}
+                  >
+                    {selected ? <CheckCircle2 aria-hidden="true" /> : <FileText aria-hidden="true" />}
+                    <span>
+                      <strong>{title}</strong>
+                      <small>{meta || "腾讯文档"}</small>
+                    </span>
+                    {file.url ? <Globe2 aria-hidden="true" /> : null}
+                  </button>
+                );
+              })}
+              {!tencentDocsFiles.length && (
+                <div className="tencent-docs-empty">{tencentDocsBusy ? "正在读取" : "暂无文档"}</div>
+              )}
+            </div>
+            <footer>
+              <button type="button" onClick={() => { setTencentDocsPickerOpen(false); setTencentDocsConnectOpen(true); }} disabled={tencentDocsBusy}>
+                <KeyRound aria-hidden="true" />
+                连接
+              </button>
+              <button className="primary-action" type="button" onClick={addSelectedTencentDocsToChat} disabled={tencentDocsBusy || !selectedTencentDocsFiles.length}>
+                <Plus aria-hidden="true" />
+                添加 {selectedTencentDocsFiles.length || ""}
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
 
       {settingsOpen && (
         <div className="modal-backdrop" onClick={() => setSettingsOpen(false)}>
@@ -10648,8 +12523,8 @@ export function App() {
                 {settingsSection === "external-connections" && (
                   <section className="settings-section">
                     <div className="settings-section-head">
-                      <strong>外部连接</strong>
-                      <span>{externalConnections.length} 个消息平台；状态来自后端连接投影</span>
+                      <strong>连接应用</strong>
+                      <span>{visibleFeaturedConnectorCount} 个高频入口；连接、授权和状态来自后端连接投影</span>
                     </div>
                     <div className="external-connections-toolbar">
                       <button
@@ -10663,82 +12538,186 @@ export function App() {
                         刷新
                       </button>
                     </div>
-                    <div className="external-connections-grid">
-                      {externalConnections.map((connection) => {
+                    <div className="external-connector-panel" aria-label="连接应用">
+                      <article className={`external-connector-row is-${tencentDocsConnected ? "connected" : tencentDocsConfigured ? "configured" : "blocked"}`}>
+                        <span className="connection-logo is-tencent-docs" aria-hidden="true">T</span>
+                        <div className="external-connector-main">
+                          <strong>腾讯文档</strong>
+                          <small>直接连接 Tencent Docs MCP，选择文档后作为会话附件读取和搜索</small>
+                        </div>
+                        <div className="external-connector-state">
+                          <span className="connector-status-dot" aria-hidden="true" />
+                          <em>{tencentDocsStatusLabel}</em>
+                        </div>
+                        <div className="external-connector-actions">
+                          <button
+                            type="button"
+                            className="external-connection-action-button is-primary"
+                            onClick={() => void openTencentDocsFlow()}
+                            disabled={tencentDocsBusy}
+                            title={tencentDocsConnected ? "打开腾讯文档选择器" : "连接腾讯文档 MCP"}
+                          >
+                            <Link2 aria-hidden="true" />
+                            {tencentDocsConnected ? "打开" : "连接"}
+                          </button>
+                          <button
+                            type="button"
+                            className="external-connection-action-button is-check"
+                            onClick={() => void refreshTencentDocsStatus(true, true)}
+                            disabled={tencentDocsBusy}
+                            title="刷新腾讯文档状态"
+                          >
+                            <RefreshCw aria-hidden="true" />
+                            刷新
+                          </button>
+                          {tencentDocsConfigured ? (
+                            <button
+                              type="button"
+                              className="external-connection-action-button is-danger"
+                              onClick={() => void disconnectTencentDocsFromDialog()}
+                              disabled={tencentDocsBusy}
+                              title="断开腾讯文档配置"
+                            >
+                              <X aria-hidden="true" />
+                              断开
+                            </button>
+                          ) : null}
+                        </div>
+                      </article>
+                      {featuredChannelRows.map((connection) => {
                         const label = connection.displayName || connection.label?.zh || connection.label?.en || connection.id;
-                        const fields = connection.fields || [];
                         const cardState = externalConnectionCardState(connection);
-                        const connected = cardState === "connected";
                         const connectionNotice = externalConnectionNotice(connection);
                         return (
-                          <article className={`external-connection-card is-${cardState}`} key={connection.id}>
-                            <div className="external-connection-head">
-                              <span className={`connection-logo is-${connection.logo?.key || connection.id}`} aria-hidden="true">
-                                {connection.logo?.fallbackText || label.slice(0, 2)}
-                              </span>
-                              <div>
-                                <strong>{label}</strong>
-                                <small>{externalConnectionDescription(connection, label)}</small>
-                              </div>
+                          <article className={`external-connector-row is-${cardState}`} key={`featured-${connection.id}`}>
+                            <span className={`connection-logo is-${connection.logo?.key || connection.id}`} aria-hidden="true">
+                              {connection.logo?.fallbackText || label.slice(0, 2)}
+                            </span>
+                            <div className="external-connector-main">
+                              <strong>{externalConnectionQuickLabel(connection)}</strong>
+                              <small title={connectionNotice || externalConnectionDescription(connection, label)}>
+                                {connectionNotice || externalConnectionDescription(connection, label)}
+                              </small>
+                            </div>
+                            <div className="external-connector-state">
+                              <span className="connector-status-dot" aria-hidden="true" />
                               <em>{externalConnectionStatusLabel(connection)}</em>
                             </div>
-                            {connectionNotice ? <div className="external-connection-error">{connectionNotice}</div> : null}
-                            <div className="external-connection-meta">
-                              <span>{connection.configured ? "已配置" : "未配置"}</span>
-                              <span>{externalConnectionConfigLabel(connection)}</span>
-                              <span>{externalConnectionCallableLabel(connection)}</span>
-                            </div>
-                            <div className="external-connection-fields">
-                              {fields.length ? fields.map((field) => (
-                                <label key={field.key}>
-                                  <span>{externalConnectionFieldLabel(field)}</span>
-                                  {field.type === "bool" ? (
-                                    <input
-                                      type="checkbox"
-                                      checked={Boolean(externalConnectionFieldValue(connection, field.key))}
-                                      onChange={(event) => updateExternalConnectionDraft(connection, field.key, event.currentTarget.checked)}
-                                    />
-                                  ) : (
-                                    <input
-                                      type={field.type === "secret" ? "password" : field.type === "number" ? "number" : "text"}
-                                      value={String(externalConnectionFieldValue(connection, field.key) || "")}
-                                      onChange={(event) => updateExternalConnectionDraft(connection, field.key, field.type === "number" ? Number(event.currentTarget.value || 0) : event.currentTarget.value)}
-                                      autoComplete="off"
-                                    />
-                                  )}
-                                </label>
-                              )) : (
-                                <div className="external-connection-empty">该平台使用扫码、授权或运行时状态完成连接</div>
-                              )}
-                            </div>
-                            <div className="external-connection-actions">
-                              {externalConnectionActions(connection, connected).map((action) => {
-                                const disabled = externalConnectionsBusy
-                                  || action.enabled === false
-                                  || (action.id === "save_config" && !fields.length)
-                                  || (action.id === "set_home_channel" && !externalConnectionHomeChannel(connection).id);
-                                return (
-                                  <button
-                                    type="button"
-                                    key={action.id}
-                                    className={`external-connection-action-button is-${externalConnectionActionTone(action.id)}`}
-                                    onClick={() => void applyExternalConnectionAction(connection, action.id)}
-                                    disabled={disabled}
-                                    title={externalConnectionActionLabel(action)}
-                                  >
-                                    {externalConnectionActionIcon(action.id)}
-                                    {externalConnectionActionLabel(action)}
-                                  </button>
-                                );
-                              })}
+                            <div className="external-connector-actions">
+                              <button
+                                type="button"
+                                className={`external-connection-action-button is-${externalConnectionActionTone(externalConnectionPrimaryActionId(connection))}`}
+                                onClick={() => void applyExternalConnectionPrimaryAction(connection)}
+                                disabled={externalConnectionsBusy}
+                                title={externalConnectionPrimaryActionLabel(connection)}
+                              >
+                                {externalConnectionActionIcon(externalConnectionPrimaryActionId(connection))}
+                                {externalConnectionPrimaryActionLabel(connection)}
+                              </button>
+                              <button
+                                type="button"
+                                className="external-connection-action-button is-check"
+                                onClick={() => void applyExternalConnectionAction(connection, "test")}
+                                disabled={externalConnectionsBusy}
+                                title="状态检查"
+                              >
+                                <Activity aria-hidden="true" />
+                                检查
+                              </button>
                             </div>
                           </article>
                         );
                       })}
-                      {!externalConnections.length && (
-                        <div className="session-empty">运行时暂未返回外部连接列表</div>
-                      )}
+                      <button
+                        type="button"
+                        className="external-connector-more-row"
+                        onClick={() => setExternalConnectionsAdvancedOpen((current) => !current)}
+                        aria-expanded={externalConnectionsAdvancedOpen}
+                        title={externalConnectionsAdvancedOpen ? "收起高级连接配置" : "展开更多连接器和高级配置"}
+                      >
+                        <Settings aria-hidden="true" />
+                        <span>更多真实连接器与高级配置</span>
+                        <em>{externalConnectionsAdvancedOpen ? "收起" : `查看全部 ${externalConnections.length}`}</em>
+                      </button>
                     </div>
+                    {externalConnectionsAdvancedOpen && (
+                      <div className="external-connections-grid" aria-label="外部连接高级配置">
+                        {externalConnections.map((connection) => {
+                          const label = connection.displayName || connection.label?.zh || connection.label?.en || connection.id;
+                          const fields = connection.fields || [];
+                          const cardState = externalConnectionCardState(connection);
+                          const connected = cardState === "connected";
+                          const connectionNotice = externalConnectionNotice(connection);
+                          return (
+                            <article className={`external-connection-card is-${cardState}`} key={connection.id}>
+                              <div className="external-connection-head">
+                                <span className={`connection-logo is-${connection.logo?.key || connection.id}`} aria-hidden="true">
+                                  {connection.logo?.fallbackText || label.slice(0, 2)}
+                                </span>
+                                <div>
+                                  <strong>{label}</strong>
+                                  <small>{externalConnectionDescription(connection, label)}</small>
+                                </div>
+                                <em>{externalConnectionStatusLabel(connection)}</em>
+                              </div>
+                              {connectionNotice ? <div className="external-connection-error">{connectionNotice}</div> : null}
+                              <div className="external-connection-meta">
+                                <span>{connection.configured ? "已配置" : "未配置"}</span>
+                                <span>{externalConnectionConfigLabel(connection)}</span>
+                                <span>{externalConnectionCallableLabel(connection)}</span>
+                              </div>
+                              <div className="external-connection-fields">
+                                {fields.length ? fields.map((field) => (
+                                  <label key={field.key}>
+                                    <span>{externalConnectionFieldLabel(field)}</span>
+                                    {field.type === "bool" ? (
+                                      <input
+                                        type="checkbox"
+                                        checked={Boolean(externalConnectionFieldValue(connection, field.key))}
+                                        onChange={(event) => updateExternalConnectionDraft(connection, field.key, event.currentTarget.checked)}
+                                      />
+                                    ) : (
+                                      <input
+                                        type={field.type === "secret" ? "password" : field.type === "number" ? "number" : "text"}
+                                        value={String(externalConnectionFieldValue(connection, field.key) || "")}
+                                        onChange={(event) => updateExternalConnectionDraft(connection, field.key, field.type === "number" ? Number(event.currentTarget.value || 0) : event.currentTarget.value)}
+                                        autoComplete="off"
+                                      />
+                                    )}
+                                  </label>
+                                )) : (
+                                  <div className="external-connection-empty">该平台使用扫码、授权或运行时状态完成连接</div>
+                                )}
+                              </div>
+                              <div className="external-connection-actions">
+                                {externalConnectionActions(connection, connected).map((action) => {
+                                  const disabled = externalConnectionsBusy
+                                    || action.enabled === false
+                                    || (action.id === "save_config" && !fields.length)
+                                    || (action.id === "set_home_channel" && !externalConnectionHomeChannel(connection).id);
+                                  return (
+                                    <button
+                                      type="button"
+                                      key={action.id}
+                                      className={`external-connection-action-button is-${externalConnectionActionTone(action.id)}`}
+                                      onClick={() => void applyExternalConnectionAction(connection, action.id)}
+                                      disabled={disabled}
+                                      title={externalConnectionActionLabel(action)}
+                                    >
+                                      {externalConnectionActionIcon(action.id)}
+                                      {externalConnectionActionLabel(action)}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </article>
+                          );
+                        })}
+                        {!externalConnections.length && (
+                          <div className="session-empty">运行时暂未返回外部连接列表</div>
+                        )}
+                      </div>
+                    )}
                   </section>
                 )}
 
@@ -10881,6 +12860,125 @@ export function App() {
                   </section>
                 )}
 
+                {settingsSection === "knowledge-graph" && (
+                  <section className="settings-section">
+                    <div className="settings-section-head">
+                      <strong>知识图谱</strong>
+                      <span>{knowledgeGraphLayoutData.nodes.length} 个节点 · {knowledgeGraphLayoutData.links.length} 条关联{knowledgeGraphLayoutData.truncated ? " · 已截断" : ""}</span>
+                    </div>
+                    <div className={`knowledge-graph-grid is-dedicated${selectedKnowledgeNode ? " has-selection" : ""}`}>
+                      <div className="knowledge-graph-panel">
+                        <div className="knowledge-graph-head">
+                          <div>
+                            <strong>知识网络</strong>
+                            <span>{selectedKnowledgeNode ? "已展开选中节点详情" : "知识网络默认全宽展示"}</span>
+                          </div>
+                          <button type="button" onClick={() => void refreshKnowledgeGraph()} disabled={knowledgeGraphBusy} title="刷新知识图谱">
+                            <RefreshCw aria-hidden="true" />
+                            刷新
+                          </button>
+                        </div>
+                        <div className="knowledge-graph-canvas is-dedicated" aria-label="知识图谱" onClick={clearSelectedKnowledgeNode}>
+                          {knowledgeGraphBusy && !knowledgeGraphLayoutData.nodes.length ? (
+                            <div className="knowledge-graph-empty">加载中</div>
+                          ) : !knowledgeGraphLayoutData.nodes.length ? (
+                            <div className="knowledge-graph-empty">暂无知识节点</div>
+                          ) : (
+                            <svg viewBox="0 0 920 520" role="group" aria-label="知识库图谱">
+                              <g className="knowledge-graph-links">
+                                {knowledgeGraphLayoutData.links.map((link) => {
+                                  const source = knowledgeGraphNodeMap.get(link.source);
+                                  const target = knowledgeGraphNodeMap.get(link.target);
+                                  if (!source || !target) return null;
+                                  return (
+                                    <line
+                                      key={`${link.source}->${link.target}`}
+                                      x1={source.x}
+                                      y1={source.y}
+                                      x2={target.x}
+                                      y2={target.y}
+                                    />
+                                  );
+                                })}
+                              </g>
+                              <g className="knowledge-graph-nodes">
+                                {knowledgeGraphLayoutData.nodes.map((node) => {
+                                  const label = knowledgeNodeLabel(node);
+                                  const selected = selectedKnowledgeNodeId === node.id;
+                                  const color = knowledgeCategoryColor(node.category || "root", knowledgeGraphLayoutData.categories);
+                                  return (
+                                    <g
+                                      key={node.id}
+                                      className={`knowledge-graph-node${selected ? " is-selected" : ""}`}
+                                      role="button"
+                                      tabIndex={0}
+                                      aria-label={label}
+                                      transform={`translate(${node.x} ${node.y})`}
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        void selectKnowledgeNode(node);
+                                      }}
+                                      onKeyDown={(event) => {
+                                        if (event.key === "Enter" || event.key === " ") {
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                          void selectKnowledgeNode(node);
+                                        }
+                                      }}
+                                    >
+                                      <circle r={node.radius} fill={color} />
+                                      <text y={node.radius + 14}>{shortKnowledgeLabel(label, node.degree > 1 ? 18 : 14)}</text>
+                                      <title>{`${label} · ${node.id}`}</title>
+                                    </g>
+                                  );
+                                })}
+                              </g>
+                            </svg>
+                          )}
+                        </div>
+                        {!!knowledgeGraphLayoutData.categories.length && (
+                          <div className="knowledge-graph-legend" aria-label="知识分类">
+                            {knowledgeGraphLayoutData.categories.slice(0, 10).map((category) => (
+                                  <span key={category}>
+                                    <i style={{ background: knowledgeCategoryColor(category, knowledgeGraphLayoutData.categories) }} />
+                                    {knowledgeCategoryLabel(category)}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                      {selectedKnowledgeNode ? (
+                        <aside className="knowledge-node-panel is-dedicated">
+                          <header>
+                            <FileText aria-hidden="true" />
+                            <div>
+                              <strong>{knowledgeNodeLabel(selectedKnowledgeNode)}</strong>
+                              <span title={selectedKnowledgeNode.id}>{selectedKnowledgeNode.id}</span>
+                            </div>
+                          </header>
+                          <>
+                            <div className="knowledge-node-meta">
+                              <span>分类 {knowledgeCategoryLabel(selectedKnowledgeNode.category)}</span>
+                              <span>关联 {selectedKnowledgeNode.degree}</span>
+                              <span>路径 {selectedKnowledgeContent?.path || selectedKnowledgeNode.id}</span>
+                            </div>
+                            <div className="knowledge-node-section">
+                              <strong>正文摘要</strong>
+                              {selectedKnowledgeBusy ? (
+                                <div className="session-empty">读取中</div>
+                              ) : selectedKnowledgeExcerpt ? (
+                                <p>{selectedKnowledgeExcerpt}</p>
+                              ) : (
+                                <div className="session-empty">暂无正文摘要</div>
+                              )}
+                            </div>
+                          </>
+                        </aside>
+                      ) : null}
+                    </div>
+                  </section>
+                )}
+
                 {settingsSection === "diagnostics" && (
                   <section className="settings-section">
                     <div className="settings-section-head">
@@ -10967,6 +13065,24 @@ export function App() {
             </footer>
           </section>
         </div>
+      )}
+
+      {imageRetouchTarget && (
+        <ImageRetouchCanvas
+          title={imageRetouchTarget.title}
+          sourcePath={imageRetouchTarget.sourcePath}
+          imageUrl={imageRetouchTarget.previewUrl}
+          relatedImages={imageRetouchTarget.relatedImages}
+          busy={imageRetouchBusy}
+          error={imageRetouchError}
+          onClose={() => {
+            if (!imageRetouchBusy) {
+              setImageRetouchTarget(null);
+              setImageRetouchError("");
+            }
+          }}
+          onSubmit={submitImageRetouch}
+        />
       )}
 
       {previewFile && isImageAttachment(previewFile) && (

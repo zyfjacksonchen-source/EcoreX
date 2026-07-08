@@ -9,6 +9,16 @@
       content="EcoreX WebUI 面向 Windows 与 macOS 的一键本地部署入口，使用 manifest 校验包进行安装和更新。"
     />
     <link rel="icon" href="./assets/icon.png" />
+    <script>
+      (() => {
+        const cdnHost = "dl.ecoremedia.net";
+        const oldHost = "mvdcm.ecoremedia.net";
+        const path = window.location.pathname.replace(/\/+$/, "");
+        if (window.location.hostname === oldHost && (path === "/ecorex-agent" || path === "/ecorex-agent/index.html")) {
+          window.location.replace(`https://${cdnHost}${window.location.pathname}${window.location.search}${window.location.hash}`);
+        }
+      })();
+    </script>
     <link rel="preload" as="image" href="./assets/icon.png" />
     <link rel="preload" as="image" href="./assets/ecorex-app-preview.png" />
     <link rel="stylesheet" href="./styles.css" />
@@ -19,7 +29,7 @@
         <a class="brand" href="./" aria-label="EcoreX WebUI">
           <img src="./assets/icon.png" alt="" />
           <span>EcoreX</span>
-          <small data-site-version>v0.2.7.2</small>
+          <small data-site-version>v0.3.0</small>
         </a>
         <nav class="nav-links" aria-label="页面导航">
           <a href="#install-guide">如何安装</a>
@@ -52,7 +62,7 @@
         <section class="release-strip" aria-label="发布状态">
           <div>
             <span>当前版本</span>
-            <strong data-version>0.2.7.2</strong>
+            <strong data-version>0.3.0</strong>
           </div>
           <div>
             <span>默认入口</span>
@@ -84,7 +94,7 @@
                 <li>
                   <strong>Windows：粘贴命令并回车</strong>
                   <div class="command-block guide-command">
-                    <code>powershell -ExecutionPolicy Bypass -NoProfile -Command "iwr https://mvdcm.ecoremedia.net/ecorex-agent/install-webui.ps1 -UseB | iex"</code>
+                    <code>powershell -ExecutionPolicy Bypass -NoProfile -Command '$p=Join-Path $env:TEMP "install-webui.ps1"; curl.exe -L --retry 8 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o $p "https://dl.ecoremedia.net/ecorex-agent/install-webui.ps1"; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; powershell -ExecutionPolicy Bypass -NoProfile -File $p'</code>
                     <button type="button" data-copy-install-command="win32">复制命令</button>
                   </div>
                 </li>
@@ -95,7 +105,7 @@
                 <li>
                   <strong>macOS：粘贴命令并回车</strong>
                   <div class="command-block guide-command">
-                    <code>curl -fsSL https://mvdcm.ecoremedia.net/ecorex-agent/install-webui.sh | bash</code>
+                    <code>curl -fsSL https://dl.ecoremedia.net/ecorex-agent/install-webui.sh | bash</code>
                     <button type="button" data-copy-install-command="darwin">复制命令</button>
                   </div>
                 </li>
@@ -110,15 +120,15 @@
               <ol class="guide-steps">
                 <li>
                   <strong>优先双击桌面入口</strong>
-                  <span>安装完成后桌面会生成 EcoreX WebUI.url，双击即可重新打开浏览器入口。</span>
+                  <span>Windows 安装完成后桌面会生成 EcoreX WebUI 入口，双击会先启动本地服务，再重新打开浏览器里的 EcoreX。</span>
                 </li>
                 <li>
                   <strong>macOS 双击桌面入口</strong>
-                  <span>macOS 安装完成后桌面会生成 EcoreX WebUI.webloc，双击即可重新打开浏览器入口。</span>
+                  <span>macOS 安装完成后桌面会生成 EcoreX WebUI 入口，双击会先恢复本地服务，再重新打开浏览器里的 EcoreX。</span>
                 </li>
                 <li>
                   <strong>入口打不开时重跑安装命令</strong>
-                  <span>如果本地服务已被关掉或端口变化，重新执行同一条安装命令会拉起服务并打开 EcoreX。</span>
+                  <span>如果本地运行时文件被移动或清理，重新执行同一条安装命令会修复入口并打开 EcoreX。</span>
                 </li>
               </ol>
             </article>
@@ -175,6 +185,6 @@
         <span>EcoreX WebUI</span>
       </footer>
     </div>
-    <script src="./site.js?v=0.2.7.2-webui-0001"></script>
+    <script src="./site.js?v=0.3.0-webui-0001"></script>
   </body>
 </html>

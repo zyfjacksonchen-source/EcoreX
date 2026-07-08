@@ -3,6 +3,7 @@ import importlib
 import importlib.util
 import re
 import threading
+import time
 from pathlib import Path
 from typing import Dict, Any, Type, Optional
 from agent.tools.base_tool import BaseTool
@@ -134,7 +135,7 @@ class ToolManager:
         if should_start_mcp:
             self._load_mcp_tools()
         else:
-            logger.info("[ToolManager] MCP auto-start disabled; configured MCP servers remain discoverable through optional_abilities")
+            logger.info("[ToolManager] MCP auto-start disabled for this load; configured MCP servers can still be started by runtime discovery")
 
     def _load_tools_from_init(self) -> bool:
         """
@@ -354,23 +355,89 @@ class ToolManager:
           1. ~/cow/mcp.json  (supports both mcpServers and mcp_servers keys)
           2. config.json mcp_servers field (fallback)
         """
+        workspace_configs = self._load_workspace_mcp_configs()
+        if workspace_configs is not None:
+            return workspace_configs
+
+        raw = conf().get("mcp_servers", [])
+        return _normalize_mcp_configs(raw)
+
+    def _load_workspace_mcp_configs(self) -> Optional[list]:
+        """Load only the workspace MCP config, returning None when no file exists or parsing fails."""
         import os
         import json as _json
 
         mcp_json_path = self._mcp_json_path()
+        if not os.path.exists(mcp_json_path):
+            return None
+        try:
+            with open(mcp_json_path, "r", encoding="utf-8") as f:
+                data = _json.load(f)
+            raw = data.get("mcpServers") or data.get("mcp_servers") or data
+            logger.info(f"[ToolManager] Loading MCP config from {mcp_json_path}")
+            return _normalize_mcp_configs(raw)
+        except Exception as e:
+            logger.warning(f"[ToolManager] Failed to read {mcp_json_path}: {e}, falling back to config.json")
+            return None
 
-        if os.path.exists(mcp_json_path):
-            try:
-                with open(mcp_json_path, "r", encoding="utf-8") as f:
-                    data = _json.load(f)
-                raw = data.get("mcpServers") or data.get("mcp_servers") or data
-                logger.info(f"[ToolManager] Loading MCP config from {mcp_json_path}")
-                return _normalize_mcp_configs(raw)
-            except Exception as e:
-                logger.warning(f"[ToolManager] Failed to read {mcp_json_path}: {e}, falling back to config.json")
+    def has_mcp_configured(self, *, include_config_fallback: bool = False) -> bool:
+        """Return True when a workspace MCP server is present, or when config fallback is explicitly allowed."""
+        try:
+            workspace_configs = self._load_workspace_mcp_configs()
+            if workspace_configs:
+                return True
+            if include_config_fallback:
+                return bool(_normalize_mcp_configs(conf().get("mcp_servers", [])))
+            return False
+        except Exception as e:
+            logger.debug(f"[ToolManager] MCP config probe failed: {e}")
+            return False
 
-        raw = conf().get("mcp_servers", [])
-        return _normalize_mcp_configs(raw)
+    def ensure_mcp_configured_loaded(
+        self,
+        *,
+        wait_seconds: float = 0.0,
+        poll_interval_seconds: float = 0.1,
+        server_name: Optional[str] = None,
+    ) -> dict:
+        """
+        Start or refresh configured MCP servers and return a bounded status snapshot.
+
+        This is intentionally separate from load_tools(start_mcp=...). Runtime
+        surfaces that must discover already-configured connectors can call this
+        without changing every generic ToolManager load into a blocking startup.
+        """
+        if getattr(self, "_mcp_loaded", False):
+            self.refresh_mcp_if_changed()
+        else:
+            include_config_fallback = bool(conf().get("mcp_auto_start", False))
+            should_start = self.has_mcp_configured(include_config_fallback=include_config_fallback)
+            if should_start:
+                self._load_mcp_tools()
+
+        deadline = time.time() + max(0.0, float(wait_seconds or 0.0))
+        while wait_seconds and time.time() < deadline:
+            status = self.list_mcp_status()
+            if not status:
+                break
+            if server_name:
+                target_status = str(status.get(server_name) or "")
+                if target_status and target_status != "pending":
+                    break
+                if any(getattr(tool, "server_name", "") == server_name for tool in self._mcp_tool_instances.values()):
+                    break
+            elif not any(str(value) == "pending" for value in status.values()):
+                break
+            time.sleep(max(0.02, float(poll_interval_seconds or 0.1)))
+
+        statuses = self.list_mcp_status()
+        return {
+            "status": statuses,
+            "configured": bool(statuses) or self.has_mcp_configured(
+                include_config_fallback=bool(conf().get("mcp_auto_start", False))
+            ),
+            "toolCount": len(self._mcp_tool_instances),
+        }
 
     def _load_mcp_tools(self):
         """

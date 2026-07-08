@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run 200 production user-behavior checks for the v0.2.7 Web release.
+"""Run 200 production user-behavior checks for the current Web release.
 
 The script reads the operator server file at runtime through the existing
 deployment helper, executes the main test matrix on the production server, and
@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import sys
 import textwrap
@@ -23,9 +24,9 @@ import paramiko
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.2.7"
+VERSION = os.environ.get("ECOREX_ACCEPTANCE_VERSION") or os.environ.get("ECOREX_DEPLOY_VERSION") or "0.2.8"
 ARTIFACT = ROOT / "docs" / f"v{VERSION}" / "artifacts" / "production-200-user-behavior.json"
-REMOTE_MARKER = "__ECOREX_V027_200_USER_BEHAVIOR_JSON__"
+REMOTE_MARKER = "__ECOREX_PRODUCTION_200_USER_BEHAVIOR_JSON__"
 
 
 def _load_deploy_module():
@@ -291,7 +292,7 @@ def phase_deployment():
     gate = read_json("/opt/ecorex-web/state/web-release-gate.json")
     add("deployment", "current release directory exists", current.exists())
     add("deployment", "release.json exists", (current / "release.json").is_file())
-    add("deployment", "release version is v0.2.7", release.get("version") == VERSION, {"version": release.get("version")})
+    add("deployment", f"release version is v{VERSION}", release.get("version") == VERSION, {"version": release.get("version")})
     add("deployment", "release artifact is web-linux-service", release.get("artifactId") == "web-linux-service")
     add("deployment", "runtime app.py exists", (current / "runtime" / "app.py").is_file())
     add("deployment", "runtime web_channel.py exists", (current / "runtime" / "channel" / "web" / "web_channel.py").is_file())
@@ -341,7 +342,7 @@ def phase_public_http():
     add("public-http", "public app returns 200", app_resp["status"] == 200)
     add("public-http", "public app references bundled script", bool(js_asset), {"asset": js_asset.split("/")[-1]})
     add("public-http", "public api version returns 200", version_resp["status"] == 200)
-    add("public-http", "public api version is v0.2.7", (version_resp.get("json") or {}).get("version") == VERSION)
+    add("public-http", f"public api version is v{VERSION}", (version_resp.get("json") or {}).get("version") == VERSION)
     add("public-http", "public auth check returns 200", auth_resp["status"] == 200)
     add("public-http", "public admin requires auth", admin_resp["status"] == 401)
     add("public-http", "public client model config rejects anonymous", gate_resp["status"] == 403)
@@ -370,7 +371,7 @@ def phase_manifest():
     manifest = HTTP.get("manifest", {}).get("json") or read_json("/srv/ecorex-agent-download/current/manifest.json")
     manifest_updated_at = str(manifest.get("updatedAt") or "")
     add("manifest", "manifest product is EcoreX", manifest.get("product") == "EcoreX")
-    add("manifest", "manifest version is v0.2.7", manifest.get("version") == VERSION)
+    add("manifest", f"manifest version is v{VERSION}", manifest.get("version") == VERSION)
     add("manifest", "manifest notes mention WebUI", "WebUI" in str(manifest.get("notes") or ""))
     add("manifest", "win recommended download is WebUI", ((manifest.get("recommendedDownloads") or {}).get("win32") or {}).get("primary") == "webui-windows-x64")
     add("manifest", "mac recommended download is WebUI", ((manifest.get("recommendedDownloads") or {}).get("darwin") or {}).get("primary") == "webui-macos-universal")
@@ -387,7 +388,7 @@ def phase_manifest():
         artifact = artifact_by_id(manifest, artifact_id)
         head_resp = HTTP.get(f"head:{artifact_id}") or {}
         add("manifest", f"{artifact_id} status ready", artifact.get("status") == "ready")
-        add("manifest", f"{artifact_id} version v0.2.7", artifact.get("version") == VERSION)
+        add("manifest", f"{artifact_id} version v{VERSION}", artifact.get("version") == VERSION)
         add("manifest", f"{artifact_id} size matches HTTP", str(artifact.get("size")) == str((head_resp.get("headers") or {}).get("content-length")))
         add("manifest", f"{artifact_id} sha256 uppercase", bool(re.fullmatch(r"[0-9A-F]{64}", str(artifact.get("sha256") or ""))))
         add("manifest", f"{artifact_id} href is downloads path", str(artifact.get("href") or "").startswith("downloads/"))

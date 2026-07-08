@@ -3950,9 +3950,12 @@ class TestProjectSessionSourceContracts(unittest.TestCase):
         source = self._app_source()
 
         self.assertIn("function syncComposerHeight()", source)
-        self.assertIn('textarea.style.height = "auto";', source)
-        self.assertIn("const nextHeight = Math.min(textarea.scrollHeight, maxHeight);", source)
-        self.assertIn("textarea.style.overflowY = textarea.scrollHeight > maxHeight ? \"auto\" : \"hidden\";", source)
+        self.assertNotIn('textarea.style.height = "auto";', source)
+        self.assertIn("textarea.dataset.autosizeValueLength", source)
+        self.assertIn('textarea.style.height = "0px";', source)
+        self.assertIn("const measuredScrollHeight = textarea.scrollHeight;", source)
+        self.assertIn("const nextHeight = Math.min(measuredScrollHeight, maxHeight);", source)
+        self.assertIn("textarea.style.overflowY = measuredScrollHeight > maxHeight ? \"auto\" : \"hidden\";", source)
         self.assertIn("window.requestAnimationFrame(syncComposerHeight);", source)
         self.assertIn('setComposerDraft("", { immediate: true });', source)
         self.assertIn("focusComposerSoon();", source)
@@ -4395,6 +4398,50 @@ class TestEcoreXWorkspaceState(unittest.TestCase):
         serialized_logs = "\n".join(logs.output)
         self.assertIn("hash=", serialized_logs)
         self.assertNotIn("Web Runtime 治理", serialized_logs)
+
+    def test_session_auto_title_strips_role_prefix_from_model_output(self):
+        from agent.chat.session_service import SessionService
+        from agent.memory.conversation_store import ConversationStore
+
+        class FakeBot:
+            def reply_text(self, session):
+                return {"completion_tokens": 8, "content": "User: 打开小红书网页版 搜索装修设计"}
+
+        with tempfile.TemporaryDirectory() as workspace:
+            store = ConversationStore(Path(workspace) / "conversation.sqlite3")
+            store.append_messages("session_title_prefix", [
+                {"role": "user", "content": "打开小红书网页版 搜索装修设计"},
+                {"role": "assistant", "content": "总结：当前会话聚焦小红书网页登录和搜索流程。"},
+            ], channel_type="web")
+
+            with patch.object(SessionService, "_get_store", return_value=store), \
+                    patch("bridge.bridge.Bridge") as bridge_cls:
+                bridge_cls.return_value.get_bot.return_value = FakeBot()
+                title = SessionService().gen_title("session_title_prefix")
+
+        self.assertEqual(title, "打开小红书网页版 搜索装修设计")
+        self.assertFalse(title.startswith("User:"))
+
+    def test_session_auto_title_fallback_prefers_summary_over_user_line(self):
+        from agent.chat.session_service import generate_session_title
+
+        class FailingBot:
+            def reply_text(self, session):
+                return {"completion_tokens": 0, "content": "请再问我一次吧"}
+
+        conversation = [
+            {"role": "user", "content": "打开小红书网页版 搜索装修设计"},
+            {"role": "assistant", "content": "总结：当前会话聚焦小红书网页登录和搜索流程。"},
+        ]
+        with patch("bridge.bridge.Bridge") as bridge_cls:
+            bridge_cls.return_value.get_bot.return_value = FailingBot()
+            title = generate_session_title(
+                user_message="好了",
+                conversation_messages=conversation,
+            )
+
+        self.assertEqual(title, "当前会话聚焦小红书网页登录和搜索流程。")
+        self.assertNotIn("User:", title)
 
     def test_web_session_title_handler_accepts_empty_body_and_uses_store_history(self):
         from agent.memory.conversation_store import ConversationStore
@@ -6560,7 +6607,7 @@ class TestWebParallelHandlers(unittest.TestCase):
                 self.assertEqual(notice["revision"], "0.2.7.1-unit")
                 self.assertEqual(calls[:2], [
                     ("https://example.invalid/client/release-notice", "ecorex-web-v0.2.6-web.1"),
-                    ("https://example.invalid/client/release-notice", "ecorex-web-v0.2.7.1-web.1"),
+                    ("https://example.invalid/client/release-notice", "ecorex-web-v0.2.9-web.1"),
                 ])
         finally:
             web_channel._ENTERPRISE_RELEASE_NOTICE_CACHE.update({"expiresAt": 0.0, "notice": {}})
@@ -7189,7 +7236,7 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertIn("onClick={() => setSidebarCollapse((current) => ({ ...current, generalSessions: !current.generalSessions }))}", app_source)
         self.assertIn("projectGroups: { ...current.projectGroups, [project.id]: !current.projectGroups[project.id] }", app_source)
         self.assertIn("function createCodexLikeWelcomeScreen()", console_source)
-        self.assertIn("和EcoreX一起开始工作", console_source)
+        self.assertIn("和小芯一起开始工作", console_source)
 
         self.assertIn("const STREAM_RENDER_THROTTLE_CHARS = 1200;", message_source)
         self.assertIn("const STREAM_MARKDOWN_CHUNK_CHARS = 5000;", message_source)
@@ -8763,13 +8810,17 @@ process.stdout.write(JSON.stringify(payload));
         self.assertNotIn("resume_args", mac_installer)
         self.assertIn("local curl_args=", mac_installer)
         self.assertIn('curl "${curl_args[@]}" "$url" -o "$partial"', mac_installer)
-        self.assertIn("EcoreX WebUI installer script: 0.2.7.2", mac_installer)
+        self.assertIn("EcoreX WebUI installer script: 0.2.9", mac_installer)
         self.assertIn("EcoreX WebUI manifest version:", mac_installer)
-        self.assertIn("EcoreX WebUI installer script: 0.2.7.2", win_installer)
+        self.assertIn("EcoreX WebUI installer script: 0.2.9", win_installer)
         self.assertIn("EcoreX WebUI manifest version:", win_installer)
         self.assertIn("EcoreX WebUI package installer:", package_source)
         self.assertIn("Generated macOS WebUI installer still contains retired resume_args code", package_source)
         self.assertIn("ecorex-webui.url", package_source)
+        self.assertIn("Launch EcoreX WebUI.ps1", package_source)
+        self.assertIn("EcoreX WebUI.lnk", package_source)
+        self.assertIn("EcoreX WebUI.command", package_source)
+        self.assertIn("Start or reopen EcoreX WebUI", package_source)
         self.assertIn("pid_matches_ecorex_webui()", package_source)
         self.assertIn('[[ "$cmd" == *"$RUNTIME_DIR/app.py"* ]] || return 1', package_source)
         self.assertIn('append_ecorex_webui_pid "$old_pid"', package_source)
@@ -8813,8 +8864,8 @@ process.stdout.write(JSON.stringify(payload));
         self.assertIn("read_timeout 1200s", web_caddy_source)
         self.assertIn("write_timeout 1200s", web_caddy_source)
         self.assertIn('VERSION="${VERSION:-', installer_source)
-        self.assertIn("<strong data-version>0.2.7.2</strong>", (root / "deploy" / "ecorex-site" / "index.html").read_text(encoding="utf-8"))
-        self.assertIn("site.js?v=0.2.7.2-webui-0001", (root / "deploy" / "ecorex-site" / "index.html").read_text(encoding="utf-8"))
+        self.assertIn("<strong data-version>0.2.9</strong>", (root / "deploy" / "ecorex-site" / "index.html").read_text(encoding="utf-8"))
+        self.assertIn("site.js?v=0.2.9-webui-0002", (root / "deploy" / "ecorex-site" / "index.html").read_text(encoding="utf-8"))
         self.assertIn("https://mvdcm.ecoremedia.net/ecorex-agent/downloads", installer_source)
         self.assertIn("ECOREX_WEB_CLIENT_BASE=$client_base", installer_source)
         self.assertIn("ECOREX_TOOL_EXECUTION_LEASE_SECONDS=900", installer_source)
@@ -10689,6 +10740,185 @@ process.stdout.write(JSON.stringify(payload));
             finally:
                 get_cancel_registry().unregister(queued_request_id)
                 reset_run_ledger_for_tests(Path(tempfile.gettempdir()) / "ecorex-run-ledger-test-reset.db")
+
+    def test_v028_queued_message_payload_survives_runtime_restart(self):
+        from agent.protocol import reset_run_event_ledger_for_tests, reset_run_ledger_for_tests
+        from bridge.context import Context
+        from channel.web import web_channel
+
+        class ImmediateThread:
+            def __init__(self, target=None, args=(), kwargs=None, daemon=None, name=None):
+                self.target = target
+                self.args = args
+                self.kwargs = kwargs or {}
+
+            def start(self):
+                if self.target:
+                    self.target(*self.args, **self.kwargs)
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            session_id = "session-v028-queue-restart"
+            request_id = "req-v028-queue-restart"
+            channel_before_restart = web_channel.WebChannel()
+
+            try:
+                with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                    with patch.object(channel_before_restart, "_generate_request_id", return_value=request_id):
+                        with patch.object(channel_before_restart, "_pre_persist_web_user_message", return_value=True):
+                            queued = channel_before_restart._accept_queued_message(
+                                session_id,
+                                visible_prompt="second message",
+                                visible_message="second message",
+                                prompt="second message",
+                                use_sse=True,
+                                queued_after_request_ids=["req-running-before-restart"],
+                            )
+
+                    self.assertEqual(queued["status"], "success")
+                    self.assertTrue(channel_before_restart._queued_payload_store().exists(request_id))
+                    self.assertEqual(ledger.get_run(request_id)["status"], "queued")
+
+                    channel_after_restart = web_channel.WebChannel()
+                    produced_contexts = []
+
+                    def fake_compose_context(ctype, content, **kwargs):
+                        context = Context(ctype, content)
+                        context.kwargs = kwargs
+                        return context
+
+                    def fake_produce_with_lock(context, session_lock):
+                        produced_contexts.append(context)
+                        session_lock.release()
+
+                    with patch.object(channel_after_restart, "_compose_context", side_effect=fake_compose_context):
+                        with patch.object(channel_after_restart, "_produce_with_session_lock", side_effect=fake_produce_with_lock):
+                            with patch.object(web_channel.threading, "Thread", ImmediateThread):
+                                started = channel_after_restart._start_next_queued_request(
+                                    session_id,
+                                    completed_request_id="req-running-before-restart",
+                                )
+
+                    self.assertTrue(started)
+                    self.assertEqual(len(produced_contexts), 1)
+                    self.assertEqual(produced_contexts[0]["request_id"], request_id)
+                    self.assertEqual(produced_contexts[0]["session_id"], session_id)
+                    self.assertFalse(channel_after_restart._queued_payload_store().exists(request_id))
+                    self.assertEqual(ledger.get_run(request_id)["status"], "running")
+                    self.assertIsNotNone(ledger.get_run(request_id)["started_at"])
+            finally:
+                reset_run_ledger_for_tests(Path(tempfile.gettempdir()) / "ecorex-run-ledger-test-reset.db")
+                reset_run_event_ledger_for_tests(Path(tempfile.gettempdir()) / "ecorex-run-event-ledger-test-reset.db")
+
+    def test_v028_queued_message_claim_prevents_double_start(self):
+        from agent.protocol import reset_run_event_ledger_for_tests, reset_run_ledger_for_tests
+        from bridge.context import Context
+        from channel.web import web_channel
+
+        class ImmediateThread:
+            def __init__(self, target=None, args=(), kwargs=None, daemon=None, name=None):
+                self.target = target
+                self.args = args
+                self.kwargs = kwargs or {}
+
+            def start(self):
+                if self.target:
+                    self.target(*self.args, **self.kwargs)
+
+        with tempfile.TemporaryDirectory() as workspace:
+            reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            session_id = "session-v028-queue-claim"
+            request_id = "req-v028-queue-claim"
+            channel_seed = web_channel.WebChannel()
+
+            try:
+                with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                    with patch.object(channel_seed, "_generate_request_id", return_value=request_id):
+                        with patch.object(channel_seed, "_pre_persist_web_user_message", return_value=True):
+                            channel_seed._accept_queued_message(
+                                session_id,
+                                visible_prompt="queued once",
+                                visible_message="queued once",
+                                prompt="queued once",
+                                use_sse=True,
+                            )
+
+                    channel_a = web_channel.WebChannel()
+                    channel_b = web_channel.WebChannel()
+                    produced_contexts = []
+
+                    def fake_compose_context(ctype, content, **kwargs):
+                        context = Context(ctype, content)
+                        context.kwargs = kwargs
+                        return context
+
+                    def fake_produce_with_lock(context, session_lock):
+                        produced_contexts.append(context)
+                        session_lock.release()
+
+                    for channel in (channel_a, channel_b):
+                        channel._compose_context = fake_compose_context
+                        channel._produce_with_session_lock = fake_produce_with_lock
+
+                    with patch.object(web_channel.threading, "Thread", ImmediateThread):
+                        first_started = channel_a._start_next_queued_request(session_id)
+                        second_started = channel_b._start_next_queued_request(session_id)
+
+                    self.assertTrue(first_started)
+                    self.assertFalse(second_started)
+                    self.assertEqual([context["request_id"] for context in produced_contexts], [request_id])
+            finally:
+                reset_run_ledger_for_tests(Path(tempfile.gettempdir()) / "ecorex-run-ledger-test-reset.db")
+                reset_run_event_ledger_for_tests(Path(tempfile.gettempdir()) / "ecorex-run-event-ledger-test-reset.db")
+
+    def test_v028_active_requests_snapshot_includes_task_observations(self):
+        from agent.protocol import reset_run_event_ledger_for_tests, reset_run_ledger_for_tests
+        from channel.web import web_channel
+
+        with tempfile.TemporaryDirectory() as workspace:
+            request_id = "req-v028-observed-active"
+            session_id = "session-v028-observed-active"
+            run_ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            event_ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            try:
+                run_ledger.create_run(request_id, session_id, phase="running", status="running")
+                event_ledger.append_event(
+                    request_id=request_id,
+                    session_id=session_id,
+                    turn_id=request_id,
+                    event_type="run.accepted",
+                    payload={"request_id": request_id, "session_id": session_id},
+                    idempotency_key="v028-active-accepted",
+                )
+                event_ledger.append_event(
+                    request_id=request_id,
+                    session_id=session_id,
+                    turn_id=request_id,
+                    event_type="task.intervention_requested",
+                    payload={
+                        "task_id": "image-job-active",
+                        "job_id": "image-job-active",
+                        "kind": "image_job",
+                        "title": "image generation",
+                        "health": "waiting_user_decision",
+                        "status": "waiting_user_decision",
+                        "next_actions": ["continue", "stop", "background"],
+                    },
+                    idempotency_key="v028-active-task-intervention",
+                )
+
+                with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                    snapshot = web_channel.WebChannel().active_requests_snapshot()
+
+                row = next(item for item in snapshot["requests"] if item["request_id"] == request_id)
+                self.assertEqual(row["task_observations"][0]["kind"], "image_job")
+                self.assertEqual(row["task_observations"][0]["health"], "waiting_user_decision")
+                self.assertEqual(row["task_observations"][0]["job_id"], "image-job-active")
+            finally:
+                reset_run_ledger_for_tests(Path(tempfile.gettempdir()) / "ecorex-run-ledger-test-reset.db")
+                reset_run_event_ledger_for_tests(Path(tempfile.gettempdir()) / "ecorex-run-event-ledger-test-reset.db")
 
     def test_post_message_backpressure_counts_ledger_only_active_runs(self):
         from agent.protocol import reset_run_ledger_for_tests

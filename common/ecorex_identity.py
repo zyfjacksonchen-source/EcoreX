@@ -6,7 +6,7 @@ import re
 from typing import Any, Dict, List
 
 
-PRODUCT_NAME = "EcoreX"
+ASSISTANT_DISPLAY_NAME = "小芯"
 
 
 def _literal_word(parts: tuple[str, ...], flags: int = re.IGNORECASE) -> re.Pattern[str]:
@@ -18,6 +18,17 @@ _OLD_IDENTITY_PATTERNS = [
     _literal_word(("C", "O", "W"), flags=0),
 ]
 
+_PROVIDER_SELF_IDENTITY_PATTERNS = [
+    re.compile(
+        r"我是\s*小芯[^\n。！？]*(?:Google\s*Deep\s*Mind|Google\s*Deepmind|DeepMind|Gemini|Antigravity)[^\n。！？]*[。！？]?",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"我是\s*(?:一个)?由\s*(?:Google\s*Deep\s*Mind|Google\s*Deepmind|DeepMind|Gemini|Antigravity)[^\n。！？]*[。！？]?",
+        re.IGNORECASE,
+    ),
+]
+
 
 def sanitize_assistant_identity(text: Any) -> Any:
     """Replace legacy product self-names in user-visible assistant text."""
@@ -25,7 +36,10 @@ def sanitize_assistant_identity(text: Any) -> Any:
         return text
     value = text
     for pattern in _OLD_IDENTITY_PATTERNS:
-        value = pattern.sub(PRODUCT_NAME, value)
+        value = pattern.sub(ASSISTANT_DISPLAY_NAME, value)
+    replacement = f"我是{ASSISTANT_DISPLAY_NAME}，EcoreX WebUI 的 AI 助手。"
+    for pattern in _PROVIDER_SELF_IDENTITY_PATTERNS:
+        value = pattern.sub(replacement, value)
     return value
 
 

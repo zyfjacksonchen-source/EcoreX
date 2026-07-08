@@ -97,7 +97,7 @@ def run() -> dict[str, Any]:
         check_slice("HFX-04 version surfaces", [
             ("cli version is v0.2.2", cli_version.strip() == "0.2.2"),
             ("release notes version v0.2.2", contains(release_notes, '"version": "0.2.2"')),
-            ("web bridge client key v0.2.6", contains(web_channel, 'var DEFAULT_WEB_CLIENT_KEY = "ecorex-web-v0.2.6-web.1"')),
+            ("web bridge reports dynamic runtime version", contains(web_channel, "var WEB_APP_VERSION = __ECOREX_WEB_APP_VERSION__;")),
             ("admin api version v0.2.6", contains(admin_api, 'VERSION = "0.2.6"')),
             ("admin html fallback v0.2.2", contains(admin_html, 'data-metric="version">0.2.2')),
             ("admin js fallback v0.2.2", contains(admin_js, 'version: "0.2.2"')),

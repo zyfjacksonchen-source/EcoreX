@@ -18,7 +18,7 @@
         <button class="nav-item active" type="button" data-panel="users">用户</button>
         <button class="nav-item" type="button" data-panel="usage">用量</button>
         <button class="nav-item" type="button" data-panel="logs">错误回溯</button>
-        <button class="nav-item" type="button" data-panel="runtime-audit">Audit</button>
+        <button class="nav-item" type="button" data-panel="runtime-audit">审计面</button>
         <button class="nav-item" type="button" data-panel="models">模型</button>
         <button class="nav-item" type="button" data-panel="capabilities">能力包</button>
         <button class="nav-item" type="button" data-panel="release">发布</button>
@@ -45,7 +45,7 @@
         <article><span>未读错误</span><strong data-metric="errors">0</strong></article>
         <article><span>能力包</span><strong data-metric="capabilities">0</strong></article>
         <article><span>模型</span><strong data-metric="modelCredentials">0</strong></article>
-        <article><span>客户端版本</span><strong data-metric="version">0.2.7.2</strong></article>
+        <article><span>客户端版本</span><strong data-metric="version">0.3.0</strong></article>
       </section>
 
       <section class="panel active" data-panel-view="users">
@@ -101,25 +101,46 @@
         <div class="panel-heading">
           <div>
             <p class="eyebrow">Runtime Audit</p>
-            <h2>Runtime event projection</h2>
+            <h2>用户行为与产物审计</h2>
           </div>
-          <button class="soft-button" type="button" data-refresh>Refresh</button>
+          <button class="soft-button" type="button" data-refresh>刷新</button>
         </div>
         <div class="audit-summary-grid" data-runtime-audit-summary></div>
         <div class="audit-layout">
           <section>
-            <h3>Event types</h3>
+            <h3>用户动作分类</h3>
             <div class="audit-count-list" data-runtime-audit-types></div>
           </section>
           <section>
-            <h3>Requests</h3>
-            <div class="audit-request-list" data-runtime-audit-requests></div>
+            <h3>最近用户动作</h3>
+            <div class="audit-action-list" data-runtime-audit-actions></div>
           </section>
         </div>
-        <section class="audit-events">
-          <h3>Recent events</h3>
+        <div class="audit-layout wide">
+          <section>
+            <h3>有效产物</h3>
+            <div class="audit-artifact-list" data-runtime-audit-effective-artifacts></div>
+          </section>
+          <section>
+            <h3>下拇指回溯</h3>
+            <div class="audit-feedback-list" data-runtime-audit-feedback-traces></div>
+          </section>
+        </div>
+        <details class="audit-events">
+          <summary>技术明细</summary>
+          <div class="audit-layout nested">
+            <section>
+              <h3>请求投影</h3>
+            <div class="audit-request-list" data-runtime-audit-requests></div>
+          </section>
+            <section>
+              <h3>事件类型</h3>
+              <div class="audit-count-list" data-runtime-audit-event-types></div>
+            </section>
+        </div>
+          <h3>最近事件</h3>
           <div class="audit-event-list" data-runtime-audit-events></div>
-        </section>
+        </details>
       </section>
 
       <section class="panel" data-panel-view="models">
@@ -162,6 +183,7 @@
           <button class="soft-button" type="button" data-release-refresh>刷新</button>
         </div>
         <div class="release-summary" data-release-summary></div>
+        <div class="release-control-grid" data-release-controls></div>
         <div class="release-list" data-release></div>
       </section>
     </main>

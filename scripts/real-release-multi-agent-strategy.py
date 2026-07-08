@@ -18,7 +18,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.2.7"
+VERSION = "0.2.8"
 DEFAULT_OUTPUT = ROOT / "docs" / f"v{VERSION}" / "artifacts" / "real-release-multi-agent-strategy.json"
 HEAVY_SCRIPT = ROOT / "scripts" / "smoke-v026-production-agent-product-acceptance.py"
 
@@ -31,7 +31,7 @@ LANE_DEFINITIONS: List[Dict[str, Any]] = [
         "groups": [],
         "legacyScripts": [],
         "command": "python scripts/真实发布轻量校验.py",
-        "artifact": "docs/v0.2.7/artifacts/real-release-light-validation.json",
+        "artifact": "docs/v0.2.8/artifacts/real-release-light-validation.json",
         "exclusiveLocks": [],
         "dependsOn": [],
         "estimatedCost": "local-low",
@@ -39,7 +39,7 @@ LANE_DEFINITIONS: List[Dict[str, Any]] = [
         "parallelSafe": True,
         "evidenceRequired": [
             "light validation status PASS",
-            "matrix count 305/537/377",
+            "matrix count 345/577/400",
             "Chinese wrapper commands work",
         ],
     },
@@ -51,7 +51,7 @@ LANE_DEFINITIONS: List[Dict[str, Any]] = [
         "groups": ["fresh-env", "auth-first-use", "runtime-api"],
         "legacyScripts": ["smoke-v026-production-200-user-behavior.py"],
         "command": "focus-run: fresh-env auth-first-use runtime-api, then attach redacted evidence",
-        "artifact": "docs/v0.2.7/artifacts/multi-agent-agent-a-fresh-runtime-auth.json",
+        "artifact": "docs/v0.2.8/artifacts/multi-agent-agent-a-fresh-runtime-auth.json",
         "exclusiveLocks": [],
         "dependsOn": ["coordinator-light-preflight"],
         "estimatedCost": "online-low",
@@ -71,7 +71,7 @@ LANE_DEFINITIONS: List[Dict[str, Any]] = [
         "groups": ["ui-ux", "context-session"],
         "legacyScripts": [],
         "command": "focus-run: ui-ux context-session with browser screenshots and ledger evidence",
-        "artifact": "docs/v0.2.7/artifacts/multi-agent-agent-b-ui-context-session.json",
+        "artifact": "docs/v0.2.8/artifacts/multi-agent-agent-b-ui-context-session.json",
         "exclusiveLocks": [],
         "dependsOn": ["coordinator-light-preflight"],
         "estimatedCost": "online-low",
@@ -91,7 +91,7 @@ LANE_DEFINITIONS: List[Dict[str, Any]] = [
         "groups": ["security-observability"],
         "legacyScripts": ["smoke-v026-production-200-user-behavior.py"],
         "command": "focus-run: security-observability plus redacted diagnostics bundle review",
-        "artifact": "docs/v0.2.7/artifacts/multi-agent-agent-c-security-observability.json",
+        "artifact": "docs/v0.2.8/artifacts/multi-agent-agent-c-security-observability.json",
         "exclusiveLocks": [],
         "dependsOn": ["coordinator-light-preflight"],
         "estimatedCost": "online-low",
@@ -111,7 +111,7 @@ LANE_DEFINITIONS: List[Dict[str, Any]] = [
         "groups": ["stream-state-machine"],
         "legacyScripts": [],
         "command": "focus-run: stream-state-machine with unique run id and replay probes",
-        "artifact": "docs/v0.2.7/artifacts/multi-agent-agent-d-stream-state-machine.json",
+        "artifact": "docs/v0.2.8/artifacts/multi-agent-agent-d-stream-state-machine.json",
         "exclusiveLocks": ["stream-ledger-heavy"],
         "dependsOn": ["agent-a-fresh-runtime-auth", "agent-b-ui-context-session"],
         "estimatedCost": "model-medium",
@@ -131,7 +131,7 @@ LANE_DEFINITIONS: List[Dict[str, Any]] = [
         "groups": ["tool-skill"],
         "legacyScripts": ["smoke-v026-production-30-image-ocr-vision-toolchain.py"],
         "command": "focus-run: tool-skill plus OCR/Vision/toolchain direct probes",
-        "artifact": "docs/v0.2.7/artifacts/multi-agent-agent-e-tool-skill-mcp-cli.json",
+        "artifact": "docs/v0.2.8/artifacts/multi-agent-agent-e-tool-skill-mcp-cli.json",
         "exclusiveLocks": ["tool-permission-audit"],
         "dependsOn": ["agent-a-fresh-runtime-auth"],
         "estimatedCost": "model-medium",
@@ -152,7 +152,7 @@ LANE_DEFINITIONS: List[Dict[str, Any]] = [
         "groups": ["multi-model-image-route"],
         "legacyScripts": ["smoke-v026-production-30-image-ocr-vision-toolchain.py"],
         "command": "focus-run: multi-model-image-route with provider switch matrix",
-        "artifact": "docs/v0.2.7/artifacts/multi-agent-agent-f-multi-model-image-route.json",
+        "artifact": "docs/v0.2.8/artifacts/multi-agent-agent-f-multi-model-image-route.json",
         "exclusiveLocks": ["image-route", "provider-switch"],
         "dependsOn": ["agent-a-fresh-runtime-auth"],
         "estimatedCost": "image-high",
@@ -172,8 +172,8 @@ LANE_DEFINITIONS: List[Dict[str, Any]] = [
         "focus": "20 virtual users, 60 requests, active-request drain, resource recovery",
         "groups": ["concurrency-pressure"],
         "legacyScripts": [],
-        "command": "python scripts/真实发布校验.py --skip-legacy --pressure-users 20 --pressure-turns 3 --output docs/v0.2.7/artifacts/real-release-pressure-focus.json",
-        "artifact": "docs/v0.2.7/artifacts/real-release-pressure-focus.json",
+        "command": "python scripts/真实发布校验.py --skip-legacy --pressure-users 20 --pressure-turns 3 --output docs/v0.2.8/artifacts/real-release-pressure-focus.json",
+        "artifact": "docs/v0.2.8/artifacts/real-release-pressure-focus.json",
         "exclusiveLocks": ["production-pressure", "active-requests-drain"],
         "dependsOn": [
             "agent-d-stream-state-machine",
@@ -198,7 +198,7 @@ LANE_DEFINITIONS: List[Dict[str, Any]] = [
         "groups": ["v027-integrated-capabilities"],
         "legacyScripts": [],
         "command": "focus-run: v027-integrated-capabilities with custom Gemini switch, MPI strict sample, and redacted toolchain evidence",
-        "artifact": "docs/v0.2.7/artifacts/multi-agent-agent-h-v027-integrated-capabilities.json",
+        "artifact": "docs/v0.2.8/artifacts/multi-agent-agent-h-v027-integrated-capabilities.json",
         "exclusiveLocks": ["provider-switch", "tongxin-mpi", "imagegen-route"],
         "dependsOn": [
             "agent-b-ui-context-session",
@@ -220,6 +220,31 @@ LANE_DEFINITIONS: List[Dict[str, Any]] = [
         ],
     },
     {
+        "id": "agent-i-v028-runtime-observability-queue",
+        "wave": 3,
+        "role": "v0.2.8 Runtime Observability Agent",
+        "focus": "Codex-style same-session queue, durable queued payload/claim lease, task_observations projection, image-job intervention controls, and Run Center observation surface",
+        "groups": ["v028-runtime-observability-queue"],
+        "legacyScripts": [],
+        "command": "focus-run: v028-runtime-observability-queue with synthetic task observation and cancellable queued-message probe",
+        "artifact": "docs/v0.2.8/artifacts/multi-agent-agent-i-v028-runtime-observability-queue.json",
+        "exclusiveLocks": ["session-queue", "runtime-observation-ledger"],
+        "dependsOn": [
+            "agent-a-fresh-runtime-auth",
+            "agent-d-stream-state-machine",
+        ],
+        "estimatedCost": "online-low",
+        "timeoutMinutes": 25,
+        "parallelSafe": False,
+        "evidenceRequired": [
+            "TaskObserver and task_observations projection import from production runtime",
+            "queued message admission returns same_session.policy=queue without cancelling the active run",
+            "queued request payload can be cancelled and drains from active requests",
+            "image-job continue/extend/background intervention controls are packaged",
+            "Run Center static assets expose compact observation state",
+        ],
+    },
+    {
         "id": "coordinator-final-real-release-gate",
         "wave": 4,
         "role": "Release Coordinator",
@@ -235,6 +260,7 @@ LANE_DEFINITIONS: List[Dict[str, Any]] = [
             "multi-model-image-route",
             "concurrency-pressure",
             "v027-integrated-capabilities",
+            "v028-runtime-observability-queue",
             "security-observability",
         ],
         "legacyScripts": [
@@ -242,7 +268,7 @@ LANE_DEFINITIONS: List[Dict[str, Any]] = [
             "smoke-v026-production-30-image-ocr-vision-toolchain.py",
         ],
         "command": "python scripts/真实发布校验.py",
-        "artifact": "docs/v0.2.7/artifacts/production-agent-product-acceptance.json",
+        "artifact": "docs/v0.2.8/artifacts/production-agent-product-acceptance.json",
         "exclusiveLocks": ["final-release-gate", "production-pressure", "image-route"],
         "dependsOn": [
             "agent-a-fresh-runtime-auth",
@@ -253,13 +279,14 @@ LANE_DEFINITIONS: List[Dict[str, Any]] = [
             "agent-f-multi-model-image-route",
             "agent-g-concurrency-pressure",
             "agent-h-v027-integrated-capabilities",
+            "agent-i-v028-runtime-observability-queue",
         ],
         "estimatedCost": "full-high",
         "timeoutMinutes": 180,
         "parallelSafe": False,
         "evidenceRequired": [
             "P0/P1 100 percent pass",
-            "enabled checks >= 377",
+            "enabled checks >= 400",
             "hardGateFailures empty",
             "redaction violations empty",
         ],
@@ -404,7 +431,7 @@ def build_strategy(*, max_parallel_agents: int = 4) -> Dict[str, Any]:
                 "checks",
                 "failurePreview",
             ],
-            "releaseDecision": "Only docs/v0.2.7/artifacts/production-agent-product-acceptance.json can mark the release accepted.",
+            "releaseDecision": "Only docs/v0.2.8/artifacts/production-agent-product-acceptance.json can mark the release accepted.",
             "failFastRules": [
                 "Any P0 lane failure blocks the final gate until fixed.",
                 "Any redaction violation blocks artifact sharing.",

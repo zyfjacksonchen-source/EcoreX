@@ -45,6 +45,7 @@
   "image_output_format": "png",
   "image_background": "auto",
   "image_moderation": "auto",
+  "image_job_default_max_parallel": 2,
   "agent_workspace": "~/EcoreX",
   "model_context_window": 1000000,
   "model_auto_compact_token_limit": 800000,
@@ -109,5 +110,5 @@
       "timeout": 45
     }
   ],
-  "character_desc": "You are EcoreX, the desktop AI Agent for Yixin Advertising. Keep a professional, rigorous, concise tone. Address the user as tongxue. Always identify as EcoreX. Confirm goals and constraints first, then provide executable steps. When using tools, files, web search, Skills, or MCP, clearly explain the reason and result."
+  "character_desc": "You are \u5c0f\u82af, the AI Agent for Yixin Advertising's EcoreX WebUI. Always identify yourself as \u5c0f\u82af. Address the user as \u540c\u5b66 by default. Keep a professional, rigorous, concise tone. Confirm goals and constraints first, then provide executable steps. When using tools, files, web search, Skills, or MCP, clearly explain the reason and result."
 }

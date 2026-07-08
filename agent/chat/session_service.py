@@ -13,13 +13,35 @@ from typing import Any, List, Optional
 from common.log import logger
 
 
+def _clean_title_candidate(value: str) -> str:
+    text = str(value or "").strip().strip('"\'')
+    if not text:
+        return ""
+    for _ in range(3):
+        cleaned = re.sub(
+            r"^\s*(?:[-*]\s*)?(?:User|Assistant|用户|助手|Recent conversation|Session summary|会话摘要|最近对话)\s*[:：]\s*",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        ).strip()
+        if cleaned == text:
+            break
+        text = cleaned
+    for line in text.splitlines():
+        line = re.sub(r"^\s*(?:[-*]\s*)", "", line).strip()
+        line = re.sub(r"^(?:User|Assistant|用户|助手)\s*[:：]\s*", "", line, flags=re.IGNORECASE).strip()
+        if line:
+            return line
+    return text
+
+
 def _truncate_fallback_title(user_message: str, max_len: int = 30) -> str:
     """Pick the first non-empty line of the user message and truncate it."""
     if not user_message:
         return "New Chat"
     first_line = ""
     for line in user_message.splitlines():
-        line = line.strip()
+        line = _clean_title_candidate(line)
         if line:
             first_line = line
             break
@@ -80,7 +102,18 @@ def _fallback_title_from_session_context(
     session_summary: str = "",
     conversation_context: str = "",
 ) -> str:
-    for source in (session_summary, conversation_context, user_message, assistant_reply):
+    summary_candidates: List[str] = []
+    for source in (session_summary, assistant_reply, conversation_context):
+        for line in str(source or "").splitlines():
+            clean = _clean_title_candidate(line)
+            if not clean:
+                continue
+            if re.search(r"^(?:总结|摘要|本会话|当前会话|聚焦|围绕)\s*[:：]?", clean):
+                clean = re.sub(r"^(?:总结|摘要)\s*[:：]\s*", "", clean).strip()
+                summary_candidates.append(clean)
+            elif "总结" in clean or "聚焦" in clean:
+                summary_candidates.append(clean)
+    for source in (*summary_candidates, session_summary, user_message, assistant_reply, conversation_context):
         title = _truncate_fallback_title(str(source or ""), max_len=30)
         if title != "New Chat":
             return title
@@ -147,7 +180,7 @@ def generate_session_title(
                 f"using fallback")
             return fallback
 
-        title = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL).strip().strip('"\'')
+        title = _clean_title_candidate(re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL))
         logger.info(f"[SessionService] Title generation result: {_title_log_summary(title)}")
         if title and len(title) <= 50:
             return title

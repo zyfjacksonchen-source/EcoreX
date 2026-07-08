@@ -1,0 +1,40 @@
+{
+    "schema":  "ecorex.webui-release-smoke.v1",
+    "version":  "0.3.0",
+    "generatedAt":  "2026-07-08T00:08:37.4719405Z",
+    "status":  "pass",
+    "command":  "scripts/release-ecorex-webui-orchestrator.ps1",
+    "checks":  [
+                   {
+                       "name":  "version alignment",
+                       "status":  "pass",
+                       "detail":  "0.3.0"
+                   },
+                   {
+                       "name":  "artifact verified",
+                       "status":  "pass",
+                       "detail":  "EcoreX_0.3.0-webui-windows-x64.zip"
+                   },
+                   {
+                       "name":  "artifact verified",
+                       "status":  "pass",
+                       "detail":  "EcoreX_0.3.0-webui-macos-universal.zip"
+                   },
+                   {
+                       "name":  "manifest promotion",
+                       "status":  "pass",
+                       "detail":  "update-ecorex-desktop-release-manifest.ps1"
+                   },
+                   {
+                       "name":  "manifest trust",
+                       "status":  "pass",
+                       "detail":  "hash/status match release-index; signatures are optional for this WebUI-only release"
+                   },
+                   {
+                       "name":  "external connector preservation policy",
+                       "status":  "pass",
+                       "detail":  "online update requires connector health check before activation"
+                   }
+               ],
+    "redacted":  true
+}

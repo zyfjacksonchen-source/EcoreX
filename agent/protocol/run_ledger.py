@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     started_at REAL,
     updated_at REAL NOT NULL,
     terminal_at REAL,
+    lease_owner TEXT,
+    lease_expires_at REAL,
     metadata_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_agent_runs_session_status
@@ -180,13 +182,21 @@ class RunLedger:
                    SET phase=?,
                        status=?,
                        updated_at=?,
+                       lease_owner=CASE
+                           WHEN ? NOT IN ('queued', 'accepted') THEN NULL
+                           ELSE lease_owner
+                       END,
+                       lease_expires_at=CASE
+                           WHEN ? NOT IN ('queued', 'accepted') THEN NULL
+                           ELSE lease_expires_at
+                       END,
                        started_at=CASE
                            WHEN ? NOT IN ('queued', 'accepted') AND started_at IS NULL THEN ?
                            ELSE started_at
                        END
                  WHERE request_id=?
                 """,
-                (phase, next_status, now, next_status, now, request_id),
+                (phase, next_status, now, next_status, next_status, next_status, now, request_id),
             )
             conn.commit()
 
@@ -223,7 +233,9 @@ class RunLedger:
                        error_code=?,
                        error_message=?,
                        updated_at=?,
-                       terminal_at=?
+                       terminal_at=?,
+                       lease_owner=NULL,
+                       lease_expires_at=NULL
                  WHERE request_id=?
                 """,
                 (
@@ -300,6 +312,79 @@ class RunLedger:
             ).fetchall()
             return [self._row_to_dict(row) for row in rows]
 
+    def claim_queued_run(
+        self,
+        request_id: str,
+        *,
+        owner: str,
+        lease_seconds: int = 30,
+    ) -> bool:
+        """Atomically claim a queued run before starting it in a worker."""
+        if not request_id or not owner:
+            return False
+        now = time.time()
+        lease_until = now + max(1, int(lease_seconds or 30))
+        with self._lock, self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT status, phase, terminal_at, lease_owner, lease_expires_at
+                  FROM agent_runs
+                 WHERE request_id=?
+                """,
+                (request_id,),
+            ).fetchone()
+            if not row or row["terminal_at"] is not None:
+                conn.rollback()
+                return False
+            if str(row["status"] or "") != "queued" or str(row["phase"] or "") != "queued":
+                conn.rollback()
+                return False
+            lease_expires_at = float(row["lease_expires_at"] or 0)
+            existing_owner = str(row["lease_owner"] or "")
+            if existing_owner and existing_owner != owner and lease_expires_at > now:
+                conn.rollback()
+                return False
+            conn.execute(
+                """
+                UPDATE agent_runs
+                   SET lease_owner=?,
+                       lease_expires_at=?,
+                       updated_at=?
+                 WHERE request_id=?
+                """,
+                (owner, lease_until, now, request_id),
+            )
+            conn.commit()
+            return True
+
+    def release_queued_claim(self, request_id: str, *, owner: str = "") -> None:
+        if not request_id:
+            return
+        with self._lock, self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT status, terminal_at, lease_owner FROM agent_runs WHERE request_id=?",
+                (request_id,),
+            ).fetchone()
+            if not row or row["terminal_at"] is not None or str(row["status"] or "") != "queued":
+                conn.rollback()
+                return
+            if owner and str(row["lease_owner"] or "") not in {"", owner}:
+                conn.rollback()
+                return
+            conn.execute(
+                """
+                UPDATE agent_runs
+                   SET lease_owner=NULL,
+                       lease_expires_at=NULL,
+                       updated_at=?
+                 WHERE request_id=?
+                """,
+                (time.time(), request_id),
+            )
+            conn.commit()
+
     def _init_db(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connection() as conn:
@@ -317,6 +402,8 @@ class RunLedger:
         migrations = {
             "model": "ALTER TABLE agent_runs ADD COLUMN model TEXT",
             "provider": "ALTER TABLE agent_runs ADD COLUMN provider TEXT",
+            "lease_owner": "ALTER TABLE agent_runs ADD COLUMN lease_owner TEXT",
+            "lease_expires_at": "ALTER TABLE agent_runs ADD COLUMN lease_expires_at REAL",
         }
         for column, statement in migrations.items():
             if column not in columns:

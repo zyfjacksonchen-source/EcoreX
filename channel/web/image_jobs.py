@@ -169,6 +169,8 @@ class ImageJobActionHandler:
                 reason = str(body.get("reason") or "cancel_requested")
                 job = service.cancel(safe_job_id, reason=reason)
                 cancel_recovered_unavailable = job.get("status") == "unknown"
+            elif action in {"continue", "extend", "background"}:
+                job = service.observation_action(safe_job_id, action=action)
             elif action in {"collect", "status", ""}:
                 job = service.collect(
                     safe_job_id,

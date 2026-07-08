@@ -788,15 +788,72 @@ def test_imagegen_tool_batches_tasks_without_shell_or_python_fallback(monkeypatc
 
     assert result.status == "success"
     assert len(calls) == 2
-    assert calls[0]["prompt"] == "batch image one"
-    assert calls[1]["prompt"] == "batch image two"
+    assert {call["prompt"] for call in calls} == {"batch image one", "batch image two"}
     assert result.result["batchMode"] == "native_imagegen_tool_loop"
+    assert result.result["maxParallel"] == 2
+    assert result.result["parallelismPolicy"]["parallelism_defaulted"] is True
     assert result.result["route"]["providerApiRoute"] == "native.batch.imagegen"
     assert result.result["pythonFallbackUsed"] is False
     assert result.result["shellFallbackUsed"] is False
     assert result.result["webFallbackUsed"] is False
     assert [item["taskIndex"] for item in result.result["images"]] == [0, 1]
     assert all(item["model"] == "gpt-image-2-pro" for item in result.result["taskResults"])
+
+
+def test_imagegen_tool_batches_tasks_with_default_parallel_lanes(monkeypatch, tmp_path):
+    from agent.tools.imagegen import imagegen as imagegen_module
+
+    lock = threading.Lock()
+    two_active = threading.Event()
+    active = 0
+    max_active = 0
+    calls = []
+
+    def fake_provider_run(payload, **_kwargs):
+        nonlocal active, max_active
+        prompt = str(payload.get("prompt") or "")
+        with lock:
+            calls.append(prompt)
+            active += 1
+            max_active = max(max_active, active)
+            if active >= 2:
+                two_active.set()
+        two_active.wait(timeout=0.4)
+        time.sleep(0.03)
+        with lock:
+            active -= 1
+        return {
+            "returncode": 0,
+            "payload": {
+                "provider": "OpenAI",
+                "model": "gpt-image-2-pro",
+                "attempted_provider_count": 1,
+                "images": [{"url": f"https://safe.example/{prompt}.png"}],
+            },
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(imagegen_module, "_authorize_file_access", lambda *_args, **_kwargs: (True, ""))
+    monkeypatch.setattr(imagegen_module, "run_image_generation_payload", fake_provider_run)
+
+    result = imagegen_module.ImageGenTool().execute(
+        {
+            "tasks": [
+                {"prompt": "parallel-one"},
+                {"prompt": "parallel-two"},
+                {"prompt": "parallel-three"},
+            ],
+            "output_dir": str(tmp_path / "images"),
+        }
+    )
+
+    assert result.status == "success"
+    assert result.result["maxParallel"] == 2
+    assert result.result["parallelismPolicy"]["parallelism_defaulted"] is True
+    assert result.result["parallelismPolicy"]["effective_max_parallel"] == 2
+    assert max_active >= 2
+    assert set(calls) == {"parallel-one", "parallel-two", "parallel-three"}
+    assert [item["taskIndex"] for item in result.result["images"]] == [0, 1, 2]
 
 
 def test_imagegen_batch_ready_events_use_session_summary_file_names(monkeypatch, tmp_path):

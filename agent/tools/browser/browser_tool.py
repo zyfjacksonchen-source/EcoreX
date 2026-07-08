@@ -155,7 +155,6 @@ class BrowserTool(BaseTool):
                     BrowserTool._shared_service = None
                 self._service = None
             else:
-                self._service.cancel_event = getattr(self, "cancel_event", None)
                 return self._service
 
         # Reuse shared service across tool copies within the same session
@@ -165,7 +164,6 @@ class BrowserTool(BaseTool):
                 BrowserTool._shared_service = None
             else:
                 self._service = shared
-                self._service.cancel_event = getattr(self, "cancel_event", None)
                 return self._service
 
         service_config = dict(self.config)
@@ -176,10 +174,12 @@ class BrowserTool(BaseTool):
         self._service = BrowserService(service_config)
         if read_only_cdp_only:
             setattr(self._service, "_ecorex_read_only_cdp_only", True)
-        self._service.cancel_event = getattr(self, "cancel_event", None)
         if not read_only_cdp_only:
             BrowserTool._shared_service = self._service
         return self._service
+
+    def _current_cancel_event(self):
+        return getattr(self, "cancel_event", None)
 
     def _read_only_start_blocker(self, action: str) -> str:
         self._read_only_existing_cdp_only = False
@@ -207,7 +207,7 @@ class BrowserTool(BaseTool):
     def _snapshot_suffix(self, service: BrowserService, limit: int = 6000) -> str:
         """Return a compact page snapshot after state-changing actions."""
         try:
-            snapshot = service.snapshot()
+            snapshot = service.snapshot(cancel_event=self._current_cancel_event())
             if len(snapshot) > limit:
                 snapshot = snapshot[:limit] + f"\n... [snapshot truncated, {len(snapshot)} chars total] ..."
             return f"\n\n--- Page Snapshot After Action ---\n{snapshot}"
@@ -247,11 +247,11 @@ class BrowserTool(BaseTool):
             url = "https://" + url
         timeout = args.get("timeout", 30000)
         service = self._get_service()
-        result = service.navigate(url, timeout=timeout)
+        result = service.navigate(url, timeout=timeout, cancel_event=self._current_cancel_event())
         if "error" in result:
             return ToolResult.fail(result["error"])
         # Auto-snapshot after navigation so the agent gets page content in one call
-        snapshot_text = service.snapshot()
+        snapshot_text = service.snapshot(cancel_event=self._current_cancel_event())
         return ToolResult.success(
             f"Navigated to: {result['url']}\nTitle: {result['title']}\nStatus: {result['status']}\n\n"
             f"--- Page Snapshot ---\n{snapshot_text}"
@@ -259,7 +259,7 @@ class BrowserTool(BaseTool):
 
     def _do_snapshot(self, args: Dict[str, Any]) -> ToolResult:
         selector = args.get("selector")
-        text = self._get_service().snapshot(selector=selector)
+        text = self._get_service().snapshot(selector=selector, cancel_event=self._current_cancel_event())
         return ToolResult.success(text)
 
     def _do_click(self, args: Dict[str, Any]) -> ToolResult:
@@ -267,7 +267,7 @@ class BrowserTool(BaseTool):
         selector = args.get("selector")
         timeout = args.get("timeout", 5000)
         service = self._get_service()
-        result = service.click(ref=ref, selector=selector, timeout=timeout)
+        result = service.click(ref=ref, selector=selector, timeout=timeout, cancel_event=self._current_cancel_event())
         if "error" in result:
             return ToolResult.fail(result["error"])
         return ToolResult.success(f"Clicked successfully.{self._snapshot_suffix(service)}")
@@ -279,7 +279,7 @@ class BrowserTool(BaseTool):
         timeout = args.get("timeout", 5000)
         if not text and text != "":
             return ToolResult.fail("Error: 'text' is required for fill action")
-        result = self._get_service().fill(text, ref=ref, selector=selector, timeout=timeout)
+        result = self._get_service().fill(text, ref=ref, selector=selector, timeout=timeout, cancel_event=self._current_cancel_event())
         if "error" in result:
             return ToolResult.fail(result["error"])
         return ToolResult.success(f"Filled text into element. Use 'snapshot' to verify.")
@@ -291,7 +291,7 @@ class BrowserTool(BaseTool):
         timeout = args.get("timeout", 5000)
         if not value:
             return ToolResult.fail("Error: 'value' is required for select action")
-        result = self._get_service().select(value, ref=ref, selector=selector, timeout=timeout)
+        result = self._get_service().select(value, ref=ref, selector=selector, timeout=timeout, cancel_event=self._current_cancel_event())
         if "error" in result:
             return ToolResult.fail(result["error"])
         return ToolResult.success(f"Selected option '{value}'.")
@@ -301,7 +301,7 @@ class BrowserTool(BaseTool):
         amount = args.get("timeout", 500)  # reuse timeout field or default
         if "amount" in args:
             amount = args["amount"]
-        result = self._get_service().scroll(direction=direction, amount=amount)
+        result = self._get_service().scroll(direction=direction, amount=amount, cancel_event=self._current_cancel_event())
         if "error" in result:
             return ToolResult.fail(result["error"])
         pos = f"scrollY={result.get('scrollY', '?')}/{result.get('scrollHeight', '?')}"
@@ -309,26 +309,26 @@ class BrowserTool(BaseTool):
 
     def _do_screenshot(self, args: Dict[str, Any]) -> ToolResult:
         full_page = args.get("full_page", False)
-        filepath = self._get_service().screenshot(full_page=full_page, cwd=self.cwd)
+        filepath = self._get_service().screenshot(full_page=full_page, cwd=self.cwd, cancel_event=self._current_cancel_event())
         return ToolResult.success(f"Screenshot saved to: {filepath}")
 
     def _do_wait(self, args: Dict[str, Any]) -> ToolResult:
         selector = args.get("selector")
         timeout = args.get("timeout", 5000)
         service = self._get_service()
-        result = service.wait(selector=selector, timeout=timeout)
+        result = service.wait(selector=selector, timeout=timeout, cancel_event=self._current_cancel_event())
         if "error" in result:
             return ToolResult.fail(result["error"])
         return ToolResult.success(f"Wait completed.{self._snapshot_suffix(service)}")
 
     def _do_back(self, args: Dict[str, Any]) -> ToolResult:
-        result = self._get_service().go_back()
+        result = self._get_service().go_back(cancel_event=self._current_cancel_event())
         if "error" in result:
             return ToolResult.fail(result["error"])
         return ToolResult.success(f"Navigated back to: {result['url']}")
 
     def _do_forward(self, args: Dict[str, Any]) -> ToolResult:
-        result = self._get_service().go_forward()
+        result = self._get_service().go_forward(cancel_event=self._current_cancel_event())
         if "error" in result:
             return ToolResult.fail(result["error"])
         return ToolResult.success(f"Navigated forward to: {result['url']}")
@@ -337,7 +337,7 @@ class BrowserTool(BaseTool):
         selector = args.get("selector", "").strip()
         if not selector:
             return ToolResult.fail("Error: 'selector' is required for get_text action")
-        result = self._get_service().get_text(selector)
+        result = self._get_service().get_text(selector, cancel_event=self._current_cancel_event())
         if "error" in result:
             return ToolResult.fail(result["error"])
         return ToolResult.success(result["text"])
@@ -347,7 +347,7 @@ class BrowserTool(BaseTool):
         if not key:
             return ToolResult.fail("Error: 'key' is required for press action")
         service = self._get_service()
-        result = service.press(key)
+        result = service.press(key, cancel_event=self._current_cancel_event())
         if "error" in result:
             return ToolResult.fail(result["error"])
         return ToolResult.success(f"Pressed key: {key}.{self._snapshot_suffix(service)}")
@@ -356,7 +356,7 @@ class BrowserTool(BaseTool):
         script = args.get("script", "").strip()
         if not script:
             return ToolResult.fail("Error: 'script' is required for evaluate action")
-        result = self._get_service().evaluate(script)
+        result = self._get_service().evaluate(script, cancel_event=self._current_cancel_event())
         if "error" in result:
             return ToolResult.fail(result["error"])
         val = result.get("result")

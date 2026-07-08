@@ -7,51 +7,39 @@ from typing import Any, Dict
 
 
 CURRENT_RELEASE_NOTES: Dict[str, Any] = {
-    "version": "0.2.7.2",
-    "revision": "2026-07-03-v0272-gemini-update-r1",
-    "title": "EcoreX 0.2.7.2 Gemini 联通与在线更新提示修复",
+    "version": "0.3.0",
+    "revision": "2026-07-07-v030-webui-active-turn-update",
+    "title": "EcoreX 0.3.0 生产级任务控制与在线更新稳定性版本",
     "summary": (
-        "本次发布聚焦真实使用链路：自定义 Gemini 可切换并真实联通、同一会话切模型不失忆、"
-        "Vision/OCR 与浏览器 CDP 默认可用、芯助手 CLI 按 MPI 做准确性对照，并降低大量本地文件历史带来的卡顿。"
+        "本次版本聚焦 WebUI 生产稳定性：同会话运行中插入新消息默认更新当前任务，"
+        "队列降级为显式选项；同时补齐 CDP 恢复、imagegen 产物排序、输入稳定性和在线更新状态链路。"
     ),
     "highlights": [
-        "自定义 Gemini 支持非官方 Gemini REST endpoint，`gemini-*` 不再被误打到 OpenAI-compatible `/chat/completions`。",
-        "同一会话切换模型只刷新聊天模型路由，不清空 AgentBridge 的 agents/messages 缓存。",
-        "进程级重建时会把用户附件和 assistant 产物的标题、类型、路径恢复为模型可见历史引用，方便继续飞书图文、轮播图等任务。",
-        "模型切换提示改为分页分隔线样式，保持 `contextExcluded=true`，不会占用普通消息卡片、复制按钮或恢复入口。",
-        "浏览器工具默认 CDP-first、可自动拉起受信 localhost DevTools，并在失败时安全 fallback。",
-        "Vision/OCR 工具默认可发现可调用，本地 OCR 支持 RapidOCR/Pillow/Tesseract fallback。",
-        "芯助手 CLI 项目/子账户枚举只从芯助手数据卷读取，MPI 作为准确性对照第一事实源。",
-        "MPI 对照结果只公开 hash、计数、漂移区间和阈值，不泄露原始项目、账户、路径或指标值。",
-        "大量本地文件历史会被限量、去重、截断后恢复到模型上下文；前端 token 估算也限制扫描文件、步骤和工具调用数量，降低长会话卡顿。",
-        "发布与测试工件按 S0-S10 切片记录，必须经过 runtime、frontend/API、toolchain、QA/release、privacy/data 五角色 review gate。"
+        "运行中再次发送默认成为“更新任务”，旧请求会被替换或合并，不再把普通发送默认塞进队列。",
+        "队列、新开分支成为明确的二级选择，用户能看见系统是替换、排队还是分支执行。",
+        "CDP/browser 调用遇到断连结果会自动重连重试，取消任务后不会污染下一次浏览器调用。",
+        "imagegen 支持一次两图和批量多任务的稳定排序，bash 只作为确定性后处理路径。",
+        "长文本输入、暂停和停止任务时保持输入框高度与滚动位置稳定。",
+        "在线更新补齐签名、灰度、kill-switch、rollback 和状态机可视化。"
     ],
     "fixes": [
-        "修复切换自定义 Gemini 时显示 agent error 的路由问题。",
-        "修复切换模型后 `_set_chat()` 重置 bot 导致会话上下文和工具/产物链路丢失的问题。",
-        "修复切换模型提示像普通消息一样长期占位、干扰后续聊天内容的问题。",
-        "修复进程重启或 Agent 重建后 assistant 产物路径没有恢复到模型上下文的问题。",
-        "修复 CDP auto-launch fallback 时可能先切换 launch mode、再清理 CDP 进程的清理顺序问题。",
-        "修复 WebFetch 在只读 broker mock 下可能因缺少 `is_read_only()` 而不兼容的问题。",
-        "修复芯助手 `project list` 缺少 `--account-id`、`--start-date`、`--end-date` 只读 flag 的问题。",
-        "修复芯助手 chengfeng 分支空结果路径引用未定义 `permission_errors` 的问题。",
-        "修复 MPI 不可达、样本为 0 或 fallback 冒充 MPI 时未 fail-closed 的准确性风险。",
-        "修复长历史中大量附件/产物引用和工具步骤造成 token 估算与上下文恢复过重的问题。"
+        "修复同会话新消息只能排队导致用户必须等待上一任务结束的问题。",
+        "修复 queued guidance 主按钮语义含混、无法表达替换/排队/分支意图的问题。",
+        "修复 browser 工具返回断连错误但服务未进入重连路径的问题。",
+        "修复 imagegen 多图和批量任务产物命名、排序不稳定的问题。",
+        "修复输入和停止任务时页面跳动、滚动被强制拉到底的问题。"
     ],
     "howTo": [
-        "重新打开 WebUI 后，左上角应显示 v0.2.7.2；首次进入会弹出本更新说明。",
-        "自定义 Gemini 仍维护 Gemini key/base/model；模型列表中会标识为自定义 Gemini endpoint，但运行时使用 Gemini REST 传输。",
-        "同一会话内可从自定义 Gemini 切回 GPT-5.5 继续任务，历史附件和 assistant 产物引用会尽量保留给新模型。",
-        "切换模型后会出现一条分页分隔线，后续聊天会自然把它顶上去；它不会进入模型上下文。",
-        "需要浏览器自动化时保持默认配置即可优先使用 CDP；CDP 不可用时会自动 fallback。",
-        "需要 OCR/Vision 时可直接上传图片或调用工具，runtime 会按本地依赖可用性选择 RapidOCR/Pillow/Tesseract fallback。",
-        "芯助手准确性测试必须以 MPI 为第一事实源，以芯助手数据卷为项目/子账户来源；MPI 不可达或样本为 0 时应阻断发布。",
-        "如果长会话仍出现卡顿，请优先检查单条消息是否携带异常大的工具结果或非常多前端附件预览。"
+        "重新打开 WebUI 后，左上角应显示 v0.3.0；首次进入会弹出本更新说明。",
+        "运行中直接输入新消息并发送，会默认更新当前任务；需要保留旧任务时使用“排队稍后执行”。",
+        "需要从当前上下文分出独立路线时，选择“新开分支”。",
+        "图片生成由 imagegen 工具层决定，bash 脚本只用于重命名、压缩、合并等确定性后处理。",
+        "在线更新会等待当前请求空闲，下载、校验、暂存、延迟安装和回滚状态会在 WebUI 中显示。"
     ],
     "updatePolicy": {
-        "windows": "v0.2.7.2 继续以 WebUI 本地包交付；Windows 使用 manifest 校验包安装和更新。",
-        "macos": "v0.2.7.2 继续以 WebUI 本地包交付；macOS 使用 manifest 校验包安装和更新。",
-        "webui": "WebUI 通过 manifest 校验下载包、Web 服务包和静态资源；后台更新只在空闲时安装，不强制拉起新浏览器，健康检查通过后由已有页面提示刷新生效。",
+        "windows": "v0.3.0 继续以 WebUI 本地包交付；Windows 使用 manifest 校验包安装和更新。",
+        "macos": "v0.3.0 继续以 WebUI 本地包交付；macOS 使用 manifest 校验包安装和更新。",
+        "webui": "WebUI 通过 manifest、release-index 和签名元数据校验下载包、Web 服务包和静态资源；后台更新只在空闲时安装，健康检查通过后由已有页面切换，失败自动回滚。",
     },
 }
 

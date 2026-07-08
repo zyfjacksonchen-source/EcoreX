@@ -230,7 +230,18 @@ const I18N = {
         skills_section_title: '技能', skill_enable: '启用', skill_disable: '禁用',
         skill_toggle_error: '操作失败，请稍后再试',
         memory_title: '记忆管理', memory_desc: '查看 Agent 记忆文件和内容',
-        memory_tab_files: '记忆文件', memory_tab_dreams: '自主进化',
+        memory_tab_files: '记忆文件', memory_tab_dreams: '自主进化', memory_tab_graph: '星空图谱',
+        memory_graph_kicker: 'Memory Galaxy',
+        memory_graph_title: '记忆星空图谱',
+        memory_graph_desc: '项目记忆与知识节点的关联全景',
+        memory_graph_selected: '当前知识页',
+        memory_graph_no_selection: '暂无选中节点',
+        memory_graph_related: '关联节点',
+        memory_graph_no_related: '暂无关联',
+        memory_graph_nodes: '节点',
+        memory_graph_links: '关联',
+        memory_graph_categories: '分类',
+        memory_graph_empty: '暂无知识节点',
         memory_loading: '加载记忆文件中...', memory_loading_desc: '记忆文件将显示在此处',
         memory_back: '返回列表',
         memory_col_name: '文件名', memory_col_type: '类型', memory_col_size: '大小', memory_col_updated: '更新时间',
@@ -303,6 +314,35 @@ const I18N = {
         voice_reply_if_voice: '仅语音问/语音答',
         voice_reply_always: '总是语音回复',
         attach_menu_folder: '上传文件夹',
+        attach_menu_tencent_docs: '腾讯文档',
+        tencent_docs_title: '腾讯文档',
+        tencent_docs_auth_title: '腾讯文档官方授权',
+        tencent_docs_auth_desc: '用微信 / QQ 扫码，或打开官方 MCP 授权页完成授权。',
+        tencent_docs_qr_title: '扫码授权腾讯文档',
+        tencent_docs_qr_desc: '授权完成后会自动检查连接状态；如未自动返回，可点击检查连接。',
+        tencent_docs_qr_caption: '微信 / QQ 扫码授权',
+        tencent_docs_official_auth: '打开官方授权页',
+        tencent_docs_check_connection: '检查连接',
+        tencent_docs_token_fallback: '高级方式：使用 MCP token',
+        tencent_docs_token_placeholder: '粘贴腾讯文档 MCP token',
+        tencent_docs_connect: '连接',
+        tencent_docs_disconnect: '断开',
+        tencent_docs_cancel: '取消',
+        tencent_docs_add_selected: '添加所选',
+        tencent_docs_recent: '最近',
+        tencent_docs_mine: '我的',
+        tencent_docs_search: '搜索',
+        tencent_docs_search_placeholder: '搜索腾讯文档',
+        tencent_docs_loading: '正在读取腾讯文档',
+        tencent_docs_empty: '暂无文档',
+        tencent_docs_not_connected: '未连接',
+        tencent_docs_connected: '已连接',
+        tencent_docs_added: '已添加腾讯文档',
+        tencent_docs_select_first: '请选择腾讯文档',
+        tencent_docs_token_required: '请在高级方式中填写腾讯文档 MCP token',
+        tencent_docs_auth_opened: '已打开腾讯文档官方授权入口',
+        tencent_docs_connect_failed: '腾讯文档连接失败',
+        tencent_docs_status_failed: '腾讯文档状态读取失败',
         confirm_yes: '确认',
         confirm_cancel: '取消',
         error_send: '发送失败，请稍后再试。', error_timeout: '请求超时，请再试一次。',
@@ -443,7 +483,18 @@ const I18N = {
         skills_section_title: 'Skills', skill_enable: 'Enable', skill_disable: 'Disable',
         skill_toggle_error: 'Operation failed, please try again',
         memory_title: 'Memory', memory_desc: 'View agent memory files and contents',
-        memory_tab_files: 'Memory Files', memory_tab_dreams: 'Self-Evolution',
+        memory_tab_files: 'Memory Files', memory_tab_dreams: 'Self-Evolution', memory_tab_graph: 'Galaxy Graph',
+        memory_graph_kicker: 'Memory Galaxy',
+        memory_graph_title: 'Memory Galaxy Graph',
+        memory_graph_desc: 'A broad map of memory and knowledge relationships',
+        memory_graph_selected: 'Selected page',
+        memory_graph_no_selection: 'No node selected',
+        memory_graph_related: 'Related nodes',
+        memory_graph_no_related: 'No related nodes',
+        memory_graph_nodes: 'nodes',
+        memory_graph_links: 'links',
+        memory_graph_categories: 'categories',
+        memory_graph_empty: 'No knowledge nodes',
         memory_loading: 'Loading memory files...', memory_loading_desc: 'Memory files will be displayed here',
         memory_back: 'Back to list',
         memory_col_name: 'Filename', memory_col_type: 'Type', memory_col_size: 'Size', memory_col_updated: 'Updated',
@@ -516,6 +567,35 @@ const I18N = {
         voice_reply_if_voice: 'Voice only if voice input',
         voice_reply_always: 'Always reply with voice',
         attach_menu_folder: 'Upload Folder',
+        attach_menu_tencent_docs: 'Tencent Docs',
+        tencent_docs_title: 'Tencent Docs',
+        tencent_docs_auth_title: 'Tencent Docs official authorization',
+        tencent_docs_auth_desc: 'Scan with WeChat / QQ, or open the official MCP authorization page.',
+        tencent_docs_qr_title: 'Scan to authorize Tencent Docs',
+        tencent_docs_qr_desc: 'After authorization, EcoreX checks the connection automatically. If it does not return, use Check Connection.',
+        tencent_docs_qr_caption: 'Scan with WeChat / QQ',
+        tencent_docs_official_auth: 'Open Official Auth',
+        tencent_docs_check_connection: 'Check Connection',
+        tencent_docs_token_fallback: 'Advanced: use MCP token',
+        tencent_docs_token_placeholder: 'Paste Tencent Docs MCP token',
+        tencent_docs_connect: 'Connect',
+        tencent_docs_disconnect: 'Disconnect',
+        tencent_docs_cancel: 'Cancel',
+        tencent_docs_add_selected: 'Add Selected',
+        tencent_docs_recent: 'Recent',
+        tencent_docs_mine: 'Mine',
+        tencent_docs_search: 'Search',
+        tencent_docs_search_placeholder: 'Search Tencent Docs',
+        tencent_docs_loading: 'Loading Tencent Docs',
+        tencent_docs_empty: 'No documents',
+        tencent_docs_not_connected: 'Not connected',
+        tencent_docs_connected: 'Connected',
+        tencent_docs_added: 'Tencent Docs added',
+        tencent_docs_select_first: 'Select Tencent Docs first',
+        tencent_docs_token_required: 'Enter a Tencent Docs MCP token in Advanced mode',
+        tencent_docs_auth_opened: 'Opened Tencent Docs official authorization',
+        tencent_docs_connect_failed: 'Tencent Docs connection failed',
+        tencent_docs_status_failed: 'Failed to read Tencent Docs status',
         confirm_yes: 'Confirm',
         confirm_cancel: 'Cancel',
         error_send: 'Failed to send. Please try again.', error_timeout: 'Request timeout. Please try again.',
@@ -1868,7 +1948,7 @@ async function refreshActiveRuntimeRequests(reason, opts) {
 fetch('/config').then(r => r.json()).then(data => {
     if (data.status === 'success') {
         appConfig = data;
-        const title = data.welcome_title || '和EcoreX一起开始工作';
+        const title = data.welcome_title || '和小芯一起开始工作';
         const welcomeTitle = document.getElementById('welcome-title');
         if (welcomeTitle) welcomeTitle.textContent = title;
         initConfigView(data);
@@ -2438,6 +2518,14 @@ function renderAttachmentPreview() {
                 <span class="att-name">${escapeHtml(att.file_name)}${suffix}</span>
             </div>`;
         }
+        if (isTencentDocsAttachment(att)) {
+            const meta = [att.doc_type, att.owner, att.updated_at].filter(Boolean).join(' · ');
+            return `<div class="att-chip att-tencent-docs" data-idx="${idx}" title="${escapeHtml(meta || t('tencent_docs_title'))}">
+                ${tencentDocsLogoHtml('is-inline')}
+                <span class="att-name">${escapeHtml(att.file_name)}</span>
+                <button class="att-remove" onclick="removeAttachment(${idx})">&times;</button>
+            </div>`;
+        }
         if (att.file_type === 'image') {
             return `<div class="att-thumb" data-idx="${idx}">
                 <img src="${att.preview_url}" alt="${escapeHtml(att.file_name)}">
@@ -2491,6 +2579,358 @@ function triggerFolderUpload() {
     if (!supportsDirectoryUpload) return;
     hideAttachMenu();
     folderInput?.click();
+}
+
+const TENCENT_DOCS_LOGO_SRC = 'assets/logos/tencent-docs.png';
+let tencentDocsModalState = {
+    status: null,
+    files: [],
+    selected: {},
+    tab: 'recent',
+    query: '',
+    busy: false,
+};
+let tencentDocsAuthPollTimer = null;
+
+function tencentDocsLogoHtml(extraClass) {
+    return `<img src="${TENCENT_DOCS_LOGO_SRC}" alt="" class="tencent-docs-logo ${escapeHtml(extraClass || '')}">`;
+}
+
+function isTencentDocsAttachment(att) {
+    const provider = String((att && (att.provider || att.source)) || '').toLowerCase();
+    const path = String((att && (att.file_path || att.key)) || '').toLowerCase();
+    return provider === 'tencent-docs' || path.startsWith('tencent-docs://') || att?.remote === true;
+}
+
+function tencentDocsFileKey(file) {
+    const raw = String(file?.key || file?.file_id || file?.node_id || file?.url || file?.title || file?.file_name || '').trim();
+    if (!raw) return '';
+    return raw.startsWith('tencent-docs://') ? raw : `tencent-docs://${raw}`;
+}
+
+function tencentDocsFileTitle(file) {
+    return String(file?.file_name || file?.title || file?.file_id || t('tencent_docs_title')).trim();
+}
+
+function tencentDocsAttachmentFromFile(file) {
+    const key = tencentDocsFileKey(file) || `tencent-docs://${Date.now()}`;
+    return {
+        file_path: key,
+        file_name: tencentDocsFileTitle(file),
+        file_type: 'file',
+        provider: 'tencent-docs',
+        source: 'tencent-docs',
+        key,
+        file_id: file?.file_id || '',
+        node_id: file?.node_id || '',
+        doc_type: file?.doc_type || file?.file_type || '',
+        url: file?.url || '',
+        owner: file?.owner || '',
+        updated_at: file?.updated_at || '',
+        remote: true,
+    };
+}
+
+async function fetchTencentDocsStatus(start) {
+    const resp = await fetch(`/api/tencent-docs/status${start ? '?start=1' : ''}`);
+    const payload = await resp.json();
+    tencentDocsModalState.status = payload;
+    return payload;
+}
+
+function tencentDocsCapability() {
+    return tencentDocsModalState.status?.capability || {};
+}
+
+function tencentDocsAuthUrl() {
+    return String(tencentDocsCapability().authUrl || 'https://docs.qq.com/open/auth/mcp.html').trim();
+}
+
+function tencentDocsQrImageUrl(url) {
+    return `https://api.qrserver.com/v1/create-qr-code/?size=184x184&margin=12&data=${encodeURIComponent(url)}`;
+}
+
+function closeTencentDocsModal() {
+    document.getElementById('tencent-docs-modal')?.remove();
+}
+
+function ensureTencentDocsModal() {
+    let modal = document.getElementById('tencent-docs-modal');
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'tencent-docs-modal';
+    modal.className = 'tencent-docs-modal-overlay';
+    modal.addEventListener('mousedown', (event) => {
+        if (event.target === modal) closeTencentDocsModal();
+    });
+    document.body.appendChild(modal);
+    return modal;
+}
+
+function renderTencentDocsAuthModal(message) {
+    const modal = ensureTencentDocsModal();
+    const capability = tencentDocsCapability();
+    const authUrl = tencentDocsAuthUrl();
+    const statusLabel = capability.configured ? t('tencent_docs_connected') : t('tencent_docs_not_connected');
+    modal.innerHTML = `
+        <section class="tencent-docs-modal-card is-auth" role="dialog" aria-modal="true">
+            <header class="tencent-docs-modal-head">
+                <div>
+                    <span>${escapeHtml(statusLabel)}</span>
+                    <h3>${escapeHtml(t('tencent_docs_title'))}</h3>
+                </div>
+                <button type="button" class="tencent-docs-icon-btn" data-close><i class="fas fa-xmark"></i></button>
+            </header>
+            <div class="tencent-docs-auth-card">
+                <span class="tencent-docs-auth-logo">${tencentDocsLogoHtml('is-large')}</span>
+                <div>
+                    <strong>${escapeHtml(t('tencent_docs_auth_title'))}</strong>
+                    <small>${escapeHtml(t('tencent_docs_auth_desc'))}</small>
+                </div>
+            </div>
+            <div class="tencent-docs-qr-panel">
+                <a class="tencent-docs-qr-box" href="${escapeHtml(authUrl)}" target="_blank" rel="noopener" data-auth>
+                    <img src="${escapeHtml(tencentDocsQrImageUrl(authUrl))}" alt="${escapeHtml(t('tencent_docs_qr_caption'))}">
+                    <span>${escapeHtml(t('tencent_docs_qr_caption'))}</span>
+                </a>
+                <div>
+                    <strong>${escapeHtml(t('tencent_docs_qr_title'))}</strong>
+                    <small>${escapeHtml(t('tencent_docs_qr_desc'))}</small>
+                </div>
+            </div>
+            <div class="tencent-docs-status-line">
+                ${tencentDocsLogoHtml('is-inline')}
+                <span>${escapeHtml(message || tencentDocsModalState.status?.message || statusLabel)}</span>
+            </div>
+            <div class="tencent-docs-modal-actions">
+                <button type="button" class="primary" data-auth>${tencentDocsLogoHtml('is-inline')}${escapeHtml(t('tencent_docs_official_auth'))}</button>
+                <button type="button" data-check><i class="fas fa-rotate"></i>${escapeHtml(t('tencent_docs_check_connection'))}</button>
+                ${capability.configured ? `<button type="button" data-disconnect><i class="fas fa-right-from-bracket"></i>${escapeHtml(t('tencent_docs_disconnect'))}</button>` : ''}
+            </div>
+            <details class="tencent-docs-token-fallback">
+                <summary>${escapeHtml(t('tencent_docs_token_fallback'))}</summary>
+                <form class="tencent-docs-token-form">
+                    <input type="password" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(t('tencent_docs_token_placeholder'))}">
+                    <button type="submit" class="primary"><i class="fas fa-check"></i>${escapeHtml(t('tencent_docs_connect'))}</button>
+                </form>
+            </details>
+        </section>`;
+    modal.querySelector('[data-close]').onclick = closeTencentDocsModal;
+    modal.querySelectorAll('[data-auth]').forEach(node => { node.onclick = beginTencentDocsAuthorization; });
+    modal.querySelector('[data-check]').onclick = checkTencentDocsAuthorization;
+    modal.querySelector('[data-disconnect]')?.addEventListener('click', disconnectTencentDocs);
+    modal.querySelector('.tencent-docs-token-form').addEventListener('submit', connectTencentDocsWithToken);
+}
+
+function renderTencentDocsPickerModal() {
+    const modal = ensureTencentDocsModal();
+    const selectedCount = Object.values(tencentDocsModalState.selected).filter(Boolean).length;
+    const rows = tencentDocsModalState.busy
+        ? `<div class="tencent-docs-empty"><i class="fas fa-spinner fa-spin"></i>${escapeHtml(t('tencent_docs_loading'))}</div>`
+        : tencentDocsModalState.files.length
+            ? tencentDocsModalState.files.map(file => {
+                const key = tencentDocsFileKey(file);
+                const selected = !!tencentDocsModalState.selected[key];
+                const meta = [file.doc_type || file.file_type, file.owner, file.updated_at].filter(Boolean).join(' · ');
+                return `<button type="button" class="tencent-docs-row${selected ? ' is-selected' : ''}" data-key="${escapeHtml(key)}">
+                    ${selected ? '<i class="fas fa-circle-check"></i>' : tencentDocsLogoHtml('is-inline')}
+                    <span><strong>${escapeHtml(tencentDocsFileTitle(file))}</strong><small>${escapeHtml(meta || t('tencent_docs_title'))}</small></span>
+                    ${file.url ? '<i class="fas fa-up-right-from-square"></i>' : ''}
+                </button>`;
+            }).join('')
+            : `<div class="tencent-docs-empty">${escapeHtml(t('tencent_docs_empty'))}</div>`;
+    modal.innerHTML = `
+        <section class="tencent-docs-modal-card is-picker" role="dialog" aria-modal="true">
+            <header class="tencent-docs-modal-head">
+                <div>
+                    <span>${escapeHtml(t('tencent_docs_connected'))}</span>
+                    <h3>${escapeHtml(t('tencent_docs_title'))}</h3>
+                </div>
+                <button type="button" class="tencent-docs-icon-btn" data-close><i class="fas fa-xmark"></i></button>
+            </header>
+            <div class="tencent-docs-toolbar">
+                <div class="tencent-docs-tabs">
+                    ${['recent', 'mine', 'search'].map(tab => `<button type="button" class="${tencentDocsModalState.tab === tab ? 'active' : ''}" data-tab="${tab}">${escapeHtml(t(`tencent_docs_${tab}`))}</button>`).join('')}
+                </div>
+                <button type="button" data-refresh><i class="fas fa-rotate"></i></button>
+            </div>
+            <form class="tencent-docs-search-form">
+                <i class="fas fa-search"></i>
+                <input type="text" value="${escapeHtml(tencentDocsModalState.query)}" placeholder="${escapeHtml(t('tencent_docs_search_placeholder'))}">
+                <button type="submit">${escapeHtml(t('tencent_docs_search'))}</button>
+            </form>
+            <div class="tencent-docs-list">${rows}</div>
+            <footer class="tencent-docs-modal-actions">
+                <button type="button" data-auth>${escapeHtml(t('tencent_docs_check_connection'))}</button>
+                <button type="button" class="primary" data-add><i class="fas fa-plus"></i>${escapeHtml(t('tencent_docs_add_selected'))}${selectedCount ? ` ${selectedCount}` : ''}</button>
+            </footer>
+        </section>`;
+    modal.querySelector('[data-close]').onclick = closeTencentDocsModal;
+    modal.querySelector('[data-refresh]').onclick = () => loadTencentDocsFiles(tencentDocsModalState.tab, tencentDocsModalState.query);
+    modal.querySelector('[data-auth]').onclick = checkTencentDocsAuthorization;
+    modal.querySelector('[data-add]').onclick = addSelectedTencentDocsToChat;
+    modal.querySelectorAll('[data-tab]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            tencentDocsModalState.tab = btn.dataset.tab || 'recent';
+            tencentDocsModalState.selected = {};
+            loadTencentDocsFiles(tencentDocsModalState.tab, tencentDocsModalState.tab === 'search' ? tencentDocsModalState.query : '');
+        });
+    });
+    modal.querySelector('.tencent-docs-search-form').addEventListener('submit', (event) => {
+        event.preventDefault();
+        tencentDocsModalState.query = modal.querySelector('.tencent-docs-search-form input').value.trim();
+        tencentDocsModalState.tab = 'search';
+        tencentDocsModalState.selected = {};
+        loadTencentDocsFiles('search', tencentDocsModalState.query);
+    });
+    modal.querySelectorAll('.tencent-docs-row').forEach(row => {
+        row.addEventListener('click', () => {
+            const key = row.dataset.key || '';
+            if (!key) return;
+            tencentDocsModalState.selected[key] = !tencentDocsModalState.selected[key];
+            renderTencentDocsPickerModal();
+        });
+    });
+}
+
+async function openTencentDocsFlow() {
+    hideAttachMenu();
+    try {
+        const payload = await fetchTencentDocsStatus(false);
+        if (payload?.capability?.configured) {
+            renderTencentDocsPickerModal();
+            loadTencentDocsFiles(tencentDocsModalState.tab, tencentDocsModalState.query);
+        } else {
+            renderTencentDocsAuthModal();
+        }
+    } catch (_) {
+        renderTencentDocsAuthModal(t('tencent_docs_status_failed'));
+    }
+}
+
+function beginTencentDocsAuthorization(event) {
+    if (event) event.preventDefault();
+    const url = tencentDocsAuthUrl();
+    if (url) window.open(url, '_blank', 'noopener,noreferrer');
+    startTencentDocsAuthPolling();
+    renderTencentDocsAuthModal(t('tencent_docs_auth_opened'));
+}
+
+function startTencentDocsAuthPolling() {
+    if (tencentDocsAuthPollTimer) clearInterval(tencentDocsAuthPollTimer);
+    let attempts = 0;
+    tencentDocsAuthPollTimer = setInterval(async () => {
+        attempts += 1;
+        try {
+            const payload = await fetchTencentDocsStatus(true);
+            if (payload?.capability?.configured) {
+                clearInterval(tencentDocsAuthPollTimer);
+                tencentDocsAuthPollTimer = null;
+                renderTencentDocsPickerModal();
+                loadTencentDocsFiles('recent', '');
+            } else if (attempts >= 30) {
+                clearInterval(tencentDocsAuthPollTimer);
+                tencentDocsAuthPollTimer = null;
+            }
+        } catch (_) {
+            if (attempts >= 30 && tencentDocsAuthPollTimer) {
+                clearInterval(tencentDocsAuthPollTimer);
+                tencentDocsAuthPollTimer = null;
+            }
+        }
+    }, 3000);
+}
+
+async function checkTencentDocsAuthorization() {
+    try {
+        const payload = await fetchTencentDocsStatus(true);
+        if (payload?.capability?.configured) {
+            renderTencentDocsPickerModal();
+            loadTencentDocsFiles('recent', '');
+        } else {
+            renderTencentDocsAuthModal(payload?.message || t('tencent_docs_not_connected'));
+        }
+    } catch (_) {
+        renderTencentDocsAuthModal(t('tencent_docs_status_failed'));
+    }
+}
+
+async function connectTencentDocsWithToken(event) {
+    event.preventDefault();
+    const input = event.currentTarget.querySelector('input');
+    const token = String(input?.value || '').trim();
+    if (!token) {
+        renderTencentDocsAuthModal(t('tencent_docs_token_required'));
+        return;
+    }
+    try {
+        const resp = await fetch('/api/tencent-docs/connect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token }),
+        });
+        const payload = await resp.json();
+        tencentDocsModalState.status = payload;
+        if (payload.status === 'error') {
+            renderTencentDocsAuthModal(payload.message || t('tencent_docs_connect_failed'));
+            return;
+        }
+        renderTencentDocsPickerModal();
+        loadTencentDocsFiles('recent', '');
+    } catch (_) {
+        renderTencentDocsAuthModal(t('tencent_docs_connect_failed'));
+    }
+}
+
+async function disconnectTencentDocs() {
+    try {
+        const resp = await fetch('/api/tencent-docs/disconnect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+        });
+        tencentDocsModalState.status = await resp.json();
+        tencentDocsModalState.files = [];
+        tencentDocsModalState.selected = {};
+        renderTencentDocsAuthModal(tencentDocsModalState.status?.message || t('tencent_docs_not_connected'));
+    } catch (_) {
+        renderTencentDocsAuthModal(t('tencent_docs_connect_failed'));
+    }
+}
+
+async function loadTencentDocsFiles(tab, query) {
+    tencentDocsModalState.busy = true;
+    tencentDocsModalState.tab = tab || 'recent';
+    tencentDocsModalState.query = query || '';
+    renderTencentDocsPickerModal();
+    const params = new URLSearchParams({ tab: tencentDocsModalState.tab, limit: '30' });
+    if (tencentDocsModalState.tab === 'search') params.set('q', tencentDocsModalState.query);
+    try {
+        const resp = await fetch(`/api/tencent-docs/files?${params.toString()}`);
+        const payload = await resp.json();
+        if (payload.status === 'error') throw new Error(payload.message || 'error');
+        tencentDocsModalState.files = payload.files || [];
+    } catch (_) {
+        tencentDocsModalState.files = [];
+    } finally {
+        tencentDocsModalState.busy = false;
+        renderTencentDocsPickerModal();
+    }
+}
+
+function addSelectedTencentDocsToChat() {
+    const selected = tencentDocsModalState.files.filter(file => tencentDocsModalState.selected[tencentDocsFileKey(file)]);
+    if (!selected.length) {
+        alert(t('tencent_docs_select_first'));
+        return;
+    }
+    selected.forEach(file => {
+        const attachment = tencentDocsAttachmentFromFile(file);
+        const exists = pendingAttachments.some(item => tencentDocsFileKey(item) === attachment.key || item.file_path === attachment.file_path);
+        if (!exists) pendingAttachments.push(attachment);
+    });
+    closeTencentDocsModal();
+    renderAttachmentPreview();
 }
 
 async function handleFileSelect(files) {
@@ -2985,6 +3425,16 @@ function submitMessage(opts) {
             file_name: a.file_name,
             file_type: a.file_type,
             file_count: a.file_count,
+            provider: a.provider,
+            source: a.source,
+            key: a.key,
+            file_id: a.file_id,
+            node_id: a.node_id,
+            doc_type: a.doc_type,
+            url: a.url,
+            owner: a.owner,
+            updated_at: a.updated_at,
+            remote: a.remote,
         }));
     }
     const retryLabel = opts.retryLabel || 'submitMessage';
@@ -4317,6 +4767,10 @@ function createUserMessageEl(content, timestamp, attachments) {
     let attachHtml = '';
     if (attachments && attachments.length > 0) {
         const items = attachments.map(a => {
+            if (isTencentDocsAttachment(a)) {
+                const meta = [a.doc_type, a.owner, a.updated_at].filter(Boolean).join(' · ');
+                return `<div class="user-msg-file user-msg-tencent-docs" title="${escapeHtml(meta || t('tencent_docs_title'))}">${tencentDocsLogoHtml('is-inline')} ${escapeHtml(a.file_name)}</div>`;
+            }
             if (a.file_type === 'image') {
                 return `<img src="${a.preview_url}" alt="${escapeHtml(a.file_name)}" class="user-msg-image">`;
             }
@@ -5236,7 +5690,7 @@ function createCodexLikeWelcomeScreen() {
     ws.style.paddingTop = '6vh';
     ws.innerHTML = `
         <div class="w-full max-w-4xl flex flex-col items-center gap-8">
-            <h1 class="text-3xl sm:text-4xl font-medium tracking-normal text-slate-900 dark:text-slate-50 text-center">和EcoreX一起开始工作</h1>
+            <h1 class="text-3xl sm:text-4xl font-medium tracking-normal text-slate-900 dark:text-slate-50 text-center">和小芯一起开始工作</h1>
             <div class="w-full rounded-[24px] bg-slate-100 dark:bg-[#262626] border border-slate-200 dark:border-white/10 shadow-sm overflow-hidden">
                 <button type="button" class="w-full min-h-[96px] px-5 py-4 text-left text-lg text-slate-500 dark:text-slate-400 focus:outline-none" data-new-session-focus>
                     随心输入
@@ -6421,10 +6875,25 @@ function toggleSkill(name, currentlyEnabled) {
 let memoryPage = 1;
 let memoryCategory = 'memory';   // 'memory' | 'evolution'
 const memoryPageSize = 10;
+let memoryGraphLoaded = false;
+let memoryGraphNodes = [];
+let memoryGraphLinks = [];
 
 function switchMemoryTab(tab) {
     document.querySelectorAll('.memory-tab').forEach(el => el.classList.remove('active'));
     document.getElementById('memory-tab-' + tab).classList.add('active');
+    document.getElementById('memory-panel-viewer')?.classList.add('hidden');
+    document.getElementById('memory-panel-list')?.classList.remove('hidden');
+    const graphPanel = document.getElementById('memory-graph-panel');
+    if (tab === 'graph') {
+        memoryCategory = 'graph';
+        document.getElementById('memory-empty')?.classList.add('hidden');
+        document.getElementById('memory-list')?.classList.add('hidden');
+        graphPanel?.classList.remove('hidden');
+        if (!memoryGraphLoaded) loadMemoryGraph(false);
+        return;
+    }
+    graphPanel?.classList.add('hidden');
     // The "dreams" tab now surfaces self-evolution logs (merged with dream diaries).
     memoryCategory = tab === 'dreams' ? 'evolution' : 'memory';
     loadMemoryView(1);
@@ -6433,6 +6902,7 @@ function switchMemoryTab(tab) {
 function loadMemoryView(page) {
     page = page || 1;
     memoryPage = page;
+    document.getElementById('memory-graph-panel')?.classList.add('hidden');
     fetch(`/api/memory?page=${page}&page_size=${memoryPageSize}&category=${memoryCategory}`).then(r => r.json()).then(data => {
         if (data.status !== 'success') return;
         const emptyEl = document.getElementById('memory-empty');
@@ -6513,6 +6983,175 @@ function openMemoryFile(filename, category) {
 function closeMemoryViewer() {
     document.getElementById('memory-panel-viewer').classList.add('hidden');
     document.getElementById('memory-panel-list').classList.remove('hidden');
+}
+
+function memoryGraphLinkId(value) {
+    return typeof value === 'object' && value ? value.id : String(value || '');
+}
+
+function memoryGraphExcerpt(content) {
+    return String(content || '')
+        .replace(/^#\s+.+$/gm, '')
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 260);
+}
+
+function renderMemoryGraphStats(nodes, links) {
+    const stats = document.getElementById('memory-graph-stats');
+    if (!stats) return;
+    const categories = [...new Set((nodes || []).map(n => n.category || 'root'))];
+    stats.innerHTML = `
+        <span><strong>${nodes.length}</strong> ${escapeHtml(t('memory_graph_nodes'))}</span>
+        <span><strong>${links.length}</strong> ${escapeHtml(t('memory_graph_links'))}</span>
+        <span><strong>${categories.length}</strong> ${escapeHtml(t('memory_graph_categories'))}</span>`;
+}
+
+function renderMemoryGraphDetail(node) {
+    const detail = document.getElementById('memory-graph-detail');
+    if (!detail) return;
+    if (!node) {
+        detail.innerHTML = `<div class="memory-starry-detail-empty">${escapeHtml(t('memory_graph_no_selection'))}</div>`;
+        return;
+    }
+    const relatedIds = new Set();
+    memoryGraphLinks.forEach(link => {
+        const source = memoryGraphLinkId(link.source);
+        const target = memoryGraphLinkId(link.target);
+        if (source === node.id && target) relatedIds.add(target);
+        if (target === node.id && source) relatedIds.add(source);
+    });
+    const byId = new Map(memoryGraphNodes.map(item => [item.id, item]));
+    const related = [...relatedIds].map(id => byId.get(id)).filter(Boolean).slice(0, 12);
+    detail.innerHTML = `
+        <header>
+            <i class="fas fa-file-lines"></i>
+            <div>
+                <strong>${escapeHtml(node.label || node.id)}</strong>
+                <span title="${escapeHtml(node.id)}">${escapeHtml(node.id)}</span>
+            </div>
+        </header>
+        <div class="memory-starry-meta">
+            <span>${escapeHtml(node.category || 'root')}</span>
+            <span>${escapeHtml(String(relatedIds.size))} ${escapeHtml(t('memory_graph_links'))}</span>
+        </div>
+        <p class="memory-starry-excerpt">${escapeHtml(t('memory_graph_selected'))}</p>
+        <div class="memory-starry-related">
+            <strong>${escapeHtml(t('memory_graph_related'))}</strong>
+            ${related.length ? `<div>${related.map(item => `<button type="button" data-node-id="${escapeHtml(item.id)}">${escapeHtml((item.label || item.id).slice(0, 24))}</button>`).join('')}</div>` : `<span>${escapeHtml(t('memory_graph_no_related'))}</span>`}
+        </div>`;
+    detail.querySelectorAll('[data-node-id]').forEach(button => {
+        button.addEventListener('click', () => {
+            const next = byId.get(button.dataset.nodeId);
+            if (next) renderMemoryGraphDetail(next);
+        });
+    });
+    fetch(`/api/knowledge/read?path=${encodeURIComponent(node.id)}`).then(r => r.json()).then(data => {
+        const excerpt = memoryGraphExcerpt(data.content || '');
+        const excerptEl = detail.querySelector('.memory-starry-excerpt');
+        if (excerptEl) excerptEl.textContent = excerpt || t('memory_graph_selected');
+    }).catch(() => {});
+}
+
+function loadMemoryGraph(force) {
+    const container = document.getElementById('memory-graph-container');
+    if (!container) return;
+    if (force) memoryGraphLoaded = false;
+    memoryGraphLoaded = true;
+    container.innerHTML = '<div class="memory-starry-empty"><i class="fas fa-spinner fa-spin"></i></div>';
+    renderMemoryGraphDetail(null);
+    Promise.all([
+        ensureD3Loaded(),
+        fetch('/api/knowledge/graph').then(r => r.json()),
+    ]).then(([, data]) => {
+        let nodes = data.nodes || [];
+        let links = data.links || [];
+        const limit = 420;
+        if (nodes.length > limit) {
+            nodes = nodes.slice(0, limit);
+            const keep = new Set(nodes.map(n => n.id));
+            links = links.filter(l => keep.has(memoryGraphLinkId(l.source)) && keep.has(memoryGraphLinkId(l.target)));
+        }
+        memoryGraphNodes = nodes;
+        memoryGraphLinks = links;
+        renderMemoryGraphStats(nodes, links);
+        if (!nodes.length) {
+            container.innerHTML = `<div class="memory-starry-empty">${escapeHtml(t('memory_graph_empty'))}</div>`;
+            return;
+        }
+        renderMemoryStarGraph(container, nodes, links);
+    }).catch(() => {
+        container.innerHTML = `<div class="memory-starry-empty">${escapeHtml(t('memory_graph_empty'))}</div>`;
+    });
+}
+
+function renderMemoryStarGraph(container, nodes, links) {
+    container.innerHTML = '';
+    const width = container.clientWidth || 960;
+    const height = container.clientHeight || 560;
+    const categories = [...new Set(nodes.map(n => n.category || 'root'))];
+    const colorScale = d3.scaleOrdinal(['#74d6ff', '#f8c45c', '#b78cff', '#5eead4', '#fb7185', '#a3e635', '#60a5fa', '#f472b6']).domain(categories);
+    const connCount = {};
+    nodes.forEach(n => connCount[n.id] = 0);
+    links.forEach(l => {
+        const source = memoryGraphLinkId(l.source);
+        const target = memoryGraphLinkId(l.target);
+        connCount[source] = (connCount[source] || 0) + 1;
+        connCount[target] = (connCount[target] || 0) + 1;
+    });
+    const svg = d3.select(container).append('svg')
+        .attr('class', 'memory-starry-svg')
+        .attr('width', width)
+        .attr('height', height);
+    const g = svg.append('g');
+    const zoom = d3.zoom().scaleExtent([0.25, 4]).on('zoom', event => g.attr('transform', event.transform));
+    svg.call(zoom);
+    const simulation = d3.forceSimulation(nodes)
+        .force('link', d3.forceLink(links).id(d => d.id).distance(110))
+        .force('charge', d3.forceManyBody().strength(-230))
+        .force('center', d3.forceCenter(width / 2, height / 2))
+        .force('x', d3.forceX(width / 2).strength(0.045))
+        .force('y', d3.forceY(height / 2).strength(0.045))
+        .force('collision', d3.forceCollide().radius(d => Math.max(14, Math.min(26, 10 + (connCount[d.id] || 0) * 2)) + 26));
+    const link = g.append('g').attr('class', 'memory-starry-links')
+        .selectAll('line').data(links).join('line');
+    const node = g.append('g').attr('class', 'memory-starry-nodes')
+        .selectAll('g').data(nodes).join('g')
+        .attr('class', 'memory-starry-node')
+        .style('cursor', 'pointer')
+        .call(d3.drag()
+            .on('start', (event, d) => { if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+            .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; })
+            .on('end', (event, d) => { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; })
+        );
+    node.append('circle')
+        .attr('r', d => Math.max(8, Math.min(20, 8 + (connCount[d.id] || 0) * 2)))
+        .attr('fill', d => colorScale(d.category || 'root'));
+    node.append('text')
+        .attr('dy', d => Math.max(20, Math.min(32, 20 + (connCount[d.id] || 0))))
+        .text(d => {
+            const label = d.label || d.id.split('/').pop() || '';
+            return label.length > 16 ? label.slice(0, 15) + '…' : label;
+        });
+    node.on('click', (event, d) => {
+        node.classed('is-selected', n => n.id === d.id);
+        link.classed('is-related', l => memoryGraphLinkId(l.source) === d.id || memoryGraphLinkId(l.target) === d.id);
+        renderMemoryGraphDetail(d);
+    });
+    simulation.on('tick', () => {
+        link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+            .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+        node.attr('transform', d => `translate(${d.x},${d.y})`);
+    });
+    simulation.on('end', () => {
+        const first = nodes.slice().sort((a, b) => (connCount[b.id] || 0) - (connCount[a.id] || 0))[0];
+        if (first) {
+            node.classed('is-selected', n => n.id === first.id);
+            link.classed('is-related', l => memoryGraphLinkId(l.source) === first.id || memoryGraphLinkId(l.target) === first.id);
+            renderMemoryGraphDetail(first);
+        }
+    });
 }
 
 // =====================================================================

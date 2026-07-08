@@ -1,0 +1,250 @@
+{
+    "product":  "EcoreX",
+    "version":  "0.2.9",
+    "updatedAt":  "2026-07-05",
+    "notes":  "EcoreX v0.2.9 WebUI release metadata. Usage-panel action projection, effective artifacts, feedback traceability, knowledge graph display, Tencent Docs MCP remote attachments, default Xiaoxin identity, thinking motion, scheduler task readability, ready WebUI packages, installer scripts, /api/version, and update notes are aligned.",
+    "download":  {
+                     "mode":  "mirror-first-origin-fallback",
+                     "mirrors":  [
+                                     {
+                                         "id":  "asset-mirror-v0.2.9",
+                                         "kind":  "asset-base",
+                                         "baseUrl":  "https://ghproxy.net/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.9",
+                                         "pathMode":  "fileName"
+                                     },
+                                     {
+                                         "id":  "github-release-v0.2.9",
+                                         "kind":  "github-release",
+                                         "baseUrl":  "https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.9",
+                                         "pathMode":  "fileName"
+                                     }
+                                 ],
+                     "minimumTargetBytesPerSecond":  1048576,
+                     "integrity":  "sha256",
+                     "fallback":  "origin"
+                 },
+    "update":  {
+                   "webui":  {
+                                 "mode":  "manifest-download",
+                                 "channel":  "stable",
+                                 "promotion":  "admin-gated",
+                                 "backgroundUpdate":  {
+                                                          "mode":  "staged-download-idle-install",
+                                                          "idleGate":  "/api/active-requests",
+                                                          "installEnv":  "ECOREX_UPDATE_MODE=background",
+                                                          "browserAfterInstall":  "soft-refresh-existing-tab",
+                                                          "manualBrowserOpen":  "first-install-or-user-request",
+                                                          "activationPolicy":  "prompt-soft-refresh-existing-tab",
+                                                          "healthCheck":  "/api/version",
+                                                          "stateFile":  "update-state.json",
+                                                          "autoLaunchBrowser":  "never-in-background",
+                                                          "rollback":  "keep-current-runtime-until-new-runtime-health-check-passes"
+                                                      },
+                                 "artifactIds":  [
+                                                     "webui-windows-x64",
+                                                     "webui-macos-universal"
+                                                 ]
+                             }
+               },
+    "recommendedDownloads":  {
+                                 "win32":  {
+                                               "primary":  "webui-windows-x64",
+                                               "webui":  "webui-windows-x64"
+                                           },
+                                 "darwin":  {
+                                                "primary":  "webui-macos-universal",
+                                                "webui":  "webui-macos-universal"
+                                            },
+                                 "web":  {
+                                             "primary":  "webui-windows-x64",
+                                             "windows":  "webui-windows-x64",
+                                             "macos":  "webui-macos-universal"
+                                         }
+                             },
+    "artifacts":  [
+                      {
+                          "id":  "windows-x64",
+                          "version":  "0.1.19",
+                          "platform":  "Windows",
+                          "variant":  "Desktop x64 installer",
+                          "fileName":  "EcoreX_0.1.19_x64-setup.exe",
+                          "href":  "downloads/EcoreX_0.1.19_x64-setup.exe",
+                          "size":  157454656,
+                          "sha256":  "6D74A30916318D86C2038727A6F60C82D07054E819DD051FED948CBFC8948D42",
+                          "status":  "retired",
+                          "source":  "Retired from the default WebUI-first release channel; preserved as historical metadata only.",
+                          "updatedAt":  "2026-06-23",
+                          "signature":  "Valid",
+                          "visible":  false
+                      },
+                      {
+                          "id":  "windows-ia32",
+                          "version":  "0.1.19",
+                          "platform":  "Windows",
+                          "variant":  "Desktop ia32 installer",
+                          "fileName":  "EcoreX_0.1.19_ia32-setup.exe",
+                          "href":  "downloads/EcoreX_0.1.19_ia32-setup.exe",
+                          "size":  103633640,
+                          "sha256":  "6403F790408510B01B15EF502CBA7F7BFF0118148D6B48278B0AD1E130162B7C",
+                          "status":  "retired",
+                          "source":  "Retired from the default WebUI-first release channel; preserved as historical metadata only.",
+                          "updatedAt":  "2026-06-23",
+                          "signature":  "Valid",
+                          "visible":  false
+                      },
+                      {
+                          "id":  "webui-windows-x64",
+                          "version":  "0.2.9",
+                          "platform":  "Windows",
+                          "variant":  "WebUI one-click local package",
+                          "fileName":  "EcoreX_0.2.9-webui-windows-x64.zip",
+                          "href":  "downloads/EcoreX_0.2.9-webui-windows-x64.zip",
+                          "size":  550836551,
+                          "sha256":  "39E5DA8C1A4477AE09D14261125F88A2BC861BD1E561AF58DFB805EE51D4AA06",
+                          "status":  "ready",
+                          "source":  "Local v0.2.9 WebUI Windows artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
+                          "updatedAt":  "2026-07-05"
+                      },
+                      {
+                          "id":  "webui-macos-universal",
+                          "version":  "0.2.9",
+                          "platform":  "macOS",
+                          "variant":  "WebUI one-click local package",
+                          "fileName":  "EcoreX_0.2.9-webui-macos-universal.zip",
+                          "href":  "downloads/EcoreX_0.2.9-webui-macos-universal.zip",
+                          "size":  652294908,
+                          "sha256":  "317F3B062954C45984550E99F04C7B6E6FF2CC77CC54EB4CCD5F16E28E08C945",
+                          "status":  "ready",
+                          "source":  "Local v0.2.9 WebUI macOS artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
+                          "updatedAt":  "2026-07-05"
+                      },
+                      {
+                          "id":  "macos-arm64-dmg",
+                          "version":  "0.1.19",
+                          "platform":  "macOS",
+                          "variant":  "Desktop Apple Silicon DMG",
+                          "fileName":  "EcoreX_0.1.19_arm64.dmg",
+                          "href":  "downloads/EcoreX_0.1.19_arm64.dmg",
+                          "size":  213711048,
+                          "sha256":  "9F88702AD25B19EDD906DFA6EBEEB964D32F5D6F77898300124E15BA91DAD32C",
+                          "status":  "retired",
+                          "source":  "Retired from the default WebUI-first release channel; preserved as historical metadata only.",
+                          "updatedAt":  "2026-06-22",
+                          "signature":  "unsigned",
+                          "installSmoke":  {
+                                               "status":  "pass",
+                                               "version":  "0.1.19",
+                                               "sha256":  "9F88702AD25B19EDD906DFA6EBEEB964D32F5D6F77898300124E15BA91DAD32C",
+                                               "artifact":  "EcoreX_0.1.19_arm64.dmg",
+                                               "arch":  "arm64",
+                                               "bytes":  213711048,
+                                               "runId":  "27950764344",
+                                               "evidenceUrl":  "https://github.com/zhangyifanjackson-dotcom/EcoreX/actions/runs/27950764344",
+                                               "evidence":  "27950764344",
+                                               "signature":  "unsigned",
+                                               "gatekeeper":  "unsigned-user-approved",
+                                               "gatekeeperInstructions":  "README-macos-agent-install.txt",
+                                               "instructions":  "README-macos-agent-install.txt",
+                                               "mounted":  true,
+                                               "appFound":  true,
+                                               "copied":  true,
+                                               "launched":  true,
+                                               "versionOk":  true,
+                                               "sidecarReady":  true,
+                                               "authReady":  true,
+                                               "authRequired":  true,
+                                               "authNegativeReady":  true,
+                                               "authNegativeStatuses":  {
+                                                                            "messageNoToken":  401,
+                                                                            "messageWrongToken":  401,
+                                                                            "messageQueryTokenRejected":  401,
+                                                                            "streamNoToken":  401,
+                                                                            "streamWrongToken":  401,
+                                                                            "streamQueryTokenRejected":  401,
+                                                                            "fileStatNoToken":  401,
+                                                                            "fileStatWrongToken":  401,
+                                                                            "fileServeNoToken":  401,
+                                                                            "fileServeWrongToken":  401,
+                                                                            "openPathNoToken":  401,
+                                                                            "openPathWrongToken":  401
+                                                                        },
+                                               "gatekeeperInstructionShown":  true
+                                           },
+                          "visible":  false
+                      },
+                      {
+                          "id":  "macos-x64-dmg",
+                          "version":  "0.1.19",
+                          "platform":  "macOS",
+                          "variant":  "Desktop Intel DMG",
+                          "fileName":  "EcoreX_0.1.19_x64.dmg",
+                          "href":  "downloads/EcoreX_0.1.19_x64.dmg",
+                          "size":  221020283,
+                          "sha256":  "11E03C90B6822D83FF46BE9BE68DEF1026E8223D843E80A0523578F83474CC6A",
+                          "status":  "retired",
+                          "source":  "Retired from the default WebUI-first release channel; preserved as historical metadata only.",
+                          "updatedAt":  "2026-06-22",
+                          "signature":  "unsigned",
+                          "installSmoke":  {
+                                               "status":  "pass",
+                                               "version":  "0.1.19",
+                                               "sha256":  "11E03C90B6822D83FF46BE9BE68DEF1026E8223D843E80A0523578F83474CC6A",
+                                               "artifact":  "EcoreX_0.1.19_x64.dmg",
+                                               "arch":  "x64",
+                                               "bytes":  221020283,
+                                               "runId":  "27951365387",
+                                               "evidenceUrl":  "https://github.com/zhangyifanjackson-dotcom/EcoreX/actions/runs/27951365387",
+                                               "evidence":  "27951365387",
+                                               "signature":  "unsigned",
+                                               "gatekeeper":  "unsigned-user-approved",
+                                               "gatekeeperInstructions":  "README-macos-agent-install.txt",
+                                               "instructions":  "README-macos-agent-install.txt",
+                                               "mounted":  true,
+                                               "appFound":  true,
+                                               "copied":  true,
+                                               "launched":  true,
+                                               "versionOk":  true,
+                                               "sidecarReady":  true,
+                                               "authReady":  true,
+                                               "authRequired":  true,
+                                               "authNegativeReady":  true,
+                                               "authNegativeStatuses":  {
+                                                                            "messageNoToken":  401,
+                                                                            "messageWrongToken":  401,
+                                                                            "messageQueryTokenRejected":  401,
+                                                                            "streamNoToken":  401,
+                                                                            "streamWrongToken":  401,
+                                                                            "streamQueryTokenRejected":  401,
+                                                                            "fileStatNoToken":  401,
+                                                                            "fileStatWrongToken":  401,
+                                                                            "fileServeNoToken":  401,
+                                                                            "fileServeWrongToken":  401,
+                                                                            "openPathNoToken":  401,
+                                                                            "openPathWrongToken":  401
+                                                                        },
+                                               "gatekeeperInstructionShown":  true
+                                           },
+                          "visible":  false
+                      },
+                      {
+                          "id":  "web-linux-service",
+                          "version":  "0.2.9",
+                          "platform":  "Linux",
+                          "variant":  "Web service deployment package",
+                          "fileName":  "EcoreX_0.2.9-web-linux-service.tar.gz",
+                          "href":  "downloads/EcoreX_0.2.9-web-linux-service.tar.gz",
+                          "size":  4214588,
+                          "sha256":  "AE86A325A8975C36CC50FF0B1DC2E343FEA230AB17C04223001112DADD446DA3",
+                          "status":  "ready",
+                          "visible":  false,
+                          "source":  "Local v0.2.9 Web service tarball built by prepare-ecorex-web-release.ps1 and validated by release artifact checks.",
+                          "updatedAt":  "2026-07-05"
+                      }
+                  ],
+    "admin":  {
+                  "href":  "admin/",
+                  "auth":  "basic"
+              },
+    "downloadsExternalized":  true
+}
+

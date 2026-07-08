@@ -1,0 +1,119 @@
+{
+  "commands": [
+    {
+      "argvHash": "1BA7A918D44CA3CC0147D69A728BFFC0C7ED96800B73C356F2EDFDB9389ED6F1",
+      "exitCode": 0,
+      "name": "usage_panel_prepare_release_dir",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "B365EE37D36B940EF2159B5AFDBF5A4F414752F99FE0D80749ABAF11ED48F41B",
+      "exitCode": 0,
+      "name": "usage_panel_upload_index.html",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "C0CC4737452735625320C2F2396DD2E608D9F81F3D37EF67599A31B76CC3A892",
+      "exitCode": 0,
+      "name": "usage_panel_upload_styles.css",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "AB57E321B209A8A64924D0EA98FCA0B047DE4F09A3D10A1F0F91329730284A8E",
+      "exitCode": 0,
+      "name": "usage_panel_upload_app.js",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "3039F09BB8C042C246E1475BA84B0E4F112273F4C643913FFF2DCEDF8288A9A4",
+      "exitCode": 0,
+      "name": "usage_panel_upload_usage_panel_api.py",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "4B166A23238AFDB0A1F28D2FD8276AC19AF28D9E0886C2FA59CE060DBD5ABC79",
+      "exitCode": 0,
+      "name": "usage_panel_install_restart_probe",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "{\"health\": {\"hasRuntimeAudit\": false, \"ok\": true, \"status\": 200, \"version\": \"0.2.9\"}, \"runtimeAudit\": {\"hasRuntimeAudit\": true, \"ok\": true, \"status\": 200, \"version\": \"0.2.9\"}, \"state\": {\"hasRuntimeAudit\": true, \"ok\": true, \"status\": 200, \"version\": \"0.2.9\"}}\n",
+      "stdoutHash": "5646B4EBE0AEAC34D1171980BCF5229BE795F7C1C4D2206B693ED8DD91F7132E"
+    }
+  ],
+  "generatedAt": "2026-07-05T00:35:13.809338+00:00",
+  "redaction": {
+    "rawOutputPersisted": false,
+    "rawPasswordPersisted": false,
+    "rawSecretPersisted": false,
+    "rawTargetPersisted": false
+  },
+  "scope": "production-independent-usage-panel-deploy",
+  "status": "PASS",
+  "summary": {
+    "releaseDir": "/srv/ecorex-agent-usage-panel/releases/20260705003507-v0.2.9-audit-panel",
+    "remoteProbe": {
+      "health": {
+        "hasRuntimeAudit": false,
+        "ok": true,
+        "status": 200,
+        "version": "0.2.9"
+      },
+      "runtimeAudit": {
+        "hasRuntimeAudit": true,
+        "ok": true,
+        "status": 200,
+        "version": "0.2.9"
+      },
+      "state": {
+        "hasRuntimeAudit": true,
+        "ok": true,
+        "status": 200,
+        "version": "0.2.9"
+      }
+    },
+    "uploaded": [
+      {
+        "fileName": "index.html",
+        "sha256": "CA0F1605D35D0CA7FF0A67C9FD5CD45481BEAA112296A4149DD29BD4F9A72F49",
+        "size": 2327
+      },
+      {
+        "fileName": "styles.css",
+        "sha256": "64D211FEE316AE63B3987A13607FA00A2DB09D7AC0859F6101145852A0A6A8C4",
+        "size": 4763
+      },
+      {
+        "fileName": "app.js",
+        "sha256": "D3922ACDFF3082FCE5EFDE5A286F70A4E66301564E9BF028E8795E291B71F2EF",
+        "size": 8203
+      },
+      {
+        "fileName": "usage_panel_api.py",
+        "sha256": "687D607C6FD65204F959A416DD4425EAC2C0084F1E0164C654BDDAEF4A6B916A",
+        "size": 2956
+      }
+    ]
+  },
+  "target": {
+    "domainHash": "A753D877497CBE35",
+    "rawTargetPersisted": false,
+    "sshHostHash": "CDF1CF905198CA97",
+    "sshUserHash": "4813494D137E1631"
+  },
+  "version": "0.2.9"
+}

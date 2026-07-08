@@ -72,12 +72,22 @@ class AuthLoginHandler:
     def POST(self):
         wc = _legacy_web_channel()
         web.header("Content-Type", "application/json; charset=utf-8")
-        if not wc._is_password_enabled():
-            return json.dumps({"status": "success", "auth_required": False})
         try:
-            data = json.loads(web.data())
+            data = json.loads(web.data() or b"{}")
         except Exception:
-            return json.dumps({"status": "error", "message": "Invalid request"})
+            data = {}
+        if not isinstance(data, dict):
+            if not wc._is_password_enabled():
+                data = {}
+            else:
+                return json.dumps({"status": "error", "message": "Invalid request"})
+        if not wc._is_password_enabled():
+            email = str(data.get("email", "") or "").strip()
+            return json.dumps({
+                "status": "success",
+                "auth_required": False,
+                "session": self._session_payload(email),
+            }, ensure_ascii=False)
         email = str(data.get("email", "") or "").strip()
         password = str(data.get("password", "") or "")
         expected = wc._get_web_password()

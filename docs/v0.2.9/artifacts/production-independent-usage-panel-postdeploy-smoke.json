@@ -1,0 +1,72 @@
+{
+  "commands": [
+    {
+      "argvHash": "5BA91696519417D27C1B638CBA110045290B12E721B6EA3351F85BD3E57F8BCD",
+      "exitCode": 0,
+      "name": "usage_panel_postdeploy_smoke",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "{\"currentTarget\": \"/srv/ecorex-agent-usage-panel/releases/20260705003507-v0.2.9-audit-panel\", \"hashes\": {\"appHash\": \"D3922ACDFF3082FCE5EFDE5A286F70A4E66301564E9BF028E8795E291B71F2EF\", \"cssHash\": \"64D211FEE316AE63B3987A13607FA00A2DB09D7AC0859F6101145852A0A6A8C4\", \"indexHash\": \"CA0F1605D35D0CA7FF0A67C9FD5CD45481BEAA112296A4149DD29BD4F9A72F49\"}, \"markers\": {\"appFetchRuntimeAudit\": true, \"appRendersEffectiveArtifacts\": true, \"cssV029Panel\": true, \"indexEffectiveArtifacts\": true, \"indexV029\": true}, \"publicUnauthStatus\": 401, \"runtimeAuditHasFields\": true, \"runtimeAuditStatus\": 200, \"runtimeAuditVersion\": \"0.2.9\", \"serviceActive\": \"active\", \"summary\": {\"effectiveArtifacts\": 734, \"events\": 12223, \"feedbackTraceCount\": 0, \"imageProcessingActions\": 103, \"thumbsDownArtifacts\": 0, \"userActions\": 11422}, \"summaryKeys\": [\"artifactRequests\", \"artifacts\", \"capabilityPolicyBlocked\", \"defaultValidArtifacts\", \"effectiveArtifacts\", \"events\", \"feedbackTraceCount\", \"imageProcessingActions\", \"invalidArtifacts\", \"lastIngestedAt\", \"messageRequests\", \"messages\", \"requests\", \"sessions\", \"terminalEvents\", \"thumbsDownArtifacts\", \"thumbsUpArtifacts\", \"unknownEventTypes\", \"userActions\", \"validArtifacts\"]}\n",
+      "stdoutHash": "AF775328E15D75C45747C567364A06123ACCC646686CC491587313D327CF2AD6"
+    }
+  ],
+  "generatedAt": "2026-07-05T00:36:30.731775+00:00",
+  "probe": {
+    "currentTarget": "/srv/ecorex-agent-usage-panel/releases/20260705003507-v0.2.9-audit-panel",
+    "hashes": {
+      "appHash": "D3922ACDFF3082FCE5EFDE5A286F70A4E66301564E9BF028E8795E291B71F2EF",
+      "cssHash": "64D211FEE316AE63B3987A13607FA00A2DB09D7AC0859F6101145852A0A6A8C4",
+      "indexHash": "CA0F1605D35D0CA7FF0A67C9FD5CD45481BEAA112296A4149DD29BD4F9A72F49"
+    },
+    "markers": {
+      "appFetchRuntimeAudit": true,
+      "appRendersEffectiveArtifacts": true,
+      "cssV029Panel": true,
+      "indexEffectiveArtifacts": true,
+      "indexV029": true
+    },
+    "publicUnauthStatus": 401,
+    "runtimeAuditHasFields": true,
+    "runtimeAuditStatus": 200,
+    "runtimeAuditVersion": "0.2.9",
+    "serviceActive": "active",
+    "summary": {
+      "effectiveArtifacts": 734,
+      "events": 12223,
+      "feedbackTraceCount": 0,
+      "imageProcessingActions": 103,
+      "thumbsDownArtifacts": 0,
+      "userActions": 11422
+    },
+    "summaryKeys": [
+      "artifactRequests",
+      "artifacts",
+      "capabilityPolicyBlocked",
+      "defaultValidArtifacts",
+      "effectiveArtifacts",
+      "events",
+      "feedbackTraceCount",
+      "imageProcessingActions",
+      "invalidArtifacts",
+      "lastIngestedAt",
+      "messageRequests",
+      "messages",
+      "requests",
+      "sessions",
+      "terminalEvents",
+      "thumbsDownArtifacts",
+      "thumbsUpArtifacts",
+      "unknownEventTypes",
+      "userActions",
+      "validArtifacts"
+    ]
+  },
+  "redaction": {
+    "rawOutputPersisted": false,
+    "rawPasswordPersisted": false,
+    "rawSecretPersisted": false
+  },
+  "scope": "production-independent-usage-panel-postdeploy-smoke",
+  "status": "PASS",
+  "version": "0.2.9"
+}

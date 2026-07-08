@@ -297,6 +297,9 @@ def _current_agent_tool_names() -> set[str]:
         manager = ToolManager()
         if not getattr(manager, "tool_classes", None):
             manager.load_tools(start_mcp=False)
+        ensure_mcp = getattr(manager, "ensure_mcp_configured_loaded", None)
+        if callable(ensure_mcp):
+            ensure_mcp(wait_seconds=0.0)
         names = {str(name) for name in getattr(manager, "tool_classes", {}).keys()}
         names.update(str(name) for name in getattr(manager, "_mcp_tool_instances", {}).keys())
         return names

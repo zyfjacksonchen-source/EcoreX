@@ -62,6 +62,9 @@ class RuntimeCapabilityRegistry:
             manager = ToolManager()
             if not getattr(manager, "tool_classes", None):
                 manager.load_tools(start_mcp=False)
+            ensure_mcp = getattr(manager, "ensure_mcp_configured_loaded", None)
+            if callable(ensure_mcp):
+                ensure_mcp(wait_seconds=0.0)
             tools = []
             for name, info in manager.list_tools().items():
                 if not isinstance(info, dict):

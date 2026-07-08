@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "ecorex.v0.2.8.storage-cleanup.v1",
+  "generatedAt": "2026-07-04T13:15:30.4817940Z",
+  "status": "WARN",
+  "workspace": "C:\\EcoreX-Agent生产版",
+  "stoppedProcesses": [],
+  "removedTargets": [
+    "release-artifacts",
+    "pytest-cache",
+    "desktop-dist",
+    "tmp-ecorex-release"
+  ],
+  "removedPycacheDirs": 45,
+  "beforeBytes": {
+    "pytest-cache": 6184,
+    "release-artifacts": 2615990430,
+    "tmp-ecorex-release": 1362558214,
+    "desktop-dist": 748226,
+    "legacy-upgrade-smoke": 3425437201
+  },
+  "afterBytes": {
+    "pytest-cache": 0,
+    "release-artifacts": 0,
+    "tmp-ecorex-release": 0,
+    "desktop-dist": 0,
+    "legacy-upgrade-smoke": 3415489673
+  },
+  "errors": [
+    {
+      "message": "The process cannot access the file 'C:\\ecx-upgrade-smoke\\v0271-4b7d0bc1\\LocalAppData\\Microsoft\\Edge\\User Data\\Default\\Cache\\No_Vary_Search\\journal.baj' because it is being used by another process.",
+      "errorType": "IOException",
+      "id": "legacy-upgrade-smoke"
+    }
+  ],
+  "port9909": [],
+  "serverCleanup": {
+    "uploadStaging": "45G -> 4K",
+    "publicReleases": "54G -> 1.2G",
+    "webReleases": "1.6G -> 19M",
+    "tmp": "3.7G -> 62M",
+    "serviceState": "active/enabled after cleanup"
+  }
+}

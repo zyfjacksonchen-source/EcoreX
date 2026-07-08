@@ -222,7 +222,7 @@ h2 { margin-bottom: 0; font-size: 22px; }
 }
 
 .metric-grid article { padding: 14px; }
-.metric-grid span, .row span, .usage-card span, .model-summary span, .capability-item span, .release-item span { color: var(--subtle); font-size: 13px; }
+.metric-grid span, .row span, .usage-card span, .model-summary span, .capability-item span, .release-item span, .release-control-grid span { color: var(--subtle); font-size: 13px; }
 .metric-grid strong { display: block; margin-top: 6px; font-size: 24px; }
 
 .panel {
@@ -278,6 +278,7 @@ select {
 .log-list,
 .release-list,
 .release-summary,
+.release-control-grid,
 .capability-list,
 .capability-policy {
   display: grid;
@@ -288,6 +289,7 @@ select {
 .log-item,
 .release-item,
 .release-summary article,
+.release-control-grid article,
 .capability-item,
 .model-summary,
 .model-empty,
@@ -349,6 +351,10 @@ select {
 }
 
 .pill[data-status="disabled"],
+.pill[data-status="invalid"],
+.pill[data-status="failed"],
+.pill[data-status="blocked"],
+.pill[data-status="denied"],
 .log-item[data-level="error"] .pill {
   color: var(--bad);
   background: color-mix(in srgb, var(--bad) 12%, transparent);
@@ -442,6 +448,9 @@ select {
 }
 
 .audit-summary-grid span,
+.audit-action-row span,
+.audit-artifact-row span,
+.audit-feedback-row span,
 .audit-request-row span,
 .audit-event-row span,
 .audit-count-row span {
@@ -454,6 +463,14 @@ select {
   grid-template-columns: minmax(220px, 0.7fr) minmax(0, 1.3fr);
   gap: 12px;
   margin-bottom: 12px;
+}
+
+.audit-layout.wide {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.audit-layout.nested {
+  margin-bottom: 14px;
 }
 
 .audit-layout section,
@@ -469,6 +486,9 @@ select {
 }
 
 .audit-count-list,
+.audit-action-list,
+.audit-artifact-list,
+.audit-feedback-list,
 .audit-request-list,
 .audit-event-list {
   display: grid;
@@ -476,6 +496,9 @@ select {
 }
 
 .audit-count-row,
+.audit-action-row,
+.audit-artifact-row,
+.audit-feedback-row,
 .audit-request-row,
 .audit-event-row {
   display: grid;
@@ -488,7 +511,26 @@ select {
 }
 
 .audit-count-row {
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.audit-count-row small {
+  color: var(--subtle);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.audit-action-row {
+  grid-template-columns: 110px minmax(0, 1fr) 90px 120px;
+}
+
+.audit-artifact-row {
+  grid-template-columns: minmax(0, 1fr) 90px 120px minmax(120px, 0.35fr);
+}
+
+.audit-feedback-row {
+  grid-template-columns: minmax(0, 1fr) 120px minmax(120px, 0.35fr) auto;
 }
 
 .audit-request-row {
@@ -499,6 +541,9 @@ select {
   grid-template-columns: 130px minmax(0, 1.2fr) 90px 110px 120px minmax(140px, 0.7fr);
 }
 
+.audit-action-row div,
+.audit-artifact-row div,
+.audit-feedback-row div,
 .audit-request-row div,
 .audit-event-row div {
   display: grid;
@@ -507,18 +552,46 @@ select {
 }
 
 .audit-count-row strong,
+.audit-action-row strong,
+.audit-artifact-row strong,
+.audit-feedback-row strong,
 .audit-request-row strong,
 .audit-event-row strong,
+.audit-artifact-row code,
+.audit-feedback-row code,
 .audit-event-row code {
   overflow-wrap: anywhere;
 }
 
+.audit-artifact-row code,
+.audit-feedback-row code,
 .audit-event-row code {
   padding: 6px 8px;
   border-radius: 8px;
   color: var(--muted);
   background: color-mix(in srgb, var(--ink) 6%, transparent);
   font-size: 12px;
+}
+
+.audit-events summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-weight: 760;
+}
+
+.audit-events[open] summary {
+  margin-bottom: 12px;
+}
+
+.audit-muted {
+  color: var(--subtle);
+  font-size: 13px;
+}
+
+.soft-link.compact {
+  min-height: 32px;
+  padding: 0 12px;
+  white-space: nowrap;
 }
 
 .model-summary {
@@ -626,16 +699,98 @@ select {
   margin-bottom: 10px;
 }
 
-.release-summary article {
+.release-summary article,
+.release-control-grid article {
   display: grid;
   gap: 6px;
   padding: 13px;
 }
 
-.release-item { grid-template-columns: 1.2fr 0.7fr 0.7fr 1fr; }
+.release-control-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 12px;
+}
+
+.release-control-grid article {
+  align-content: start;
+  min-width: 0;
+}
+
+.release-control-grid article.wide {
+  grid-column: span 2;
+}
+
+.release-control-grid strong,
+.release-control-grid small,
+.release-risk {
+  overflow-wrap: anywhere;
+}
+
+.release-control-grid small,
+.release-failures span {
+  color: var(--subtle);
+  font-size: 12px;
+}
+
+.release-risk {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  font-size: 12px;
+}
+
+.release-risk[data-severity="high"] {
+  color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+}
+
+.release-risk[data-severity="medium"] {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 13%, transparent);
+}
+
+.release-risk[data-severity="ok"] {
+  color: var(--good);
+  background: color-mix(in srgb, var(--good) 12%, transparent);
+}
+
+.danger-text {
+  color: var(--bad);
+}
+
+.release-item { grid-template-columns: 1.2fr 0.7fr 0.7fr 0.7fr 1fr; }
 
 .release-item.is-current {
   border-color: color-mix(in srgb, var(--good) 38%, var(--rule));
+}
+
+.release-item[data-release-health="failed"] {
+  border-color: color-mix(in srgb, var(--bad) 42%, var(--rule));
+}
+
+.release-failures {
+  grid-column: 1 / -1;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--bad) 22%, var(--rule));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bad) 6%, transparent);
+}
+
+.release-failures summary {
+  cursor: pointer;
+  color: var(--bad);
+  font-size: 13px;
+  font-weight: 740;
+}
+
+.release-failures span {
+  display: block;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
 }
 
 .empty {
@@ -715,7 +870,11 @@ select {
   .sidebar { position: static; height: auto; grid-template-rows: auto; }
   nav { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .form-grid, .form-grid.compact, .filter-bar, .row, .log-item, .model-summary, .capability-policy, .capability-item, .release-item, .audit-summary-grid, .audit-layout, .audit-request-row, .audit-event-row {
+  .form-grid, .form-grid.compact, .filter-bar, .row, .log-item, .model-summary, .capability-policy, .capability-item, .release-summary, .release-control-grid, .release-item, .audit-summary-grid, .audit-layout, .audit-action-row, .audit-artifact-row, .audit-feedback-row, .audit-request-row, .audit-event-row {
     grid-template-columns: 1fr;
+  }
+
+  .release-control-grid article.wide {
+    grid-column: auto;
   }
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """真实发布完整校验入口。
 
-The full release gate first deploys the local v0.2.7 release artifacts to the
+The full release gate first deploys the local v0.2.8 release artifacts to the
 configured production server, then runs the production acceptance matrix.
 """
 
@@ -11,15 +11,17 @@ import importlib.util
 import json
 import os
 import runpy
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = os.environ.get("ECOREX_ACCEPTANCE_VERSION", "0.2.7")
+VERSION = os.environ.get("ECOREX_ACCEPTANCE_VERSION", "0.2.8")
 TARGET = Path(__file__).with_name("smoke-v026-production-agent-product-acceptance.py")
 DEPLOY_TARGET = Path(__file__).with_name("deploy-v024-production.py")
+LEGACY_UPGRADE_TARGET = Path(__file__).with_name("smoke-v028-legacy-webui-online-upgrade.ps1")
 
 
 def _load_deploy_module():
@@ -74,8 +76,11 @@ def _write_deploy_failure(exc: Exception, deployer=None) -> None:
 
 if __name__ == "__main__":
     skip_deploy = "--skip-deploy" in sys.argv
+    skip_legacy_upgrade = "--skip-legacy-upgrade" in sys.argv
     if skip_deploy:
         sys.argv = [arg for arg in sys.argv if arg != "--skip-deploy"]
+    if skip_legacy_upgrade:
+        sys.argv = [arg for arg in sys.argv if arg != "--skip-legacy-upgrade"]
     else:
         os.environ["ECOREX_DEPLOY_VERSION"] = VERSION
         os.environ["ECOREX_PROMOTE_PUBLIC_RELEASE"] = "1"
@@ -88,4 +93,29 @@ if __name__ == "__main__":
         except Exception as exc:
             _write_deploy_failure(exc, deployer)
             raise SystemExit(1)
-    runpy.run_path(str(TARGET), run_name="__main__")
+    heavy_exit = 0
+    try:
+        runpy.run_path(str(TARGET), run_name="__main__")
+    except SystemExit as exc:
+        try:
+            heavy_exit = int(exc.code or 0)
+        except Exception:
+            heavy_exit = 1
+
+    legacy_exit = 0
+    if not skip_legacy_upgrade:
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(LEGACY_UPGRADE_TARGET),
+            ],
+            text=True,
+        )
+        legacy_exit = int(result.returncode or 0)
+
+    if heavy_exit or legacy_exit:
+        raise SystemExit(1)

@@ -1,6 +1,6 @@
 {
   "name": "ecorex-desktop",
-  "version": "0.2.7.2",
+  "version": "0.3.0",
   "private": true,
   "description": "EcoreX desktop application with a local agent runtime",
   "author": "EcoreX",
@@ -17,7 +17,8 @@
     "build": "npm run build:renderer && npm run build:electron",
     "build:renderer": "vite build",
     "build:electron": "tsc -p tsconfig.electron.json",
-    "webui:package": "npm run build:renderer && powershell -ExecutionPolicy Bypass -Command \"Set-Location ..; ./scripts/prepare-ecorex-webui-local-release.ps1 -Version 0.2.7.2 -SkipCombinedPackage\"",
+    "webui:package": "npm run build:renderer && powershell -ExecutionPolicy Bypass -Command \"Set-Location ..; ./scripts/prepare-ecorex-webui-local-release.ps1 -Version 0.3.0 -SkipCombinedPackage\"",
+    "webui:release": "powershell -ExecutionPolicy Bypass -File ../scripts/release-ecorex-webui-orchestrator.ps1 -Version 0.3.0",
     "webui:stage-public": "powershell -ExecutionPolicy Bypass -File ../scripts/release-ecorex-default.ps1",
     "release:default": "powershell -ExecutionPolicy Bypass -File ../scripts/release-ecorex-default.ps1",
     "release:embed-downloads": "powershell -ExecutionPolicy Bypass -File ../scripts/release-ecorex-default.ps1 -EmbedDownloads",
@@ -59,7 +60,8 @@
     "lucide-react": "^0.561.0",
     "markdown-it": "^14.2.0",
     "react": "^19.2.3",
-    "react-dom": "^19.2.3"
+    "react-dom": "^19.2.3",
+    "tldraw": "^5.1.1"
   },
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",

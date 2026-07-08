@@ -1,0 +1,98 @@
+{
+  "commands": [
+    {
+      "argvHash": "56065C6AC4C761AC5FA639D1CC538FB4332171CF819284505273DF928B0CE64B",
+      "exitCode": 0,
+      "name": "inspect_independent_usage_panel",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "{\"current\": {\"exists\": true, \"isSymlink\": true, \"size\": 0, \"target\": \"/srv/ecorex-agent-usage-panel/releases/20260629113626-usage-panel\"}, \"files\": {\"adminCss\": {\"exists\": false, \"isSymlink\": false, \"size\": 0, \"target\": \"/srv/ecorex-agent-usage-panel/releases/20260629113626-usage-panel/admin.css\"}, \"adminJs\": {\"exists\": false, \"isSymlink\": false, \"size\": 0, \"target\": \"/srv/ecorex-agent-usage-panel/releases/20260629113626-usage-panel/admin.js\"}, \"index\": {\"exists\": true, \"isSymlink\": false, \"size\": 6345, \"target\": \"/srv/ecorex-agent-usage-panel/releases/20260629113626-usage-panel/index.html\"}}, \"find\": \"/srv/ecorex-agent-usage-panel/releases/20260629112022-usage-panel/app.js\\t18491\\t2026-06-29 11:20\\n/srv/ecorex-agent-usage-panel/releases/20260629112022-usage-panel/data.js\\t1866840\\t2026-06-29 11:20\\n/srv/ecorex-agent-usage-panel/releases/20260629112022-usage-panel/index.html\\t3421\\t2026-06-29 11:20\\n/srv/ecorex-agent-usage-panel/releases/20260629112022-usage-panel/styles.css\\t6466\\t2026-06-29 11:20\\n/srv/ecorex-agent-usage-panel/releases/20260629112056-usage-panel/app.js\\t18792\\t2026-06-29 11:22\\n/srv/ecorex-agent-usage-panel/releases/20260629112056-usage-panel/data.js\\t1866840\\t2026-06-29 11:20\\n/srv/ecorex-agent-usage-panel/releases/20260629112056-usage-panel/index.html\\t3421\\t2026-06-29 11:20\\n/srv/ecorex-agent-usage-panel/releases/20260629112056-usage-panel/styles.css\\t6466\\t2026-06-29 11:20\\n/srv/ecorex-agent-usage-panel/releases/20260629113626-usage-panel/app.js\\t78411\\t2026-06-29 16:49\\n/srv/ecorex-agent-usage-panel/releases/20260629113626-usage-panel/data.js\\t2802696\\t2026-06-29 16:53\\n/srv/ecorex-agent-usage-panel/releases/20260629113626-usage-panel/index.html\\t6345\\t2026-06-29 16:49\\n/srv/ecorex-agent-usage-panel/releases/20260629113626-usage-panel/styles.css\\t15582\\t2026-06-29 16:49\\n/srv/ecorex-agent-usage-panel/releases/20260629113626-usage-panel/usage_panel_api.py\\t21927\\t2026-06-29 12:33\\n/srv/ecorex-agent-usage-panel/server/__pycache__/usage_panel_api.cpython-311.pyc\\t50222\\t2026-06-29 16:42\\n/srv/ecorex-agent-usage-panel/server/usage_panel_api.py\\t31930\\t2026-06-29 16:42\\n\", \"hashes\": {\"cssHash\": \"E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855\", \"cssLength\": 0, \"indexHash\": \"05510F4111E47D972F05F00D16623F5C15FB28DF772547E175E7A90898F349BB\", \"indexLength\": 5496, \"jsHash\": \"EFE3C0BDC35B1714A4700DBDBB30F48633138E9F36F00ED44D0C66BFE4EA14E3\", \"jsLength\": 72566}, \"localApi\": {\"apiRoot\": {\"bodyHash\": \"0B02A0ECF609BB203FF86A47ACC9AC5A3D0C5D6F5F55471B3D705AAF470942DD\", \"bodyPrefix\": \"{\\\"ok\\\":false,\\\"error\\\":\\\"not found\\\"}\", \"contentType\": \"application/json; charset=utf-8\", \"status\": 404}, \"[REDACTED]\": {\"bodyHash\": \"0B02A0ECF609BB203FF86A47ACC9AC5A3D0C5D6F5F55471B3D705AAF470942DD\", \"bodyPrefix\": \"{\\\"ok\\\":false,\\\"error\\\":\\\"not found\\\"}\", \"contentType\": \"application/json; charset=utf-8\", \"status\": 404}, \"runtimeAudit\": {\"bodyHash\": \"0B02A0ECF609BB203FF86A47ACC9AC5A3D0C5D6F5F55471B3D705AAF470942DD\", \"bodyPrefix\": \"{\\\"ok\\\":f",
+      "stdoutHash": "466445527E1734D1E9D0FB196AD7324663D36E1569EC86AD50A8FB68F52F97AC"
+    }
+  ],
+  "generatedAt": "2026-07-05T00:30:07.075242+00:00",
+  "probe": {
+    "current": {
+      "exists": true,
+      "isSymlink": true,
+      "size": 0,
+      "target": "/srv/ecorex-agent-usage-panel/releases/20260629113626-usage-panel"
+    },
+    "files": {
+      "adminCss": {
+        "exists": false,
+        "isSymlink": false,
+        "size": 0,
+        "target": "/srv/ecorex-agent-usage-panel/releases/20260629113626-usage-panel/admin.css"
+      },
+      "adminJs": {
+        "exists": false,
+        "isSymlink": false,
+        "size": 0,
+        "target": "/srv/ecorex-agent-usage-panel/releases/20260629113626-usage-panel/admin.js"
+      },
+      "index": {
+        "exists": true,
+        "isSymlink": false,
+        "size": 6345,
+        "target": "/srv/ecorex-agent-usage-panel/releases/20260629113626-usage-panel/index.html"
+      }
+    },
+    "find": "/srv/ecorex-agent-usage-panel/releases/20260629112022-usage-panel/app.js\t18491\t2026-06-29 11:20\n/srv/ecorex-agent-usage-panel/releases/20260629112022-usage-panel/data.js\t1866840\t2026-06-29 11:20\n/srv/ecorex-agent-usage-panel/releases/20260629112022-usage-panel/index.html\t3421\t2026-06-29 11:20\n/srv/ecorex-agent-usage-panel/releases/20260629112022-usage-panel/styles.css\t6466\t2026-06-29 11:20\n/srv/ecorex-agent-usage-panel/releases/20260629112056-usage-panel/app.js\t18792\t2026-06-29 11:22\n/srv/ecorex-agent-usage-panel/releases/20260629112056-usage-panel/data.js\t1866840\t2026-06-29 11:20\n/srv/ecorex-agent-usage-panel/releases/20260629112056-usage-panel/index.html\t3421\t2026-06-29 11:20\n/srv/ecorex-agent-usage-panel/releases/20260629112056-usage-panel/styles.css\t6466\t2026-06-29 11:20\n/srv/ecorex-agent-usage-panel/releases/20260629113626-usage-panel/app.js\t78411\t2026-06-29 16:49\n/srv/ecorex-agent-usage-panel/releases/20260629113626-usage-panel/data.js\t2802696\t2026-06-29 16:53\n/srv/ecorex-agent-usage-panel/releases/20260629113626-usage-panel/index.html\t6345\t2026-06-29 16:49\n/srv/ecorex-agent-usage-panel/releases/20260629113626-usage-panel/styles.css\t15582\t2026-06-29 16:49\n/srv/ecorex-agent-usage-panel/releases/20260629113626-usage-panel/usage_panel_api.py\t21927\t2026-06-29 12:33\n/srv/ecorex-agent-usage-panel/server/__pycache__/usage_panel_api.cpython-311.pyc\t50222\t2026-06-29 16:42\n/srv/ecorex-agent-usage-panel/server/usage_panel_api.py\t31930\t2026-06-29 16:42\n",
+    "hashes": {
+      "cssHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "cssLength": 0,
+      "indexHash": "05510F4111E47D972F05F00D16623F5C15FB28DF772547E175E7A90898F349BB",
+      "indexLength": 5496,
+      "jsHash": "EFE3C0BDC35B1714A4700DBDBB30F48633138E9F36F00ED44D0C66BFE4EA14E3",
+      "jsLength": 72566
+    },
+    "localApi": {
+      "apiRoot": {
+        "bodyHash": "0B02A0ECF609BB203FF86A47ACC9AC5A3D0C5D6F5F55471B3D705AAF470942DD",
+        "bodyPrefix": "{\"ok\":false,\"error\":\"not found\"}",
+        "contentType": "application/json; charset=utf-8",
+        "status": 404
+      },
+      "root": {
+        "bodyHash": "0B02A0ECF609BB203FF86A47ACC9AC5A3D0C5D6F5F55471B3D705AAF470942DD",
+        "bodyPrefix": "{\"ok\":false,\"error\":\"not found\"}",
+        "contentType": "application/json; charset=utf-8",
+        "status": 404
+      },
+      "runtimeAudit": {
+        "bodyHash": "0B02A0ECF609BB203FF86A47ACC9AC5A3D0C5D6F5F55471B3D705AAF470942DD",
+        "bodyPrefix": "{\"ok\":false,\"error\":\"not found\"}",
+        "contentType": "application/json; charset=utf-8",
+        "status": 404
+      },
+      "state": {
+        "bodyHash": "0B02A0ECF609BB203FF86A47ACC9AC5A3D0C5D6F5F55471B3D705AAF470942DD",
+        "bodyPrefix": "{\"ok\":false,\"error\":\"not found\"}",
+        "contentType": "application/json; charset=utf-8",
+        "status": 404
+      }
+    },
+    "markers": {
+      "cssAuditRows": false,
+      "indexAuditPanel": false,
+      "indexEffectiveArtifacts": false,
+      "jsEffectiveArtifacts": false
+    },
+    "ports": "LISTEN 0      5          127.0.0.1:18105      0.0.0.0:*    users:((\"python3\",pid=234649,fd=3))                                                                                                           \nLISTEN 0      5          127.0.0.1:18084      0.0.0.0:*    users:((\"python3\",pid=446221,fd=6))                                                                                                           \n",
+    "root": {
+      "exists": true,
+      "isSymlink": false,
+      "size": 0,
+      "target": "/srv/ecorex-agent-usage-panel"
+    },
+    "services": "  auditd.service                                        loaded    active   running Security Auditing Service\n  ecorex-admin-api.service                              loaded    active   running EcoreX Admin API\n  ecorex-usage-panel-api.service                        loaded    active   running EcoreX Usage Panel API\n  ecorex-web.service                                    loaded    active   running EcoreX WebUI Runtime\n"
+  },
+  "redaction": {
+    "rawOutputPersisted": false,
+    "rawSecretPersisted": false
+  },
+  "scope": "production-independent-usage-panel-inspect",
+  "status": "PASS",
+  "version": "0.2.9"
+}

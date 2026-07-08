@@ -1413,6 +1413,26 @@ select {
 .att-thumb:hover .att-remove,
 .att-chip:hover .att-remove { opacity: 1; }
 
+.tencent-docs-logo {
+    width: 16px;
+    height: 16px;
+    display: inline-block;
+    flex: 0 0 auto;
+    border-radius: 3px;
+    object-fit: contain;
+    vertical-align: -3px;
+}
+.tencent-docs-logo.is-inline { width: 18px; height: 18px; }
+.tencent-docs-logo.is-large { width: 30px; height: 30px; }
+.att-tencent-docs {
+    border-color: rgba(47, 125, 246, 0.26);
+    background: rgba(47, 125, 246, 0.08);
+}
+.dark .att-tencent-docs {
+    border-color: rgba(96, 165, 250, 0.28);
+    background: rgba(59, 130, 246, 0.14);
+}
+
 /* Drag-over highlight */
 .drag-over {
     background: rgba(74, 190, 110, 0.08) !important;
@@ -1442,6 +1462,576 @@ select {
     border-radius: 6px;
     background: rgba(255,255,255,0.15);
     font-size: 12px;
+}
+.user-msg-tencent-docs {
+    background: rgba(255,255,255,0.22);
+}
+
+.tencent-docs-modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 160;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: rgba(15, 23, 42, 0.48);
+    backdrop-filter: blur(8px);
+}
+.tencent-docs-modal-card {
+    width: min(720px, calc(100vw - 28px));
+    max-height: calc(100dvh - 32px);
+    display: grid;
+    gap: 12px;
+    overflow: hidden;
+    padding: 16px;
+    border: 1px solid #e2e8f0;
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 24px 80px rgba(15, 23, 42, 0.22);
+}
+.dark .tencent-docs-modal-card {
+    border-color: rgba(255,255,255,0.12);
+    background: #1A1A1A;
+}
+.tencent-docs-modal-card.is-auth { width: min(520px, calc(100vw - 28px)); }
+.tencent-docs-modal-head,
+.tencent-docs-modal-actions,
+.tencent-docs-toolbar,
+.tencent-docs-status-line {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+.tencent-docs-modal-head {
+    justify-content: space-between;
+}
+.tencent-docs-modal-head > div {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+}
+.tencent-docs-modal-head span,
+.tencent-docs-status-line span,
+.tencent-docs-row small {
+    min-width: 0;
+    overflow: hidden;
+    color: #64748b;
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.dark .tencent-docs-modal-head span,
+.dark .tencent-docs-status-line span,
+.dark .tencent-docs-row small { color: #94a3b8; }
+.tencent-docs-modal-head h3 {
+    margin: 0;
+    color: #0f172a;
+    font-size: 18px;
+    font-weight: 700;
+}
+.dark .tencent-docs-modal-head h3 { color: #f8fafc; }
+.tencent-docs-icon-btn {
+    width: 32px;
+    height: 32px;
+    display: grid;
+    place-items: center;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    color: #64748b;
+    background: #f8fafc;
+}
+.dark .tencent-docs-icon-btn {
+    border-color: rgba(255,255,255,0.12);
+    color: #94a3b8;
+    background: rgba(255,255,255,0.06);
+}
+.tencent-docs-auth-card {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 12px;
+    align-items: center;
+    padding: 12px;
+    border: 1px solid rgba(47, 125, 246, 0.22);
+    border-radius: 12px;
+    background: rgba(47, 125, 246, 0.07);
+}
+.tencent-docs-auth-logo {
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    border: 1px solid rgba(47, 125, 246, 0.28);
+    border-radius: 12px;
+    background: #fff;
+}
+.tencent-docs-auth-card strong {
+    color: #0f172a;
+    font-size: 14px;
+}
+.dark .tencent-docs-auth-card strong { color: #f8fafc; }
+.tencent-docs-auth-card small {
+    display: block;
+    margin-top: 3px;
+    color: #64748b;
+    font-size: 12px;
+    line-height: 1.5;
+}
+.dark .tencent-docs-auth-card small { color: #94a3b8; }
+.tencent-docs-qr-panel {
+    display: grid;
+    grid-template-columns: 188px minmax(0, 1fr);
+    gap: 16px;
+    align-items: center;
+    padding: 14px;
+    border: 1px solid rgba(47, 125, 246, 0.22);
+    border-radius: 12px;
+    background:
+        radial-gradient(circle at 18% 14%, rgba(47,125,246,0.14), transparent 34%),
+        #f8fafc;
+}
+.dark .tencent-docs-qr-panel {
+    border-color: rgba(255,255,255,0.12);
+    background:
+        radial-gradient(circle at 18% 14%, rgba(96,165,250,0.18), transparent 34%),
+        rgba(255,255,255,0.05);
+}
+.tencent-docs-qr-box {
+    display: grid;
+    justify-items: center;
+    gap: 8px;
+    color: #334155;
+    text-decoration: none;
+}
+.dark .tencent-docs-qr-box { color: #cbd5e1; }
+.tencent-docs-qr-box img {
+    width: 184px;
+    height: 184px;
+    display: block;
+    border: 10px solid #fff;
+    border-radius: 12px;
+    background: #fff;
+}
+.tencent-docs-qr-box span,
+.tencent-docs-qr-panel small {
+    color: #64748b;
+    font-size: 12px;
+    line-height: 1.5;
+}
+.dark .tencent-docs-qr-box span,
+.dark .tencent-docs-qr-panel small { color: #94a3b8; }
+.tencent-docs-qr-panel strong {
+    display: block;
+    margin-bottom: 5px;
+    color: #0f172a;
+    font-size: 15px;
+}
+.dark .tencent-docs-qr-panel strong { color: #f8fafc; }
+.tencent-docs-modal-actions {
+    flex-wrap: wrap;
+}
+.tencent-docs-modal-actions button,
+.tencent-docs-toolbar button,
+.tencent-docs-search-form button,
+.tencent-docs-token-form button {
+    min-height: 34px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    padding: 0 12px;
+    border: 1px solid #e2e8f0;
+    border-radius: 999px;
+    color: #334155;
+    background: #f8fafc;
+    font-size: 13px;
+    font-weight: 600;
+}
+.dark .tencent-docs-modal-actions button,
+.dark .tencent-docs-toolbar button,
+.dark .tencent-docs-search-form button,
+.dark .tencent-docs-token-form button {
+    border-color: rgba(255,255,255,0.12);
+    color: #cbd5e1;
+    background: rgba(255,255,255,0.06);
+}
+.tencent-docs-modal-actions button.primary,
+.tencent-docs-token-form button.primary {
+    color: #fff;
+    border-color: #2f7df6;
+    background: #2f7df6;
+}
+.tencent-docs-token-fallback {
+    padding: 10px 12px;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    background: #f8fafc;
+}
+.dark .tencent-docs-token-fallback {
+    border-color: rgba(255,255,255,0.1);
+    background: rgba(255,255,255,0.05);
+}
+.tencent-docs-token-fallback summary {
+    cursor: pointer;
+    color: #334155;
+    font-size: 13px;
+    font-weight: 700;
+}
+.dark .tencent-docs-token-fallback summary { color: #e2e8f0; }
+.tencent-docs-token-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    margin-top: 10px;
+}
+.tencent-docs-token-form input,
+.tencent-docs-search-form input {
+    min-width: 0;
+    min-height: 34px;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 0 10px;
+    color: #0f172a;
+    background: #fff;
+    font-size: 13px;
+}
+.dark .tencent-docs-token-form input,
+.dark .tencent-docs-search-form input {
+    border-color: rgba(255,255,255,0.12);
+    color: #f8fafc;
+    background: rgba(255,255,255,0.06);
+}
+.tencent-docs-toolbar {
+    justify-content: space-between;
+}
+.tencent-docs-tabs {
+    display: inline-flex;
+    gap: 4px;
+    padding: 3px;
+    border: 1px solid #e2e8f0;
+    border-radius: 999px;
+    background: #f1f5f9;
+}
+.dark .tencent-docs-tabs {
+    border-color: rgba(255,255,255,0.1);
+    background: rgba(255,255,255,0.06);
+}
+.tencent-docs-tabs button {
+    min-height: 28px;
+    border: 0;
+    background: transparent;
+}
+.tencent-docs-tabs button.active {
+    color: #0f172a;
+    background: #fff;
+    box-shadow: 0 1px 4px rgba(15,23,42,0.08);
+}
+.dark .tencent-docs-tabs button.active {
+    color: #f8fafc;
+    background: rgba(255,255,255,0.1);
+}
+.tencent-docs-search-form {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+}
+.tencent-docs-search-form > i {
+    color: #94a3b8;
+}
+.tencent-docs-list {
+    min-height: 220px;
+    max-height: min(420px, 52vh);
+    display: grid;
+    align-content: start;
+    gap: 6px;
+    overflow: auto;
+}
+.tencent-docs-row {
+    min-height: 52px;
+    display: grid;
+    grid-template-columns: 22px minmax(0, 1fr) 18px;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    color: #0f172a;
+    background: #fff;
+    text-align: left;
+}
+.dark .tencent-docs-row {
+    border-color: rgba(255,255,255,0.1);
+    color: #f8fafc;
+    background: rgba(255,255,255,0.05);
+}
+.tencent-docs-row:hover,
+.tencent-docs-row.is-selected {
+    border-color: rgba(47,125,246,0.42);
+    background: rgba(47,125,246,0.08);
+}
+.tencent-docs-row > i {
+    color: #2f7df6;
+}
+.tencent-docs-row span {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+}
+.tencent-docs-row strong {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.tencent-docs-empty {
+    min-height: 150px;
+    display: grid;
+    place-items: center;
+    gap: 8px;
+    color: #94a3b8;
+    border: 1px dashed #cbd5e1;
+    border-radius: 12px;
+    background: #f8fafc;
+    font-size: 13px;
+}
+.dark .tencent-docs-empty {
+    border-color: rgba(255,255,255,0.14);
+    background: rgba(255,255,255,0.05);
+}
+
+.memory-starry-page {
+    display: grid;
+    gap: 14px;
+    padding: 14px;
+    overflow: hidden;
+    border: 1px solid rgba(116, 214, 255, 0.22);
+    border-radius: 16px;
+    color: #edf7ff;
+    background:
+        radial-gradient(circle at 12% 18%, rgba(255,255,255,0.42) 0 1px, transparent 1.8px),
+        radial-gradient(circle at 74% 22%, rgba(248,196,92,0.32) 0 1px, transparent 1.8px),
+        radial-gradient(circle at 62% 82%, rgba(183,140,255,0.28) 0 1px, transparent 1.8px),
+        linear-gradient(135deg, #071022 0%, #0b1426 52%, #130f25 100%);
+}
+.memory-starry-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    min-width: 0;
+}
+.memory-starry-header > div:first-child {
+    min-width: 0;
+    display: grid;
+    gap: 3px;
+}
+.memory-starry-header span,
+.memory-starry-header p {
+    color: rgba(237,247,255,0.68);
+    font-size: 12px;
+}
+.memory-starry-header h3 {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 800;
+    line-height: 1.25;
+}
+.memory-starry-header p {
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.memory-starry-stats {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.memory-starry-stats span {
+    min-height: 30px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0 10px;
+    border: 1px solid rgba(237,247,255,0.16);
+    border-radius: 999px;
+    color: rgba(237,247,255,0.74);
+    background: rgba(255,255,255,0.07);
+}
+.memory-starry-stats strong {
+    color: #fff;
+    font-size: 14px;
+}
+.memory-starry-refresh {
+    min-height: 34px;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 0 12px;
+    border: 1px solid rgba(237,247,255,0.16);
+    border-radius: 999px;
+    color: #edf7ff;
+    background: rgba(255,255,255,0.08);
+}
+.memory-starry-layout {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(260px, 330px);
+    gap: 12px;
+    align-items: stretch;
+}
+.memory-starry-canvas {
+    min-height: min(620px, calc(100vh - 260px));
+    overflow: hidden;
+    border: 1px solid rgba(237,247,255,0.14);
+    border-radius: 14px;
+    background: rgba(2,7,18,0.45);
+}
+.memory-starry-svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+.memory-starry-links line {
+    stroke: rgba(146,201,255,0.22);
+    stroke-width: 1.2;
+}
+.memory-starry-links line.is-related {
+    stroke: rgba(248,196,92,0.78);
+    stroke-width: 2;
+}
+.memory-starry-node circle {
+    stroke: rgba(255,255,255,0.86);
+    stroke-width: 1.8;
+    filter: drop-shadow(0 0 10px rgba(116,214,255,0.35));
+}
+.memory-starry-node text {
+    fill: #f8fbff;
+    font-size: 11px;
+    font-weight: 800;
+    text-anchor: middle;
+    paint-order: stroke;
+    stroke: rgba(3,8,18,0.88);
+    stroke-width: 5px;
+    stroke-linejoin: round;
+    pointer-events: none;
+}
+.memory-starry-node.is-selected circle {
+    stroke: #ffe08a;
+    stroke-width: 3;
+}
+.memory-starry-detail {
+    min-width: 0;
+    display: grid;
+    align-content: start;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid rgba(237,247,255,0.15);
+    border-radius: 14px;
+    background: rgba(255,255,255,0.08);
+}
+.memory-starry-detail header {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.memory-starry-detail header > i {
+    width: 18px;
+    color: #74d6ff;
+}
+.memory-starry-detail header > div {
+    min-width: 0;
+    display: grid;
+    gap: 3px;
+}
+.memory-starry-detail header strong {
+    overflow: hidden;
+    color: #fff;
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.memory-starry-detail header span,
+.memory-starry-related > span {
+    color: rgba(237,247,255,0.68);
+    font-size: 12px;
+}
+.memory-starry-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.memory-starry-meta span {
+    min-height: 24px;
+    display: inline-flex;
+    align-items: center;
+    padding: 0 8px;
+    border: 1px solid rgba(237,247,255,0.14);
+    border-radius: 999px;
+    color: rgba(237,247,255,0.76);
+    background: rgba(255,255,255,0.08);
+    font-size: 12px;
+}
+.memory-starry-excerpt {
+    margin: 0;
+    max-height: 220px;
+    overflow: auto;
+    color: rgba(237,247,255,0.88);
+    font-size: 12px;
+    line-height: 1.65;
+}
+.memory-starry-related {
+    display: grid;
+    gap: 8px;
+}
+.memory-starry-related strong {
+    color: #fff;
+    font-size: 12px;
+}
+.memory-starry-related div {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.memory-starry-related button {
+    min-height: 26px;
+    max-width: 100%;
+    padding: 0 8px;
+    overflow: hidden;
+    border: 1px solid rgba(237,247,255,0.14);
+    border-radius: 999px;
+    color: rgba(237,247,255,0.86);
+    background: rgba(255,255,255,0.08);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.memory-starry-empty,
+.memory-starry-detail-empty {
+    min-height: 180px;
+    display: grid;
+    place-items: center;
+    color: rgba(237,247,255,0.68);
+    font-size: 13px;
+}
+
+@media (max-width: 960px) {
+    .memory-starry-header {
+        align-items: stretch;
+        flex-direction: column;
+    }
+    .memory-starry-layout {
+        grid-template-columns: 1fr;
+    }
+    .memory-starry-canvas {
+        min-height: 420px;
+    }
 }
 
 /* Placeholder Cards */

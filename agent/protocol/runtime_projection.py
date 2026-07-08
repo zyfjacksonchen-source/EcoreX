@@ -549,6 +549,24 @@ class RuntimeProjectionService:
                 record["lease_count"] = _safe_projection_nonnegative_int(payload.get("lease_count"))
                 record["last_event_type"] = event_type
                 record["last_event_id"] = event.get("event_id")
+                if "job_id" in payload:
+                    job_id = _safe_projection_image_job_id(payload.get("job_id"))
+                    if job_id:
+                        record["job_id"] = job_id
+                if "progress" in payload:
+                    progress = _safe_projection_progress(payload.get("progress"))
+                    if progress is not None:
+                        record["progress"] = progress
+                if "image_job_status" in payload:
+                    record["image_job_status"] = _safe_image_job_progress_status(payload.get("image_job_status"))
+                if "backgrounded" in payload:
+                    backgrounded = _safe_projection_bool(payload.get("backgrounded"))
+                    if backgrounded is not None:
+                        record["backgrounded"] = backgrounded
+                if "reason" in payload:
+                    reason = _safe_projection_telemetry_token(payload.get("reason"))
+                    if reason is not None:
+                        record["reason"] = reason
                 if event_type == "task.intervention_requested":
                     record["intervention"] = {
                         "status": "waiting_user_decision",
@@ -1334,6 +1352,7 @@ _IMAGE_JOB_EVENT_PAYLOAD_FIELDS = {
     "artifact_index",
     "attempt",
     "configured_max_parallel",
+    "default_max_parallel",
     "effective_max_parallel",
     "elapsed_ms",
     "endpoint_host_hash",
@@ -1364,6 +1383,7 @@ _IMAGE_JOB_EVENT_PAYLOAD_FIELDS = {
     "output_format",
     "parallelism_clamp_reason",
     "parallelism_clamped",
+    "parallelism_defaulted",
     "parallelism_policy_version",
     "postprocess_latency_ms",
     "progress",
@@ -1394,6 +1414,7 @@ _IMAGE_JOB_EVENT_NONNEGATIVE_INT_FIELDS = {
     "attempt",
     "attempted_provider_count",
     "configured_max_parallel",
+    "default_max_parallel",
     "effective_max_parallel",
     "elapsed_ms",
     "finalization_latency_ms",
@@ -1916,6 +1937,7 @@ def _append_projection_artifacts(assistant: Dict[str, Any], payload: Dict[str, A
         )
     elif not isinstance(payload.get("artifact"), dict) and _looks_like_artifact(payload):
         assistant.setdefault("artifacts", []).append(_safe_projection_artifact(payload))
+    assistant["artifacts"] = _sort_projection_artifacts(assistant.get("artifacts") or [])
 
 
 def _looks_like_artifact(payload: Dict[str, Any]) -> bool:
@@ -1946,6 +1968,11 @@ _PROJECTION_ARTIFACT_DTO_FIELDS = {
     "height",
     "sha256",
     "safeArtifactId",
+    "task_id",
+    "task_index",
+    "taskIndex",
+    "artifact_index",
+    "artifactIndex",
     "artifact_sanitized",
     "metadata_truncated",
     "omitted_field_count",
@@ -1999,6 +2026,36 @@ def _safe_projection_artifact(artifact: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+def _projection_artifact_sort_key(artifact: Dict[str, Any]) -> tuple[int, int, str]:
+    def _safe_index(value: Any, fallback: int = 999_999) -> int:
+        try:
+            number = int(value)
+            return number if number >= 0 else fallback
+        except (TypeError, ValueError):
+            return fallback
+
+    return (
+        _safe_index(artifact.get("task_index") if "task_index" in artifact else artifact.get("taskIndex")),
+        _safe_index(artifact.get("artifact_index") if "artifact_index" in artifact else artifact.get("artifactIndex")),
+        str(
+            artifact.get("safeArtifactId")
+            or artifact.get("id")
+            or artifact.get("path")
+            or artifact.get("relativePath")
+            or artifact.get("relative_path")
+            or artifact.get("url")
+            or artifact.get("title")
+            or ""
+        ),
+    )
+
+
+def _sort_projection_artifacts(artifacts: Any) -> List[Dict[str, Any]]:
+    if not isinstance(artifacts, list):
+        return []
+    return sorted((dict(item) for item in artifacts if isinstance(item, dict)), key=_projection_artifact_sort_key)
+
+
 def _safe_projection_artifact_value(key: str, value: Any) -> tuple[Any, bool]:
     if value is None:
         return None, False
@@ -2007,7 +2064,7 @@ def _safe_projection_artifact_value(key: str, value: Any) -> tuple[Any, bool]:
         return (evidence, True) if evidence else (None, False)
     if isinstance(value, bool):
         return value, False
-    if key in {"width", "height", "sizeBytes", "size_bytes"}:
+    if key in {"width", "height", "sizeBytes", "size_bytes", "task_index", "taskIndex", "artifact_index", "artifactIndex"}:
         try:
             return max(0, int(value)), False
         except (TypeError, ValueError):
@@ -3102,7 +3159,7 @@ def _merge_artifacts(*artifact_lists: Any) -> List[Dict[str, Any]]:
                 continue
             seen.add(key)
             merged.append(artifact)
-    return merged
+    return _sort_projection_artifacts(merged)
 
 
 def _reduce_image_job_event(
@@ -3143,9 +3200,11 @@ def _reduce_image_job_event(
             "api_base_host_hash",
             "requested_max_parallel",
             "configured_max_parallel",
+            "default_max_parallel",
             "provider_max_parallel",
             "hard_max_parallel",
             "effective_max_parallel",
+            "parallelism_defaulted",
             "parallelism_clamped",
             "parallelism_clamp_reason",
             "parallelism_policy_version",
@@ -3165,7 +3224,7 @@ def _reduce_image_job_event(
                     "ocr_provider",
                 }:
                     value = _safe_projection_telemetry_token(payload.get(key))
-                elif key in {"parallelism_clamped", "ocr_cache_enabled"}:
+                elif key in {"parallelism_clamped", "parallelism_defaulted", "ocr_cache_enabled"}:
                     value = _safe_projection_bool(payload.get(key))
                 else:
                     value = _safe_projection_nonnegative_int(payload.get(key))
@@ -3253,11 +3312,13 @@ def _reduce_image_job_event(
         if isinstance(artifact, dict):
             artifact = _safe_projection_artifact(artifact)
             job.setdefault("artifacts", []).append(artifact)
+            job["artifacts"] = _sort_projection_artifacts(job.get("artifacts") or [])
             task_id = str(payload.get("task_id") or "")
             task_id = _safe_projection_image_task_id(task_id) or ""
             if task_id:
                 task = _image_job_task(job, task_id)
                 task.setdefault("artifacts", []).append(artifact)
+                task["artifacts"] = _sort_projection_artifacts(task.get("artifacts") or [])
                 task["status"] = task.get("status") or "artifact"
     elif event_type == "image_job.completed":
         if job.get("status") in {"completed", "failed", "cancelled"}:

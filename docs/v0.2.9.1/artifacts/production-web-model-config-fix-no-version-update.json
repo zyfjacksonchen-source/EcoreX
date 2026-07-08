@@ -1,0 +1,58 @@
+{
+  "scope": "production-web-model-config-fix-no-version-update",
+  "status": "PASS",
+  "date": "2026-07-06",
+  "versionChanged": false,
+  "operation": "server-config-and-runtime-hotfix",
+  "rootCause": {
+    "adminClientKeys": "The production Admin API allow-list was missing the current WEBUI client key.",
+    "webClientBase": "The production WEB runtime had ECOREX_WEB_CLIENT_BASE=https://mvdcm.ecoremedia.net/client, missing the /ecorex-agent prefix. WEB /api/models could not validate enterprise tokens, so send preflight reported no available model.",
+    "browserBridge": "The served WEB bridge did not expose window.ECOREX_WEB_CLIENT_BASE, so re-login could fall back to local WEB auth instead of Admin enterprise auth."
+  },
+  "serverChanges": [
+    {
+      "path": "/srv/ecorex-agent-admin/env/ecorex-admin-api.env",
+      "backup": "/srv/ecorex-agent-admin/env/ecorex-admin-api.env.bak.20260706142101",
+      "change": "Added current/compatible WEBUI client keys to ECOREX_CLIENT_EVENT_KEYS.",
+      "serviceRestarted": "ecorex-admin-api.service"
+    },
+    {
+      "path": "/etc/ecorex-web/ecorex-web.env",
+      "backup": "/etc/ecorex-web/ecorex-web.env.bak.20260706143641",
+      "change": "Set ECOREX_WEB_CLIENT_BASE=https://mvdcm.ecoremedia.net/ecorex-agent/client.",
+      "serviceRestarted": "ecorex-web.service"
+    },
+    {
+      "path": "/opt/ecorex-web/current/runtime/channel/web/web_channel.py",
+      "backup": "/opt/ecorex-web/current/runtime/channel/web/web_channel.py.bak.202607061444-web-client-base-inject",
+      "change": "Injected window.ECOREX_WEB_CLIENT_BASE and window.ECOREX_WEB_CLIENT_KEYS into the served WEB bridge.",
+      "sha256": "E8505959C9A8DB3F5DD70DDE59CC8131EAED8078124188F0EA54695EAB3B332E"
+    }
+  ],
+  "verification": {
+    "serviceActive": true,
+    "pageInjection": {
+      "url": "https://mvdcm.ecoremedia.net/ecorex-agent/app/",
+      "hasRightClientBase": true,
+      "hasWrongClientBase": false,
+      "assignsWindowBase": true,
+      "assignsWindowKeys": true
+    },
+    "users": [
+      "shlijingxuan@ecoremedia.net",
+      "shwangjingying@ecoremedia.net",
+      "shliaozoujing@ecoremedia.net"
+    ],
+    "clientKeys": [
+      "ecorex-web-v0.2.9.1-web.1",
+      "ecorex-web-v0.2.9-web.1",
+      "ecorex-web-v0.2.7.1-web.1"
+    ],
+    "adminModelConfig": "All 9 user/key combinations returned HTTP 200, configured=true.",
+    "webApiModels": "All 9 user/key combinations returned HTTP 200 with configured providers deepseek, gemini, openai, doubao.",
+    "currentProvider": "deepseek",
+    "currentModel": "deepseek-v4-pro",
+    "temporaryProbeSessionsRevoked": true
+  },
+  "operatorNote": "Users with the old page already open should refresh the WEBUI page and log in again so the new bridge script is loaded."
+}

@@ -54,6 +54,7 @@ _DANGEROUS_TOOLS = {
 _ALLOWED_MODES = {"full-access", "smart-ask", "always-ask", "read-only", "custom"}
 _DEFAULT_TIMEOUT_SECONDS = 300
 _DEFAULT_CDP_ENDPOINT = "http://127.0.0.1:9222"
+_TENCENT_DOCS_MCP_ENDPOINT = "https://docs.qq.com/openapi/mcp"
 _ACCESS_RANK = {"deny": 0, "read": 1, "write": 2}
 _ACCESS_TIEBREAK = {"deny": 3, "write": 2, "read": 1}
 
@@ -249,6 +250,19 @@ def _is_trusted_default_chrome_devtools_start(args: Dict[str, Any]) -> bool:
         and flags.issubset(trusted_flags)
         and bool(args.get("trusted_default_chrome_devtools"))
     )
+
+
+def _is_trusted_tencent_docs_mcp_start(args: Dict[str, Any]) -> bool:
+    if str((args or {}).get("server") or "").strip() != "tencent-docs":
+        return False
+    raw_url = str((args or {}).get("url") or "").strip().rstrip("/")
+    if raw_url != _TENCENT_DOCS_MCP_ENDPOINT:
+        return False
+    try:
+        parsed = urlparse(raw_url)
+    except Exception:
+        return False
+    return parsed.scheme == "https" and parsed.netloc == "docs.qq.com" and parsed.path == "/openapi/mcp"
 
 
 def _is_low_risk_web_fetch_request(args: Dict[str, Any]) -> bool:
@@ -711,7 +725,7 @@ _LOW_RISK_CAPABILITY_ACTIONS = {
 _SCHEDULER_READ_ACTIONS = {"diagnose", "get", "list", "projection", "read", "refresh", "status"}
 _SCHEDULER_MUTATION_ACTIONS = {"create", "delete", "disable", "enable", "execute", "start", "stop", "update"}
 _IMAGE_JOB_READ_ACTIONS = {"collect", "get", "list", "projection", "read", "status"}
-_IMAGE_JOB_SAFE_CONTROL_ACTIONS = {"cancel"}
+_IMAGE_JOB_SAFE_CONTROL_ACTIONS = {"background", "cancel", "continue", "extend"}
 _BASH_WORKSPACE_READ_ACTIONS = {"read", "workspace_read", "workspace-list", "workspace_list"}
 _BASH_WORKSPACE_WRITE_ACTIONS = {"auditable_write", "workspace_write", "workspace-write"}
 
@@ -1035,6 +1049,17 @@ class ToolPermissionBroker:
                 },
             )
             return {"allowed": True, "reason": "default-cdp-mcp-startup"}
+        if normalized_tool == "mcp_server" and _is_trusted_tencent_docs_mcp_start(args):
+            self._audit(
+                "tool-execution",
+                "allow",
+                {
+                    "tool": normalized_tool,
+                    "reason": "default-tencent-docs-mcp-startup",
+                    "server": "tencent-docs",
+                },
+            )
+            return {"allowed": True, "reason": "default-tencent-docs-mcp-startup"}
 
         if mode == "full-access":
             self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "full-access"})

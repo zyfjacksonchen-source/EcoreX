@@ -162,6 +162,11 @@ for artifact_id, artifact in artifacts.items():
         raise SystemExit(f"Artifact {artifact_id} SHA256 does not match checksums.json")
 PY
 
+if [[ -n "$DOWNLOADS_SOURCE_DIR" && -d "$DOWNLOADS_SOURCE_DIR" ]]; then
+  mkdir -p "$tmp_dir/site/downloads"
+  cp -a "$DOWNLOADS_SOURCE_DIR/." "$tmp_dir/site/downloads/"
+fi
+
 install -d "$RELEASE_ROOT/releases"
 install -d "$ADMIN_ROOT/app"
 install -d "$ADMIN_ROOT/data"

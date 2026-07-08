@@ -217,13 +217,19 @@ def test_v025_registry_snapshots_do_not_start_mcp(monkeypatch, tmp_path):
     from agent.tools.tool_manager import ToolManager
 
     seen = []
+    ensured = []
 
     def fake_load_tools(self, *args, **kwargs):
         seen.append(kwargs.get("start_mcp"))
         self.tool_classes = {}
         self._mcp_tool_instances = {}
 
+    def fake_ensure_mcp(self, *args, **kwargs):
+        ensured.append(kwargs.get("wait_seconds"))
+        return {"status": {}, "configured": False, "toolCount": 0}
+
     monkeypatch.setattr(ToolManager, "load_tools", fake_load_tools)
+    monkeypatch.setattr(ToolManager, "ensure_mcp_configured_loaded", fake_ensure_mcp)
     manager = ToolManager()
     manager.tool_classes = {}
     manager._mcp_tool_instances = {}
@@ -233,6 +239,7 @@ def test_v025_registry_snapshots_do_not_start_mcp(monkeypatch, tmp_path):
     _current_agent_tool_names()
 
     assert seen == [False, False, False]
+    assert ensured == [0.0, 0.0, 0.0]
 
 
 def test_v025_extension_registry_redacts_skill_paths_and_mcp_commands(tmp_path, monkeypatch):

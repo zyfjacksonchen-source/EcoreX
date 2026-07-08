@@ -13,6 +13,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from math import ceil
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
@@ -33,6 +34,7 @@ ImageJobRunner = Callable[
 ]
 ImageJobOcrProvider = Callable[[Dict[str, Any]], Any]
 IMAGE_JOB_PRODUCTION_HARD_MAX_PARALLEL = 8
+IMAGE_JOB_BASELINE_SECONDS = 120.0
 
 
 class ImageJobCancelled(RuntimeError):
@@ -51,6 +53,24 @@ class _ImageJobState:
     thread: Optional[threading.Thread] = None
     finished_at: float = 0.0
     in_flight: bool = True
+    observation_started_at: float = 0.0
+    observation_started_wall_time: float = 0.0
+    observation_last_progress_at: float = 0.0
+    observation_last_heartbeat_at: float = 0.0
+    observation_intervention_at: float = 0.0
+    observation_soft_deadline_seconds: float = 1200.0
+    observation_hard_deadline_seconds: float = 1800.0
+    observation_stall_seconds: float = 1200.0
+    observation_heartbeat_seconds: float = 60.0
+    observation_watchdog_interval_seconds: float = 5.0
+    observation_per_image_baseline_seconds: float = IMAGE_JOB_BASELINE_SECONDS
+    observation_last_deadline_extension_at: float = 0.0
+    observation_lease_count: int = 0
+    observation_health: str = "running"
+    observation_backgrounded: bool = False
+    observation_terminal_emitted: bool = False
+    observation_watchdog_stop: threading.Event = field(default_factory=threading.Event)
+    observation_watchdog_thread: Optional[threading.Thread] = None
 
 
 class ImageJobService:
@@ -88,6 +108,7 @@ class ImageJobService:
         parallelism = _bounded_parallelism(max_parallel, len(task_list))
         job_id = _safe_job_id(job_id, fallback=f"image-job-{uuid.uuid4().hex[:16]}")
         state = _ImageJobState(job_id=job_id, request_id=request_id, session_id=session_id, turn_id=turn_id)
+        _apply_observation_policy(state, metadata or {})
         ocr_cache_enabled = bool(ocr_reuse and ocr_provider)
         safe_started_metadata = dict(metadata or {})
         if ocr_reuse:
@@ -107,6 +128,8 @@ class ImageJobService:
             },
             suffix="started",
         )
+        self._start_observation(state, operation=operation, task_count=len(task_list), max_parallel=parallelism, metadata=safe_started_metadata)
+        self._start_observation_watchdog(state)
 
         def _target() -> None:
             try:
@@ -124,6 +147,7 @@ class ImageJobService:
                     state.in_flight = False
                     if state.status in {"completed", "failed", "cancelled"} and not state.finished_at:
                         state.finished_at = time.monotonic()
+                    state.observation_watchdog_stop.set()
 
         if synchronous:
             _target()
@@ -143,7 +167,7 @@ class ImageJobService:
                 "request_id": state.request_id,
                 "session_id": state.session_id,
                 "status": state.status,
-                "artifacts": [dict(item) for item in state.artifacts if isinstance(item, dict)],
+                "artifacts": _sort_artifacts_for_display([dict(item) for item in state.artifacts if isinstance(item, dict)]),
                 "cancel_requested": state.cancel_event.is_set(),
                 "running": bool(state.in_flight or (state.thread and state.thread.is_alive())),
                 "finished_at": state.finished_at,
@@ -231,6 +255,7 @@ class ImageJobService:
                 return {**self.status(job_id), "cancelled": state.status == "cancelled"}
             state.status = "cancelled"
             state.finished_at = time.monotonic()
+        self._finish_observation(state, "cancelled", reason=_safe_cancel_reason(reason))
         self._emit(
             state,
             "image_job.cancelled",
@@ -238,6 +263,292 @@ class ImageJobService:
             suffix="cancelled",
         )
         return {**self.status(job_id), "cancelled": True}
+
+    def observation_action(self, job_id: str, *, action: str) -> Dict[str, Any]:
+        """Apply a user/runtime decision to an active image-job observation."""
+        safe_action = str(action or "").strip().lower().replace("-", "_")
+        if safe_action == "continue":
+            safe_action = "extend"
+        if safe_action not in {"extend", "background"}:
+            return {"job_id": str(job_id or ""), "status": "error", "message": "unsupported observation action"}
+        with self._lock:
+            state = self._jobs.get(str(job_id or ""))
+            if not state:
+                return {"job_id": str(job_id or ""), "status": "unknown", "action": safe_action}
+            if state.status in {"completed", "failed", "cancelled"}:
+                return {**self.status(job_id), "action": safe_action, "observation_applied": False}
+            now = time.monotonic()
+            state.observation_lease_count += 1
+            state.observation_intervention_at = 0.0
+            state.observation_last_progress_at = now
+            if safe_action == "background":
+                state.observation_backgrounded = True
+                state.observation_health = "backgrounded"
+                state.observation_watchdog_stop.set()
+                next_health = "backgrounded"
+            else:
+                extension = max(state.observation_soft_deadline_seconds, state.observation_stall_seconds, 1.0)
+                state.observation_soft_deadline_seconds += extension
+                state.observation_hard_deadline_seconds = max(
+                    state.observation_hard_deadline_seconds + extension,
+                    state.observation_soft_deadline_seconds,
+                )
+                state.observation_health = "extended"
+                next_health = "extended"
+        self._emit_task_event(
+            state,
+            "task.health_changed",
+            {
+                "status": next_health,
+                "health": next_health,
+                "action": safe_action,
+                "reason": f"image_job_observation_{safe_action}",
+            },
+            suffix=f"observation-action:{safe_action}:{time.monotonic_ns()}",
+        )
+        return {**self.status(job_id), "action": safe_action, "observation_applied": True}
+
+    def _start_observation(
+        self,
+        state: _ImageJobState,
+        *,
+        operation: str,
+        task_count: int,
+        max_parallel: int,
+        metadata: Dict[str, Any],
+    ) -> None:
+        now = time.monotonic()
+        wall_time = time.time()
+        with self._lock:
+            state.observation_started_at = now
+            state.observation_started_wall_time = wall_time
+            state.observation_last_progress_at = now
+            state.observation_last_heartbeat_at = now
+            state.observation_health = "running"
+        self._emit_task_event(
+            state,
+            "task.started",
+            {
+                "status": "running",
+                "health": "running",
+                "operation": _safe_operation(operation),
+                "task_count": max(0, int(task_count or 0)),
+                "max_parallel": max(1, int(max_parallel or 1)),
+                **_safe_metadata(metadata),
+            },
+            suffix="task-started",
+        )
+
+    def _start_observation_watchdog(self, state: _ImageJobState) -> None:
+        with self._lock:
+            if state.observation_watchdog_thread is not None:
+                return
+            interval = max(0.05, float(state.observation_watchdog_interval_seconds or 5.0))
+            stop_event = state.observation_watchdog_stop
+
+        def _watchdog() -> None:
+            while not stop_event.wait(interval):
+                now = time.monotonic()
+                heartbeat_due = False
+                intervention_due = False
+                reason = ""
+                next_actions = ["continue", "stop", "background"]
+                with self._lock:
+                    if (
+                        state.status in {"completed", "failed", "cancelled"}
+                        or not state.in_flight
+                        or state.observation_terminal_emitted
+                        or state.observation_backgrounded
+                    ):
+                        return
+                    started_at = state.observation_started_at or now
+                    last_progress_at = state.observation_last_progress_at or started_at
+                    elapsed = max(0.0, now - started_at)
+                    stalled = max(0.0, now - last_progress_at)
+                    if state.observation_heartbeat_seconds > 0 and now - state.observation_last_heartbeat_at >= state.observation_heartbeat_seconds:
+                        heartbeat_due = True
+                        state.observation_last_heartbeat_at = now
+                    if not state.observation_intervention_at:
+                        if elapsed >= state.observation_hard_deadline_seconds:
+                            intervention_due = True
+                            reason = "hard_deadline_exceeded"
+                            next_actions = ["stop", "background", "continue"]
+                        elif elapsed >= state.observation_soft_deadline_seconds:
+                            intervention_due = True
+                            reason = "soft_deadline_exceeded"
+                        elif stalled >= state.observation_stall_seconds:
+                            intervention_due = True
+                            reason = "progress_stalled"
+                        if intervention_due:
+                            state.observation_intervention_at = now
+                            state.observation_health = "waiting_user_decision"
+                if heartbeat_due:
+                    self._emit_task_event(
+                        state,
+                        "task.heartbeat",
+                        {
+                            "status": "running",
+                            "health": state.observation_health,
+                            "reason": "image_job_watchdog",
+                        },
+                        suffix=f"watchdog-heartbeat:{time.monotonic_ns()}",
+                    )
+                if intervention_due:
+                    payload = {
+                        "status": "waiting_user_decision",
+                        "health": "waiting_user_decision",
+                        "reason": reason or "image_job_observation",
+                        "next_actions": next_actions,
+                    }
+                    self._emit_task_event(
+                        state,
+                        "task.health_changed",
+                        payload,
+                        suffix=f"watchdog-health:{reason}:{time.monotonic_ns()}",
+                    )
+                    self._emit_task_event(
+                        state,
+                        "task.intervention_requested",
+                        payload,
+                        suffix=f"watchdog-intervention:{reason}:{time.monotonic_ns()}",
+                    )
+
+        thread = threading.Thread(target=_watchdog, daemon=True, name=f"image-job-observer-{state.job_id[:18]}")
+        with self._lock:
+            state.observation_watchdog_thread = thread
+        thread.start()
+
+    def _emit_observation_progress(
+        self,
+        state: _ImageJobState,
+        *,
+        status: str,
+        progress: Optional[float] = None,
+        index: int = 0,
+    ) -> None:
+        safe_status = _safe_progress_status(status)
+        detail = _image_observation_status_policy(safe_status)
+        with self._lock:
+            if state.observation_terminal_emitted:
+                return
+            now = time.monotonic()
+            previous_health = state.observation_health
+            started_at = state.observation_started_at or now
+            elapsed = max(0.0, now - started_at)
+            state.observation_last_progress_at = now
+            state.observation_last_heartbeat_at = now
+            extended = False
+            extension_seconds = 0.0
+            if detail.get("extends_deadline"):
+                baseline = max(30.0, float(state.observation_per_image_baseline_seconds or IMAGE_JOB_BASELINE_SECONDS))
+                extension_seconds = max(30.0, float(detail.get("extension_factor", 1.0)) * baseline)
+                next_soft = elapsed + extension_seconds
+                if next_soft > state.observation_soft_deadline_seconds + 5.0:
+                    state.observation_soft_deadline_seconds = min(next_soft, 86400.0)
+                    state.observation_hard_deadline_seconds = min(
+                        max(state.observation_hard_deadline_seconds, state.observation_soft_deadline_seconds + baseline),
+                        86400.0,
+                    )
+                    state.observation_last_deadline_extension_at = now
+                    extended = True
+            if previous_health == "waiting_user_decision":
+                state.observation_health = "running"
+                recovered = True
+            else:
+                recovered = False
+        if recovered:
+            self._emit_task_event(
+                state,
+                "task.health_changed",
+                {
+                    "status": "running",
+                    "health": "running",
+                    "reason": "image_job_progress_resumed",
+                },
+                suffix=f"progress-resumed:{time.monotonic_ns()}",
+            )
+        payload: Dict[str, Any] = {
+            "status": "running",
+            "health": state.observation_health,
+            "image_job_status": safe_status,
+            "task_index": max(0, int(index or 0)),
+        }
+        if progress is not None:
+            payload["progress"] = max(0.0, min(float(progress), 1.0))
+        if extended:
+            payload["deadline_extended"] = True
+            payload["extension_seconds"] = int(extension_seconds)
+            payload["soft_deadline_seconds"] = int(state.observation_soft_deadline_seconds or 0)
+            payload["hard_deadline_seconds"] = int(state.observation_hard_deadline_seconds or 0)
+        self._emit_task_event(
+            state,
+            "task.heartbeat",
+            payload,
+            suffix=f"progress-heartbeat:{index}:{safe_status}:{time.monotonic_ns()}",
+        )
+
+    def _finish_observation(self, state: _ImageJobState, status: str, **payload: Any) -> None:
+        terminal_status = str(status or "").strip().lower() or "completed"
+        if terminal_status == "success":
+            terminal_status = "completed"
+        event_type = {
+            "completed": "task.completed",
+            "cancelled": "task.cancelled",
+            "canceled": "task.cancelled",
+            "failed": "task.failed",
+            "timeout": "task.failed",
+            "error": "task.failed",
+        }.get(terminal_status, "task.completed")
+        with self._lock:
+            if state.observation_terminal_emitted:
+                return
+            state.observation_terminal_emitted = True
+            state.observation_health = terminal_status
+            state.observation_watchdog_stop.set()
+        self._emit_task_event(
+            state,
+            event_type,
+            {
+                "status": terminal_status,
+                "health": terminal_status,
+                **payload,
+            },
+            suffix=f"task-terminal:{terminal_status}",
+        )
+
+    def _emit_task_event(self, state: _ImageJobState, event_type: str, payload: Dict[str, Any], *, suffix: str) -> Dict[str, Any]:
+        return self.event_ledger.append_event(
+            request_id=state.request_id,
+            session_id=state.session_id,
+            turn_id=state.turn_id,
+            event_type=event_type,
+            payload=self._task_payload(state, payload),
+            idempotency_key=f"{state.request_id}:{state.job_id}:task:{suffix}",
+            source="image_job_service",
+        )
+
+    def _task_payload(self, state: _ImageJobState, payload: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            started_at = state.observation_started_at or time.monotonic()
+            elapsed_seconds = max(0.0, time.monotonic() - started_at)
+            base = {
+                "task_id": state.job_id,
+                "kind": "image_job",
+                "title": "image generation",
+                "request_id": state.request_id,
+                "parent_id": state.job_id,
+                "job_id": state.job_id,
+                "started_at": state.observation_started_wall_time or time.time(),
+                "elapsed_seconds": round(elapsed_seconds, 2),
+                "soft_deadline_seconds": int(state.observation_soft_deadline_seconds or 0),
+                "hard_deadline_seconds": int(state.observation_hard_deadline_seconds or 0),
+                "per_image_baseline_seconds": int(state.observation_per_image_baseline_seconds or 0),
+                "lease_count": int(state.observation_lease_count or 0),
+                "health": state.observation_health or "running",
+                "backgrounded": bool(state.observation_backgrounded),
+            }
+        base.update(payload or {})
+        return base
 
     def _run_job(
         self,
@@ -280,6 +591,12 @@ class ImageJobService:
                     state.status = "completed"
                     state.finished_at = time.monotonic()
             if state.status == "completed":
+                self._finish_observation(
+                    state,
+                    "completed",
+                    artifact_count=len(state.artifacts),
+                    total_latency_ms=int((time.monotonic() - started_at) * 1000),
+                )
                 self._emit(
                     state,
                     "image_job.completed",
@@ -297,6 +614,7 @@ class ImageJobService:
                 state.status = "cancelled"
                 state.finished_at = time.monotonic()
             if not already_cancelled:
+                self._finish_observation(state, "cancelled", reason=_safe_cancel_reason(str(exc) or "cancelled"))
                 self._emit(
                     state,
                     "image_job.cancelled",
@@ -309,6 +627,7 @@ class ImageJobService:
                     return
                 state.status = "failed"
                 state.finished_at = time.monotonic()
+            self._finish_observation(state, "failed", error_type=_safe_error_type(exc))
             self._emit(
                 state,
                 "image_job.failed",
@@ -361,6 +680,7 @@ class ImageJobService:
                         state.status = "cancelled"
                         state.finished_at = time.monotonic()
                 if not already_terminal:
+                    self._finish_observation(state, "cancelled", reason=_safe_cancel_reason(str(exc) or "cancelled"))
                     self._emit(
                         state,
                         "image_job.cancelled",
@@ -374,6 +694,7 @@ class ImageJobService:
                     state.status = "failed"
                     state.finished_at = time.monotonic()
             if not already_terminal:
+                self._finish_observation(state, "failed", error_type=_safe_error_type(exc))
                 self._emit(
                     state,
                         "image_job.failed",
@@ -518,32 +839,41 @@ class ImageJobService:
             break
         for artifact_index, artifact in enumerate(artifacts):
             safe_artifact = safe_artifacts[artifact_index] if artifact_index < len(safe_artifacts) else _safe_artifact(artifact)
+            safe_artifact = {
+                **safe_artifact,
+                "task_index": max(0, int(index or 0)),
+                "artifact_index": max(0, int(artifact_index or 0)),
+                "task_id": task_id,
+            }
             with self._lock:
                 if state.cancel_event.is_set() or state.status in {"completed", "failed", "cancelled"}:
                     raise ImageJobCancelled("image job cancelled")
                 state.artifacts.append(safe_artifact)
+                state.artifacts = _sort_artifacts_for_display(state.artifacts)
                 self._emit(
                     state,
                     "artifact.created",
                     {
                         "artifact": safe_artifact,
                         "job_id": state.job_id,
-                    "task_id": task_id,
-                    "artifact_index": artifact_index,
-                },
-                suffix=f"artifact-created:{index}:{artifact_index}",
-            )
+                        "task_id": task_id,
+                        "task_index": index,
+                        "artifact_index": artifact_index,
+                    },
+                    suffix=f"artifact-created:{index}:{artifact_index}",
+                )
                 self._emit(
                     state,
                     "image_job.artifact",
                     {
                         "job_id": state.job_id,
                         "task_id": task_id,
-                    "artifact": safe_artifact,
-                    "artifact_index": artifact_index,
-                },
-                suffix=f"artifact:{index}:{artifact_index}",
-            )
+                        "task_index": index,
+                        "artifact": safe_artifact,
+                        "artifact_index": artifact_index,
+                    },
+                    suffix=f"artifact:{index}:{artifact_index}",
+                )
         self._emit_progress(state, task_id, "completed", progress=1.0, index=index)
 
     def _maybe_apply_ocr_brief(
@@ -646,7 +976,10 @@ class ImageJobService:
         with self._lock:
             if state.cancel_event.is_set() or state.status in {"completed", "failed", "cancelled"}:
                 return {}
-            return self._emit(state, "image_job.progress", payload, suffix=f"progress:{index}:{safe_status}:{time.monotonic_ns()}")
+            event = self._emit(state, "image_job.progress", payload, suffix=f"progress:{index}:{safe_status}:{time.monotonic_ns()}")
+        if event:
+            self._emit_observation_progress(state, status=safe_status, progress=progress, index=index)
+        return event
 
     def _emit(self, state: _ImageJobState, event_type: str, payload: Dict[str, Any], *, suffix: str) -> Dict[str, Any]:
         return self.event_ledger.append_event(
@@ -672,6 +1005,33 @@ def _coerce_artifacts(result: Any) -> List[Dict[str, Any]]:
     if isinstance(result, (list, tuple)):
         return [item for item in result if isinstance(item, dict)]
     return []
+
+
+def _artifact_sort_key(artifact: Dict[str, Any]) -> tuple[int, int, str]:
+    def _safe_index(value: Any, fallback: int = 999_999) -> int:
+        try:
+            number = int(value)
+            return number if number >= 0 else fallback
+        except (TypeError, ValueError):
+            return fallback
+
+    return (
+        _safe_index(artifact.get("task_index") if "task_index" in artifact else artifact.get("taskIndex")),
+        _safe_index(artifact.get("artifact_index") if "artifact_index" in artifact else artifact.get("artifactIndex")),
+        str(
+            artifact.get("id")
+            or artifact.get("path")
+            or artifact.get("relativePath")
+            or artifact.get("relative_path")
+            or artifact.get("url")
+            or artifact.get("title")
+            or ""
+        ),
+    )
+
+
+def _sort_artifacts_for_display(artifacts: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return sorted((dict(item) for item in artifacts if isinstance(item, dict)), key=_artifact_sort_key)
 
 
 def _quality_retry_limit(task: Dict[str, Any]) -> int:
@@ -883,7 +1243,13 @@ def resolve_image_job_parallelism_policy(
 ) -> Dict[str, Any]:
     cfg = config if isinstance(config, dict) else conf()
     safe_task_count = max(1, int(task_count or 1))
-    requested = _positive_int((request or {}).get("max_parallel") or (request or {}).get("maxParallel")) or 1
+    raw_requested = _positive_int((request or {}).get("max_parallel") or (request or {}).get("maxParallel"))
+    configured_default = _positive_int(
+        cfg.get("image_job_default_max_parallel") or os.environ.get("ECOREX_IMAGE_JOB_DEFAULT_MAX_PARALLEL")
+    )
+    default_max_parallel = configured_default or (2 if safe_task_count > 1 else 1)
+    parallelism_defaulted = raw_requested is None
+    requested = raw_requested or min(safe_task_count, default_max_parallel)
     configured = _positive_int(cfg.get("image_job_max_parallel"))
     provider = _positive_int(cfg.get("image_provider_concurrency"))
     configured_hard = _positive_int(
@@ -912,8 +1278,10 @@ def resolve_image_job_parallelism_policy(
         "parallelism_policy_version": "v1",
         "task_count": safe_task_count,
         "requested_max_parallel": requested,
+        "default_max_parallel": default_max_parallel,
         "hard_max_parallel": hard,
         "effective_max_parallel": effective,
+        "parallelism_defaulted": parallelism_defaulted,
         "parallelism_clamped": effective < requested,
         "parallelism_clamp_reason": clamp_reason,
     }
@@ -922,6 +1290,105 @@ def resolve_image_job_parallelism_policy(
     if provider is not None:
         policy["provider_max_parallel"] = provider
     return policy
+
+
+def _apply_observation_policy(state: _ImageJobState, metadata: Dict[str, Any]) -> None:
+    cfg = conf()
+    baseline = _observation_seconds(
+        metadata,
+        ("observation_per_image_baseline_seconds", "per_image_baseline_seconds", "baseline_seconds"),
+        config_key="image_job_observation_per_image_baseline_seconds",
+        env_key="ECOREX_IMAGE_JOB_OBSERVATION_PER_IMAGE_BASELINE_SECONDS",
+        default=IMAGE_JOB_BASELINE_SECONDS,
+        cfg=cfg,
+    )
+    task_count = _positive_int(
+        metadata.get("task_count")
+        or metadata.get("output_count")
+        or metadata.get("image_count")
+    ) or 1
+    parallelism = _positive_int(
+        metadata.get("effective_max_parallel")
+        or metadata.get("max_parallel")
+        or metadata.get("maxParallel")
+    ) or 1
+    waves = max(1, ceil(task_count / max(1, parallelism)))
+    expected_seconds = max(baseline, waves * baseline)
+    soft = _observation_seconds(
+        metadata,
+        ("observation_soft_deadline_seconds", "soft_deadline_seconds"),
+        config_key="image_job_observation_soft_deadline_seconds",
+        env_key="ECOREX_IMAGE_JOB_OBSERVATION_SOFT_DEADLINE_SECONDS",
+        default=expected_seconds,
+        cfg=cfg,
+    )
+    stall = _observation_seconds(
+        metadata,
+        ("observation_stall_seconds", "stall_seconds"),
+        config_key="image_job_observation_stall_seconds",
+        env_key="ECOREX_IMAGE_JOB_OBSERVATION_STALL_SECONDS",
+        default=baseline,
+        cfg=cfg,
+    )
+    hard = _observation_seconds(
+        metadata,
+        ("observation_hard_deadline_seconds", "hard_deadline_seconds"),
+        config_key="image_job_observation_hard_deadline_seconds",
+        env_key="ECOREX_IMAGE_JOB_OBSERVATION_HARD_DEADLINE_SECONDS",
+        default=max(soft + baseline, expected_seconds + baseline),
+        cfg=cfg,
+    )
+    heartbeat = _observation_seconds(
+        metadata,
+        ("observation_heartbeat_seconds", "heartbeat_seconds"),
+        config_key="image_job_observation_heartbeat_seconds",
+        env_key="ECOREX_IMAGE_JOB_OBSERVATION_HEARTBEAT_SECONDS",
+        default=min(30.0, baseline / 2.0),
+        cfg=cfg,
+        allow_zero=True,
+    )
+    interval = _observation_seconds(
+        metadata,
+        ("observation_watchdog_interval_seconds", "watchdog_interval_seconds"),
+        config_key="image_job_observation_watchdog_interval_seconds",
+        env_key="ECOREX_IMAGE_JOB_OBSERVATION_WATCHDOG_INTERVAL_SECONDS",
+        default=min(5.0, max(0.05, heartbeat or 5.0)),
+        cfg=cfg,
+    )
+    state.observation_per_image_baseline_seconds = baseline
+    state.observation_soft_deadline_seconds = soft
+    state.observation_stall_seconds = stall
+    state.observation_hard_deadline_seconds = max(hard, soft)
+    state.observation_heartbeat_seconds = heartbeat
+    state.observation_watchdog_interval_seconds = interval
+
+
+def _observation_seconds(
+    metadata: Dict[str, Any],
+    metadata_keys: tuple[str, ...],
+    *,
+    config_key: str,
+    env_key: str,
+    default: float,
+    cfg: Dict[str, Any],
+    allow_zero: bool = False,
+) -> float:
+    raw: Any = None
+    for key in metadata_keys:
+        if key in metadata:
+            raw = metadata.get(key)
+            break
+    if raw in (None, ""):
+        raw = cfg.get(config_key)
+    if raw in (None, ""):
+        raw = os.environ.get(env_key)
+    try:
+        value = float(raw if raw not in (None, "") else default)
+    except (TypeError, ValueError):
+        value = float(default)
+    if allow_zero and value <= 0:
+        return 0.0
+    return max(0.05, min(value, 86400.0))
 
 
 def _prepare_task_list(tasks: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1039,7 +1506,10 @@ _METADATA_DTO_FIELDS = {
     "fallback_used",
     "finalization_latency_ms",
     "configured_max_parallel",
+    "default_max_parallel",
+    "deadline_extended",
     "effective_max_parallel",
+    "extension_seconds",
     "hard_max_parallel",
     "image_mode",
     "input_image_count",
@@ -1058,6 +1528,7 @@ _METADATA_DTO_FIELDS = {
     "output_format",
     "parallelism_clamp_reason",
     "parallelism_clamped",
+    "parallelism_defaulted",
     "parallelism_policy_version",
     "postprocess_latency_ms",
     "progress",
@@ -1087,8 +1558,10 @@ _METADATA_NONNEGATIVE_INT_FIELDS = {
     "attempt",
     "attempted_provider_count",
     "configured_max_parallel",
+    "default_max_parallel",
     "effective_max_parallel",
     "elapsed_ms",
+    "extension_seconds",
     "finalization_latency_ms",
     "hard_max_parallel",
     "input_image_count",
@@ -1123,14 +1596,20 @@ _PROGRESS_STATUSES = {
     "ocr",
     "progress",
     "provider_request",
+    "provider_polling",
     "provider_response",
+    "provider_waiting",
     "quality_check",
+    "qa",
+    "qa_check",
     "queued",
     "rate_limited",
     "retry",
     "running",
     "saving",
     "started",
+    "postprocess",
+    "polling",
     "waiting",
 }
 
@@ -1347,7 +1826,7 @@ def _safe_metadata_value(key: str, value: Any) -> tuple[Any, bool]:
         return _safe_metadata_nonnegative_number(value), False
     if key == "progress":
         return _safe_metadata_progress(value), False
-    if key in {"retryable", "fallback_used", "ocr_cache_enabled", "ocr_cache_hit"}:
+    if key in {"retryable", "fallback_used", "ocr_cache_enabled", "ocr_cache_hit", "parallelism_defaulted"}:
         return _safe_metadata_bool(value), False
     if key == "operation":
         return _safe_operation(value), False
@@ -1510,6 +1989,24 @@ def _safe_progress_status(status: Any) -> str:
     if raw in _PROGRESS_STATUSES:
         return raw
     return "progress"
+
+
+def _image_observation_status_policy(status: str) -> Dict[str, Any]:
+    """Map provider progress states to observation lease behavior."""
+    if status in {
+        "provider_request",
+        "provider_polling",
+        "provider_waiting",
+        "polling",
+        "waiting",
+        "rate_limited",
+        "retry",
+        "fallback",
+    }:
+        return {"extends_deadline": True, "extension_factor": 1.0}
+    if status in {"download", "saving", "quality_check", "qa", "qa_check", "postprocess", "provider_response"}:
+        return {"extends_deadline": True, "extension_factor": 0.5}
+    return {"extends_deadline": False, "extension_factor": 0.0}
 
 
 _image_job_service: Optional[ImageJobService] = None

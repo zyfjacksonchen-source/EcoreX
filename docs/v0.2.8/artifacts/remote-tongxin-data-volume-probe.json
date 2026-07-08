@@ -1,0 +1,90 @@
+{
+  "schemaVersion": "ecorex.v0.2.8.remote-tongxin-data-volume-probe.v1",
+  "generatedAt": "2026-07-04T18:35:00+08:00",
+  "status": "BLOCKED",
+  "scope": "production-tongxin-data-volume",
+  "version": "0.2.8",
+  "redaction": {
+    "rawHostPersisted": false,
+    "rawUserPersisted": false,
+    "rawPasswordPersisted": false,
+    "rawPathPersisted": false,
+    "rawBusinessDataPersisted": false
+  },
+  "service": {
+    "active": "active",
+    "enabled": "enabled"
+  },
+  "environment": {
+    "envFileExists": true,
+    "tongxinDatabaseConfigured": false,
+    "tongxinDatabaseFileExists": false,
+    "stateDirConfigured": false
+  },
+  "defaultDatabasePaths": {
+    "checkedCount": 3,
+    "existingCount": 0
+  },
+  "toolStatus": {
+    "exitCode": 0,
+    "status": "success",
+    "available": true,
+    "configured": true,
+    "configurationState": "configured",
+    "databaseConfigured": true,
+    "databaseFileExists": false,
+    "remoteAuthConfigured": true,
+    "remoteBootstrapAvailable": true,
+    "bundledAvailable": true
+  },
+  "rootFilesystemSearch": {
+    "schemaVersion": "ecorex.v0.2.8.remote-sqlite-root-search.v1",
+    "findExitCode": 0,
+    "candidateCount": 4,
+    "candidateWithInterestingDataCount": 0,
+    "topCounts": {
+      "/root": 1,
+      "/srv": 3
+    },
+    "candidateSummary": [
+      {
+        "pathHash": "93376C2D4B7FF312",
+        "top": "/srv",
+        "size": 1236992,
+        "sqlite": true,
+        "tableCount": 8,
+        "interestingTableCount": 0,
+        "nonEmptyInterestingTableCount": 0
+      },
+      {
+        "pathHash": "060AB7CE816599AC",
+        "top": "/srv",
+        "size": 221184,
+        "sqlite": true,
+        "tableCount": 14,
+        "interestingTableCount": 0,
+        "nonEmptyInterestingTableCount": 0
+      },
+      {
+        "pathHash": "6F58B66F55EBBE9E",
+        "top": "/srv",
+        "size": 16486400,
+        "sqlite": true,
+        "tableCount": 15,
+        "interestingTableCount": 0,
+        "nonEmptyInterestingTableCount": 0
+      },
+      {
+        "pathHash": "D84CAC8CDDA40F94",
+        "top": "/root",
+        "size": 11423744,
+        "sqlite": true,
+        "tableCount": 14,
+        "interestingTableCount": 0,
+        "nonEmptyInterestingTableCount": 0
+      }
+    ]
+  },
+  "conclusion": "Production runtime and Tongxin CLI are active/configured, but no mounted non-empty Tongxin data-volume SQLite database was found. The final product gate must remain fail-closed until ECOREX_TONGXIN_DATABASE or tools.tongxin_cli.database_path points to a real read-only data-volume database with project/account samples.",
+  "nextUnblockAction": "Mount or provide a non-empty Tongxin data-volume SQLite database, set ECOREX_TONGXIN_DATABASE or tools.tongxin_cli.database_path, restart/reinstall ecorex-web, then rerun python scripts/真实发布校验.py."
+}

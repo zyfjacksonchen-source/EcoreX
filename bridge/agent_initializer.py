@@ -511,6 +511,9 @@ class AgentInitializer:
         """Load all tools"""
         tool_manager = ToolManager()
         tool_manager.load_tools()
+        ensure_mcp = getattr(tool_manager, "ensure_mcp_configured_loaded", None)
+        if callable(ensure_mcp):
+            ensure_mcp(wait_seconds=2.0, poll_interval_seconds=0.2)
         
         tools = []
         file_config = {

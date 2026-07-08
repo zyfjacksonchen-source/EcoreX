@@ -247,6 +247,21 @@ def _is_browser_dead_error(err: Exception) -> bool:
     return any(h in msg for h in _BROWSER_DEAD_HINTS)
 
 
+def _is_browser_dead_result(value: Any) -> bool:
+    """Return True when an action returned a structured stale-browser error."""
+    if isinstance(value, dict):
+        candidates = [
+            value.get("error"),
+            value.get("message"),
+            value.get("error_message"),
+            value.get("details"),
+        ]
+        return any(any(h in str(item).lower() for h in _BROWSER_DEAD_HINTS) for item in candidates if item)
+    if isinstance(value, str) and ("error" in value.lower() or "failed" in value.lower()):
+        return any(h in value.lower() for h in _BROWSER_DEAD_HINTS)
+    return False
+
+
 def _should_use_headless() -> bool:
     """Decide headless mode: headless on Linux servers without display, headed elsewhere."""
     if sys.platform in ("win32", "darwin"):
@@ -729,7 +744,7 @@ class BrowserService:
         self._playwright = None
         logger.info("[Browser] Browser closed")
 
-    def _submit(self, fn: Callable, *args, **kwargs):
+    def _submit(self, fn: Callable, *args, cancel_event=None, **kwargs):
         """Submit *fn* to the background thread and block until it completes."""
         for attempt in range(2):
             # If the browser died externally (e.g. user closed the window), tear
@@ -751,9 +766,9 @@ class BrowserService:
 
             # Timeout prevents permanent hang if the background thread crashes
             deadline = time.time() + 120
-            cancel_event = getattr(self, "cancel_event", None)
+            active_cancel_event = cancel_event if cancel_event is not None else getattr(self, "cancel_event", None)
             while not result_slot["event"].wait(timeout=0.25):
-                if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
+                if active_cancel_event is not None and getattr(active_cancel_event, "is_set", lambda: False)():
                     result_slot["error"] = RuntimeError("Browser operation cancelled by user")
                     result_slot["event"].set()
                     self._request_thread_stop(join_timeout=1)
@@ -763,7 +778,12 @@ class BrowserService:
                     raise TimeoutError("Browser operation timed out (120s)")
 
             if "error" not in result_slot:
-                return result_slot.get("value")
+                value = result_slot.get("value")
+                if self._launch_mode == "cdp" and attempt == 0 and _is_browser_dead_result(value):
+                    self._needs_restart = True
+                    logger.info(f"[Browser] CDP action returned stale connection; reconnecting once: {value}")
+                    continue
+                return value
             error = result_slot["error"]
             if self._launch_mode == "cdp" and attempt == 0 and _is_browser_dead_error(error):
                 self._needs_restart = True
@@ -823,8 +843,8 @@ class BrowserService:
     # Actions  (each method is dispatched to the background thread)
     # ------------------------------------------------------------------
 
-    def navigate(self, url: str, timeout: int = 30000) -> Dict[str, Any]:
-        return self._submit(self._do_navigate, url, timeout)
+    def navigate(self, url: str, timeout: int = 30000, cancel_event=None) -> Dict[str, Any]:
+        return self._submit(self._do_navigate, url, timeout, cancel_event=cancel_event)
 
     def _do_navigate(self, url: str, timeout: int) -> Dict[str, Any]:
         page = self._page
@@ -851,8 +871,8 @@ class BrowserService:
 
         return {"url": current_url, "title": title, "status": status}
 
-    def snapshot(self, selector: Optional[str] = None) -> str:
-        return self._submit(self._do_snapshot, selector)
+    def snapshot(self, selector: Optional[str] = None, cancel_event=None) -> str:
+        return self._submit(self._do_snapshot, selector, cancel_event=cancel_event)
 
     def _do_snapshot(self, selector: Optional[str] = None) -> str:
         page = self._page
@@ -883,8 +903,8 @@ class BrowserService:
 
         return f"{header}\n{body}"
 
-    def screenshot(self, full_page: bool = False, cwd: str = "") -> str:
-        return self._submit(self._do_screenshot, full_page, cwd)
+    def screenshot(self, full_page: bool = False, cwd: str = "", cancel_event=None) -> str:
+        return self._submit(self._do_screenshot, full_page, cwd, cancel_event=cancel_event)
 
     def _do_screenshot(self, full_page: bool = False, cwd: str = "") -> str:
         page = self._page
@@ -928,8 +948,8 @@ class BrowserService:
                 pass
 
     def click(self, ref: Optional[int] = None, selector: Optional[str] = None,
-              timeout: int = 5000) -> Dict[str, Any]:
-        return self._submit(self._do_click, ref, selector, timeout)
+              timeout: int = 5000, cancel_event=None) -> Dict[str, Any]:
+        return self._submit(self._do_click, ref, selector, timeout, cancel_event=cancel_event)
 
     def _do_click(self, ref, selector, timeout) -> Dict[str, Any]:
         page = self._page
@@ -956,8 +976,8 @@ class BrowserService:
             return {"error": f"Click failed: {e}"}
 
     def fill(self, text: str, ref: Optional[int] = None,
-             selector: Optional[str] = None, timeout: int = 5000) -> Dict[str, Any]:
-        return self._submit(self._do_fill, text, ref, selector, timeout)
+             selector: Optional[str] = None, timeout: int = 5000, cancel_event=None) -> Dict[str, Any]:
+        return self._submit(self._do_fill, text, ref, selector, timeout, cancel_event=cancel_event)
 
     def _do_fill(self, text, ref, selector, timeout) -> Dict[str, Any]:
         page = self._page
@@ -985,8 +1005,8 @@ class BrowserService:
             return {"error": f"Fill failed: {e}"}
 
     def select(self, value: str, ref: Optional[int] = None,
-               selector: Optional[str] = None, timeout: int = 5000) -> Dict[str, Any]:
-        return self._submit(self._do_select, value, ref, selector, timeout)
+               selector: Optional[str] = None, timeout: int = 5000, cancel_event=None) -> Dict[str, Any]:
+        return self._submit(self._do_select, value, ref, selector, timeout, cancel_event=cancel_event)
 
     def _do_select(self, value, ref, selector, timeout) -> Dict[str, Any]:
         page = self._page
@@ -1011,8 +1031,8 @@ class BrowserService:
         except Exception as e:
             return {"error": f"Select failed: {e}"}
 
-    def scroll(self, direction: str = "down", amount: int = 500) -> Dict[str, Any]:
-        return self._submit(self._do_scroll, direction, amount)
+    def scroll(self, direction: str = "down", amount: int = 500, cancel_event=None) -> Dict[str, Any]:
+        return self._submit(self._do_scroll, direction, amount, cancel_event=cancel_event)
 
     def _do_scroll(self, direction, amount) -> Dict[str, Any]:
         page = self._page
@@ -1039,8 +1059,8 @@ class BrowserService:
             return {"error": f"Scroll failed: {e}"}
 
     def wait(self, selector: Optional[str] = None, timeout: int = 5000,
-             state: str = "visible") -> Dict[str, Any]:
-        return self._submit(self._do_wait, selector, timeout, state)
+             state: str = "visible", cancel_event=None) -> Dict[str, Any]:
+        return self._submit(self._do_wait, selector, timeout, state, cancel_event=cancel_event)
 
     def _do_wait(self, selector, timeout, state) -> Dict[str, Any]:
         page = self._page
@@ -1054,8 +1074,8 @@ class BrowserService:
         except Exception as e:
             return {"error": f"Wait failed: {e}"}
 
-    def go_back(self) -> Dict[str, Any]:
-        return self._submit(self._do_go_back)
+    def go_back(self, cancel_event=None) -> Dict[str, Any]:
+        return self._submit(self._do_go_back, cancel_event=cancel_event)
 
     def _do_go_back(self) -> Dict[str, Any]:
         page = self._page
@@ -1073,8 +1093,8 @@ class BrowserService:
         except Exception as e:
             return {"error": f"Go back failed: {e}"}
 
-    def go_forward(self) -> Dict[str, Any]:
-        return self._submit(self._do_go_forward)
+    def go_forward(self, cancel_event=None) -> Dict[str, Any]:
+        return self._submit(self._do_go_forward, cancel_event=cancel_event)
 
     def _do_go_forward(self) -> Dict[str, Any]:
         page = self._page
@@ -1092,8 +1112,8 @@ class BrowserService:
         except Exception as e:
             return {"error": f"Go forward failed: {e}"}
 
-    def get_text(self, selector: str) -> Dict[str, Any]:
-        return self._submit(self._do_get_text, selector)
+    def get_text(self, selector: str, cancel_event=None) -> Dict[str, Any]:
+        return self._submit(self._do_get_text, selector, cancel_event=cancel_event)
 
     def _do_get_text(self, selector) -> Dict[str, Any]:
         page = self._page
@@ -1103,8 +1123,8 @@ class BrowserService:
         except Exception as e:
             return {"error": f"Get text failed: {e}"}
 
-    def evaluate(self, script: str) -> Dict[str, Any]:
-        return self._submit(self._do_evaluate, script)
+    def evaluate(self, script: str, cancel_event=None) -> Dict[str, Any]:
+        return self._submit(self._do_evaluate, script, cancel_event=cancel_event)
 
     def _do_evaluate(self, script) -> Dict[str, Any]:
         page = self._page
@@ -1114,8 +1134,8 @@ class BrowserService:
         except Exception as e:
             return {"error": f"Evaluate failed: {e}"}
 
-    def press(self, key: str) -> Dict[str, Any]:
-        return self._submit(self._do_press, key)
+    def press(self, key: str, cancel_event=None) -> Dict[str, Any]:
+        return self._submit(self._do_press, key, cancel_event=cancel_event)
 
     def _do_press(self, key) -> Dict[str, Any]:
         page = self._page

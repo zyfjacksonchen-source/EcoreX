@@ -34,6 +34,15 @@ VOLATILE_DIR_NAMES = {"capability-state"}
 VOLATILE_FILE_SUFFIXES = {".log"}
 WINDOWS_PYTHON_LAUNCHER_DIR = pathlib.PurePosixPath("python/Scripts")
 SITE_PACKAGES_PARTS = {"site-packages", "dist-packages"}
+VENDOR_TEXT_SCAN_SKIP_PARTS = {
+    "node",
+    "node_modules",
+    "playwright-browsers",
+    "site-packages",
+    "dist-packages",
+    "wheelhouse",
+}
+MAX_TEXT_SCAN_BYTES = 2 * 1024 * 1024
 
 
 def _s(*parts: str) -> str:
@@ -95,6 +104,29 @@ def is_allowed_migration_readme(path: pathlib.Path, text: str) -> bool:
 
 def is_text_candidate(path: pathlib.Path) -> bool:
     return path.name in TEXT_NAMES or path.suffix.lower() in TEXT_SUFFIXES
+
+
+def is_vendor_path(path: pathlib.Path, root: pathlib.Path) -> bool:
+    try:
+        rel_parts = set(path.relative_to(root).parts)
+    except ValueError:
+        return False
+    return bool(rel_parts.intersection(VENDOR_TEXT_SCAN_SKIP_PARTS))
+
+
+def should_scan_text_file(path: pathlib.Path, root: pathlib.Path) -> bool:
+    if not is_text_candidate(path):
+        return False
+    if path.name in TEXT_NAMES or path.name == "runtime-manifest.json":
+        return True
+    if is_vendor_path(path, root):
+        return False
+    try:
+        if path.stat().st_size > MAX_TEXT_SCAN_BYTES:
+            return False
+    except OSError:
+        return False
+    return True
 
 
 def sanitize_text(text: str) -> str:
@@ -218,7 +250,7 @@ def sanitize_tree(root: pathlib.Path) -> list[pathlib.Path]:
         sanitize_runtime_manifest(root / "runtime-manifest.json")
         changed.append(root / "runtime-manifest.json")
     for path in root.rglob("*"):
-        if not path.is_file() or not is_text_candidate(path):
+        if not path.is_file() or not should_scan_text_file(path, root):
             continue
         try:
             original = path.read_text(encoding="utf-8-sig")
@@ -247,11 +279,13 @@ def find_non_portable_paths(root: pathlib.Path) -> list[str]:
 def find_forbidden(root: pathlib.Path) -> list[str]:
     hits: list[str] = []
     for path in root.rglob("*"):
+        if is_vendor_path(path, root):
+            continue
         rel = path.relative_to(root).as_posix()
         if FORBIDDEN_RE.search(rel):
             hits.append(rel)
             continue
-        if not path.is_file() or not is_text_candidate(path):
+        if not path.is_file() or not should_scan_text_file(path, root):
             continue
         try:
             text = path.read_text(encoding="utf-8-sig")
