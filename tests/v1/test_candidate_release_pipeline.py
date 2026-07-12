@@ -732,6 +732,57 @@ def test_stage_receipt_rejects_embedded_private_credentials(tmp_path: Path) -> N
         )
 
 
+def test_stage_receipt_accepts_non_secret_dependency_marker_substrings(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "image"
+    source.mkdir()
+    (source / "ecorex-image-pack.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "pack_id": "image",
+                "runtime_api_version": "1.0.0",
+                "tools": ["imagegen", "vision"],
+                "adapter": "core-managed-image-v1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (source / "__main__.py").write_text(
+        "raise SystemExit('managed bridge test')\n",
+        encoding="utf-8",
+    )
+    (source / "ssh.py").write_text(
+        '_SK_START = b"-----BEGIN OPENSSH PRIVATE KEY-----"\n',
+        encoding="utf-8",
+    )
+    (source / "font-data.txt").write_text(
+        "QAHAEwAAQAAAAAAAgAHAGQAAQAAAAAAAwAaAKIAAQAAAAAABAAHAM0AAQAAAA",
+        encoding="utf-8",
+    )
+
+    receipt = write_stage_receipt(
+        source_dir=source,
+        destination=tmp_path / "receipt.json",
+        stage_id="image-windows-x64",
+        commit_sha=COMMIT,
+        workflow_run_id=RUN_ID,
+        producer_executable_sha256=STAGER_SHA256,
+        producer_adapter_sha256=None,
+        kind="capability-pack",
+        platform="windows",
+        architecture="x64",
+        pack_id="image",
+        gate_evidence=_gate_evidence("image"),
+    )
+
+    assert (
+        json.loads(receipt.read_text(encoding="utf-8"))["receipt_type"]
+        == "ecorex-candidate-stage"
+    )
+
+
 def test_candidate_cli_writes_typed_failure_when_protected_signer_is_missing(
     tmp_path: Path,
 ) -> None:

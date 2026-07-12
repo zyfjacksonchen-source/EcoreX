@@ -78,10 +78,13 @@ _RUNTIME_DISTRIBUTIONS = (
     "websockets",
 )
 _SECRET_PATTERNS = (
-    re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
-    re.compile(rb"AKIA[0-9A-Z]{16}"),
-    re.compile(rb"gh[pousr]_[A-Za-z0-9]{20,}"),
-    re.compile(rb"xox[baprs]-[A-Za-z0-9-]{10,}"),
+    re.compile(
+        rb"-----BEGIN ((?:RSA |EC |OPENSSH )?PRIVATE KEY)-----\r?\n"
+        rb"(?:[A-Za-z0-9+/=]{16,}\r?\n)+-----END \1-----"
+    ),
+    re.compile(rb"(?<![A-Za-z0-9+/=])AKIA[0-9A-Z]{16}(?![A-Za-z0-9+/=])"),
+    re.compile(rb"(?<![A-Za-z0-9+/=])gh[pousr]_[A-Za-z0-9]{20,}(?![A-Za-z0-9+/=])"),
+    re.compile(rb"(?<![A-Za-z0-9+/=])xox[baprs]-[A-Za-z0-9-]{10,}(?![A-Za-z0-9+/=])"),
 )
 _FIXED_TIME = (1980, 1, 1, 0, 0, 0)
 _MAX_FILE_BYTES = 512 * 1024 * 1024

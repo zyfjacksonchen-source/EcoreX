@@ -1106,6 +1106,54 @@ def test_platform_stager_binds_installed_runtime_inventory_to_hash_lock() -> Non
         )
 
 
+def test_platform_supply_chain_scan_distinguishes_dependency_markers_from_secrets(
+    tmp_path: Path,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    (tmp_path / "ssh.py").write_bytes(
+        b'_SK_START = b"-----BEGIN OPENSSH PRIVATE KEY-----"\n'
+    )
+    (tmp_path / "font-data.txt").write_bytes(
+        b"QAHAEwAAQAAAAAAAgAHAGQAAQAAAAAAAwAaAKIAAQAAAAAABAAHAM0AAQAAAA"
+    )
+
+    evidence = stager["_supply_chain"](
+        tmp_path,
+        (),
+        lock_profile="runtime",
+        require_complete=False,
+    )
+
+    assert evidence["secret_scan"] == "passed"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        b'credential="AKIAABCDEFGHIJKLMNOP"\n',
+        (
+            b"-----BEGIN OPENSSH PRIVATE KEY-----\n"
+            b"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=\n"
+            b"-----END OPENSSH PRIVATE KEY-----\n"
+        ),
+    ),
+)
+def test_platform_supply_chain_scan_still_rejects_complete_secret_shapes(
+    tmp_path: Path,
+    payload: bytes,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    (tmp_path / "leaked.txt").write_bytes(payload)
+
+    with pytest.raises(stager["StageError"], match="stage_supply_chain_secret_match"):
+        stager["_supply_chain"](
+            tmp_path,
+            (),
+            lock_profile="runtime",
+            require_complete=False,
+        )
+
+
 def test_platform_stager_copies_locked_distribution_from_user_site(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
