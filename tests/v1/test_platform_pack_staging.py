@@ -1166,6 +1166,18 @@ def test_platform_stager_binds_installed_runtime_inventory_to_hash_lock() -> Non
         )
 
 
+def test_windows_gui_launcher_and_embedded_cli_are_probed_separately() -> None:
+    source = (ROOT / "platform-staging" / "stager.py").read_text(encoding="utf-8")
+
+    assert '(str(launcher), "--help")' in source
+    assert (
+        '(str(interpreter), "-I", "-B", "-m", "ecorex.server", "--help")'
+        in source
+    )
+    assert 'if b"serve" not in cli_help.stdout:' in source
+    assert 'if b"serve" not in launch.stdout:' not in source
+
+
 def test_platform_supply_chain_scan_distinguishes_dependency_markers_from_secrets(
     tmp_path: Path,
 ) -> None:

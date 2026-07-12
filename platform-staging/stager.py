@@ -1186,12 +1186,23 @@ def _core_gates(
         timeout=30,
         code="runtime_launch_probe_failed",
     )
-    if b"serve" not in launch.stdout:
+    cli_help = _run(
+        (str(interpreter), "-I", "-B", "-m", "ecorex.server", "--help"),
+        cwd=core,
+        environment=_runtime_environment(),
+        timeout=30,
+        code="runtime_launch_probe_failed",
+    )
+    if b"serve" not in cli_help.stdout:
         raise StageError("runtime_launch_probe_failed")
     _gate(
         evidence,
         "runtime-launch",
-        {"launcher_sha256": _sha256(launcher), "exit_code": launch.returncode},
+        {
+            "launcher_sha256": _sha256(launcher),
+            "exit_code": launch.returncode,
+            "cli_help_sha256": hashlib.sha256(cli_help.stdout).hexdigest(),
+        },
     )
     health = _run(
         (
