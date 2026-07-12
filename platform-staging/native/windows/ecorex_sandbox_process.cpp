@@ -534,6 +534,15 @@ int Probe(const std::wstring& expected_digest,
     FreeSid(sid);
     return 70;
   }
+  if (!PrepareProbeWorkspace(workspace, sid)) {
+    std::cerr << "ecorex_sandbox_probe:workspace_security";
+    FreeSid(sid);
+    closesocket(listener);
+    WSACleanup();
+    std::filesystem::remove_all(base, error);
+    std::filesystem::remove(outside, error);
+    return 70;
+  }
   const auto child = Launch(
       module,
       {L"probe-child", workspace.wstring(), outside.wstring(), std::to_wstring(port)},

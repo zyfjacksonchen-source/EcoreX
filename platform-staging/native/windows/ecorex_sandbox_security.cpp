@@ -383,6 +383,17 @@ bool RemoveIntegrityLabel(const std::filesystem::path& path) {
                                empty) == ERROR_SUCCESS;
 }
 
+bool PrepareProbeWorkspace(const std::filesystem::path& workspace, PSID sid) {
+  std::error_code error;
+  if (sid == nullptr || !std::filesystem::is_directory(workspace, error) || error) {
+    return false;
+  }
+  return ApplyGrant(workspace, sid,
+                    GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE | DELETE,
+                    true) &&
+         ApplyLowIntegrity(workspace, true);
+}
+
 bool GrantsPermissions(const std::filesystem::path& path, PSID sid,
                        DWORD permissions, bool require_inheritance) {
   PACL acl = nullptr;

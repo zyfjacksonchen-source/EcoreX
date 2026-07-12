@@ -688,6 +688,7 @@ def test_windows_helper_source_contains_real_appcontainer_and_job_boundaries() -
         "TerminateJobObject",
         "SetNamedSecurityInfoW",
         "BCryptHashData",
+        "PrepareProbeWorkspace",
         "ecorex_sandbox_probe:child_boundary",
     ):
         assert symbol in source

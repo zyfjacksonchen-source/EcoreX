@@ -54,6 +54,7 @@ bool ValidateSecurityRoots(const SecurityRoots& request);
 bool AttestSecurity(const SecurityRoots& request, PSID sid, bool full,
                     std::string* digest, std::string* failure = nullptr,
                     bool strict_children = false);
+bool PrepareProbeWorkspace(const std::filesystem::path& workspace, PSID sid);
 
 int SecurityCommand(const std::wstring& operation, int argc, wchar_t** argv);
 int ProbeChild(const std::filesystem::path& workspace,
