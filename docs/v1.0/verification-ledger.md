@@ -1258,3 +1258,17 @@ one real Image 2 request succeeds, bounded image concurrency completes without
 duplicate billing/results, and the resulting image passes structured Retouch
 inspection. No provider secret was copied into the Runtime, repository or this
 ledger.
+
+## Windows staging diagnostic closure - 2026-07-13
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Fixed-commit Windows drill at `fc273766` | 1 | Source-pinned staging reached real Core native binaries, the isolated OCR dependency closure and browser Pack evidence before failing closed after about 28 minutes; no Candidate receipt was accepted. |
+| Nested diagnostic propagation | 0 | The platform wrapper now retains only a bounded public adapter failure code in `stage-failure.json`; arbitrary detail and secret-like stderr cannot cross the receipt boundary. The drill reports that safe code instead of another generic rejection. |
+| Host isolated-Python repair | 0 | The workstation had `pydantic` code 2.9.0 paired with metadata 2.12.5 and `pydantic_core` 2.41.5. Exact reinstall of the locked `pydantic==2.12.5` restored both ordinary and `python -I` imports without changing project dependencies. |
+| Windows boundary and Pack rerun | 0 | 56 passed, 1 platform-condition skip across release process boundary, signed drill and platform Pack staging; Browser and managed Image Pack direct probes passed, Ruff/compile/diff were clean. |
+
+The workstation repair is not a repository dependency change. Protected
+runners must still provision the lock exactly and fail their isolated import
+preflight before expensive native staging if their host interpreter is
+inconsistent.

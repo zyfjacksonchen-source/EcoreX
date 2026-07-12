@@ -174,6 +174,72 @@ def test_platform_stager_wrapper_fails_closed_on_adapter_output_flood(
     assert failure["code"] == "platform_stager_boundedprocessoutputoverflow"
 
 
+def test_platform_stager_wrapper_retains_only_adapter_public_failure_code(
+    tmp_path: Path,
+) -> None:
+    repository = Path(__file__).resolve().parents[2]
+    adapter = tmp_path / "rejecting_stager.py"
+    adapter.write_text(
+        "import json,sys\n"
+        "sys.stdin.buffer.read()\n"
+        "print(json.dumps({'code':'browser_pack_smoke_failed',"
+        "'detail':'must-not-surface'}),file=sys.stderr)\n"
+        "raise SystemExit(1)\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    output = tmp_path / "stage-output"
+    environment = dict(os.environ)
+    environment.update(
+        {
+            "ECOREX_PLATFORM_STAGER_EXECUTABLE": sys.executable,
+            "ECOREX_PLATFORM_STAGER_EXECUTABLE_SHA256": hashlib.sha256(
+                Path(sys.executable).read_bytes()
+            ).hexdigest(),
+            "ECOREX_PLATFORM_STAGER_ADAPTER": str(adapter),
+            "ECOREX_PLATFORM_STAGER_ADAPTER_SHA256": hashlib.sha256(
+                adapter.read_bytes()
+            ).hexdigest(),
+            "ECOREX_PUBLIC_BOOTSTRAP_INDEX_URL": (
+                "https://releases.example.test/ecorex/public-bootstrap-index.json"
+            ),
+            "ECOREX_PUBLICATION_PUBLIC_KEYS_JSON": json.dumps(
+                {"publication-v1": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}
+            ),
+        }
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(repository / "scripts" / "invoke-v1-platform-stager.py"),
+            "--repo-root",
+            str(repository),
+            "--output-root",
+            str(output),
+            "--platform",
+            "windows",
+            "--architecture",
+            "x64",
+            "--commit-sha",
+            "a" * 40,
+            "--workflow-run-id",
+            "1",
+        ],
+        cwd=repository,
+        env=environment,
+        capture_output=True,
+        check=False,
+        timeout=20,
+    )
+
+    assert result.returncode == 1
+    failure = json.loads((output / "stage-failure.json").read_text(encoding="utf-8"))
+    assert failure["code"] == "browser_pack_smoke_failed"
+    assert "must-not-surface" not in (output / "stage-failure.json").read_text(
+        encoding="utf-8"
+    )
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows Job Object tree contract")
 def test_windows_job_kills_descendant_after_root_exits_with_inherited_pipe(
     tmp_path: Path,

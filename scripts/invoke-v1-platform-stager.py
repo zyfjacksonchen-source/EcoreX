@@ -35,6 +35,7 @@ from ecorex.release.process_boundary import (  # noqa: E402
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
+_SAFE_CODE = re.compile(r"^[a-z][a-z0-9_]{2,127}$")
 _SECRET_PATTERNS = (
     re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     re.compile(rb"AKIA[0-9A-Z]{16}"),
@@ -141,6 +142,24 @@ def _failure(path: Path, code: str, args: argparse.Namespace) -> None:
     )
 
 
+def _adapter_failure_code(stderr: bytes) -> str | None:
+    """Extract only a stable public StageError code from bounded stderr."""
+
+    try:
+        text = stderr.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    for line in reversed(text.splitlines()):
+        try:
+            value = json.loads(line)
+        except (json.JSONDecodeError, RecursionError):
+            continue
+        code = value.get("code") if isinstance(value, dict) else None
+        if isinstance(code, str) and _SAFE_CODE.fullmatch(code):
+            return code
+    return None
+
+
 def run(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     output = args.output_root.resolve()
@@ -205,7 +224,11 @@ def run(argv: list[str] | None = None) -> int:
             raise CandidateBuildError(
                 f"platform_stager_{type(exc).__name__.casefold()}"
             ) from None
-        if result.returncode != 0 or not 1 <= len(result.stdout) <= 4096:
+        if result.returncode != 0:
+            raise CandidateBuildError(
+                _adapter_failure_code(result.stderr) or "platform_stager_rejected"
+            )
+        if not 1 <= len(result.stdout) <= 4096:
             raise CandidateBuildError("platform_stager_rejected")
         try:
             response = json.loads(result.stdout.decode("utf-8"))
