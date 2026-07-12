@@ -241,6 +241,15 @@ def test_local_windows_drill_cannot_relax_fixed_twenty_four_stage_gate() -> None
     assert '"promotion_claimed": False' in source
 
 
+def test_local_windows_drill_forbids_cross_source_partial_splicing() -> None:
+    drill = _drill_module()
+    source = Path(drill.__file__).read_text(encoding="utf-8")
+
+    assert 'core_attempts[1]["resume_from"] != 0' in source
+    assert '"cross_source_partial_reuse_forbidden": True' in source
+    assert 'core_attempts[1]["resume_from"] <= 0' not in source
+
+
 def test_local_bootstrap_floor_is_release_key_signed_and_canonical(
     tmp_path: Path,
 ) -> None:

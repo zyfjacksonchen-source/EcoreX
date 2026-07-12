@@ -218,7 +218,7 @@ class WindowsStage:
 
 
 class RecordingFailoverFetcher:
-    """A local replica fetcher with deterministic partial-transfer failover."""
+    """A local replica fetcher with deterministic partial-transfer failure."""
 
     def __init__(
         self,
@@ -1945,9 +1945,9 @@ def _build_and_run(repo: Path, temporary: Path, deadline: Deadline) -> dict[str,
     if (
         [attempt["source_id"] for attempt in core_attempts] != ["github-cn", "github"]
         or core_attempts[0]["resume_from"] != 0
-        or core_attempts[1]["resume_from"] <= 0
+        or core_attempts[1]["resume_from"] != 0
     ):
-        raise DrillError("signed mirror-to-GitHub resume/fallback order was not enforced")
+        raise DrillError("signed mirror-to-GitHub safe fallback order was not enforced")
     shutil.rmtree(temporary / "baseline-replicas")
     deadline.enter("first-install activation")
     pending = baseline_coordinator.activate(prepared.transaction_id)
@@ -2323,6 +2323,7 @@ def _build_and_run(repo: Path, temporary: Path, deadline: Deadline) -> dict[str,
             ],
             "selected_core_source": core_attempts[-1]["source_id"],
             "core_resume_offset": core_attempts[-1]["resume_from"],
+            "cross_source_partial_reuse_forbidden": True,
             "injected_outages": ["github-cn"],
             **replica_evidence,
         },
