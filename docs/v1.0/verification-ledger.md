@@ -1286,3 +1286,16 @@ inconsistent.
 This fixes a real Windows lifecycle defect rather than weakening cleanup. The
 parent can delete mapped native modules only after process exit, which is the
 correct ownership boundary for all one-shot executable Capability Packs.
+
+## Platform-stage lock convergence - 2026-07-13
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Fourth fixed-commit Windows drill | 1 | The Browser smoke advanced successfully; signing then failed closed at `python_dependency_lock_mismatch`, proving the native cleanup fix and exposing the next independent supply-chain gate. |
+| Drift diagnosis | 0 | `platform-stage.lock` pins Playwright 1.52.0 while the workstation had 1.58.0. Other Browser closure members matched. A runnable newer browser was not treated as signable evidence. |
+| Staging toolchain convergence | 0 | Reinstalled exact Playwright 1.52.0 and its Chromium 1169 payload. Project dependencies and lock files were not changed. |
+| Locked Browser-only smoke | 0 | Snapshot completed with `ecorex-stage-ready`; the four-package Browser inventory matched platform-stage lock manifest `2777443fb28ef39cc2a4fa7e4ba033899f3288624128709d032d7a42b0d2346d`, profile lock `3c7b26516bb4d18fc1a620e20ee92a922bf4858aee6e0ce0fa5fb89e491ddfd0`, and left no temp residue. |
+
+Protected native runners must provision from the hashed lock before staging;
+locally installed newer packages are intentionally rejected even when their
+functional smoke succeeds.
