@@ -203,8 +203,27 @@ def test_repository_platform_stage_wrapper_uses_the_same_bounded_boundary() -> N
     )
 
     assert "run_bounded_process(" in source
-    assert "timeout_seconds=2100" in source
+    assert "_WRAPPER_TIMEOUT_SECONDS = 50 * 60" in source
+    assert "timeout_seconds=_WRAPPER_TIMEOUT_SECONDS" in source
     assert "subprocess.run(" not in source
+
+
+def test_platform_stage_nested_timeouts_leave_ci_cleanup_budget() -> None:
+    repository = Path(__file__).resolve().parents[2]
+    invoke_source = (
+        repository / "scripts" / "invoke-v1-platform-stager.py"
+    ).read_text(encoding="utf-8")
+    wrapper_source = (
+        repository / "scripts" / "run-v1-repo-platform-stage.py"
+    ).read_text(encoding="utf-8")
+    workflow = (
+        repository / ".github" / "workflows" / "ecorex-v1-platform-stage.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "_STAGER_TIMEOUT_SECONDS = 45 * 60" in invoke_source
+    assert "timeout_seconds=_STAGER_TIMEOUT_SECONDS" in invoke_source
+    assert "_WRAPPER_TIMEOUT_SECONDS = 50 * 60" in wrapper_source
+    assert "timeout-minutes: 60" in workflow
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows nested Job Object contract")

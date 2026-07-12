@@ -1228,3 +1228,7 @@ push, published Candidate, protected-runner provenance or user acceptance yet.
 
 This correction does not yet claim the repeated end-to-end Windows drill; that
 result is recorded only after the fresh committed-source run completes.
+
+| Platform-stage timeout budget reproduction | 1 | the real local stager was still progressing at 1,804 seconds and failed closed at its former 30-minute nested deadline; no receipt or Candidate was accepted |
+| Bounded timeout hierarchy correction | 0 | stager 45 minutes, repository wrapper 50 minutes and protected job 60 minutes preserve process-tree termination plus a ten-minute cleanup/receipt margin |
+| Process boundary and Windows drill regression | 0 | 17 focused tests passed; Ruff and compile checks passed |

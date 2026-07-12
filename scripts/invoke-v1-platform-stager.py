@@ -41,6 +41,7 @@ _SECRET_PATTERNS = (
     re.compile(rb"gh[pousr]_[A-Za-z0-9]{20,}"),
     re.compile(rb"xox[baprs]-[A-Za-z0-9-]{10,}"),
 )
+_STAGER_TIMEOUT_SECONDS = 45 * 60
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -196,7 +197,7 @@ def run(argv: list[str] | None = None) -> int:
                 payload=request,
                 cwd=args.repo_root.resolve(strict=True),
                 environment=os.environ,
-                timeout_seconds=1800,
+                timeout_seconds=_STAGER_TIMEOUT_SECONDS,
                 max_stdout_bytes=4096,
                 max_stderr_bytes=4096,
             )

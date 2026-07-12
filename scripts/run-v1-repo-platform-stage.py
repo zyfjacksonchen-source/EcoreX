@@ -20,6 +20,9 @@ from ecorex.release.process_boundary import (  # noqa: E402
 )
 
 
+_WRAPPER_TIMEOUT_SECONDS = 50 * 60
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-root", required=True, type=Path)
@@ -79,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
             payload=None,
             cwd=ROOT,
             environment=environment,
-            timeout_seconds=2100,
+            timeout_seconds=_WRAPPER_TIMEOUT_SECONDS,
             max_stdout_bytes=16 * 1024,
             max_stderr_bytes=16 * 1024,
         )

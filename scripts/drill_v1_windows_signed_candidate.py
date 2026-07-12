@@ -114,7 +114,7 @@ SESSION_KEY_ID = "ecorex-local-session-drill"
 CORE_ARTIFACT_ID = "core-windows-x64"
 DEFAULT_TIMEOUT_SECONDS = 1_800.0
 _MIN_TIMEOUT_SECONDS = 45.0
-_MAX_TIMEOUT_SECONDS = 3_600.0
+_MAX_TIMEOUT_SECONDS = 5_400.0
 _RUNTIME_DEPENDENCY_GROUP = "dependencies"
 _NON_RUNTIME_PARTS = frozenset(
     {"test", "tests", "testing", "example", "examples", "benchmark", "benchmarks"}

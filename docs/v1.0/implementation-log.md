@@ -3753,3 +3753,13 @@ session keys, writes all three public roles, includes every private value in
 the persistence scan and never serializes private material. Seven focused
 drill tests, Ruff and Python compilation pass. No installation, activation,
 external request, push or publication occurred during the rejected attempt.
+
+The repeated committed-source drill then reached real Pack staging but was
+terminated at 1,804 seconds while the bounded stager was still making forward
+progress. The protected job already allowed 60 minutes, while its repository
+wrapper allowed 35 minutes and the nested stager only 30. Those budgets are
+now ordered at 45 minutes for staging, 50 minutes for wrapper verification and
+60 minutes for the protected job, retaining hard process-tree termination and
+a ten-minute cleanup/receipt margin. Seventeen focused process-boundary and
+Windows drill tests pass; this is a timeout-contract correction, not a skipped
+probe or an unbounded build.
