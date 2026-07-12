@@ -1584,14 +1584,20 @@ def _pack_request(pack_id: str, tool_id: str, arguments: Mapping[str, Any]) -> M
 
 
 def _invoke_zipapp(interpreter: Path, zipapp: Path, request: Mapping[str, Any], *, timeout: int) -> Mapping[str, Any]:
-    result = _run(
-        (str(interpreter), "-I", "-B", str(zipapp)),
-        cwd=ROOT,
-        environment=_runtime_environment(),
-        input_bytes=json.dumps(request, sort_keys=True, separators=(",", ":")).encode("utf-8"),
-        timeout=timeout,
-        code="capability_pack_probe_failed",
-    )
+    # Mirror the product Runtime's per-invocation TEMP ownership.  A Windows
+    # child cannot unlink a native module while it is mapped, but after _run
+    # reaps that child the parent can remove the complete private temp domain.
+    with tempfile.TemporaryDirectory(prefix="ecorex-pack-probe-call-") as raw:
+        environment = _runtime_environment()
+        environment.update({"TEMP": raw, "TMP": raw})
+        result = _run(
+            (str(interpreter), "-I", "-B", str(zipapp)),
+            cwd=ROOT,
+            environment=environment,
+            input_bytes=json.dumps(request, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+            timeout=timeout,
+            code="capability_pack_probe_failed",
+        )
     try:
         value = json.loads(result.stdout.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):

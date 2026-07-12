@@ -475,6 +475,53 @@ def test_browser_runtime_manifest_rejects_escape_and_duplicate_paths(
         )
 
 
+def test_browser_runtime_delegates_windows_native_cleanup_to_parent_temp_domain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(PACKS / "common"))
+    browser = runpy.run_path(str(PACKS / "browser" / "browser_pack.py"))
+    outer = tmp_path / "browser.pyz"
+    with zipfile.ZipFile(outer, "w") as archive:
+        archive.writestr("browser-runtime.json", b"manifest")
+        archive.writestr("browser-runtime.zip", b"archive")
+    observed: dict[str, object] = {}
+
+    class Temporary:
+        def __init__(self, *, prefix: str, ignore_cleanup_errors: bool) -> None:
+            observed.update(
+                prefix=prefix,
+                ignore_cleanup_errors=ignore_cleanup_errors,
+            )
+
+        def __enter__(self) -> str:
+            return str(tmp_path)
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+    monkeypatch.setattr(sys, "argv", [str(outer)])
+    monkeypatch.setattr(browser["tempfile"], "TemporaryDirectory", Temporary)
+    runtime_globals = browser["_browser_runtime"].__wrapped__.__globals__
+    monkeypatch.setitem(
+        runtime_globals,
+        "_parse_runtime_manifest",
+        lambda _manifest, _archive: {"browser_executable": "browser/chrome.exe"},
+    )
+    monkeypatch.setitem(
+        runtime_globals,
+        "_extract_verified_runtime",
+        lambda _archive, destination, _manifest: destination.mkdir(),
+    )
+
+    with browser["_browser_runtime"]() as runtime:
+        assert runtime == tmp_path / "payload"
+    assert observed == {
+        "prefix": "ecorex-browser-runtime-",
+        "ignore_cleanup_errors": os.name == "nt",
+    }
+
+
 def test_sandbox_pack_acknowledges_exact_core_contract_and_fixed_shell(tmp_path: Path) -> None:
     artifact = _zipapp(tmp_path, "sandbox")
     request = _request(

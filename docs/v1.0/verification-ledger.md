@@ -1272,3 +1272,17 @@ The workstation repair is not a repository dependency change. Protected
 runners must still provision the lock exactly and fail their isolated import
 preflight before expensive native staging if their host interpreter is
 inconsistent.
+
+## Browser Pack Windows native cleanup closure - 2026-07-13
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Third fixed-commit Windows drill | 1 | Safe diagnostic propagation identified the exact gate as `browser_pack_smoke_failed`; Core, native binaries, Browser archive and OCR closure had completed before the probe rejected the Candidate. |
+| Direct vendored Pack traceback | 1 | Browser navigation itself completed, but child cleanup raised Windows `PermissionError` while unlinking the still-loaded `greenlet._greenlet.pyd`; stdio correctly reduced the private traceback to `pack_internal_failure`. |
+| Parent-owned invocation TEMP/TMP | 0 | Core now creates one private temp domain per Pack call, injects it through the allowlisted child environment and removes it strictly after the child is reaped. The Browser child ignores only its Windows in-process DLL unlink error; no background cleaner or cross-call shared cache is used. |
+| Real Browser-only vendored smoke | 0 | Staged Playwright 1.58.0/Chromium Pack returned `completed`, contained `ecorex-stage-ready`, preserved its four-distribution inventory and left zero new parent temp residues. |
+| Pack/process/release boundary regression | 0 | 73 passed, 2 platform-condition skips; Ruff, Python compile and whitespace gates passed. A test observes equal private TEMP/TMP inside the child and proves the directory no longer exists after invocation returns. |
+
+This fixes a real Windows lifecycle defect rather than weakening cleanup. The
+parent can delete mapped native modules only after process exit, which is the
+correct ownership boundary for all one-shot executable Capability Packs.

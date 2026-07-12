@@ -12,9 +12,11 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import signal
+import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 from typing import Any
 import zipfile
 
@@ -258,9 +260,37 @@ class ProcessCapabilityPackAdapter:
         if not 1 <= len(payload) <= MAX_REQUEST_BYTES:
             raise CapabilityPackProcessError("pack_request_too_large")
         await asyncio.to_thread(_verify_pack_artifact, self.pack)
+        temporary_root = await asyncio.to_thread(_create_pack_invocation_temp)
+        child_environment = dict(self._child_environment)
+        child_environment.update(
+            {"TEMP": str(temporary_root), "TMP": str(temporary_root)}
+        )
+        try:
+            return await self._invoke_process(
+                tool_id=tool_id,
+                payload=payload,
+                context=context,
+                timeout=timeout,
+                sandbox_contract=sandbox_contract,
+                child_environment=child_environment,
+            )
+        finally:
+            await asyncio.to_thread(_remove_pack_invocation_temp, temporary_root)
+
+    async def _invoke_process(
+        self,
+        *,
+        tool_id: str,
+        payload: bytes,
+        context: ToolInvocationContext,
+        timeout: float,
+        sandbox_contract: SandboxIsolationContract | None,
+        child_environment: Mapping[str, str],
+    ) -> Any:
         process = await self._spawn(
             tool_id=tool_id,
             sandbox_contract=sandbox_contract,
+            child_environment=child_environment,
         )
         stdout_task = asyncio.create_task(
             _read_bounded(process.stdout, MAX_STDOUT_BYTES)
@@ -336,13 +366,14 @@ class ProcessCapabilityPackAdapter:
         *,
         tool_id: str,
         sandbox_contract: SandboxIsolationContract | None,
+        child_environment: Mapping[str, str],
     ) -> asyncio.subprocess.Process:
         kwargs: dict[str, Any] = {
             "stdin": asyncio.subprocess.PIPE,
             "stdout": asyncio.subprocess.PIPE,
             "stderr": asyncio.subprocess.PIPE,
             "cwd": str(self.workspace_roots[0]),
-            "env": dict(self._child_environment),
+            "env": dict(child_environment),
         }
         if os.name == "nt":
             kwargs["creationflags"] = (
@@ -473,6 +504,25 @@ class _ProcessPackToolHandler:
         context: ToolInvocationContext,
     ) -> Any:
         return await self._adapter.invoke(self._tool_id, arguments, context)
+
+
+def _create_pack_invocation_temp() -> Path:
+    root = Path(tempfile.mkdtemp(prefix="ecorex-pack-call-")).resolve(strict=True)
+    root.chmod(0o700)
+    return root
+
+
+def _remove_pack_invocation_temp(root: Path) -> None:
+    """Remove a child-owned temp domain only after its process is reaped."""
+
+    try:
+        shutil.rmtree(root)
+    except FileNotFoundError:
+        return
+    except OSError:
+        raise CapabilityPackProcessError(
+            "pack_process_temp_cleanup_failed", retryable=True
+        ) from None
 
 
 def _inspect_zipapp(pack: VerifiedCapabilityPack) -> PackProcessDescriptor:

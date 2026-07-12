@@ -271,7 +271,15 @@ def _browser_runtime() -> Iterator[Path]:
     except (OSError, KeyError, zipfile.BadZipFile):
         raise ContractError("browser_runtime_missing") from None
     manifest = _parse_runtime_manifest(manifest_payload, archive_payload)
-    with tempfile.TemporaryDirectory(prefix="ecorex-browser-runtime-") as raw:
+    # Windows keeps imported extension modules (notably greenlet's ``.pyd``)
+    # mapped until this one-shot Pack process exits.  Core gives every Pack
+    # call a private TEMP/TMP domain and removes that domain after the child is
+    # reaped, so the child must not turn an otherwise successful operation into
+    # ``pack_internal_failure`` while trying to unlink its still-mapped DLL.
+    with tempfile.TemporaryDirectory(
+        prefix="ecorex-browser-runtime-",
+        ignore_cleanup_errors=os.name == "nt",
+    ) as raw:
         root = Path(raw).resolve(strict=True)
         archive_path = root / _RUNTIME_ARCHIVE
         archive_path.write_bytes(archive_payload)

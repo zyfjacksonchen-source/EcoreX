@@ -126,9 +126,14 @@ def _verified_pack(
 ECHO_MAIN = """
 import json
 import os
+from pathlib import Path
 import sys
 
 request = json.load(sys.stdin)
+Path(request["context"]["workspace_roots"][0], ".pack-temp-observation").write_text(
+    os.environ.get("TEMP", "") + "\\n" + os.environ.get("TMP", ""),
+    encoding="utf-8",
+)
 result = {
     "tool_id": request["tool_id"],
     "sandbox": request["context"]["effective_sandbox"],
@@ -222,6 +227,12 @@ def test_browser_pack_process_is_executable_and_parent_secrets_are_absent(
         "workspace_count": 1,
         "parent_secret_present": False,
     }
+    observed_temp, observed_tmp = (
+        workspace / ".pack-temp-observation"
+    ).read_text(encoding="utf-8").splitlines()
+    assert observed_temp == observed_tmp
+    assert Path(observed_temp).name.startswith("ecorex-pack-call-")
+    assert not Path(observed_temp).exists()
 
 
 def test_product_resolver_binds_browser_pack_only_with_resolved_workspace(
