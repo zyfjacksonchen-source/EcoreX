@@ -127,6 +127,77 @@ class UnavailableSandboxBackend:
         raise RuntimeError(self.reason)
 
 
+def probe_windows_appcontainer_helper(
+    helper_path: Path | str,
+    *,
+    expected_sha256: str,
+    workspace_roots: tuple[Path, ...],
+) -> SandboxProbe:
+    """Behaviorally attest a staged helper before slot security is provisioned.
+
+    This probe proves the native AppContainer and Job Object implementation.
+    It deliberately cannot produce a launch plan; runtime execution still
+    requires the installed-slot security receipt enforced by
+    :class:`WindowsAppContainerSandboxBackend`.
+    """
+
+    digest = str(expected_sha256).lower()
+    if not _SHA256.fullmatch(digest):
+        raise ValueError("sandbox helper digest is invalid")
+    helper = _trusted_regular_file(Path(helper_path))
+    if _sha256_file(helper) != digest:
+        raise ValueError("sandbox helper digest does not match signed identity")
+    command: tuple[str, ...] = (
+        str(helper),
+        "probe",
+        "--protocol",
+        SANDBOX_LAUNCH_PROTOCOL,
+        "--workspace-digest",
+        _roots_digest(workspace_roots),
+    )
+    for root in workspace_roots:
+        command += ("--workspace", str(root))
+    try:
+        completed = _run_bounded_probe(command, timeout_seconds=10)
+        if completed is None:
+            raise ValueError("bounded probe failed")
+        value = json.loads(completed.stdout.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        value = None
+        completed = None
+    required = {
+        "protocol": SANDBOX_LAUNCH_PROTOCOL,
+        "backend": "windows-appcontainer",
+        "cpu_rate_hard_cap": WINDOWS_CPU_RATE_HARD_CAP,
+        "filesystem_read_scoped": True,
+        "filesystem_write_scoped": True,
+        "job_memory_limit_bytes": WINDOWS_JOB_MEMORY_LIMIT_BYTES,
+        "network_denied": True,
+        "process_memory_limit_bytes": WINDOWS_PROCESS_MEMORY_LIMIT_BYTES,
+        "process_tree_contained": True,
+        "workspace_roots_sha256": _roots_digest(workspace_roots),
+    }
+    ready = bool(
+        completed is not None
+        and completed.returncode == 0
+        and isinstance(value, Mapping)
+        and set(value) == set(required)
+        and all(value.get(key) == expected for key, expected in required.items())
+        and completed.stdout
+        == json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+    return SandboxProbe(
+        backend_id="windows-appcontainer",
+        platform="windows",
+        ready=ready,
+        reason="ready" if ready else "windows_appcontainer_probe_failed",
+        filesystem_read_scoped=ready,
+        filesystem_write_scoped=ready,
+        network_denied=ready,
+        process_tree_contained=ready,
+    )
+
+
 class WindowsAppContainerSandboxBackend:
     """Adapter for the product-owned AppContainer launcher.
 
@@ -195,59 +266,10 @@ class WindowsAppContainerSandboxBackend:
                 reason="windows_appcontainer_security_receipt_invalid",
             )
             return self._last_probe
-        command: tuple[str, ...] = (
-            str(self.helper_path),
-            "probe",
-            "--protocol",
-            SANDBOX_LAUNCH_PROTOCOL,
-            "--workspace-digest",
-            _roots_digest(workspace_roots),
-        )
-        for root in workspace_roots:
-            command += ("--workspace", str(root))
-        try:
-            completed = _run_bounded_probe(
-                command,
-                timeout_seconds=10,
-            )
-            if completed is None:
-                raise ValueError("bounded probe failed")
-            value = json.loads(completed.stdout.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
-            value = None
-            completed = None
-        required = {
-            "protocol": SANDBOX_LAUNCH_PROTOCOL,
-            "backend": "windows-appcontainer",
-            "cpu_rate_hard_cap": WINDOWS_CPU_RATE_HARD_CAP,
-            "filesystem_read_scoped": True,
-            "filesystem_write_scoped": True,
-            "job_memory_limit_bytes": WINDOWS_JOB_MEMORY_LIMIT_BYTES,
-            "network_denied": True,
-            "process_memory_limit_bytes": WINDOWS_PROCESS_MEMORY_LIMIT_BYTES,
-            "process_tree_contained": True,
-            "workspace_roots_sha256": _roots_digest(workspace_roots),
-        }
-        ready = bool(
-            completed is not None
-            and completed.returncode == 0
-            and isinstance(value, Mapping)
-            and set(value) == set(required)
-            and all(value.get(key) == expected for key, expected in required.items())
-            and completed.stdout
-            == json.dumps(
-                value, sort_keys=True, separators=(",", ":")
-            ).encode("utf-8")
-        )
-        self._last_probe = SandboxProbe(
-            backend_id="windows-appcontainer",
-            platform="windows",
-            ready=ready,
-            reason="ready" if ready else "windows_appcontainer_probe_failed",
-            filesystem_read_scoped=ready,
-            filesystem_write_scoped=ready,
-            network_denied=ready,
-            process_tree_contained=ready,
+        self._last_probe = probe_windows_appcontainer_helper(
+            self.helper_path,
+            expected_sha256=self.expected_sha256,
+            workspace_roots=workspace_roots,
         )
         return self._last_probe
 

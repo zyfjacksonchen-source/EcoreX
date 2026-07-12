@@ -15,10 +15,12 @@ import sys
 import time
 import zipfile
 import runpy
+from types import SimpleNamespace
 
 import pytest
 
 import ecorex.integration.pack_python as pack_python_module
+import ecorex.integration.sandbox as sandbox_module
 from ecorex.integration.pack_python import (
     PackPythonError,
     build_pack_python_manifest,
@@ -709,6 +711,63 @@ def test_windows_helper_source_contains_real_appcontainer_and_job_boundaries() -
     assert "SpecialFolder]::ProgramFilesX86" in build
     assert "SpecialFolder]::Windows" in build
     assert "${env:ProgramFiles(x86)}" not in build
+
+
+def test_staged_windows_helper_probe_is_behavioral_but_cannot_authorize_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    helper = tmp_path / "ecorex-sandbox-host.exe"
+    helper.write_bytes(b"signed-native-helper")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    roots = (workspace.resolve(strict=True),)
+    roots_digest = hashlib.sha256(str(roots[0]).encode("utf-8")).hexdigest()
+    expected = {
+        "backend": "windows-appcontainer",
+        "cpu_rate_hard_cap": sandbox_module.WINDOWS_CPU_RATE_HARD_CAP,
+        "filesystem_read_scoped": True,
+        "filesystem_write_scoped": True,
+        "job_memory_limit_bytes": sandbox_module.WINDOWS_JOB_MEMORY_LIMIT_BYTES,
+        "network_denied": True,
+        "process_memory_limit_bytes": sandbox_module.WINDOWS_PROCESS_MEMORY_LIMIT_BYTES,
+        "process_tree_contained": True,
+        "protocol": sandbox_module.SANDBOX_LAUNCH_PROTOCOL,
+        "workspace_roots_sha256": roots_digest,
+    }
+    payload = json.dumps(expected, sort_keys=True, separators=(",", ":")).encode()
+    observed: dict[str, object] = {}
+
+    def run(command, *, timeout_seconds):
+        observed.update(command=command, timeout_seconds=timeout_seconds)
+        return SimpleNamespace(returncode=0, stdout=payload, stderr=b"")
+
+    monkeypatch.setattr(sandbox_module, "_run_bounded_probe", run)
+    helper_digest = hashlib.sha256(helper.read_bytes()).hexdigest()
+    probe = sandbox_module.probe_windows_appcontainer_helper(
+        helper,
+        expected_sha256=helper_digest,
+        workspace_roots=roots,
+    )
+
+    assert probe.complete is True
+    assert observed["timeout_seconds"] == 10
+    assert observed["command"][:3] == (
+        str(helper.resolve()),
+        "probe",
+        "--protocol",
+    )
+    runtime = sandbox_module.WindowsAppContainerSandboxBackend(
+        helper,
+        expected_sha256=helper_digest,
+    )
+    denied = runtime.probe(
+        workspace_roots=roots,
+        python_executable=Path(sys.executable),
+        artifact_path=helper,
+    )
+    assert denied.complete is False
+    assert denied.reason == "windows_appcontainer_security_receipt_invalid"
 
 
 def test_windows_native_receipt_is_bound_to_pinned_toolchain_and_binaries(

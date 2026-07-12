@@ -42,7 +42,7 @@ from ecorex.integration.pack_python import (  # noqa: E402
 )
 from ecorex.integration.sandbox import (  # noqa: E402
     MacOSSandboxExecBackend,
-    WindowsAppContainerSandboxBackend,
+    probe_windows_appcontainer_helper,
 )
 from ecorex.release.models import WebBundleBuildInput  # noqa: E402
 from ecorex.pack_catalog import (  # noqa: E402
@@ -1531,14 +1531,18 @@ def _sandbox_gates(
         _gate(evidence, "pack-contract", {"descriptor": descriptor, "zipapp_sha256": _sha256(zipapp)})
         if platform == "windows":
             helper = native / "ecorex-sandbox-host.exe"
-            backend = WindowsAppContainerSandboxBackend(helper, expected_sha256=_sha256(helper))
+            probe = probe_windows_appcontainer_helper(
+                helper,
+                expected_sha256=_sha256(helper),
+                workspace_roots=(workspace.resolve(strict=True),),
+            )
         else:
             backend = MacOSSandboxExecBackend()
-        probe = backend.probe(
-            workspace_roots=(workspace.resolve(strict=True),),
-            python_executable=interpreter,
-            artifact_path=zipapp,
-        )
+            probe = backend.probe(
+                workspace_roots=(workspace.resolve(strict=True),),
+                python_executable=interpreter,
+                artifact_path=zipapp,
+            )
         if not probe.complete:
             raise StageError("sandbox_boundary_probe_failed")
         _gate(evidence, "sandbox-boundary", {"probe": probe.to_dict()})
