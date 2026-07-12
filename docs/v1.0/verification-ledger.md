@@ -1232,3 +1232,29 @@ result is recorded only after the fresh committed-source run completes.
 | Platform-stage timeout budget reproduction | 1 | the real local stager was still progressing at 1,804 seconds and failed closed at its former 30-minute nested deadline; no receipt or Candidate was accepted |
 | Bounded timeout hierarchy correction | 0 | stager 45 minutes, repository wrapper 50 minutes and protected job 60 minutes preserve process-tree termination plus a ten-minute cleanup/receipt margin |
 | Process boundary and Windows drill regression | 0 | 17 focused tests passed; Ruff and compile checks passed |
+
+## Real-user CDP and provider admission audit - 2026-07-13
+
+| Scope | Result | Evidence / boundary |
+| --- | --- | --- |
+| First-message model selection | PASS | The built React WebUI exposed `GPT-5.6 SOL · 中等推理` and the independent `Image 2` selector before the first message. The first Turn completed without residual thinking state. |
+| Reasoning disclosure continuity | PASS | CDP observed `正在核对季度资料。` remain visible until the next atom arrived, then change directly to `资料已核对，正在整理结果。`; it did not flash away between atoms and archived only on the explicit terminal reasoning event. |
+| Button, border and typography language | PASS | CDP computed style on an ordinary toolbar button was transparent at rest, 13/20 px, 10 px token radius and 32 px high, using the EcoreX system Chinese font stack. The control did not add a permanent card border. |
+| Image intent and preview | PROTOCOL PASS | An Office-mode image request preferred Image 2 without removing Office mode; the result appeared inline and the preview opened fit-to-canvas with zoom retained. This same-origin GA provider is deterministic and does not certify a live provider. |
+| Structured precise Retouch | PROTOCOL PASS | CDP created a normalized rectangle annotation, submitted a Retouch workspace, received a dedicated Retouch Turn, new revision, inline image, change summary, inspection regions and original/new/side-by-side comparison. The audit found and fixed missing `turn_id`/job linkage in the GA completion event before rerunning to green. Pixel accuracy remains provider-blocked. |
+| Steer / queue / replace | PASS | All three composer dispositions were exercised through visible menus. Steer appended to the active Turn; queue created a queued Turn; replace superseded the old Turn and created a replacement. The GA server now retains bounded events, exposes event pages and confirms every operation by `client_message_id`. |
+| Task-ID continuation | PASS | `thr_target_ga` restored the independent target projection, original user message and assistant response without contaminating the current task. |
+| Output, memory and permissions | PASS | Default output changed from Documents to Downloads; learned memory reset from two to zero with a 24-hour undo affordance; Full Access became persistently visible and exposed one-click restore. |
+| Extension and Connector management | PASS | The product UI exposed one governed catalog for Skill/MCP/tool/connector extensions with trust, health, enable/disable and rollback actions. Feishu and Tencent Docs appeared as stable connectors in the shared connection surface. No live tenant OAuth was claimed. |
+| Public share conversation and image | PASS | The real Control Plane share renderer distinguished `你的指令` from `EcoreX`, attached the image to the assistant Turn and displayed it inline. The isolated media endpoint returned 200 `image/png`, 58,100 bytes, with ETag equal to the actual SHA-256 and no local path. |
+| Capability planner, progressive disclosure, Worker and image orchestration | PASS | Focused backend rerun completed 176/176 tests across capability planning/discovery/invocation, Agent Worker, image concurrency stability, image orchestrator and managed-image integration. |
+| Real `gpt-5.6-sol` inference | **BLOCKED** | The existing administrator policy credential reached the configured upstream and `/models` returned 200, but the catalog did not contain `gpt-5.6-sol`. One initial request plus three bounded retries returned 503. The old `gpt-5.5` control request also returned 503, proving an upstream inference outage in addition to the missing new mapping. |
+| Real Image 2 generation / concurrency / pixel Retouch | **BLOCKED** | The real upstream catalog listed `gpt-image-2`, but a single low-quality generation was rejected with 503 `No available compatible accounts`. Concurrency was deliberately not amplified after failed single-flight admission. |
+
+The provider failures are release blockers. No push, protected Candidate,
+publication or rollout may be represented as complete until the upstream
+catalog contains `gpt-5.6-sol`, chat inference succeeds with medium reasoning,
+one real Image 2 request succeeds, bounded image concurrency completes without
+duplicate billing/results, and the resulting image passes structured Retouch
+inspection. No provider secret was copied into the Runtime, repository or this
+ledger.

@@ -115,6 +115,7 @@ CORE_ARTIFACT_ID = "core-windows-x64"
 DEFAULT_TIMEOUT_SECONDS = 1_800.0
 _MIN_TIMEOUT_SECONDS = 45.0
 _MAX_TIMEOUT_SECONDS = 5_400.0
+_SAFE_STAGE_FAILURE_CODE = re.compile(r"^[a-z][a-z0-9_]{2,127}$")
 _RUNTIME_DEPENDENCY_GROUP = "dependencies"
 _NON_RUNTIME_PARTS = frozenset(
     {"test", "tests", "testing", "example", "examples", "benchmark", "benchmarks"}
@@ -606,6 +607,32 @@ def _resolve_go(deadline: Deadline) -> tuple[Path, str]:
     )
 
 
+def _platform_stage_failure_code(output: Path, stderr: bytes) -> str:
+    """Return only the stager's bounded public failure code."""
+
+    candidates: list[Any] = []
+    try:
+        candidates.append(
+            json.loads((output / "stage-failure.json").read_text(encoding="utf-8"))
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+        pass
+    try:
+        text = stderr.decode("utf-8")
+    except UnicodeDecodeError:
+        text = ""
+    for line in reversed(text.splitlines()):
+        try:
+            candidates.append(json.loads(line))
+        except (json.JSONDecodeError, RecursionError):
+            continue
+    for value in candidates:
+        code = value.get("code") if isinstance(value, Mapping) else None
+        if isinstance(code, str) and _SAFE_STAGE_FAILURE_CODE.fullmatch(code):
+            return code
+    return "platform_stage_failed"
+
+
 def _stage_windows(
     repo: Path,
     root: Path,
@@ -700,7 +727,10 @@ def _stage_windows(
         or len(result.stdout) > 16 * 1024
         or len(result.stderr) > 16 * 1024
     ):
-        raise DrillError("the source-pinned Windows platform stage failed closed")
+        code = _platform_stage_failure_code(output, result.stderr)
+        raise DrillError(
+            "the source-pinned Windows platform stage failed closed: " + code
+        )
     receipts: list[dict[str, Any]] = []
     receipt_digests: dict[str, str] = {}
     for key in _WINDOWS_STAGE_KEYS:

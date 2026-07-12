@@ -341,12 +341,62 @@ test("GA harness models thinking terminal, HITL, retry, and retouch result scena
   await fetch(`${harness.url}/__ga/reset?scenario=retry`, { method: "POST" });
   const retry = await fetch(`${harness.url}/api/v1/threads/thread-ga/projection`).then((response) => response.json());
   assert.equal(retry.turns[0].status, "retry_wait");
+  const steered = await fetch(`${harness.url}/api/v1/turns/turn-ga/steer`, {
+    method: "POST",
+    headers: MUTATION_HEADERS,
+    body: JSON.stringify({
+      input: "补充华东区域同比数据",
+      agent_model_id: "ecorex-chat",
+      image_model_id: "gpt-image-2",
+      client_message_id: "message-steer-ga",
+      metadata: {},
+    }),
+  }).then((response) => response.json());
+  assert.equal(steered.turn.status, "retry_wait");
   const queued = await fetch(`${harness.url}/api/v1/threads/thread-ga/queue`, {
     method: "POST",
     headers: MUTATION_HEADERS,
-    body: JSON.stringify({ input: "下一轮处理附件", model: "ecorex-office-1" }),
+    body: JSON.stringify({
+      input: "下一轮处理附件",
+      agent_model_id: "ecorex-chat",
+      image_model_id: "gpt-image-2",
+      client_message_id: "message-queue-ga",
+      metadata: {},
+    }),
   }).then((response) => response.json());
   assert.equal(queued.turn.status, "queued");
+  const replaced = await fetch(`${harness.url}/api/v1/turns/turn-ga/replace`, {
+    method: "POST",
+    headers: MUTATION_HEADERS,
+    body: JSON.stringify({
+      input: "改为生成完整季度复盘",
+      agent_model_id: "ecorex-chat",
+      image_model_id: "gpt-image-2",
+      client_message_id: "message-replace-ga",
+      metadata: {},
+      reason: "replaced_by_user",
+    }),
+  }).then((response) => response.json());
+  assert.equal(replaced.superseded_turn.status, "superseded");
+  assert.equal(replaced.replacement_turn.status, "queued");
+  const operationProjection = await fetch(
+    `${harness.url}/api/v1/threads/thread-ga/projection`,
+  ).then((response) => response.json());
+  assert.deepEqual(
+    operationProjection.items.slice(-3).map((candidate) => candidate.client_message_id),
+    ["message-steer-ga", "message-queue-ga", "message-replace-ga"],
+  );
+  const operationEvents = await fetch(
+    `${harness.url}/api/v1/threads/thread-ga/events?after_seq=0&limit=1000`,
+  ).then((response) => response.json());
+  assert.equal(operationEvents.has_more, false);
+  assert.equal(operationEvents.watermark, operationProjection.watermark);
+  assert.deepEqual(
+    operationEvents.events
+      .map((event) => event.client_message_id)
+      .filter(Boolean),
+    ["message-steer-ga", "message-queue-ga", "message-queue-ga", "message-replace-ga"],
+  );
 
   await fetch(`${harness.url}/__ga/reset?scenario=artifact`, { method: "POST" });
   const artifacts = await fetch(`${harness.url}/api/v1/artifacts?thread_id=thread-ga`).then((response) => response.json());
@@ -427,6 +477,12 @@ test("GA harness models thinking terminal, HITL, retry, and retouch result scena
     },
   ).then((response) => response.json());
   assert.equal(savedWorkspace.mask.coordinate_space_version, "oriented-normalized-v1");
+  const beforeWorkspaceSubmit = await fetch(
+    `${harness.url}/api/v1/threads/thread-ga/projection`,
+  ).then((response) => response.json());
+  const workspaceEvents = await fetch(
+    `${harness.url}/api/v1/threads/thread-ga/events/stream?after_seq=${beforeWorkspaceSubmit.watermark}&follow=true`,
+  );
   const submittedWorkspace = await fetch(
     `${harness.url}/api/v1/retouch-workspaces/${workspace.workspace_id}/submit`,
     {
@@ -439,13 +495,26 @@ test("GA harness models thinking terminal, HITL, retry, and retouch result scena
     },
   ).then((response) => response.json());
   assert.equal(submittedWorkspace.status, "submitted");
-  await new Promise((resolve) => setTimeout(resolve, 500));
+  const workspaceCompletionEvents = await readUntil(
+    workspaceEvents,
+    "artifact.retouch.completed",
+  );
+  assert.match(workspaceCompletionEvents, /event: item\.created/);
+  assert.match(workspaceCompletionEvents, /event: artifact\.retouch\.completed/);
+  assert.match(workspaceCompletionEvents, /"turn_id":"turn-retouch-workspace-job-/);
+  assert.match(workspaceCompletionEvents, /"retouch_job_id":"retouch-workspace-job-/);
   const completedWorkspace = await fetch(
     `${harness.url}/api/v1/retouch-workspaces/${workspace.workspace_id}`,
   ).then((response) => response.json());
   assert.equal(completedWorkspace.job.status, "completed");
   assert.equal(completedWorkspace.result.artifact_id, "artifact-ga-source");
   assert.equal(completedWorkspace.job.inspection_regions[0].summary, "移除标记物");
+  const workspaceProjection = await fetch(
+    `${harness.url}/api/v1/threads/thread-ga/projection`,
+  ).then((response) => response.json());
+  assert.equal(workspaceProjection.turns.at(-1).status, "completed");
+  assert.equal(workspaceProjection.items.at(-1).turn_id, workspaceProjection.turns.at(-1).turn_id);
+  assert.match(workspaceProjection.items.at(-1).content.change_summary, /保留主体轮廓/);
 });
 
 test("GA viewport matrix includes the 320px Hallmark floor in both themes", async (context) => {

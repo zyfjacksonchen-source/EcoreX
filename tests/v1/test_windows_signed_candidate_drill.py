@@ -125,6 +125,34 @@ def test_local_runtime_config_uses_distinct_release_and_rollback_trust_roles() -
     )
 
 
+def test_platform_stage_failure_keeps_only_a_bounded_public_code(
+    tmp_path: Path,
+) -> None:
+    drill = _drill_module()
+    output = tmp_path / "stage"
+    output.mkdir()
+    (output / "stage-failure.json").write_text(
+        json.dumps({"status": "failed", "code": "office_format_probe_failed"}),
+        encoding="utf-8",
+    )
+    assert drill._platform_stage_failure_code(
+        output,
+        b'{"code":"fallback_probe_failed","secret":"must-not-surface"}\n',
+    ) == "office_format_probe_failed"
+
+    (output / "stage-failure.json").write_text(
+        json.dumps({"status": "failed", "code": "BAD secret value"}),
+        encoding="utf-8",
+    )
+    assert drill._platform_stage_failure_code(
+        output,
+        b'{"code":"safe_fallback_failed","detail":"not returned"}\n',
+    ) == "safe_fallback_failed"
+    assert drill._platform_stage_failure_code(output, b"not-json") == (
+        "platform_stage_failed"
+    )
+
+
 def test_fault_candidate_excludes_only_cache_and_runtime_site_packages() -> None:
     drill = _drill_module()
     ignored = drill._fault_candidate_ignore(

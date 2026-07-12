@@ -739,6 +739,7 @@ function scenarioState(name) {
     shareCounter: 0,
     liveReplayRequests: new Map(),
     seq: 0,
+    events: [],
     clients: new Set(),
     timers: new Set(),
     terminalScheduled: false,
@@ -1038,7 +1039,13 @@ async function body(req) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
-function envelope(state, eventType, { turnId = null, itemId = null, jobId = null, payload = {} } = {}) {
+function envelope(state, eventType, {
+  turnId = null,
+  itemId = null,
+  jobId = null,
+  clientMessageId = null,
+  payload = {},
+} = {}) {
   state.seq += 1;
   if (state.projection) state.projection.watermark = state.seq;
   return {
@@ -1050,7 +1057,7 @@ function envelope(state, eventType, { turnId = null, itemId = null, jobId = null
     item_id: itemId,
     job_id: jobId,
     tool_call_id: null,
-    client_message_id: null,
+    client_message_id: clientMessageId,
     causation_id: null,
     correlation_id: "correlation-ga",
     trace_id: "trace-ga",
@@ -1065,6 +1072,8 @@ function envelope(state, eventType, { turnId = null, itemId = null, jobId = null
 }
 
 function emit(state, event) {
+  state.events.push(event);
+  if (state.events.length > 2_048) state.events.splice(0, state.events.length - 2_048);
   const block = `id: ${event.seq}\nevent: ${event.event_type}\ndata: ${JSON.stringify(event)}\n\n`;
   for (const client of state.clients) client.write(block);
 }
@@ -1587,6 +1596,30 @@ async function handleApi(holder, req, res, url) {
     return true;
   }
 
+  const eventPageMatch = path.match(/^\/api\/v1\/threads\/([^/]+)\/events$/);
+  if (eventPageMatch && req.method === "GET") {
+    const threadId = decodeURIComponent(eventPageMatch[1]);
+    if (!projectionResponse(state, threadId)) return apiError(res, 404, "thread_not_found", "Thread not found");
+    const afterSeq = Number.parseInt(url.searchParams.get("after_seq") ?? "0", 10);
+    const requestedLimit = Number.parseInt(url.searchParams.get("limit") ?? "1000", 10);
+    if (!Number.isSafeInteger(afterSeq) || afterSeq < 0) {
+      return apiError(res, 422, "invalid_after_seq", "after_seq must be a non-negative integer");
+    }
+    const limit = Number.isSafeInteger(requestedLimit)
+      ? Math.min(Math.max(requestedLimit, 1), 1_000)
+      : 1_000;
+    const available = state.events.filter((event) => (
+      event.thread_id === threadId && event.seq > afterSeq
+    ));
+    const events = available.slice(0, limit);
+    return json(res, 200, {
+      events,
+      after_seq: events.at(-1)?.seq ?? afterSeq,
+      watermark: state.seq,
+      has_more: available.length > events.length,
+    });
+  }
+
   const createTurnMatch = path.match(/^\/api\/v1\/threads\/([^/]+)\/turns$/);
   if (createTurnMatch && req.method === "POST") {
     if (!state.authenticated) return apiError(res, 401, "managed_session_unavailable", "Managed login is required");
@@ -1615,19 +1648,154 @@ async function handleApi(holder, req, res, url) {
 
   const queueMatch = path.match(/^\/api\/v1\/threads\/([^/]+)\/queue$/);
   if (queueMatch && req.method === "POST") {
+    const threadId = decodeURIComponent(queueMatch[1]);
     const request = await body(req);
-    if (!state.projection) return apiError(res, 404, "thread_not_found", "Thread not found");
+    if (!projectionResponse(state, threadId)) return apiError(res, 404, "thread_not_found", "Thread not found");
     const queued = turn(
       `turn-queued-${state.projection.turns.length + 1}`,
       "queued",
       String(request.input ?? ""),
       String(request.agent_model_id ?? ""),
       request.image_model_id == null ? null : String(request.image_model_id),
+      threadId,
     );
     queued.client_message_id = String(request.client_message_id ?? queued.client_message_id);
     state.projection.turns.push(queued);
-    state.projection.items.push(item(`item-queued-${state.projection.items.length + 1}`, queued.turn_id, "user", queued.input));
-    return json(res, 201, threadMutationResponse(state, queued));
+    const queuedItem = item(
+      `item-queued-${state.projection.items.length + 1}`,
+      queued.turn_id,
+      "user",
+      queued.input,
+      threadId,
+    );
+    queuedItem.client_message_id = queued.client_message_id;
+    state.projection.items.push(queuedItem);
+    emit(state, envelope(state, "turn.accepted", {
+      turnId: queued.turn_id,
+      itemId: queuedItem.item_id,
+      clientMessageId: queued.client_message_id,
+      payload: {
+        input: queued.input,
+        agent_model_id: queued.agent_model_id,
+        image_model_id: queued.image_model_id,
+        metadata: request.metadata ?? {},
+      },
+    }));
+    emit(state, envelope(state, "turn.queued", {
+      turnId: queued.turn_id,
+      clientMessageId: queued.client_message_id,
+      payload: { reason: "queued_by_user" },
+    }));
+    return json(res, 202, threadMutationResponse(state, queued));
+  }
+
+  const steerMatch = path.match(/^\/api\/v1\/turns\/([^/]+)\/steer$/);
+  if (steerMatch && req.method === "POST") {
+    const turnId = decodeURIComponent(steerMatch[1]);
+    const activeTurn = state.projection?.turns.find((candidate) => candidate.turn_id === turnId);
+    if (!activeTurn) return apiError(res, 404, "turn_not_found", "Turn not found");
+    if (TERMINAL_TURN_STATUSES.has(activeTurn.status) || activeTurn.status === "finalizing") {
+      return apiError(res, 409, "turn_not_active", "A finalizing or terminal Turn cannot accept steer input");
+    }
+    const request = await body(req);
+    const clientMessageId = String(request.client_message_id ?? "");
+    const existing = state.projection.items.find((candidate) => (
+      candidate.client_message_id === clientMessageId
+    ));
+    if (existing) return json(res, 202, threadMutationResponse(state, activeTurn));
+    const steered = item(
+      `item-steer-${state.projection.items.length + 1}`,
+      activeTurn.turn_id,
+      "user",
+      String(request.input ?? ""),
+      activeTurn.thread_id,
+    );
+    steered.client_message_id = clientMessageId;
+    steered.content = {
+      ...steered.content,
+      metadata: request.metadata ?? {},
+      steer: true,
+    };
+    state.projection.items.push(steered);
+    emit(state, envelope(state, "turn.steered", {
+      turnId: activeTurn.turn_id,
+      itemId: steered.item_id,
+      clientMessageId,
+      payload: {
+        input: steered.content.text,
+        agent_model_id: request.agent_model_id ?? activeTurn.agent_model_id,
+        image_model_id: request.image_model_id ?? activeTurn.image_model_id,
+        metadata: request.metadata ?? {},
+      },
+    }));
+    return json(res, 202, threadMutationResponse(state, activeTurn));
+  }
+
+  const replaceMatch = path.match(/^\/api\/v1\/turns\/([^/]+)\/replace$/);
+  if (replaceMatch && req.method === "POST") {
+    const turnId = decodeURIComponent(replaceMatch[1]);
+    const current = state.projection?.turns.find((candidate) => candidate.turn_id === turnId);
+    if (!current) return apiError(res, 404, "turn_not_found", "Turn not found");
+    if (TERMINAL_TURN_STATUSES.has(current.status)) {
+      return apiError(res, 409, "turn_not_active", "A terminal Turn cannot be replaced");
+    }
+    const request = await body(req);
+    const clientMessageId = String(request.client_message_id ?? "");
+    const existing = state.projection.turns.find((candidate) => (
+      candidate.client_message_id === clientMessageId && candidate.metadata?.replaces_turn_id === turnId
+    ));
+    if (existing) {
+      return json(res, 202, {
+        superseded_turn: current,
+        replacement_turn: existing,
+        job: null,
+        watermark: state.projection.watermark,
+      });
+    }
+    const from = current.status;
+    current.status = "superseded";
+    current.terminal_reason = String(request.reason ?? "replaced_by_user");
+    emit(state, envelope(state, "turn.status_changed", {
+      turnId: current.turn_id,
+      payload: { from, to: "superseded", reason: current.terminal_reason },
+    }));
+    const replacement = turn(
+      `turn-replacement-${state.projection.turns.length + 1}`,
+      "queued",
+      String(request.input ?? ""),
+      String(request.agent_model_id ?? current.agent_model_id),
+      request.image_model_id == null ? current.image_model_id : String(request.image_model_id),
+      current.thread_id,
+    );
+    replacement.client_message_id = clientMessageId;
+    replacement.metadata = { ...(request.metadata ?? {}), replaces_turn_id: current.turn_id };
+    const replacementItem = item(
+      `item-replacement-${state.projection.items.length + 1}`,
+      replacement.turn_id,
+      "user",
+      replacement.input,
+      current.thread_id,
+    );
+    replacementItem.client_message_id = clientMessageId;
+    state.projection.turns.push(replacement);
+    state.projection.items.push(replacementItem);
+    emit(state, envelope(state, "turn.accepted", {
+      turnId: replacement.turn_id,
+      itemId: replacementItem.item_id,
+      clientMessageId,
+      payload: {
+        input: replacement.input,
+        agent_model_id: replacement.agent_model_id,
+        image_model_id: replacement.image_model_id,
+        metadata: replacement.metadata,
+      },
+    }));
+    return json(res, 202, {
+      superseded_turn: current,
+      replacement_turn: replacement,
+      job: null,
+      watermark: state.projection.watermark,
+    });
   }
 
   const interruptMatch = path.match(/^\/api\/v1\/turns\/([^/]+)\/interrupt$/);
@@ -1965,6 +2133,28 @@ async function handleApi(holder, req, res, url) {
       const source = state.artifacts.find((candidate) => candidate.artifact_id === workspace.artifact_id);
       const baseRevision = workspace.edit_surface.base_revision_id;
       const jobId = `retouch-workspace-job-${state.seq + 1}`;
+      const retouchTurn = turn(
+        `turn-${jobId}`,
+        "accepted",
+        "精准修图",
+        "ecorex-chat",
+        "gpt-image-2",
+      );
+      state.projection.turns.push(retouchTurn);
+      emit(state, envelope(state, "turn.accepted", {
+        turnId: retouchTurn.turn_id,
+        payload: {
+          input: retouchTurn.input,
+          agent_model_id: retouchTurn.agent_model_id,
+          image_model_id: retouchTurn.image_model_id,
+          metadata: { retouch: true, workspace_id: workspace.workspace_id },
+        },
+      }));
+      retouchTurn.status = "tool_running";
+      emit(state, envelope(state, "turn.status_changed", {
+        turnId: retouchTurn.turn_id,
+        payload: { from: "accepted", to: "tool_running", reason: "retouch_workspace_submitted" },
+      }));
       workspace.status = "submitted";
       workspace.version += 1;
       workspace.submitted_job_id = jobId;
@@ -2010,7 +2200,7 @@ async function handleApi(holder, req, res, url) {
         const artifactItem = {
           item_id: `item-${result.revision_id}`,
           thread_id: "thread-ga",
-          turn_id: "turn-ga",
+          turn_id: retouchTurn.turn_id,
           kind: "artifact",
           status: "completed",
           content: {
@@ -2023,7 +2213,31 @@ async function handleApi(holder, req, res, url) {
           updated_at: new Date().toISOString(),
         };
         state.projection.items.push(artifactItem);
-        emit(state, envelope(state, "item.created", { itemId: artifactItem.item_id, payload: { kind: "artifact", status: "completed", content: artifactItem.content } }));
+        emit(state, envelope(state, "item.created", {
+          turnId: artifactItem.turn_id,
+          itemId: artifactItem.item_id,
+          jobId,
+          payload: { kind: "artifact", status: "completed", content: artifactItem.content },
+        }));
+        emit(state, envelope(state, "artifact.retouch.completed", {
+          turnId: artifactItem.turn_id,
+          itemId: artifactItem.item_id,
+          jobId,
+          payload: {
+            artifact_id: result.artifact_id,
+            revision_id: result.revision_id,
+            retouch_job_id: jobId,
+            change_summary: workspace.job.change_summary,
+            inspection_regions: workspace.job.inspection_regions,
+          },
+        }));
+        retouchTurn.status = "completed";
+        retouchTurn.terminal_reason = "completed";
+        emit(state, envelope(state, "turn.status_changed", {
+          turnId: retouchTurn.turn_id,
+          jobId,
+          payload: { from: "tool_running", to: "completed", reason: "completed" },
+        }));
       }, 350);
     }
     return json(res, 202, workspaceWire(workspace));
