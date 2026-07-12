@@ -1,18 +1,29 @@
-/* Hallmark pre-emit critique: P5 H5 E4 S5 R4 V4 */
+/* Hallmark · genre: modern-minimal · macrostructure: Workbench · design-system: design.md · designed-as-app */
 :root {
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, system-ui, sans-serif;
-  --font-mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  --font-size-ui: 14px;
-  --font-size-code: 12px;
-  --icon-size: 14px;
-  --icon-size-sm: 12px;
+  color-scheme: light dark;
 
-  --radius-xs: 6px;
-  --radius-sm: 10px;
-  --radius-md: 14px;
-  --radius-lg: 18px;
-  --radius-xl: 24px;
-  --radius-pill: 999px;
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-code: ui-monospace, "SFMono-Regular", "SF Mono", "Cascadia Mono", "Segoe UI Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --font-display: var(--font-ui);
+  --font-body: var(--font-ui);
+  --font-mono: var(--font-code);
+  --font-sans: var(--font-body);
+
+  --text-caption-size: 12px;
+  --text-caption-line: 16px;
+  --text-ui-size: 13px;
+  --text-ui-line: 20px;
+  --text-body-size: 14px;
+  --text-body-line: 22px;
+  --text-title-size: 15px;
+  --text-title-line: 20px;
+  --font-size-ui: var(--text-ui-size);
+  --font-size-code: var(--text-caption-size);
+
+  --icon-size-xs: 12px;
+  --icon-size-sm: 14px;
+  --icon-size: 16px;
+  --icon-size-lg: 20px;
 
   --space-1: 4px;
   --space-2: 8px;
@@ -21,55 +32,171 @@
   --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
 
-  --motion-fast: 120ms;
-  --motion-base: 180ms;
-  --motion-slow: 260ms;
-  --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --radius-none: 0;
+  --radius-compact: 8px;
+  --radius-control: 10px;
+  --radius-card: 12px;
+  --radius-panel: 16px;
+  --radius-dialog: 18px;
+  --radius-pill: 999px;
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 240ms;
+  --duration-progress: 1200ms;
+  --motion-fast: var(--duration-fast);
+  --motion-base: var(--duration-base);
+  --motion-slow: var(--duration-slow);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-standard: var(--ease-out);
+
+  --z-base: 0;
+  --z-sticky: 10;
+  --z-popover: 20;
+  --z-modal: 30;
+  --z-toast: 40;
+  --z-critical: 50;
+
+  --target-desktop: 32px;
+  --target-touch: 44px;
+  --workspace-inset: 10px;
+  --artifact-action-rail-width: 132px;
+  --focus-primary-ring: 0 0 0 2px var(--color-accent-ink);
+  --control-idle-border: transparent;
+  --control-idle-surface: transparent;
+  --control-hover-border: var(--color-rule);
+  --control-hover-surface: var(--color-raised);
+
 }
 
+:root,
 :root[data-theme="light"] {
   color-scheme: light;
-  --color-bg: oklch(0.985 0.006 78);
-  --color-surface: oklch(1 0 0);
-  --color-surface-raised: oklch(0.995 0.004 78);
-  --color-surface-muted: oklch(0.96 0.012 78);
-  --color-border: oklch(0.895 0.012 78);
-  --color-border-strong: oklch(0.82 0.018 72);
-  --color-text: #18181b;
-  --color-muted: #52525b;
-  --color-subtle: #71717a;
-  --color-disabled: #a1a1aa;
-  --color-brand: oklch(0.69 0.18 48);
-  --color-brand-strong: oklch(0.59 0.19 43);
-  --color-brand-soft: oklch(0.94 0.05 58);
-  --color-info: oklch(0.58 0.14 250);
-  --color-success: oklch(0.58 0.13 150);
-  --color-warning: oklch(0.74 0.16 78);
-  --color-danger: oklch(0.6 0.19 28);
-  --color-overlay: oklch(0 0 0 / 0.28);
-  --shadow-popover: 0 18px 48px oklch(0.32 0.03 50 / 0.16);
+
+  --color-canvas: oklch(0.975 0.008 72);
+  --color-surface: oklch(0.995 0.004 72);
+  --color-raised: oklch(0.965 0.01 70);
+  --color-hover: oklch(0.945 0.014 68);
+  --color-selected: oklch(0.92 0.035 62);
+  --color-overlay-surface: oklch(0.995 0.004 72);
+
+  --color-ink: oklch(0.205 0.018 55);
+  --color-ink-muted: oklch(0.43 0.02 58);
+  --color-ink-subtle: oklch(0.53 0.018 62);
+  --color-ink-disabled: oklch(0.64 0.014 66);
+  --color-rule: oklch(0.875 0.014 68);
+  --color-rule-strong: oklch(0.77 0.022 64);
+
+  --color-accent: oklch(0.72 0.17 55);
+  --color-accent-strong: oklch(0.61 0.185 48);
+  --color-accent-soft: oklch(0.925 0.055 62);
+  --color-accent-ink: oklch(0.205 0.018 55);
+  --color-focus: oklch(0.56 0.18 252);
+
+  --color-info: oklch(0.54 0.15 250);
+  --color-success: oklch(0.52 0.13 150);
+  --color-warning: oklch(0.54 0.15 78);
+  --color-danger: oklch(0.56 0.19 28);
+  --color-overlay: oklch(0.12 0.01 55 / 0.34);
+
+  --elevation-popover: 0 14px 36px oklch(0.28 0.025 52 / 0.14);
+  --elevation-dialog: 0 24px 72px oklch(0.24 0.025 52 / 0.2);
+  --elevation-toast: 0 12px 32px oklch(0.28 0.025 52 / 0.16);
+
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: oklch(0.75 0.018 64);
+  --scrollbar-thumb-hover: oklch(0.62 0.022 62);
+
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --color-bg: oklch(0.16 0.018 55);
+
+  --color-canvas: oklch(0.155 0.016 55);
   --color-surface: oklch(0.205 0.018 55);
-  --color-surface-raised: oklch(0.245 0.02 55);
-  --color-surface-muted: oklch(0.29 0.024 55);
-  --color-border: oklch(0.34 0.025 58);
-  --color-border-strong: oklch(0.42 0.032 58);
-  --color-text: #f4f4f5;
-  --color-muted: #a1a1aa;
-  --color-subtle: #71717a;
-  --color-disabled: #52525b;
-  --color-brand: oklch(0.76 0.17 55);
-  --color-brand-strong: oklch(0.82 0.16 58);
-  --color-brand-soft: oklch(0.31 0.07 52);
+  --color-raised: oklch(0.245 0.02 55);
+  --color-hover: oklch(0.285 0.023 56);
+  --color-selected: oklch(0.315 0.055 55);
+  --color-overlay-surface: oklch(0.235 0.02 55);
+
+  --color-ink: oklch(0.94 0.008 72);
+  --color-ink-muted: oklch(0.76 0.012 68);
+  --color-ink-subtle: oklch(0.65 0.014 64);
+  --color-ink-disabled: oklch(0.5 0.016 60);
+  --color-rule: oklch(0.35 0.024 58);
+  --color-rule-strong: oklch(0.44 0.03 58);
+
+  --color-accent: oklch(0.78 0.16 58);
+  --color-accent-strong: oklch(0.84 0.145 62);
+  --color-accent-soft: oklch(0.31 0.07 52);
+  --color-accent-ink: oklch(0.19 0.02 52);
+  --color-focus: oklch(0.76 0.13 250);
+
   --color-info: oklch(0.74 0.12 245);
   --color-success: oklch(0.72 0.12 150);
   --color-warning: oklch(0.82 0.14 80);
   --color-danger: oklch(0.74 0.16 30);
-  --color-overlay: oklch(0 0 0 / 0.48);
-  --shadow-popover: 0 18px 48px oklch(0 0 0 / 0.36);
+  --color-overlay: oklch(0.08 0.008 55 / 0.62);
+
+  --elevation-popover: 0 16px 42px oklch(0.06 0.008 55 / 0.46);
+  --elevation-dialog: 0 28px 80px oklch(0.05 0.008 55 / 0.58);
+  --elevation-toast: 0 14px 36px oklch(0.06 0.008 55 / 0.5);
+
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: oklch(0.43 0.025 58);
+  --scrollbar-thumb-hover: oklch(0.53 0.028 58);
+
+}
+
+@media (forced-colors: active) {
+  :root,
+  :root[data-theme="light"],
+  :root[data-theme="dark"] {
+    --color-canvas: Canvas;
+    --color-surface: Canvas;
+    --color-raised: Canvas;
+    --color-hover: Highlight;
+    --color-selected: Highlight;
+    --color-overlay-surface: Canvas;
+    --color-ink: CanvasText;
+    --color-ink-muted: CanvasText;
+    --color-ink-subtle: CanvasText;
+    --color-ink-disabled: GrayText;
+    --color-rule: ButtonBorder;
+    --color-rule-strong: CanvasText;
+    --color-accent: Highlight;
+    --color-accent-strong: Highlight;
+    --color-accent-soft: Canvas;
+    --color-accent-ink: HighlightText;
+    --color-focus: Highlight;
+    --color-info: CanvasText;
+    --color-success: CanvasText;
+    --color-warning: CanvasText;
+    --color-danger: CanvasText;
+    --color-overlay: Canvas;
+    --elevation-popover: none;
+    --elevation-dialog: none;
+    --elevation-toast: none;
+    --scrollbar-track: Canvas;
+    --scrollbar-thumb: CanvasText;
+    --scrollbar-thumb-hover: Highlight;
+    --focus-primary-ring: 0 0 0 2px HighlightText;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms;
+    --duration-base: 0ms;
+    --duration-slow: 0ms;
+    --duration-progress: 2000ms;
+    --motion-fast: 0ms;
+    --motion-base: 0ms;
+    --motion-slow: 0ms;
+  }
 }

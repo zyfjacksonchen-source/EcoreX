@@ -1,0 +1,484 @@
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from fastapi.testclient import TestClient
+
+from ecorex.connectors import InMemoryCredentialVault
+from ecorex.integration import ImageGenerationToolHandler
+from ecorex.server import (
+    BundleIntegrityError,
+    ProductServerSettings,
+    WebBundleManifest,
+    WebFileRecord,
+    build_uvicorn_config,
+    create_product_app,
+)
+from ecorex.session import (
+    Ed25519SessionLeaseVerifier,
+    ManagedSessionLeaseClaims,
+    ManagedSessionService,
+    SessionLeaseSignature,
+    SignedManagedSessionLease,
+    token_digest,
+)
+from ecorex.update import (
+    ReleaseArtifact,
+    ReleaseChannel,
+    ReleaseManifest,
+    ReleaseSource,
+    SignatureEnvelope,
+    SourceKind,
+)
+
+
+ORIGIN = "http://127.0.0.1:8765"
+
+
+def _signature(private_key: Ed25519PrivateKey, payload: bytes) -> SignatureEnvelope:
+    return SignatureEnvelope(
+        algorithm="ed25519",
+        key_id="test-key",
+        value=base64.b64encode(private_key.sign(payload)).decode("ascii"),
+    )
+
+
+def _unsigned_signature() -> SignatureEnvelope:
+    return SignatureEnvelope(
+        algorithm="ed25519",
+        key_id="test-key",
+        value=base64.b64encode(b"0" * 64).decode("ascii"),
+    )
+
+
+def _write_signed_bundle(tmp_path: Path):
+    private_key = Ed25519PrivateKey.generate()
+    public_key = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    web_root = tmp_path / "web"
+    web_root.mkdir(parents=True)
+    javascript = b"document.body.dataset.ready = 'true';\n"
+    javascript_sha = hashlib.sha256(javascript).hexdigest()
+    javascript_path = f"assets/app.{javascript_sha[:12]}.js"
+    (web_root / "assets").mkdir()
+    (web_root / javascript_path).write_bytes(javascript)
+    index = (
+        "<!doctype html><html><head>"
+        "<!--__ECOREX_RUNTIME_CONFIG__-->"
+        f'<script type="module" src="/{javascript_path}"></script>'
+        "</head><body></body></html>"
+    ).encode("utf-8")
+    (web_root / "index.html").write_bytes(index)
+
+    files = (
+        WebFileRecord(
+            path="index.html",
+            size_bytes=len(index),
+            sha256=hashlib.sha256(index).hexdigest(),
+            immutable=False,
+        ),
+        WebFileRecord(
+            path=javascript_path,
+            size_bytes=len(javascript),
+            sha256=javascript_sha,
+            immutable=True,
+        ),
+    )
+    build_digest = hashlib.sha256(b"release-build").hexdigest()
+    web_manifest = WebBundleManifest(
+        schema_version=1,
+        release_id="release-1.0.0-stable-001",
+        version="1.0.0",
+        build_digest=build_digest,
+        bundle_sha256=WebBundleManifest.compute_bundle_sha256(files),
+        entrypoint="index.html",
+        files=files,
+        signature=_unsigned_signature(),
+    )
+    web_manifest = replace(
+        web_manifest,
+        signature=_signature(private_key, web_manifest.canonical_payload()),
+    )
+    web_manifest_path = tmp_path / "web-manifest.json"
+    web_manifest_path.write_bytes(web_manifest.to_json().encode("utf-8"))
+    web_manifest_bytes = web_manifest_path.read_bytes()
+
+    artifact = ReleaseArtifact(
+        artifact_id="web-manifest",
+        platform="all",
+        architecture="all",
+        file_name="web-manifest.json",
+        size_bytes=len(web_manifest_bytes),
+        sha256=hashlib.sha256(web_manifest_bytes).hexdigest(),
+        signature=_unsigned_signature(),
+    )
+    artifact = replace(
+        artifact,
+        signature=_signature(
+            private_key,
+            artifact.signed_payload(
+                release_id=web_manifest.release_id,
+                version=web_manifest.version,
+                build_digest=build_digest,
+            ),
+        ),
+    )
+    sources = (
+        ReleaseSource(
+            source_id="mirror",
+            kind=SourceKind.GITHUB_CN_MIRROR,
+            priority=0,
+            base_url="https://mirror.example/releases",
+        ),
+        ReleaseSource(
+            source_id="github",
+            kind=SourceKind.GITHUB_RELEASE,
+            priority=1,
+            base_url="https://github.example/releases",
+        ),
+        ReleaseSource(
+            source_id="cdn",
+            kind=SourceKind.ECOREX_CDN,
+            priority=2,
+            base_url="https://cdn.example/releases",
+        ),
+    )
+    release_manifest = ReleaseManifest(
+        schema_version=1,
+        release_id=web_manifest.release_id,
+        version=web_manifest.version,
+        build_digest=build_digest,
+        channel=ReleaseChannel.STABLE,
+        created_at="2026-07-10T00:00:00+00:00",
+        sources=sources,
+        artifacts=(artifact,),
+        signature=_unsigned_signature(),
+    )
+    release_manifest = replace(
+        release_manifest,
+        signature=_signature(private_key, release_manifest.canonical_payload()),
+    )
+    release_manifest_path = tmp_path / "release-manifest.json"
+    release_manifest_path.write_text(release_manifest.to_json(), encoding="utf-8")
+    return {
+        "web_root": web_root,
+        "javascript": javascript,
+        "javascript_path": javascript_path,
+        "web_manifest_path": web_manifest_path,
+        "release_manifest_path": release_manifest_path,
+        "public_keys": {"test-key": public_key},
+    }
+
+
+def _settings(tmp_path: Path, signed: dict, *, secret_factory=None):
+    return ProductServerSettings(
+        database_path=tmp_path / "runtime.db",
+        web_root=signed["web_root"],
+        release_manifest_path=signed["release_manifest_path"],
+        web_manifest_path=signed["web_manifest_path"],
+        trusted_public_keys=signed["public_keys"],
+        host="127.0.0.1",
+        port=8765,
+        secret_factory=secret_factory,
+        allow_unmanaged_session_for_testing=True,
+        workspace_roots=(tmp_path,),
+    )
+
+
+def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
+    signed = _write_signed_bundle(tmp_path)
+    secrets = iter(
+        [
+            "x</script><img src=x onerror=alert(1)>" + "b" * 32,
+            "c" * 64,
+        ]
+    )
+    app = create_product_app(
+        _settings(tmp_path, signed, secret_factory=lambda _bytes: next(secrets))
+    )
+    capability_service = app.state.runtime_composition.capability_service
+    assert set(capability_service.handlers) == {
+        "read",
+        "skill_search",
+        "skill_read",
+        "tool_search",
+        "tool_describe",
+        "connector_search",
+        "connector_describe",
+        "connector_read",
+        "connector_write",
+        "artifact_read",
+    }
+    connector_runtime = app.state.runtime_composition.connector_agent_runtime
+    artifact_runtime = app.state.runtime_composition.artifact_read_runtime
+    assert connector_runtime is not None
+    assert artifact_runtime is not None
+    for tool_id in (
+        "connector_search",
+        "connector_describe",
+        "connector_read",
+        "connector_write",
+    ):
+        assert capability_service.handlers[tool_id].__self__ is connector_runtime
+    assert capability_service.handlers["artifact_read"].__self__ is artifact_runtime
+    assert app.state.runtime_composition.availability.installed_packs == frozenset()
+    assert app.state.runtime_composition.availability.disabled_tools == {
+        "cdp": "verified_handler_not_installed",
+        "fetch": "verified_handler_not_installed",
+        "imagegen": "verified_handler_not_installed",
+        "shell": "verified_handler_not_installed",
+        "vision": "verified_handler_not_installed",
+    }
+    client = TestClient(app, base_url=ORIGIN)
+
+    index = client.get("/")
+    assert index.status_code == 200
+    assert index.headers["cache-control"] == "no-store"
+    assert "'nonce-" in index.headers["content-security-policy"]
+    assert "window.__ECOREX_RUNTIME__" in index.text
+    assert "<img src=x onerror=alert(1)>" not in index.text
+    assert "\\u003c/script\\u003e" in index.text
+    assert "csrf" not in index.text.casefold()
+    second_index = client.get("/")
+    assert second_index.headers["content-security-policy"] != index.headers[
+        "content-security-policy"
+    ]
+    assert client.head("/").content == b""
+
+    bearer = app.state.runtime_bearer_token
+    bootstrap = client.get(
+        "/api/v1/bootstrap",
+        headers={"Authorization": f"Bearer {bearer}"},
+    )
+    assert bootstrap.status_code == 200
+    csrf = bootstrap.json()["csrf_token"]
+    created = client.post(
+        "/api/v1/threads",
+        json={"client_request_id": "server-test"},
+        headers={
+            "Authorization": f"Bearer {bearer}",
+            "Origin": ORIGIN,
+            "X-EcoreX-CSRF": csrf,
+        },
+    )
+    assert created.status_code == 201
+
+    for persisted in (path for path in tmp_path.rglob("*") if path.is_file()):
+        payload = persisted.read_bytes()
+        assert bearer.encode("utf-8") not in payload
+        assert csrf.encode("utf-8") not in payload
+
+    asset = client.get(f"/{signed['javascript_path']}")
+    assert asset.content == signed["javascript"]
+    assert asset.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert asset.headers["x-content-type-options"] == "nosniff"
+    assert asset.headers["etag"]
+
+
+@pytest.mark.parametrize(
+    "tool_id",
+    (
+        "connector_search",
+        "connector_describe",
+        "connector_read",
+        "connector_write",
+        "artifact_read",
+    ),
+)
+def test_product_app_refuses_to_replace_core_connector_or_artifact_handler(
+    tmp_path,
+    tool_id,
+):
+    signed = _write_signed_bundle(tmp_path)
+    settings = replace(
+        _settings(tmp_path, signed),
+        capability_handlers={tool_id: lambda _arguments: {"replaced": True}},
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="a caller cannot replace a Core capability-discovery handler",
+    ):
+        create_product_app(settings)
+
+
+def test_product_app_disables_imagegen_when_managed_image_service_is_absent(
+    tmp_path,
+):
+    signed = _write_signed_bundle(tmp_path)
+    settings = replace(
+        _settings(tmp_path, signed),
+        capability_handlers={"imagegen": ImageGenerationToolHandler()},
+    )
+    app = create_product_app(settings)
+    availability = app.state.runtime_composition.availability
+    assert "imagegen" in app.state.runtime_composition.capability_service.handlers
+    assert availability.disabled_tools["imagegen"] == (
+        "managed_image_orchestration_not_configured"
+    )
+
+
+def test_product_settings_inject_cloud_authoritative_session(tmp_path):
+    signed = _write_signed_bundle(tmp_path)
+    session_key = Ed25519PrivateKey.generate()
+    session_public = session_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    now = datetime.now(UTC).replace(microsecond=0)
+    access_token = "product-managed-access-token"
+    refresh_token = "product-managed-refresh-token"
+    claims = ManagedSessionLeaseClaims(
+        lease_id="product-session-lease",
+        account_id="product-account",
+        organization_id="product-organization",
+        display_name="产品用户",
+        roles=("member",),
+        model_allowlist=("ecorex-chat",),
+        quota={"managed_requests": 50},
+        admin_denies=("shell",),
+        issued_at=now - timedelta(minutes=1),
+        expires_at=now + timedelta(hours=1),
+        revision=1,
+        access_token_sha256=token_digest(access_token),
+        refresh_token_sha256=token_digest(refresh_token),
+    )
+    lease = SignedManagedSessionLease(
+        claims=claims,
+        signature=SessionLeaseSignature(
+            algorithm="ed25519",
+            key_id="product-session-key",
+            value=base64.b64encode(
+                session_key.sign(claims.canonical_payload())
+            ).decode("ascii"),
+        ),
+    )
+    service = ManagedSessionService(
+        tmp_path / "runtime.db",
+        vault=InMemoryCredentialVault(),
+        verifier=Ed25519SessionLeaseVerifier(
+            {"product-session-key": session_public}
+        ),
+    )
+    service.install(
+        lease,
+        access_token=access_token,
+        refresh_token=refresh_token,
+        client_request_id="product-managed-login",
+    )
+    settings = replace(
+        _settings(tmp_path, signed),
+        managed_session_service=service,
+        allow_unmanaged_session_for_testing=False,
+    )
+    app = create_product_app(settings)
+    client = TestClient(app, base_url=ORIGIN)
+    bootstrap = client.get(
+        "/api/v1/bootstrap",
+        headers={"Authorization": f"Bearer {app.state.runtime_bearer_token}"},
+    )
+    assert bootstrap.status_code == 200
+    assert bootstrap.json()["login"]["account_id"] == "product-account"
+    assert bootstrap.json()["login"]["display_name"] == "产品用户"
+    assert bootstrap.json()["policy_lease"]["lease_id"] == lease.claims.lease_id
+
+
+def test_spa_fallback_does_not_swallow_api_or_unknown_files(tmp_path):
+    signed = _write_signed_bundle(tmp_path)
+    app = create_product_app(_settings(tmp_path, signed))
+    client = TestClient(app, base_url=ORIGIN)
+    assert client.get("/threads/example").status_code == 200
+    missing_api = client.get("/api/v1/not-a-route")
+    assert missing_api.status_code == 401
+    bearer = app.state.runtime_bearer_token
+    missing_api = client.get(
+        "/api/v1/not-a-route",
+        headers={"Authorization": f"Bearer {bearer}"},
+    )
+    assert missing_api.status_code == 404
+    assert missing_api.headers["content-type"].startswith("application/json")
+    assert client.get("/API/v1/not-a-route").status_code == 404
+    assert client.get("/assets/missing.js").status_code == 404
+    assert client.get("/.env").status_code == 404
+    assert client.get("/%2e%2e/secret.txt").status_code == 404
+    assert client.get("/assets/%2e%2e/index.html").status_code == 404
+
+
+def test_host_header_and_non_loopback_launcher_are_rejected(tmp_path):
+    signed = _write_signed_bundle(tmp_path)
+    settings = _settings(tmp_path, signed)
+    app = create_product_app(settings)
+    client = TestClient(app, base_url=ORIGIN)
+    invalid_host = client.get("/", headers={"Host": "attacker.example"})
+    assert invalid_host.status_code == 400
+    assert invalid_host.headers["x-content-type-options"] == "nosniff"
+    duplicate_host = client.get(
+        "/",
+        headers=[("Host", settings.authority), ("Host", "attacker.example")],
+    )
+    assert duplicate_host.status_code == 400
+    config = build_uvicorn_config(app, settings)
+    assert config.host == "127.0.0.1"
+    assert config.port == 8765
+    assert config.proxy_headers is False
+    assert config.access_log is False
+    with pytest.raises(ValueError, match="loopback"):
+        replace(settings, host="0.0.0.0")
+    with pytest.raises(ValueError, match="loopback"):
+        replace(settings, host="127.0.0.2")
+
+
+def test_startup_fails_closed_for_tampered_bundle_or_web_manifest(tmp_path):
+    signed = _write_signed_bundle(tmp_path)
+    javascript_path = signed["web_root"] / signed["javascript_path"]
+    javascript_path.write_bytes(b"x" * len(signed["javascript"]))
+    with pytest.raises(BundleIntegrityError, match="SHA-256"):
+        create_product_app(_settings(tmp_path, signed))
+
+    signed = _write_signed_bundle(tmp_path / "second")
+    signed["web_manifest_path"].write_bytes(
+        signed["web_manifest_path"].read_bytes() + b" "
+    )
+    with pytest.raises(BundleIntegrityError, match="web manifest"):
+        create_product_app(_settings(tmp_path / "second", signed))
+
+
+def test_unlisted_web_root_file_is_not_accepted(tmp_path):
+    signed = _write_signed_bundle(tmp_path)
+    (signed["web_root"] / "stale.js").write_text("stale", encoding="utf-8")
+    with pytest.raises(BundleIntegrityError, match="unlisted"):
+        create_product_app(_settings(tmp_path, signed))
+
+
+def test_startup_rejects_tampered_release_manifest(tmp_path):
+    signed = _write_signed_bundle(tmp_path)
+    raw = json.loads(signed["release_manifest_path"].read_text(encoding="utf-8"))
+    raw["version"] = "1.0.1"
+    signed["release_manifest_path"].write_text(
+        json.dumps(raw),
+        encoding="utf-8",
+    )
+    with pytest.raises(BundleIntegrityError, match="release manifest"):
+        create_product_app(_settings(tmp_path, signed))
+
+
+def test_startup_rejects_manifest_path_symlinks(tmp_path):
+    signed = _write_signed_bundle(tmp_path)
+    link = tmp_path / "release-link.json"
+    try:
+        link.symlink_to(signed["release_manifest_path"])
+    except OSError as error:
+        pytest.skip(f"symlink creation is unavailable: {error}")
+    settings = replace(_settings(tmp_path, signed), release_manifest_path=link)
+    with pytest.raises(BundleIntegrityError, match="regular non-link"):
+        create_product_app(settings)

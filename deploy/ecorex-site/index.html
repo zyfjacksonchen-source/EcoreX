@@ -3,39 +3,29 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>EcoreX WebUI 下载与部署</title>
+    <meta http-equiv="Cache-Control" content="no-store" />
+    <title>EcoreX v1.0 Bootstrap 下载</title>
     <meta
       name="description"
-      content="EcoreX WebUI 面向 Windows 与 macOS 的一键本地部署入口，使用 manifest 校验包进行安装和更新。"
+      content="EcoreX v1.0 Windows x64、macOS Apple Silicon 与 Intel 的签名 Bootstrap 发布发现页。"
     />
-    <link rel="icon" href="./assets/icon.png" />
-    <script>
-      (() => {
-        const cdnHost = "dl.ecoremedia.net";
-        const oldHost = "mvdcm.ecoremedia.net";
-        const path = window.location.pathname.replace(/\/+$/, "");
-        if (window.location.hostname === oldHost && (path === "/ecorex-agent" || path === "/ecorex-agent/index.html")) {
-          window.location.replace(`https://${cdnHost}${window.location.pathname}${window.location.search}${window.location.hash}`);
-        }
-      })();
-    </script>
-    <link rel="preload" as="image" href="./assets/icon.png" />
-    <link rel="preload" as="image" href="./assets/ecorex-app-preview.png" />
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="icon" href="./assets/icon.3a9a24c09a41.png" />
+    <link rel="preload" as="image" href="./assets/ecorex-app-preview.6b606a2eecd4.png" />
+    <link rel="stylesheet" href="./styles.fe77b0f2a5b1.css" />
   </head>
   <body>
     <div class="page-shell">
       <header class="topbar">
-        <a class="brand" href="./" aria-label="EcoreX WebUI">
-          <img src="./assets/icon.png" alt="" />
+        <a class="brand" href="./" aria-label="EcoreX v1.0">
+          <img src="./assets/icon.3a9a24c09a41.png" alt="" />
           <span>EcoreX</span>
-          <small data-site-version>v0.3.0</small>
+          <small data-site-version>v1.0</small>
         </a>
         <nav class="nav-links" aria-label="页面导航">
-          <a href="#install-guide">如何安装</a>
+          <a href="#trust-chain">验签逻辑</a>
           <a href="#download">下载</a>
           <a href="#workflow">更新逻辑</a>
-          <a href="./admin/">管理端</a>
+          <a href="/admin/">管理端</a>
           <button class="icon-button" type="button" data-theme-toggle aria-label="切换明暗模式">
             <span data-theme-icon>◐</span>
           </button>
@@ -43,148 +33,99 @@
       </header>
 
       <main>
-        <section class="hero" aria-label="EcoreX WebUI">
-          <img class="hero-media" src="./assets/ecorex-app-preview.png" alt="EcoreX WebUI 界面预览" />
+        <section class="hero" aria-label="EcoreX v1.0 Bootstrap">
+          <img class="hero-media" src="./assets/ecorex-app-preview.6b606a2eecd4.png" alt="EcoreX WebUI 界面预览" />
           <div class="hero-copy">
-            <p class="eyebrow">WebUI-first release</p>
-            <h1>EcoreX WebUI</h1>
+            <p class="eyebrow">Signed Bootstrap / Thin WebUI</p>
+            <h1>EcoreX v1.0</h1>
             <p class="lead">
-              Windows 与 macOS 统一走本地 WebUI：一键安装、生成桌面网页入口、通过 manifest 和 SHA256 校验包更新。
-              桌面端自动更新通道已停止作为默认路径。
+              下载页只提供发布发现信息。Bootstrap 使用内置 Ed25519 信任根验签完整发布清单，
+              再按国内 GitHub 镜像 → GitHub Releases → EcoreX CDN 下载同一份 Core。
             </p>
             <div class="hero-actions">
-              <a class="button primary" href="#install-guide">查看安装步骤</a>
-              <a class="button ghost" href="#download">选择系统下载</a>
+              <a class="button primary" href="#download">选择系统</a>
+              <a class="button ghost" href="#trust-chain">了解信任边界</a>
             </div>
           </div>
         </section>
 
-        <section class="release-strip" aria-label="发布状态">
+        <section class="release-strip" aria-label="发布发现状态">
           <div>
-            <span>当前版本</span>
-            <strong data-version>0.3.0</strong>
+            <span>发布版本</span>
+            <strong data-version>尚未发布</strong>
           </div>
           <div>
-            <span>默认入口</span>
-            <strong>WebUI</strong>
+            <span>清单状态</span>
+            <strong data-manifest-check>尚未核对</strong>
           </div>
           <div>
-            <span>支持系统</span>
-            <strong>Windows / macOS</strong>
+            <span>支持目标</span>
+            <strong>Win x64 / macOS arm64+x64</strong>
           </div>
           <div>
-            <span>更新时间</span>
-            <strong data-updated>2026-06-30</strong>
+            <span>发布日期</span>
+            <strong data-updated>—</strong>
           </div>
         </section>
 
-        <section class="install-guide" id="install-guide" aria-label="如何安装 EcoreX WebUI">
+        <section class="install-guide" id="trust-chain" aria-label="EcoreX 发布信任链">
           <div class="section-heading">
-            <p class="eyebrow">How to install</p>
-            <h2>Windows / macOS 安装指南</h2>
+            <p class="eyebrow">Trust boundary</p>
+            <h2>下载页不是签名权威</h2>
           </div>
           <div class="guide-grid">
             <article class="guide-panel">
-              <h3>首次安装</h3>
-              <ol class="guide-steps">
-                <li>
-                  <strong>Windows：打开 PowerShell</strong>
-                  <span>在开始菜单搜索 PowerShell，普通打开即可；不需要提前安装 npm 或下载安装包。</span>
-                </li>
-                <li>
-                  <strong>Windows：粘贴命令并回车</strong>
-                  <div class="command-block guide-command">
-                    <code>powershell -ExecutionPolicy Bypass -NoProfile -Command '$p=Join-Path $env:TEMP "install-webui.ps1"; curl.exe -L --retry 8 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o $p "https://dl.ecoremedia.net/ecorex-agent/install-webui.ps1"; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; powershell -ExecutionPolicy Bypass -NoProfile -File $p'</code>
-                    <button type="button" data-copy-install-command="win32">复制命令</button>
-                  </div>
-                </li>
-                <li>
-                  <strong>macOS：打开终端</strong>
-                  <span>按 Command + Space 打开聚焦搜索，输入“终端”或 “Terminal”，回车打开。</span>
-                </li>
-                <li>
-                  <strong>macOS：粘贴命令并回车</strong>
-                  <div class="command-block guide-command">
-                    <code>curl -fsSL https://dl.ecoremedia.net/ecorex-agent/install-webui.sh | bash</code>
-                    <button type="button" data-copy-install-command="darwin">复制命令</button>
-                  </div>
-                </li>
-                <li>
-                  <strong>等待自动完成</strong>
-                  <span>脚本会读取 manifest、下载对应系统的 WebUI 包、校验 SHA256、安装本地运行时，并自动打开浏览器里的 EcoreX。</span>
-                </li>
-              </ol>
+              <h3>1. 发现发布</h3>
+              <p>页面读取一个 no-store 的静态 pointer，用于展示平台、文件大小、摘要提示和三个下载源。</p>
             </article>
             <article class="guide-panel">
-              <h3>关闭后重新打开</h3>
-              <ol class="guide-steps">
-                <li>
-                  <strong>优先双击桌面入口</strong>
-                  <span>Windows 安装完成后桌面会生成 EcoreX WebUI 入口，双击会先启动本地服务，再重新打开浏览器里的 EcoreX。</span>
-                </li>
-                <li>
-                  <strong>macOS 双击桌面入口</strong>
-                  <span>macOS 安装完成后桌面会生成 EcoreX WebUI 入口，双击会先恢复本地服务，再重新打开浏览器里的 EcoreX。</span>
-                </li>
-                <li>
-                  <strong>入口打不开时重跑安装命令</strong>
-                  <span>如果本地运行时文件被移动或清理，重新执行同一条安装命令会修复入口并打开 EcoreX。</span>
-                </li>
-              </ol>
+              <h3>2. Bootstrap 验签</h3>
+              <p>Bootstrap 重新下载 exact <code>release-manifest.json</code>，使用内置公钥验证清单和目标制品签名。</p>
             </article>
             <article class="guide-panel">
-              <h3>以后更新</h3>
-              <ol class="guide-steps">
-                <li>
-                  <strong>仍然运行同一条命令</strong>
-                  <span>安装脚本每次都会重新读取线上 manifest，下载最新 WebUI 包并校验 SHA256 后再替换。</span>
-                </li>
-                <li>
-                  <strong>下载中断直接重跑</strong>
-                  <span>如果出现 Recv failure、Operation timed out 或网络中断，重新执行同一条命令即可继续重试下载。</span>
-                </li>
-                <li>
-                  <strong>项目和会话保留在本机</strong>
-                  <span>更新网页端不会清空项目列表；本机工作区、项目文件夹和 .ecorex/ui-state.json 会继续沿用。</span>
-                </li>
-              </ol>
+              <h3>3. 同摘要故障转移</h3>
+              <p>只有当三源 receipt 证明 size 与 SHA-256 完全一致时，公开 pointer 才能从 unpublished 原子切换为 published。</p>
             </article>
           </div>
+          <p class="trust-note">
+            浏览器不声称已验签。
+            <a data-manifest-link hidden rel="noopener noreferrer">查看待 Bootstrap 验签的签名清单</a>
+          </p>
         </section>
 
-        <section class="downloads" id="download" aria-label="下载 EcoreX WebUI">
+        <section class="downloads" id="download" aria-label="下载 EcoreX Bootstrap">
           <div class="section-heading">
             <p class="eyebrow">Install / Update</p>
-            <h2>一条命令完成安装或更新</h2>
+            <h2>选择预构建的 Bootstrap</h2>
           </div>
           <div class="download-grid" data-downloads>
             <article class="download-card skeleton">
-              <span class="platform-icon">...</span>
-              <h3>正在读取版本</h3>
+              <span class="platform-icon">···</span>
+              <h3>正在读取发布发现信息</h3>
               <p>请稍候。</p>
             </article>
           </div>
         </section>
 
-        <section class="capability-band" id="workflow" aria-label="WebUI 更新逻辑">
-          <img src="./assets/ecorex-ecosystem-hub.png" alt="EcoreX 能力结构预览" />
+        <section class="capability-band" id="workflow" aria-label="EcoreX 更新逻辑">
+          <img src="./assets/ecorex-ecosystem-hub.910fc71c7642.png" alt="EcoreX 能力结构预览" />
           <div>
             <p class="eyebrow">Update policy</p>
-            <h2>构建在发布机，更新在 manifest。</h2>
+            <h2>后台下载，用户确认后刷新激活。</h2>
             <div class="feature-list">
-              <span title="发布机执行 npm 构建，生成 Windows/macOS WebUI 包。">npm 发布构建</span>
-              <span title="客户端只下载 manifest 指向的包，并校验 SHA256。">哈希校验安装</span>
-              <span title="重新运行一键命令即可安装最新包，不依赖用户本机 npm。">跨端一致更新</span>
-              <span title="项目目录和文件读取由本地 WebUI 服务授权处理。">本地文件桥接</span>
+              <span title="用户机器不执行 git pull、npm build 或 pip 在线组装。">预构建签名制品</span>
+              <span title="发布清单、Bootstrap 与 Core 均使用 Ed25519 + SHA-256。">密码学验证</span>
+              <span title="国内 GitHub 镜像优先，故障后才切换 GitHub 与 CDN。">三源同摘要</span>
+              <span title="首装和更新共用 InstallCoordinator 锁与 side-by-side slot。">原子激活与回滚</span>
             </div>
           </div>
         </section>
       </main>
 
       <footer class="footer">
-        <span>EcoreX WebUI</span>
+        <span>EcoreX v1.0 Public Bootstrap Discovery</span>
       </footer>
     </div>
-    <script src="./site.js?v=0.3.0-webui-0001"></script>
+    <script type="module" src="./site.c27cf0b2588d.js"></script>
   </body>
 </html>

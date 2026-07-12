@@ -12,6 +12,8 @@ QR.png
 nohup.out
 tmp
 .tmp-*/
+/.ci/
+/.candidate/
 plugins.json
 *.log
 logs/
@@ -52,8 +54,6 @@ desktop/release-local*/
 desktop/release-unsigned-v*/
 desktop/runtime/
 deploy/ecorex-site/downloads/
-deploy/ecorex-admin-api/*.sqlite3
-deploy/ecorex-admin-api/*.db
 release-artifacts/
 tmp/ecorex-ui-smoke/
 
@@ -62,7 +62,3 @@ dist/
 build/
 *.egg-info/
 .cow.pid
-!desktop/build/
-!desktop/build/icon.png
-!desktop/build/icon.ico
-!desktop/build/icon.icns

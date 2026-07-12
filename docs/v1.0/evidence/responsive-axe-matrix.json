@@ -1,0 +1,415 @@
+{
+  "contract_version": "1.0",
+  "captured_at": "2026-07-10T22:36:26.973Z",
+  "browser": "codex-in-app-browser",
+  "results": [
+    {
+      "matrix_id": "1440x900-light",
+      "contract_version": "1.0",
+      "viewport": {
+        "expected_width": 1440,
+        "expected_height": 900,
+        "actual_width": 1440,
+        "actual_height": 900,
+        "root_client_width": 1440,
+        "root_client_height": 900,
+        "device_pixel_ratio": 1.5
+      },
+      "theme": {
+        "expected": "light",
+        "actual": "light"
+      },
+      "horizontal_overflow": {
+        "present": false,
+        "overflow_pixels": 0,
+        "content_width": 1440
+      },
+      "key_controls": {
+        "navigation": {
+          "present": true,
+          "visible": true
+        },
+        "model_selector": {
+          "present": true,
+          "visible": true
+        },
+        "composer": {
+          "present": true,
+          "visible": true
+        },
+        "task_type": {
+          "present": true,
+          "visible": true
+        },
+        "artifact_shelf": {
+          "present": true,
+          "visible": true
+        }
+      },
+      "passed": true,
+      "accessibility": {
+        "engine": "4.12.1",
+        "violations": [],
+        "incomplete": [],
+        "passes": 36
+      }
+    },
+    {
+      "matrix_id": "1440x900-dark",
+      "contract_version": "1.0",
+      "viewport": {
+        "expected_width": 1440,
+        "expected_height": 900,
+        "actual_width": 1440,
+        "actual_height": 900,
+        "root_client_width": 1440,
+        "root_client_height": 900,
+        "device_pixel_ratio": 1.5
+      },
+      "theme": {
+        "expected": "dark",
+        "actual": "dark"
+      },
+      "horizontal_overflow": {
+        "present": false,
+        "overflow_pixels": 0,
+        "content_width": 1440
+      },
+      "key_controls": {
+        "navigation": {
+          "present": true,
+          "visible": true
+        },
+        "model_selector": {
+          "present": true,
+          "visible": true
+        },
+        "composer": {
+          "present": true,
+          "visible": true
+        },
+        "task_type": {
+          "present": true,
+          "visible": true
+        },
+        "artifact_shelf": {
+          "present": true,
+          "visible": true
+        }
+      },
+      "passed": true,
+      "accessibility": {
+        "engine": "4.12.1",
+        "violations": [],
+        "incomplete": [],
+        "passes": 33
+      }
+    },
+    {
+      "matrix_id": "1024x768-light",
+      "contract_version": "1.0",
+      "viewport": {
+        "expected_width": 1024,
+        "expected_height": 768,
+        "actual_width": 1024,
+        "actual_height": 768,
+        "root_client_width": 1024,
+        "root_client_height": 768,
+        "device_pixel_ratio": 1.5
+      },
+      "theme": {
+        "expected": "light",
+        "actual": "light"
+      },
+      "horizontal_overflow": {
+        "present": false,
+        "overflow_pixels": 0,
+        "content_width": 1024
+      },
+      "key_controls": {
+        "navigation": {
+          "present": true,
+          "visible": true
+        },
+        "model_selector": {
+          "present": true,
+          "visible": true
+        },
+        "composer": {
+          "present": true,
+          "visible": true
+        },
+        "task_type": {
+          "present": true,
+          "visible": true
+        },
+        "artifact_shelf": {
+          "present": true,
+          "visible": true
+        }
+      },
+      "passed": true,
+      "accessibility": {
+        "engine": "4.12.1",
+        "violations": [],
+        "incomplete": [],
+        "passes": 36
+      }
+    },
+    {
+      "matrix_id": "1024x768-dark",
+      "contract_version": "1.0",
+      "viewport": {
+        "expected_width": 1024,
+        "expected_height": 768,
+        "actual_width": 1024,
+        "actual_height": 768,
+        "root_client_width": 1024,
+        "root_client_height": 768,
+        "device_pixel_ratio": 1.5
+      },
+      "theme": {
+        "expected": "dark",
+        "actual": "dark"
+      },
+      "horizontal_overflow": {
+        "present": false,
+        "overflow_pixels": 0,
+        "content_width": 1024
+      },
+      "key_controls": {
+        "navigation": {
+          "present": true,
+          "visible": true
+        },
+        "model_selector": {
+          "present": true,
+          "visible": true
+        },
+        "composer": {
+          "present": true,
+          "visible": true
+        },
+        "task_type": {
+          "present": true,
+          "visible": true
+        },
+        "artifact_shelf": {
+          "present": true,
+          "visible": true
+        }
+      },
+      "passed": true,
+      "accessibility": {
+        "engine": "4.12.1",
+        "violations": [],
+        "incomplete": [],
+        "passes": 33
+      }
+    },
+    {
+      "matrix_id": "768x900-light",
+      "contract_version": "1.0",
+      "viewport": {
+        "expected_width": 768,
+        "expected_height": 900,
+        "actual_width": 768,
+        "actual_height": 900,
+        "root_client_width": 768,
+        "root_client_height": 900,
+        "device_pixel_ratio": 1.5
+      },
+      "theme": {
+        "expected": "light",
+        "actual": "light"
+      },
+      "horizontal_overflow": {
+        "present": false,
+        "overflow_pixels": 0,
+        "content_width": 768
+      },
+      "key_controls": {
+        "navigation": {
+          "present": true,
+          "visible": true
+        },
+        "model_selector": {
+          "present": true,
+          "visible": true
+        },
+        "composer": {
+          "present": true,
+          "visible": true
+        },
+        "task_type": {
+          "present": true,
+          "visible": true
+        },
+        "artifact_shelf": {
+          "present": true,
+          "visible": true
+        }
+      },
+      "passed": true,
+      "accessibility": {
+        "engine": "4.12.1",
+        "violations": [],
+        "incomplete": [],
+        "passes": 36
+      }
+    },
+    {
+      "matrix_id": "768x900-dark",
+      "contract_version": "1.0",
+      "viewport": {
+        "expected_width": 768,
+        "expected_height": 900,
+        "actual_width": 768,
+        "actual_height": 900,
+        "root_client_width": 768,
+        "root_client_height": 900,
+        "device_pixel_ratio": 1.5
+      },
+      "theme": {
+        "expected": "dark",
+        "actual": "dark"
+      },
+      "horizontal_overflow": {
+        "present": false,
+        "overflow_pixels": 0,
+        "content_width": 768
+      },
+      "key_controls": {
+        "navigation": {
+          "present": true,
+          "visible": true
+        },
+        "model_selector": {
+          "present": true,
+          "visible": true
+        },
+        "composer": {
+          "present": true,
+          "visible": true
+        },
+        "task_type": {
+          "present": true,
+          "visible": true
+        },
+        "artifact_shelf": {
+          "present": true,
+          "visible": true
+        }
+      },
+      "passed": true,
+      "accessibility": {
+        "engine": "4.12.1",
+        "violations": [],
+        "incomplete": [],
+        "passes": 36
+      }
+    },
+    {
+      "matrix_id": "390x844-light",
+      "contract_version": "1.0",
+      "viewport": {
+        "expected_width": 390,
+        "expected_height": 844,
+        "actual_width": 390,
+        "actual_height": 844,
+        "root_client_width": 390,
+        "root_client_height": 844,
+        "device_pixel_ratio": 1.5
+      },
+      "theme": {
+        "expected": "light",
+        "actual": "light"
+      },
+      "horizontal_overflow": {
+        "present": false,
+        "overflow_pixels": 0,
+        "content_width": 390
+      },
+      "key_controls": {
+        "navigation": {
+          "present": true,
+          "visible": true
+        },
+        "model_selector": {
+          "present": true,
+          "visible": true
+        },
+        "composer": {
+          "present": true,
+          "visible": true
+        },
+        "task_type": {
+          "present": true,
+          "visible": true
+        },
+        "artifact_shelf": {
+          "present": true,
+          "visible": true
+        }
+      },
+      "passed": true,
+      "accessibility": {
+        "engine": "4.12.1",
+        "violations": [],
+        "incomplete": [],
+        "passes": 33
+      }
+    },
+    {
+      "matrix_id": "390x844-dark",
+      "contract_version": "1.0",
+      "viewport": {
+        "expected_width": 390,
+        "expected_height": 844,
+        "actual_width": 390,
+        "actual_height": 844,
+        "root_client_width": 390,
+        "root_client_height": 844,
+        "device_pixel_ratio": 1.5
+      },
+      "theme": {
+        "expected": "dark",
+        "actual": "dark"
+      },
+      "horizontal_overflow": {
+        "present": false,
+        "overflow_pixels": 0,
+        "content_width": 390
+      },
+      "key_controls": {
+        "navigation": {
+          "present": true,
+          "visible": true
+        },
+        "model_selector": {
+          "present": true,
+          "visible": true
+        },
+        "composer": {
+          "present": true,
+          "visible": true
+        },
+        "task_type": {
+          "present": true,
+          "visible": true
+        },
+        "artifact_shelf": {
+          "present": true,
+          "visible": true
+        }
+      },
+      "passed": true,
+      "accessibility": {
+        "engine": "4.12.1",
+        "violations": [],
+        "incomplete": [],
+        "passes": 36
+      }
+    }
+  ]
+}

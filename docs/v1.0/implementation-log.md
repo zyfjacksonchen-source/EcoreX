@@ -1,0 +1,3743 @@
+# EcoreX v1.0 implementation log
+
+## Recovery header
+
+- Goal: implement the approved EcoreX v1.0 productization architecture.
+- Status: active.
+- Public target: `1.0.0` directly from the v0.3.0 product line.
+- Baseline branch: `codex/ecorex-v0.3.0-hardening`.
+- Baseline commit observed at start: `9ac3b958`.
+- Worktree policy: preserve all pre-existing modified and untracked files; never
+  reset or overwrite them to obtain a clean tree.
+- Current recovery point: foundation batch in progress. New v1 modules are being
+  built under `ecorex/` with isolated tests under `tests/v1/`.
+
+## 2026-07-10 - Goal initialization
+
+### Completed
+
+- Converted the approved plan into a persistent long-running goal.
+- Added the machine-readable recovery pointer and durable engineering ledgers.
+- Established `ecorex.__version__` as the v1 product version source and made
+  `pyproject.toml` consume it dynamically with a Python 3.11 runtime floor.
+- Audited the existing runtime, artifact presentation, UI shape/elevation,
+  release scripts, data storage, permissions, and update flow.
+- Locked the initial module boundaries: runtime/protocol, office artifacts, and
+  update coordinator are developed as separate slices before legacy integration.
+- Assigned isolated file ownership to parallel implementation workers to avoid
+  collisions in the dirty worktree.
+
+### In progress
+
+- `ecorex/runtime/**` and `ecorex/protocol/**`: event store, Thread/Turn/Item,
+  durable jobs, HITL, and `/api/v1` contracts.
+- `ecorex/artifacts/**`: authoritative office artifact classification, identity,
+  feedback, and structured retouch contracts.
+- `ecorex/update/**`: signed release manifest contract and transactional update
+  coordinator.
+- Root integration: v1 version source, packaging metadata, development records,
+  and cross-slice verification.
+
+### Next recovery action
+
+1. Collect the three isolated implementation slices.
+2. Review their diffs without touching pre-existing user changes.
+3. Integrate package metadata and a single `1.0.0` version source.
+4. Run focused v1 tests, record failures, and only then wire `/api/v1` into the
+   existing Web runtime behind a feature flag.
+
+### Verification completed in this batch
+
+- `python -m pytest -q tests/v1/test_version_source.py` -> `1 passed`.
+- `python -m json.tool docs/v1.0/progress.json` -> valid.
+- `python -m compileall -q ecorex` -> pass at the foundation checkpoint.
+
+## 2026-07-10 - Independent foundation audit and capability policy slice
+
+### Completed
+
+- Ran independent read-only reviews of Runtime, Artifact, and Update rather
+  than accepting the initial green tests as release evidence.
+- Recorded release blockers covering snapshot/watermark gaps, lease fencing,
+  API authentication, HITL invariants, artifact classification bypasses,
+  internal-ID leakage, cross-process CAS races, user-confirmation bypass,
+  fail-open signature verdicts, and staging TOCTOU.
+- Converted each review into an isolated remediation batch with explicit file
+  ownership and a "failing regression first" requirement. These batches are
+  still in progress and the affected domains are not considered verified.
+- Added `ecorex/capabilities/**`: a backend-owned versioned `ToolSpec`
+  registry, availability and governance stages, direct/deferred/hidden
+  exposure, deterministic routing snapshots, progressive `tool_search` /
+  `tool_describe` / guarded `tool_call`, and redacted invocation records.
+- Added a managed model catalog with modality-specific defaults and strict
+  canonical alias resolution. `image2`, `image-2`, `IMAGE_2`, and
+  `gpt-image-2` resolve to the same image model without requiring a Thread.
+- Verified that image intent promotes image generation without deleting
+  `read`, `fetch`, `vision`, CDP, or shell candidates. Unknown tools and models
+  fail closed; full access skips approvals but never overrides administrator
+  hard-deny.
+
+### Verification
+
+- `python -m pytest -q tests/v1/test_capability_planner.py
+  tests/v1/test_capability_invocation.py tests/v1/test_managed_model_catalog.py`
+  -> `12 passed`.
+
+### In progress
+
+- Runtime audit remediation: consistent SQLite read snapshots, lease fencing,
+  authenticated local API/CSRF, HITL and terminal-state invariants, event
+  immutability, idempotency and durable SSE semantics.
+- Artifact audit remediation: normalized fail-closed classification, trusted
+  deliverable declarations, safe revision/lineage DTOs, cross-process CAS and
+  atomic retouch/rendition transactions.
+- Update audit remediation: explicit activation confirmation, strict verifier
+  verdicts, recovery re-verification, platform/version admission, safe slot
+  switching, bounded downloads and known-good semantics.
+
+### Next recovery action
+
+1. Collect and review the three remediation batches.
+2. Run each domain suite independently, then the full `tests/v1` suite.
+3. Mount the managed catalog and capability snapshots into authenticated
+   `/api/v1/bootstrap` and Turn creation only after the Runtime security patch
+   has landed.
+
+## Batch completion template
+
+Append one section per batch containing:
+
+- Scope and owned files.
+- Decisions added or changed, with ADR references.
+- Tests and exact results.
+- Known gaps and rollback path.
+- The single next recovery action.
+
+## 2026-07-10 - Hardened Runtime, Artifact authority, migration and thin WebUI
+
+### Completed
+
+- Hardened the SQLite event store, Thread/Turn/Item state machine, durable job
+  leasing/fencing, HITL recovery, idempotency, authenticated SSE, exact
+  loopback Origin/CSRF checks, and the 72-hour durable security lease.
+- Added immutable Runtime configuration/model/permission snapshots and durable
+  capability snapshots. Turn admission now canonicalizes managed models and
+  captures config, capability, permission, and model-catalog IDs atomically;
+  Job lifecycle events recover the same context from an immutable relation.
+- Replaced hard-coded bootstrap model/connector lists with backend-owned model,
+  capability, and connector catalogs. Image intent promotes `imagegen` without
+  removing read/fetch/vision/CDP/shell.
+- Added a same-origin product server that verifies a signed release manifest
+  and signed Web bundle manifest before serving an in-memory, allowlisted React
+  bundle. It enforces loopback/Host boundaries, no-store HTML, immutable hashed
+  assets, CSP, and per-process bearer injection.
+- Completed office Artifact classification, content-addressed storage,
+  revisions/lineage, feedback and structured retouch. Added immutable
+  account/thread/turn ownership; the public API cannot enumerate another
+  account or internal implementation artifacts.
+- Mounted Artifact routes under Runtime security. Public Artifact events first
+  commit to a leased SQLite outbox and then idempotently append to the owning
+  Thread event stream with the Turn snapshot context.
+- Completed copy-on-write v0.3 migration for conversations/messages/projects,
+  memory, declared office artifacts, connector metadata and skill state. Legacy
+  secrets are AES-GCM quarantined with an externally supplied key and never
+  activated or uploaded.
+- Hardened InstallCoordinator recovery, signature/digest revalidation, exact
+  first-install pins, user-confirmed activation, safe slots, known-good
+  rollback, size/disk bounds and cross-platform archive extraction.
+- Added the deterministic release builder for Windows x64 and macOS arm64/x64,
+  real Ed25519 artifact/manifest signatures, fixed source priority, atomic
+  output and CycloneDX inventory. The independently signed Web manifest is the
+  current follow-up batch.
+- Promoted `desktop/src/v1/AppV1.tsx` to the only renderer entry. Removed the
+  legacy React/App CSS source and tracked Electron build/runtime/signing chain.
+  The remaining WebUI package has no Electron, tldraw, markdown-it, wait-on or
+  electron-builder dependency and reports zero npm vulnerabilities.
+- Implemented the single clipped WorkspaceSurface, semantic OKLCH tokens,
+  hover/focus/touch Artifact action rail, authenticated Artifact list/preview/
+  download/feedback, inline image previews, and a structured rectangle-based
+  precise-retouch workspace without CSP-incompatible inline styles.
+
+### Independent verification highlights
+
+- Runtime reviewer: 33 Runtime tests passed; product server 17 passed and one
+  platform-permission skip.
+- Artifact domain after ownership integration: 88 tests passed.
+- Migration reviewer: 12 migration tests passed; the last stable full v1 tree
+  before the concurrent Web-manifest follow-up was 242 passed, 4 skipped.
+- Update reviewer: 42 update tests passed, 2 platform skips.
+- Release builder reviewer: 22 builder tests passed, 1 platform skip.
+- WebUI: 11 reducer/transport tests passed; TypeScript passed; Vite produced one
+  376.40 kB hashed JS asset and one 29.79 kB hashed CSS asset; npm audit is zero.
+- Design gate now requires the legacy monolith to be absent and reports zero
+  legacy colour/radius/shadow/z-index debt.
+
+### Known open work (not complete)
+
+- Model Gateway, actual Agent job worker/tool handlers, checkpointed long-task
+  execution and cloud Control Plane/WSS push are not yet wired.
+- Connector persistence/OS credential vault is in independent final review.
+- Release WebBundleManifest builder, updater HTTP transport, trusted-key
+  rotation/revocation, admin rollout service and install bootstrap are active
+  follow-up batches.
+- Migration canonical project/memory/connector/skill consumers still need
+  Runtime APIs; older unknown v0.3 schema variants remain explicitly reported.
+- Browser screenshot/accessibility regression and Windows/macOS real-machine
+  update/permission tests remain release blockers.
+
+### Next recovery action
+
+1. Finish and merge connector durability and signed Web-manifest builder.
+2. Implement the Agent worker/Model Gateway boundary and durable audit/replay.
+3. Add update/control-plane APIs and wire the WebUI activation flow.
+4. Run the full v1 suite from a quiescent tree, then browser visual/a11y matrix.
+
+## 2026-07-10 - Managed Model Gateway worker lifecycle
+
+### Completed
+
+- Added a strict managed Model Gateway transport boundary and a lease-fenced
+  `AgentTurnWorker`. Model deltas, tool calls, continuation requests, retries,
+  terminal state, and HITL checkpoints now persist through the Runtime rather
+  than through browser state.
+- Added durable tool-execution identity and result records. Non-idempotent
+  executions with an uncertain prior result stop at a conflict-resolution
+  interaction instead of being silently repeated.
+- Added `AgentWorkerSupervisor` as the ASGI lifecycle owner for a bounded worker
+  pool. It starts only when a managed gateway is explicitly injected, drains on
+  shutdown, cancels after a bounded timeout, and relies on expired durable
+  leases for crash recovery.
+- Separated the managed model catalog from model-service availability in
+  `/api/v1/bootstrap`. The catalog is still available before the first message;
+  an unconfigured gateway is represented as `unavailable` instead of a false
+  ready state. The thin WebUI preserves model selection and disables only model
+  submission while history and local Artifacts remain usable.
+- Product server settings can inject the gateway and capability handlers into
+  the local Runtime without placing provider credentials in the React bundle.
+
+### Verification
+
+- `15 passed, 1 skipped`: supervisor lifecycle, Worker, Runtime API, and signed
+  product-server tests.
+- `27 passed`: Runtime composition, hardening, and version-source regressions.
+- `npm run typecheck` passed and `npm run test:v1` passed all 11 reducer/client
+  tests after adding the `model_service` contract.
+
+### Known open work (not complete)
+
+- The Control Plane must still provision/refresh the gateway credential and
+  publish dynamic service health; the current injection point is intentionally
+  credential-provider agnostic.
+- Office tool handlers still need to create scoped Artifact revisions and
+  conversational Artifact Items through the authoritative services.
+- Connector durability and the real SHA-named Web production build are still
+  running independent final checks.
+
+### Next recovery action
+
+1. Finish real SHA-256 Web dist generation and its signed release/server E2E.
+2. Integrate durable connector instances, vault-backed auth, health and outbox
+   into Runtime bootstrap and `/api/v1` routes.
+3. Implement persistent permission settings and the update/control-plane API.
+
+## 2026-07-10 - Persistent permission authority and content-addressed Web dist
+
+### Completed
+
+- Added a SQLite-backed permission authority for the local account. Default and
+  full-access preferences survive Runtime restarts, mutations require CSRF and
+  a client idempotency ID, and an append-only request audit records each change.
+- Every future Turn now obtains a newly verified immutable permission snapshot
+  from the authority. Existing Turn/Job contexts retain their original policy;
+  delayed retries cannot resurrect a permission profile the user subsequently
+  revoked. Administrator hard-denies remain effective under full access.
+- Added the settings mutation contract and thin WebUI control. The current mode
+  is continuously visible, enabling full access is explicit, and returning to
+  default is one click; errors remain in the Runtime transport error channel.
+- Replaced Rollup's non-authoritative filename hash with a deterministic
+  post-build content-addressing gate. It rewrites the asset dependency DAG and
+  `index.html`, verifies every final filename against final-byte SHA-256, then
+  swaps the directory atomically. A second run is byte-identical.
+- The Web gate rejects missing/orphaned/cyclic assets, links/reparse points,
+  unsafe paths/types, inline script/style, external entry resources and all
+  known legacy overlay markers. Real Vite output now passes through
+  `WebBundleBuildInput`, signed release manifests and the product-server loader
+  in one executable E2E.
+
+### Verification
+
+- Permission API/composition/supervisor/capability focused checks: 9 passed;
+  dedicated permission persistence/hard-deny/delayed-retry checks: 2 passed.
+- Web: TypeScript passed; `npm run test:v1` passed 15 tests; design gate passed;
+  npm audit reported zero vulnerabilities; real production build passed.
+- Signed real-dist release/server E2E and Web/release domain: 20 passed, one
+  platform skip (extended release/server run: 37 passed, two skips).
+
+### Known open work (not complete)
+
+- The permission batch is under an independent adversarial review; findings
+  must be merged before its milestone is treated as release-ready.
+- Cyclic Rollup chunk references are deliberately a release error because
+  recursive content addresses have no stable byte identity. Future code
+  splitting must keep the emitted asset dependency graph acyclic.
+- Runtime update API/control-plane push, update activation UI, and cross-platform
+  package activation tests are still open.
+
+### Next recovery action
+
+1. Merge permission and connector independent audits.
+2. Mount connector state/auth/health/action APIs and dynamic bootstrap catalog.
+3. Add signed update-feed transport, background preparation and explicit
+   “update and refresh” activation contract.
+
+## 2026-07-10 - Durable Connector mount and signed Bootstrap supervisor
+
+### Completed
+
+- Added a versioned Connector repository with durable OAuth/instance/health/
+  invocation/idempotency/outbox state, lease fencing, restart recovery and
+  fail-closed OS credential-vault selection. OAuth state is stored only as a
+  digest; the exact loopback callback is protected by one-time state, PKCE,
+  expiry and consumption fencing.
+- Mounted the backend-owned Connector catalog, OAuth begin/callback/complete,
+  health, invoke, disconnect and uncertain-operation resolution contracts at
+  `/api/v1/connectors`. Bootstrap now projects adapter availability and current
+  health, and newly accepted Turns record a fresh availability/configuration
+  snapshot rather than trusting React state.
+- Bridged Connector outbox facts idempotently into an internal Runtime audit
+  Thread. Public connector output is validated against action-specific schemas
+  and rejects credential material, sensitive URI components and undeclared
+  fields.
+- Added the signed slot Bootstrap supervisor. It validates slot metadata,
+  receipt, payload identity and known-good pointers independently, launches the
+  Runtime without a shell using a constrained environment, handles the
+  dedicated restart exit code, forwards signals and bounds restart attempts.
+
+### Verification
+
+- `58 passed, 1 skipped`: Connector contract/persistence/vault/Runtime mount and
+  Bootstrap supervisor suites. The skip is a platform-specific credential-
+  manager check on the current Windows environment.
+
+### Known open work (not complete)
+
+- The React Connector popover still needs live connect/reconnect/disconnect
+  actions and OAuth completion polling; that work is active in a separate
+  frontend batch.
+- Feishu and Tencent Docs production adapters still require real credentials,
+  provider sandbox tests and signed capability-pack delivery before GA.
+- The online updater factory must wire its restart requester to the Bootstrap
+  supervisor; the update/control-plane chain is in independent adversarial
+  review.
+
+### Next recovery action
+
+1. Finish live Connector WebUI actions without exposing credentials.
+2. Finish update/control-plane WSS and signed activation review.
+3. Merge Replay/trace/audit outbox, then run the quiescent full v1 suite.
+
+## 2026-07-10 - Durable cloud Managed Model Gateway boundary
+
+### Completed
+
+- Added the cloud-side authenticated managed-model stream service. Account
+  principals carry an explicit model allowlist and quota period; local Runtime
+  requests cannot select an undeclared provider or submit provider keys.
+- Added a WAL-backed request/event ledger. A request ID is bound to its full
+  request digest and account, each provider event commits before NDJSON is
+  emitted, duplicate delivery replays the same terminal stream, and terminal
+  event plus request completion commit atomically.
+- Added lease fencing and fail-closed crash recovery. An expired active model
+  request is not invoked a second time; it is fenced and converges to a
+  retryable `gateway_execution_uncertain` fact. Append-only triggers and event
+  digests detect mutation.
+- Changed local Agent model-request identity to include the durable Job attempt.
+  In-attempt replay keeps one identity, while an explicitly scheduled retry can
+  make a new provider attempt instead of replaying the previous retryable
+  terminal failure forever.
+
+### Verification
+
+- `16 passed`: managed Gateway client/server and Agent worker focused suites,
+  including auth, allowlist, quota, idempotent replay, provider-error redaction,
+  sequence validation, expired-lease fencing, tamper detection and new-attempt
+  request identity.
+
+### Known open work (not complete)
+
+- The server requires an independent security review before release-ready
+  status. Production still needs the account-session authenticator, quota
+  policy source, real cloud provider Adapter and deployment/TLS controls.
+- A real long-stream/disconnect soak is still required; focused tests exercise
+  cancellation and recovery contracts but not an external provider network.
+
+## 2026-07-10 - Signed online update and rollout Control Plane closure
+
+### Completed
+
+- Corrected the WSS client/server contract so channel, platform, architecture
+  and current version participate in the real handshake. WSS requires hostname-
+  validating TLS and forbids redirects, preventing a bearer token from being
+  forwarded to another origin.
+- Hardened release feed and resumable artifact transport around content
+  encoding/length, exact ranges, parent links/reparse points, hardlinks,
+  exclusive file creation and opened-file identity checks.
+- Activation now re-fetches the authoritative feed and requires the staged
+  manifest to match in full, then re-verifies manifest/artifact signatures.
+  Pause or kill switch can durably cancel before pointer switch; recovery from
+  drain/activate reauthorizes, while a switched pointer follows an explicit
+  roll-forward health/known-good path.
+- Made channel kill switch durable and added an explicit clear operation. New
+  rollouts and client feeds fail closed while killed. Control Plane audit-chain
+  verification runs at transactional and distribution reads.
+- Added `build_product_update_composition`, which wires trusted Ed25519 keys,
+  HTTPS feed, WSS hint, hardened fetcher, InstallCoordinator,
+  RuntimeUpdateService and the delayed Bootstrap restart requester without
+  permissive health/drain/migration defaults.
+- Update shutdown now waits for in-flight blocking work and idempotently closes
+  feed, signal source and coordinator fetcher. WSS wake ordering no longer loses
+  an update hint.
+
+### Verification
+
+- Independent batch full v1 report: `361 passed, 7 skipped`.
+- Root reproduction: `20 passed, 1 skipped` for update transport/service, real
+  TLS WSS and Control Plane rollout/feed contracts.
+- The real network test launches a TLS Uvicorn listener with a trusted test CA,
+  activates a rollout and receives `update.available` through `websockets`.
+
+### Known open work (not complete)
+
+- The in-memory WSS hub is single-process; production multi-instance Control
+  Plane needs Redis/NATS-equivalent shared Pub/Sub. Five-minute signed feed
+  polling remains the correctness fallback.
+- A narrow distributed TOCTOU remains between feed reauthorization and the
+  local pointer switch. Eliminating it entirely requires a short-lived signed
+  activation lease bound to release, client and staged digest.
+- Public CA/load balancer, KMS key rotation, live domestic mirror/GitHub/CDN
+  outage drill and signed platform packages remain deployment/GA gates.
+
+## 2026-07-10 - Live Connector WebUI lifecycle
+
+### Completed
+
+- Added strict Connector catalog/auth/health/disconnect TypeScript contracts and
+  Runtime client methods with authenticated mutation headers and stable client
+  request IDs.
+- Extracted Connector lifecycle state from the main Runtime session hook into a
+  dedicated module. It owns catalog refresh, HTTPS authorization URL checks,
+  45-second bounded OAuth completion polling, connect/reconnect/health/
+  disconnect state and recoverable errors.
+- Replaced the display-only popover with stable/Beta grouping, explicit
+  unconfigured/connected/degraded/error states, add-account/reconnect/check and
+  second-confirmation disconnect actions. Keyboard, touch targets, loading,
+  disabled, notice and error states use the locked Design System tokens.
+- Fixed production API base normalization, which previously could turn the
+  injected `/api/v1` base into `/api/v1/api/v1` and make every Connector action
+  fail only in the signed bundle.
+
+### Verification
+
+- Root reproduction: TypeScript passed; `npm run test:v1` passed 19 tests;
+  Design System gate reported zero raw colour/radius/shadow/z-index/
+  `transition: all`/layout-transition violations; production Vite build and
+  final-byte content-addressing completed with two assets.
+
+### Known open work (not complete)
+
+- Connector mutations must still persistently consume the submitted
+  `client_request_id`; a backend follow-up is active.
+- OAuth callback needs a safe close/parent-notification page, reauthorization
+  needs one atomic backend operation, and non-OAuth credentials must remain
+  disabled until an OS-vault-only submission contract exists.
+- Browser screenshot, focus, touch and responsive verification remains a final
+  UI gate; static/build checks do not replace it.
+
+## 2026-07-10 - Durable thread catalog and authoritative history projection
+
+### Completed
+
+- Added authenticated `/api/v1/threads` keyset pagination with active/archived
+  filters. The opaque cursor is HMAC-bound to its filter and now enforces one
+  canonical URL-safe Base64 representation, so textually altered cursor aliases
+  fail closed even when they would otherwise decode to the same bytes.
+- Added idempotent rename, archive and restore mutations. Replayed stale client
+  request IDs return the current projection and cannot roll a later title or
+  lifecycle state backward.
+- Added first-Turn server-side title generation and made every committed Thread
+  event advance `threads.updated_at`, keeping catalog ordering and deterministic
+  Replay on the same event-defined timeline.
+- Extended Mock Replay for rename, generated title, archive and restore events;
+  the replayed Thread projection is checked against the authoritative Runtime
+  projection rather than UI-local state.
+
+### Verification
+
+- `14 passed`: thread catalog, Replay/observability and Runtime kernel/API
+  focused suites, including cursor tamper/filter rejection, pagination without
+  duplicates, stale mutation replay, CSRF and whitespace-title rejection.
+
+### Known open work (not complete)
+
+- React task navigation, rename/archive controls and ShareSnapshot UI still
+  need to consume these backend contracts.
+- Final multi-process/full-suite verification is intentionally deferred until
+  the concurrently hardened Connector, Gateway and retouch branches are idle.
+
+## 2026-07-10 - Independent Managed Gateway and Worker hardening
+
+### Completed
+
+- Enforced bounded, variant-strict model streams: request/event/stream sizes,
+  JSON complexity, Unicode, sequence, identity, continuation and terminal
+  framing are validated at both Gateway and Runtime boundaries.
+- Made account/model allowlists, monthly quota and active-concurrency admission
+  one immediate transaction. Expired leases release concurrency while their old
+  execution token remains fenced.
+- Strengthened the durable request ledger with cross-account request-ID
+  rejection, append-only hash-linked events, atomic terminal commits, exact
+  terminal replay and disconnect cancellation without a second Provider call.
+- Added lease heartbeats during first-token silence and asynchronous tools;
+  restart can resume an idempotent `tool_running` checkpoint, and lease loss
+  cancels/fences execution.
+
+### Verification
+
+- Independent focused run: `39 passed`; adjacent Runtime/Capability: `18
+  passed`.
+- Root reproduction of the combined Gateway, Worker, Job, Runtime and
+  Capability surface: `57 passed`.
+
+### Known open work (not complete)
+
+- Production requires an externally anchored audit signature/WORM target,
+  account-session composition, shared transactional storage for horizontal
+  scale, real Provider deployment and TCP half-close/proxy-buffering E2E.
+- Synchronous blocking tools must execute outside the event loop to preserve
+  heartbeats. Explicit policy retries intentionally receive a new provider
+  attempt identity and may incur another call after an uncertain prior attempt.
+
+## 2026-07-10 - Connector lifecycle authority closure
+
+### Completed
+
+- Added a schema-v5 durable lifecycle request ledger. Auth begin, health,
+  disconnect and reauthorization consume stable client request IDs, replay the
+  same fingerprint, reject conflicting reuse, lease concurrent ownership and
+  persist terminal failure/success.
+- Reauthorization is one recoverable vault/database transition: new credential
+  first, atomic instance switch, durable old-credential cleanup. Account
+  mismatch preserves the existing connection; restart resumes unfinished vault
+  cleanup.
+- Non-OAuth secret submission remains fail-closed until an OS-vault-only UI
+  contract exists. Browser OAuth callback is a nonce-CSP/no-store page using an
+  exact loopback parent origin, `postMessage` and safe window close without
+  reflecting state, code or token.
+
+### Verification
+
+- Independent quiescent full v1 run at this boundary: `411 passed, 7 skipped`.
+- Root Connector reproduction: `50 passed`; Web TypeScript, 19 Node tests and
+  production build were also reported green by the domain owner.
+
+### Known open work (not complete)
+
+- The compatibility mount still synthesizes a server request ID when an older
+  client omits the lifecycle header; the v1 Web always supplies one. Removal of
+  that compatibility path is a GA protocol-cutover task.
+- Real Feishu/Tencent tenant OAuth, read/write/revoke and Windows/macOS OS-vault
+  tests remain environment gates.
+
+## 2026-07-10 - Deterministic Replay and encrypted local audit outbox
+
+### Completed
+
+- Mock Replay reconstructs a Thread through any valid watermark and fork
+  lineage without invoking models, tools, connectors or Artifact writes. Live
+  Replay requires explicit confirmation and creates a new Turn/Job after
+  replanning current model, capability and permission authority.
+- Added OTel-compatible trace projection for thread, turn, model, tool, human
+  and Artifact spans without prompts, tool arguments or results.
+- Added an AES-256-GCM local audit outbox, OS-vault key reference, redaction,
+  leased drain/retry, retention and backfill. Tamper or wrong-key reads fail
+  closed rather than dropping the business database.
+
+### Verification
+
+- Root Replay/observability plus Thread-history reproduction: `11 passed`.
+
+### Known open work (not complete)
+
+- A production cloud audit collector with tenant RBAC/admin-access audit and a
+  concrete OTLP exporter still has to be deployed and exercised end to end.
+
+## 2026-07-10 - Resumable administrator release promotion CLI
+
+### Completed
+
+- Added the `ecorex-release` entry point and a strict HTTPS Control Plane
+  client. It requires an explicit host allowlist, refuses redirects and
+  credentialed/non-origin endpoints, bounds JSON in both directions and reads
+  the administrator bearer only at request time from a named environment
+  variable.
+- `ecorex-release promote` validates a signed release manifest and an exact
+  evidence map for all 16 mandatory gates, then orchestrates candidate creation,
+  gate recording, publication, rollout creation and optional activation.
+- A cross-process lock plus atomically replaced promotion journal persists one
+  stable request ID per step and the resulting rollout ID. Re-running after an
+  ambiguous network failure replays the same server operations and cannot
+  create a second rollout. The journal contains no administrator credential.
+- Added explicit rollout activate/pause/halt, channel kill-switch and client
+  distribution commands so routine release control no longer requires ad-hoc
+  deployment scripts.
+
+### Verification
+
+- `7 passed`: strict admin HTTPS client, redirect/auth/contract failure cases,
+  resumable promotion journal and existing Control Plane publication flow.
+- `py_compile` and scoped `git diff --check` passed; Black is not installed in
+  the current workspace and was therefore not claimed as a formatting gate.
+
+### Known open work (not complete)
+
+- A browser administrator release dashboard, production identity provider,
+  KMS-backed token issuance and multi-instance signal Pub/Sub remain open.
+
+## 2026-07-10 - Supervised structured retouch in the product Runtime
+
+### Completed
+
+- Bound each retouch request and the unified Durable Job in the same SQLite
+  transaction. The worker uses leases, heartbeat, checkpoint, deadline,
+  retry/dead-letter and a stable external idempotency key; restart asks the
+  image-edit service to recover that key before it can execute again.
+- The managed adapter sends structured base/selected/reference revisions,
+  normalized annotations and global instruction as bounded HTTPS multipart. It
+  has no prompt field and never publishes source bytes or internal annotation
+  layers.
+- Success atomically creates the new Artifact revision, completed Durable Job,
+  public Turn Artifact item, preview metadata, change summary and inspection
+  regions. Failure/cancel/recovery converge on matching Runtime and Artifact
+  terminal facts.
+- Wired the coordinator and Worker supervisor into the formal Runtime lifespan.
+  When no managed image-edit adapter is configured, `/retouch` now fails before
+  persisting either an Artifact retouch row or an orphan Durable Job.
+- Added a backend `retouch_service` readiness projection. The thin WebUI keeps
+  the precise-retouch control visible but disabled with the exact backend reason
+  instead of silently dropping it or accepting a doomed request.
+
+### Verification
+
+- Domain owner full v1 checkpoint before mainline wiring: `435 passed, 7
+  skipped`; retouch focused `9 passed` and Artifact/Runtime cross-regression `93
+  passed`.
+- Root mainline reproduction: `18 passed, 1 platform skip` across supervised
+  Runtime retouch, domain execution, Artifact integration and product server.
+- Web TypeScript, `25/25` Node tests, strict Design System gate and production
+  content-addressed build passed after readiness/disabled-state integration.
+
+### Known open work (not complete)
+
+- Production still needs the deployed managed image-edit endpoint with durable
+  `Idempotency-Key` and `/recover` semantics, plus a real visual edit/compare
+  browser E2E against that service.
+
+## 2026-07-10 - Independent ShareSnapshot security closure
+
+### Completed
+
+- Enforced account scope on every local share read/write and validated the
+  immutable payload digest, duplicated metadata, status and allowlisted HTTPS
+  URL before returning a projection. Concurrent create/publish/revoke, expiry
+  and same-timestamp ordering now converge deterministically.
+- Public payload construction basename-sanitizes Artifact names and admits only
+  user messages plus public Artifact metadata; paths, tool payloads, source
+  files, internal layers and binary content cannot cross the boundary.
+- Hardened the Runtime publisher to port-443 HTTPS without redirects or
+  compression, with an 8 MiB request and 64 KiB response ceiling, exact length
+  checks and sanitized exception causality.
+- Cloud share tokens remain write-only: only SHA-256 is stored. Snapshot state
+  has a keyed MAC and the lifecycle audit is an HMAC chain; every write verifies
+  both, while public reads perform constant-time/O(1) state authentication.
+  Cross-account use returns NotFound and produces a different public token.
+- Added pre-JSON body limits and non-reflective validation errors on the cloud
+  endpoint. Revoke, expiry, state/audit mutation and snapshot deletion all fail
+  closed.
+
+### Verification
+
+- Independent share-focused run: `28 passed`; independent full v1 checkpoint:
+  `440 passed, 7 skipped`.
+- Root reproduction including local/cloud share, transport, Runtime list/UI
+  contract and administrator Control Plane clients: `35 passed`.
+
+### Known open work (not complete)
+
+- Local Runtime SQLite still stores the complete published URL. If local-at-rest
+  token secrecy is mandatory, encrypt it through the OS vault or use an
+  authenticated reissue endpoint.
+- Crash-stuck publishing/revoking can be retried idempotently but is not yet
+  auto-enqueued as a Durable Job. Token-key rotation/versioning, deployment
+  disk/KMS encryption, explicit preview-schema migration and large-scale audit
+  checkpoints remain GA infrastructure tasks.
+
+## 2026-07-10 - Verified capability packs and executable tool contracts
+
+### Completed
+
+- Added a deliberately bounded JSON-Schema subset at the backend tool trust
+  boundary. Every `ToolSpec` is checked when registered; every model-supplied
+  argument is validated before its handler is called, and every result is
+  normalized and validated before it can enter a Durable Job, event or model
+  continuation. Unsupported remote references/keywords fail closed.
+- Replaced the built-in tools' catch-all input objects with bounded contracts
+  for read, fetch, vision, CDP, shell and image generation. This prevents a
+  Gateway response from smuggling undeclared fields into a privileged adapter.
+- Added the v1 signed Capability Pack manifest. Pack identity, SemVer, Runtime
+  API, platform/architecture, artifact name/size/SHA-256, sorted tool bindings
+  and each backend-owned `ToolSpec` digest are Ed25519-covered. Artifact reads
+  reject links/reparse points and detect open/read races.
+- A verified pack can bind only an exact, callable handler set and cannot
+  redefine a ToolSpec, shadow another pack/core handler or claim installation
+  without executable adapters. The resulting availability projection marks
+  every catalog tool without a real handler as disabled.
+- Added a bounded workspace `read` handler. It authorizes explicit roots,
+  rejects traversal and links, checks file identity, limits size/chunks and
+  returns `workspace://` locators instead of host absolute paths.
+
+### Verification
+
+- `27 passed`: capability planning/invocation/snapshot/Agent Worker regression
+  plus signed-pack verification/binding, tamper failure, schema enforcement,
+  truthful availability and workspace path confinement.
+
+### Known open work (not complete)
+
+- The verified handler set still has to be wired into the Product Runtime after
+  the active managed-session composition lands. Production fetch, vision, CDP,
+  sandbox-command and image adapters remain signed deployment packs/providers;
+  the Runtime must not advertise them before that binding exists.
+
+## 2026-07-10 - Managed session authority and truthful Product capabilities
+
+### Completed
+
+- Added an Ed25519-signed managed-session lease capped at 72 hours. Account,
+  organization, roles, canonical model allowlist, quotas, administrator denies,
+  token commitments and monotonic revision are verified on every snapshot and
+  bearer read. Plaintext access/refresh tokens exist only in the OS credential
+  vault; SQLite stores the signed lease and commitments.
+- Session install is a two-stage durable transaction (`staged -> vault_written
+  -> committed`) with restart recovery, cleanup journal, stale-request
+  fingerprinting, monotonic revision and append-only redacted audit. Logout is
+  CSRF/digest/request-ID bound and cannot remove a newer login.
+- Product mode now requires the signed session whenever a Model Gateway is
+  configured. Only an explicit test-only override permits unmanaged mode. The
+  Gateway client must use the same `ManagedSessionService` credential object.
+- Bootstrap projects the real identity, organization, roles, lease, quotas and
+  admin denies. Models are filtered only by canonical ID; unknown cloud entries
+  never become local aliases. Mutations revalidate the lease while expired
+  sessions retain scoped read access to local history and Artifacts.
+- Product capability composition now builds availability from actual handlers:
+  one root-confined `read`, trusted core adapters and Ed25519-verified packs.
+  Missing handlers are explicitly disabled. The old Runtime default no longer
+  pretends that the image pack is installed.
+- Retouch startup requires both the verified image capability pack and managed
+  image adapter. In managed mode, the signed lease must also allow
+  `gpt-image-2`; bootstrap reports the exact unavailable reason otherwise.
+
+### Verification
+
+- Managed session/Product owner gate: `23 passed, 1 skipped`; adjacent session,
+  Gateway, Runtime and Product regression: `78 passed, 1 skipped`.
+- Root Product capability/session/retouch convergence: `23 passed, 1 skipped`,
+  followed by `10 passed, 1 skipped` after verified-pack readiness fencing.
+
+### Known open work (not complete)
+
+- The cloud identity provider/device-authorization broker and first-login UI
+  still need an end-to-end deployment contract; no unsafe local token-import
+  endpoint was introduced as a substitute.
+
+## 2026-07-10 - Retouch owns a dedicated backend Turn
+
+### Completed
+
+- A precise-retouch command now atomically creates its own backend-managed Turn,
+  completed user message and exactly one `artifact_retouch` Durable Job. It
+  never attaches execution state or result items to the source image Turn and
+  never creates a competing `agent_turn` Job.
+- The backend captures a fresh config/capability/permission/model snapshot for
+  the retouch intent and validates it inside the shared Artifact transaction.
+  A stale permission, disallowed image model or unavailable image capability
+  rolls the entire request back with no Turn, Job or Artifact retouch row.
+- Worker success/failure/retry transitions, public Artifact item, preview,
+  change summary and inspection regions now belong to that Retouch Turn and
+  replay deterministically after restart.
+
+### Verification
+
+- Root convergence across Retouch domain/Runtime/Event Store/Jobs/Replay:
+  `28 passed`. The concurrency fixture replays the same request across eight
+  initial and eight restarted callers and observes one Turn/message/Job.
+
+## 2026-07-10 - Capability packs enter the signed release graph
+
+### Completed
+
+- Added `capability-pack` as a deterministic ReleaseBuilder artifact kind.
+  Every pack ZIP receives a separately signed canonical sidecar containing the
+  pack/runtime versions, platform, architecture, artifact size/SHA-256 and
+  exact sorted ToolSpec bindings; both ZIP and sidecar are also outer release
+  artifacts covered by the release manifest.
+- Release construction rejects unknown tools, tools that do not declare the
+  named pack, duplicate pack targets, sidecar collisions and over-limit packs.
+  The Runtime verifier is the only constructor of a verified-pack proof, so a
+  caller cannot instantiate a trusted marker around arbitrary bytes.
+
+### Verification
+
+- ReleaseBuilder/capability-pack/security regression: `25 passed, 1 platform
+  skip`; focused pack Runtime plus release round trip: `8 passed`.
+
+## 2026-07-10 - Refresh-safe administrator release console
+
+### Completed
+
+- Mounted the content-addressed, SRI-checked `/admin` Workbench and authenticated
+  read-only `/api/v1/admin/resume` route in the formal Control Plane app.
+- Candidate, rollout, canary/stable kill-switch and client distribution facts
+  are captured in one SQLite WAL read transaction. Explicit latest IDs use
+  persisted business time, append-only creation sequence and stable ID tie
+  breaking; the page never infers state from array order or memory.
+- The console covers candidate creation, all 16 release gates, publication,
+  rollout activation/pause/halt, channel kill switches and distribution. Admin
+  credentials remain ephemeral and are not stored in browser storage.
+
+### Verification
+
+- Root admin Web/Control Plane/CLI regression: `19 passed`, including app
+  rebuild/refresh recovery, authorization and a concurrent commit snapshot
+  consistency test.
+
+## 2026-07-10 - ShareSnapshot external effects become Durable Jobs
+
+### Completed
+
+- Share creation and revocation now commit the local Share state, one Durable
+  Job, its binding and `job.queued` in the same SQLite transaction. The HTTP
+  API returns `publishing`/`revoking`; it never holds a browser request open
+  while calling the remote service.
+- Dedicated `share_publish` and `share_revoke` workers use lease, heartbeat,
+  checkpoint, deadline, retry/dead-letter and stable external idempotency. A
+  restart reclaims expired leases without creating a second public snapshot.
+- Job payloads contain only the action and `share_id`. Conversation content,
+  Artifact paths, account identity, public URL and provider token stay behind
+  the Share repository/publisher boundary.
+- Expiry or revoke fences an in-flight publish result. A late provider success
+  cannot make the URL visible again and causes an idempotent remote revoke.
+  Publish/revoke terminal facts and Share terminal state are committed
+  atomically.
+- The Share supervisor is part of the Runtime lifecycle and is not started
+  without a valid managed session. Logout stops it before the same-slot Runtime
+  restart.
+
+### Verification
+
+- Share owner focused gate: `36 passed`; adjacent Runtime/Product regression:
+  `35 passed, 1 platform skip`; final focused cleanup gate: `10 passed`.
+- The post-Share full v1 checkpoint reached `501 passed, 8 skipped`. Later
+  device-login/Product/Web changes still require one final quiescent rerun.
+
+## 2026-07-10 - Managed device login and same-slot session reload
+
+### Completed
+
+- Added a durable OAuth-style device flow. SQLite stores only hashed request
+  identity and public challenge facts; `device_code`, access token and refresh
+  token are confined to the OS credential vault and the trusted broker/session
+  boundary.
+- The broker transport accepts only an allowlisted HTTPS/443 origin, two fixed
+  endpoints, bounded JSON, no redirect and stable idempotency. The returned
+  managed lease is still verified by the existing Ed25519 session authority
+  before any account/model/policy fact becomes active.
+- Polling uses a durable lease and restart-safe attempts. Pending, slow-down,
+  authorization, denial, expiry and transient provider failure have explicit
+  states; concurrent pollers cannot install the grant twice.
+- Added authenticated local routes for start, safe status and poll. They remain
+  protected by the Runtime bearer, exact Origin and CSRF, while only these two
+  POST routes are exempt from requiring an already-active managed session.
+- A successful login requests process exit `86`. The signed Bootstrap
+  supervisor re-verifies and restarts the same slot; release activation remains
+  the separate exit `85` path and still requires a pointer change.
+- Product Server now accepts and identity-checks the device service against the
+  exact `ManagedSessionService`; `/bootstrap.login_service` truthfully reports
+  whether first-login is available.
+
+### Verification
+
+- Device domain/transport/router gate: `6 passed`.
+- Root managed-session/device/Product adjacency: `44 passed, 1 platform skip`.
+- Independent Product-to-Runtime black-box convergence: `21 passed, 1 platform
+  skip`. It proves login-before-model, local bearer/Origin/CSRF enforcement,
+  zero device/token plaintext in API/SQLite/WAL, restart fencing and signed
+  identity after app reconstruction. This entry does not claim a production
+  identity-provider deployment.
+
+## 2026-07-10 - Thin WebUI interaction and static/Mock GA closure
+
+### Completed
+
+- The React client consumes the expanded managed bootstrap contract, keeps
+  model selectors usable before a Thread exists and blocks model/permission
+  mutations while unauthenticated. Device login keeps only flow/user-code
+  facts in memory, opens HTTPS verification links and refreshes only after the
+  backend reports a scheduled same-slot restart.
+- One reducer owns terminal thinking cleanup, reconnect/gap recovery, retry,
+  queued work and persisted HITL. Interaction controls have a re-entry guard;
+  closed mobile navigation is removed from the focus order and the drawer
+  constrains keyboard focus.
+- Artifact projections replace stale Item state. Fine pointers receive the
+  hover/focus action rail; coarse pointers receive a real dialog-backed bottom
+  sheet. Retouch renders the returned image, change summary and inspection
+  regions rather than a local prompt or text-only success claim.
+- Forced-colors, two-ring focus, semantic contrast and the approved
+  `WorkspaceSurface`/Workbench system were hardened. The strict CSS gate finds
+  no raw color, arbitrary spacing/radius/z-index, `100vw` or `transition: all`
+  debt in the four v1 style files.
+- Added a same-origin GA Mock Runtime covering bootstrap/CSRF/SSE, first-turn
+  terminal, retry/queue, HITL, image2, Artifact/Retouch, unique shares and
+  default/full permissions. It is repeatable with `npm run ga:serve` and does
+  not replace real-browser evidence.
+
+### Verification
+
+- TypeScript passed; Web tests `39/39`; standalone Mock E2E `2/2`; production
+  build passed with `1811` modules and two final-byte content-addressed assets.
+- Hallmark static/contrast/design gates and scoped diff check passed. Evidence
+  is durable in `.hallmark/log.json` and `.hallmark/browser-ga.json`.
+- The Browser integration returned `No browser is available` and inventory
+  `[]`. Multi-viewport screenshots, axe, actual keyboard/touch, forced-colors
+  and reduced-motion remain explicitly `not_run_no_browser`; no standalone
+  Playwright evidence was substituted.
+
+### Discovered contract gap
+
+- Artifact projections advertise `open/reveal`, but no backend intent endpoint
+  existed. The WebUI correctly withheld those entries instead of inventing a
+  local filesystem action. A backend-authoritative implementation is now an
+  active follow-up batch.
+
+## 2026-07-10 - Packaged Product Runtime entrypoint
+
+### Completed
+
+- `ecorex serve --host --port` and `ecorex-product` now start the v1 Product
+  Runtime. The command accepts no bearer, API key, config path or install-root
+  argument and normalizes errors without echoing native vault/network details.
+- Startup is permitted only from the Bootstrap-selected signed current slot.
+  It re-verifies the Release/Core receipt, canonical `runtime-config.json`,
+  platform/architecture, every path ancestor and the exact signed Web bundle;
+  all mutable paths remain confined to the install root.
+- The entrypoint composes the OS vault, managed session, device broker, Model
+  Gateway and update service. An absent or expired lease starts the local
+  unauthenticated shell with model Workers closed, so first login is possible
+  without weakening the managed model boundary.
+- ReleaseBuilder requires an explicit `product_runtime=True` Core and one
+  signed React bundle. It deterministically injects the Web tree/manifest into
+  Core and rejects implicit, Web-less or legacy WebChannel/Electron inputs.
+- The loader and Runtime lifespan now have single resource ownership. Failed
+  dependency construction, repeated Web verification failure and an
+  unauthenticated no-Worker shutdown close device broker, update transports and
+  Gateway exactly once; the normal Worker path does not double-close Gateway.
+
+### Verification
+
+- Product owner convergence: `114 passed, 4 platform/environment skips`.
+- Root entrypoint/Bootstrap/Product/session/Worker reproduction: `49 passed, 3
+  platform skips`. Python compilation, help contract and whitespace checks
+  passed; only the existing Starlette multipart deprecation warning remains.
+
+### Known composition gap
+
+- A configured Capability Pack is fully verified and requires an exact trusted
+  adapter set, but the formal CLI still supplies no production adapter
+  resolver. This remains active P0 composition work rather than being described
+  as available. Share, Retouch, Audit and stable Connector transports have since
+  received signed Product assembly in later batches.
+
+## 2026-07-10 - Backend-authoritative Artifact actions and cloud Audit Product wiring
+
+### Completed
+
+- Artifact `open` and `reveal` are backend intents, not paths sent to React.
+  Runtime verifies account, public visibility and the authoritative `actions[]`,
+  materializes CAS content atomically into a bounded exports directory, writes
+  its event before the external side effect and keeps an at-most-once receipt.
+- A crash after launch starts is reported as an unknown outcome and is never
+  replayed automatically. Windows and macOS use fixed platform launchers and
+  safe argument boundaries; unsupported platforms fail closed. Responses,
+  receipts and events never disclose local paths.
+- The signed Product Runtime configuration now has an optional cloud Audit
+  service with one allowlisted HTTPS/443 ingestion route, bounded dispatch
+  cadence and retention no longer than the product defaults. The publisher is
+  account-fenced to the exact managed session and has one cleanup owner both
+  before ASGI handoff and during Runtime lifespan shutdown.
+- WebUI's Artifact More menu sends only artifact/action/request identities and
+  renders the Runtime result. It cannot fabricate an open/reveal success or
+  bypass an unavailable backend action.
+
+### Verification
+
+- Artifact/Retouch owner gate: `97 passed`; Runtime/permission/action security:
+  `42 passed`; Web `40 passed`, TypeScript/build/design gates passed.
+- Product Runtime plus cloud Audit composition: `33 passed, 1 platform skip`.
+  This covers canonical signed config, fixed endpoints, managed credentials,
+  retention bounds and unstarted/ASGI transport cleanup.
+
+### Active follow-ups
+
+- Unified high-concurrency generation/retouch scheduling and Cowart-inspired
+  clean-room retouch interaction completeness remain parallel batches. Durable
+  reasoning and cross-restart activation health are closed below; packaged
+  platform drills and remaining provider capability gates stay open.
+
+## 2026-07-10 - Durable disclosed-reasoning Item lifecycle
+
+### Root cause and completed contract
+
+- The prior WebUI derived a generic “thinking” row only from Turn phase. There
+  was no durable reasoning identity, content revision or presentation event,
+  so a phase/tool update could make disclosed content disappear before another
+  summary existed.
+- Added the backend-owned `reasoning` Item and typed
+  `reasoning_summary` content. `reasoning.replaced` atomically archives the
+  previous visible atom and creates the next one only on its first non-empty
+  delta; `reasoning.delta` advances the same Item revision.
+- Terminal settlement emits `reasoning.archived` before Item/Turn terminal
+  facts. Retry, tool, assistant-content, stream-state and phase events do not
+  clear the current summary. Deadline convergence uses the same explicit
+  archive operation.
+- Managed Gateway events carry a provider reasoning identity and accept only a
+  visible provider-approved summary. Hidden chain-of-thought is not stored or
+  exposed.
+- Event Store projection, fork history, side-effect-free Mock Replay and the
+  React reducer implement the same replace/delta/archive semantics. Projection
+  resync after a gap or disconnect restores the exact visible atom/revision.
+- Timeline renders the backend-projected summary and keeps it visible across
+  tool/phase changes. No timeout, animation completion or local phase heuristic
+  may hide it.
+
+### Verification
+
+- Focused Runtime/Worker/Replay reasoning tests passed, covering idempotent
+  atom revision, atomic replacement, restart reconstruction, explicit terminal
+  ordering and managed Gateway validation.
+- Web typecheck and all `43` Web tests passed. Reducer tests prove that ordinary
+  tool/phase and even a terminal phase fact cannot hide a summary without the
+  explicit backend archive event, and projection replay restores revision 5
+  exactly.
+
+## 2026-07-10 - Stable managed office Connector Product wiring
+
+### Completed
+
+- Added one strict managed Connector Gateway adapter for Feishu and Tencent
+  Docs. OAuth begin/complete, health, actions and revoke use connector-specific
+  fixed routes below one signed HTTPS/443 root, reject redirects/compression,
+  bound request/response size and recheck the managed session generation around
+  every bearer acquisition.
+- OAuth returns an opaque `managed_grant`; ConnectorService stores it only in
+  the OS credential vault and continues to own PKCE/state, scopes, action
+  schemas, idempotency, uncertain-write reconciliation, audit and replay.
+- Signed `runtime-config.json` chooses a unique sorted subset of the two stable
+  adapters. Unknown/Beta adapters are rejected at composition. Product settings
+  identity-check every adapter against the exact managed session, and Runtime
+  stops maintenance before closing each async transport.
+- Fetch/CDP, vision/image and shell contracts now name `browser`, `image` and
+  `sandbox` packs respectively; shell's default policy is workspace-write with
+  on-request approval, while full access remains a separate explicit profile.
+
+### Verification
+
+- Managed Connector transport security/contract: `8 passed`.
+- Product entrypoint plus connector mount/integration: `33 passed, 1 platform
+  skip`. Capability planner/pack/invocation/release adjacency: `20 passed`.
+- These are strict mock-gateway and local lifecycle gates. Real Feishu/Tencent
+  tenant credentials remain an external GA gate and are not claimed here.
+
+## 2026-07-10 - Product distribution retirement of the legacy Python CLI
+
+### Completed
+
+- The Python distribution now discovers only `ecorex*`. Legacy `cli`, `agent`,
+  `channel`, Electron/desktop source and tests are explicitly outside the wheel.
+  `click` and `requests` were removed because no v1 module imports them.
+- Product console scripts resolve only to Product Runtime, signed Bootstrap and
+  Control Plane/release administration. A source-level gate rejects any v1
+  import back into legacy packages.
+- ReleaseBuilder already rejects `chat.html`, WebChannel, Electron output and
+  overlay markers from Product Core/Web inputs; the package boundary now gives
+  the same guarantee to ordinary Python wheel construction.
+
+### Verification
+
+- Clean-source wheel: `527244` bytes, `161` members, zero `cli/agent/channel/
+  desktop` entries, no Click or Requests metadata dependency.
+- Packaging plus ReleaseBuilder/Product adjacency: `42 passed, 2 platform
+  skips`. The dirty workspace's pre-existing `build/` directory can contaminate
+  an in-place setuptools build, so recorded evidence deliberately uses a fresh
+  source staging directory, matching CI/release behavior.
+
+## 2026-07-10 - Backend-authoritative precise-retouch workspace
+
+### Clean-room boundary
+
+- Reviewed Cowart commit `61f6daaf` only for interaction mechanisms. That
+  repository exposes no explicit license, so no source, wording, layout or
+  styling was copied. EcoreX keeps its existing structured Artifact/Job model,
+  Workbench design system and managed image boundary.
+
+### Completed
+
+- Added durable Retouch Workspace rows with optimistic version fencing,
+  idempotent coalesced saves, restart recovery, stable annotation identities,
+  persisted references/global instruction/view state and submit error release.
+- Bound every canvas to an immutable edit surface containing base revision,
+  SHA-256, oriented dimensions, EXIF orientation, color space and coordinate
+  version. Source, reference and result image endpoints read exact revisions;
+  the mutable current-preview endpoint is no longer a coordinate authority.
+- Enforced ten reference images in Pydantic, domain and WebUI boundaries and
+  pinned each reference revision through the Retouch Job transaction.
+- Added deterministic bounded raster masks for rectangle, ellipse, point,
+  polygon, polyline and brush geometry. Mask PNGs enter CAS and their digest,
+  dimensions, coverage and pixel regions remain backend evidence.
+- Rebuilt the thin React editor with all six tools, selection/move/instruction
+  edit/delete, bounded undo/redo, pointer-cancel recovery, keyboard submit/Esc,
+  pan/zoom/fit, exact-aspect rendering, reference thumbnails and coalesced API
+  persistence. No localStorage draft or prompt routing was introduced.
+- Submission no longer closes the editor. It shows queued/running/failure
+  truth, supports failed-job draft reopening, and presents the completed new
+  revision beside the pinned original with compare, inspection overlay, open
+  and continue-modifying actions.
+- Revision merge logic now uses lineage/time evidence and retains a newer
+  completion Item when a delayed Artifact list still contains the base image.
+
+### Verification
+
+- Artifact/Retouch selection: `135 passed, 1 platform skip`.
+- Managed image + Workspace/Retouch/Product cross-layer: `45 passed, 1
+  platform skip`; CAS mask content is loaded by digest at the adapter boundary.
+- Web: typecheck, `49 passed`, production build (`1812` modules/two hashed
+  assets) and the six-counter Design System gate all passed.
+- Real managed-image quality and multi-viewport browser screenshots remain
+  external GA gates; the local mock lifecycle is not substituted for them.
+
+## 2026-07-10 - Multi-origin release asset publication
+
+### Completed
+
+- Added strict resumable publishers for GitHub Releases, the signed domestic
+  mirror and the EcoreX CDN. Uploads are digest-fenced, refuse redirects and
+  compressed control responses, validate exact public receipt locations and
+  never accept a bearer token through command arguments or JSON content.
+- Added one publication coordinator with the enforced order: domestic mirror
+  ready, GitHub draft assets ready, CDN ready, then optional GitHub visibility.
+  A bad mirror/CDN/GitHub receipt stops publication before the public release.
+- Added `publish-assets`, backed by one reusable no-secret JSON endpoint config.
+  The command verifies manifest/artifact signatures, the exact directory member
+  set and every local digest before its first remote mutation. The lower-level
+  `upload-github` command is intentionally draft-only.
+- Promoting a candidate now also requires the explicit `cdn-sync` release gate;
+  GitHub and mirror evidence alone cannot activate a manifest whose signed
+  disaster-recovery source is not ready.
+- Successful multi-origin publication atomically writes a deterministic receipt
+  tied to the release/manifest digest and prints its SHA-256. A crash before the
+  receipt is harmless: rerunning reconstructs it from idempotent remote assets;
+  a receipt path already tied to another release is rejected.
+- Replica receipt validation is split correctly: the transport validates the
+  allowlisted HTTPS public host and encoded filename; the coordinator compares
+  the complete URL against the signed source base. This supports either a
+  version or release-ID directory without weakening manifest authority.
+
+### Verification
+
+- GitHub, replica, coordinator, CLI and Control Plane admin adjacency: `21
+  passed`; focused publication/replica/CLI rerun: `12 passed`.
+- Tests cover resumable exact assets, tamper rejection before remote mutation,
+  mirror-before-GitHub ordering, CDN-before-public ordering, malicious receipt
+  rejection, no-secret config construction and deterministic cleanup.
+- Live GitHub/domestic-mirror/CDN credentials and origin-outage drills remain
+  real-environment release gates; no production release was published here.
+
+## 2026-07-10 - Crash-contained browser/sandbox pack protocol
+
+### Completed
+
+- Added a strict signed-zipapp descriptor and stdio invocation protocol for the
+  `browser` and `sandbox` packs. Outer signature/digest, inner pack/tool/runtime
+  identity and canonical descriptor must agree before a handler exists.
+- Core supplies the effective sandbox, approval, idempotency, execution scope
+  and resolved workspace roots. React and model arguments cannot change that
+  authority. Child output containing protected host paths is rejected.
+- Each call runs outside the Runtime process with a minimized environment,
+  fixed system executable search path, isolated Python import mode, bounded
+  request/stdout/stderr, deadline, process-group termination and strict
+  correlated success/error envelopes. Streams are drained with bounded memory
+  after an output flood so Windows pipe transports close cleanly.
+- Added and wired the aggregate Product resolver: image tools keep the managed
+  in-process adapter, while browser/sandbox select the crash-contained pack
+  adapter; unknown pack IDs fail closed. The signed Product loader passes only
+  its already-resolved workspace roots, and the packaged CLI always selects
+  this aggregate resolver.
+
+### Verification
+
+- Process pack plus existing invocation/runtime adjacency: `15 passed`.
+  Covered secret stripping, backend permission propagation, approval,
+  idempotency, descriptor mismatch, child crash, protected-path response and a
+  five-MiB output flood without an unclosed Windows subprocess transport.
+- Aggregate resolver/Product loader integration: `33 passed, 1 platform skip`;
+  focused Product/process gate: `25 passed, 1 platform skip`; packaged CLI help
+  remains green.
+
+## 2026-07-10 - Cross-restart activation health receipt
+
+### Root cause and completed contract
+
+- Removed production authority from the old Runtime's static candidate health
+  callback. Product `InstallCoordinator.activate()` now persists an exact
+  provisional activation intent, switches the pointer and stops at durable
+  `healthchecking`; it does not mark the slot known-good or complete the
+  transaction.
+- The intent binds transaction/slot/release/version/build/artifact digest,
+  immutable prior pointers, Core payload digest, signed Web bundle digest and
+  a storage identity. Bootstrap validates the intent, append-only journal,
+  signed manifest/artifact and retained slot receipt through a dedicated path;
+  ordinary `CurrentSlotVerifier` remains strict and still rejects every other
+  non-known-good current slot.
+- Bootstrap launches the candidate with a fresh health nonce in environment
+  only. The nonce is omitted from argv, repr, JSON, journal and SQLite. The
+  exact loopback health response uses an HMAC proof over the complete identity;
+  wrong Host, nonce, identity, proof, media type or response bounds fail closed.
+- Provisional Product startup returns a minimal probe-only ASGI composition. It
+  verifies signed Runtime/Web/capability inputs and the platform vault type but
+  never opens the business database, reads credentials, constructs Provider
+  authority or starts a Worker. Every non-health route
+  returns `503 activation_health_pending`. A bounded parent/watchdog monitor
+  exits an orphaned candidate, and Bootstrap fences a still-occupied port before
+  relaunch after its own crash.
+- Successful proof makes Bootstrap converge receipt, known-good pointer and
+  completed journal under the product lock, then stop the probe and relaunch the
+  same slot as the full Runtime. Immediately before any live database can open,
+  Product startup durably records the signed storage data barrier; no rollback
+  path exists after that point. Prior signed slots are deliberately not pruned
+  until this barrier succeeds.
+- Pre-data process failure, timeout, spoof, invalid identity, health failure,
+  confirmed full-process creation failure or full-process exit restores and
+  re-verifies the prior known-good pointers before relaunch. The receipt moves
+  through `rollback_pending` to `rolled_back_pre_data`, so a power loss before
+  pointer restore, journal append, final receipt or candidate cleanup is replayed
+  idempotently. First install returns to an empty current pointer.
+- Intent-before-switch, pointer-before-journal, confirmation, Bootstrap probe
+  and confirmed pre-data rollback crash windows converge from the signed
+  journal/intent/receipt facts. A crossed storage barrier is explicitly tested
+  to retain the candidate and require roll-forward repair.
+
+### Verification
+
+- Dedicated activation-health suite: `19 passed`, including RuntimeUpdateService
+  restart handoff, signed Product probe-only startup, zero database creation
+  before health, mutation gating, nonce non-persistence, first install,
+  timeout/spoof, candidate probe/full launch failure, full-process pre-barrier
+  exit, parent loss, Bootstrap crash, intent/confirmation/rollback recovery and
+  the durable roll-forward storage barrier.
+- Update/Bootstrap/Product adjacency: `119 passed, 5 platform/environment
+  skips`. Existing download, mirror, signature, recovery, update API, Product
+  entrypoint and strict known-good launch contracts remain green.
+
+## 2026-07-10 - Unified managed image Product execution
+
+### Completed
+
+- Added tenant-scoped private input CAS registration and completed-result
+  download to the cloud-authoritative `/api/v1/images` API. Result responses
+  carry MIME, length, ETag and SHA-256 commitments and never expose storage
+  paths; every request resolves ownership from the authenticated principal.
+- Added one strict managed image client bound to the exact
+  `ManagedSessionService`, signed fixed HTTPS root and immutable account/session
+  generation/lease/revision tuple. Its local restart journal stores identities
+  and fingerprints only. A known request always recovers its cloud Job before
+  submit, so an uncertain response cannot become a second provider request.
+- Mapped structured Retouch surface, normalized annotations, deterministic mask
+  evidence and content digests to one cloud Retouch Job. Base/reference/mask
+  bytes are read from Artifact CAS, verified and uploaded by digest; neither
+  local paths nor prompt-routing instructions cross this adapter.
+- Bound signed `imagegen` and `vision` pack contracts to product-owned handlers.
+  imagegen and Retouch share the same client and scheduler. Missing pack/client
+  state remains visible as an exact disabled reason instead of falling back to
+  the legacy image script.
+- Deleted the former synchronous multipart/base64 Retouch gateway adapter,
+  credential protocol, package exports and endpoint-specific test. A static
+  product-source gate now prevents that adapter, endpoint or base64 result
+  contract from returning.
+- Implemented two-phase local image publication. The cloud job/result
+  commitment is durable before the Artifact, then one lineage-bearing Artifact,
+  inline Item and event are published idempotently. Unique cloud-result and
+  Artifact-marker indexes plus restart marker recovery prevent duplicate
+  deliverables without re-running the provider.
+- Added a renewable publication lease across cloud polling, result staging and
+  Artifact CAS. A replacement token fences the old owner; heartbeat loss is a
+  retryable product error. Protocol-invalid missing result descriptors now use
+  a stable error code and release the lease rather than relying on `assert`.
+
+### Verification
+
+- Managed image integration covers tenant fencing, strict download validation,
+  restart recovery, shared generate/Retouch scheduling, structured mask
+  mapping, Artifact crash recovery, lease heartbeat concurrency and malformed
+  result settlement.
+- Image/Product/Pack/Retouch cross-regression commands and exact counts are
+  recorded in `docs/v1.0/verification-ledger.md`.
+- The suites use a real ASGI API, SQLite WAL, private CAS and deterministic
+  provider double. Deployed PostgreSQL/object storage load, real managed image
+  quality and Windows/macOS packaged lifecycle remain external GA gates.
+
+## 2026-07-10 - Rotation-safe public ShareSnapshot authority
+
+### Root cause and completed contract
+
+- Replaced the Control Plane's single Share HMAC key assumption with a bounded
+  `CloudShareKeyRing`: exactly one key issues new identities, while explicitly
+  retained old keys verify and revoke existing snapshots.
+- Persisted an immutable non-secret key ID and MAC version with each token
+  digest/snapshot state and audit entry. MAC v2 binds the key ID itself; a
+  database edit cannot silently relabel a row to another valid key.
+- Kept published URLs stable across rotation. Idempotent republish derives the
+  token from the snapshot's original key, not the current active key; revoke
+  recomputes the state MAC with that same original key, and expiry remains an
+  immutable payload fact.
+- Made the append-only audit chain rotation-aware. A single chain can contain
+  old- and new-key entries without re-signing history, while missing historical
+  verification keys stop further mutations rather than bypassing audit.
+- Added an atomic pre-keyring schema annotation path. Historical token, state
+  and audit MACs remain version 1; the upgrader temporarily suspends only the
+  audit UPDATE trigger inside one immediate transaction, attaches the explicit
+  legacy key identity, restores the append-only trigger before commit and emits
+  only key-bound version 2 records afterward. A populated multi-key migration
+  without an explicit legacy identity is rejected; a cryptographically wrong
+  explicit choice rolls the entire schema annotation back before commit.
+- Retained the one-key constructor as a compatibility boundary. No key material
+  or key ID is exposed through public URLs or Share projections; an unavailable
+  row key is returned publicly as not-found and remains a sanitized conflict on
+  authenticated mutation paths.
+
+### Verification
+
+- Focused Control Plane Share rotation and existing cloud-share contract:
+  `12 passed`.
+- Local Share/Control Plane full adjacency: `40 passed`; covers unique URLs,
+  Durable Job publish/revoke recovery, transport hardening, rotation, old URL
+  idempotence, cross-key audit, revoke, expiry, removed-key failure and legacy
+  schema migration.
+- Wider `create_control_plane_app` adjacency: `34 passed` with only existing
+  third-party deprecation warnings; release, cloud audit and real TLS update WSS
+  contracts remain compatible.
+- The active/retired key lifecycle still requires deployment KMS/HSM custody and
+  an operational rotation drill; those are environment gates, not inferred from
+  the in-process cryptographic contract tests.
+
+## 2026-07-10 - Publication and process-pack adversarial hardening
+
+### Root causes and completed contract
+
+- Closed the signed-pack time-of-check/time-of-use gap. Browser and sandbox
+  zipapps are re-hashed against their signed manifest immediately before child
+  creation and again before a successful result is accepted. Canonical JSON
+  now rejects non-finite values, excessive graph complexity and malformed
+  request values with stable pack errors.
+- Replaced Windows parent-only termination with an actual process-tree kill
+  (`taskkill /T /F`) followed by a direct-kill fallback. A real regression
+  creates a pack parent and grandchild and proves neither remains active.
+  Protected-path comparison now normalizes Windows separators, and the child
+  environment is rebuilt with canonical allowlisted variable names.
+- Made the multi-origin publisher fail before its first remote mutation when
+  signed source URLs, publisher identities, CDN availability, local filenames
+  or digest maps disagree. Mirror and CDN hosts are strict HTTPS identities;
+  replica receipts reject bool-as-int fields and uploads re-hash the still-open
+  source file after transport.
+- Bound existing GitHub tags to the exact EcoreX release body/name/channel.
+  Concurrent tag or asset creation (`422`) now resumes only by re-reading the
+  exact tag or same-name SHA-256 receipt; a conflicting asset remains
+  immutable. GitHub asset URLs are repository/tag/name fenced, and publication
+  must be explicitly confirmed as non-draft.
+- Extended the publication receipt lock across release identity validation,
+  every remote mutation and atomic receipt persistence. Two administrator
+  processes can no longer publish different releases and discover the shared
+  receipt conflict only after both have changed remote state. Windows reparse
+  entries, reserved/duplicate release filenames and non-regular JSON inputs are
+  rejected.
+- Added checked-in, no-secret
+  `release/v1/publication-config.example.json` and its strict companion schema.
+  All sample hosts use the reserved `.invalid` suffix; credentials remain
+  late-bound environment-variable names. The CLI parser and schema/example
+  property sets are regression-bound.
+- Promotion now requires the exact publication receipt. It verifies the
+  release/manifest identity, non-draft GitHub state, all three signed source
+  URLs, every asset size/digest and cross-origin byte equality. The
+  `github-release`, `mirror-sync` and `cdn-sync` gates must all contain the same
+  canonical `publication-receipt:sha256:<digest>` evidence token. An unrelated
+  receipt cannot release a candidate through the product CLI.
+- Control Plane repository publication is monotonic: repeating publication
+  with a new request identity preserves the original `published_at`; direct
+  repository gate evidence also observes the same bounded size contract as the
+  HTTP model.
+
+### Verification
+
+- Focused Process Pack and existing pack runtime: `17 passed`, including a
+  real Windows descendant-tree termination, post-binding artifact mutation and
+  non-finite response rejection; trusted system-tool resolution is independent
+  of parent `SystemRoot`/`WINDIR` values.
+- Publication transports/coordinator/CLI: `31 passed`, including GitHub
+  creation races, signed-source preflight, cross-release receipt locking,
+  replica type fencing and checked-in config/schema binding.
+- Control Plane publication/release CLI: `18 passed`, including immutable
+  publication time and same-receipt three-gate evidence.
+- ReleaseBuilder/Web/Capability/Control Plane combined adjacency: `109 passed,
+  2 platform skips`.
+- Live GitHub, domestic mirror/CDN, platform pack sandboxes and signed packaged
+  Windows/macOS process drills remain external release gates.
+
+## 2026-07-10 - Durable managed OTLP/HTTP JSON trace export
+
+### Root cause and completed contract
+
+- Closed the gap between the existing read-only OTel-compatible projection and
+  a production transport. The Product Runtime now composes a concrete managed
+  OTLP/HTTP JSON exporter from signed, credential-free configuration and owns
+  its transport through the ASGI lifespan.
+- Added a separate encrypted trace outbox rather than overloading Audit
+  records. A terminal Turn or archived Thread marks an immutable segment in the
+  source Event transaction. Restart backfill, deterministic batch identity,
+  SQLite leases, expired-lease recovery, bounded exponential retry with jitter
+  and `Retry-After`, terminal rejection and retention are backend facts.
+- Export is completion-oriented: a terminal Turn emits only its Turn/model/tool/
+  human/artifact subtree; the Thread root is emitted on archive. This avoids
+  duplicate full-thread snapshots and does not expose unfinished spans.
+- OTLP payloads use lower-camel proto3 JSON fields, hexadecimal trace/span IDs,
+  integer enums and decimal-string Unix nanoseconds. Batches are bounded by
+  Span count and canonical JSON byte length; local paths, credentials and
+  binary-shaped data are redacted before AES-GCM persistence.
+- The collector endpoint is exactly allowlisted HTTPS/443 `/v1/traces`, refuses
+  redirects/compressed responses and fences every request to the same managed
+  account/session generation. A non-zero OTLP `partialSuccess.rejectedSpans`
+  becomes a permanent diagnostic instead of a false successful delivery.
+- No OpenTelemetry SDK/protobuf dependency was added. The JSON wire contract
+  follows the stable OTLP/HTTP protobuf JSON mapping while reusing the existing
+  Runtime TraceProjector and local audit-key authority.
+
+### Verification
+
+- Dedicated exporter/outbox suite passes `15` tests covering fixed endpoint identity, canonical
+  wire shape, size limits, partial success, Retry-After, terminal-only
+  projection, redaction, encryption, retry and crash/expired-lease recovery.
+- Signed Product focused tests pass `2` cases covering canonical configuration
+  round-trip, invalid route and size rejection, exact managed-session ownership
+  and ASGI-owned transport closure. Runtime lifecycle ordering stops the
+  dispatcher before closing its transport.
+- OTLP, Cloud Audit, signed Product, Server and Replay adjacency passes `66`
+  tests with `2` platform/environment skips.
+- A real external collector, production RBAC/retention dashboard and sustained
+  offline-to-online soak remain explicit deployment gates.
+
+## 2026-07-10 - Deterministic Replay thin-WebUI exposure
+
+### Root cause and completed contract
+
+- The Runtime already implemented deterministic Mock Replay and explicitly
+  confirmed Live Replay, but the v1 WebUI had no task-level entry. Diagnostics
+  therefore existed only as a backend contract and users could not inspect the
+  verified watermark/projection or safely request a new Replay Turn.
+- Added a task Header More menu entry and one focused Replay dialog. Mock Replay
+  is visibly read-only and presents only Runtime-returned integrity evidence:
+  source/through watermarks, event count, SHA-256 digest, task summary, Turn,
+  Item and interaction counts. A failed refresh retains and labels the last
+  verified snapshot instead of replacing it with unverified local state.
+- Added backend-projected `live_replay_turn_ids`. This closes the fork-lineage
+  authority gap: React no longer treats every visible terminal Turn as
+  executable, while the Runtime continues to validate the source at mutation
+  time.
+- Root integration preserved Capability pipeline separation required by Live
+  Replay: a missing pack still yields `eligible=false` and hidden exposure,
+  while the immutable decision retains current-policy `requires_approval`.
+  Availability cannot silently erase governance evidence before a later pack
+  install or Replay permission comparison.
+- Live Replay requires a source selection, an explicit danger checkbox and a
+  separate action. Copy explains that current permissions are re-evaluated,
+  prior approvals are not inherited and historical external side effects are
+  not reused. One request identity survives ambiguous network failure and
+  dialog reopen through the Runtime session owner.
+- Once accepted, the session refreshes the normal Thread projection. The dialog
+  names the exact new Turn and permission snapshot, and the same Turn appears
+  in the ordinary timeline; no parallel frontend execution model was added.
+- Extended the GA Runtime with a `replay` scenario. Mock reads do not move its
+  sequence, confirmation is required, duplicate Live requests return the same
+  Turn, and no model/tool/connector implementation is present.
+
+### Verification
+
+- Backend Replay suite: `8 passed`; Thread catalog/kernel/Replay adjacency:
+  `14 passed`. Capability plus Replay governance adjacency: `16 passed`.
+- Web typecheck passed. Full Web contract suite: `56 passed`, including Replay
+  transport, reducer request stability, stale-snapshot Live fencing,
+  backend-only candidate mapping and GA Mock/Live idempotency.
+- Production Web build transformed 1814 modules and emitted two
+  content-addressed assets. The strict design-system gate kept all six
+  prohibited debt counters at zero; scoped `git diff --check` passed.
+- A real Browser instance is unavailable, so keyboard, touch, forced-colors,
+  reduced-motion, screenshot and axe evidence remains a named external gate;
+  static/GA results are not represented as visual E2E.
+
+## 2026-07-10 - Quiescent local v1 convergence
+
+### Completed
+
+- Stopped every implementation writer and removed four stale, task-owned
+  Control Plane pytest processes before starting the release-like gate. No
+  source mutation occurred during the authoritative full-suite run.
+- The first full run exposed three stale test assumptions that treated a shell
+  handler as executable without its signed `sandbox` pack. Product behavior was
+  not loosened: HITL tests now install/bind an explicit test pack, and catalog/
+  policy tests distinguish `missing_packs:sandbox` from later admin denial.
+- Preserved Capability pipeline separation: unavailable tools remain hidden and
+  ineligible, while immutable decisions retain the current governance
+  `requires_approval` fact for diagnostics and Live Replay.
+- The second complete Python run passed. The final React run, production build,
+  Design System gate, Python compileall, Product/Release CLI imports, JSON scan,
+  tracked diff check and new-source trailing-whitespace scan also passed.
+
+### Verification
+
+- Full Python v1 suite: `673 passed, 8 skipped`, zero failures. Skips are named
+  platform/environment conditions already represented in the GA matrix.
+- Web: typecheck, `56 passed`, 1814 transformed modules, exactly two final
+  content-addressed assets and all six design-debt counters at zero.
+- Static convergence: all `ecorex`/v1 tests compile; 7 engineering JSON files
+  parse; Product and Release CLI help surfaces remain closed; no pytest/Node
+  test process remained; no trailing whitespace in v1 source/docs.
+- Local code gates are now quiescent. Real Browser, provider credentials,
+  Windows/macOS signed candidates, live origins/collector and production data
+  drills remain explicit external GA gates rather than inferred success.
+
+## 2026-07-10 - Durable multi-instance Control Plane update hints
+
+### Root cause and completed contract
+
+- Replaced the single-process-only rollout notification path with a durable
+  append-only signal/outbox in the existing Control Plane transaction. Rollout
+  activate, pause and halt, channel kill and kill-clear all commit a signal only
+  when their canonical mutation, idempotency receipt and administrator audit
+  commit. A channel kill records one bounded affected-rollout fact per halted
+  rollout plus the channel state fact.
+- Added monotonic `AUTOINCREMENT` signal sequences, stable event IDs, request-
+  bound dedupe keys, update-forbidden rows, bounded batch reads, per-instance
+  monotonic consumer cursors and time retention that always preserves a latest
+  floor. Retention never resets sequence identity. A lagging consumer detects a
+  gap and processes the retained committed suffix; facts that were already
+  removed recover only through the periodic signed feed, never a synthetic WSS
+  event.
+- Every ASGI app owns and closes one bounded asynchronous poller. Production can
+  supply a stable unique instance identity explicitly or through
+  `ECOREX_CONTROL_PLANE_INSTANCE_ID`; independent instances sharing the database
+  consume the same facts with separate cursors. Backoff and bounded batches
+  contain database/transport failure, while the five-minute feed poll remains
+  available.
+- Kept the public WSS schema unchanged. Signals are wake-up hints only. Active
+  rollout hints are resolved against current eligibility; pause/halt hints use
+  the original rollout targeting only to wake affected clients, which then
+  re-read the canonical signed feed. Signal rows and payloads contain no actor,
+  account, organization, token or secret material.
+- Preserved low-latency same-instance behavior even for explicit ASGI embeddings
+  that disable lifespan. The request path locally fans out the exact committed
+  stable event ID; the durable poller may replay it, and the existing Runtime
+  signal repository makes that boundary idempotent.
+- Removed the legacy `broadcast_rollout` helper and the synthetic gap-resync
+  event path. Before any WSS fan-out the Hub now requires the complete model to
+  match the same durable row by sequence; a forged event ID or altered field
+  fails before entering a client queue. Static and behavioral tests bind that
+  the Hub cannot manufacture rollout identity.
+- Bound kill-switch wake ordering end to end. One transaction appends each
+  affected `rollout.halted` fact before `channel.killed`; a second ASGI instance
+  consumes that order and sends the targeted halted-release wake hint to an
+  already connected/staged client. Its immediate signed-feed refresh returns
+  no release after the kill, so the hint accelerates revocation without becoming
+  authority.
+
+### Verification
+
+- Dedicated multi-instance suite: `8 passed`, covering node-A mutation to a
+  node-B WSS client, exact activate -> targeted halt -> channel-killed ordering,
+  tenant targeting, same-request signal idempotency,
+  crash-before-ack replay, stable-instance restart without redelivery, missed
+  WSS feed recovery, retention gaps, monotonic post-prune sequence identity,
+  immutable rows, transaction rollback, fail-closed instance identity and
+  kill/clear signal composition.
+- Focused signal/Control Plane/real-WSS/Runtime update chain after the authority
+  closure: `33 passed, 1 environment skip`; every public hint event ID is now
+  traced to a committed outbox row.
+- Control Plane/Update adjacency: `72 passed, 1 environment skip`, including
+  existing rollout/feed/RBAC behavior, real TLS Uvicorn WSS delivery, Runtime
+  durable signal deduplication, periodic feed polling, Share, cloud Audit and
+  administrator client/dashboard contracts.
+- The local tests use two ASGI instances and independent repository objects over
+  one WAL database. A deployed multi-replica database/identity/termination soak
+  and network-partition drill remain release-environment evidence.
+
+## 2026-07-10 - Unified Extension platform architecture batch (historical boundary)
+
+### Root cause and fixed acceptance boundary
+
+- Product inspection found several independent extension authorities: legacy
+  `plugins/`, legacy `agent/skills` and MCP loaders, the v1 Tool registry,
+  Capability Pack bindings and the Connector registry. Separate identity,
+  enablement, trust, health and upgrade rules make the apparent management
+  disorder structural rather than a menu-layout problem.
+- v1 will own one durable backend Extension registry for `skill`, `mcp_server`,
+  `tool_provider`, `capability_pack` and `connector_provider`. Connector
+  instances remain in their own business domain, while the adapter package and
+  its executable lifecycle can no longer bypass Extension governance. The
+  immutable identity is contract
+  version plus extension ID, semantic version and artifact digest; source,
+  signature/trust, compatibility, dependencies/conflicts and exported
+  capabilities are validated before an installed revision can be activated.
+- Lifecycle facts are backend-owned and restart-safe: staged, installed,
+  enabled, disabled, quarantined, superseded and rollback state must be
+  idempotent and auditable. Unknown kinds, contracts, permissions, dependencies
+  or health responses fail closed. UI toggles submit intent and render the
+  returned projection; they never import code, invent availability or bypass
+  policy.
+- Executable MCP/tool-provider/pack code may not hot-load into the Runtime
+  process. It must run behind the existing bounded process and managed-session
+  boundaries with restart budget, circuit/quarantine state and exact
+  permission/capability snapshots. Skills remain declarative content and may
+  reference only registered capabilities.
+- The legacy directories are migration inputs only. Their configuration may be
+  inventoried and staged for explicit revalidation, but old loaders and
+  arbitrary command arguments cannot remain a production execution path.
+
+### Historical pending evidence (superseded)
+
+- This was the pre-implementation acceptance boundary. The later Extension
+  end-to-end closure, immutable Turn snapshot, crash containment, generated
+  contracts and current-tree checkpoints supersede its former pending status.
+
+## 2026-07-10 - Tracked v0.3 Web executable cutoff
+
+### Root cause and completed boundary
+
+- Removed all `66` tracked files below `channel/web/`: the WebChannel handler
+  graph, `chat.html`, copied React bundles, v0.29 overlay CSS/JS, console code,
+  logos, fonts and vendored browser libraries. The deletion did not touch the
+  untracked `agent/core/` experiment, migration fixtures, user data, ignored
+  release evidence or installed updater slots.
+- Removed the four source-era Web artifact builders/checkers:
+  `check-ecorex-web-release.sh`, `prepare-ecorex-web-release.ps1`,
+  `prepare-ecorex-webui-local-release.ps1` and
+  `validate-ecorex-release-artifacts.py`. These scripts packaged the deleted
+  WebChannel/static tree and cannot describe a v1 Core/Web artifact.
+- Replaced `app.py`, root `run.sh`, `scripts/run.ps1` and `scripts/start.sh`
+  with exit-78 tombstones and removed the obsolete provider-key-bearing
+  `config-template.json`. `channel/channel_factory.py` no longer registers or
+  imports a `web` channel. No legacy launcher can silently assemble or start a
+  source Runtime; the signed Bootstrap/Product entrypoints remain separate.
+- Added `scripts/check-v1-legacy-cutoff.py`. It rejects retired source/build
+  paths, a non-tombstoned source launcher and any absolute import from v1 back
+  into `agent`, `channel`, old CLI/provider/plugin/tool roots. The gate ignores
+  only generated `__pycache__` and `.pyc` files, which are excluded from source
+  and signed artifacts; the separate release scanners still validate the exact
+  Core and hashed Web allowlists.
+- Added a black-box test that proves `channel.web.web_channel` has no import
+  spec, `app.py` exits 78 without starting a service, and importing
+  `ecorex.migration` does not load a legacy Runtime module. Migration continues
+  to inventory and parse data copy-on-write; it does not use old executable
+  source. Rollback continues through signed known-good slots.
+
+### Verification
+
+- Static cutoff gate: pass.
+- Cutoff, Product packaging and copy-on-write migration focus: `18 passed`.
+- Final strict cutoff plus ReleaseBuilder/Web bundle/capability-pack/migration/
+  package/design adjacency: `76 passed, 2 named platform skips`.
+- PEP 517 isolated wheel: `605396` bytes, `174` entries and zero
+  `agent/channel/cli/desktop/chat/overlay/Electron` members. The preceding
+  no-build-isolation attempt failed only because the host Python lacked the
+  `bdist_wheel` command; using the declared isolated build requirements passed.
+- Historical v0.x Web tests and smoke programs are not treated as v1 evidence;
+  their exact disposition is audited separately instead of weakening the v1
+  gate or restoring the deleted implementation.
+
+### Historical-test and CI disposition
+
+- Deleted five implementation-bound tests after migrating the two still-current
+  contracts into v1: `tests/test_ecorex_web_parallel_backend.py`,
+  `tests/test_web_runtime_goal.py`, `tests/test_v029_webui_followups.py`,
+  `tests/test_v028_runtime_queue_observation.py` and
+  `tests/test_v030_webui_hardening.py`. The v1 replacements assert progressive
+  Artifact actions for hover/focus/coarse pointers and non-exclusive image
+  planning that keeps read/fetch/vision/CDP/shell discoverable.
+- Removed `.github/workflows/ecorex-desktop-release.yml` and
+  `.github/workflows/ecorex-webui-macos-smoke.yml`; both invoked deleted
+  Electron/WebChannel packagers. Added `testpaths = ["tests/v1"]` so the
+  default pytest/CI authority is explicit. A final collect-only run found `698`
+  nodes and zero outside `tests/v1`.
+- Tombstoned `scripts/release-ecorex-default.ps1` and
+  `scripts/release-ecorex-webui-orchestrator.ps1` at exit 78. After its only
+  current LF-byte requirement was migrated into the v1 ReleaseBuilder tests,
+  removed `scripts/prepare-ecorex-public-release.ps1` with the rest of the old
+  production packagers. The strict cutoff now passes with no exception.
+- Deleted `17` additional pure v0.x release/deploy/install/Web smoke programs,
+  including the old public packager, target deploy/rollback drivers, release
+  artifact validators, production Web acceptance programs and the desktop
+  release-manifest updater. Removed `docker/entrypoint.sh`,
+  `scripts/install-ecorex-web.sh` and the old `ecorex-web.service` example so a
+  Docker/service/install command cannot start `app.py` after WebChannel removal.
+- Retained reference inventory (historical, not v1 CI): three read-only/mixed
+  baseline/memory/capability smoke programs, mixed legacy provider/connector tests and
+  the old public download-site manifest. Residual reference files fell from
+  `33` to `16` after excluding the v1 rejection tests/scanner itself. These
+  references are not represented as completed work and must not be selected by
+  a v1 release job. Static download-site migration remains a separate local
+  batch and does not re-enable a Runtime or packager entrypoint.
+
+## 2026-07-10 - System stability, responsiveness and comprehension batch (historical boundary)
+
+### Root-cause acceptance boundary
+
+- State-machine stability will be assessed as one system rather than by green
+  unit suites in isolation. Turn/Item, Durable Job, Interaction, Install,
+  Extension, Memory reset and outbound facts must define commit points,
+  idempotency, restart reconstruction, lease/fencing and cross-domain
+  causation. Fault injection must cover failure before commit, after commit but
+  before delivery, duplicated delivery, stale revision and process restart.
+- High-frequency model output is not allowed to turn SQLite, SSE or React into
+  a token-by-token bottleneck. The backend must preserve exact text and ordered
+  facts while coalescing bounded deltas, apply backpressure and flush before
+  terminal facts. The client must batch stream application by render frame,
+  update only affected Items, preserve scroll intent and avoid layout shifts or
+  whole-timeline live-region announcements.
+- Capability/Tool progressive disclosure remains backend-owned. Image intent,
+  Skill/MCP discovery and explicit aliases may rank or defer tools but cannot
+  erase unrelated eligible capabilities. Invocation rechecks current provider
+  revocation, permission and idempotency authority even when a Turn owns an
+  older immutable discovery snapshot.
+- The default user output location is an export policy, not the Artifact CAS.
+  React selects a backend-projected safe location alias; raw host paths never
+  become browser authority. A location change affects future work through an
+  immutable output-policy snapshot and cannot redirect an in-flight Turn.
+- “Reset memory” means learned/user memory only. Factory knowledge, product
+  policy, conversations and Artifacts are not deleted. The mutation is
+  confirmed, idempotent, audited and transactionally tombstones the selected
+  revision with an explicit recovery/purge boundary.
+- Thread IDs become visible/copyable product identities. Starting from an ID
+  in a new task uses the backend Thread catalog/fork contract, preserves
+  lineage and snapshots, and never asks the model to fabricate or rediscover
+  history from prompt text.
+- System observability must cover event-loop lag, process/resources, SQLite/WAL
+  contention, queue/lease depth, SSE connections/backpressure, model TTFT and
+  stream rate, tools, connectors, Artifact/CAS, memory, update and Extension
+  health. Metrics are bounded/redacted and export through the managed trace/
+  audit boundary; a local diagnostic projection uses user language and keeps
+  codes/IDs in an opt-in technical-detail section.
+- Product copy will translate phases, permissions, retries, tools and failures
+  into concise Chinese actions and outcomes. Raw tool IDs, sandbox names,
+  provider errors and internal state codes do not appear in primary chat text;
+  they remain available for diagnosis without losing audit precision.
+
+### Historical pending evidence (superseded)
+
+- This was the pre-implementation acceptance boundary. Later Runtime invariant,
+  bounded streaming/media, Output, memory reset, Thread continuation,
+  observability, plain-language UI and browser batches supersede the queue note;
+  real platform/provider/soak evidence remains separately listed in the GA
+  matrix.
+
+## 2026-07-10 - Public Bootstrap discovery and download-site cutoff
+
+### Release authority and atomic pointer
+
+- Added `ecorex.release.public_index` as the only producer of the browser-facing
+  discovery document. It accepts only a verified stable manifest, exact raw
+  manifest bytes, the exact canonical publication receipt and a trusted public
+  key set. It independently checks the raw-byte digest, reparses those bytes,
+  verifies the manifest and exactly three platform Bootstrap signatures, and
+  proves all three origins contain identical asset identities.
+- Hardened the release CLI's JSON/manifest reader to use a bounded regular-file
+  descriptor with before/open/after identity checks. The live pointer writer
+  validates its complete runtime shape, enforces 256 KiB, takes the product
+  lock, fsyncs a same-directory temporary and atomically replaces the old file.
+  The persistent lock is keyed outside the served tree; a failed validation or
+  replace does not change the prior pointer or expose a lock artifact.
+- Added the strict Draft 2020-12 schema with exact object widths, canonical
+  64-byte Ed25519 base64, safe IDs/filenames, aware RFC 3339 timestamps, three
+  ordered source kinds and HTTPS-only URLs. Runtime validation, JSON Schema and
+  browser parsing are independent fail-closed layers.
+
+### Static public surface
+
+- Removed the obsolete v0.3 `manifest.json`, `release-index.json`, Windows/macOS
+  `install-webui` scripts and executable Web service example. The two installer
+  deletions were confirmed as clean whole-file deletions relative to the
+  baseline; ignored local downloads and dirty admin dashboard files were not
+  opened or rewritten by this batch.
+- Replaced the old website behavior with a v1 Bootstrap-only page. Its
+  checked-in pointer is canonical `unpublished`/`release:null`, so a source
+  checkout cannot claim a release exists. When a real pointer is published,
+  the page validates exact keys/types, retries mirror -> GitHub -> CDN and
+  compares the exact manifest response bytes with the published SHA-256 before
+  rendering any download link. The copy continues to state that only
+  Bootstrap's embedded Ed25519 keys authorize installation.
+- Public JS, CSS and all three images are named by the first 12 hexadecimal
+  characters of their real SHA-256. HTML references only those names. Caddy
+  and Nginx examples serve HTML/discovery with `no-store` and content-addressed
+  assets/downloads with one-year `immutable` caching.
+- Added the idempotent public-asset builder. It materializes new digest names
+  before atomically switching HTML, then removes old/generated crash leftovers,
+  so an interruption before or after the mutable pointer change remains
+  recoverable without a broken asset reference.
+- Added `scripts/check-v1-public-download-site.py` to reject old manifests,
+  installers, unhashed/misnamed assets, unresolved references, fake checked-in
+  URLs/signatures, missing manifest-byte verification and incomplete cache
+  policy. The release runbook records the one-command pointer build and the
+  browser-vs-Bootstrap trust boundary.
+
+## 2026-07-10 - Cross-domain Runtime crash consistency and event-loop isolation
+
+### Root causes closed
+
+- Reproduced the final-lease split brain: a `running` Agent Job reached
+  `dead_letter` while its Turn stayed `streaming` and the scheduler allowed the
+  same Thread's next Job to pass it. Lease reclamation now writes the Job fact,
+  projection, Turn retry/terminal fact, Item settlement and HITL closure in one
+  transaction. Unsafe provider/tool phases explicitly enter `retry_wait`;
+  exhausted attempts fail the graph. If `model.response_completed` and
+  `finalizing` committed before the crash, recovery completes the graph even
+  when that was the last attempt.
+- Reproduced Python SQLite's implicit pre-commit: calling
+  `Connection.executescript()` inside `SQLiteDatabase.transaction()` preserved
+  an earlier insert after the caller raised and rolled back. Runtime now uses a
+  transaction-safe Connection implementation that parses complete SQLite
+  statements, preserves the caller transaction and rejects nested transaction
+  control. This closes the same hidden boundary in Runtime snapshots,
+  permissions, sessions, Update state/events, observability outboxes and the
+  unified Extension repository.
+- Agent Turn and Runtime Update background loops previously called synchronous
+  SQLite repositories on the ASGI asyncio thread. Every repository call in the
+  hot worker/update paths is now dispatched off-loop. Durable lease fencing is
+  unchanged; WAL/busy-timeout contention no longer freezes model-stream
+  keepalives and unrelated requests.
+- A later event could explicitly supply a different immutable snapshot/trace
+  identity because EventStore filled only missing fields. EventStore now
+  compares every supplied config/capability/permission/Extension/trace identity
+  with `turn.accepted` and rejects drift before appending.
+
+### System invariant and fault harness
+
+- Added `RuntimeInvariantAuditor`, which uses one WAL read snapshot plus SQLite
+  quick/foreign-key checks. It replays Turn, Item, Job and Interaction lifecycle
+  facts and checks monotonic heads, contiguous sequences, references, snapshot
+  identity, projection state, complete lease tuples, attempts, waiting/retry
+  coupling and terminal dependents. Reports contain only codes, states and
+  durable IDs; no prompt, tool argument, path or secret. It never mutates the
+  evidence it diagnoses.
+- Added commit-fault tests that raise `BaseException` from the transactional
+  event sink during Turn creation and terminal settlement, reopen the database,
+  and prove zero partial facts/projections. Additional tests inject projection,
+  lease and snapshot drift; exhaust/reclaim leases; recover terminal response
+  facts; and hold SQLite calls while proving the asyncio loop remains live.
+
+### Verification checkpoint
+
+- New invariant/fault suite: 11 passed.
+- Agent worker, supervisor and invariant convergence: 21 passed.
+- Runtime/Permission/Session/Extension/Update adjacency: 144 passed, 4 skipped;
+  one stale raw `events` column fixture was then updated for
+  `extension_snapshot_id` and its focused rerun passed.
+- Retouch/Share/Artifact Job adjacency: 40 passed.
+- Runtime Update/activation/composition/transport adjacency after offload:
+  40 passed, 1 environment skip.
+- Extension fence + Agent worker + Runtime composition: 25 passed, 1
+  environment skip.
+- Audit/OTLP/Replay/Capability/Connector/Artifact repository adjacency: 127
+  passed.
+- Copy-on-write Migration + Product Runtime entrypoint + server composition:
+  39 passed, 2 environment skips.
+
+The immutable-candidate full suite remains a root-level convergence gate after
+the other active performance/memory/output/thread-observability batches land;
+these focused results do not replace it.
+
+## 2026-07-10 - Unified Extension platform end-to-end closure
+
+### Backend authority and provenance
+
+- Replaced separate Skill/MCP/tool/connector/pack toggles with one Extension
+  registry over the Runtime WAL database. Immutable revision rows, detached
+  signature evidence, quarantine facts, catalog snapshots, lifecycle events and
+  idempotency responses are separately append-only. Revision identity uses the
+  unsigned canonical declaration plus artifact digest, so key rotation records
+  new re-verifiable evidence without changing product identity.
+- Added exact Core declarations for base tools, every loaded Capability Pack and
+  the connector adapter layer. Product Server composes them only after the Web,
+  Release and Core build are verified; the same signed build digest binds each
+  declaration. Publisher/administrator manifests use the current Ed25519 trust
+  provider. Export IDs are checked against the exact backend Tool, Connector and
+  Pack registries. MCP accepts and records only stable protocol `2025-11-25`.
+- Added a static-only `local_bundle` Skill source. ZIP uploads and internal
+  administrator directory imports share one normalizer: 10 MiB total, 256
+  files, 2 MiB per file, bounded path depth/inventory and compression ratio;
+  canonical NFC/portable paths; duplicate/case collision, traversal, link,
+  reparse/device, executable and compression-bomb rejection. Root `SKILL.md` is
+  strict UTF-8 with a closed, flat whitelist frontmatter. Scripts, hooks, bin,
+  command, environment, secret, network and native-code namespaces/formats are
+  rejected. Files receive individual SHA-256 identities and an atomic canonical
+  CAS manifest. `local-content-sha256` is deliberately integrity evidence, not
+  publisher trust.
+- Migration imports only bounded legacy Skill metadata under deterministic
+  `legacy.skill.*` identities. It cannot load `SKILL.md`, a script or MCP
+  command, and both enable and Runtime bind paths permanently reject
+  `legacy_import` revisions until a new bundle passes the v1 contract.
+
+### Turn/runtime and thin Web integration
+
+- `extension_snapshot_id` now travels with config/capability/permission/model
+  facts through `TurnSnapshotContext`, accepted/derived events, durable Job
+  context, Live Replay and the TypeScript event contract. Runtime verifies the
+  immutable catalog digest and its config binding inside Turn admission.
+- New-Turn availability uses only enabled, healthy, dependency-complete and
+  currently provenance-valid provider revisions. Immediately before the actual
+  tool call, Agent worker re-checks the historical Turn snapshot against the
+  current provider revision; disabling, replacing, quarantining, dependency
+  loss, signature revocation or CAS corruption therefore fences already queued
+  work as well as future disclosure.
+- Bootstrap and `GET /api/v1/extensions` return the same generated projection.
+  Enable, disable, health and rollback accept expected revision plus stable
+  request identity. The local Skill endpoint accepts canonical base64 ZIP only,
+  never a host path. React renders those actions/reasons, uploads a bounded ZIP
+  through the Runtime client, and keeps all import/enable decisions in the
+  backend. Product Server supplies the exact platform/architecture, release
+  verifier and Core build identity to the service.
+
+### Verification checkpoint
+
+- Extension provenance/CAS/lifecycle/API/MCP/Turn-fence suite: 15 passed, 1
+  platform symlink skip.
+- Runtime kernel/composition/permission/Agent worker/Replay plus Extension:
+  46 passed, 1 platform skip.
+- Product Server/Product Runtime/Extension composition: 42 passed, 3 named
+  platform/environment skips.
+- Web TypeScript check passed. The first 69-test Web run found one mobile-first
+  CSS contract omission in the newly added import row; the token-only responsive
+  rule was added before the final Web rerun recorded in the verification ledger.
+
+## 2026-07-10 - Plain-language Web boundary and diagnostic disclosure
+
+- Added one frontend language boundary for service reasons, request failures,
+  Artifact families and human-readable file sizes. Unknown backend codes no
+  longer become primary UI copy; status-aware guidance is shown instead.
+- Startup, local connectivity, model availability, permission mode and update
+  activation now describe the user-visible state and next action without
+  exposing Runtime, sandbox or approval implementation names. The persistent
+  permission badge still makes Default versus Full Access visible and explains
+  how to revoke Full Access.
+- Connector account failures, device-login failures and Share publication
+  failures now keep the friendly explanation in the primary reading path.
+  Bounded error codes, service reasons and Share IDs remain available through a
+  keyboard-accessible, collapsed `TechnicalDetails` disclosure; Replay and
+  diagnostics retain their full technical evidence.
+- Artifact rows and the full-window preview now use Chinese office-family names
+  and compact IEC-style sizes. Precise-retouch unavailability uses the same
+  reason mapping in hover, menu and touch-sheet paths instead of exposing a raw
+  service literal.
+- Clipboard denial still cannot report success. The Share dialog now instructs
+  manual selection without misclassifying a browser permission denial as a
+  Runtime outage, and task rename/continue guidance describes the user outcome
+  rather than event-store mechanics.
+
+### Verification checkpoint
+
+- `npm run typecheck`: passed.
+- `npm run test:v1`: 72 passed, including three new language-boundary tests.
+- `npm run build`: passed and content-addressed both production Web assets.
+- `python scripts/check-v1-design-system.py`: passed with zero hard-coded
+  radii, shadows, colors, numeric z-index, layout transitions or
+  `transition: all` findings.
+
+## 2026-07-10 - System-level health projection, streamed rendering and task continuity
+
+- Added a bounded Runtime health service and supervisor over the shared SQLite
+  WAL store. It records event-loop responsiveness, SSE lifecycle, process and
+  storage pressure, queue/Turn/Job/HITL/image/retouch state, Artifact and Memory
+  volume plus aggregate Worker/Connector/Extension/Update health. Sampling runs
+  in a worker thread, provider failures degrade only their component, health
+  transitions are append-only and old samples are pruned to a fixed limit.
+- Instrumented the actual SSE generator at connect/event/close boundaries and
+  retained adaptive active-versus-idle polling. The React session batches only
+  delta facts to one animation-frame dispatch, flushes state/terminal facts
+  synchronously, stops on the first sequence gap and now applies `item.delta`
+  rather than dropping streamed assistant text. Completed messages use bounded
+  content visibility while live text avoids expensive pretty reflow.
+- Settings now presents four plain-language system components and loads the
+  redacted metric projection only inside an explicit “技术详情” disclosure.
+  Primary health responses never contain raw metrics. The GA Runtime models the
+  same split contract so browser evidence cannot silently accept a missing
+  production endpoint.
+- Added backend-authoritative task continuation by full `thr_…` identity and a
+  copy-ID action. A new task can read its saved projection/events and continue;
+  clipboard denial reveals the ID for manual copy and never reports success.
+- Image preview now opens as a viewport-inset workspace with the complete image
+  fitted at zoom 1. Magnifier controls remain available for 125–400% inspection
+  and “显示完整图片” deterministically returns to fit-to-window.
+
+### Verification checkpoint
+
+- System service/API/SSE integration: 5 focused tests passed; adjacent Runtime
+  hardening/kernel API set passed 31 tests.
+- Web typecheck passed; the v1 Web suite passed 72 tests before adding the
+  system transport/GA assertions, whose focused rerun then passed 20 tests.
+- Public Bootstrap site static gate passed and public discovery/release/control
+  adjacency passed 30 tests.
+
+## 2026-07-10 - Backend-authoritative default Output locations
+
+- Added one account-bound Output service over the same Runtime/Artifact SQLite
+  database. The browser sees only `documents`, `downloads` and `workspace`
+  aliases, revision and availability; OS/product composition resolves the host
+  roots and no API projection contains an absolute path.
+- Every Turn config snapshot now includes the current immutable
+  `output_policy_snapshot_id`. Artifact saving resolves the creating Turn's
+  frozen policy, so changing Settings affects only new tasks. The user action
+  is now “保存到默认位置” and returns a durable, path-free receipt plus a visible
+  alias/display-name confirmation rather than invoking the browser's unrelated
+  download directory.
+- Materialization streams and verifies the Artifact CAS, rejects internal and
+  implementation families, fences root replacement/symlink/reparse attacks,
+  uses same-directory fsync and exclusive publication, stabilizes concurrent
+  name collisions, and recovers interrupted `preparing/published` receipts.
+  Identical content is reused; different content never overwrites it.
+- Settings exposes the default location and clearly states that an active long
+  task keeps its original destination. Preference mutations use expected
+  revision and stable request identity; stale responses refresh before retry.
+  The GA Runtime implements the same preference/materialization contract.
+
+### Verification checkpoint
+
+- Output domain: 14 passed, 1 Windows account capability skip.
+- Runtime integration: 1 passed, proving two Turns on opposite sides of a
+  preference change materialize into their independently frozen roots and the
+  receipt contains no path.
+- Web typecheck and complete v1 suite: 80 passed after Output transport,
+  Settings and GA contract integration.
+
+## 2026-07-11 - Thin Web feature loading and bundle regression budget
+
+- Replaced eager imports for Settings, Extension management, Share, Replay,
+  full Artifact preview and Precise Retouch with `React.lazy` feature islands.
+  The first open activates the download; the loaded subtree remains mounted on
+  close so dialog drafts and local state retain their existing behavior.
+- Added a shared Suspense and error boundary with plain-language loading,
+  feature-local failure containment and refresh recovery. Pointer/focus intent
+  warms menu-driven features without preloading them in the production HTML.
+- Preserved all Settings system-health, learned-memory, permission and update
+  props while moving the component behind its lazy boundary.
+- Kept the release asset graph acyclic without weakening content addressing.
+  Rollup uses stable third-party Runtime, EcoreX API/state and UI primitive
+  layers; it has no feature-name or icon-name manual chunk table.
+- Added a post-rehash bundle gate and focused contracts. Production now fails
+  if the entry, aggregate initial JavaScript, gzip initial JavaScript or any
+  chunk exceeds its budget, or if a low-frequency feature is accidentally
+  module-preloaded.
+- Recorded exact before/after output in `docs/v1.0/web-bundle-report.md`.
+  Workspace entry fell from 517.68 kB to 54.22 kB; initial JavaScript is
+  452.51 KiB / gzip 140.10 KiB, with 64.13 KiB / gzip 22.47 KiB deferred.
+
+### Verification checkpoint
+
+- `npm run typecheck`: passed before the production build checkpoint.
+- `npm run test:v1`: 80 passed, including six new lazy/budget contracts and
+  the concurrently integrated output-location transport contract.
+- `npm run build`: passed; 11 content-addressed Web assets, no chunk above
+  500 KiB and no Vite large-chunk advisory.
+- Browser focus, first-open loading and slow/failing chunk behavior remain part
+  of the final GA browser matrix rather than inferred from Node-only tests.
+
+## 2026-07-11 - Session, Connector and Extension async-boundary hardening
+
+- Audited every asynchronous entry point in `ecorex/session`,
+  `ecorex/connectors` and `ecorex/extensions`. The common root cause was not
+  SQLite itself, but synchronous repository, credential-vault, file-verification
+  and callback work being invoked directly by ASGI handlers or supervisors.
+  Under WAL contention or a slow OS credential provider those calls stalled
+  unrelated streaming and input handling on the one Runtime event loop.
+- Device authorization now performs request lookup, secret storage, poll-lease
+  acquisition, signed-session installation and terminal/retry commits in worker
+  threads. Lease acquisition and its audit fact remain one transaction. Broker
+  calls are bounded; the supervisor polls at most four due flows concurrently,
+  uses a bounded per-flow deadline and leaves an expired lease for deterministic
+  restart recovery instead of inventing an in-memory retry state.
+- Connector auth, health, invocation, disconnect and uncertain-operation API
+  paths now move repository, vault, policy, audit and outbox work off the event
+  loop. Adapter calls use one Runtime-loop limiter (16 by default) and a bounded
+  deadline. A timed-out synchronous provider keeps its limiter slot until its
+  worker actually exits; write calls are persisted as `uncertain` and therefore
+  cannot be silently retried as success or failure.
+- Connector recovery/outbox maintenance has independent non-blocking cycle and
+  publisher locks. One stuck synchronous event sink can occupy only one worker;
+  later maintenance ticks do not accumulate threads, and shutdown is bounded.
+  Pending delivery no longer runs inside Product construction; the
+  lifecycle-managed supervisor owns initial and recurring drain. Delivery
+  remains at-least-once from the already committed immutable outbox.
+- Managed connector transport reads the managed-session generation and bearer
+  token in one off-loop snapshot sequence before network I/O. Extension enable
+  and health-check preflight/verification plus their transactional commits now
+  run off-loop; synchronous or asynchronous health probes share an eight-call
+  limiter and a 20-second default deadline. Probe timeout records the safe
+  `health_probe_timeout` fact and never activates the candidate revision.
+- The public `/api/v1` request/response contracts and existing SQLite
+  transaction/lease/audit facts are unchanged. Only scheduling, deadlines and
+  resource bounds changed; no frontend or Runtime API module was edited in this
+  batch.
+
+### Verification checkpoint
+
+- Device, managed-session, Connector contract/persistence/composition/gateway,
+  Runtime Connector mount and Extension platform adjacency: 102 passed, 1
+  platform symlink skip after refreshing one signed-bundle fixture with the
+  now-required Core build digest.
+- New deterministic regression coverage proves event-loop responsiveness during
+  delayed SQLite/session reads, bounded Device supervisor timeout and restart
+  reclaim, Connector write uncertainty after provider timeout, serialized stuck
+  outbox work, and Extension synchronous-probe responsiveness/timeout fencing.
+- Scoped `compileall` for Session, Connector and Extension production modules
+  passed.
+- Product Server, Runtime composition, system observability and Worker
+  supervisor adjacency passed 17 tests with one named environment skip.
+
+## 2026-07-11 - v1 CI and cross-runner byte stability
+
+- Added the read-only `EcoreX v1 CI` workflow. The authoritative quality job
+  runs pinned Python/Ruff/pytest, full v1 tests, compileall, a clean Node 22
+  install, high-severity npm audit, TypeScript/Web tests, the content-addressed
+  production build and all static v1 gates.
+- Added an explicit compatibility matrix for `windows-latest` (x64),
+  `macos-15` (arm64) and `macos-15-intel` (x64), matching GitHub's current
+  hosted-runner labels. These jobs run platform-sensitive Runtime smoke tests,
+  Web typecheck/build and the same byte gate. They neither sign nor publish.
+- Added `scripts/run-v1-lint.py` as the cross-shell lint entrypoint. Ruff checks
+  the complete v1 Runtime/test/gate surface for syntax, undefined-name,
+  duplicate-definition and import-structure failures. Existing public
+  re-export/unused-symbol debt is an explicit baseline exception rather than a
+  reason to omit lint from CI.
+- Added a canonical reproducibility contract. It validates the checked-in
+  unpublished pointer byte-for-byte, verifies SHA-256 prefixes in public and
+  WebUI JS/CSS names, rejects CR/CRLF in v1 shell and digest-bearing text, and
+  records sorted path/hash/size facts without host, timestamp or architecture.
+  CI compares four manifests byte-for-byte after build.
+- Expanded `.gitattributes` with LF policy for shell, HTML, JS/CSS, JSON,
+  Python, TOML and workflow sources. Dev dependencies now pin pytest, Ruff,
+  `jsonschema` and `python-multipart`; a new venv proved the test suite does not
+  inherit those packages from the developer machine.
+
+### Verification checkpoint
+
+- Clean Python venv installed only `.[dev]`; pinned tool imports succeeded,
+  lint passed, and CI/public-index/Product Server/Runtime-entry tests passed 41
+  with 2 named environment skips.
+- Clean `npm ci` found zero vulnerabilities at the high threshold; Web
+  typecheck, 87 tests and the 11-asset content-addressed build passed.
+- Design, legacy cutoff, public download and reproducibility gates passed;
+  workflow YAML parsed and the edited scope passed `git diff --check`.
+- GitHub-hosted matrix execution remains unclaimed until Actions runs. Signed
+  WebUI Runtime archives, SBOM/license/secret scans, publication and Runtime
+  install/update/rollback evidence remain release-environment work; native app
+  installers and notarization are outside scope.
+
+## 2026-07-11 - Complete image preview and browser focus closure
+
+- The Artifact row/media card is the preview trigger. Opening an image no
+  longer starts from a cropped or magnified surface: zoom `1` is the explicit
+  fit-to-window state, the preview canvas fills the viewport-inset dialog and
+  the image uses `object-fit: contain`. The magnifier remains available for
+  bounded 125–400% inspection and “显示完整图片” returns to the fitted state.
+- The full-window preview keeps backend-authoritative saving (`Artifact ID` +
+  revision through Output materialization); it never creates a browser-side
+  download path. Closing the Radix dialog returns focus to the exact Artifact
+  card that opened it.
+- A real in-app Browser run at 1280×720 measured the fitted body at about
+  1213×505 px with equal canvas/image bounds and no horizontal overflow. At
+  125%, the canvas expanded to about 1498 px and became scrollable; resetting
+  restored the 1213 px fitted width. Evidence is stored under
+  `docs/v1.0/evidence/image-preview-fit-current.jpg`.
+- First-open Settings exposed a second root cause: a trigger can remain
+  connected while its mobile Sidebar is hidden, so `isConnected` alone is not
+  a valid focus-restoration test. Shared restoration now rejects body,
+  document, disabled, inert and hidden candidates, verifies
+  `document.activeElement` after focusing, and walks visible task-menu and
+  navigation fallbacks.
+- Suspense loading/error surfaces now use Radix Dialog rather than a visually
+  modal `div`. They trap focus, support Escape/overlay close, expose real title
+  and description semantics, and delegate final focus restoration to the same
+  application contract.
+- Added a dedicated Artifact preview contract covering card-click activation,
+  default fitted state, bounded zoom, viewport-sized canvas and `contain`
+  rendering so future CSS changes cannot silently reintroduce cropping.
+
+### Verification checkpoint
+
+- Browser: Settings close returned to the Settings trigger; preview close
+  returned to the original Artifact card; zoom/readjust behavior matched the
+  measured geometry above.
+- `npm run typecheck`, `npm run test:v1` and `npm run build`: passed with 87
+  Web tests, 11 content-addressed assets and the bundle gate at 55.05 KiB entry,
+  454.64 KiB initial JS / gzip 140.61 KiB.
+- Design, legacy-cutoff and public-download static gates passed. The design
+  scan still reports zero hard-coded radius, shadow, raw color, numeric
+  z-index, layout-transition or `transition: all` findings.
+- The complete responsive/theme/touch/forced-colors/reduced-motion/axe matrix
+  remains release-candidate evidence; this browser checkpoint is deliberately
+  recorded as partial rather than promoted to that full gate.
+
+## 2026-07-11 - Full-suite timing determinism
+
+- The first current-tree full Python run reached 759 passes and 10 named skips
+  but exposed two load-dependent test-harness failures. Neither was dismissed
+  as an intermittent product failure.
+- The state-machine fixture had frozen `datetime.now()` during collection and
+  issued a 120-second lease from that old value; late-suite completion therefore
+  expired a newly constructed test lease. Each test now creates its own
+  explicit clock and lease recovery advances from the committed expiry.
+- A Windows `spawn` lock test used a fixed five-second readiness wait. It now
+  uses a bounded 20-second monotonic deadline, reports PID/exit/alive state on
+  failure and guarantees join → terminate → kill cleanup without hiding the
+  original assertion.
+- The two files pass together (19 passed, 2 platform skips), adjacent Job/Update
+  coverage passes (42 passed, 2 skips), and the two Windows spawn cases pass in
+  three consecutive runs. Product assertions and skip policy were not relaxed.
+- After all writers stopped, the authoritative full `tests/v1` run collected
+  778 tests and finished with 768 passes, 10 named platform/environment skips
+  and zero failures in 355.75 seconds. This is the current local source-tree
+  checkpoint, not evidence for the still-unbuilt signed platform candidate.
+
+## 2026-07-11 - Fixed-viewport responsive GA browser harness
+
+- Added a test-only, same-origin responsive wrapper to the standalone GA
+  Runtime. Its canonical matrix covers 1440×900, 1024×768, 768×900 and
+  390×844 in both light and dark themes without adding a viewport or theme
+  branch to the production React application.
+- Each wrapper owns an iframe with exact CSS-pixel width and height and reports
+  the frame's real `innerWidth`/`innerHeight`, applied theme, horizontal content
+  overflow and the presence/visibility of navigation, model selection,
+  composer, task type and Artifact controls. The report is also exposed as
+  `window.__ECOREX_GA_VIEWPORT_REPORT__` for deterministic in-app Browser
+  inspection.
+- Preserved the production document's `frame-ancestors 'none'` contract. A
+  separate `/__ga/frame-app` response alone uses same-origin framing and an
+  external, pre-module theme bootstrap; ordinary `/` and the wrapper remain
+  unframeable.
+- Viewport, theme and scenario inputs are exact allowlists with duplicate and
+  unknown parameter rejection. Unknown `/__ga/` paths cannot fall through to
+  the SPA, and the fixed wrapper source cannot recurse or accept an injected
+  frame URL. All matrix, wrapper, frame and helper-asset responses are
+  `no-store` under route-specific CSPs.
+- Added `responsive-ga-harness.md` as the durable operator/browser handoff.
+
+### Verification checkpoint
+
+- Focused GA tests: 5 passed, including CSP separation, 8-entry matrix,
+  content-addressed frame bundle, pre-module theme setup and malicious/
+  duplicate/recursive parameter rejection.
+- `npm run test:v1`: 89 passed with no regression to Runtime transport,
+  reducers, Artifact/retouch, Replay, extension, design, lazy-feature or bundle
+  contracts.
+- The subtask's in-app Browser backend was unavailable (`agent.browsers.list()`
+  returned no browser), so this checkpoint does not claim rendered matrix
+  screenshots. The harness is ready for the root session's real-browser matrix
+  run; Node route tests are deliberately not substituted for that evidence.
+
+## 2026-07-11 - Real responsive/theme/axe matrix closure
+
+- The root in-app Browser executed all eight exact viewport/theme entries from
+  the GA harness: 1440×900, 1024×768, 768×900 and 390×844 in light and dark.
+  Every frame reported the requested CSS viewport, zero horizontal overflow,
+  the requested theme and visible navigation/model/composer/task/Artifact
+  controls.
+- Added GA-only axe-core 4.12.1 loading under the isolated frame CSP. The
+  production document remains non-frameable and never loads axe. All eight
+  frames finished with zero violations and zero incomplete checks.
+- The browser audit found product defects rather than merely generating a
+  report. The workspace page title now has an `h1`, model and Artifact action
+  clusters expose group semantics, compact Sidebar icon buttons retain
+  accessible names, and the Composer label can no longer create horizontal
+  overflow.
+- The exact JSON report and eight light/dark screenshots are stored under
+  `docs/v1.0/evidence/`. The report is the authoritative measurement; stitched
+  full-page screenshots are visual evidence and not substituted for the
+  per-frame DOM facts.
+
+## 2026-07-11 - Signed Windows WebUI Runtime candidate drill
+
+- Built a real Windows x64 Core archive containing Python 3.11 Runtime closure,
+  ASGI product code and the exact content-addressed React build. An ephemeral
+  Ed25519 key signed the ReleaseBuilder manifest and artifacts; private key
+  bytes were never persisted and the drill made no external publication.
+- Exercised first install through `awaiting_user → activating → healthchecking
+  → completed`, then a separately signed same-version fault candidate through
+  pre-data rollback. The original slot was restored, relaunched and returned
+  authenticated `/api/v1/bootstrap` HTTP 200; the failed slot was discarded
+  and the product registration pin was released.
+- The drill exposed and repaired real activation defects: signed payload
+  mutation from Python bytecode, user-site dependency leakage, environment-
+  dependent Windows architecture detection, readiness probes that treated an
+  expected unauthenticated 401 as failure, and unbounded/error-revealing
+  startup diagnostics. Bootstrap now disables bytecode and user-site imports,
+  derives Windows bitness from the signed process, obtains the bearer only
+  through the injected no-store page contract and reports fixed safe stages.
+- This is a WebUI-serving Runtime archive, not an Electron/native desktop app,
+  EXE installer or OS application-signing claim. The evidence is
+  `docs/v1.0/evidence/windows-x64-signed-candidate-drill.json`.
+
+## 2026-07-11 - Bounded browser media and long-timeline rendering
+
+- Replaced eager per-thread media downloads with an abortable preview cache:
+  viewport-near loading, four concurrent requests, 24 entries, 64 MiB total,
+  revision-aware deduplication, LRU URL revocation and explicit rejection of an
+  oversized single preview. Thread/revision changes cancel stale work.
+- Added a second request fence at the dialog boundary. A slow preview response
+  can no longer overwrite a newer Artifact preview or repopulate a dialog the
+  user already closed.
+- Long tasks now start with an anchored 120-message DOM window. History pages
+  have stable item anchors, so incoming streaming deltas do not move the page;
+  users can page newer/older or return to the live tail. Completed rows retain
+  native `content-visibility`, while `item.delta`/reasoning deltas are batched
+  once per animation frame with a 50 ms background-tab bound and terminal or
+  state facts flush synchronously.
+- The pre-contract-integration checkpoint passed TypeScript, 97 Web tests,
+  content-addressed build and the design-system gate. Dedicated cache,
+  timeline, preview-race, forced-colors, reduced-motion, coarse-pointer and
+  clipboard-denial contracts are now part of the source gate set.
+
+## 2026-07-11 - WebUI-only scope hardening
+
+- Reconfirmed ADR-006/013 as the current delivery scope: React WebUI plus the
+  local backend Runtime and signed online-update archives. Electron, native
+  windows, DMG/native apps and their application signing/notarization chain
+  are not v1 deliverables.
+- Removed the remaining tracked macOS app entitlements, DMG installation note,
+  native icon build inputs, dead `window.ecorexDesktop` bridge declarations and
+  `build:renderer` compatibility alias. The legacy cutoff gate now rejects
+  those native-app inputs if they return.
+- Root/WebUI README, CI wording and release runbook now call platform outputs
+  WebUI Runtime archives and distinguish Ed25519 archive verification from OS
+  application signing. Windows/macOS names remain host compatibility targets,
+  not desktop UI products.
+
+## 2026-07-11 - One administrator WebUI and one release authority
+
+- Removed the public site's v0.3 static admin, zero-dependency Admin API, usage
+  panel and their server install/check/migration scripts. They implemented a
+  second SQLite release state, Basic Auth, old client keys and legacy
+  `/message`/`upload`/public Runtime routes beside the v1 Control Plane.
+- The download page now links to `/admin/`. Caddy and Nginx proxy only
+  `/admin*` and `/api/v1/admin*` to the loopback v1 Control Plane; they never
+  publish a user's local Runtime. The Control Plane's content-addressed admin
+  assets, in-memory bearer and backend role checks remain authoritative.
+- Public downloads now advertise ZIP/GZip/BIN Runtime archives only; DMG/EXE
+  MIME and native-app routes are absent. The old `/ecorex-agent/admin` path is
+  a redirect, not a second application.
+- Moved the retired-host redirect out of inline HTML into the hashed public
+  module, then regenerated the content address. Public HTML has one external
+  module and no inline script/style/base; Caddy/Nginx add no-store, nosniff,
+  no-referrer and a self-only script/style CSP with HTTPS connect permission
+  for the three signed manifest origins.
+- The strict public and legacy gates now reject every removed admin/API/usage
+  tree, legacy proxy snippet and old installer entrypoint if it returns.
+
+## 2026-07-11 - v0.3.0 copy-on-write migration closure
+
+- Audited the actual v0.3.0 release-data implementations at `f0750d24` and the
+  final local image-hotfix commit `9ac3b958`. The seven schema/state source
+  blobs are byte-identical. The repository has no `v0.3.0` tag and its release
+  target, release-index commit and package hashes disagree, so the migration
+  report now separates schema compatibility from marker metadata and explicitly
+  records that the historical archive was not attested.
+- Added strict read adapters for `agent_runs`, `agent_run_events`, queued request
+  payloads and scheduler JSON v1. Conflicting IDs/owners, invalid JSON,
+  unsupported schema versions and malformed schedules abort staging. Runtime
+  events are redacted diagnostic history; they are not injected into the v1 UI
+  event stream.
+- Removed the last source-side SQLite ambiguity: even `mode=ro` can touch a WAL
+  shared-memory file on some platforms. Migration now copies stable DB/WAL
+  bytes into staging, re-hashes the source pair, and invokes SQLite only on the
+  private copy. A live-WAL fixture proves uncheckpointed rows are imported while
+  source DB/WAL/SHM bytes and mtimes remain unchanged during the run.
+- A matching legacy request enriches its imported Turn with model and terminal
+  state. Active states become `interrupted`, while a branch is linked only when
+  child/parent request ownership and its fork event boundary can be proven.
+- Active/queued message work becomes a bounded, redacted
+  `requires_user_confirmation` recovery draft. Legacy schedules remain disabled
+  pending confirmation. Neither path inserts a v1 Durable Job, so Runtime start
+  cannot execute v0.3 hidden context, tools, connectors or schedules.
+- Staged the permission profile as `default` or `full_access` for later account
+  binding. Remembered grants and filesystem paths are counted but not activated.
+  External permission and release marker files can be pinned into the same
+  before/after digest under opaque labels.
+- Matched the released WebUI hydration behavior: cached `sessionUiState`
+  messages are imported only for sessions without canonical DB history.
+- Evidence and provenance limits are recorded in
+  `docs/v1.0/evidence/v030-migration-baseline.json`.
+
+## 2026-07-11 - Signed declarative candidate storage migrations
+
+- Candidate Core archives now carry a canonical `storage-migrations.json`
+  whose plan hash participates in the build digest and Ed25519-signed Artifact.
+  Admission accepts an explicitly newer target schema while rejecting
+  downgrade; the candidate Runtime itself still requires its compiled schema
+  to equal the signed target.
+- Migration input is a bounded declarative operation set, never candidate SQL
+  or Python. Admission and live preflight run copy-on-write against the same
+  plan hash, record source/target digests, row counts, `quick_check`, foreign
+  keys and release/build identity, and reject links/reparse points or receipt
+  drift. A poison candidate proves admission does not execute candidate code.
+- Live preflight runs before the data barrier and live apply after it. Failure
+  before new-data use rolls back; failure after the barrier enters explicit
+  roll-forward repair rather than pretending an unsafe downgrade is possible.
+
+## 2026-07-11 - Shared image storage and bounded cloud workers
+
+- The image orchestrator now supports PostgreSQL 15+ leasing with explicit,
+  validated migrations and S3-compatible shared CAS. PostgreSQL cannot be
+  paired with node-local CAS; SQLite remains the local correctness/reference
+  mode only.
+- Shared blobs use create-if-absent writes, digest/MIME verification, ETag CAS
+  reference mutation, tombstones and conditional deletion. Deletion can resume
+  after a crash and refuses to remove bytes whose ETag changed. Blocking S3 and
+  database calls leave the ASGI event loop.
+- Upload chunk limits and a 512 MiB worker memory envelope derive 1–8 execution
+  slots. PostgreSQL pools are bounded to 1–16 connections and fail closed when
+  their schema, trigger or index contract drifts. Real PostgreSQL/S3 load is
+  still a candidate-environment gate, not inferred from deterministic fakes.
+
+## 2026-07-11 - Generated Runtime contracts
+
+- Bootstrap, Event, Artifact-list and Artifact-detail boundaries are generated
+  from authoritative Pydantic schemas into deterministic JSON Schema and TS
+  metadata. SSE `id`/`event` headers must agree with the durable envelope; an
+  unknown enum, missing field, count drift or bad digest is rejected before it
+  reaches React state.
+- Artifact families and visibility no longer have a second frontend allowlist,
+  and historical malformed Artifact Items are omitted rather than cast through
+  `unknown`. Contract generation has a pinned full-schema digest and a CI
+  `--check` mode.
+
+## 2026-07-11 - Public ShareSnapshot v2 and Codex-density WebUI
+
+- ShareSnapshot v2 binds each visible Artifact to its Turn and carries only an
+  immutable raster-media descriptor. The local durable worker reads the
+  verified Artifact CAS, uploads each image sequentially with a stable media
+  idempotency key, then publishes JSON. Missing or mismatched media prevents a
+  public snapshot; retry repeats the same media key.
+- The Control Plane stages PNG/JPEG/WebP/GIF/AVIF bytes under account/share/
+  media authority, with 16 MiB item, 64 MiB share and four-request memory
+  bounds. A token can read only media declared by its active, unexpired
+  snapshot; revoke/expiry immediately return 404. Fresh orphans are capped per
+  account and old unlinked bytes are reclaimed, while linked media is
+  immutable. SVG, redirects, digest/MIME/magic drift and cross-account reuse
+  fail closed.
+- The public page is a script-free chat transcript. It labels user intent as
+  “你的指令”, Agent output as “EcoreX”, attaches the image to the correct Turn,
+  renders it with `contain`, and keeps the full-image link under the same token.
+  Schema-v1 canonical bytes and old text-only links remain compatible.
+- Ordinary WebUI text/icon/tool buttons now have transparent idle border,
+  background and shadow; hover/focus/active alone reveal the low-contrast
+  surface. Primary, dangerous and selected controls retain semantic treatment.
+  System UI and `ui-monospace` stacks, 14/22 body, 13/20 controls and 12/16
+  captions are locked by CI; chat/connector/office rows use sparse framing.
+- Browser inspection found two cascade/order defects missed by source scans: a
+  broad `font: inherit` overrode 13/20 controls, and equal timestamps caused
+  opaque Item IDs to reorder a reply before its instruction. The shorthand was
+  narrowed to font family, backend projections now order by first Event `seq`,
+  and React preserves projection/event insertion order.
+
+### Browser and focused verification checkpoint
+
+- Main WebUI at 1280×720 measured ordinary idle controls at transparent border
+  and background with 13px/20px type. The conversation DOM order was `你 →
+  EcoreX`; the media Action Rail was non-interactive at rest.
+- The real Control Plane share route loaded a 1800×1100 image as 758.66×463.63
+  with `object-fit: contain`, zero horizontal overflow and zero scripts. At
+  390×844 it rendered 364.65×222.84, kept zero overflow and switched the
+  Workspace to radius 0. Evidence is
+  `evidence/share-chat-browser-audit.json`.
+- The browser run first rejected an obsolete short GA CSRF fixture, proving the
+  generated boundary failed closed. The fixture now uses the same minimum
+  token contract and has a regression assertion.
+
+## 2026-07-11 - Core storage schema authority closure
+
+- Removed the last Runtime-owned pre-GA extension-column `ALTER TABLE` path.
+  A running Runtime can create the current core schema only in a database with
+  no user tables; any non-empty store must already carry the exact compiled
+  storage version.
+- Core tables, indexes and safety triggers now have one canonical definition
+  fingerprint. Missing version metadata, an incomplete event/job-context
+  column set, a deleted index or trigger, or a same-name altered trigger fails
+  before Runtime DDL and remains unchanged on disk. This prevents
+  `CREATE IF NOT EXISTS` from masquerading as repair or migration.
+- Product composition and its Output tests now establish the versioned core
+  database before Artifact/Output repositories register their domain tables.
+  A reversed order is treated as an unversioned partial store rather than
+  silently adopted.
+- Candidate storage evolution remains the Ed25519-bound declarative plan with
+  copy-on-write admission, live preflight, data barrier and receipts. Existing
+  pre-GA compatibility ALTER paths inside some non-core domain repositories are
+  explicitly a remaining consolidation batch; they are not represented as
+  closed by the core fingerprint work.
+
+## 2026-07-11 - Production Control Plane composition and operator lifecycle
+
+- Added `ecorex-control-plane serve`, `schema migrate/check`, and `backup
+  create/check`. Configuration is environment-only and secret material enters
+  through a fixed `SecretProvider`; the CLI has no secret, token, key, DSN or
+  path arguments and emits no exception text.
+- The built-in provider declares and enforces single-node SQLite WAL: one
+  cross-platform process lock, one persistent-volume marker, encrypted-volume
+  attestation, bounded free-space checks, distinct verified backup storage and
+  exactly one replica. `postgresql`/multi-replica input fails before storage and
+  a typed provider seam records the later HA boundary without a fake fallback.
+- `serve` validates the three existing schema authorities and repository audit
+  chains but never executes DDL. Explicit migration takes the instance lock,
+  creates a pre-upgrade backup, runs core/Audit/Share migrations, verifies WAL
+  and creates a post-upgrade backup. A partial new database is removed; a failed
+  existing upgrade restores the verified pre-migration SQLite copy.
+- Production Share always receives `S3ShareObjectStore`. Startup/check require
+  an HTTPS SDK client, encrypted private bucket controls and a private
+  write/head/delete probe. SDK credentials remain in the workload-identity/
+  boto chain. Audit AES/HMAC keys and rotation-aware Share HMAC keys are never
+  represented in config output; raw access logging is disabled because Share
+  tokens are URL path credentials.
+- Added strict short-lived Ed25519 JWT verification for Control Plane clients
+  and admins: canonical bounded segments, duplicate-member rejection, exact
+  issuer/audience/use/lifetime checks and bounded principal/role projection.
+  Release manifests retain a separate Ed25519 trust ring.
+- ASGI lifespan now exposes dependency-backed liveness/readiness only for a
+  production lifecycle. Draining rejects new HTTP work, closes new/active WSS
+  update sockets with restart semantics, stops the durable signal poller,
+  closes S3 and releases the process lock in order. Online backups use ULID/
+  SHA-256/canonical receipts, bounded retention and retry; backup failure removes
+  readiness.
+- Focused new production composition suite: `13 passed`, including a real
+  second-process lock probe. Broad Control Plane, Cloud Audit/Share, WSS,
+  schema-authority and hint regression adjacency: `153 passed`.
+- Environment evidence still required: a real credentialed S3 bucket outage/
+  latency/permission run. A multi-replica Control Plane additionally needs a
+  first-party PostgreSQL schema/repository provider and HA/partition/load proof;
+  neither is inferred from the deterministic S3 double or SQLite tests.
+
+## 2026-07-11 - Protected Candidate build, signing and publication chain
+
+- Added a dispatch-only Candidate workflow with channel concurrency locks,
+  protected canary/stable Environments, minimum job permissions and explicit
+  `publish_assets`/promotion inputs. The default remains a non-publishing
+  canary Candidate, dry-run promotion and 1% rollout.
+- Added a separate protected platform-stage workflow for Windows x64, macOS
+  arm64 and macOS x64. A SHA-256-pinned external stager must produce the real
+  Runtime plus browser/image/sandbox Pack trees and platform gate evidence.
+  Missing binaries and placeholder trees fail before any signing and leave a
+  typed failure receipt. Every tree also requires a supply-chain evidence
+  digest, and its receipt records the pinned stager executable/adapter digest,
+  so opaque staged dependencies cannot inherit the source-only scan.
+- Added strict stage and recipe contracts. Candidate admission recomputes every
+  file digest, rejects links/reparse points and target duplication, requires 12
+  exact stages and pins each receipt to the same non-PR workflow-dispatch run,
+  repository and commit.
+- Added `DigestPinnedExternalSigner`: canonical ReleaseBuilder payloads go only
+  over stdin; executable/adapter SHA-256 is checked before and after each call;
+  stderr is discarded; stdout is bounded to a Base64 Ed25519 signature; the
+  protected public key verifies the result before it can enter a manifest.
+- Reused ReleaseBuilder for three product Cores, nine Capability Packs, signed
+  Pack sidecars, Web manifest, SBOM and release metadata. Reused the existing
+  source-order publication coordinator for domestic mirror, GitHub and CDN.
+- Closed cross-channel and repeated-canary collisions: source roots/scoping
+  participate in `build_digest`, mirror/CDN append `release_id`, stable keeps
+  `v1.0.0`, and each canary tag carries its 24-hex build prefix.
+- Added immutable build/signature/supply-chain/gate receipts and an evidence
+  assembler compatible with the Control Plane's exact 17-gate contract.
+- Focused Candidate suite: `11 passed`; targeted compile and Ruff passed; local
+  license/secret preflight passed. Real protected runners, KMS/HSM signing,
+  production stage binaries and three-origin publication remain external
+  evidence and are not claimed by the fixture suite.
+
+## 2026-07-11 - Versioned general HITL contract and restart continuation
+
+- Replaced arbitrary interaction response JSON with a Runtime-owned v1
+  `InteractionContract`: bounded text/textarea/select/checkbox fields, exact
+  declared options, required/length rules, typed actions and presentation
+  intent. Permission, information, connector login, conflict resolution and
+  Artifact review now share this one durable contract.
+- Connector login contracts have no input fields. They expose only a public
+  connector state and the backend-declared begin-login/check-status/cancel
+  actions. Password/token/secret-named fields and credential-shaped response
+  values are rejected before an Event or response row can be committed.
+- The Runtime core schema now persists the immutable contract and the accepted
+  response's client request ID/fingerprint. A partial unique index and
+  transaction-level fingerprint check make an identical retry replayable while
+  rejecting reuse of the same ID for another interaction or payload.
+- `interaction.requested` and `interaction.resolved` carry complete typed
+  facts. Replay validates the contract, response and correlation ID. Restart
+  projections therefore reconstruct the same pending form and accepted answer.
+- Agent Turn Worker honors a tool follow-up only when the reviewed
+  `ToolSpec.output_schema` explicitly declares `_ecorex_interaction`. The tool
+  completes once, the Job checkpoints in `waiting_tool_followup`, and a
+  restarted worker returns the validated human response to the model without
+  repeating the side effect.
+- React `InteractionStack` renders backend fields/actions with labels,
+  keyboard/focus support, live validation/server errors and a busy state.
+  Actions are frameless at rest and use the shared subtle hover/focus frame.
+  The session retains one request ID and payload until Runtime acknowledgement.
+- Verification: focused Python Runtime/Worker/Replay adjacency `60 passed`;
+  schema authority and signed-migration adjacency `19 passed, 1 skipped`; Web
+  typecheck passed and the current Web contract/state/accessibility suite
+  `126 passed`.
+  At this batch's final verification point the full Web build reached Vite
+  output but the shared initial-JS gate remained `475.33 KiB > 475 KiB`; this
+  batch therefore does not report the aggregate bundle gate as green.
+
+## 2026-07-11 - Trusted, non-exclusive image intent routing
+
+- Removed every concrete image term, route identity and tool-ID branch from
+  `CapabilityPlanner`. The Planner now performs only catalog matching,
+  availability, governance, versioned routing-policy evaluation, exposure and
+  stable ranking. A source contract prevents `imagegen`, `media.image` or the
+  retired `_IMAGE_INTENT` pattern from returning to that module.
+- Added the Core-owned `IntentRoutingPolicy` contract and v1 built-in create/
+  edit rules. Rules require `GENERATE_MEDIA` plus reviewed
+  `media.image.create` / `media.image.edit` facets. Phrase/rule/facet counts and
+  lengths and score boosts are bounded; repeated phrases/rules cannot stack
+  priority. The current policy is built into Core. The injection seam accepts
+  only an already trusted product policy; no MCP wire or extension contract can
+  submit routing facets or a boost.
+- Added the reviewed facets to the built-in media capability. A replacement
+  capability with a different ID and the same reviewed contract receives the
+  same route treatment. Free-form MCP names, descriptions, effects and intent
+  tags remain search evidence only and cannot self-promote.
+- Strong Chinese/English creation and reference-image edit requests promote the
+  media capability to direct without removing read/fetch/vision/CDP/shell.
+  Exact eligible tool selection remains stronger than a route hint (`use shell
+  to generate image` keeps shell first). `image2`/`gpt-image-2` alone is not an
+  action: model feature/price/availability/fault questions stay unpromoted, but
+  an alias accompanied by generation/edit language routes normally.
+- Product discussions such as “optimize image-generation intent routing”,
+  architecture, pricing/model selection and retouch-workflow design are also
+  suppression evidence rather than media actions.
+- Added explicit suppression for analysis-only, negated and diagnostic intent.
+  A media name in “image generation failed; only analyze” is recorded as an
+  explicit reference but does not become an invocation. Mixed requests remain
+  compositional: “do not generate; only edit this reference” suppresses create
+  while retaining edit.
+- Extended immutable decisions with bounded `matched_evidence` and
+  `suppression_reasons`; the Plan now binds routing-policy ID, version and
+  SHA-256 digest. Durable snapshot restart/Replay round-trips score, evidence,
+  suppression and policy identity. Missing Pack, offline, disabled and
+  administrator-denied candidates retain trace evidence but stay hidden and
+  uncallable.
+- Verification: focused Planner/snapshot/real Runtime composition suite
+  `40 passed`; focused Planner/snapshot/Runtime/Gateway/Replay adjacency
+  `58 passed`; MCP/Pack/Gateway/Worker/Replay/permission adjacency
+  `132 passed, 2 environment skips, 1 unrelated stale handler-set expectation
+  deliberately deselected and reported to the root integration owner`.
+  `run-v1-lint`, 17-fragment Runtime schema authority, seven-authority server
+  schema gate, Planner concrete-media scan and owned-file whitespace scan all
+  passed. Repository-wide `git diff --check` was clean apart from existing
+  line-ending conversion warnings.
+- Known boundary: this deterministic policy improves direct exposure; an
+  unlisted novel expression still sees the media tool through deferred
+  discovery instead of invoking an unreviewed fuzzy classifier. Vocabulary or
+  policy changes require a version/digest change. Rollback removes the policy
+  promotion and returns all tools to catalog default exposure without deleting
+  any capability or changing governance.
+
+## 2026-07-11 - Real platform Packs and atomic Core+Pack activation
+
+- Added repository-owned browser/image/sandbox Pack sources, a bounded child
+  protocol, Playwright/Chromium nested runtime verification, managed-image
+  provider refusal and fixed-shell sandbox contract acknowledgement.
+- Added a content-bound `pack-python.json` contract and removed every Product
+  fallback to PATH/system Python. Core staging now builds a complete Python
+  closure and runs it before producing dependency evidence.
+- Added deterministic Windows/macOS launchers, a Windows AppContainer + Job
+  Object helper, Seatbelt/AppContainer behavior probes and the source-pinned
+  platform stager for all three targets. Windows Product composition now
+  injects the helper from the active verified slot; helper identity is checked
+  again before each launch.
+- Implemented ADR-075: the exact browser/image/sandbox archive+sidecar set is
+  downloaded with per-file resumable source failover, verified at the outer
+  release and inner Pack layers, staged under the Core payload and activated as
+  one slot. Added composite receipts, Bootstrap/provisional/prior-slot
+  revalidation, fail-closed content-verifier injection and cleanup of a slot
+  renamed immediately before a failed composite recheck.
+- Closed a composite-receipt trust gap: verification now recomputes the Core
+  sub-tree with the fixed Pack projection excluded and compares it directly to
+  the retained signed Core archive. Rewriting both a Core file and the mutable
+  local `payload_digest` no longer reauthorizes altered Runtime bytes.
+- Exercised the real local Playwright/Chromium closure. It exposed both valid
+  zero-byte distribution members (now supported only for dependency files) and
+  a 208.21 MiB nested browser runtime. Artifact limits are now identity-aware:
+  Core remains 150 MiB, Bootstrap 10 MiB, Pack archive 500 MiB and Pack sidecar
+  1 MiB.
+- Platform staging now consumes only the `platform-stage` profile selected by
+  `requirements/locks/manifest.json`; Core dependency evidence requires the
+  complete locked inventory, while the nested browser runtime is a validated
+  subset. Every dependency/supply-chain gate records both manifest and profile
+  lock digests instead of trusting the runner's installed package list.
+- Removed the `capabilities -> update -> capabilities` cycle through dependency
+  inversion. `PackContentVerifier` lives in the update domain; the concrete
+  Capability manifest adapter lives in product integration and is injected by
+  Bootstrap CLI and server/update composition. Both import orders were
+  executed successfully.
+- Verification: final atomic update/Bootstrap suite `79 passed, 3 skipped`;
+  Pack/platform/Candidate/manifest/builder suite `74 passed, 3 skipped`;
+  Product Runtime/update composition suite `41 passed, 2 skipped`.
+  `run-v1-lint`, `py_compile` and both Capability-first/Update-first import
+  orders passed. The skips are environment/platform-specific native behavior
+  tests.
+- Evidence boundary: this Windows development machine has no MSVC `cl/link` or
+  macOS clang/Seatbelt environment. Native source and protocol tests are green,
+  but no local native-build receipt is claimed. GA still requires all three
+  protected runner receipts plus real first-install/update/rollback evidence.
+
+## 2026-07-11 - Adversarial routing and reserved extension names
+
+- Replaced the narrow create/edit phrase list with versioned action-group ×
+  deliverable-group evidence. Common poster, cover, illustration, drawing,
+  cut-out and background-edit language now routes without embedding a concrete
+  tool ID. Product discussion, pricing/model/fault questions and explicit
+  negation remain suppression evidence.
+- Split create-failure and edit-failure suppression. A user can now say
+  “generation failed, edit this image instead” or “retouch failed, generate a
+  new image” without the failed route suppressing the explicit fallback.
+- Added Unicode NFKC/zero-width handling, invalid-surrogate fail-closed behavior,
+  a 64 KiB routing budget, bounded 128-entry decision evidence and stable
+  candidate ordering independent of registry insertion order.
+- Core tool IDs and aliases are a reserved explicit-reference namespace. A
+  Skill/MCP contribution named like `imagegen`, `shell` or another Core alias
+  cannot cause the generic extension executor to receive the same explicit
+  boost. The snapshot records `reserved-skill-reference:*` for diagnostics;
+  the unique extension ID remains selectable.
+- Runtime validation errors now project bounded safe locations/messages without
+  reflecting invalid user input, including malformed Unicode that previously
+  could make JSON error serialization fail a second time.
+- Focused adversarial verification: `85 passed, 1 skipped`; the final full v1
+  suite below includes the same cases.
+
+## 2026-07-12 - Effect-routed ImageGen model-request integration
+
+- Reconfirmed the image route as a backend-owned, versioned effect/facet rule,
+  not an `imagegen` branch in the generic planner. The selected implementation
+  can be replaced by any reviewed catalog entry implementing the same
+  `media.image.* + generate_media` contract; the planner source gate rejects a
+  concrete media tool or route identity.
+- Added a full Agent worker regression that freezes the capability snapshot,
+  builds the managed Gateway request and proves the image implementation is
+  the first direct tool for a generation request while read remains direct and
+  fetch, vision, CDP and shell remain deferred/discoverable. No route invokes a
+  tool automatically; runtime availability, policy and invocation validation
+  remain independent gates.
+- Replaced global meta-word suppression with bounded local-context and ordered
+  clause evidence. `生成图片说明`, `修复图片生成按钮`, `优化改图功能` and chart/
+  caption/link requests no longer false-route, while compound deliverables such
+  as `生成图片并写图片说明` remain valid. The latest explicit clause wins, so a
+  retry after `生图失败` routes again and a final `只分析` cancels promotion.
+- Focused planner/snapshot/invocation/model/worker/Runtime verification passed
+  `109 passed`; a separate managed Responses adapter regression proves direct
+  tool order survives the final provider payload projection. Ruff passed.
+
+## 2026-07-11 - Reproducible dependency closure
+
+- Added repository-owned hash locks for bootstrap, Runtime, development,
+  cloud and platform-stage profiles. Python is fixed at 3.11.9, Node at
+  22.23.1, and every external GitHub Action is pinned to a 40-character commit.
+- CI/Candidate/platform jobs now use only the strict profile installer and
+  `npm ci`; naked pip/npm installation, URL/VCS/path dependencies, lock drift,
+  missing hashes and floating toolchains fail the dependency gate.
+- Candidate identity, release metadata, receipts and SBOM bind lock manifest
+  `c452d89bf9215c89c00638bc7bf39a0eed89a29fd3a63a5917c5abf3d691fa85`.
+  Platform staging compares its installed inventory with the selected lock.
+- Fresh Windows Runtime/cloud installation and import passed. Public binary
+  availability probes found 21/21 Runtime packages for Windows x64, macOS 11+
+  arm64 and macOS 11+ x64. Actual macOS installation remains a protected-runner
+  gate, not a local claim.
+
+## 2026-07-11 - Final browser, bundle and source-tree closure
+
+- A real browser exposed that the post-Vite content-addressing pass could let
+  generic and asset-specific string matches overlap on one quote, producing an
+  invalid `import(""./chunk.js"")`. The rewriter now gives exact local assets
+  precedence and rejects any overlapping generic token. The final bundle gate
+  additionally invokes the JavaScript parser on every emitted chunk, so future
+  rewrite corruption is blocked generically.
+- Applied the same reference-authority rule to ReleaseBuilder reachability.
+  This fixed a real `clientOperationOutbox` false orphan without weakening the
+  rejection of stale or missing assets.
+- Narrow mobile Artifact layout now reserves a real 44×44 px More target even
+  when a desktop pointer emulates a 390 px viewport; feedback/retouch remain in
+  the touch menu. Image preview opens in fit/contain mode with zoom retained.
+- Browser Pack now validates every HTTP subrequest, not only the main URL,
+  blocks WebSockets for the bounded office-browser contract and validates the
+  nested Chromium manifest against duplicate/escaping paths. Explicit private,
+  loopback and link-local subresources from public or `data:` documents fail
+  before dispatch.
+- Final local browser evidence: 1440×900, 1024×768, 768×900 and 390×844 in
+  light/dark passed 8/8 with zero horizontal overflow and zero axe violations;
+  a clean direct production page logged zero error/warn.
+- Final frozen source-tree verification: `1208 passed, 14 skipped, 0 failed` in
+  415.32 s; TypeScript and `138/138` Web tests passed; 17 content-addressed Web
+  assets passed syntax and size gates; Ruff, 17 Runtime/7 server schema
+  authorities, strict legacy/public/design/dependency/supply-chain/
+  reproducibility gates, npm audit and whitespace checks passed.
+- The final local Windows Ed25519 candidate drill completed in 352.7 s with
+  background download, user-confirmed activation, bootstrap 200, refresh-safe
+  caching and signed fault rollback. Its report is explicitly Core-only because
+  the local host lacks a trusted native compiler. Formal Core+three-Pack
+  Windows/macOS evidence remains bound to the protected platform workflow.
+
+## 2026-07-12 - Automatic public Bootstrap freshness renewal
+
+- Split immutable release authority from renewable pointer freshness. The
+  Control Plane accepts only same-sequence, same-revision, same-target renewal
+  signed by the independent online publication key.
+- Added a durable startup catch-up + periodic refresher with an eight-hour lead,
+  one-hour check and ten-minute database lease by default. Attempts,
+  preparations, events, state and alert outbox rows survive restart; exact
+  prepared bytes and deterministic publication request IDs prevent duplicate
+  KMS identities or external writes.
+- Reused the existing stage → object CAS → credential-free HTTPS readback →
+  canonical activation saga. Added recovery for a process exit after exact
+  activation/readback but before refresh-success bookkeeping, plus phase lease
+  renewal and fail-closed readiness after expiry.
+- Production composition now supports a digest-pinned workload-identity
+  KMS/HSM signer. Missing signer is explicit `unconfigured`; signer, object or
+  readback failures retain the previous database-active pointer and emit safe
+  audit/outbox/health evidence. No path emits a rollout/update signal.
+- Added administrator status and one-shot refresh API/client/CLI operations;
+  the supplied client request ID is durably replayed through Control Plane
+  idempotency.
+- Verification: server schema authority passed; the combined pointer/index,
+  schema, release-flow, admin and production suite passed `73 passed`. The
+  refreshed saga suite passed `18 passed`, and production composition passed
+  `14 passed`. No live KMS, public HTTPS object store or rollout was invoked by
+  this local deterministic evidence.
+
+## 2026-07-12 - Post-QA release/freshness hardening
+
+- Closed three P1 findings: freshness readiness now binds automation enablement,
+  signer, live task, heartbeat and scheduler error; release/publication roles
+  reject identical raw Ed25519 keys under different aliases; external signer
+  stdout/stderr are bounded streams and timeout/overflow terminates and reaps
+  the complete process tree without exposing stderr.
+- Closed scheduler timing gaps: check interval cannot exceed half the lead
+  window, lead plus clock skew must remain below the 24-hour TTL, and check +
+  lease + signer timeout + skew must fit before the renewal boundary.
+- Promotion journal schema v3 binds the complete semantic rollout target
+  (channel, percentage, sorted organizations/accounts and minimum compatible
+  version) into prepare/final evidence. Parameter drift fails before any server
+  call. Manual freshness CLI accepts an explicit request ID or uses a locked,
+  fsynced pending journal bound to endpoint + immutable authority digest. It
+  survives ambiguous response loss, clears only after observed success and
+  audits invalidation when the release target changes.
+- Verification: focused QA suite passed `58 passed`; the final release/security/
+  schema/admin/production adjacency suite passed `106 passed`. Ruff,
+  `py_compile` and the eight-authority server schema gate passed. No live KMS,
+  public CDN/object store or rollout mutation was used.
+- Final P2 regression: simulated server success followed by lost client
+  response changed the active expiry, yet a new CLI process reused the pending
+  ID and the server performed one publication only. After observed success the
+  next invocation produced a new ID. CLI/client/freshness focused tests passed
+  `30 passed`.
+
+## 2026-07-12 - Release-gate execution integrity
+
+- Removed `e2e` and `migration-dry-run` from the quality writer's automatic
+  passed-gate declaration. Quality evidence now hashes the real browser E2E and
+  complete migration execution logs; E2E is promoted to a gate only after it
+  is bound to the signed Candidate and verified Windows platform-stage set.
+- Candidate quality now fetches and verifies the full object graph for fixed
+  v0.3.0 commit `f0750d247bfe52ffb95c137cadc9983a03010690`.
+  The migration gate explicitly runs copy-on-write, Product coordinator,
+  quarantine, released-schema, signed Candidate migration and activation
+  rollback suites plus both schema-authority checks.
+- Added required `image-shared-storage` and `image-soak` Control Plane gates.
+  The bounded job creates isolated digest-pinned PostgreSQL 16.9 and MinIO and
+  runs 256 jobs/48 workers across exactly two node IDs. A separate protected
+  runner repeats that real test for at least four hours. No skip-to-pass path
+  exists; absent protected capacity keeps the Candidate blocked.
+- Added release-bound evidence that joins execution, commit/run identity,
+  Candidate receipt, release/build identity and the complete Windows
+  Core/Bootstrap/browser/image/sandbox stage boundary before the three runtime
+  gate receipts are written.
+- Added filesystem-authoritative source checks to Candidate and CI, closing the
+  untracked-file blind spot in `git diff --check`. The supported lint/compile
+  surface now includes all current-v1 scripts, platform stager and Capability
+  Pack Python without pulling historical scripts back into production gates.
+- Focused integrity, workflow, lint, quality and Candidate tests passed `12`;
+  Ruff passed for all touched Python files. The protected four-hour soak and
+  signed platform jobs remain intentionally unclaimed until their runners
+  execute them.
+
+## 2026-07-12 - Signed and typed release-evidence hardening
+
+- Upgraded the successful Candidate build receipt to schema v2 and signed its
+  canonical, domain-separated unsigned body with the same digest-pinned
+  external Ed25519 signer used for artifacts and the release manifest. The
+  receipt authenticates commit/staging provenance, exact 15-stage set, Web
+  tree, dependency lock and the complete manifest artifact projection.
+- Replaced log-string evidence with full pytest and migration JUnit plus
+  Playwright JSON. Validation requires at least 1,000 executed full-suite cases
+  and critical Runtime sentinels, the exact migration corpus with zero skips,
+  and exactly 11/11 browser cases with zero skips.
+- The image shared-storage runner now parses per-round JUnit and requires the
+  two fixed pytest node IDs and exactly two passing, non-skipped test cases;
+  stdout text can no longer mint a passing gate.
+- Release binding verifies the real manifest and Candidate receipt signatures
+  with the protected public key, then checks complete manifest/Candidate/
+  staging/run identity. Migration is rebound after Candidate creation. Stage
+  producer receipts bind `workflow_run_attempt` to staging provenance so
+  rerun artifacts cannot be mixed.
+- Gate receipt schema v2 carries release ID, version, channel, build digest and
+  exact manifest SHA-256. The assembler rejects mixed runs and validates the
+  complete publication receipt against the manifest.
+- Added stable evidence I/O that rejects symlink/reparse components, detects
+  opened-file identity/size/mtime drift, refuses NaN/Infinity JSON, and creates
+  immutable receipts using exclusive create plus fsync.
+
+Verification:
+
+- Signed Candidate, typed gate, publication, process-boundary, stable-I/O and
+  reproducibility suite: `48 passed, 1 skipped`; the skip is the real Windows
+  symlink case where this host lacks symlink privilege.
+- `python scripts/run-v1-lint.py --compile`: passed.
+- Candidate/platform workflow YAML parsing: passed.
+- A real Playwright 1.61.1 / Node 22 JSON report from 11/11 GA cases was parsed
+  successfully by the new quality validator.
+
+## 2026-07-12 - Cross-runner reproducibility becomes a Candidate gate
+
+- Added required `ci_run_id` and `ci_run_attempt` Candidate inputs and a
+  read-only provenance job. It reads the same-repository run API record and
+  downloads only the four named Ubuntu/Windows/macOS byte-contract artifacts
+  from that run; the existing typed verifier rejects stale, PR/fork, wrong
+  commit/run/attempt, incomplete, linked or non-identical inputs.
+- The signing job now consumes that immutable source evidence and invokes the
+  dedicated reproducibility binder only after the schema-v2 Candidate receipt
+  and signed manifest exist. The binder requires its canonical Web tree to
+  equal the Candidate receipt's signed Web tree.
+- Added `reproducibility` to the Control Plane required gate set. The typed gate
+  writer has a dedicated strict validator for
+  `ecorex-release-bound-reproducibility`; raw comparison evidence cannot mint a
+  receipt. Source evidence, the release-bound projection and its receipt are
+  retained in the Candidate artifact and enforced by the release assembler.
+- Focused CI provenance, release-integrity and Candidate pipeline tests passed
+  `38 passed`; workflow YAML parsing and touched-file Ruff checks passed.
+
+### Attempt-bound artifact hardening
+
+- Closed the GitHub rerun ambiguity: Candidate now fetches the run artifact
+  metadata and the attempt-specific run API record first, requires exactly
+  four expected non-expired artifacts whose
+  workflow/repository/head identity and timestamps belong to the selected
+  attempt, then downloads those immutable Artifact IDs rather than a name
+  pattern. Source and bound schema v2 retain artifact metadata SHA-256 plus
+  every artifact ID, archive digest, size and creation/update time separately
+  from the downloaded byte-contract digests.
+- Accepted GitHub's documented workflow-run path shape only as either the exact
+  base workflow path or that path suffixed with `@main`; evidence canonicalizes
+  the base path and negative tests reject `@feature` and all other paths.
+- Kept the artifact set exact-four by design. Full reruns/new runs are
+  supported; partial job reruns that retain another attempt's runner artifact
+  fail the timestamp/set check and require an operator full rerun, preventing a
+  mixed-attempt reproducibility receipt.
+- Final focused verification: reproducibility/release/dependency/Candidate
+  suites `45 passed`; Control Plane release/admin/WSS adjacency `56 passed`;
+  dependency locks, v1 lint/compile and all three workflow YAML parses passed.
+
+## 2026-07-12 - Gate-writer authority reauthentication audit
+
+- Every gate-writer invocation now supplies the signed Candidate receipt,
+  trusted release public key, signed manifest, exact staging provenance and
+  expected staging run. Generic execution/platform and reproducibility gates
+  additionally supply their raw typed source evidence.
+- The writer snapshots bound evidence, raw source, Candidate, manifest and
+  staging authority exactly once with stable-file/link/TOCTOU checks before
+  independently authenticating and recomputing the submitted bound bytes.
+  This removes cross-read path replacement windows.
+- Generic Candidate authentication now requires the exact canonical receipt
+  bytes emitted by the production builder, in addition to Ed25519 signature,
+  manifest and staging checks. A whitespace-reformatted receipt is rejected.
+- Generic gate calls are restricted to one execution gate or the exact paired
+  Windows/macOS platform set. Reproducibility remains an isolated singleton;
+  ambiguous mixed gate sets cannot create receipts. Non-bound quality and
+  supply-chain gates retain their existing typed validators but still require
+  the authenticated Candidate authority.
+- Independent focused verification: `41 passed`; isolated-cache v1
+  lint/compile and all three workflow YAML parses passed.
+
+## 2026-07-12 - Managed chat policy upgraded to GPT-5.6 SOL
+
+- Kept the migration-stable local model ID `ecorex-chat`, while moving its
+  authoritative upstream identity to `gpt-5.6-sol`. The model directory now
+  publishes the real display name, aliases, `chat/tools/vision/reasoning`
+  capabilities and a versioned execution policy instead of making WebUI infer
+  any of those facts.
+- Added one shared v1 policy authority consumed by Runtime and Model Gateway:
+  policy `ecorex-chat-gpt-5.6-sol@1.0.0`, fixed `medium` reasoning and an exact
+  272000-token compaction threshold. Production startup rejects any environment
+  mapping other than `{"ecorex-chat":"gpt-5.6-sol"}`; it never silently routes
+  the stable local identity to another upstream.
+- The Runtime freezes the policy in the model catalog snapshot, sends it in
+  every `ModelGatewayRequest`, and records it in the durable `model.requested`
+  event. Gateway rechecks the complete policy before provider projection.
+- Every upstream Responses request now carries both
+  `reasoning={"effort":"medium"}` and the actual server-side trigger
+  `context_management=[{"type":"compaction","compact_threshold":272000}]`.
+  The existing provider bearer-token logical name, environment variable and
+  read path were not changed.
+- The thin WebUI contract maps this backend policy, validates it at Bootstrap,
+  and continues to select the canonical local ID; it does not choose upstream
+  model, effort or compaction settings.
+
+Verification and evidence boundary:
+
+- Focused capability/catalog/Runtime/worker/Gateway suite: `219 passed`.
+- Additional managed Gateway/server/schema/supervisor/import suite:
+  `57 passed, 1 skipped`.
+- Policy-focused catalog/composition/provider/worker suite: `66 passed`.
+- Generated Runtime contract check, WebUI TypeScript typecheck and 37 focused
+  Web contract/model-selection tests passed; the full v1 lint/compile gate passed.
+- MockTransport evidence proves the exact provider payload and accepts an
+  emitted opaque compaction item, but no live >272000-token provider run was
+  performed here. Therefore this batch claims a real configured trigger and
+  durable policy contract, not evidence that a production compaction event has
+  already occurred. Live `gpt-5.6-sol` entitlement, long-context compaction and
+  quality/latency soak remain deployment gates.
+
+## 2026-07-12 - Permission-safe durable tool admission
+
+- Added one append-only `InvocationAdmission` permit before every Worker tool
+  dispatch. It binds Job/Thread/Turn/execution batch, exact tool version,
+  canonical argument digest, idempotency key, frozen permission snapshot,
+  current permission snapshot and verified ledger-chain digest, current
+  availability digest, approval interaction, effective sandbox and admission
+  time. Capability dispatch resolves this durable permit; a caller boolean is
+  not authority.
+- Permission mutation and in-process admission share the same product lock.
+  More importantly, the admission `BEGIN IMMEDIATE` transaction rechecks the
+  current `runtime_permission_state` against its append-only ledger before the
+  permit INSERT. A separately locked Runtime process that revokes first makes
+  the stale admission retry current governance; an admission that commits first
+  is auditable as already started under that permission fact.
+- Current authority is a non-broadening intersection: a new default profile,
+  administrator deny, missing/quarantined Pack, disconnected Connector or
+  offline network can tighten an old Turn; a later full-access profile cannot
+  relax the Turn's frozen requirements.
+- A `started` ToolExecution without a permit is restart-safe and resumes the
+  approval/admission path. Only a permitted non-idempotent execution can enter
+  the uncertain-human-resolution path. Resolved permission approval is checked
+  for exact `allow` and is bound back to the Job checkpoint, model tool-call ID,
+  arguments and execution batch; a resolved deny cannot mint a permit.
+- Tool arguments are schema-validated and canonicalized before Tool Item or
+  HITL creation. Invalid opaque/non-idempotent commands therefore fail without
+  approval UI, an execution record or an uncertainty warning.
+
+Schema/release impact:
+
+- This pre-GA change extends the compiled `tool-executions` schema fragment
+  with `invocation_admissions` and append-only triggers, so the compiled product
+  schema digest and signed Candidate target-schema digest change. Runtime still
+  never repairs an existing database at startup. Any database belonging to a
+  previously signed v1 Candidate must advance through a signed declarative
+  storage migration and Candidate dry-run/live receipt; only disposable
+  unsigned development databases may be recreated. The v0.3 import remains a
+  copy-on-write import into the current compiled v1 schema.
+
+Focused evidence: admission/permission/Worker/schema/shell tests cover
+full-access-to-default queued and restart recovery, current admin deny,
+same-process and separately locked revocation races, cross-batch permit replay,
+deny-ID forgery, invalid arguments, pre-admission recovery and post-admission
+non-idempotent uncertainty.
+
+## 2026-07-12 - Exact, batch-scoped Skill resource grants
+
+- Replaced model-facing Skill name/alias reads with the immutable
+  `skill:<extension_id>@<revision_id>` discovery contract. `skill_search`
+  returns schema version, batch-frozen Extension snapshot, contribution
+  snapshot and bounded name/description/tag metadata; it exposes no host path,
+  CAS digest or source filename.
+- A completed `skill_search` now discloses only the generic `skill_read`
+  endpoint. Before returning content, Runtime requires that exact Skill ID to
+  exist in a completed search under the same Job, Thread, Turn, execution
+  batch, capability snapshot, permission snapshot and Extension snapshot. It
+  recomputes the full frozen search result and independently recomputes its
+  canonical SHA-256 before binding the search ToolExecution ID and digest into
+  the read outcome.
+- Explicit Skill mentions now affect search order only. They no longer promote
+  `skill_read`. A Skill grant never enters Tool/MCP/Connector disclosure, and
+  reference reads remain restricted to immutable IDs from that exact Skill
+  revision's frozen inventory.
+- Worker model projection reconstructs the generic endpoint disclosure from
+  completed SQLite facts. Exact content authority is reconstructed separately,
+  so Runtime restart retains the link while cross-Skill, cross-reference,
+  cross-batch, guessed/alias, stale-revision and forged-result attempts fail
+  closed.
+
+This changes the Core Tool catalog contract and catalog snapshot digest but
+does not add or alter a storage-schema object. Existing signed Candidates still
+require normal catalog/protocol compatibility gating; no startup schema repair
+or legacy compatibility shortcut was introduced.
+
+## 2026-07-12 - Batch-scoped Tool Search and exact Describe grants
+
+- Added immutable `execution_batch_id` to every `ToolExecution` identity,
+  repository record, query, Worker begin path, index and identity trigger. A
+  ToolExecution can be created only when its Job, Turn and execution batch
+  agree; an invocation admission must now match the same batch stored by the
+  execution itself.
+- Closed the model-facing deferred-tool shortcut. `tool_describe` accepts only
+  the exact `tool:<tool_id>@<tool_version>` discovery ID returned by a completed
+  `tool_search` under the same Job/Thread/Turn/batch/capability/permission
+  scope. Bare canonical names, aliases, guessed IDs and stale versions produce
+  a structured non-grant result. Runtime-internal `CapabilityService`
+  description by canonical tool ID remains available for approval and UI code.
+- The Describe result binds `search_tool_call_id`, exact `discovery_id` and the
+  canonical search-result SHA-256. Before issuing it, Runtime recomputes the
+  bounded search against the batch-frozen model catalog and requires the whole
+  recorded result to match. Durable grant reconstruction independently joins
+  both completed execution facts to the same batch and verifies the exact
+  deferred Tool decision, so restart does not depend on process memory.
+- Worker model projection and pre-Item/pre-HITL invocation checks now query
+  disclosures by execution batch. A grant from an earlier steer batch cannot
+  enter a later model request or authorize its invocation.
+
+Focused evidence: Tool disclosure, Worker, admission and execution-schema
+suite `42 passed`; it covers real Search -> exact Describe -> invocation,
+restart reconstruction, missing/forged scope, bare name, alias, stale version,
+forged search result, malformed Describe result and cross-batch replay.
+
+## 2026-07-12 - Bounded model-visible Tool working set
+
+- Added the versioned `tool-projection-budget@1.0.0` contract. A model round can
+  receive at most 16 complete descriptors, no more than 12 of which may be
+  durable deferred grants. Each canonical UTF-8 descriptor is capped at 96 KiB
+  and the canonical descriptor batch at 256 KiB. The deferred catalog remains
+  bounded separately at 1,024 identities and does not send schemas.
+- Runtime now creates one deterministic, execution-batch-bound Tool projection
+  in frozen plan score order. Frozen direct tools are projected first and are
+  never displaced by an extension grant. An oversized direct set fails with a
+  typed, non-retryable outcome before provider I/O; an over-budget deferred
+  grant remains searchable/deferred but has no schema or invocation authority
+  in that round.
+- Initial authorization and the immediate pre-dispatch check both rebuild the
+  same bounded projection. A provider cannot call a grant suppressed from the
+  request, and Runtime restart reconstructs the same projection from durable
+  Search/Describe facts.
+- `ModelGatewayRequest` validates count and canonical-byte limits. The fixed
+  Responses provider independently repeats them so an unvalidated object copy
+  or future alternate transport cannot bypass the network boundary.
+- `model.requested` now records the budget version, canonical schema byte count,
+  projected IDs and suppressed IDs. It records no descriptor schema.
+
+Focused tests cover provider floods, exact 96 KiB and aggregate 256 KiB
+boundaries, 16/12 count limits, Core-first ordering, restart determinism,
+deferred suppression and rejection at both authorization and execution fences.
+
+## 2026-07-12 - Share image rendition authority closes silent degradation
+
+- Added one shared media-publication contract used by Local Runtime and the
+  Control Plane. Schema-v2 image Artifacts without a bounded raster rendition
+  now fail before a snapshot identity or public URL is committed; the old
+  fallback that treated a primary source blob as a preview was removed.
+- The durable worker repeats the contract immediately before external I/O and
+  treats an already frozen invalid payload as terminal. The Control Plane
+  repeats it before render/staging/linking and public resolution; media remains
+  accessible only through the active snapshot token and declared link.
+- Added stable user-safe errors for missing, over-16-MiB, unsupported, invalid
+  and over-64-MiB previews plus schema-v1 issuance. WebUI maps the codes to
+  plain Chinese while technical details retain only the stable code. No error
+  contains an Artifact name, local path, digest or provider detail.
+- The current Artifact service can attach immutable renditions but does not own
+  a general safe resize pipeline. Sharing therefore refuses an image that has
+  no rendition instead of decoding the original in the Control Plane. Existing
+  schema-v1 snapshots remain byte-compatible/readable; only new issuance is v2.
+
+## 2026-07-12 - Verified provider provenance and fair Tool Search
+
+- Added immutable provider provenance to `ToolSpec`, capability decisions,
+  plan snapshots, Tool Search summaries, exact Describe responses and MCP
+  contribution snapshots. The provider record contains only kind, exact
+  provider/revision, trust verdict, optional key ID and evidence SHA-256; raw
+  detached signatures are not projected.
+- The safe legacy `ToolSpec` default is reviewed Core, but the `mcp.*`
+  namespace explicitly rejects it. MCP specs must use their verified
+  `mcp.<extension_id>:` namespace, exact `extrev_*`, deferred exposure, zero
+  product routing facets and zero priority bias. MCP trust never sets
+  `product_reviewed`, including for a Core-bundled protocol transport.
+- `MCPRuntimeBinding` now requires the non-serializable
+  `VerifiedExtensionManifest`. Runtime re-verifies that exact candidate under
+  current trust, matches its stored unsigned revision and exact append-only
+  signature evidence, then derives sanitized Tool provenance. MCP list
+  metadata has no path to this constructor.
+- Discovery policy `ecorex.discovery@1.2.0` binds
+  `ecorex.provider_fairness@1.0.0`. Exact-reference matches precede quotas;
+  broader results reserve at most half of remaining slots for reviewed Core,
+  then balance by exact provider provenance. This retains `limit=1` exactness,
+  prevents a 256-tool provider flood and remains deterministic after restart.
+
+This changes catalog/discovery/snapshot digests but adds no database object.
+Previously emitted pre-GA capability snapshots without provider provenance
+fail closed instead of being assigned a guessed source.
+
+## 2026-07-12 - Image concurrency deadline, backoff and staged-result closure
+
+- Closed a durable-capacity leak in both image Store adapters. Schedulable jobs
+  whose deadline elapsed are now atomically and idempotently changed to
+  `failed/deadline_exceeded` by submit, lease or explicit reclaim. PostgreSQL
+  holds the scheduler control lock and row-locks candidates with
+  `FOR UPDATE SKIP LOCKED`; SQLite serializes the equivalent transition with
+  `BEGIN IMMEDIATE`. Exactly one terminal event is appended and the row stops
+  consuming queue admission capacity.
+- Added bounded RFC `Retry-After` handling to the managed image provider.
+  Delta-seconds and HTTP-date are normalized to 1–3600 seconds; missing or
+  malformed values fall back to exponential jitter. A submit-time 429 is a
+  known non-acceptance and retries submit, while a result-download 429 retains
+  recover-first authority because the provider effect is already known.
+  Every 429 also opens the durable provider/model/operation/size scope until
+  at least the maximum of the bounded hint, breaker cooldown policy and an
+  existing fence. This is independent of the ordinary breaker failure
+  threshold, so queued jobs cannot continue a rate-limit stampede.
+- Replaced the read-only circuit check in the Worker path with a durable
+  transactionally leased half-open decision. After cooldown, only one replica
+  may call submit/recover for a provider/model/operation/size scope. Other
+  replicas persist retry wait until the probe lease; success resets the
+  breaker, failure reopens it, and a crashed probe becomes eligible only after
+  the bounded lease expires.
+- CAS put/describe/read now renew the Job lease. The exact result and usage are
+  persisted together in the committing checkpoint. A crash or database fault
+  after CAS staging therefore resumes by verifying CAS and completing the
+  result/usage/event transaction without another provider call. Invalid staged
+  identity fails closed; corrupt/missing staged bytes return to recover-first
+  rather than being published.
+- No image storage schema object changed. The half-open lease deliberately
+  reuses the existing durable breaker `open_until`; deadline cleanup and staged
+  commitments use existing state/checkpoint columns. Production composition
+  derives the probe lease from two provider timeout windows plus the Job lease.
+
+Focused deterministic evidence uses only a controlled fake provider: 32
+concurrent expiry/restart contenders append one terminal event, 16 concurrent
+Workers issue one half-open provider call, a slow CAS write crosses the original
+lease while heartbeats keep ownership, and an injected final-commit fault
+restarts with `submit=1`, `recover=0`, one usage record and one completion event.
+This does not claim a real-provider or 24-hour production soak.
+
+## 2026-07-12 - Hallmark WebUI interaction closure
+
+- Kept the locked Workbench design intact: one clipped WorkspaceSurface,
+  transparent idle button borders, ordinary surfaces without shadows,
+  contain-first image preview, Artifact hover/focus rail and touch More sheet.
+- Fixed the only product interaction defect found: the `<640px` rule removed
+  the whole send-disposition control. The stacked Composer now retains
+  steer/queue/replace, and a 320×568 touch test executes `排到下一轮` end to end.
+- Updated the GA fixture to the authoritative `ecorex-chat` →
+  `gpt-5.6-sol`, medium-reasoning, 272000-compaction policy and current event
+  envelope. Added real-DOM tests for reasoning replacement/terminal archive,
+  first-turn zero output, retry, persisted HITL and Chinese share copy.
+- Extended the light/dark browser matrix with the 320px Hallmark floor and a
+  rendered-line check for clickable labels. Shorter Composer copy kept the
+  unchanged initial-JS budget below 475 KiB.
+
+Evidence: Playwright 20/20, Web tests 154/154, TypeScript clean, strict design
+gate clean, production build 474.99 KiB initial JavaScript. No Python backend,
+physical device, screen reader or public share origin was certified here.
+
+## 2026-07-12 - Connector-login HITL Web closure (provisional)
+
+- Routed connector login begin/check/cancel through dedicated lifecycle
+  endpoints. Connector cards never submit these actions through generic
+  `/respond` and remain backend/SSE/projection authoritative.
+- Added safe pre-opened OAuth windows, device-code verification UI, bounded
+  polling and manual checks. `authorization_required` and
+  `reauthorization_required` stop polling, clear stale URLs/codes and retain a
+  clear retry-login action; unknown or mismatched responses fail closed.
+- Pending checks no longer refresh the full connector catalog every two
+  seconds. Connected/reauthorization facts refresh catalog authority, while
+  successful completion refreshes the current projection and waits for the
+  backend-bound new execution batch.
+- Added GA browser scenarios for OAuth, device code, dedicated cancellation,
+  partial scope and interrupted completion. All assert zero connector use of
+  generic `/respond`.
+
+Interim evidence: Playwright 25/25, focused Web tests 50/50, direct TypeScript
+clean, design debt zero, content-addressed build 474.68 KiB initial JavaScript.
+The authoritative Runtime schema was still changing in the backend batch, so
+generated-contract/full Web gates are intentionally deferred until codegen is
+frozen.
+
+## 2026-07-12 - Connector progressive-disclosure and crash-fence closure
+
+- Replaced model-facing action aliases with four governed Core tools:
+  `connector_search`, `connector_describe`, `connector_read` and
+  `connector_write`. Exact discovery IDs bind the instance, account, action,
+  frozen Connector catalog digest and one durable execution batch.
+- Added backend-owned intent aliases to Connector action contracts. Ranking can
+  favor the intended office action without hardcoding Feishu/Tencent action
+  families in the planner or hiding unrelated capabilities.
+- Added append-only Connector-login generations and dedicated begin/check/cancel
+  endpoints. Flow activation, callback consumption, credential activation or
+  swap, interaction state and authority refresh use durable fenced facts;
+  startup recovery is per-reference and emits sanitized deferred diagnostics.
+- Added informed default-mode write approval. The prompt names the Connector,
+  account and exact action without copying user content, and resume recomputes
+  the same-batch Describe descriptor/digest before admission. Permission changes
+  between projection and admission now enter this HITL path with the complete
+  invocation context.
+- Added durable operation/invocation/idempotency fencing, pre-dispatch current
+  admin-policy sampling and supervised late-result handling. A timed-out write
+  that later succeeds becomes a replayable completion with one provider call;
+  unresolved writes remain explicitly reconcilable.
+- Disconnect now has a per-instance revocation claim and stable provider
+  idempotency key. Maintenance autonomously resumes abandoned `draining` and
+  expired `revoking` states; provider revocation, credential cleanup and final
+  deletion remain separately fenced.
+- Registered the `connector-agent-runtime` schema fragment in the schema
+  authority and regenerated the thin-Web Runtime contract.
+
+Local focused evidence is 99 passing Connector/Runtime/approval tests, two
+schema-authority gate tests, clean Ruff, and generated contract check. Provider
+adapters are deterministic fakes; real Feishu/Tencent credentials, deployed
+multi-process soak, and atomic oversized-result Artifact staging remain GA
+gates rather than certified results.
+
+## 2026-07-12 - Connector result Artifact publication closure
+
+- Added `connectors-v6` result staging and exact invocation-envelope replay.
+  Inline provider JSON is capped at 512 KiB; larger canonical JSON enters CAS
+  as a secondary ready `data_export` deliverable. Artifact metadata,
+  invocation/idempotency/outbox, deterministic completed Artifact Item and the
+  real user-thread event linearize in one Runtime SQLite transaction.
+- Model-originated reads and writes now share stable durable call identities.
+  Same-key concurrency waits, restart and late-provider success finalize from
+  local staging, and an already prepared stage blocks human reconciliation
+  from reopening provider execution.
+- Added secret-free `result_unavailable` receipts whose digest identifies only
+  the bounded receipt, not rejected provider bytes. Recovery deferrals emit a
+  redacted, deduplicated Connector outbox fact and maintenance retries them.
+- Added the protected `artifact_read` Core handler with account/thread,
+  visibility, family/role/MIME/status, exact Revision/SHA, strict UTF-8 and
+  character-bound checks. It never exposes a filesystem path.
+- The supported v0.3.0 copy-on-write target creates final `connectors-v6`
+  schema directly. Unreleased v5 prototype databases fail closed and remain
+  unchanged; Runtime performs no implicit DDL repair.
+
+Evidence: focused Connector/Artifact/schema tests 102/102, expanded
+Connector-or-Artifact tests 250 passed/1 skipped, Runtime schema-authority
+gate passed, and targeted Ruff passed. External real-credential and deployed
+multi-process soak remain release-gate work.
+
+## 2026-07-12 - Critical recovery execution lane
+
+- Replaced the shared HTTP read-only exception list with an independent,
+  process-local `RecoveryExecutionGate`. Its only fixed scopes are managed
+  session revocation and activation of an already staged local update; it does
+  not inherit or override business Runtime health.
+- `update.check` now remains a normal managed mutation. It requires the active
+  managed session and a healthy Runtime permit, so Critical mode rejects it and
+  logout cannot turn it into an unauthenticated network request.
+- `update.activate` uses loopback Runtime bearer + Origin + CSRF as the local
+  installer credential. It requires an exact `awaiting_user` transaction and
+  re-verifies the stored signed manifest, artifact signature/digest, active
+  metadata, install journal, staged slot, Capability Packs, platform/channel
+  and slot security before activation. It never calls the cloud feed in this
+  recovery path.
+- Recovery async dispatch captures one permit, rechecks it after each await and
+  before consuming results, and installs the same permit at every shared SQLite
+  commit boundary. No gate lock crosses an await. Closing the recovery lane
+  between `BEGIN` and `COMMIT` rolls back the request.
+- Added whole-database table-diff tests. During Critical recovery, only
+  `managed_session*` and `runtime_update*` tables may change; Thread, Turn,
+  Item, Artifact and Connector authority remains byte-for-byte unchanged.
+
+Focused evidence: recovery/update tests 14/14 and managed-session,
+InstallCoordinator and Runtime Critical integration tests 42/42; targeted Ruff
+and Python compilation passed.
+
+## 2026-07-12 - Permission/Turn acceptance linearization
+
+- Added one synchronous `RuntimeComposition.admit_turn` boundary. It captures
+  the current permission first, generates immutable config/capability/policy
+  snapshots, and persists `turn.accepted` before releasing the same mutation
+  lock used by permission updates. Awaitable acceptance callbacks are rejected,
+  so no provider call or await can retain the permission lock.
+- Migrated create, queue, replace and live replay to this boundary. Precise
+  retouch now holds the same lock only across snapshot capture and its local
+  Artifact/Turn/Job product transaction; adapter execution and notification
+  remain outside it.
+- Added a second SQLite fence for multi-process races. Product Turn creation
+  supplies the permission account, and the Kernel write transaction verifies
+  the frozen permission snapshot against the current mutable row and its
+  append-only ledger before writing `turn.accepted`.
+- Fixed a discovered replace defect: converting `ReplaceTurnRequest` to the
+  planning request included the extra `reason` field, so HTTP replace failed
+  before it ever entered Turn preparation. The planner now receives only
+  `CreateTurnRequest` fields and reconstructs the canonical replacement inside
+  the shared admission.
+- Deterministic concurrent tests pause after old permission capture, start a
+  permission update, and prove the update cannot return 200 until the old Turn
+  has committed. Every Turn accepted after that 200 uses the new
+  `permission_snapshot_id`; a stale cross-process prepared context is rejected
+  with no accepted Event.
+
+Evidence: 61 focused permission/composition/create/queue/replace/live
+replay/retouch/Kernel tests and 67 Worker/tool-admission/retouch-integration/
+Runtime-hardening tests passed; targeted Ruff and compilation passed.
+
+## 2026-07-12 - Runtime Critical-request atomic publication
+
+- Replaced independently mutable requested error/time fields with one frozen,
+  first-writer-wins Critical request published under a dedicated short lock.
+  Concurrent timeouts can no longer splice one caller's error code with another
+  caller's timestamp.
+- A published request closes admission before the main gate lock is available.
+  Exactly one caller owns inline/background completion; competing requests do
+  not create additional closer threads or overwrite the diagnostic fact.
+- Permit issuance from a previously healthy admission now also checks the
+  closure-request flag, covering the interval between non-blocking publication
+  and final epoch latching. No gate lock is retained across provider waits or
+  SQLite transactions.
+
+Evidence: Runtime gate/invariant tests 21/21, Worker/Connector/Device/Recovery
+permit integration tests 30/30, and targeted Ruff passed.
+
+## 2026-07-12 - Runtime commit, lease and permission consistency closure
+
+- Added one composable request/Job commit guard to the shared SQLite
+  connection. Direct commits, nested service guards and `executescript` now
+  retain the outer Runtime authority; a closed epoch rolls the transaction
+  back before bytes become durable. In-memory Job permits retire only from an
+  after-commit callback, so a rolled-back terminal transition cannot orphan a
+  live durable lease.
+- Fenced Job permit publication by the current durable lease token. A delayed
+  old lease generation can no longer delete or replace the permit belonging to
+  a newer generation. Gate admission is a short validation step and never
+  retains a Runtime lock while SQLite or a provider is active, eliminating the
+  prior database/gate lock-order inversion.
+- Linearized permission capture and Turn acceptance for create, queue,
+  replace, Live Replay and precise retouch. The process lock covers only
+  permission read, immutable snapshot creation and local acceptance commit;
+  the Kernel repeats the permission-ledger check inside SQLite for
+  cross-process races. Provider calls and awaits are outside the lock.
+- Replaced permission audit SQL N+1 with an already-verified revision map.
+  `verified_sample_scope` reuses one complete ledger/audit verification only
+  inside one synchronous invocation-governance call, reducing its permission
+  SELECTs from 12 to 4. The next invocation verifies afresh, and durable
+  admission still rejects a cross-process revocation before provider dispatch.
+- Made Critical requests first-writer-wins immutable facts. Error code and
+  timestamp publish atomically, only one closer owns epoch completion, and a
+  closure request immediately blocks permits issued from an earlier admission.
+
+Deterministic evidence includes old/new lease generation barriers, rollback
+after scheduled permit retirement, create/queue/replace/replay/retouch
+permission races, cross-process revocation with zero provider calls and
+concurrent Critical requests. The final complete Python gate is recorded in
+the verification ledger.
+
+## 2026-07-12 - Durable event delivery and bounded Connector shutdown
+
+- Promoted Artifact event delivery to a lifecycle supervisor. Claim, actual
+  sync-thread/async-provider dispatch, result handling and acknowledgement all
+  revalidate the Runtime/local epoch. Provider calls have a hard timeout and
+  token/digest-fenced lease heartbeat; a timeout leaves the immutable event
+  pending and immediately recoverable instead of duplicating dispatch.
+- Rebuilt Connector outbox draining as a Condition/generation single flight.
+  A nudge arriving while an owner is publishing advances the generation, and
+  that owner must rescan it before becoming idle. Busy calls no longer lose
+  wakeups or create unbounded publisher work.
+- Runs synchronous Connector publishers in one bounded daemon attempt. On
+  timeout the heartbeat stops, the durable row remains pending and a
+  secret-free `stuck` circuit prevents thread accumulation. A late thread can
+  acknowledge only with its original unexpired lease token and a healthy
+  Runtime permit; event consumers still deduplicate the immutable `event_id`.
+- Uses a Condition seqlock for system outbox health so durable pending count
+  cannot be combined with a different active/generation state. Sustained churn
+  falls back to one bounded unified fence, and inactive backlog is degraded,
+  never falsely ready.
+- Shutdown now orders producers/workers, durable outbox flush, Runtime Gate
+  closure, then adapters/transports. Maintenance, request nudges and final
+  flush use dedicated daemon runners rather than the default executor, and all
+  waits share the lifecycle monotonic deadline. A publisher that first hangs
+  during final flush cannot stretch a 0.2-second lifecycle budget to its own
+  two-second timeout; pending work survives restart.
+- Connector login consume paths now require explicit Runtime control
+  admission. Late-success watchers start from a clean Context with a fresh
+  Connector permit, and same-idempotency retries use bounded durable
+  reconciliation without a second provider dispatch.
+
+Red-team evidence covered 80 repeated epoch/stuck/idle-boundary cases, ten
+old-daemon/new-owner races, ten sink-success/Gate-close races, child-process
+hard-deadline shutdown and a 20-row backlog. Connector plus Runtime shutdown
+and observability adjacency finished with 150 passing tests.
+
+## 2026-07-12 - Product startup, handler authority and migration concurrency
+
+- Finished real product Phase A/Phase B startup. Managed Session, Device,
+  Update and Extension services support projection-only construction and
+  explicit healthy convergence; Critical startup performs no semantic
+  business write. Repeated full product construction is idempotent.
+- Upgraded Windows workspace attestation to `stable-provision-v2`: immutable
+  payloads retain full-tree identity, while mutable workspace roots bind a
+  stable security policy and verify every child for AppContainer ACL, Low
+  Integrity and reparse/symlink rejection. A first boot creating Outputs no
+  longer invalidates the second boot; old v1 attestation cannot be reused.
+- Corrected Core handler availability after product binding. The four
+  Connector discovery/call handlers and `artifact_read` clear only a stale
+  `verified_handler_not_installed` or their own not-bound fact. Administrator,
+  offline, sandbox and Pack denials are never cleared or overwritten, and no
+  injected handler may replace these Core owners.
+- Root-caused concurrent Cloud Share migration failure to the transaction-free
+  `PRAGMA journal_mode=WAL` after a successful exclusive commit. WAL activation
+  now retries only SQLite BUSY/LOCKED with a five-second bounded exponential
+  backoff, verifies the resulting mode, and fails other I/O immediately.
+  Barrier stress completed 300 rounds by eight callers (2,400 migrations)
+  with one history row and WAL reasserted by every caller.
+
+## 2026-07-12 - Frozen local GA verification checkpoint
+
+- The authoritative managed chat route remains `ecorex-chat` to
+  `gpt-5.6-sol`, `reasoning.effort=medium` and exact server-side compaction
+  threshold 272000. The provider secret adapter is unchanged; the local
+  Runtime receives only a managed-session bearer and never a provider API key.
+- The final Python v1 run completed 1,769 passed, 17 platform-condition skips,
+  zero failures and zero errors. Its persistent JUnit and output are under
+  `.candidate/quality/full-pytest-20260712-175948.*`.
+- Final Web evidence is 158/158 Node contract tests, clean TypeScript, 25/25
+  Playwright scenarios, 2,080 transformed modules and a content-addressed
+  bundle at 471.92 KiB initial JavaScript, below the unchanged 475 KiB limit.
+- Runtime/server schema, strict design, legacy cutoff, dependency-lock, public
+  download, local reproducibility, generated-contract, lint/compile and
+  whitespace gates pass. The source-tree gate intentionally remains red:
+  605 of 608 authoritative files are not yet tracked. Their content pre-scan
+  found no symlink, binary, non-UTF-8, CRLF, missing LF or trailing whitespace,
+  but only Git admission followed by a fresh gate run can close this release
+  condition.
+
+No Candidate was published or rollout changed. Protected Windows/macOS
+platform artifacts, real Gateway/Connector credentials, public mirror/CDN
+readback and multi-hour production soaks remain external release evidence.
+
+## 2026-07-12 - WebUI product-language and task-continuation closure
+
+- Routed Interaction, task inspection, precise retouch and Extension failures
+  through the controlled Chinese error boundary. A server API error can now
+  expose only an approved code/status message; its arbitrary response text is
+  never reused as primary UI copy. Retouch failure reasons use the same
+  allowlisted service-reason projection.
+- Renamed the task Replay surface to “任务检查与重新运行”. Record digests,
+  cursor positions, work-step IDs and permission IDs are collapsed under
+  explicit technical detail. The normal view uses task, work-step, saved
+  record and rerun language; Extension and Settings similarly replace MCP,
+  runtime, manifest and lease vocabulary with user-facing labels.
+- Added a four-task browser fixture with independent projections and a delayed
+  historical task. Sidebar navigation now disables only the selected row, so
+  a newer choice can abort an older read; the existing generation fence proves
+  the late old response cannot overwrite the latest task. A missing manual ID
+  preserves the original transcript, while Enter and the mobile drawer restore
+  a valid task.
+- Exercised default Output alias selection, learned-memory reset/undo and
+  complete-access enable/revoke through the real Settings UI. Added a real
+  task-inspection flow that checks saved records, confirms rerun and observes
+  the newly created work step while technical identifiers remain folded.
+
+Evidence: TypeScript and generated contracts passed; `npm run test:v1` passed
+161/161; `npm run test:e2e` passed 30/30 Chromium scenarios; the production
+build transformed 2,080 modules into 17 content-addressed assets at 472.60 KiB
+initial JavaScript; the strict design gate retained zero violations. No Runtime
+Python, publication, rollout or Candidate state was changed by this closure.
+
+## 2026-07-12 - Artifact transaction and system-observability closure
+
+- Added a same-database `persist_in_transaction` contract for Artifact event
+  intents. Feedback, open/reveal receipts, direct Retouch requests and Retouch
+  workspace completion now commit their business rows and immutable outbox
+  intent together; publication starts only after SQLite commits.
+- Joined Retouch workspace `submitted`, the public Retouch Job, its internal
+  annotation layer, optional Durable Job binding and the event intent in one
+  transaction. Intent failure rolls the complete unit back; publisher failure
+  retains one pending, idempotent outbox row for restart drain.
+- Fenced persisted system-health samples with a Runtime admission permit and
+  the database commit guard through the actual commit. A Critical transition
+  at the dirty-commit boundary now rolls the sample back.
+- Extended the unified technical health projection with real Audit, Trace,
+  Share, Retouch, Device Authorization, image-publication and Artifact-event
+  queue/supervisor state. Disabled providers remain explicit without degrading
+  the core Runtime.
+- Removed cached executable residue from retired WebChannel/admin trees and
+  made the legacy cutoff inspect `.pyc`, `__pycache__` and every other file in
+  retired trees. Only static notes in dedicated `docs`/`history` subtrees are
+  exempt.
+
+Fault-injection and adjacency evidence completed with 140 passing tests. The
+focused Ruff check, Python compile checks and strict legacy cutoff also passed.
+No release, publication, rollout or Git commit was performed.
+
+## 2026-07-12 - Runtime streaming checkpoint and Event delivery performance
+
+- Replaced per-delta Agent Job heartbeat writes with a per-run checkpoint
+  pulse. Reasoning and answer deltas always update the newest in-memory
+  recovery checkpoint, while durable heartbeat/checkpoint writes are limited
+  to a configurable 100–250 ms interval (200 ms by default). Model terminal,
+  tool-call and failure boundaries force the latest checkpoint immediately.
+- Kept the existing silent-provider lease loop. A provider that produces no
+  event still renews at the lease-derived interval with the newest checkpoint;
+  every write retains worker ID, lease token, execution permit and commit
+  guard validation. Replayed deltas retain their original idempotency keys.
+- Added a process-local, database-path-scoped Event notification hub. New
+  Event facts register a callback on the owned SQLite connection and wake
+  local thread subscribers only after the transaction commits. Rollback clears
+  the callback; duplicate idempotent reads do not publish a false append.
+- SSE captures a notification generation before each SQLite page read. It
+  always reads the fact source first, then waits on the generation, closing the
+  page-to-wait lost-wakeup window. A one-second SQLite poll remains for another
+  process, disconnect detection and keepalive; cancellation removes waiters.
+
+Evidence: 128 mixed reasoning/text deltas completed with fewer than one-quarter
+as many heartbeat facts, while the terminal checkpoint held the final sequence;
+silent-provider renewal and contender exclusion passed. Five notification
+race/pressure tests covered commit/rollback, two EventStore instances, 24
+waiters, multiple threads, cancellation, 16 SSE clients, page-to-wait injection
+and notification-free fallback. Worker/Event/Kernel adjacency passed 89 tests;
+lease/state/shutdown fencing passed 43; tool/HITL replay fencing passed 18;
+focused Ruff passed. One cold child-process wall-clock assertion was 3.687 s
+against a 3.5 s host bound on its first isolated run and passed both immediate
+rerun and the complete 43-test rerun. No release, update, observability or
+Artifact-agent implementation was changed.
+
+## 2026-07-12 - Cross-transaction download CAS and administrator rollback authority
+
+- Added a product-scoped verified download CAS shared by install transactions.
+  Core, delta and Capability Pack downloads enter it only after manifest,
+  artifact signature, exact size and SHA-256 verification. Publication uses an
+  atomic replace; materialization re-verifies into a transaction-private file.
+  Per-digest product locks provide cross-process single-flight behavior, while
+  corrupt entries are quarantined and bounded age/capacity collection skips
+  live leases. A cancelled transaction can reuse already verified bytes without
+  trusting its abandoned staging directory.
+- Added a first-class administrator rollback record beside normal rollouts.
+  Creation is idempotent and audited, and accepts only a published older target
+  that has a prior non-draft normal rollout and the exact same canonical Core
+  platform/architecture matrix as the source. Activation, pause and halt have
+  rollback-specific API/audit identities and still use the durable rollout
+  wake signal and channel kill switch.
+- Added a compact Ed25519 rollback authorization distinct from the immutable
+  release trust role. It binds the authenticated client, exact source release,
+  build and artifact, exact target release/build/artifact, channel, platform,
+  architecture, request nonce and a 60–900 second lifetime. The HTTPS feed
+  verifies the nonce-bound grant before exposing it; the installer re-verifies
+  and atomically consumes the locally accepted fingerprint exactly once.
+- Runtime feed and WebSocket requests now project the re-verified current slot
+  release/build identity. A matching active rollback outranks normal upgrades
+  only for that source build. The signed target then follows the existing
+  prepare, user confirmation, drain, atomic activation and health chain; no
+  rollback-specific activation bypass was introduced.
+- Added `rollback_public_keys` to the signed Product Runtime configuration and
+  enforced release/rollback key-ID and key-material separation. Production
+  Control Plane composition reuses its separately trusted online publication
+  signer for short-lived rollback authorization, never the offline release key.
+- Added an administrator Web console rollback form with targeting, bounded TTL,
+  confirmation, activate/pause/halt controls and content-addressed asset hashes.
+
+Evidence: the focused update/CAS group passed 56 tests with two platform skips;
+the Control Plane schema, client, UI, signal, production and release-flow group
+passed 88 tests; rollback token, API, WSS hint and Runtime safe-activation
+coverage passed; focused Product Runtime/configuration coverage passed eight
+tests. Ruff, Python compile checks and JavaScript syntax validation passed. No
+release, rollout, external publication or Git commit was performed.
+
+## 2026-07-12 - Final local productization closure and evidence correction
+
+- Froze the Candidate topology at six required Capability Packs for every
+  target: `browser`, `channels`, `image`, `ocr`, `office` and `sandbox`. Core,
+  Bootstrap and those six packs produce eight receipts per target and 24
+  receipts across the three supported target tuples. `channels.adapters`,
+  `ocr.extract` and `office.formats` are service-only bindings and expose no
+  invented tools. In particular, `office.formats` proves bounded
+  create/read/validate support for DOCX, XLSX, PPTX and PDF; it does not claim
+  to be a high-fidelity Office renderer.
+- Bound Runtime admission to the durable update activation boundary. Once the
+  active pointer may have switched, including an interrupt after atomic slot
+  replacement, the old Runtime remains drained; an unreadable boundary also
+  fails closed. A pre-boundary timeout returns the transaction to
+  `awaiting_user` without discarding the staged candidate.
+- Completed the cross-transaction verified download CAS and administrator
+  rollback path. Core, delta and pack bytes are admitted only after signature,
+  exact-size and SHA-256 checks, reused through digest-scoped single-flight,
+  quarantined on corruption and materialized into transaction-private staging.
+  A rollback remains an audited, short-lived, nonce-bound authorization to an
+  older compatible known-good release and still follows user confirmation,
+  drain, activation and health checking.
+- Corrected Runtime supervisor backoff to use an absolute monotonic deadline.
+  Early platform timer wake-ups now wait for the remaining interval while an
+  explicit stop still interrupts immediately.
+- Made the streaming checkpoint pulse accept an injected monotonic clock and
+  start the next heartbeat window after its durable commit completes. The
+  pressure assertion now derives its bound from measured elapsed time instead
+  of assuming an unloaded host; the 100–250 ms product checkpoint contract and
+  forced terminal/tool boundaries are unchanged.
+- Split Connector invocation into bounded local admission and provider
+  response phases. Limiter wait plus the final policy/SQLite fence no longer
+  consume the provider response timeout. A pre-dispatch timeout cancels and
+  joins the task before it can cross into the adapter; a post-dispatch mutating
+  timeout retains the operation fence and late-result reconciliation, avoiding
+  an untracked external write.
+
+The first final Python run exposed a Windows timer early-wake boundary. After
+that root fix, the second run exposed the host-speed-dependent heartbeat
+assertion and the Connector admission/provider timeout race. Those were fixed
+at their authority boundaries and independently repeated before the final full
+run. The final local Python result is **1,814 passed, 17 skipped, 0 failed**.
+The final Web result is **161 unit/contract tests**, clean TypeScript,
+content-addressed production build, and **30 Playwright scenarios**. Runtime
+and server schema authority, design-system debt, legacy cutoff, dependency
+locks, public-download shape, reproducibility, supply-chain preflight and
+whitespace gates passed.
+
+The remaining local release blocker is intentionally the source-tree Git
+admission gate: 623 authoritative v1 files were inventoried, of which 3 are
+tracked and 620 remain untracked. An independent scan found zero regular-file,
+UTF-8, LF, final-newline or trailing-whitespace violations; no file was
+implicitly staged, committed or pushed. This workstation has no Go toolchain,
+and no protected clean runner, KMS/signing authority, live release origin or
+live Connector/model endpoints were available. Therefore this record does not
+claim Bootstrap Go-test completion, protected Candidate evidence, external
+signature/publication, live-provider certification or rollout completion.
+
+## 2026-07-12 - Authorized local Git admission boundary
+
+The user authorized local source admission and a fresh build for manual
+acceptance, while explicitly withholding push and publication until that
+manual test passes. The complete change set was staged after excluding
+`.candidate/` logs, JUnit output and temporary reports. The staged scope has
+no file larger than 10 MiB and contains no build cache, `desktop/dist`,
+`node_modules` or temporary Candidate path.
+
+The real source-tree gate now passes with all 623 authoritative v1 files in
+the Git index. Candidate supply-chain preflight, v1 lint/compile, 20 Runtime
+schema fragments, 8 server authorities across 3 roots, design debt, dependency
+locks, legacy cutoff and staged whitespace checks all pass. This changes the
+local boundary from source admission to fresh Candidate construction; it does
+not authorize a push, release publication or rollout.

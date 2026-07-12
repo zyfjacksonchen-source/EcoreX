@@ -3,34 +3,34 @@
     "publicDownloadsSource": {
       "EcoreX_0.2.9.2-web-linux-service.tar.gz": {
         "artifactId": "EcoreX_0.2.9.2-web-linux-service.tar.gz",
-        "sha256": "50C7FCF63F160D4B748AE5EBA913FFFCF9110983B5D7788E459737545B3D17AB",
-        "size": 4219493
+        "sha256": "BDD078CD2E2B321FCD48993B74629924C865C1294091C133E6F0736313695F6D",
+        "size": 4219655
       },
       "EcoreX_0.2.9.2-webui-macos-universal.zip": {
         "artifactId": "EcoreX_0.2.9.2-webui-macos-universal.zip",
-        "sha256": "01EA88BC3785F1A542454E09573AC2634E87E1498500D4262956C1FF9B3B0043",
-        "size": 652300343
+        "sha256": "5A3615AF9BE64BC6605DEC262EB6FB4E98E12293F9DA0E6DB550DC7BB9179ECF",
+        "size": 652318675
       },
       "EcoreX_0.2.9.2-webui-windows-x64.zip": {
         "artifactId": "EcoreX_0.2.9.2-webui-windows-x64.zip",
-        "sha256": "2A87D8AF7B0B3C31E45C319C1E276663B2CF49ACCA43FDA450EA9460C68A54AE",
-        "size": 550842007
+        "sha256": "992C44710543D70AFD5B3F90680097F4745F4DD33E631E0DB1F01747BFA9F17E",
+        "size": 550842181
       }
     },
     "publicZip": {
       "artifactId": "EcoreX_0.2.9.2-public-release.zip",
-      "sha256": "DAF434753603DA8B7616679240C689E360ECD49488AAFDF6E428DF6C6A00E1F0",
+      "sha256": "8219CA52E998E22E3EECB4B28D2F245907B09E160F2E9ECCE3E08AEC82C67343",
       "size": 2868477
     },
     "webTarball": {
       "artifactId": "EcoreX_0.2.9.2-web-linux-service.tar.gz",
-      "sha256": "50C7FCF63F160D4B748AE5EBA913FFFCF9110983B5D7788E459737545B3D17AB",
-      "size": 4219493
+      "sha256": "BDD078CD2E2B321FCD48993B74629924C865C1294091C133E6F0736313695F6D",
+      "size": 4219655
     }
   },
   "commands": [
     {
-      "argvHash": "F9C5498CA452B265B5E85213300D789F9A423125F870CEC0E85DEC02A2EEE521",
+      "argvHash": "C43153B584626FAC6E8FD91442BCB2BC4FE8965FA004FDF7F21E79C5F361BE0A",
       "exitCode": 0,
       "name": "prepare_remote_dir",
       "stderrExcerptRedacted": "",
@@ -39,7 +39,7 @@
       "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
     },
     {
-      "argvHash": "6D7C09151CC38111BCA2ABA61E5A6F0944B057760A15A93C995734358665A04B",
+      "argvHash": "8D6DBC644F82FEA2612B6C875E056043DE23BCC90C04395C625E21DEE083CCC9",
       "exitCode": 0,
       "name": "upload_web_tar",
       "stderrExcerptRedacted": "",
@@ -48,7 +48,7 @@
       "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
     },
     {
-      "argvHash": "60175D67244B53927ED5B6D4399A7F15E096B5DE12E180E2F74097F857C780A0",
+      "argvHash": "06A15654831A0D19C73B87CA404FC7943AE213ADCF571009322CB99C39693A85",
       "exitCode": 0,
       "name": "upload_public_zip",
       "stderrExcerptRedacted": "",
@@ -57,7 +57,7 @@
       "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
     },
     {
-      "argvHash": "4545A5EA83C9BCCD1DFA4565735B2A8A465EF1BA190B611180622E9EC2E3C044",
+      "argvHash": "200B9472BE891EAA360087702D288BD37555B83D796E8EDB7C0898DE333D5148",
       "exitCode": 0,
       "name": "upload_install_web",
       "stderrExcerptRedacted": "",
@@ -66,7 +66,7 @@
       "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
     },
     {
-      "argvHash": "AA2B54785B032813B05855862D407C429C09B9D4CC84F8C5D9FAFA91D21C5FFF",
+      "argvHash": "32321617E2E957BB38505436EC9509131FF7957BAAA51798463870E701C7D268",
       "exitCode": 0,
       "name": "upload_check_web",
       "stderrExcerptRedacted": "",
@@ -75,7 +75,7 @@
       "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
     },
     {
-      "argvHash": "517F86F2210F6ADF6F125EC6769CC886258421FC22D446AAB9E2017571898EBE",
+      "argvHash": "A82E388CD2561F52E036EDB5CB6BC0970A653B7AD710E5DBE2FE723AB2240EC6",
       "exitCode": 0,
       "name": "upload_install_public",
       "stderrExcerptRedacted": "",
@@ -84,7 +84,7 @@
       "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
     },
     {
-      "argvHash": "A0341D7C9E23D739F42612AFF7944B9F0195B4827FAD2A558C654A301C8B5B12",
+      "argvHash": "80FC605E0761762430F0AF7FE2EAC8A21A572A11F4B7AEB929AF95BDED5DA6A2",
       "exitCode": 0,
       "name": "upload_check_server",
       "stderrExcerptRedacted": "",
@@ -93,25 +93,25 @@
       "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
     },
     {
-      "argvHash": "4C134797D1FA0D8DFD13FF5500337DBD9885E9B9A75A80FFDE36E02D07ABDB38",
+      "argvHash": "3FC7C90B9C6F505C730360123E688B65FC0C5E51C3FA7DF6F40F95CF4C5AA33F",
       "exitCode": 0,
-      "name": "webui_windows_download_cache_probe",
+      "name": "webui_windows_download_externalized_skipped",
       "stderrExcerptRedacted": "",
       "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
-      "stdoutExcerptRedacted": "cache-hit\n",
-      "stdoutHash": "C5C7DDB9BB95BD6FAF67D859DC896B5D079438FE7A5DBBC5B9A7A83FF78C0317"
+      "stdoutExcerptRedacted": "webui download is served by manifest mirrors; server-local upload skipped",
+      "stdoutHash": "0E7F4DD850B122BC4FDE91E329A697CB5B550AC4F42D1CE86161A56853EC0FEC"
     },
     {
-      "argvHash": "CFE288D3F7CD60899A1092DEAEF23AD0BB3E8512C411FAA2F267C4A1B1183667",
+      "argvHash": "E48630388F77E0F7137A11185B3A56E16ACBB3A356CF29EC02603D548A8E1EB6",
       "exitCode": 0,
-      "name": "webui_macos_download_cache_probe",
+      "name": "webui_macos_download_externalized_skipped",
       "stderrExcerptRedacted": "",
       "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
-      "stdoutExcerptRedacted": "cache-hit\n",
-      "stdoutHash": "C5C7DDB9BB95BD6FAF67D859DC896B5D079438FE7A5DBBC5B9A7A83FF78C0317"
+      "stdoutExcerptRedacted": "webui download is served by manifest mirrors; server-local upload skipped",
+      "stdoutHash": "0E7F4DD850B122BC4FDE91E329A697CB5B550AC4F42D1CE86161A56853EC0FEC"
     },
     {
-      "argvHash": "6A691ECB83B869325EEAB0A913218A28BD7EBFF0ED1DA3F00C616EC2759AFBD4",
+      "argvHash": "6B3C0C3958092DFB6CC2EC5C14BA13B42FE490D3B02741A5D1F69AF2FCD1D722",
       "exitCode": 0,
       "name": "stage_web_tar_download_source",
       "stderrExcerptRedacted": "",
@@ -120,7 +120,7 @@
       "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
     },
     {
-      "argvHash": "305609E24CB7EF59D475DF877F8B9992656491C430C627A984794CD7830C3CB1",
+      "argvHash": "CC815A8553E4E9E046282C354056ED1CF7CF6FBF44460E557E6288ADFC66211C",
       "exitCode": 0,
       "name": "chmod_release_scripts",
       "stderrExcerptRedacted": "",
@@ -138,16 +138,16 @@
       "stdoutHash": "9FFE2B5969BCD8762980176DA3F82BDB8A3CB25930859ED6108FBCC7BBFDA654"
     },
     {
-      "argvHash": "C61934DA16523F3EE5DE525B05BF4B4539453CAD9E4A1DE66E1BF08B1A7FB5ED",
+      "argvHash": "4C85985B377763C7BBE3EFB48E2A397D7356D453CEF5FAF545411B3A5FE95376",
       "exitCode": 0,
       "name": "install_web_service",
       "stderrExcerptRedacted": "",
       "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
-      "stdoutExcerptRedacted": "Looking in indexes: [URL]\nRequirement already satisfied: pip in /opt/ecorex-web/venv/lib64/python3.11/site-packages (26.1.2)\nRequirement already satisfied: setuptools in /opt/ecorex-web/venv/lib64/python3.11/site-packages (83.0.0)\nRequirement already satisfied: wheel in /opt/ecorex-web/venv/lib64/python3.11/site-packages (0.47.0)\nRequirement already satisfied: packaging>=24.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from wheel) (26.2)\nLooking in indexes: [URL]\nIgnoring legacy-cgi: markers 'python_version >= \"3.13\"' don't match your environment\nRequirement already satisfied: numpy>=1.21 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260706145745-v0.2.9.2/runtime/requirements.txt (line 1)) (2.4.6)\nRequirement already satisfied: aiohttp<3.10,>=3.8.6 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260706145745-v0.2.9.2/runtime/requirements.txt (line 2)) (3.9.5)\nRequirement already satisfied: requests>=2.28.2 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260706145745-v0.2.9.2/runtime/requirements.txt (line 3)) (2.34.2)\nRequirement already satisfied: chardet>=5.1.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260706145745-v0.2.9.2/runtime/requirements.txt (line 4)) (7.4.3)\nRequirement already satisfied: Pillow in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260706145745-v0.2.9.2/runtime/requirements.txt (line 5)) (12.2.0)\nRequirement already satisfied: rapidocr-onnxruntime in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260706145745-v0.2.9.2/runtime/requirements.txt (line 6)) (1.4.4)\nRequirement already satisfied: python-dotenv>=1.0.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260706145745-v0.2.9.2/runtime/requirements.txt (line 7)) (1.2.2)\nRequirement already satisfied: PyYAML>=6.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260706145745-v0.2.9.2/runtime/requirements.txt (line 8)) (6.0.3)\nRequirement already satisfied: croniter>=2.0.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260706145745-v0.2.9.2/runtime/requirements.txt (line 9)) (6.2.2)\nRequirement already satisfied: click>=8.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260706145745-v0.2.9.2/runtime/requirements.txt (line 10)) (8.4.1)\nRequirement already satisfied: qrcode in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260706145745-v0.2.9.2/runtime/requirements.txt (line 11)) (8.2)\nRequirement already satisfied: json-repair in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260706145745-v0.2.9.2/runtime/requirements.txt (line 12)) (0.61.0)\nRequirement alr",
-      "stdoutHash": "622FB4DA8A1AA707F8B4D819F28772A40269228E151B95CB420437D3AD82CAD9"
+      "stdoutExcerptRedacted": "Looking in indexes: [URL]\nRequirement already satisfied: pip in /opt/ecorex-web/venv/lib64/python3.11/site-packages (26.1.2)\nRequirement already satisfied: setuptools in /opt/ecorex-web/venv/lib64/python3.11/site-packages (83.0.0)\nRequirement already satisfied: wheel in /opt/ecorex-web/venv/lib64/python3.11/site-packages (0.47.0)\nRequirement already satisfied: packaging>=24.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from wheel) (26.2)\nLooking in indexes: [URL]\nIgnoring legacy-cgi: markers 'python_version >= \"3.13\"' don't match your environment\nRequirement already satisfied: numpy>=1.21 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260708071213-v0.2.9.2/runtime/requirements.txt (line 1)) (2.4.6)\nRequirement already satisfied: aiohttp<3.10,>=3.8.6 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260708071213-v0.2.9.2/runtime/requirements.txt (line 2)) (3.9.5)\nRequirement already satisfied: requests>=2.28.2 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260708071213-v0.2.9.2/runtime/requirements.txt (line 3)) (2.34.2)\nRequirement already satisfied: chardet>=5.1.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260708071213-v0.2.9.2/runtime/requirements.txt (line 4)) (7.4.3)\nRequirement already satisfied: Pillow in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260708071213-v0.2.9.2/runtime/requirements.txt (line 5)) (12.2.0)\nRequirement already satisfied: rapidocr-onnxruntime in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260708071213-v0.2.9.2/runtime/requirements.txt (line 6)) (1.4.4)\nRequirement already satisfied: python-dotenv>=1.0.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260708071213-v0.2.9.2/runtime/requirements.txt (line 7)) (1.2.2)\nRequirement already satisfied: PyYAML>=6.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260708071213-v0.2.9.2/runtime/requirements.txt (line 8)) (6.0.3)\nRequirement already satisfied: croniter>=2.0.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260708071213-v0.2.9.2/runtime/requirements.txt (line 9)) (6.2.2)\nRequirement already satisfied: click>=8.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260708071213-v0.2.9.2/runtime/requirements.txt (line 10)) (8.4.1)\nRequirement already satisfied: qrcode in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260708071213-v0.2.9.2/runtime/requirements.txt (line 11)) (8.2)\nRequirement already satisfied: json-repair in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260708071213-v0.2.9.2/runtime/requirements.txt (line 12)) (0.61.0)\nRequirement alr",
+      "stdoutHash": "446EEE4E59E035091BE70A566B32D9D7223E21158C7344757F3E51D535FA8526"
     },
     {
-      "argvHash": "8A009E527B26F10CC814076F4C545C17183EC6EDBA6D6C821C4B8A707A2C0C0B",
+      "argvHash": "6605461AB290361112D8E0AEB3217583540E9B6710E6B64D5DBABCC3F05E41D9",
       "exitCode": 0,
       "name": "check_web_service",
       "stderrExcerptRedacted": "",
@@ -156,13 +156,13 @@
       "stdoutHash": "7DEFB381A3C73EE4AE8AE7B53A7AA2E40129EE46C8D0875976F7A4BC3AC82140"
     },
     {
-      "argvHash": "C43822D106CF378BDE86367C0F31E4DE5EED7B487B585E3BBC676F7164D447C2",
+      "argvHash": "BDB25933EDC9321CD5726B808D3B9AE07233ECB23BADBB3E9A38242724CC0594",
       "exitCode": 0,
       "name": "install_public_site_admin",
       "stderrExcerptRedacted": "",
       "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
-      "stdoutExcerptRedacted": "EcoreX public release installed.\nversion: [IP]\nzipSha256: DAF434753603DA8B7616679240C689E360ECD49488AAFDF6E428DF6C6A00E1F0\nreleaseDir: /srv/ecorex-agent-download/releases/20260706145753-v0.2.9.2\npromotion: promoted\nstaged: /srv/ecorex-agent-download/staged-v0.2.9.2\ncurrent: /srv/ecorex-agent-download/current\nadminApp: /srv/ecorex-agent-admin/app\nadminEnv: /srv/ecorex-agent-admin/env/ecorex-admin-api.env\nadminComposeContext: /opt/xhs-report/_ecorex_admin_api\nserverHelpers: /srv/ecorex-agent-admin/server\n",
-      "stdoutHash": "8BA2790CBEA49A498CBF3ECDEB7445E05F3F5026ED5589E08331AC88E89F80C3"
+      "stdoutExcerptRedacted": "EcoreX public release installed.\nversion: [IP]\nzipSha256: 8219CA52E998E22E3EECB4B28D2F245907B09E160F2E9ECCE3E08AEC82C67343\nreleaseDir: /srv/ecorex-agent-download/releases/20260708071218-v0.2.9.2\npromotion: promoted\nstaged: /srv/ecorex-agent-download/staged-v0.2.9.2\ncurrent: /srv/ecorex-agent-download/current\nadminApp: /srv/ecorex-agent-admin/app\nadminEnv: /srv/ecorex-agent-admin/env/ecorex-admin-api.env\nadminComposeContext: /opt/xhs-report/_ecorex_admin_api\nserverHelpers: /srv/ecorex-agent-admin/server\n",
+      "stdoutHash": "01EC972768F50F51C128940B895E7838FB9A27D5A65FCDB0A3C39A69C6DBF6EE"
     },
     {
       "argvHash": "80B6B09EFACEA4BDF84BFEEF97547992964F9317CB98BCE6C20B5151FD023D98",
@@ -177,19 +177,19 @@
       "argvHash": "1E8B5E6B2960144D8B96F4BC0BB739703A2902A378FFC58E60C9A656B3812FAF",
       "exitCode": 0,
       "name": "restart_admin_api_after_public_install",
-      "stderrExcerptRedacted": "curl: (7) Failed to connect to [IP] port 18084 after 0 ms: Couldn't connect to server\ncurl: (7) Failed to connect to [IP] port 18084 after 0 ms: Couldn't connect to server\ncurl: (7) Failed to connect to [IP] port 18084 after 0 ms: Couldn't connect to server\n",
-      "stderrHash": "2A9992F6E4E7C0A9C75A9E7A94B7A4206748E32F8F5BCCE8D88648169F766C09",
+      "stderrExcerptRedacted": "curl: (7) Failed to connect to [IP] port 18084 after 0 ms: Couldn't connect to server\n",
+      "stderrHash": "720534258ED595F38B9894FC6E7893D37D18DF2C1451761322A1A7B7EFD2E377",
       "stdoutExcerptRedacted": "admin-api-ready:403\n",
       "stdoutHash": "71EA4A3D29FFFCC198FD24D5A879B39C155E893827DD18AA4B22CAAE4F88AE99"
     },
     {
-      "argvHash": "EF3ADE33E7F81A94312D6789AACF49A9C24CC265CDDC9389DFFA1AC8BD547BF0",
+      "argvHash": "EEF2949593DAC8215EDD1BFBA3FE25A50D7267BBF91B048024BAB89FA008A96F",
       "exitCode": 0,
       "name": "check_public_site_admin",
       "stderrExcerptRedacted": "",
       "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
-      "stdoutExcerptRedacted": "PASS dir /srv/ecorex-agent-download/releases\nPASS file /srv/ecorex-agent-download/current/index.html\nPASS file /srv/ecorex-agent-download/current/manifest.json\nPASS file /srv/ecorex-agent-download/current/admin/index.html\nPASS file /srv/ecorex-agent-admin/app/ecorex_admin_api.py\nPASS file /srv/ecorex-agent-admin/env/ecorex-admin-api.env\nPASS file /srv/ecorex-agent-admin/server/caddy/Caddyfile.example\nPASS file /etc/nginx/ecorex-admin.htpasswd\nPASS admin Basic Auth file readable by nginx worker nginx\nPASS manifest EcoreX [IP]\nSKIP artifact windows-x64 status=retired\nSKIP artifact windows-ia32 status=retired\nPASS artifact webui-windows-x64 EcoreX_0.2.9.2-webui-windows-x64.zip\nPASS artifact webui-macos-universal EcoreX_0.2.9.2-webui-macos-universal.zip\nSKIP artifact macos-arm64-dmg status=retired\nSKIP artifact macos-x64-dmg status=retired\nPASS artifact web-linux-service EcoreX_0.2.9.2-web-linux-service.tar.gz\nPASS http public-manifest [URL]]/ecorex-agent/manifest.json -> 200\nPASS http public-[REDACTED] [URL]]/ecorex-agent/ -> 200\nPASS http public-asset-assets/icon.png [URL]]/ecorex-agent/assets/icon.png -> 200\nPASS http public-asset-assets/ecorex-app-preview.png [URL]]/ecorex-agent/assets/ecorex-app-preview.png -> 200\nPASS http public-asset-assets/ecorex-ecosystem-hub.png [URL]]/ecorex-agent/assets/ecorex-ecosystem-hub.png -> 200\nPASS http public-admin-auth [URL]]/ecorex-agent/admin/ -> 401\nPASS http public-client-gate [URL]]/ecorex-agent/client/model-config -> 403\nPASS downloaded public manifest [URL]]/ecorex-agent/manifest.json\nPASS public manifest EcoreX [IP]\nSKIP public artifact windows-x64 status=retired\nSKIP public artifact windows-ia32 status=retired\nPASS http artifact webui-windows-x64 [URL]]/ecorex-agent/downloads/EcoreX_0.2.9.2-webui-windows-x64.zip -> 200\nPASS http artifact webui-macos-universal [URL]]/ecorex-agent/downloads/EcoreX_0.2.9.2-webui-macos-universal.zip -> 200\nSKIP public artifact macos-arm64-dmg status=retired\nSKIP public artifact macos-x64-dmg status=retired\nPASS http artifact web-linux-service [URL]]/ecorex-agent/downloads/EcoreX_0.2.9.2-web-linux-service.tar.gz -> 200\nEcoreX server release check passed.\n",
-      "stdoutHash": "0518074D8D0C272CB11AFE1FF7A65230C223FB63A5760D65F6A64FD287EF1691"
+      "stdoutExcerptRedacted": "PASS dir /srv/ecorex-agent-download/releases\nPASS file /srv/ecorex-agent-download/current/index.html\nPASS file /srv/ecorex-agent-download/current/manifest.json\nPASS file /srv/ecorex-agent-download/current/admin/index.html\nPASS file /srv/ecorex-agent-admin/app/ecorex_admin_api.py\nPASS file /srv/ecorex-agent-admin/env/ecorex-admin-api.env\nPASS file /srv/ecorex-agent-admin/server/caddy/Caddyfile.example\nPASS file /etc/nginx/ecorex-admin.htpasswd\nPASS admin Basic Auth file readable by nginx worker nginx\nPASS manifest EcoreX [IP]\nSKIP artifact windows-x64 status=retired\nSKIP artifact windows-ia32 status=retired\nPASS external artifact webui-windows-x64 downloads/EcoreX_0.2.9.2-webui-windows-x64.zip\nPASS external artifact webui-macos-universal downloads/EcoreX_0.2.9.2-webui-macos-universal.zip\nSKIP artifact macos-arm64-dmg status=retired\nSKIP artifact macos-x64-dmg status=retired\nPASS artifact web-linux-service EcoreX_0.2.9.2-web-linux-service.tar.gz\nPASS http public-manifest [URL]]/ecorex-agent/manifest.json -> 200\nPASS http public-[REDACTED] [URL]]/ecorex-agent/ -> 200\nPASS http public-asset-assets/icon.png [URL]]/ecorex-agent/assets/icon.png -> 200\nPASS http public-asset-assets/ecorex-app-preview.png [URL]]/ecorex-agent/assets/ecorex-app-preview.png -> 200\nPASS http public-asset-assets/ecorex-ecosystem-hub.png [URL]]/ecorex-agent/assets/ecorex-ecosystem-hub.png -> 200\nPASS http public-admin-auth [URL]]/ecorex-agent/admin/ -> 401\nPASS http public-client-gate [URL]]/ecorex-agent/client/model-config -> 403\nPASS downloaded public manifest [URL]]/ecorex-agent/manifest.json\nPASS public manifest EcoreX [IP]\nSKIP public artifact windows-x64 status=retired\nSKIP public artifact windows-ia32 status=retired\nPASS http artifact webui-windows-x64 [URL] -> 200\nPASS http artifact webui-macos-universal [URL] -> 200\nSKIP public artifact macos-arm64-dmg status=retired\nSKIP public artifact macos-x64-dmg status=retired\nPASS http artifact web-linux-service [URL] -> 200\nEcoreX server release check passed.\n",
+      "stdoutHash": "96E0EEB75C52F3A540A7AB4AB07588F99F861F8342586CADDE7C4387B24A48A7"
     },
     {
       "argvHash": "3D1FA1C33204DB8A8E524A1A7C53A3ED0BB76AE8332F31B6F125B735D5DF9A15",
@@ -201,7 +201,7 @@
       "stdoutHash": "9FFE2B5969BCD8762980176DA3F82BDB8A3CB25930859ED6108FBCC7BBFDA654"
     }
   ],
-  "generatedAt": "2026-07-06T14:58:14.081593+00:00",
+  "generatedAt": "2026-07-08T07:12:27.479797+00:00",
   "onlineChecks": {
     "installationManifestVersion": "0.2.9.2",
     "publicManifestVersion": "0.2.9.2",

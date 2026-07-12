@@ -1,0 +1,146 @@
+{
+  "cleanup": {
+    "temporary_directory_removed": true
+  },
+  "first_install": {
+    "bootstrap_http_status": 200,
+    "bootstrap_launches": 2,
+    "prepared_state": "awaiting_user",
+    "registration_pin_released": true,
+    "slot_id": "r-753eb15732aa0c07de2d2d3a9a815b0462faf26b",
+    "terminal_state": "completed"
+  },
+  "network": {
+    "artifact_fetcher": "LocalSourceFetcher",
+    "external_publication": false,
+    "runtime_live_endpoints": "loopback-only"
+  },
+  "release": {
+    "build_digest": "89942535adcbbb96792dce94e150986bc99a1dd60160521f9658f40e4b658834",
+    "core_sha256": "5ee32f65ee4e5fb8741b1a426598683b7c537032a9e13dcebc62b1b00df0fccd",
+    "manifest_sha256": "352c0ca1d77f0fdfedac41e4831e2fc5df9acc2aaeadf9bb2d135dd734392b3e",
+    "release_id": "release-stable-89942535adcbbb96792dce94",
+    "version": "1.0.0",
+    "web_bundle_sha256": "069f3de1dc1162817287f16c05d89f7aa3d3ca5cfd1bb6ec18cfcd7b7c189dc6",
+    "web_manifest_sha256": "9d3f0d5600df2e28b0077aa54327ca3aa316b32485af5bd1a15b6a00223f3596"
+  },
+  "rollback": {
+    "bootstrap_http_status": 200,
+    "bootstrap_launches": 2,
+    "cross_version_update_claimed": false,
+    "exercise": "signed_same_version_replacement_pre_data",
+    "fault_release": {
+      "build_digest": "2047e518a216a653287f7ee30495a6054da9ac1ecc65e3372c8d5bbd0e2e4492",
+      "core_sha256": "cd10ae8e52b2e97b12d52f58e590f1ac83e4f9eabe604b202cb437b1b94a52dc",
+      "manifest_sha256": "49af3c52232ef9ef910c885603730c9b000e5b251196970c2614d5e4a08b4437",
+      "release_id": "release-stable-2047e518a216a653287f7ee3",
+      "version": "1.0.0",
+      "web_bundle_sha256": "069f3de1dc1162817287f16c05d89f7aa3d3ca5cfd1bb6ec18cfcd7b7c189dc6",
+      "web_manifest_sha256": "4ab2c1758a5f98813a297f9e6a930905c9cf20ab472c784675ac6457a0f7bec9"
+    },
+    "fault_slot_discarded": true,
+    "fault_slot_id": "r-b3288e958528468c811d53983606af843cb4a69c",
+    "restored_slot_id": "r-753eb15732aa0c07de2d2d3a9a815b0462faf26b",
+    "terminal_state": "rollback"
+  },
+  "runtime_dependencies": [
+    {
+      "name": "annotated-types",
+      "version": "0.7.0"
+    },
+    {
+      "name": "anyio",
+      "version": "4.13.0"
+    },
+    {
+      "name": "certifi",
+      "version": "2026.2.25"
+    },
+    {
+      "name": "cffi",
+      "version": "2.0.0"
+    },
+    {
+      "name": "click",
+      "version": "8.4.1"
+    },
+    {
+      "name": "colorama",
+      "version": "0.4.6"
+    },
+    {
+      "name": "cryptography",
+      "version": "46.0.7"
+    },
+    {
+      "name": "fastapi",
+      "version": "0.115.0"
+    },
+    {
+      "name": "h11",
+      "version": "0.16.0"
+    },
+    {
+      "name": "httpcore",
+      "version": "1.0.9"
+    },
+    {
+      "name": "httpx",
+      "version": "0.27.2"
+    },
+    {
+      "name": "idna",
+      "version": "3.12"
+    },
+    {
+      "name": "pycparser",
+      "version": "3.0"
+    },
+    {
+      "name": "pydantic",
+      "version": "2.12.5"
+    },
+    {
+      "name": "pydantic_core",
+      "version": "2.41.5"
+    },
+    {
+      "name": "sniffio",
+      "version": "1.3.1"
+    },
+    {
+      "name": "starlette",
+      "version": "0.38.6"
+    },
+    {
+      "name": "typing_extensions",
+      "version": "4.15.0"
+    },
+    {
+      "name": "typing-inspection",
+      "version": "0.4.2"
+    },
+    {
+      "name": "uvicorn",
+      "version": "0.30.0"
+    },
+    {
+      "name": "websockets",
+      "version": "15.0.1"
+    }
+  ],
+  "schema_version": 1,
+  "signing": {
+    "algorithm": "ed25519",
+    "key_id": "ecorex-local-candidate-drill",
+    "os_application_signing_used": false,
+    "private_key_persisted": false,
+    "public_key_sha256": "6db31960f2d413fd5833df6170046c976c58bff4f876db886df27e23b4762b56"
+  },
+  "status": "passed",
+  "target": {
+    "architecture": "x64",
+    "platform": "windows"
+  },
+  "version": "1.0.0"
+}

@@ -1,0 +1,131 @@
+# v1 update-chain development log
+
+## 2026-07-10 — first implementation slice
+
+Implemented within `ecorex/update`:
+
+- Strict `ReleaseManifest` schema v1 with immutable release identity, required
+  source priority, SHA-256 metadata, and detached Ed25519 envelopes.
+- Fail-closed signature verifier interface and optional real `cryptography`
+  Ed25519 adapter. Missing crypto support is an explicit error.
+- Cross-process product lock using `msvcrt.locking` on Windows and `flock` on
+  macOS/POSIX.
+- Hash-chained, fsynced NDJSON install journal with partial-tail recovery.
+- Durable coordinator states from `resolving` through `completed`, `rollback`,
+  or `failed`; downloads are resumable and corrupt mirrors fall through in the
+  signed priority order.
+- Persistent first-install version/build/artifact pin, released only after the
+  active slot is validated and registration is marked complete.
+- Safe ZIP staging, side-by-side integrity-checked slots, atomic authoritative pointer
+  record, inspectable `current`/`previous` labels, health-gated activation, and
+  restoration of prior pointers on failure.
+- No network side effects: the included fetcher reads explicit local source
+  directories; production networking is an injected boundary.
+
+Verification command:
+
+```powershell
+python -m pytest -q tests\v1\test_update_manifest.py tests\v1\test_update_coordinator.py tests\v1\test_update_durability.py
+```
+
+Result at handoff: `11 passed`.
+
+## 2026-07-10 — trust and recovery hardening
+
+- Recovery at `awaiting_user` now remains staged and never drains or activates.
+- Trust, drain, migration, pin-recovery, and rollback authorization boundaries
+  require explicit boolean success.
+- Manifest, package, and extracted payload are revalidated at every persistent
+  staging/activation boundary; terminal transaction payloads are removed.
+- Slot pointers track three ordered known-good releases. Human-readable labels
+  are non-authoritative and cannot turn a committed switch into a false failure.
+- Slot links/reparse points, portable-name collisions, Windows device names,
+  unsafe ZIP paths, and package sizes above 150 MiB are rejected.
+- macOS executable modes are restored without privileged mode bits.
+- Host/channel/version admission, authorized rollback and failed-first-install
+  pin recovery are explicit coordinator policies.
+
+Hardening verification result: `44 passed, 2 skipped, 1 warning` for all
+`test_update_*.py` suites plus the single-version-source contract. The skips are
+platform-specific: POSIX executable-mode verification and an actual symlink
+test on a Windows host without symlink privilege; Windows reparse-attribute
+handling remains covered by a privilege-free unit test.
+
+Deferred integration points:
+
+- HTTP/WSS control-plane transport and release push handling.
+- Platform capability-pack wiring for `cryptography` and production public keys.
+- Runtime process drain/restart implementation and live health endpoint probe.
+- Production signing ceremony and HSM/KMS custody; the release library accepts
+  only an injected signer and deliberately does not load private-key files.
+
+## 2026-07-10 — deterministic release builder and signer
+
+Implemented within `ecorex/release`:
+
+- Deterministic core/bootstrap ZIP construction with stable order, timestamp,
+  declared executable modes, normalized portable paths, source-change checks,
+  and symlink/reparse/special-file rejection.
+- Supported product matrix limited to Windows x64 and macOS arm64/x64, with
+  mirror → GitHub Releases → CDN source order validated before packaging.
+- Hard compressed limits of 150 MiB for core and 10 MiB for bootstrap, plus
+  bounded member count and unpacked source size.
+- A build digest derived from the sole `ecorex._version` source and complete
+  artifact/file inventory.
+- Real deterministic Ed25519 artifact and manifest signatures through an
+  injected signer. `Ed25519MemorySigner` accepts only an existing in-memory key;
+  signer failures are redacted and private keys are never serialized.
+- Atomic immutable release-directory publication containing the signed
+  manifest, release metadata, artifacts, and deterministic CycloneDX 1.5 SBOM.
+- Reserved output-name protection so a custom artifact cannot replace the
+  manifest, metadata, or SBOM.
+
+Focused verification at implementation time:
+
+```powershell
+$files = Get-ChildItem tests/v1 -Filter 'test_release_builder*.py' | % FullName
+python -m pytest -q -p no:cacheprovider $files
+```
+
+Result: `22 passed, 1 skipped`. The skip is the actual symlink test when the
+Windows host lacks symlink privilege; Windows reparse-attribute rejection also
+has a privilege-free unit test.
+
+Complete v1 regression at handoff: `227 passed, 4 skipped, 1 warning`. The
+warning is Starlette's upstream `python_multipart` pending-deprecation notice;
+the other skips are platform/privilege-specific tests.
+
+## 2026-07-10 — signed React dist and Server release contract
+
+- Added the single `WebBundleBuildInput` release input and reserved independent
+  `web-manifest.json` / `web-manifest` artifact identity.
+- Reused Server's `WebBundleManifest` and `WebFileRecord` contract without a
+  Server-to-release dependency. File records, entrypoint and domain-separated
+  bundle digest now match the production Server loader exactly.
+- Added a non-circular build identity: the release build digest covers the
+  complete unsigned Web file inventory; the signed Web JSON is then hashed and
+  signed as a ReleaseArtifact under the same release/version/build identity.
+- Added a production dist gate for exact root layout, SHA-256 asset names,
+  reachability-based allowlisting, missing lazy dependencies, hidden/extra
+  files, source-like suffixes, symlink/reparse/special entries, Runtime marker,
+  CSP-incompatible inline code, and legacy bundle/overlay references/content.
+- The Web tree is scanned again before publication. Release metadata, artifact
+  paths and CycloneDX SBOM now include the Web manifest and allowlisted files.
+- Confirmed the current repository `desktop/dist` fails closed on its
+  non-SHA-256 Vite asset names; Web post-build transformation remains required.
+
+Verification at this handoff:
+
+```powershell
+$web = Get-ChildItem tests/v1 -Filter 'test_release_web_bundle*.py' | % FullName
+python -m pytest -q -p no:cacheprovider $web
+python -m pytest -q -p no:cacheprovider tests/v1
+```
+
+- Web release tests: `19 passed, 1 skipped, 1 warning`.
+- Release/Server/Updater contract set: `74 passed, 3 skipped, 1 warning`.
+- Complete v1 regression: `270 passed, 5 skipped, 1 warning`.
+
+The focused skip is the real Windows symlink case on a host without symlink
+privilege; reparse-bit handling has a privilege-free test. The warning remains
+Starlette's upstream `python_multipart` pending-deprecation notice.

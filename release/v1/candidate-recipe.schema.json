@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ecorex.local/schemas/release/v1/candidate-recipe.schema.json",
+  "title": "EcoreX v1 Candidate recipe",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "channel", "created_at", "sources", "inputs"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "channel": {"enum": ["canary", "stable"]},
+    "created_at": {"type": "string", "minLength": 1},
+    "sources": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "prefixItems": [
+        {"$ref": "#/$defs/mirror"},
+        {"$ref": "#/$defs/github"},
+        {"$ref": "#/$defs/cdn"}
+      ],
+      "items": false
+    },
+    "inputs": {
+      "type": "array",
+      "minItems": 24,
+      "maxItems": 24,
+      "items": {"$ref": "#/$defs/input"}
+    }
+  },
+  "$defs": {
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_dir", "receipt"],
+      "properties": {
+        "source_dir": {"type": "string", "minLength": 1},
+        "receipt": {"type": "string", "minLength": 1}
+      }
+    },
+    "sourceBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "kind", "base_url"],
+      "properties": {
+        "source_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "kind": {"enum": ["github-cn-mirror", "github-release", "ecorex-cdn"]},
+        "base_url": {"type": "string", "pattern": "^https://"}
+      }
+    },
+    "mirror": {
+      "allOf": [
+        {"$ref": "#/$defs/sourceBase"},
+        {"properties": {"kind": {"const": "github-cn-mirror"}}}
+      ]
+    },
+    "github": {
+      "allOf": [
+        {"$ref": "#/$defs/sourceBase"},
+        {"properties": {"kind": {"const": "github-release"}}}
+      ]
+    },
+    "cdn": {
+      "allOf": [
+        {"$ref": "#/$defs/sourceBase"},
+        {"properties": {"kind": {"const": "ecorex-cdn"}}}
+      ]
+    }
+  }
+}

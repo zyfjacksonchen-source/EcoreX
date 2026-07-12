@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "component": "managed-model-gateway",
+  "recorded_at": "2026-07-11T21:44:11+08:00",
+  "local_status": "verified",
+  "local_evidence": {
+    "gateway_test_files": "58 passed",
+    "production_runtime_tests": "10 passed",
+    "shared_auth_control_image_regression": "33 passed",
+    "server_schema_authority": "passed",
+    "ruff": "passed",
+    "python_compile": "passed",
+    "diff_check": "passed"
+  },
+  "external_ga_status": "pending",
+  "pending_evidence": [
+    "real_provider_account and model protocol",
+    "public TLS certificate chain and rotation",
+    "load balancer streaming, timeout and drain behavior",
+    "encrypted persistent volume attestation",
+    "WAL-consistent backup restore drill with measured RPO and RTO",
+    "container kill, node restart, long soak and provider flood drill"
+  ],
+  "ha_claim": false,
+  "storage_topology": "single-node sqlite-wal with exclusive process lock"
+}

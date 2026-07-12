@@ -1,0 +1,9 @@
+[
+  {
+    "date": "2026-07-10",
+    "macrostructure": "Workbench",
+    "theme": "design.md",
+    "enrichment": "none",
+    "brief": "EcoreX v1 React WebUI GA audit, managed login, Artifact/Retouch interaction, accessibility, and design-system hardening"
+  }
+]

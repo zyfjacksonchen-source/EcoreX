@@ -1,0 +1,1 @@
+{"pack_id":"browser","protocol":"ecorex-stdio-tool-v1","runtime_api_version":"1.0.0","schema_version":1,"tools":["cdp","fetch"]}

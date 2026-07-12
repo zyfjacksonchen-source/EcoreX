@@ -1,0 +1,62 @@
+{
+  "contract_version": "1.0",
+  "evidence_kind": "local_browser_qa",
+  "external_ga_evidence": false,
+  "recorded_at": "2026-07-11T22:20:00+08:00",
+  "build": {
+    "index_sha256": "afa65fef696da9b4ff2b165e67e0aa777d830530349da301a3a8578b44e33779",
+    "entry_asset": "assets/index.432fa727fd3c9eef.js",
+    "style_asset": "assets/index.415544ab548a6cd0.css"
+  },
+  "environment": {
+    "browser": "Codex in-app Chromium",
+    "origin": "http://127.0.0.1:4179",
+    "fixture": "desktop/tools/ga-mock-server.mjs",
+    "scenario": "artifact",
+    "note": "The fixture provides deterministic local Runtime responses; this is UI and browser-runtime evidence, not cloud or provider evidence."
+  },
+  "production_asset_regression": {
+    "observed": "The first content-addressed entry asset failed to parse because overlapping reference matches duplicated dynamic-import quotes.",
+    "root_cause": "The generic string-token matcher and local-asset matcher shared a one-character quote boundary, causing the rewrite cursor to move backwards.",
+    "resolution": "Generic matches are now discarded on any half-open range overlap with a more specific local asset literal.",
+    "regression_test": "desktop/tools/rehash-dist.test.mjs: does not duplicate quotes around adjacent minified dynamic imports",
+    "final_console_errors": 0,
+    "final_console_warnings": 0
+  },
+  "responsive_matrix": [
+    {"viewport": "1440x900", "theme": "light", "passed": true, "horizontal_overflow_pixels": 0, "artifact_visible": true, "axe_violations": []},
+    {"viewport": "1440x900", "theme": "dark", "passed": true, "horizontal_overflow_pixels": 0, "artifact_visible": true, "axe_violations": []},
+    {"viewport": "1024x768", "theme": "light", "passed": true, "horizontal_overflow_pixels": 0, "artifact_visible": true, "axe_violations": []},
+    {"viewport": "1024x768", "theme": "dark", "passed": true, "horizontal_overflow_pixels": 0, "artifact_visible": true, "axe_violations": []},
+    {"viewport": "768x900", "theme": "light", "passed": true, "horizontal_overflow_pixels": 0, "artifact_visible": true, "axe_violations": []},
+    {"viewport": "768x900", "theme": "dark", "passed": true, "horizontal_overflow_pixels": 0, "artifact_visible": true, "axe_violations": []},
+    {"viewport": "390x844", "theme": "light", "passed": true, "horizontal_overflow_pixels": 0, "artifact_visible": true, "axe_violations": []},
+    {"viewport": "390x844", "theme": "dark", "passed": true, "horizontal_overflow_pixels": 0, "artifact_visible": true, "axe_violations": []}
+  ],
+  "interaction_checks": {
+    "desktop": {
+      "system_font_stack": true,
+      "body_typography": "14px/22px",
+      "ordinary_button_idle_border": "transparent",
+      "workspace_radius_px": 16,
+      "workspace_overflow": "clip",
+      "workspace_box_shadow": "none",
+      "artifact_action_rail_idle_opacity": 0
+    },
+    "image_preview": {
+      "opens_from_artifact_card": true,
+      "initial_mode": "fit",
+      "object_fit": "contain",
+      "image_inside_stage": true,
+      "zoom_controls_retained": true
+    },
+    "mobile": {
+      "workspace_radius_px": 0,
+      "direct_feedback_and_retouch_actions_hidden": true,
+      "more_action_visible": true,
+      "more_action_target_px": [44, 44],
+      "overflow_menu_contains_feedback_retouch_preview_open_reveal_download": true
+    }
+  },
+  "result": "passed"
+}

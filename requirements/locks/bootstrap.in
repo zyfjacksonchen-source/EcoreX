@@ -1,0 +1,5 @@
+# Build frontend used by every CI and Candidate Python environment.
+# Keep these exact pins identical to pyproject.toml [build-system].
+pip==24.0
+setuptools==68.0.0
+wheel==0.42.0

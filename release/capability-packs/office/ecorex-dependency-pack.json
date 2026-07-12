@@ -1,0 +1,1 @@
+{"adapter":"python-office-formats-v1","inventory":"runtime-inventory.json","kind":"dependency-service","pack_id":"office","runtime_api_version":"1.0.0","schema_version":1,"services":["office.formats"]}

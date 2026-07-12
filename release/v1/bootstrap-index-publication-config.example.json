@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "endpoint": "https://release-control.example.com/api/v1/bootstrap-index",
+  "allowed_hosts": ["release-control.example.com"],
+  "public_url": "https://download.example.com/ecorex/stable/public-bootstrap-index.json",
+  "public_hosts": ["download.example.com"],
+  "token_env": "ECOREX_BOOTSTRAP_INDEX_TOKEN"
+}

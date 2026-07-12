@@ -1,0 +1,1068 @@
+name: EcoreX v1 protected Candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Signed release channel
+        required: true
+        type: choice
+        default: canary
+        options:
+          - canary
+          - stable
+      staging_run_id:
+        description: Successful protected platform-stage workflow run for this exact commit
+        required: true
+        type: string
+      ci_run_id:
+        description: Successful protected EcoreX v1 CI run for this exact commit
+        required: true
+        type: string
+      ci_run_attempt:
+        description: Exact successful attempt number of the EcoreX v1 CI run
+        required: true
+        type: string
+      publish_assets:
+        description: Mutate domestic mirror, GitHub Release and CDN
+        required: true
+        type: boolean
+        default: false
+      promotion_mode:
+        description: Control Plane action after publication
+        required: true
+        type: choice
+        default: dry-run
+        options:
+          - dry-run
+          - create
+          - create-and-activate
+      rollout_percentage:
+        description: Initial rollout percentage (defaults to 1%)
+        required: true
+        type: string
+        default: "1"
+      delta_base_tag:
+        description: Optional prior immutable GitHub Release tag used to derive signed Core deltas
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ecorex-v1-candidate-${{ inputs.channel }}
+  cancel-in-progress: false
+
+jobs:
+  validate-request:
+    name: Validate protected dispatch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Refuse PR, unprotected ref or contradictory mutation inputs
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_PROTECTED: ${{ github.ref_protected }}
+          STAGING_RUN_ID: ${{ inputs.staging_run_id }}
+          CI_RUN_ID: ${{ inputs.ci_run_id }}
+          CI_RUN_ATTEMPT: ${{ inputs.ci_run_attempt }}
+          PUBLISH_ASSETS: ${{ inputs.publish_assets }}
+          PROMOTION_MODE: ${{ inputs.promotion_mode }}
+          ROLLOUT_PERCENTAGE: ${{ inputs.rollout_percentage }}
+          DELTA_BASE_TAG: ${{ inputs.delta_base_tag }}
+        run: |
+          python - <<'PY'
+          import os, re
+          ok = (
+              os.environ["EVENT_NAME"] == "workflow_dispatch"
+              and os.environ["REF_PROTECTED"] == "true"
+              and re.fullmatch(r"[1-9][0-9]{0,18}", os.environ["STAGING_RUN_ID"] or "")
+              and re.fullmatch(r"[1-9][0-9]{0,18}", os.environ["CI_RUN_ID"] or "")
+              and re.fullmatch(r"[1-9][0-9]{0,8}", os.environ["CI_RUN_ATTEMPT"] or "")
+              and re.fullmatch(r"(?:[1-9]|[1-9][0-9]|100)", os.environ["ROLLOUT_PERCENTAGE"] or "")
+              and (
+                  not os.environ["DELTA_BASE_TAG"]
+                  or re.fullmatch(r"v[0-9A-Za-z][0-9A-Za-z.+-]{0,126}", os.environ["DELTA_BASE_TAG"])
+              )
+              and not (
+                  os.environ["PUBLISH_ASSETS"] != "true"
+                  and os.environ["PROMOTION_MODE"] != "dry-run"
+              )
+          )
+          raise SystemExit(0 if ok else 1)
+          PY
+
+  quality:
+    name: Full source, contract, migration and supply-chain gates
+    needs: validate-request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout immutable source without persisted credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch and verify the complete fixed v0.3.0 Git object set
+        env:
+          V030_RELEASE_COMMIT: f0750d247bfe52ffb95c137cadc9983a03010690
+        run: |
+          git fetch --no-tags --force origin "$V030_RELEASE_COMMIT"
+          python scripts/check-v1-release-baseline.py \
+            --commit "$V030_RELEASE_COMMIT" \
+            --output .candidate/quality/v030-baseline.json
+
+      - name: Reject invisible untracked source and whitespace drift
+        run: |
+          git diff --check HEAD --
+          python scripts/check-v1-source-tree.py
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11.9"
+          cache: pip
+          cache-dependency-path: |
+            requirements/locks/bootstrap.lock
+            requirements/locks/cloud.lock
+            requirements/locks/dev.lock
+            requirements/locks/manifest.json
+
+      - name: Set up Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.23.1"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install runner-only development dependencies
+        run: python scripts/install-v1-python-profile.py --profile dev
+
+      - name: Resolve production cloud adapters from the reviewed lock
+        run: |
+          python scripts/install-v1-python-profile.py --profile cloud
+          python -c "import boto3, psycopg, psycopg_pool"
+
+      - name: Lint and compile Runtime
+        run: python scripts/run-v1-lint.py --compile --output-format=github
+
+      - name: Unit, contract and integration suites
+        run: >-
+          python -m pytest -q -p no:cacheprovider
+          --junitxml=.candidate/quality/full-pytest.xml
+          tests/v1
+
+      - name: Explicit release and protocol contracts
+        run: >-
+          python -m pytest -q -p no:cacheprovider
+          tests/v1/test_release_builder.py
+          tests/v1/test_release_capability_pack.py
+          tests/v1/test_release_asset_publication.py
+          tests/v1/test_control_plane_release_flow.py
+          tests/v1/test_update_wss_e2e.py
+          tests/v1/test_real_web_release_pipeline.py
+
+      - name: Migration dry-run and schema authority
+        run: |
+          python -m pytest -q -p no:cacheprovider \
+            --junitxml=.candidate/quality/migration-pytest.xml \
+            tests/v1/test_migration_copy_on_write.py \
+            tests/v1/test_product_legacy_migration.py \
+            tests/v1/test_migration_quarantine.py \
+            tests/v1/test_v030_release_schema_archive.py \
+            tests/v1/test_candidate_storage_migrations.py \
+            tests/v1/test_update_activation_health.py
+          python scripts/check-v1-runtime-schema-authority.py
+          python scripts/check-v1-server-schema-authority.py
+
+      - name: Install, audit, type-check, test and build WebUI once
+        working-directory: desktop
+        run: |
+          npm ci
+          npm audit --audit-level=high
+          npm run typecheck
+          npm run test:v1
+          npm run build
+          npx playwright test --config=playwright.config.ts --reporter=json \
+            > ../.candidate/quality/playwright-report.json
+
+      - name: Static product gates
+        run: |
+          python scripts/check-v1-design-system.py
+          python scripts/check-v1-dependency-locks.py
+          python scripts/check-v1-legacy-cutoff.py --strict-production
+          python scripts/check-v1-public-download-site.py
+          python scripts/check-v1-reproducibility.py --web-dist desktop/dist --write-manifest .candidate/quality/byte-contract.json
+
+      - name: License and secret scan
+        run: >-
+          python scripts/check-v1-candidate-supply-chain.py preflight
+          --repo .
+          --report .candidate/quality/supply-chain.json
+
+      - name: Seal completed source-quality job
+        run: >-
+          python scripts/write-v1-quality-evidence.py
+          --commit-sha ${{ github.sha }}
+          --workflow-run-id ${{ github.run_id }}
+          --byte-contract .candidate/quality/byte-contract.json
+          --supply-chain .candidate/quality/supply-chain.json
+          --baseline-evidence .candidate/quality/v030-baseline.json
+          --full-pytest-junit .candidate/quality/full-pytest.xml
+          --migration-pytest-junit .candidate/quality/migration-pytest.xml
+          --playwright-json .candidate/quality/playwright-report.json
+          --output .candidate/quality/quality-complete.json
+
+      - name: Upload WebUI, quality evidence and gates
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ecorex-v1-candidate-quality
+          path: |
+            desktop/dist
+            .candidate/quality
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
+
+  image-shared-storage:
+    name: Real PostgreSQL and MinIO two-node-id concurrency
+    needs: validate-request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16.9@sha256:7c688148e5e156d0e86df7ba8ae5a05a2386aaec1e2ad8e6d11bdf10504b1fb7
+        env:
+          POSTGRES_DB: ecorex_image_gate
+          POSTGRES_PASSWORD: ecorex-image-gate
+          POSTGRES_USER: ecorex
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ecorex -d ecorex_image_gate"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Checkout exact source without persisted credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11.9"
+
+      - name: Install exact test and cloud dependencies
+        run: |
+          python scripts/install-v1-python-profile.py --profile dev
+          python scripts/install-v1-python-profile.py --profile cloud
+
+      - name: Start isolated digest-pinned MinIO
+        run: |
+          docker run --detach --rm \
+            --name "ecorex-minio-${{ github.run_id }}-shared" \
+            --publish 127.0.0.1:9000:9000 \
+            --env MINIO_ROOT_USER=ecorex-test \
+            --env MINIO_ROOT_PASSWORD=ecorex-test-secret \
+            minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e \
+            server /data
+          for attempt in $(seq 1 30); do
+            curl --fail --silent http://127.0.0.1:9000/minio/health/ready && exit 0
+            sleep 1
+          done
+          exit 1
+
+      - name: Execute the real 256-job two-node-id gate
+        env:
+          ECOREX_TEST_POSTGRES_DSN: postgresql://ecorex:ecorex-image-gate@127.0.0.1:5432/ecorex_image_gate
+          ECOREX_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+          ECOREX_TEST_S3_ACCESS_KEY: ecorex-test
+          ECOREX_TEST_S3_SECRET_KEY: ecorex-test-secret
+        run: >-
+          python scripts/run-v1-image-shared-storage-gate.py
+          --gate-type shared-storage
+          --commit-sha ${{ github.sha }}
+          --workflow-run-id ${{ github.run_id }}
+          --node-id candidate-shared-a
+          --node-id candidate-shared-b
+          --jobs 256
+          --workers 48
+          --minimum-duration-seconds 0
+          --output .candidate/image-shared-storage.json
+
+      - name: Upload executed shared-storage evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ecorex-v1-image-shared-storage
+          path: .candidate/image-shared-storage.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Remove isolated MinIO
+        if: ${{ always() }}
+        run: docker rm --force "ecorex-minio-${{ github.run_id }}-shared" || true
+
+  image-soak:
+    name: Protected four-hour PostgreSQL and MinIO image soak
+    needs: validate-request
+    runs-on: [self-hosted, linux, x64, ecorex-image-soak]
+    timeout-minutes: 300
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16.9@sha256:7c688148e5e156d0e86df7ba8ae5a05a2386aaec1e2ad8e6d11bdf10504b1fb7
+        env:
+          POSTGRES_DB: ecorex_image_soak
+          POSTGRES_PASSWORD: ecorex-image-soak
+          POSTGRES_USER: ecorex
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ecorex -d ecorex_image_soak"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Checkout exact source without persisted credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11.9"
+
+      - name: Install exact soak dependencies
+        run: |
+          python scripts/install-v1-python-profile.py --profile dev
+          python scripts/install-v1-python-profile.py --profile cloud
+
+      - name: Start isolated digest-pinned MinIO
+        run: |
+          docker run --detach --rm \
+            --name "ecorex-minio-${{ github.run_id }}-soak" \
+            --publish 127.0.0.1:9000:9000 \
+            --env MINIO_ROOT_USER=ecorex-test \
+            --env MINIO_ROOT_PASSWORD=ecorex-test-secret \
+            minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e \
+            server /data
+          for attempt in $(seq 1 30); do
+            curl --fail --silent http://127.0.0.1:9000/minio/health/ready && exit 0
+            sleep 1
+          done
+          exit 1
+
+      - name: Execute the protected four-hour two-node-id soak
+        env:
+          ECOREX_TEST_POSTGRES_DSN: postgresql://ecorex:ecorex-image-soak@127.0.0.1:5432/ecorex_image_soak
+          ECOREX_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+          ECOREX_TEST_S3_ACCESS_KEY: ecorex-test
+          ECOREX_TEST_S3_SECRET_KEY: ecorex-test-secret
+        run: >-
+          python scripts/run-v1-image-shared-storage-gate.py
+          --gate-type soak
+          --commit-sha ${{ github.sha }}
+          --workflow-run-id ${{ github.run_id }}
+          --node-id candidate-soak-a
+          --node-id candidate-soak-b
+          --jobs 256
+          --workers 48
+          --minimum-duration-seconds 14400
+          --output .candidate/image-soak.json
+
+      - name: Upload executed soak evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ecorex-v1-image-soak
+          path: .candidate/image-soak.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Remove isolated MinIO
+        if: ${{ always() }}
+        run: docker rm --force "ecorex-minio-${{ github.run_id }}-soak" || true
+
+  reproducibility-input:
+    name: Verify protected cross-runner reproducibility
+    needs: validate-request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout exact verifier without persisted credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11.9"
+
+      - name: Install exact Runtime verification dependencies
+        run: python scripts/install-v1-python-profile.py --profile runtime
+
+      - name: Read exact CI run metadata from this repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ inputs.ci_run_id }}
+          CI_RUN_ATTEMPT: ${{ inputs.ci_run_attempt }}
+        run: |
+          mkdir -p .candidate/ci
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${CI_RUN_ID}/attempts/${CI_RUN_ATTEMPT}" \
+            > .candidate/ci/run.json
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${CI_RUN_ID}/artifacts?per_page=100" \
+            > .candidate/ci/artifacts.json
+
+      - name: Select four immutable artifacts from the exact CI attempt
+        id: ci-artifacts
+        env:
+          CI_RUN_ID: ${{ inputs.ci_run_id }}
+          CI_RUN_ATTEMPT: ${{ inputs.ci_run_attempt }}
+        run: >-
+          python scripts/select-v1-ci-reproducibility-artifacts.py
+          --run-metadata .candidate/ci/run.json
+          --artifact-metadata .candidate/ci/artifacts.json
+          --repository "${GITHUB_REPOSITORY}"
+          --commit-sha "${GITHUB_SHA}"
+          --workflow-run-id "${CI_RUN_ID}"
+          --run-attempt "${CI_RUN_ATTEMPT}"
+          --protected-ref refs/heads/main
+          --max-run-age-seconds 86400
+          --output .candidate/ci/artifact-selection.json
+          --github-output "${GITHUB_OUTPUT}"
+
+      - name: Download only the four selected immutable artifact IDs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.ci_run_id }}
+          artifact-ids: ${{ steps.ci-artifacts.outputs.artifact_ids }}
+          path: .candidate/ci/contracts
+
+      - name: Reject stale, foreign, incomplete or non-identical CI evidence
+        env:
+          CI_RUN_ID: ${{ inputs.ci_run_id }}
+          CI_RUN_ATTEMPT: ${{ inputs.ci_run_attempt }}
+        run: >-
+          python scripts/verify-v1-ci-provenance.py
+          --run-metadata .candidate/ci/run.json
+          --artifact-metadata .candidate/ci/artifacts.json
+          --contracts-root .candidate/ci/contracts
+          --repository "${GITHUB_REPOSITORY}"
+          --commit-sha "${GITHUB_SHA}"
+          --workflow-run-id "${CI_RUN_ID}"
+          --run-attempt "${CI_RUN_ATTEMPT}"
+          --protected-ref refs/heads/main
+          --max-run-age-seconds 86400
+          --output .candidate/ci/reproducibility.json
+
+      - name: Upload typed reproducibility source evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ecorex-v1-candidate-reproducibility-input
+          path: .candidate/ci
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
+
+  staging-input:
+    name: Verify exact protected staging run
+    needs: validate-request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout verifier without persisted credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Read staging run metadata from this repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p .candidate
+          gh api repos/${{ github.repository }}/actions/runs/${{ inputs.staging_run_id }} > .candidate/staging-run.json
+
+      - name: Reject PR, fork, different commit or untrusted workflow provenance
+        run: >-
+          python scripts/verify-v1-staging-provenance.py
+          --metadata .candidate/staging-run.json
+          --expected-run-id ${{ inputs.staging_run_id }}
+          --expected-commit ${{ github.sha }}
+          --expected-repository ${{ github.repository }}
+          --receipt .candidate/staging-provenance.json
+
+      - name: Download all three real platform stages
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.staging_run_id }}
+          pattern: ecorex-v1-stage-*
+          path: .candidate/input
+          merge-multiple: true
+
+      - name: Refuse typed failure receipts and incomplete target set
+        run: |
+          test ! -e .candidate/input/stage-failure.json
+          for target in windows-x64 macos-arm64 macos-x64; do
+            test -d ".candidate/input/stages/$target/core"
+            test -d ".candidate/input/stages/$target/bootstrap"
+            test -d ".candidate/input/stages/$target/packs/browser"
+            test -d ".candidate/input/stages/$target/packs/image"
+            test -d ".candidate/input/stages/$target/packs/sandbox"
+            test -f ".candidate/input/receipts/$target/core.json"
+            test -f ".candidate/input/receipts/$target/bootstrap.json"
+            test -f ".candidate/input/receipts/$target/browser.json"
+            test -f ".candidate/input/receipts/$target/image.json"
+            test -f ".candidate/input/receipts/$target/sandbox.json"
+          done
+
+      - name: Upload consolidated immutable stage input
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ecorex-v1-candidate-stage-input
+          path: |
+            .candidate/input
+            .candidate/staging-provenance.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
+
+  build-and-sign:
+    name: Build and externally sign immutable Candidate
+    needs:
+      - quality
+      - staging-input
+      - reproducibility-input
+      - image-shared-storage
+      - image-soak
+    environment:
+      name: ecorex-release-${{ inputs.channel }}
+    runs-on: [self-hosted, linux, x64, ecorex-release-sign]
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout exact protected commit without persisted credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11.9"
+
+      - name: Install runner-only build dependencies
+        run: python scripts/install-v1-python-profile.py --profile runtime
+
+      - name: Download verified stage input
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ecorex-v1-candidate-stage-input
+          path: .candidate/stage-artifact
+
+      - name: Download WebUI and source gate receipts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ecorex-v1-candidate-quality
+          path: .candidate/quality-artifact
+
+      - name: Download executed image concurrency evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: ecorex-v1-image-*
+          path: .candidate/image-evidence
+          merge-multiple: true
+
+      - name: Download verified cross-runner reproducibility evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ecorex-v1-candidate-reproducibility-input
+          path: .candidate/reproducibility-artifact
+
+      - name: Merge stage and gate inputs
+        run: |
+          mkdir -p .candidate/input .candidate/gates
+          cp -R .candidate/stage-artifact/input/. .candidate/input/
+          cp .candidate/stage-artifact/staging-provenance.json .candidate/input/staging-provenance.json
+
+      - name: Derive deterministic candidate time from the immutable commit
+        id: commit
+        run: echo "created_at=$(git show -s --format=%cI ${{ github.sha }})" >> "$GITHUB_OUTPUT"
+
+      - name: Assemble fixed 24-stage recipe
+        env:
+          ECOREX_RELEASE_MIRROR_BASE_URL: ${{ vars.ECOREX_RELEASE_MIRROR_BASE_URL }}
+          ECOREX_RELEASE_CDN_BASE_URL: ${{ vars.ECOREX_RELEASE_CDN_BASE_URL }}
+        run: >-
+          python scripts/assemble-v1-candidate-recipe.py
+          --input-root .candidate/input
+          --output .candidate/input/candidate-recipe.json
+          --channel ${{ inputs.channel }}
+          --created-at "${{ steps.commit.outputs.created_at }}"
+          --repository ${{ github.repository }}
+
+      - name: Download optional prior signed Core set for delta derivation
+        if: ${{ inputs.delta_base_tag != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DELTA_BASE_TAG: ${{ inputs.delta_base_tag }}
+        run: |
+          mkdir -p .candidate/delta-base
+          gh release download "$DELTA_BASE_TAG" \
+            --repo "${{ github.repository }}" \
+            --dir .candidate/delta-base \
+            --pattern release-manifest.json \
+            --pattern 'ecorex-core-*.zip'
+
+      - name: Build with stdin-only digest-pinned KMS or HSM signer
+        env:
+          ECOREX_RELEASE_SIGNER_EXECUTABLE: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE }}
+          ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256 }}
+          ECOREX_RELEASE_SIGNER_ADAPTER: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER }}
+          ECOREX_RELEASE_SIGNER_ADAPTER_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER_SHA256 }}
+          ECOREX_RELEASE_SIGNER_KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          ECOREX_RELEASE_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+          DELTA_BASE_TAG: ${{ inputs.delta_base_tag }}
+        run: |
+          args=(
+            --recipe .candidate/input/candidate-recipe.json
+            --input-root .candidate/input
+            --web-dist .candidate/quality-artifact/desktop/dist
+            --output .candidate/output/release
+            --receipt .candidate/output/candidate-build-receipt.json
+            --expected-commit ${{ github.sha }}
+            --expected-staging-run-id ${{ inputs.staging_run_id }}
+            --staging-provenance .candidate/input/staging-provenance.json
+            --dependency-lock-manifest requirements/locks/manifest.json
+          )
+          if [[ -n "$DELTA_BASE_TAG" ]]; then
+            args+=(--delta-base-release-dir .candidate/delta-base)
+          fi
+          python scripts/build-v1-candidate.py "${args[@]}"
+
+      - name: Independently verify every signature
+        env:
+          ECOREX_RELEASE_SIGNER_KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          ECOREX_RELEASE_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+        run: >-
+          python scripts/verify-v1-release-signatures.py
+          --release-dir .candidate/output/release
+          --report .candidate/output/signature-report.json
+
+      - name: Bind browser, platform and image executions to this signed Candidate
+        env:
+          ECOREX_RELEASE_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+        run: |
+          python scripts/bind-v1-release-gate-evidence.py \
+            --gate e2e \
+            --source-evidence .candidate/quality-artifact/.candidate/quality/quality-complete.json \
+            --candidate-receipt .candidate/output/candidate-build-receipt.json \
+            --release-manifest .candidate/output/release/release-manifest.json \
+            --trusted-public-key "$ECOREX_RELEASE_SIGNER_PUBLIC_KEY" \
+            --staging-provenance .candidate/input/staging-provenance.json \
+            --commit-sha ${{ github.sha }} \
+            --workflow-run-id ${{ github.run_id }} \
+            --expected-staging-run-id ${{ inputs.staging_run_id }} \
+            --output .candidate/output/e2e-release-bound.json
+          python scripts/bind-v1-release-gate-evidence.py \
+            --gate migration-dry-run \
+            --source-evidence .candidate/quality-artifact/.candidate/quality/quality-complete.json \
+            --candidate-receipt .candidate/output/candidate-build-receipt.json \
+            --release-manifest .candidate/output/release/release-manifest.json \
+            --trusted-public-key "$ECOREX_RELEASE_SIGNER_PUBLIC_KEY" \
+            --staging-provenance .candidate/input/staging-provenance.json \
+            --commit-sha ${{ github.sha }} \
+            --workflow-run-id ${{ github.run_id }} \
+            --expected-staging-run-id ${{ inputs.staging_run_id }} \
+            --output .candidate/output/migration-release-bound.json
+          python scripts/bind-v1-release-gate-evidence.py \
+            --gate image-shared-storage \
+            --source-evidence .candidate/image-evidence/image-shared-storage.json \
+            --candidate-receipt .candidate/output/candidate-build-receipt.json \
+            --release-manifest .candidate/output/release/release-manifest.json \
+            --trusted-public-key "$ECOREX_RELEASE_SIGNER_PUBLIC_KEY" \
+            --staging-provenance .candidate/input/staging-provenance.json \
+            --commit-sha ${{ github.sha }} \
+            --workflow-run-id ${{ github.run_id }} \
+            --expected-staging-run-id ${{ inputs.staging_run_id }} \
+            --output .candidate/output/image-shared-storage-release-bound.json
+          python scripts/bind-v1-release-gate-evidence.py \
+            --gate image-soak \
+            --source-evidence .candidate/image-evidence/image-soak.json \
+            --candidate-receipt .candidate/output/candidate-build-receipt.json \
+            --release-manifest .candidate/output/release/release-manifest.json \
+            --trusted-public-key "$ECOREX_RELEASE_SIGNER_PUBLIC_KEY" \
+            --staging-provenance .candidate/input/staging-provenance.json \
+            --commit-sha ${{ github.sha }} \
+            --workflow-run-id ${{ github.run_id }} \
+            --expected-staging-run-id ${{ inputs.staging_run_id }} \
+            --output .candidate/output/image-soak-release-bound.json
+
+      - name: Bind cross-runner bytes to this signed Candidate
+        env:
+          ECOREX_RELEASE_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+        run: >-
+          python scripts/bind-v1-reproducibility-evidence.py
+          --evidence .candidate/reproducibility-artifact/reproducibility.json
+          --candidate-receipt .candidate/output/candidate-build-receipt.json
+          --release-manifest .candidate/output/release/release-manifest.json
+          --trusted-public-key "$ECOREX_RELEASE_SIGNER_PUBLIC_KEY"
+          --output .candidate/output/reproducibility-release-bound.json
+
+      - name: Verify generated SBOM, archive secrets and compressed size limits
+        run: >-
+          python scripts/check-v1-candidate-supply-chain.py release
+          --release-dir .candidate/output/release
+          --dependency-lock-manifest requirements/locks/manifest.json
+          --report .candidate/output/release-supply-chain.json
+
+      - name: Retain exact platform receipts beside Candidate evidence
+        run: |
+          mkdir -p .candidate/output/evidence
+          cp -R .candidate/input/receipts .candidate/output/evidence/stage-receipts
+          cp -R .candidate/input/.evidence .candidate/output/evidence/platform-stage
+          cp .candidate/stage-artifact/staging-provenance.json .candidate/output/evidence/staging-provenance.json
+          cp -R .candidate/quality-artifact/.candidate/quality .candidate/output/evidence/quality
+          cp -R .candidate/reproducibility-artifact .candidate/output/evidence/reproducibility-source
+
+      - name: Record signed Candidate gates
+        env:
+          ECOREX_RELEASE_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+        run: |
+          manifest=.candidate/output/release/release-manifest.json
+          common=(
+            --manifest "$manifest"
+            --candidate-receipt .candidate/output/candidate-build-receipt.json
+            --trusted-public-key "$ECOREX_RELEASE_SIGNER_PUBLIC_KEY"
+            --staging-provenance .candidate/input/staging-provenance.json
+            --expected-staging-run-id ${{ inputs.staging_run_id }}
+            --commit-sha ${{ github.sha }}
+            --workflow-run-id ${{ github.run_id }}
+            --output-dir .candidate/gates
+          )
+          python scripts/write-v1-gate-receipts.py --gate lint --gate typecheck --gate unit --gate contract --gate integration --evidence-file .candidate/quality-artifact/.candidate/quality/quality-complete.json "${common[@]}"
+          python scripts/write-v1-gate-receipts.py --gate migration-dry-run --evidence-file .candidate/output/migration-release-bound.json --source-evidence .candidate/quality-artifact/.candidate/quality/quality-complete.json "${common[@]}"
+          python scripts/write-v1-gate-receipts.py --gate license --gate secret-scan --evidence-file .candidate/quality-artifact/.candidate/quality/supply-chain.json "${common[@]}"
+          python scripts/write-v1-gate-receipts.py --gate windows-build --gate macos-build --evidence-file .candidate/output/e2e-release-bound.json --source-evidence .candidate/quality-artifact/.candidate/quality/quality-complete.json "${common[@]}"
+          python scripts/write-v1-gate-receipts.py --gate e2e --evidence-file .candidate/output/e2e-release-bound.json --source-evidence .candidate/quality-artifact/.candidate/quality/quality-complete.json "${common[@]}"
+          python scripts/write-v1-gate-receipts.py --gate image-shared-storage --evidence-file .candidate/output/image-shared-storage-release-bound.json --source-evidence .candidate/image-evidence/image-shared-storage.json "${common[@]}"
+          python scripts/write-v1-gate-receipts.py --gate image-soak --evidence-file .candidate/output/image-soak-release-bound.json --source-evidence .candidate/image-evidence/image-soak.json "${common[@]}"
+          python scripts/write-v1-gate-receipts.py --gate reproducibility --evidence-file .candidate/output/reproducibility-release-bound.json --source-evidence .candidate/reproducibility-artifact/reproducibility.json "${common[@]}"
+          python scripts/write-v1-gate-receipts.py --gate signature --evidence-file .candidate/output/signature-report.json "${common[@]}"
+          python scripts/write-v1-gate-receipts.py --gate sbom --gate size-scan --evidence-file .candidate/output/release-supply-chain.json "${common[@]}"
+
+      - name: Upload immutable Candidate and pre-publication evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ecorex-v1-candidate-${{ inputs.channel }}
+          path: |
+            .candidate/output
+            .candidate/gates
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
+
+  publish:
+    name: Publish mirror, GitHub and CDN exact bytes
+    if: ${{ inputs.publish_assets == true }}
+    needs: build-and-sign
+    environment:
+      name: ecorex-release-${{ inputs.channel }}
+    runs-on: [self-hosted, linux, x64, ecorex-release-publish]
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout release CLI without persisted credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11.9"
+
+      - name: Install runner-only publisher dependencies
+        run: python scripts/install-v1-python-profile.py --profile runtime
+
+      - name: Download exact signed Candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ecorex-v1-candidate-${{ inputs.channel }}
+          path: .candidate
+
+      - name: Publish in signed source order and make GitHub public last
+        env:
+          ECOREX_GITHUB_TOKEN: ${{ github.token }}
+          ECOREX_MIRROR_TOKEN: ${{ secrets.ECOREX_MIRROR_TOKEN }}
+          ECOREX_CDN_TOKEN: ${{ secrets.ECOREX_CDN_TOKEN }}
+          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+          PUBLICATION_CONFIG: ${{ vars.ECOREX_RELEASE_PUBLICATION_CONFIG }}
+        run: >-
+          ecorex-release publish-assets
+          --release-dir .candidate/output/release
+          --publication-config "$PUBLICATION_CONFIG"
+          --receipt .candidate/output/publication-receipt.json
+          --trusted-key "$KEY_ID=$PUBLIC_KEY"
+          --publish-github
+
+      - name: Reproduce the stable public Bootstrap discovery bytes
+        if: ${{ inputs.channel == 'stable' }}
+        env:
+          ECOREX_RELEASE_SIGNER_EXECUTABLE: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE }}
+          ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256 }}
+          ECOREX_RELEASE_SIGNER_ADAPTER: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER }}
+          ECOREX_RELEASE_SIGNER_ADAPTER_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER_SHA256 }}
+          ECOREX_RELEASE_SIGNER_KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          ECOREX_RELEASE_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+          ECOREX_PUBLICATION_SIGNER_EXECUTABLE: ${{ vars.ECOREX_PUBLICATION_SIGNER_EXECUTABLE }}
+          ECOREX_PUBLICATION_SIGNER_EXECUTABLE_SHA256: ${{ vars.ECOREX_PUBLICATION_SIGNER_EXECUTABLE_SHA256 }}
+          ECOREX_PUBLICATION_SIGNER_ADAPTER: ${{ vars.ECOREX_PUBLICATION_SIGNER_ADAPTER }}
+          ECOREX_PUBLICATION_SIGNER_ADAPTER_SHA256: ${{ vars.ECOREX_PUBLICATION_SIGNER_ADAPTER_SHA256 }}
+          ECOREX_PUBLICATION_SIGNER_KEY_ID: ${{ vars.ECOREX_PUBLICATION_SIGNER_KEY_ID }}
+          ECOREX_PUBLICATION_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_PUBLICATION_SIGNER_PUBLIC_KEY }}
+          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+          PUBLICATION_KEY_ID: ${{ vars.ECOREX_PUBLICATION_SIGNER_KEY_ID }}
+          PUBLICATION_PUBLIC_KEY: ${{ vars.ECOREX_PUBLICATION_SIGNER_PUBLIC_KEY }}
+        run: >-
+          ecorex-release build-public-bootstrap-index
+          --release-dir .candidate/output/release
+          --publication-receipt .candidate/output/publication-receipt.json
+          --output .candidate/output/public-bootstrap-index.json
+          --trusted-key "$KEY_ID=$PUBLIC_KEY"
+          --trusted-publication-key "$PUBLICATION_KEY_ID=$PUBLICATION_PUBLIC_KEY"
+
+      - name: Stage the stable Bootstrap index without changing public authority
+        if: ${{ inputs.channel == 'stable' }}
+        env:
+          ECOREX_BOOTSTRAP_INDEX_TOKEN: ${{ secrets.ECOREX_BOOTSTRAP_INDEX_TOKEN }}
+          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+          PUBLICATION_KEY_ID: ${{ vars.ECOREX_PUBLICATION_SIGNER_KEY_ID }}
+          PUBLICATION_PUBLIC_KEY: ${{ vars.ECOREX_PUBLICATION_SIGNER_PUBLIC_KEY }}
+          BOOTSTRAP_INDEX_PUBLICATION_CONFIG: ${{ vars.ECOREX_BOOTSTRAP_INDEX_PUBLICATION_CONFIG }}
+        run: >-
+          ecorex-release stage-public-bootstrap-index
+          --release-dir .candidate/output/release
+          --publication-receipt .candidate/output/publication-receipt.json
+          --index .candidate/output/public-bootstrap-index.json
+          --publication-config "$BOOTSTRAP_INDEX_PUBLICATION_CONFIG"
+          --receipt .candidate/output/bootstrap-index-stage-receipt.json
+          --trusted-key "$KEY_ID=$PUBLIC_KEY"
+          --trusted-publication-key "$PUBLICATION_KEY_ID=$PUBLICATION_PUBLIC_KEY"
+
+      - name: Assemble exact channel-specific preparation evidence
+        env:
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+        run: |
+          args=(
+            --receipts-dir .candidate/gates
+            --manifest .candidate/output/release/release-manifest.json
+            --publication-receipt .candidate/output/publication-receipt.json
+            --expected-commit ${{ github.sha }}
+          )
+          if [[ "$RELEASE_CHANNEL" == "stable" ]]; then
+            args+=(--phase prepare --output .candidate/output/release-evidence-prepare.json)
+          else
+            args+=(--phase finalize --output .candidate/output/release-evidence.json)
+          fi
+          python scripts/assemble-v1-release-evidence.py "${args[@]}"
+
+      - name: Upload publication receipts and evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ecorex-v1-published-${{ inputs.channel }}
+          path: .candidate
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 90
+
+  promote:
+    name: ${{ inputs.promotion_mode == 'dry-run' && 'Dry-run 1% promotion' || 'Explicit Control Plane promotion' }}
+    if: ${{ inputs.publish_assets == true }}
+    needs: publish
+    environment:
+      name: ecorex-release-${{ inputs.channel }}
+    runs-on: [self-hosted, linux, x64, ecorex-release-publish]
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout release CLI without persisted credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11.9"
+
+      - name: Install runner-only promotion dependencies
+        run: python scripts/install-v1-python-profile.py --profile runtime
+
+      - name: Download published exact bytes and evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ecorex-v1-published-${{ inputs.channel }}
+          path: .candidate
+
+      - name: Dry-run promotion without Control Plane credentials
+        if: ${{ inputs.promotion_mode == 'dry-run' }}
+        env:
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+        run: |
+          args=(
+            promote
+            --manifest .candidate/output/release/release-manifest.json
+            --publication-receipt .candidate/output/publication-receipt.json
+            --journal .candidate/output/promotion-dry-run-journal.json
+            --percentage "${{ inputs.rollout_percentage }}"
+            --dry-run
+          )
+          if [[ "$RELEASE_CHANNEL" == "stable" ]]; then
+            args+=(--phase prepare --evidence .candidate/output/release-evidence-prepare.json)
+          else
+            args+=(--phase auto --evidence .candidate/output/release-evidence.json)
+          fi
+          ecorex-release "${args[@]}"
+
+      - name: Create stable candidate gates and paused draft rollout
+        if: ${{ inputs.channel == 'stable' && inputs.promotion_mode != 'dry-run' }}
+        env:
+          ECOREX_CONTROL_PLANE_URL: ${{ vars.ECOREX_CONTROL_PLANE_URL }}
+          ECOREX_CONTROL_PLANE_HOSTS: ${{ vars.ECOREX_CONTROL_PLANE_HOSTS }}
+          ECOREX_CONTROL_PLANE_TOKEN: ${{ secrets.ECOREX_CONTROL_PLANE_TOKEN }}
+        run: >-
+          ecorex-release promote
+          --phase prepare
+          --manifest .candidate/output/release/release-manifest.json
+          --evidence .candidate/output/release-evidence-prepare.json
+          --publication-receipt .candidate/output/publication-receipt.json
+          --journal .candidate/output/promotion-journal.json
+          --percentage "${{ inputs.rollout_percentage }}"
+
+      - name: Create or activate canary rollout
+        if: ${{ inputs.channel == 'canary' && inputs.promotion_mode != 'dry-run' }}
+        env:
+          ECOREX_CONTROL_PLANE_URL: ${{ vars.ECOREX_CONTROL_PLANE_URL }}
+          ECOREX_CONTROL_PLANE_HOSTS: ${{ vars.ECOREX_CONTROL_PLANE_HOSTS }}
+          ECOREX_CONTROL_PLANE_TOKEN: ${{ secrets.ECOREX_CONTROL_PLANE_TOKEN }}
+          PROMOTION_MODE: ${{ inputs.promotion_mode }}
+        run: |
+          args=(
+            promote --phase auto
+            --manifest .candidate/output/release/release-manifest.json
+            --evidence .candidate/output/release-evidence.json
+            --publication-receipt .candidate/output/publication-receipt.json
+            --journal .candidate/output/promotion-journal.json
+            --percentage "${{ inputs.rollout_percentage }}"
+          )
+          if [[ "$PROMOTION_MODE" == "create-and-activate" ]]; then args+=(--activate); fi
+          ecorex-release "${args[@]}"
+
+      - name: CAS-activate and publicly read back the stable Bootstrap index
+        if: ${{ inputs.channel == 'stable' && inputs.promotion_mode == 'create-and-activate' }}
+        env:
+          ECOREX_BOOTSTRAP_INDEX_TOKEN: ${{ secrets.ECOREX_BOOTSTRAP_INDEX_TOKEN }}
+          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+          PUBLICATION_KEY_ID: ${{ vars.ECOREX_PUBLICATION_SIGNER_KEY_ID }}
+          PUBLICATION_PUBLIC_KEY: ${{ vars.ECOREX_PUBLICATION_SIGNER_PUBLIC_KEY }}
+          BOOTSTRAP_INDEX_PUBLICATION_CONFIG: ${{ vars.ECOREX_BOOTSTRAP_INDEX_PUBLICATION_CONFIG }}
+        run: >-
+          ecorex-release activate-public-bootstrap-index
+          --release-dir .candidate/output/release
+          --publication-receipt .candidate/output/publication-receipt.json
+          --index .candidate/output/public-bootstrap-index.json
+          --stage-receipt .candidate/output/bootstrap-index-stage-receipt.json
+          --publication-config "$BOOTSTRAP_INDEX_PUBLICATION_CONFIG"
+          --receipt .candidate/output/bootstrap-index-publication-receipt.json
+          --trusted-key "$KEY_ID=$PUBLIC_KEY"
+          --trusted-publication-key "$PUBLICATION_KEY_ID=$PUBLICATION_PUBLIC_KEY"
+
+      - name: Assemble stable active-and-readback evidence
+        if: ${{ inputs.channel == 'stable' && inputs.promotion_mode == 'create-and-activate' }}
+        run: >-
+          python scripts/assemble-v1-release-evidence.py
+          --phase finalize
+          --receipts-dir .candidate/gates
+          --manifest .candidate/output/release/release-manifest.json
+          --publication-receipt .candidate/output/publication-receipt.json
+          --bootstrap-index-receipt .candidate/output/bootstrap-index-publication-receipt.json
+          --expected-commit ${{ github.sha }}
+          --output .candidate/output/release-evidence.json
+
+      - name: Publish release then activate stable rollout
+        if: ${{ inputs.channel == 'stable' && inputs.promotion_mode == 'create-and-activate' }}
+        env:
+          ECOREX_CONTROL_PLANE_URL: ${{ vars.ECOREX_CONTROL_PLANE_URL }}
+          ECOREX_CONTROL_PLANE_HOSTS: ${{ vars.ECOREX_CONTROL_PLANE_HOSTS }}
+          ECOREX_CONTROL_PLANE_TOKEN: ${{ secrets.ECOREX_CONTROL_PLANE_TOKEN }}
+        run: >-
+          ecorex-release promote
+          --phase finalize
+          --manifest .candidate/output/release/release-manifest.json
+          --evidence .candidate/output/release-evidence.json
+          --publication-receipt .candidate/output/publication-receipt.json
+          --bootstrap-index-receipt .candidate/output/bootstrap-index-publication-receipt.json
+          --journal .candidate/output/promotion-journal.json
+          --percentage "${{ inputs.rollout_percentage }}"
+          --activate
+
+      - name: Retain promotion journal and public activation evidence
+        if: ${{ always() && inputs.promotion_mode != 'dry-run' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ecorex-v1-promotion-${{ inputs.channel }}-${{ github.run_id }}
+          path: |
+            .candidate/output/promotion-journal.json
+            .candidate/output/bootstrap-index-publication-receipt.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 90

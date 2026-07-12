@@ -1,0 +1,77 @@
+{
+  "schema": "ecorex.v1.v030-migration-baseline.v1",
+  "recorded_at": "2026-07-11T00:00:00+08:00",
+  "status": "implemented_with_explicit_provenance_limit",
+  "release_provenance": {
+    "local_v030_tag_present": false,
+    "release_schema_commit": "f0750d247bfe52ffb95c137cadc9983a03010690",
+    "github_release_target_recorded_in_docs": "938e16546a7d6b5ce06151f9fbd6ed58415e97f7",
+    "later_release_index_commit": "d96fd6ec7c0d39677a39aecf59f1ea79e7d617bb",
+    "last_local_v030_hotfix_commit": "9ac3b958a006e82bd53d8a26edf8e119110435d8",
+    "first_recorded_windows_asset_sha256": "3BF9A6546A294C2A96AC32786B7B893848BF3DC6A30897F228AD13CCDC49A48C",
+    "later_package_smoke_sha256": "B5845638264377BAF1DC685709957E836A0035DF9EE647491524CC31B149BFA8",
+    "conclusion": "The repository evidence does not prove one unique v0.3.0 archive-to-commit chain. Migration reports schema compatibility and marker metadata separately and never claim archive attestation without archive bytes."
+  },
+  "released_schema_blob_identity": [
+    {
+      "file": "agent/memory/conversation_store.py",
+      "git_blob": "dd10989d6bb8140bd81d74836be8c747ed948529",
+      "equal_at_release_and_last_hotfix": true
+    },
+    {
+      "file": "agent/memory/storage.py",
+      "git_blob": "683b083fe80f509632fc46755b8cf5dc5190b323",
+      "equal_at_release_and_last_hotfix": true
+    },
+    {
+      "file": "agent/protocol/run_ledger.py",
+      "git_blob": "0ecccc9a2d2ed1fac8234539e7b4bba60d804344",
+      "equal_at_release_and_last_hotfix": true
+    },
+    {
+      "file": "agent/protocol/run_event_ledger.py",
+      "git_blob": "8d9b9ee554a396636477046f4c2b43dcfd48bb61",
+      "equal_at_release_and_last_hotfix": true
+    },
+    {
+      "file": "agent/tools/scheduler/task_store.py",
+      "git_blob": "a54ce46b5340e7f89bba08a7dcfe47a2445e45a2",
+      "equal_at_release_and_last_hotfix": true
+    },
+    {
+      "file": "common/ecorex_tool_permissions.py",
+      "git_blob": "2bfd50f48109d4c1a05c4571844e334b87ae1c63",
+      "equal_at_release_and_last_hotfix": true
+    },
+    {
+      "file": "common/ecorex_workspace.py",
+      "git_blob": "dc5f3129e2a942dcde51dc9fc850a7eb2b653141",
+      "equal_at_release_and_last_hotfix": true
+    }
+  ],
+  "implemented_invariants": [
+    "source SQLite is never opened by SQLite; DB/WAL bytes are copied and re-hashed before the staging-only backup API runs",
+    "source and pinned external metadata are inventoried before and after migration",
+    "v1 target is built in disposable staging and atomically published",
+    "run/event history is immutable diagnostic data, not live replay input",
+    "active and queued runs become redacted user-confirmed recovery drafts",
+    "legacy scheduler tasks remain disabled pending explicit confirmation",
+    "legacy permission grants and paths are not activated",
+    "provider and connector credentials remain encrypted in local quarantine",
+    "WebUI-only history is imported only when canonical DB history is absent",
+    "branch lineage is written only when request ownership and parent identity are provable",
+    "malformed queue, scheduler, release marker, schema, ownership or duplicate IDs fail closed",
+    "migration failure leaves the v0.3 source and existing target untouched"
+  ],
+  "verification": {
+    "focused_command": "python -m pytest -q tests/v1/test_migration_copy_on_write.py",
+    "focused_result": "16 passed",
+    "lint_command": "python -m ruff check ecorex/migration tests/v1/test_migration_copy_on_write.py",
+    "lint_result": "passed",
+    "limitations": [
+      "No original 551+ MiB v0.3 release archive was downloaded or re-hashed in this local audit.",
+      "A release marker digest proves the supplied marker bytes, not the historical package bytes.",
+      "Old active work and scheduled work intentionally require user confirmation instead of automatic continuation."
+    ]
+  }
+}

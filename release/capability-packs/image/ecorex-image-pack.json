@@ -1,0 +1,1 @@
+{"adapter":"core-managed-image-v1","pack_id":"image","runtime_api_version":"1.0.0","schema_version":1,"tools":["imagegen","vision"]}

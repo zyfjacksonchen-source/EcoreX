@@ -1,0 +1,4549 @@
+{
+  "contracts": {
+    "ArtifactProjection": {
+      "$defs": {
+        "ArtifactAction": {
+          "enum": [
+            "preview",
+            "open",
+            "download",
+            "reveal",
+            "feedback",
+            "precise_retouch"
+          ],
+          "title": "ArtifactAction",
+          "type": "string"
+        },
+        "ArtifactFamily": {
+          "enum": [
+            "document",
+            "spreadsheet",
+            "presentation",
+            "pdf",
+            "image",
+            "audio",
+            "video",
+            "data_export",
+            "web_report",
+            "archive",
+            "cloud_link",
+            "source_code",
+            "script",
+            "diff",
+            "log",
+            "temporary",
+            "directory"
+          ],
+          "title": "ArtifactFamily",
+          "type": "string"
+        },
+        "ArtifactLineage": {
+          "properties": {
+            "source_artifact_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Source Artifact Ids",
+              "type": "array"
+            },
+            "supersedes_revision_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Supersedes Revision Id"
+            }
+          },
+          "title": "ArtifactLineage",
+          "type": "object"
+        },
+        "ArtifactRole": {
+          "enum": [
+            "deliverable",
+            "rendition",
+            "source",
+            "intermediate",
+            "diagnostic"
+          ],
+          "title": "ArtifactRole",
+          "type": "string"
+        },
+        "ArtifactStatus": {
+          "enum": [
+            "pending",
+            "ready",
+            "failed",
+            "deleted"
+          ],
+          "title": "ArtifactStatus",
+          "type": "string"
+        },
+        "ArtifactVisibility": {
+          "enum": [
+            "primary",
+            "secondary",
+            "internal"
+          ],
+          "title": "ArtifactVisibility",
+          "type": "string"
+        },
+        "FeedbackProjection": {
+          "properties": {
+            "feedback_id": {
+              "title": "Feedback Id",
+              "type": "string"
+            },
+            "recorded_at": {
+              "title": "Recorded At",
+              "type": "string"
+            },
+            "revision_id": {
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "signal": {
+              "$ref": "#/$defs/FeedbackSignal"
+            }
+          },
+          "required": [
+            "feedback_id",
+            "revision_id",
+            "signal",
+            "recorded_at"
+          ],
+          "title": "FeedbackProjection",
+          "type": "object"
+        },
+        "FeedbackSignal": {
+          "enum": [
+            "thumbs_up",
+            "thumbs_down"
+          ],
+          "title": "FeedbackSignal",
+          "type": "string"
+        },
+        "QualityCheck": {
+          "properties": {
+            "detail": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Detail"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/$defs/QualityStatus"
+            }
+          },
+          "required": [
+            "name",
+            "status"
+          ],
+          "title": "QualityCheck",
+          "type": "object"
+        },
+        "QualityEvidence": {
+          "properties": {
+            "checks": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/QualityCheck"
+              },
+              "title": "Checks",
+              "type": "array"
+            },
+            "score": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Score"
+            },
+            "status": {
+              "$ref": "#/$defs/QualityStatus",
+              "default": "not_checked"
+            },
+            "summary": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Summary"
+            }
+          },
+          "title": "QualityEvidence",
+          "type": "object"
+        },
+        "QualityStatus": {
+          "enum": [
+            "not_checked",
+            "passed",
+            "warning",
+            "failed"
+          ],
+          "title": "QualityStatus",
+          "type": "string"
+        },
+        "RenditionKind": {
+          "enum": [
+            "preview",
+            "thumbnail"
+          ],
+          "title": "RenditionKind",
+          "type": "string"
+        },
+        "RenditionProjection": {
+          "properties": {
+            "kind": {
+              "$ref": "#/$defs/RenditionKind"
+            },
+            "mime_type": {
+              "title": "Mime Type",
+              "type": "string"
+            },
+            "sha256": {
+              "title": "Sha256",
+              "type": "string"
+            },
+            "size_bytes": {
+              "title": "Size Bytes",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "mime_type",
+            "size_bytes",
+            "sha256"
+          ],
+          "title": "RenditionProjection",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "actions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ArtifactAction"
+          },
+          "title": "Actions",
+          "type": "array"
+        },
+        "artifact_id": {
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "created_at": {
+          "title": "Created At",
+          "type": "string"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "family": {
+          "$ref": "#/$defs/ArtifactFamily"
+        },
+        "feedback": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FeedbackProjection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "lineage": {
+          "$ref": "#/$defs/ArtifactLineage"
+        },
+        "mime_type": {
+          "title": "Mime Type",
+          "type": "string"
+        },
+        "quality_evidence": {
+          "$ref": "#/$defs/QualityEvidence"
+        },
+        "renditions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RenditionProjection"
+          },
+          "title": "Renditions",
+          "type": "array"
+        },
+        "revision_id": {
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/ArtifactRole"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/$defs/ArtifactStatus"
+        },
+        "visibility": {
+          "$ref": "#/$defs/ArtifactVisibility"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "revision_id",
+        "family",
+        "role",
+        "visibility",
+        "status",
+        "display_name",
+        "mime_type",
+        "size_bytes",
+        "sha256",
+        "created_at"
+      ],
+      "title": "ArtifactProjection",
+      "type": "object"
+    },
+    "BootstrapResponse": {
+      "$defs": {
+        "ConnectorDescriptor": {
+          "additionalProperties": false,
+          "properties": {
+            "adapter_available": {
+              "default": false,
+              "title": "Adapter Available",
+              "type": "boolean"
+            },
+            "auth_kinds": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Auth Kinds",
+              "type": "array"
+            },
+            "capabilities": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Capabilities",
+              "type": "array"
+            },
+            "connector_id": {
+              "title": "Connector Id",
+              "type": "string"
+            },
+            "contract_version": {
+              "default": "1.0",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Description"
+            },
+            "display_name": {
+              "title": "Display Name",
+              "type": "string"
+            },
+            "health": {
+              "enum": [
+                "connected",
+                "disconnected",
+                "degraded",
+                "unconfigured"
+              ],
+              "title": "Health",
+              "type": "string"
+            },
+            "icon_key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Icon Key"
+            },
+            "tier": {
+              "enum": [
+                "stable",
+                "beta"
+              ],
+              "title": "Tier",
+              "type": "string"
+            },
+            "unavailable_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Unavailable Reason"
+            }
+          },
+          "required": [
+            "connector_id",
+            "display_name",
+            "tier",
+            "health"
+          ],
+          "title": "ConnectorDescriptor",
+          "type": "object"
+        },
+        "ExtensionActionProjection": {
+          "additionalProperties": false,
+          "properties": {
+            "action_id": {
+              "enum": [
+                "enable",
+                "disable",
+                "health_check",
+                "rollback"
+              ],
+              "title": "Action Id",
+              "type": "string"
+            },
+            "disabled_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Disabled Reason"
+            },
+            "enabled": {
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "requires_confirmation": {
+              "title": "Requires Confirmation",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "action_id",
+            "enabled",
+            "requires_confirmation"
+          ],
+          "title": "ExtensionActionProjection",
+          "type": "object"
+        },
+        "ExtensionCatalogSnapshot": {
+          "additionalProperties": false,
+          "properties": {
+            "contract_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/$defs/ExtensionProjection"
+              },
+              "title": "Items",
+              "type": "array"
+            },
+            "snapshot_id": {
+              "pattern": "^ext_[0-9a-f]{64}$",
+              "title": "Snapshot Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "snapshot_id"
+          ],
+          "title": "ExtensionCatalogSnapshot",
+          "type": "object"
+        },
+        "ExtensionDependencyProjection": {
+          "additionalProperties": false,
+          "properties": {
+            "extension_id": {
+              "pattern": "^[a-z][a-z0-9_.-]{1,127}$",
+              "title": "Extension Id",
+              "type": "string"
+            },
+            "version_range": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Version Range",
+              "type": "string"
+            }
+          },
+          "required": [
+            "extension_id",
+            "version_range"
+          ],
+          "title": "ExtensionDependencyProjection",
+          "type": "object"
+        },
+        "ExtensionExportProjection": {
+          "additionalProperties": false,
+          "properties": {
+            "export_id": {
+              "pattern": "^[a-z][a-z0-9_.:-]{1,127}$",
+              "title": "Export Id",
+              "type": "string"
+            },
+            "exposure": {
+              "enum": [
+                "direct",
+                "deferred",
+                "hidden"
+              ],
+              "title": "Exposure",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "tool",
+                "skill",
+                "mcp_server",
+                "connector",
+                "capability_pack"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "permission_effects": {
+              "items": {
+                "enum": [
+                  "read",
+                  "write",
+                  "network",
+                  "execute",
+                  "ui_automation",
+                  "generate_media",
+                  "subscribe"
+                ],
+                "type": "string"
+              },
+              "title": "Permission Effects",
+              "type": "array"
+            }
+          },
+          "required": [
+            "export_id",
+            "kind",
+            "exposure"
+          ],
+          "title": "ExtensionExportProjection",
+          "type": "object"
+        },
+        "ExtensionProjection": {
+          "additionalProperties": false,
+          "properties": {
+            "actions": {
+              "items": {
+                "$ref": "#/$defs/ExtensionActionProjection"
+              },
+              "title": "Actions",
+              "type": "array"
+            },
+            "active_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Active Digest"
+            },
+            "active_revision_id": {
+              "anyOf": [
+                {
+                  "pattern": "^extrev_[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Active Revision Id"
+            },
+            "active_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Active Version"
+            },
+            "dependencies": {
+              "items": {
+                "$ref": "#/$defs/ExtensionDependencyProjection"
+              },
+              "title": "Dependencies",
+              "type": "array"
+            },
+            "description": {
+              "maxLength": 2048,
+              "minLength": 1,
+              "title": "Description",
+              "type": "string"
+            },
+            "display_name": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Display Name",
+              "type": "string"
+            },
+            "exports": {
+              "items": {
+                "$ref": "#/$defs/ExtensionExportProjection"
+              },
+              "title": "Exports",
+              "type": "array"
+            },
+            "extension_id": {
+              "pattern": "^[a-z][a-z0-9_.-]{1,127}$",
+              "title": "Extension Id",
+              "type": "string"
+            },
+            "health": {
+              "enum": [
+                "unknown",
+                "healthy",
+                "degraded",
+                "unhealthy",
+                "circuit_open"
+              ],
+              "title": "Health",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "skill",
+                "mcp_server",
+                "tool_provider",
+                "connector_provider",
+                "capability_pack"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "last_error_code": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Error Code"
+            },
+            "revision": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            },
+            "source": {
+              "enum": [
+                "core_bundle",
+                "signed_release",
+                "capability_pack",
+                "administrator",
+                "local_bundle",
+                "legacy_import"
+              ],
+              "title": "Source",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "staged",
+                "enabled",
+                "disabled",
+                "quarantined"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "trust": {
+              "enum": [
+                "builtin",
+                "administrator",
+                "verified_publisher",
+                "local_untrusted"
+              ],
+              "title": "Trust",
+              "type": "string"
+            },
+            "updated_at": {
+              "format": "date-time",
+              "title": "Updated At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "extension_id",
+            "display_name",
+            "description",
+            "kind",
+            "source",
+            "trust",
+            "status",
+            "health",
+            "revision",
+            "updated_at"
+          ],
+          "title": "ExtensionProjection",
+          "type": "object"
+        },
+        "LoginSnapshot": {
+          "additionalProperties": false,
+          "properties": {
+            "account_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Account Id"
+            },
+            "authenticated": {
+              "title": "Authenticated",
+              "type": "boolean"
+            },
+            "display_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Display Name"
+            },
+            "organization_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Organization Id"
+            },
+            "roles": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Roles",
+              "type": "array"
+            },
+            "session_revision": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Session Revision"
+            }
+          },
+          "required": [
+            "authenticated"
+          ],
+          "title": "LoginSnapshot",
+          "type": "object"
+        },
+        "ModelCatalog": {
+          "additionalProperties": false,
+          "properties": {
+            "audio": {
+              "items": {
+                "$ref": "#/$defs/ModelDescriptor"
+              },
+              "title": "Audio",
+              "type": "array"
+            },
+            "chat": {
+              "items": {
+                "$ref": "#/$defs/ModelDescriptor"
+              },
+              "title": "Chat",
+              "type": "array"
+            },
+            "embedding": {
+              "items": {
+                "$ref": "#/$defs/ModelDescriptor"
+              },
+              "title": "Embedding",
+              "type": "array"
+            },
+            "image": {
+              "items": {
+                "$ref": "#/$defs/ModelDescriptor"
+              },
+              "title": "Image",
+              "type": "array"
+            },
+            "snapshot_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Snapshot Id"
+            },
+            "vision": {
+              "items": {
+                "$ref": "#/$defs/ModelDescriptor"
+              },
+              "title": "Vision",
+              "type": "array"
+            }
+          },
+          "title": "ModelCatalog",
+          "type": "object"
+        },
+        "ModelContextManagementDescriptor": {
+          "additionalProperties": false,
+          "properties": {
+            "compact_threshold_tokens": {
+              "maximum": 2000000,
+              "minimum": 1000,
+              "title": "Compact Threshold Tokens",
+              "type": "integer"
+            },
+            "type": {
+              "const": "compaction",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "compact_threshold_tokens"
+          ],
+          "title": "ModelContextManagementDescriptor",
+          "type": "object"
+        },
+        "ModelDescriptor": {
+          "additionalProperties": false,
+          "properties": {
+            "aliases": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Aliases",
+              "type": "array"
+            },
+            "capabilities": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Capabilities",
+              "type": "array"
+            },
+            "display_name": {
+              "title": "Display Name",
+              "type": "string"
+            },
+            "is_default": {
+              "default": false,
+              "title": "Is Default",
+              "type": "boolean"
+            },
+            "model_id": {
+              "title": "Model Id",
+              "type": "string"
+            },
+            "model_policy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelPolicyDescriptor"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "model_id",
+            "display_name",
+            "capabilities"
+          ],
+          "title": "ModelDescriptor",
+          "type": "object"
+        },
+        "ModelPolicyDescriptor": {
+          "additionalProperties": false,
+          "properties": {
+            "context_management": {
+              "$ref": "#/$defs/ModelContextManagementDescriptor"
+            },
+            "local_model_id": {
+              "title": "Local Model Id",
+              "type": "string"
+            },
+            "policy_id": {
+              "title": "Policy Id",
+              "type": "string"
+            },
+            "policy_version": {
+              "title": "Policy Version",
+              "type": "string"
+            },
+            "reasoning_effort": {
+              "const": "medium",
+              "title": "Reasoning Effort",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": 1,
+              "title": "Schema Version",
+              "type": "integer"
+            },
+            "upstream_model_id": {
+              "title": "Upstream Model Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schema_version",
+            "policy_id",
+            "policy_version",
+            "local_model_id",
+            "upstream_model_id",
+            "reasoning_effort",
+            "context_management"
+          ],
+          "title": "ModelPolicyDescriptor",
+          "type": "object"
+        },
+        "ModelServiceSnapshot": {
+          "additionalProperties": false,
+          "properties": {
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reason"
+            },
+            "state": {
+              "enum": [
+                "ready",
+                "unavailable"
+              ],
+              "title": "State",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "title": "ModelServiceSnapshot",
+          "type": "object"
+        },
+        "PermissionSnapshot": {
+          "additionalProperties": false,
+          "properties": {
+            "admin_hard_denies": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Admin Hard Denies",
+              "type": "array"
+            },
+            "approval": {
+              "enum": [
+                "on-request",
+                "never"
+              ],
+              "title": "Approval",
+              "type": "string"
+            },
+            "full_access": {
+              "title": "Full Access",
+              "type": "boolean"
+            },
+            "profile": {
+              "enum": [
+                "default",
+                "full_access"
+              ],
+              "title": "Profile",
+              "type": "string"
+            },
+            "revision": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            },
+            "sandbox": {
+              "enum": [
+                "workspace-write",
+                "danger-full-access"
+              ],
+              "title": "Sandbox",
+              "type": "string"
+            },
+            "snapshot_id": {
+              "pattern": "^perm_[0-9a-f]{64}$",
+              "title": "Snapshot Id",
+              "type": "string"
+            },
+            "updated_at": {
+              "format": "date-time",
+              "title": "Updated At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "snapshot_id",
+            "profile",
+            "revision",
+            "updated_at",
+            "sandbox",
+            "approval",
+            "full_access"
+          ],
+          "title": "PermissionSnapshot",
+          "type": "object"
+        },
+        "PolicyLeaseSnapshot": {
+          "additionalProperties": false,
+          "properties": {
+            "duration_hours": {
+              "default": 72,
+              "maximum": 72,
+              "minimum": 1,
+              "title": "Duration Hours",
+              "type": "integer"
+            },
+            "expires_at": {
+              "format": "date-time",
+              "title": "Expires At",
+              "type": "string"
+            },
+            "issued_at": {
+              "format": "date-time",
+              "title": "Issued At",
+              "type": "string"
+            },
+            "lease_id": {
+              "title": "Lease Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "lease_id",
+            "issued_at",
+            "expires_at"
+          ],
+          "title": "PolicyLeaseSnapshot",
+          "type": "object"
+        },
+        "QuotaSnapshot": {
+          "additionalProperties": false,
+          "properties": {
+            "limits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Limits",
+              "type": "object"
+            },
+            "remaining": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remaining"
+            },
+            "resets_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resets At"
+            },
+            "unit": {
+              "default": "requests",
+              "title": "Unit",
+              "type": "string"
+            }
+          },
+          "title": "QuotaSnapshot",
+          "type": "object"
+        },
+        "UpdateSnapshot": {
+          "additionalProperties": false,
+          "properties": {
+            "build_digest": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Build Digest"
+            },
+            "can_activate": {
+              "default": false,
+              "title": "Can Activate",
+              "type": "boolean"
+            },
+            "current_version": {
+              "title": "Current Version",
+              "type": "string"
+            },
+            "error_code": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Error Code"
+            },
+            "release_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Release Id"
+            },
+            "requires_refresh": {
+              "default": false,
+              "title": "Requires Refresh",
+              "type": "boolean"
+            },
+            "state": {
+              "default": "idle",
+              "enum": [
+                "idle",
+                "available",
+                "downloading",
+                "awaiting_user",
+                "activating",
+                "failed"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "target_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Target Version"
+            },
+            "transaction_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Transaction Id"
+            }
+          },
+          "required": [
+            "current_version"
+          ],
+          "title": "UpdateSnapshot",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Api Version",
+          "type": "string"
+        },
+        "connectors": {
+          "items": {
+            "$ref": "#/$defs/ConnectorDescriptor"
+          },
+          "title": "Connectors",
+          "type": "array"
+        },
+        "csrf_token": {
+          "title": "Csrf Token",
+          "type": "string"
+        },
+        "event_schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Event Schema Version",
+          "type": "integer"
+        },
+        "extensions": {
+          "$ref": "#/$defs/ExtensionCatalogSnapshot"
+        },
+        "login": {
+          "$ref": "#/$defs/LoginSnapshot"
+        },
+        "login_service": {
+          "$ref": "#/$defs/ModelServiceSnapshot",
+          "default": {
+            "reason": "device_authorization_not_configured",
+            "state": "unavailable"
+          }
+        },
+        "model_service": {
+          "$ref": "#/$defs/ModelServiceSnapshot"
+        },
+        "models": {
+          "$ref": "#/$defs/ModelCatalog"
+        },
+        "permissions": {
+          "$ref": "#/$defs/PermissionSnapshot"
+        },
+        "policy_lease": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolicyLeaseSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quota": {
+          "$ref": "#/$defs/QuotaSnapshot"
+        },
+        "retouch_service": {
+          "$ref": "#/$defs/ModelServiceSnapshot",
+          "default": {
+            "reason": "managed_image_edit_not_configured",
+            "state": "unavailable"
+          }
+        },
+        "server_time": {
+          "format": "date-time",
+          "title": "Server Time",
+          "type": "string"
+        },
+        "share_service": {
+          "$ref": "#/$defs/ModelServiceSnapshot",
+          "default": {
+            "reason": "share_service_not_configured",
+            "state": "unavailable"
+          }
+        },
+        "storage_schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Storage Schema Version",
+          "type": "integer"
+        },
+        "update": {
+          "$ref": "#/$defs/UpdateSnapshot"
+        }
+      },
+      "required": [
+        "login",
+        "policy_lease",
+        "models",
+        "model_service",
+        "quota",
+        "permissions",
+        "connectors",
+        "update",
+        "csrf_token"
+      ],
+      "title": "BootstrapResponse",
+      "type": "object"
+    },
+    "CreateTurnRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_model_id": {
+          "default": "ecorex-chat",
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Agent Model Id",
+          "type": "string"
+        },
+        "client_message_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Client Message Id"
+        },
+        "explicit_tool_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Explicit Tool Ids",
+          "type": "array"
+        },
+        "image_model_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image Model Id"
+        },
+        "input": {
+          "minLength": 1,
+          "title": "Input",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "title": "CreateTurnRequest",
+      "type": "object"
+    },
+    "EventEnvelope": {
+      "additionalProperties": false,
+      "description": "One immutable fact in a thread's ordered event stream.",
+      "properties": {
+        "capability_snapshot_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Capability Snapshot Id"
+        },
+        "causation_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Causation Id"
+        },
+        "client_message_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Client Message Id"
+        },
+        "config_snapshot_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Config Snapshot Id"
+        },
+        "correlation_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Correlation Id"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "event_id": {
+          "minLength": 1,
+          "title": "Event Id",
+          "type": "string"
+        },
+        "event_type": {
+          "minLength": 1,
+          "title": "Event Type",
+          "type": "string"
+        },
+        "extension_snapshot_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Extension Snapshot Id"
+        },
+        "item_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Item Id"
+        },
+        "job_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Job Id"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
+        "permission_snapshot_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Permission Snapshot Id"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "thread_id": {
+          "minLength": 1,
+          "title": "Thread Id",
+          "type": "string"
+        },
+        "tool_call_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Call Id"
+        },
+        "trace_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trace Id"
+        },
+        "turn_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Turn Id"
+        }
+      },
+      "required": [
+        "event_id",
+        "seq",
+        "thread_id",
+        "event_type"
+      ],
+      "title": "EventEnvelope",
+      "type": "object"
+    },
+    "InteractionMutationResponse": {
+      "$defs": {
+        "ConnectorInteractionState": {
+          "enum": [
+            "authorization_required",
+            "awaiting_callback",
+            "verifying",
+            "reauthorization_required"
+          ],
+          "title": "ConnectorInteractionState",
+          "type": "string"
+        },
+        "InteractionAction": {
+          "additionalProperties": false,
+          "properties": {
+            "action_id": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Action Id",
+              "type": "string"
+            },
+            "action_type": {
+              "$ref": "#/$defs/InteractionActionType"
+            },
+            "label": {
+              "maxLength": 80,
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            },
+            "style": {
+              "$ref": "#/$defs/InteractionActionStyle",
+              "default": "secondary"
+            },
+            "submits_form": {
+              "default": false,
+              "title": "Submits Form",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "action_id",
+            "label",
+            "action_type"
+          ],
+          "title": "InteractionAction",
+          "type": "object"
+        },
+        "InteractionActionStyle": {
+          "enum": [
+            "primary",
+            "secondary",
+            "danger"
+          ],
+          "title": "InteractionActionStyle",
+          "type": "string"
+        },
+        "InteractionActionType": {
+          "enum": [
+            "submit",
+            "continue",
+            "cancel",
+            "allow",
+            "deny",
+            "retry",
+            "skip",
+            "accept",
+            "request_changes",
+            "connector_begin_login",
+            "connector_check_status"
+          ],
+          "title": "InteractionActionType",
+          "type": "string"
+        },
+        "InteractionChoice": {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "maxLength": 240,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Description"
+            },
+            "label": {
+              "maxLength": 80,
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            },
+            "option_id": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Option Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "option_id",
+            "label"
+          ],
+          "title": "InteractionChoice",
+          "type": "object"
+        },
+        "InteractionConnectorContext": {
+          "additionalProperties": false,
+          "properties": {
+            "connector_id": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Connector Id",
+              "type": "string"
+            },
+            "display_name": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Display Name",
+              "type": "string"
+            },
+            "required_action_ids": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 32,
+              "title": "Required Action Ids",
+              "type": "array"
+            },
+            "state": {
+              "$ref": "#/$defs/ConnectorInteractionState"
+            }
+          },
+          "required": [
+            "connector_id",
+            "display_name",
+            "state"
+          ],
+          "title": "InteractionConnectorContext",
+          "type": "object"
+        },
+        "InteractionContract": {
+          "additionalProperties": false,
+          "description": "Versioned, persistable UI/action contract owned by Runtime.\n\nThe contract deliberately cannot describe password controls or secret\nfields. Connector authentication is represented only by safe lifecycle\nactions and a backend-owned public status.",
+          "properties": {
+            "actions": {
+              "items": {
+                "$ref": "#/$defs/InteractionAction"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "title": "Actions",
+              "type": "array"
+            },
+            "connector": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/InteractionConnectorContext"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "fields": {
+              "items": {
+                "$ref": "#/$defs/InteractionFormField"
+              },
+              "maxItems": 16,
+              "title": "Fields",
+              "type": "array"
+            },
+            "schema_version": {
+              "const": 1,
+              "default": 1,
+              "title": "Schema Version",
+              "type": "integer"
+            },
+            "title": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "title",
+            "actions"
+          ],
+          "title": "InteractionContract",
+          "type": "object"
+        },
+        "InteractionFieldControl": {
+          "enum": [
+            "text",
+            "textarea",
+            "select",
+            "checkbox"
+          ],
+          "title": "InteractionFieldControl",
+          "type": "string"
+        },
+        "InteractionFormField": {
+          "additionalProperties": false,
+          "properties": {
+            "control": {
+              "$ref": "#/$defs/InteractionFieldControl"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "maxLength": 240,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Description"
+            },
+            "field_id": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Field Id",
+              "type": "string"
+            },
+            "label": {
+              "maxLength": 80,
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            },
+            "max_length": {
+              "default": 500,
+              "maximum": 4000,
+              "minimum": 1,
+              "title": "Max Length",
+              "type": "integer"
+            },
+            "min_length": {
+              "default": 0,
+              "maximum": 4000,
+              "minimum": 0,
+              "title": "Min Length",
+              "type": "integer"
+            },
+            "options": {
+              "items": {
+                "$ref": "#/$defs/InteractionChoice"
+              },
+              "maxItems": 100,
+              "title": "Options",
+              "type": "array"
+            },
+            "placeholder": {
+              "anyOf": [
+                {
+                  "maxLength": 160,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Placeholder"
+            },
+            "required": {
+              "default": false,
+              "title": "Required",
+              "type": "boolean"
+            },
+            "sensitive": {
+              "const": false,
+              "default": false,
+              "title": "Sensitive",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "field_id",
+            "label",
+            "control"
+          ],
+          "title": "InteractionFormField",
+          "type": "object"
+        },
+        "InteractionKind": {
+          "enum": [
+            "permission_approval",
+            "information",
+            "connector_login",
+            "conflict_resolution",
+            "artifact_review"
+          ],
+          "title": "InteractionKind",
+          "type": "string"
+        },
+        "InteractionProjection": {
+          "additionalProperties": false,
+          "description": "Safe interaction card returned to the WebUI.",
+          "properties": {
+            "contract": {
+              "$ref": "#/$defs/InteractionContract"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "expires_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expires At"
+            },
+            "interaction_id": {
+              "title": "Interaction Id",
+              "type": "string"
+            },
+            "job_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Job Id"
+            },
+            "kind": {
+              "$ref": "#/$defs/InteractionKind"
+            },
+            "options": {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "title": "Options",
+              "type": "array"
+            },
+            "prompt": {
+              "title": "Prompt",
+              "type": "string"
+            },
+            "response": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/InteractionResponse"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "response_client_request_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Response Client Request Id"
+            },
+            "status": {
+              "$ref": "#/$defs/InteractionStatus"
+            },
+            "thread_id": {
+              "title": "Thread Id",
+              "type": "string"
+            },
+            "turn_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Turn Id"
+            },
+            "updated_at": {
+              "format": "date-time",
+              "title": "Updated At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "interaction_id",
+            "kind",
+            "status",
+            "prompt",
+            "contract",
+            "thread_id",
+            "created_at",
+            "updated_at"
+          ],
+          "title": "InteractionProjection",
+          "type": "object"
+        },
+        "InteractionResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "action_id": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Action Id",
+              "type": "string"
+            },
+            "values": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              },
+              "maxProperties": 16,
+              "title": "Values",
+              "type": "object"
+            }
+          },
+          "required": [
+            "action_id"
+          ],
+          "title": "InteractionResponse",
+          "type": "object"
+        },
+        "InteractionStatus": {
+          "enum": [
+            "pending",
+            "resolved",
+            "cancelled",
+            "expired"
+          ],
+          "title": "InteractionStatus",
+          "type": "string"
+        },
+        "JobProjection": {
+          "additionalProperties": false,
+          "description": "Safe Web projection of a durable job.\n\nLease fencing data, checkpoints, idempotency keys, raw payloads, worker\nidentity, heartbeat details, and raw failures are Runtime-internal and can\nnever cross this contract.",
+          "properties": {
+            "attempt": {
+              "minimum": 0,
+              "title": "Attempt",
+              "type": "integer"
+            },
+            "available_at": {
+              "format": "date-time",
+              "title": "Available At",
+              "type": "string"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "deadline": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Deadline"
+            },
+            "job_id": {
+              "title": "Job Id",
+              "type": "string"
+            },
+            "kind": {
+              "title": "Kind",
+              "type": "string"
+            },
+            "max_attempts": {
+              "minimum": 1,
+              "title": "Max Attempts",
+              "type": "integer"
+            },
+            "priority": {
+              "default": 0,
+              "title": "Priority",
+              "type": "integer"
+            },
+            "reason_code": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reason Code"
+            },
+            "status": {
+              "$ref": "#/$defs/JobStatus"
+            },
+            "thread_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Thread Id"
+            },
+            "turn_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Turn Id"
+            },
+            "updated_at": {
+              "format": "date-time",
+              "title": "Updated At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "job_id",
+            "kind",
+            "status",
+            "attempt",
+            "max_attempts",
+            "available_at",
+            "created_at",
+            "updated_at"
+          ],
+          "title": "JobProjection",
+          "type": "object"
+        },
+        "JobStatus": {
+          "enum": [
+            "queued",
+            "leased",
+            "running",
+            "waiting_human",
+            "retry_scheduled",
+            "completed",
+            "failed",
+            "cancelled",
+            "dead_letter"
+          ],
+          "title": "JobStatus",
+          "type": "string"
+        },
+        "TurnProjection": {
+          "additionalProperties": false,
+          "properties": {
+            "agent_model_id": {
+              "title": "Agent Model Id",
+              "type": "string"
+            },
+            "client_message_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Client Message Id"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "image_model_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Image Model Id"
+            },
+            "inherited": {
+              "default": false,
+              "title": "Inherited",
+              "type": "boolean"
+            },
+            "input": {
+              "title": "Input",
+              "type": "string"
+            },
+            "metadata": {
+              "additionalProperties": true,
+              "title": "Metadata",
+              "type": "object"
+            },
+            "status": {
+              "$ref": "#/$defs/TurnStatus"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
+            },
+            "thread_id": {
+              "title": "Thread Id",
+              "type": "string"
+            },
+            "turn_id": {
+              "title": "Turn Id",
+              "type": "string"
+            },
+            "updated_at": {
+              "format": "date-time",
+              "title": "Updated At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "turn_id",
+            "thread_id",
+            "status",
+            "input",
+            "agent_model_id",
+            "created_at",
+            "updated_at"
+          ],
+          "title": "TurnProjection",
+          "type": "object"
+        },
+        "TurnStatus": {
+          "enum": [
+            "accepted",
+            "queued",
+            "preparing",
+            "model_requested",
+            "streaming",
+            "tool_pending",
+            "waiting_human",
+            "tool_running",
+            "retry_wait",
+            "finalizing",
+            "completed",
+            "failed",
+            "cancelled",
+            "interrupted",
+            "superseded"
+          ],
+          "title": "TurnStatus",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "interaction": {
+          "$ref": "#/$defs/InteractionProjection"
+        },
+        "job": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobProjection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "turn": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TurnProjection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "watermark": {
+          "minimum": 0,
+          "title": "Watermark",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "interaction",
+        "watermark"
+      ],
+      "title": "InteractionMutationResponse",
+      "type": "object"
+    },
+    "InteractionRequest": {
+      "$defs": {
+        "ConnectorInteractionState": {
+          "enum": [
+            "authorization_required",
+            "awaiting_callback",
+            "verifying",
+            "reauthorization_required"
+          ],
+          "title": "ConnectorInteractionState",
+          "type": "string"
+        },
+        "InteractionAction": {
+          "additionalProperties": false,
+          "properties": {
+            "action_id": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Action Id",
+              "type": "string"
+            },
+            "action_type": {
+              "$ref": "#/$defs/InteractionActionType"
+            },
+            "label": {
+              "maxLength": 80,
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            },
+            "style": {
+              "$ref": "#/$defs/InteractionActionStyle",
+              "default": "secondary"
+            },
+            "submits_form": {
+              "default": false,
+              "title": "Submits Form",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "action_id",
+            "label",
+            "action_type"
+          ],
+          "title": "InteractionAction",
+          "type": "object"
+        },
+        "InteractionActionStyle": {
+          "enum": [
+            "primary",
+            "secondary",
+            "danger"
+          ],
+          "title": "InteractionActionStyle",
+          "type": "string"
+        },
+        "InteractionActionType": {
+          "enum": [
+            "submit",
+            "continue",
+            "cancel",
+            "allow",
+            "deny",
+            "retry",
+            "skip",
+            "accept",
+            "request_changes",
+            "connector_begin_login",
+            "connector_check_status"
+          ],
+          "title": "InteractionActionType",
+          "type": "string"
+        },
+        "InteractionChoice": {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "maxLength": 240,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Description"
+            },
+            "label": {
+              "maxLength": 80,
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            },
+            "option_id": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Option Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "option_id",
+            "label"
+          ],
+          "title": "InteractionChoice",
+          "type": "object"
+        },
+        "InteractionConnectorContext": {
+          "additionalProperties": false,
+          "properties": {
+            "connector_id": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Connector Id",
+              "type": "string"
+            },
+            "display_name": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Display Name",
+              "type": "string"
+            },
+            "required_action_ids": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 32,
+              "title": "Required Action Ids",
+              "type": "array"
+            },
+            "state": {
+              "$ref": "#/$defs/ConnectorInteractionState"
+            }
+          },
+          "required": [
+            "connector_id",
+            "display_name",
+            "state"
+          ],
+          "title": "InteractionConnectorContext",
+          "type": "object"
+        },
+        "InteractionContract": {
+          "additionalProperties": false,
+          "description": "Versioned, persistable UI/action contract owned by Runtime.\n\nThe contract deliberately cannot describe password controls or secret\nfields. Connector authentication is represented only by safe lifecycle\nactions and a backend-owned public status.",
+          "properties": {
+            "actions": {
+              "items": {
+                "$ref": "#/$defs/InteractionAction"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "title": "Actions",
+              "type": "array"
+            },
+            "connector": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/InteractionConnectorContext"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "fields": {
+              "items": {
+                "$ref": "#/$defs/InteractionFormField"
+              },
+              "maxItems": 16,
+              "title": "Fields",
+              "type": "array"
+            },
+            "schema_version": {
+              "const": 1,
+              "default": 1,
+              "title": "Schema Version",
+              "type": "integer"
+            },
+            "title": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "title",
+            "actions"
+          ],
+          "title": "InteractionContract",
+          "type": "object"
+        },
+        "InteractionFieldControl": {
+          "enum": [
+            "text",
+            "textarea",
+            "select",
+            "checkbox"
+          ],
+          "title": "InteractionFieldControl",
+          "type": "string"
+        },
+        "InteractionFormField": {
+          "additionalProperties": false,
+          "properties": {
+            "control": {
+              "$ref": "#/$defs/InteractionFieldControl"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "maxLength": 240,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Description"
+            },
+            "field_id": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Field Id",
+              "type": "string"
+            },
+            "label": {
+              "maxLength": 80,
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            },
+            "max_length": {
+              "default": 500,
+              "maximum": 4000,
+              "minimum": 1,
+              "title": "Max Length",
+              "type": "integer"
+            },
+            "min_length": {
+              "default": 0,
+              "maximum": 4000,
+              "minimum": 0,
+              "title": "Min Length",
+              "type": "integer"
+            },
+            "options": {
+              "items": {
+                "$ref": "#/$defs/InteractionChoice"
+              },
+              "maxItems": 100,
+              "title": "Options",
+              "type": "array"
+            },
+            "placeholder": {
+              "anyOf": [
+                {
+                  "maxLength": 160,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Placeholder"
+            },
+            "required": {
+              "default": false,
+              "title": "Required",
+              "type": "boolean"
+            },
+            "sensitive": {
+              "const": false,
+              "default": false,
+              "title": "Sensitive",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "field_id",
+            "label",
+            "control"
+          ],
+          "title": "InteractionFormField",
+          "type": "object"
+        },
+        "InteractionKind": {
+          "enum": [
+            "permission_approval",
+            "information",
+            "connector_login",
+            "conflict_resolution",
+            "artifact_review"
+          ],
+          "title": "InteractionKind",
+          "type": "string"
+        },
+        "InteractionResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "action_id": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Action Id",
+              "type": "string"
+            },
+            "values": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              },
+              "maxProperties": 16,
+              "title": "Values",
+              "type": "object"
+            }
+          },
+          "required": [
+            "action_id"
+          ],
+          "title": "InteractionResponse",
+          "type": "object"
+        },
+        "InteractionStatus": {
+          "enum": [
+            "pending",
+            "resolved",
+            "cancelled",
+            "expired"
+          ],
+          "title": "InteractionStatus",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "contract": {
+          "$ref": "#/$defs/InteractionContract"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expires At"
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        },
+        "interaction_id": {
+          "title": "Interaction Id",
+          "type": "string"
+        },
+        "job_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Job Id"
+        },
+        "kind": {
+          "$ref": "#/$defs/InteractionKind"
+        },
+        "options": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Options",
+          "type": "array"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "response": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InteractionResponse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "response_client_request_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Response Client Request Id"
+        },
+        "status": {
+          "$ref": "#/$defs/InteractionStatus"
+        },
+        "thread_id": {
+          "title": "Thread Id",
+          "type": "string"
+        },
+        "turn_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Turn Id"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "interaction_id",
+        "kind",
+        "status",
+        "prompt",
+        "contract",
+        "thread_id",
+        "idempotency_key",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "InteractionRequest",
+      "type": "object"
+    },
+    "QueueTurnRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_model_id": {
+          "default": "ecorex-chat",
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Agent Model Id",
+          "type": "string"
+        },
+        "client_message_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Client Message Id"
+        },
+        "explicit_tool_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Explicit Tool Ids",
+          "type": "array"
+        },
+        "image_model_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image Model Id"
+        },
+        "input": {
+          "minLength": 1,
+          "title": "Input",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "title": "QueueTurnRequest",
+      "type": "object"
+    },
+    "ReplaceTurnRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_model_id": {
+          "default": "ecorex-chat",
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Agent Model Id",
+          "type": "string"
+        },
+        "client_message_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Client Message Id"
+        },
+        "explicit_tool_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Explicit Tool Ids",
+          "type": "array"
+        },
+        "image_model_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image Model Id"
+        },
+        "input": {
+          "minLength": 1,
+          "title": "Input",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "reason": {
+          "default": "replaced_by_user",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "title": "ReplaceTurnRequest",
+      "type": "object"
+    },
+    "RespondInteractionRequest": {
+      "$defs": {
+        "InteractionResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "action_id": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Action Id",
+              "type": "string"
+            },
+            "values": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              },
+              "maxProperties": 16,
+              "title": "Values",
+              "type": "object"
+            }
+          },
+          "required": [
+            "action_id"
+          ],
+          "title": "InteractionResponse",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "client_request_id": {
+          "maxLength": 192,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$",
+          "title": "Client Request Id",
+          "type": "string"
+        },
+        "response": {
+          "$ref": "#/$defs/InteractionResponse"
+        }
+      },
+      "required": [
+        "response",
+        "client_request_id"
+      ],
+      "title": "RespondInteractionRequest",
+      "type": "object"
+    },
+    "RetouchBody": {
+      "$defs": {
+        "RetouchAnnotationBody": {
+          "additionalProperties": false,
+          "properties": {
+            "annotation_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Annotation Id"
+            },
+            "instruction": {
+              "maxLength": 4000,
+              "minLength": 1,
+              "title": "Instruction",
+              "type": "string"
+            },
+            "kind": {
+              "maxLength": 32,
+              "minLength": 1,
+              "title": "Kind",
+              "type": "string"
+            },
+            "normalized_geometry": {
+              "additionalProperties": true,
+              "title": "Normalized Geometry",
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "normalized_geometry",
+            "instruction"
+          ],
+          "title": "RetouchAnnotationBody",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "agent_model_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Agent Model Id",
+          "type": "string"
+        },
+        "annotations": {
+          "items": {
+            "$ref": "#/$defs/RetouchAnnotationBody"
+          },
+          "maxItems": 100,
+          "title": "Annotations",
+          "type": "array"
+        },
+        "base_revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Base Revision Id",
+          "type": "string"
+        },
+        "client_request_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Client Request Id",
+          "type": "string"
+        },
+        "global_instruction": {
+          "default": "",
+          "maxLength": 8000,
+          "title": "Global Instruction",
+          "type": "string"
+        },
+        "image_model_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Image Model Id",
+          "type": "string"
+        },
+        "reference_artifact_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10,
+          "title": "Reference Artifact Ids",
+          "type": "array"
+        },
+        "selected_artifact_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "title": "Selected Artifact Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "base_revision_id",
+        "selected_artifact_ids",
+        "agent_model_id",
+        "image_model_id",
+        "client_request_id"
+      ],
+      "title": "RetouchBody",
+      "type": "object"
+    },
+    "RetouchWorkspaceSubmitBody": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_model_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Agent Model Id",
+          "type": "string"
+        },
+        "client_request_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Client Request Id",
+          "type": "string"
+        },
+        "expected_version": {
+          "minimum": 1,
+          "title": "Expected Version",
+          "type": "integer"
+        },
+        "image_model_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Image Model Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "expected_version",
+        "agent_model_id",
+        "image_model_id",
+        "client_request_id"
+      ],
+      "title": "RetouchWorkspaceSubmitBody",
+      "type": "object"
+    },
+    "SteerTurnRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_model_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent Model Id"
+        },
+        "client_message_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Client Message Id"
+        },
+        "explicit_tool_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Explicit Tool Ids",
+          "type": "array"
+        },
+        "image_model_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image Model Id"
+        },
+        "input": {
+          "minLength": 1,
+          "title": "Input",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "title": "SteerTurnRequest",
+      "type": "object"
+    },
+    "ThreadProjectionResponse": {
+      "$defs": {
+        "ConnectorInteractionState": {
+          "enum": [
+            "authorization_required",
+            "awaiting_callback",
+            "verifying",
+            "reauthorization_required"
+          ],
+          "title": "ConnectorInteractionState",
+          "type": "string"
+        },
+        "InteractionAction": {
+          "additionalProperties": false,
+          "properties": {
+            "action_id": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Action Id",
+              "type": "string"
+            },
+            "action_type": {
+              "$ref": "#/$defs/InteractionActionType"
+            },
+            "label": {
+              "maxLength": 80,
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            },
+            "style": {
+              "$ref": "#/$defs/InteractionActionStyle",
+              "default": "secondary"
+            },
+            "submits_form": {
+              "default": false,
+              "title": "Submits Form",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "action_id",
+            "label",
+            "action_type"
+          ],
+          "title": "InteractionAction",
+          "type": "object"
+        },
+        "InteractionActionStyle": {
+          "enum": [
+            "primary",
+            "secondary",
+            "danger"
+          ],
+          "title": "InteractionActionStyle",
+          "type": "string"
+        },
+        "InteractionActionType": {
+          "enum": [
+            "submit",
+            "continue",
+            "cancel",
+            "allow",
+            "deny",
+            "retry",
+            "skip",
+            "accept",
+            "request_changes",
+            "connector_begin_login",
+            "connector_check_status"
+          ],
+          "title": "InteractionActionType",
+          "type": "string"
+        },
+        "InteractionChoice": {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "maxLength": 240,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Description"
+            },
+            "label": {
+              "maxLength": 80,
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            },
+            "option_id": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Option Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "option_id",
+            "label"
+          ],
+          "title": "InteractionChoice",
+          "type": "object"
+        },
+        "InteractionConnectorContext": {
+          "additionalProperties": false,
+          "properties": {
+            "connector_id": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Connector Id",
+              "type": "string"
+            },
+            "display_name": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Display Name",
+              "type": "string"
+            },
+            "required_action_ids": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 32,
+              "title": "Required Action Ids",
+              "type": "array"
+            },
+            "state": {
+              "$ref": "#/$defs/ConnectorInteractionState"
+            }
+          },
+          "required": [
+            "connector_id",
+            "display_name",
+            "state"
+          ],
+          "title": "InteractionConnectorContext",
+          "type": "object"
+        },
+        "InteractionContract": {
+          "additionalProperties": false,
+          "description": "Versioned, persistable UI/action contract owned by Runtime.\n\nThe contract deliberately cannot describe password controls or secret\nfields. Connector authentication is represented only by safe lifecycle\nactions and a backend-owned public status.",
+          "properties": {
+            "actions": {
+              "items": {
+                "$ref": "#/$defs/InteractionAction"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "title": "Actions",
+              "type": "array"
+            },
+            "connector": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/InteractionConnectorContext"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "fields": {
+              "items": {
+                "$ref": "#/$defs/InteractionFormField"
+              },
+              "maxItems": 16,
+              "title": "Fields",
+              "type": "array"
+            },
+            "schema_version": {
+              "const": 1,
+              "default": 1,
+              "title": "Schema Version",
+              "type": "integer"
+            },
+            "title": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "title",
+            "actions"
+          ],
+          "title": "InteractionContract",
+          "type": "object"
+        },
+        "InteractionFieldControl": {
+          "enum": [
+            "text",
+            "textarea",
+            "select",
+            "checkbox"
+          ],
+          "title": "InteractionFieldControl",
+          "type": "string"
+        },
+        "InteractionFormField": {
+          "additionalProperties": false,
+          "properties": {
+            "control": {
+              "$ref": "#/$defs/InteractionFieldControl"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "maxLength": 240,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Description"
+            },
+            "field_id": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Field Id",
+              "type": "string"
+            },
+            "label": {
+              "maxLength": 80,
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            },
+            "max_length": {
+              "default": 500,
+              "maximum": 4000,
+              "minimum": 1,
+              "title": "Max Length",
+              "type": "integer"
+            },
+            "min_length": {
+              "default": 0,
+              "maximum": 4000,
+              "minimum": 0,
+              "title": "Min Length",
+              "type": "integer"
+            },
+            "options": {
+              "items": {
+                "$ref": "#/$defs/InteractionChoice"
+              },
+              "maxItems": 100,
+              "title": "Options",
+              "type": "array"
+            },
+            "placeholder": {
+              "anyOf": [
+                {
+                  "maxLength": 160,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Placeholder"
+            },
+            "required": {
+              "default": false,
+              "title": "Required",
+              "type": "boolean"
+            },
+            "sensitive": {
+              "const": false,
+              "default": false,
+              "title": "Sensitive",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "field_id",
+            "label",
+            "control"
+          ],
+          "title": "InteractionFormField",
+          "type": "object"
+        },
+        "InteractionKind": {
+          "enum": [
+            "permission_approval",
+            "information",
+            "connector_login",
+            "conflict_resolution",
+            "artifact_review"
+          ],
+          "title": "InteractionKind",
+          "type": "string"
+        },
+        "InteractionProjection": {
+          "additionalProperties": false,
+          "description": "Safe interaction card returned to the WebUI.",
+          "properties": {
+            "contract": {
+              "$ref": "#/$defs/InteractionContract"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "expires_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expires At"
+            },
+            "interaction_id": {
+              "title": "Interaction Id",
+              "type": "string"
+            },
+            "job_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Job Id"
+            },
+            "kind": {
+              "$ref": "#/$defs/InteractionKind"
+            },
+            "options": {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "title": "Options",
+              "type": "array"
+            },
+            "prompt": {
+              "title": "Prompt",
+              "type": "string"
+            },
+            "response": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/InteractionResponse"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "response_client_request_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Response Client Request Id"
+            },
+            "status": {
+              "$ref": "#/$defs/InteractionStatus"
+            },
+            "thread_id": {
+              "title": "Thread Id",
+              "type": "string"
+            },
+            "turn_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Turn Id"
+            },
+            "updated_at": {
+              "format": "date-time",
+              "title": "Updated At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "interaction_id",
+            "kind",
+            "status",
+            "prompt",
+            "contract",
+            "thread_id",
+            "created_at",
+            "updated_at"
+          ],
+          "title": "InteractionProjection",
+          "type": "object"
+        },
+        "InteractionResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "action_id": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Action Id",
+              "type": "string"
+            },
+            "values": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              },
+              "maxProperties": 16,
+              "title": "Values",
+              "type": "object"
+            }
+          },
+          "required": [
+            "action_id"
+          ],
+          "title": "InteractionResponse",
+          "type": "object"
+        },
+        "InteractionStatus": {
+          "enum": [
+            "pending",
+            "resolved",
+            "cancelled",
+            "expired"
+          ],
+          "title": "InteractionStatus",
+          "type": "string"
+        },
+        "ItemKind": {
+          "enum": [
+            "message",
+            "reasoning",
+            "tool_call",
+            "artifact",
+            "interaction",
+            "checkpoint"
+          ],
+          "title": "ItemKind",
+          "type": "string"
+        },
+        "ItemProjection": {
+          "additionalProperties": false,
+          "properties": {
+            "content": {
+              "additionalProperties": true,
+              "title": "Content",
+              "type": "object"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "inherited": {
+              "default": false,
+              "title": "Inherited",
+              "type": "boolean"
+            },
+            "item_id": {
+              "title": "Item Id",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/ItemKind"
+            },
+            "status": {
+              "$ref": "#/$defs/ItemStatus"
+            },
+            "thread_id": {
+              "title": "Thread Id",
+              "type": "string"
+            },
+            "turn_id": {
+              "title": "Turn Id",
+              "type": "string"
+            },
+            "updated_at": {
+              "format": "date-time",
+              "title": "Updated At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item_id",
+            "thread_id",
+            "turn_id",
+            "kind",
+            "status",
+            "created_at",
+            "updated_at"
+          ],
+          "title": "ItemProjection",
+          "type": "object"
+        },
+        "ItemStatus": {
+          "enum": [
+            "created",
+            "in_progress",
+            "waiting_human",
+            "completed",
+            "failed",
+            "cancelled"
+          ],
+          "title": "ItemStatus",
+          "type": "string"
+        },
+        "JobProjection": {
+          "additionalProperties": false,
+          "description": "Safe Web projection of a durable job.\n\nLease fencing data, checkpoints, idempotency keys, raw payloads, worker\nidentity, heartbeat details, and raw failures are Runtime-internal and can\nnever cross this contract.",
+          "properties": {
+            "attempt": {
+              "minimum": 0,
+              "title": "Attempt",
+              "type": "integer"
+            },
+            "available_at": {
+              "format": "date-time",
+              "title": "Available At",
+              "type": "string"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "deadline": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Deadline"
+            },
+            "job_id": {
+              "title": "Job Id",
+              "type": "string"
+            },
+            "kind": {
+              "title": "Kind",
+              "type": "string"
+            },
+            "max_attempts": {
+              "minimum": 1,
+              "title": "Max Attempts",
+              "type": "integer"
+            },
+            "priority": {
+              "default": 0,
+              "title": "Priority",
+              "type": "integer"
+            },
+            "reason_code": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reason Code"
+            },
+            "status": {
+              "$ref": "#/$defs/JobStatus"
+            },
+            "thread_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Thread Id"
+            },
+            "turn_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Turn Id"
+            },
+            "updated_at": {
+              "format": "date-time",
+              "title": "Updated At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "job_id",
+            "kind",
+            "status",
+            "attempt",
+            "max_attempts",
+            "available_at",
+            "created_at",
+            "updated_at"
+          ],
+          "title": "JobProjection",
+          "type": "object"
+        },
+        "JobStatus": {
+          "enum": [
+            "queued",
+            "leased",
+            "running",
+            "waiting_human",
+            "retry_scheduled",
+            "completed",
+            "failed",
+            "cancelled",
+            "dead_letter"
+          ],
+          "title": "JobStatus",
+          "type": "string"
+        },
+        "ThreadProjection": {
+          "additionalProperties": false,
+          "properties": {
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "forked_from_seq": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Forked From Seq"
+            },
+            "forked_from_thread_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Forked From Thread Id"
+            },
+            "forked_from_turn_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Forked From Turn Id"
+            },
+            "metadata": {
+              "additionalProperties": true,
+              "title": "Metadata",
+              "type": "object"
+            },
+            "status": {
+              "$ref": "#/$defs/ThreadStatus"
+            },
+            "thread_id": {
+              "title": "Thread Id",
+              "type": "string"
+            },
+            "title": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Title"
+            },
+            "updated_at": {
+              "format": "date-time",
+              "title": "Updated At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "thread_id",
+            "status",
+            "created_at",
+            "updated_at"
+          ],
+          "title": "ThreadProjection",
+          "type": "object"
+        },
+        "ThreadStatus": {
+          "enum": [
+            "active",
+            "archived"
+          ],
+          "title": "ThreadStatus",
+          "type": "string"
+        },
+        "TurnProjection": {
+          "additionalProperties": false,
+          "properties": {
+            "agent_model_id": {
+              "title": "Agent Model Id",
+              "type": "string"
+            },
+            "client_message_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Client Message Id"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "image_model_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Image Model Id"
+            },
+            "inherited": {
+              "default": false,
+              "title": "Inherited",
+              "type": "boolean"
+            },
+            "input": {
+              "title": "Input",
+              "type": "string"
+            },
+            "metadata": {
+              "additionalProperties": true,
+              "title": "Metadata",
+              "type": "object"
+            },
+            "status": {
+              "$ref": "#/$defs/TurnStatus"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
+            },
+            "thread_id": {
+              "title": "Thread Id",
+              "type": "string"
+            },
+            "turn_id": {
+              "title": "Turn Id",
+              "type": "string"
+            },
+            "updated_at": {
+              "format": "date-time",
+              "title": "Updated At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "turn_id",
+            "thread_id",
+            "status",
+            "input",
+            "agent_model_id",
+            "created_at",
+            "updated_at"
+          ],
+          "title": "TurnProjection",
+          "type": "object"
+        },
+        "TurnStatus": {
+          "enum": [
+            "accepted",
+            "queued",
+            "preparing",
+            "model_requested",
+            "streaming",
+            "tool_pending",
+            "waiting_human",
+            "tool_running",
+            "retry_wait",
+            "finalizing",
+            "completed",
+            "failed",
+            "cancelled",
+            "interrupted",
+            "superseded"
+          ],
+          "title": "TurnStatus",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "interactions": {
+          "items": {
+            "$ref": "#/$defs/InteractionProjection"
+          },
+          "title": "Interactions",
+          "type": "array"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/ItemProjection"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "jobs": {
+          "items": {
+            "$ref": "#/$defs/JobProjection"
+          },
+          "title": "Jobs",
+          "type": "array"
+        },
+        "thread": {
+          "$ref": "#/$defs/ThreadProjection"
+        },
+        "turns": {
+          "items": {
+            "$ref": "#/$defs/TurnProjection"
+          },
+          "title": "Turns",
+          "type": "array"
+        },
+        "watermark": {
+          "title": "Watermark",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "thread",
+        "turns",
+        "items",
+        "jobs",
+        "interactions",
+        "watermark"
+      ],
+      "title": "ThreadProjectionResponse",
+      "type": "object"
+    },
+    "TurnMutationResponse": {
+      "$defs": {
+        "JobProjection": {
+          "additionalProperties": false,
+          "description": "Safe Web projection of a durable job.\n\nLease fencing data, checkpoints, idempotency keys, raw payloads, worker\nidentity, heartbeat details, and raw failures are Runtime-internal and can\nnever cross this contract.",
+          "properties": {
+            "attempt": {
+              "minimum": 0,
+              "title": "Attempt",
+              "type": "integer"
+            },
+            "available_at": {
+              "format": "date-time",
+              "title": "Available At",
+              "type": "string"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "deadline": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Deadline"
+            },
+            "job_id": {
+              "title": "Job Id",
+              "type": "string"
+            },
+            "kind": {
+              "title": "Kind",
+              "type": "string"
+            },
+            "max_attempts": {
+              "minimum": 1,
+              "title": "Max Attempts",
+              "type": "integer"
+            },
+            "priority": {
+              "default": 0,
+              "title": "Priority",
+              "type": "integer"
+            },
+            "reason_code": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reason Code"
+            },
+            "status": {
+              "$ref": "#/$defs/JobStatus"
+            },
+            "thread_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Thread Id"
+            },
+            "turn_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Turn Id"
+            },
+            "updated_at": {
+              "format": "date-time",
+              "title": "Updated At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "job_id",
+            "kind",
+            "status",
+            "attempt",
+            "max_attempts",
+            "available_at",
+            "created_at",
+            "updated_at"
+          ],
+          "title": "JobProjection",
+          "type": "object"
+        },
+        "JobStatus": {
+          "enum": [
+            "queued",
+            "leased",
+            "running",
+            "waiting_human",
+            "retry_scheduled",
+            "completed",
+            "failed",
+            "cancelled",
+            "dead_letter"
+          ],
+          "title": "JobStatus",
+          "type": "string"
+        },
+        "TurnProjection": {
+          "additionalProperties": false,
+          "properties": {
+            "agent_model_id": {
+              "title": "Agent Model Id",
+              "type": "string"
+            },
+            "client_message_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Client Message Id"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "image_model_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Image Model Id"
+            },
+            "inherited": {
+              "default": false,
+              "title": "Inherited",
+              "type": "boolean"
+            },
+            "input": {
+              "title": "Input",
+              "type": "string"
+            },
+            "metadata": {
+              "additionalProperties": true,
+              "title": "Metadata",
+              "type": "object"
+            },
+            "status": {
+              "$ref": "#/$defs/TurnStatus"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
+            },
+            "thread_id": {
+              "title": "Thread Id",
+              "type": "string"
+            },
+            "turn_id": {
+              "title": "Turn Id",
+              "type": "string"
+            },
+            "updated_at": {
+              "format": "date-time",
+              "title": "Updated At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "turn_id",
+            "thread_id",
+            "status",
+            "input",
+            "agent_model_id",
+            "created_at",
+            "updated_at"
+          ],
+          "title": "TurnProjection",
+          "type": "object"
+        },
+        "TurnStatus": {
+          "enum": [
+            "accepted",
+            "queued",
+            "preparing",
+            "model_requested",
+            "streaming",
+            "tool_pending",
+            "waiting_human",
+            "tool_running",
+            "retry_wait",
+            "finalizing",
+            "completed",
+            "failed",
+            "cancelled",
+            "interrupted",
+            "superseded"
+          ],
+          "title": "TurnStatus",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "job": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobProjection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "turn": {
+          "$ref": "#/$defs/TurnProjection"
+        },
+        "watermark": {
+          "title": "Watermark",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "turn",
+        "watermark"
+      ],
+      "title": "TurnMutationResponse",
+      "type": "object"
+    },
+    "TurnProjection": {
+      "$defs": {
+        "TurnStatus": {
+          "enum": [
+            "accepted",
+            "queued",
+            "preparing",
+            "model_requested",
+            "streaming",
+            "tool_pending",
+            "waiting_human",
+            "tool_running",
+            "retry_wait",
+            "finalizing",
+            "completed",
+            "failed",
+            "cancelled",
+            "interrupted",
+            "superseded"
+          ],
+          "title": "TurnStatus",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "agent_model_id": {
+          "title": "Agent Model Id",
+          "type": "string"
+        },
+        "client_message_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Client Message Id"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "image_model_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image Model Id"
+        },
+        "inherited": {
+          "default": false,
+          "title": "Inherited",
+          "type": "boolean"
+        },
+        "input": {
+          "title": "Input",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "status": {
+          "$ref": "#/$defs/TurnStatus"
+        },
+        "terminal_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Terminal Reason"
+        },
+        "thread_id": {
+          "title": "Thread Id",
+          "type": "string"
+        },
+        "turn_id": {
+          "title": "Turn Id",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn_id",
+        "thread_id",
+        "status",
+        "input",
+        "agent_model_id",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "TurnProjection",
+      "type": "object"
+    }
+  },
+  "document_type": "ecorex.web-runtime-contracts",
+  "public_artifact_policy": {
+    "families": [
+      "document",
+      "spreadsheet",
+      "presentation",
+      "pdf",
+      "image",
+      "audio",
+      "video",
+      "data_export",
+      "web_report",
+      "archive",
+      "cloud_link"
+    ],
+    "visibilities": [
+      "primary",
+      "secondary"
+    ]
+  },
+  "schema_version": 1,
+  "sources": {
+    "ArtifactProjection": "ecorex.artifacts.models.ArtifactProjection",
+    "BootstrapResponse": "ecorex.protocol.BootstrapResponse",
+    "CreateTurnRequest": "ecorex.protocol.CreateTurnRequest",
+    "EventEnvelope": "ecorex.protocol.EventEnvelope",
+    "InteractionMutationResponse": "ecorex.protocol.InteractionMutationResponse",
+    "InteractionRequest": "ecorex.protocol.InteractionRequest",
+    "QueueTurnRequest": "ecorex.protocol.QueueTurnRequest",
+    "ReplaceTurnRequest": "ecorex.protocol.ReplaceTurnRequest",
+    "RespondInteractionRequest": "ecorex.protocol.RespondInteractionRequest",
+    "RetouchBody": "ecorex.artifacts.api.RetouchBody",
+    "RetouchWorkspaceSubmitBody": "ecorex.artifacts.api.RetouchWorkspaceSubmitBody",
+    "SteerTurnRequest": "ecorex.protocol.SteerTurnRequest",
+    "ThreadProjectionResponse": "ecorex.protocol.ThreadProjectionResponse",
+    "TurnMutationResponse": "ecorex.protocol.TurnMutationResponse",
+    "TurnProjection": "ecorex.protocol.TurnProjection"
+  }
+}

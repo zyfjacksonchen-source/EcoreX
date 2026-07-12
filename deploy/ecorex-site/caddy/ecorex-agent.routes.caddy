@@ -1,61 +1,34 @@
-# Import this file inside the existing www.ecoreai.cn site block.
-# Replace <replace-with-caddy-hash> with: caddy hash-password
+# EcoreX v1 public Bootstrap site + release Control Plane Web console.
+# Import this file inside the HTTPS site block. The Control Plane listens only
+# on loopback; its own bearer authorization remains authoritative.
+
+@ecorex_public_mutable path /ecorex-agent/ /ecorex-agent/index.html /ecorex-agent/public-bootstrap-index.json
+header @ecorex_public_mutable Cache-Control "no-store"
+header @ecorex_public_mutable X-Content-Type-Options "nosniff"
+header @ecorex_public_mutable Referrer-Policy "no-referrer"
+header @ecorex_public_mutable Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self' https:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+
+@ecorex_public_hashed path_regexp ecorex_public_hashed ^/ecorex-agent/(?:(?:site|styles)\.[0-9a-f]{12}\.(?:js|css)|assets/[A-Za-z0-9._-]+\.[0-9a-f]{12}\.(?:png|svg|webp|woff2))$
+header @ecorex_public_hashed Cache-Control "public, max-age=31536000, immutable"
+header @ecorex_public_hashed X-Content-Type-Options "nosniff"
+
+@ecorex_release_assets path /ecorex-agent/downloads/*
+header @ecorex_release_assets Cache-Control "public, max-age=31536000, immutable"
 
 redir /ecorex-agent /ecorex-agent/
-redir /ecorex-agent/admin /ecorex-agent/admin/
-redir /ecorex-agent/usage-panel /ecorex-agent/usage-panel/
-redir /ecorex-agent/app /ecorex-agent/app/
+redir /ecorex-agent/admin /admin/
+redir /ecorex-agent/admin/* /admin/
+redir /admin /admin/
 
-handle /ecorex-agent/usage-panel/api/* {
+# The v1 Control Plane serves the content-addressed administrator WebUI at
+# /admin and owns every /api/v1/admin mutation. There is no parallel static
+# v0.3 management console or public proxy to the user's local Agent Runtime.
+handle /admin* {
     reverse_proxy 127.0.0.1:18084
 }
 
-handle /ecorex-agent/admin/api/* {
+handle /api/v1/admin* {
     reverse_proxy 127.0.0.1:18084
-}
-
-handle /ecorex-agent/api/admin/* {
-    reverse_proxy 127.0.0.1:18084
-}
-
-handle /ecorex-agent/client/* {
-    reverse_proxy 127.0.0.1:18084
-}
-
-handle /client/session-shares/* {
-    reverse_proxy 127.0.0.1:18084
-}
-
-@ecorex_web_runtime {
-    path /ecorex-agent/app/* /ecorex-agent/auth/* /ecorex-agent/message /ecorex-agent/upload /ecorex-agent/uploads/* /ecorex-agent/api/* /ecorex-agent/poll /ecorex-agent/stream /ecorex-agent/cancel /ecorex-agent/chat /ecorex-agent/config /ecorex-agent/assets/*
-}
-handle @ecorex_web_runtime {
-    uri strip_prefix /ecorex-agent
-    reverse_proxy 127.0.0.1:9909 {
-        flush_interval -1
-        header_down X-Accel-Buffering no
-        transport http {
-            dial_timeout 10s
-            read_timeout 1200s
-            write_timeout 1200s
-        }
-    }
-}
-
-handle_path /ecorex-agent/admin/* {
-    basic_auth {
-        admin <replace-with-caddy-hash>
-    }
-    root * /srv/ecorex-agent-download/current/admin
-    file_server
-}
-
-handle_path /ecorex-agent/usage-panel/* {
-    basic_auth {
-        admin <replace-with-caddy-hash>
-    }
-    root * /srv/ecorex-agent-download/current/admin
-    file_server
 }
 
 handle_path /ecorex-agent/* {

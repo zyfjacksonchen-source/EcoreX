@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="referrer" content="no-referrer">
+    <title>EcoreX 发布控制台</title>
+    <link rel="stylesheet" href="__ADMIN_CSS_URL__" integrity="__ADMIN_CSS_SRI__" crossorigin="anonymous">
+    <script src="__ADMIN_JS_URL__" integrity="__ADMIN_JS_SRI__" crossorigin="anonymous" defer></script>
+  </head>
+  <body>
+    <div class="admin-shell">
+      <aside class="admin-rail" aria-label="发布控制台导航">
+        <div class="brand-row">
+          <span class="brand-mark" aria-hidden="true">E</span>
+          <div>
+            <strong>EcoreX</strong>
+            <span>发布控制台</span>
+          </div>
+        </div>
+        <nav class="section-nav">
+          <a href="#candidate">候选与门禁</a>
+          <a href="#rollout">灰度发布</a>
+          <a href="#rollback">紧急回滚</a>
+          <a href="#channels">通道止损</a>
+          <a href="#distribution">客户端分布</a>
+        </nav>
+        <div class="session-state">
+          <span>管理员会话</span>
+          <strong id="session-label">未连接</strong>
+          <small>令牌仅保存在当前页面内存中。</small>
+        </div>
+      </aside>
+
+      <main class="workspace" id="main-content">
+        <header class="workspace-header">
+          <div class="workspace-title">
+            <h1>发布与灰度</h1>
+            <p>验证候选，控制激活范围，并在异常时停止通道。</p>
+          </div>
+          <form class="auth-form" id="auth-form" novalidate>
+            <label for="admin-token">管理员令牌</label>
+            <div class="auth-controls">
+              <input
+                id="admin-token"
+                type="password"
+                autocomplete="off"
+                aria-describedby="token-help"
+                spellcheck="false"
+                minlength="24"
+                maxlength="4096"
+                placeholder="粘贴本次会话令牌"
+                required
+              >
+              <button class="button primary" id="connect-button" type="submit">连接控制面</button>
+              <button class="button" id="refresh-state-button" type="button" disabled>刷新服务端状态</button>
+              <button class="button" id="clear-token-button" type="button" disabled>清除令牌</button>
+            </div>
+            <span class="field-help" id="token-help">不会写入 URL、Cookie 或浏览器存储；重新连接后从服务端恢复候选、灰度、止损与客户端分布。</span>
+          </form>
+        </header>
+
+        <div class="message" id="global-message" role="status" aria-live="polite" hidden>
+          <span id="global-message-text"></span>
+          <button class="text-button" id="dismiss-message-button" type="button">关闭</button>
+        </div>
+
+        <div class="workspace-content">
+          <section class="work-section" id="candidate" aria-labelledby="candidate-title">
+            <header class="section-heading">
+              <div>
+                <h2 id="candidate-title">候选与发布门禁</h2>
+                <p>导入签名 Manifest 后，由 API 返回候选状态及 16 项发布门禁。</p>
+              </div>
+              <span class="status-badge" id="candidate-status">尚未创建</span>
+            </header>
+
+            <form class="manifest-form" id="manifest-form" novalidate>
+              <label class="file-field" for="manifest-file">
+                <span>Release Manifest</span>
+                <input id="manifest-file" type="file" accept=".json,application/json" aria-describedby="manifest-help" required>
+              </label>
+              <button class="button primary" id="create-candidate-button" type="submit" disabled>创建候选</button>
+            </form>
+            <p class="field-help" id="manifest-help">仅接受不超过 16 MiB 的 JSON；文件只在本地解析后提交给 Control Plane。</p>
+
+            <dl class="projection-list" id="candidate-projection" hidden>
+              <div><dt>Release ID</dt><dd id="candidate-release-id">—</dd></div>
+              <div><dt>版本</dt><dd id="candidate-version">—</dd></div>
+              <div><dt>通道</dt><dd id="candidate-channel">—</dd></div>
+              <div><dt>Build digest</dt><dd id="candidate-digest">—</dd></div>
+            </dl>
+
+            <div class="gate-region" id="gate-region" hidden>
+              <div class="subsection-heading">
+                <div>
+                  <h3>门禁证据</h3>
+                  <p id="gate-summary">等待 API 返回门禁状态。</p>
+                </div>
+                <button class="button primary" id="publish-button" type="button" disabled>发布候选</button>
+              </div>
+              <div class="table-scroll" tabindex="0" aria-label="发布门禁表格">
+                <table>
+                  <thead>
+                    <tr>
+                      <th scope="col">门禁</th>
+                      <th scope="col">当前状态</th>
+                      <th scope="col">记录结果</th>
+                      <th scope="col">证据</th>
+                      <th scope="col">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="gate-table-body"></tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <section class="work-section" id="rollout" aria-labelledby="rollout-title">
+            <header class="section-heading">
+              <div>
+                <h2 id="rollout-title">灰度目标</h2>
+                <p>比例与组织、账号目标一并提交；后端决定最终可激活状态。</p>
+              </div>
+              <span class="status-badge" id="rollout-status">尚未创建</span>
+            </header>
+
+            <form class="rollout-form" id="rollout-form" novalidate>
+              <label for="rollout-release-id">
+                <span>Release ID</span>
+                <input id="rollout-release-id" type="text" readonly required>
+              </label>
+              <label for="rollout-percentage">
+                <span>灰度比例</span>
+                <input id="rollout-percentage" type="number" min="1" max="100" value="1" required>
+              </label>
+              <label for="minimum-version">
+                <span>最低兼容版本</span>
+                <input id="minimum-version" type="text" maxlength="128" placeholder="可选，例如 0.9.0">
+              </label>
+              <label for="target-organizations">
+                <span>组织 ID</span>
+                <textarea id="target-organizations" rows="3" placeholder="每行一个，最多 500 个"></textarea>
+              </label>
+              <label for="target-accounts">
+                <span>账号 ID</span>
+                <textarea id="target-accounts" rows="3" placeholder="每行一个，最多 500 个"></textarea>
+              </label>
+              <button class="button primary rollout-submit" id="create-rollout-button" type="submit" disabled>创建灰度</button>
+            </form>
+
+            <dl class="projection-list" id="rollout-projection" hidden>
+              <div><dt>Rollout ID</dt><dd id="rollout-id">—</dd></div>
+              <div><dt>Release ID</dt><dd id="rollout-release">—</dd></div>
+              <div><dt>比例</dt><dd id="rollout-percent">—</dd></div>
+              <div><dt>创建时间</dt><dd id="rollout-created-at">—</dd></div>
+            </dl>
+            <div class="action-row" id="rollout-actions" hidden>
+              <button class="button primary" data-rollout-action="activate" type="button">激活灰度</button>
+              <button class="button" data-rollout-action="pause" type="button">暂停灰度</button>
+              <button class="button danger" data-rollout-action="halt" type="button">终止灰度</button>
+            </div>
+          </section>
+
+          <section class="work-section" id="rollback" aria-labelledby="rollback-title">
+            <header class="section-heading">
+              <div>
+                <h2 id="rollback-title">紧急回滚</h2>
+                <p>只允许回滚到已发布、曾真实灰度且平台矩阵兼容的旧版本；创建后仍需显式激活。</p>
+              </div>
+              <span class="status-badge" id="rollback-status">尚未创建</span>
+            </header>
+
+            <form class="rollout-form" id="rollback-form" novalidate>
+              <label for="rollback-source-release-id">
+                <span>当前 Release ID</span>
+                <input id="rollback-source-release-id" type="text" maxlength="128" placeholder="例如 release-1.0.2-stable" required>
+              </label>
+              <label for="rollback-target-release-id">
+                <span>已知良好目标</span>
+                <input id="rollback-target-release-id" type="text" maxlength="128" placeholder="例如 release-1.0.1-stable" required>
+              </label>
+              <label for="rollback-percentage">
+                <span>回滚比例</span>
+                <input id="rollback-percentage" type="number" min="1" max="100" value="1" required>
+              </label>
+              <label for="rollback-ttl">
+                <span>授权有效期（秒）</span>
+                <input id="rollback-ttl" type="number" min="60" max="900" value="300" required>
+              </label>
+              <label for="rollback-organizations">
+                <span>组织 ID</span>
+                <textarea id="rollback-organizations" rows="3" placeholder="每行一个，最多 500 个"></textarea>
+              </label>
+              <label for="rollback-accounts">
+                <span>账号 ID</span>
+                <textarea id="rollback-accounts" rows="3" placeholder="每行一个，最多 500 个"></textarea>
+              </label>
+              <button class="button danger rollout-submit" id="create-rollback-button" type="submit" disabled>创建回滚</button>
+            </form>
+
+            <dl class="projection-list" id="rollback-projection" hidden>
+              <div><dt>Rollback ID</dt><dd id="rollback-id">—</dd></div>
+              <div><dt>当前版本</dt><dd id="rollback-source">—</dd></div>
+              <div><dt>目标版本</dt><dd id="rollback-target">—</dd></div>
+              <div><dt>比例</dt><dd id="rollback-percent">—</dd></div>
+              <div><dt>授权 TTL</dt><dd id="rollback-auth-ttl">—</dd></div>
+            </dl>
+            <div class="action-row" id="rollback-actions" hidden>
+              <button class="button danger" data-rollback-action="activate" type="button">激活回滚</button>
+              <button class="button" data-rollback-action="pause" type="button">暂停回滚</button>
+              <button class="button" data-rollback-action="halt" type="button">终止回滚</button>
+            </div>
+          </section>
+
+          <section class="work-section" id="channels" aria-labelledby="channels-title">
+            <header class="section-heading">
+              <div>
+                <h2 id="channels-title">通道止损</h2>
+                <p>Kill switch 会停止该通道的活跃灰度；清除后仍由后端重新校验激活条件。</p>
+              </div>
+            </header>
+            <div class="table-scroll" tabindex="0" aria-label="通道止损表格">
+              <table>
+                <thead>
+                  <tr><th scope="col">通道</th><th scope="col">API 返回状态</th><th scope="col">操作</th></tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row">canary</th>
+                    <td id="canary-kill-state">尚未返回</td>
+                    <td class="table-actions">
+                      <button class="button danger" data-channel="canary" data-kill-action="set" type="button">设置 Kill switch</button>
+                      <button class="button" data-channel="canary" data-kill-action="clear" type="button">清除 Kill switch</button>
+                    </td>
+                  </tr>
+                  <tr>
+                    <th scope="row">stable</th>
+                    <td id="stable-kill-state">尚未返回</td>
+                    <td class="table-actions">
+                      <button class="button danger" data-channel="stable" data-kill-action="set" type="button">设置 Kill switch</button>
+                      <button class="button" data-channel="stable" data-kill-action="clear" type="button">清除 Kill switch</button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="work-section" id="distribution" aria-labelledby="distribution-title">
+            <header class="section-heading">
+              <div>
+                <h2 id="distribution-title">客户端版本与更新分布</h2>
+                <p id="distribution-summary">连接控制面后读取当前分布。</p>
+              </div>
+              <button class="button" id="refresh-distribution-button" type="button" disabled>刷新分布</button>
+            </header>
+            <div class="table-scroll" tabindex="0" aria-label="客户端版本与更新分布表格">
+              <table>
+                <thead>
+                  <tr><th scope="col">类别</th><th scope="col">值</th><th scope="col">客户端数</th></tr>
+                </thead>
+                <tbody id="distribution-table-body">
+                  <tr><td colspan="3">尚未加载</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <dialog class="confirm-dialog" id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-description">
+      <div class="dialog-heading">
+        <h2 id="confirm-title">确认操作</h2>
+        <p id="confirm-description">请确认本次变更。</p>
+      </div>
+      <div class="dialog-actions">
+        <button class="button" id="confirm-cancel-button" type="button">取消</button>
+        <button class="button danger" id="confirm-submit-button" type="button">确认执行</button>
+      </div>
+    </dialog>
+
+    <noscript>发布控制台需要启用 JavaScript 才能调用同源管理员 API。</noscript>
+  </body>
+</html>

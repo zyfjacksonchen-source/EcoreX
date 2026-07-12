@@ -1,0 +1,65 @@
+.ex-technical-details {
+  color: var(--color-ink-muted);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
+.ex-technical-details summary {
+  align-items: center;
+  cursor: pointer;
+  display: inline-flex;
+  min-height: var(--target-desktop);
+  padding-block: var(--space-1);
+}
+
+.ex-technical-details summary:hover {
+  color: var(--color-ink);
+}
+
+.ex-technical-details summary:focus-visible {
+  border-radius: var(--radius-compact);
+  outline: var(--focus-primary-ring);
+  outline-offset: var(--space-1);
+}
+
+.ex-technical-details dl {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0 0 var(--space-2);
+}
+
+.ex-technical-details dl > div {
+  display: grid;
+  gap: var(--space-1);
+  grid-template-columns: minmax(5rem, auto) minmax(0, 1fr);
+}
+
+.ex-technical-details dt,
+.ex-technical-details dd {
+  margin: 0;
+}
+
+.ex-technical-details code {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.ex-connector-instance-copy > .ex-technical-details {
+  flex-basis: 100%;
+}
+
+.ex-share-error > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.ex-share-error > div > span {
+  overflow-wrap: anywhere;
+}
+
+@media (pointer: coarse) {
+  .ex-technical-details summary {
+    min-height: var(--target-touch);
+  }
+}

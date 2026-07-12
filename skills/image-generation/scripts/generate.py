@@ -1755,7 +1755,14 @@ def main():
     if image_url in (None, "", []):
         image_url = args.get("image_urls")
 
-    output_dir = os.environ.get("IMAGE_OUTPUT_DIR", os.path.join(os.getcwd(), "images"))
+    output_dir = os.environ.get("IMAGE_OUTPUT_DIR")
+    if not output_dir:
+        workspace = (
+            os.environ.get("ECOREX_AGENT_WORKSPACE")
+            or os.environ.get("AGENT_WORKSPACE")
+            or os.path.join(os.path.expanduser("~"), "EcoreX")
+        )
+        output_dir = os.path.join(workspace, "images")
 
     providers = _build_providers(model, provider_id=provider_id)
     if not providers:

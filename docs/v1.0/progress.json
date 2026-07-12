@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "goal": "EcoreX v1.0 productization implementation",
+  "status": "active",
+  "public_target": "1.0.0",
+  "baseline": {
+    "branch": "codex/ecorex-v0.3.0-hardening",
+    "commit": "9ac3b958",
+    "dirty_worktree_preserved": true
+  },
+  "current_milestone": "local_candidate_build_and_manual_acceptance",
+  "current_batch": "The 2026-07-12 local implementation freeze closes Runtime execution permits and commit guards, permission-to-Turn linearization, operation-scoped permission verification, PublicToolActivity, Artifact and Connector durable outboxes, bounded Connector shutdown, Phase A/Phase B product startup, Windows stable-provision-v2, Cloud Share concurrent WAL activation, Core handler availability, gpt-5.6-sol medium reasoning with exact 272000 server compaction, the final thin WebUI interaction/design contract, and the six-required-Pack Candidate topology with 24 fixed stage receipts. The complete authoritative v1 tree is now Git-admitted locally; the next boundary is a fresh local Candidate assembled from this source for manual acceptance, with no push or publication before user approval.",
+  "last_verified_batch": "Frozen local evidence on 2026-07-12: complete Python v1 gate 1814 passed / 17 platform skips / 0 failures / 0 errors; Web contract 161 passed, TypeScript clean, Playwright 30 passed, and the production build passed with 17 content-addressed assets, 472.60 KiB initial JS (146.05 KiB gzip) and 94.43 KiB deferred JS (33.67 KiB gzip). Candidate topology is Core + Bootstrap + six required Capability Packs for each of three targets, totaling 24 fixed stage receipts. All 623 authoritative v1 source files are admitted to the local Git index and the real source-tree gate passes. Runtime schema 20 fragments, server schema 8 authorities across 3 roots, strict design debt zero, legacy cutoff, dependency locks, public-download static contract, local reproducibility, generated contracts, lint/compile, supply-chain and whitespace gates pass. Local Go/gofmt is unavailable, so Bootstrap Go verification still requires a protected runner.",
+  "recovery_document": "docs/v1.0/implementation-log.md",
+  "verification_document": "docs/v1.0/verification-ledger.md",
+  "milestones": [
+    {"id": "foundation", "status": "completed"},
+    {"id": "runtime_core", "status": "completed"},
+    {"id": "capability_policy", "status": "completed"},
+    {"id": "office_artifacts_connectors", "status": "completed"},
+    {"id": "thin_webui_design_system", "status": "completed"},
+    {"id": "release_update_control_plane", "status": "in_progress"},
+    {"id": "migration_ga_gates", "status": "in_progress"}
+  ],
+  "remaining_local_work": [
+    "rebuild the wheel, Core, Bootstrap, six required Capability Packs and 24-receipt signed Candidate from the current gpt-5.6-sol and stable-provision-v2 source; never reuse tmp/v1-clean-wheel-output-20260710",
+    "bind the final Python JUnit, Web, migration, image and platform evidence to the immutable Candidate recipe and release manifest",
+    "complete protected Windows/macOS platform stages, publish/readback evidence, migration activation and first-install pin drills"
+  ],
+  "external_blockers": [
+    "the local machine has no Go/gofmt toolchain; Bootstrap Go tests and formatting must run on the protected build runner",
+    "protected-runner Windows x64 and macOS arm64/x64 signed WebUI Runtime archives containing the real Core plus the complete browser/channels/image/ocr/office/sandbox Pack set",
+    "protected native Windows AppContainer/Job and macOS Seatbelt build/probe receipts; local Windows helper compilation is not a substitute for protected provenance",
+    "macOS arm64/x64 install, update, rollback and Keychain drills",
+    "multi-hour multi-node image soak plus production HTTPS/private-bucket/KMS evidence; the bounded real PostgreSQL 16.9 + MinIO 256-job/48-worker crash drill is complete",
+    "real Model/Image Gateway, Feishu, Tencent Docs and OTLP endpoints",
+    "live domestic mirror, GitHub and CDN digest-consistent outage failover",
+    "real installed-user v0.3.0 corpus and historical archive attestation",
+    "coarse touch, forced colors, reduced motion, screen reader and slow-network reconnect evidence"
+  ]
+}

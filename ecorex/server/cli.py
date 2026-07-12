@@ -1,0 +1,154 @@
+"""Packaged EcoreX v1 Product Runtime command line."""
+
+from __future__ import annotations
+
+import argparse
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from enum import IntEnum
+import sys
+
+from fastapi import FastAPI
+import uvicorn
+
+from ecorex.session import ManagedSessionError
+
+from .activation import create_activation_probe_app
+from .app import create_product_app
+from .config import (
+    ActivationProbeComposition,
+    ProductRuntimeComposition,
+    ProductRuntimeConfigurationError,
+    ProductRuntimeTrustError,
+    load_product_runtime,
+)
+from .errors import BundleIntegrityError, ServerConfigurationError
+from .launcher import build_uvicorn_config
+from .pack_resolver import production_pack_adapter_resolver
+
+
+class ProductRuntimeExitCode(IntEnum):
+    SUCCESS = 0
+    CONFIGURATION = 64
+    SOFTWARE = 70
+    TRUST_FAILURE = 78
+
+
+@dataclass(frozen=True, slots=True)
+class ProductRuntimeServer:
+    composition: ProductRuntimeComposition | ActivationProbeComposition
+    app: FastAPI
+    uvicorn_config: uvicorn.Config
+
+
+class _Parser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        del message
+        self.print_usage(sys.stderr)
+        raise SystemExit(2)
+
+
+def _load_product_runtime_for_cli(**kwargs) -> ProductRuntimeComposition:
+    """Production CLI always supplies executable signed-pack adapters."""
+
+    return load_product_runtime(
+        pack_adapter_resolver=production_pack_adapter_resolver,
+        **kwargs,
+    )
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = _Parser(prog="ecorex", add_help=True)
+    commands = parser.add_subparsers(dest="command", required=True)
+    serve = commands.add_parser(
+        "serve",
+        help="run the signed local Product Runtime",
+        add_help=True,
+    )
+    # This is intentionally the entire packaged process contract.  In
+    # particular there is no token, bearer, API key, config path or install
+    # root argument that could leak through process listings.
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8765)
+    return parser
+
+
+def build_product_runtime_server(
+    *,
+    host: str,
+    port: int,
+    runtime_loader: Callable[..., ProductRuntimeComposition] = _load_product_runtime_for_cli,
+) -> ProductRuntimeServer:
+    composition = runtime_loader(host=host, port=port)
+    try:
+        app = (
+            create_activation_probe_app(composition.server_settings)
+            if isinstance(composition, ActivationProbeComposition)
+            else create_product_app(composition.server_settings)
+        )
+        app.state.product_runtime_composition = composition
+    except BaseException:
+        composition.close_unstarted()
+        raise
+    composition.transfer_to_app()
+    return ProductRuntimeServer(
+        composition=composition,
+        app=app,
+        uvicorn_config=build_uvicorn_config(app, composition.server_settings),
+    )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    if args.command != "serve":
+        # argparse currently makes this unreachable; keep the boundary closed
+        # if commands are added without a product implementation later.
+        print("EcoreX Product Runtime command is unsupported.", file=sys.stderr)
+        return int(ProductRuntimeExitCode.CONFIGURATION)
+    try:
+        server = build_product_runtime_server(host=args.host, port=args.port)
+        uvicorn.Server(server.uvicorn_config).run()
+        return int(ProductRuntimeExitCode.SUCCESS)
+    except (ProductRuntimeTrustError, BundleIntegrityError):
+        print("EcoreX refused an untrusted Product Runtime slot.", file=sys.stderr)
+        return int(ProductRuntimeExitCode.TRUST_FAILURE)
+    except ManagedSessionError:
+        print("EcoreX Product Runtime configuration is invalid.", file=sys.stderr)
+        print("EcoreX startup stage: managed_session", file=sys.stderr)
+        return int(ProductRuntimeExitCode.CONFIGURATION)
+    except ProductRuntimeConfigurationError as exc:
+        print("EcoreX Product Runtime configuration is invalid.", file=sys.stderr)
+        # Only a validated fixed stage code crosses the process boundary; the
+        # error message and native cause remain private because providers may
+        # include credentials or paths in exception text.
+        print(
+            f"EcoreX startup stage: {exc.stage_code or 'configuration'}",
+            file=sys.stderr,
+        )
+        return int(ProductRuntimeExitCode.CONFIGURATION)
+    except (ServerConfigurationError, ValueError):
+        print("EcoreX Product Runtime configuration is invalid.", file=sys.stderr)
+        print("EcoreX startup stage: server_configuration", file=sys.stderr)
+        return int(ProductRuntimeExitCode.CONFIGURATION)
+    except KeyboardInterrupt:
+        return 130
+    except SystemExit:
+        print("EcoreX Product Runtime could not start.", file=sys.stderr)
+        return int(ProductRuntimeExitCode.SOFTWARE)
+    except Exception:
+        # Do not render exception values: transports and platform vaults may
+        # include sensitive implementation details in their native errors.
+        print("EcoreX Product Runtime could not start.", file=sys.stderr)
+        return int(ProductRuntimeExitCode.SOFTWARE)
+
+
+__all__ = [
+    "ProductRuntimeExitCode",
+    "ProductRuntimeServer",
+    "build_product_runtime_server",
+    "main",
+]
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())

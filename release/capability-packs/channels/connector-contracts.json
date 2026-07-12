@@ -1,0 +1,1 @@
+{"connectors":[{"connector_id":"feishu","maturity":"stable","operations":["catalog","describe","read","write","health"]},{"connector_id":"tencent-docs","maturity":"stable","operations":["catalog","describe","read","write","health"]}],"result_transport":"artifact-envelope-v1","schema_version":1}

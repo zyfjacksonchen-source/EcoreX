@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "evidence_type": "local_development_observation",
+  "release_authority": false,
+  "host": {
+    "platform": "windows",
+    "architecture": "x64",
+    "python": "3.11.9"
+  },
+  "browser_runtime": {
+    "playwright": "1.58.0",
+    "chromium_tree_file_count": 310,
+    "chromium_tree_size_bytes": 412504847,
+    "nested_runtime_zip_size_bytes": 218325471
+  },
+  "native_toolchains": {
+    "cl.exe": "missing",
+    "link.exe": "missing",
+    "clang.exe": "missing"
+  },
+  "claims": {
+    "pack_protocol_and_install_tests": "passed",
+    "native_binary_build": "not_run",
+    "appcontainer_behavior": "requires_protected_windows_runner",
+    "seatbelt_behavior": "requires_protected_macos_runner"
+  }
+}

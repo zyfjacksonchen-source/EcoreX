@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "evidence_type": "ecorex-image-shared-storage-real-integration",
+  "recorded_at": "2026-07-12T00:03:00+08:00",
+  "status": "passed",
+  "scope": {
+    "platform": "windows-x64-docker-linux",
+    "postgres": {
+      "version": "16.9",
+      "image_digest": "sha256:7c688148e5e156d0e86df7ba8ae5a05a2386aaec1e2ad8e6d11bdf10504b1fb7"
+    },
+    "s3_compatible_store": {
+      "implementation": "MinIO",
+      "release": "RELEASE.2025-04-22T22-12-26Z",
+      "image_digest": "sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e"
+    }
+  },
+  "load": {
+    "unique_jobs": 256,
+    "worker_threads": 48,
+    "shared_result_blob_count": 1,
+    "concurrent_duplicate_submissions": 16,
+    "expected_durable_jobs_for_duplicate_key": 1,
+    "completed_exactly_once": true,
+    "all_references_preserved": true,
+    "queue_drained": true,
+    "elapsed_seconds": 123.85,
+    "pytest_elapsed_seconds": 117.72
+  },
+  "faults": {
+    "expired_worker_lease": {
+      "stale_token_fenced": true,
+      "reclaimed_attempt": 2,
+      "provider_uncertainty_preserved": true
+    },
+    "s3_process_pause": {
+      "failed_closed": true,
+      "bounded_failure_seconds": 7.297,
+      "recovered_after_unpause": true
+    },
+    "postgres_process_restart": {
+      "failure_bounded": true,
+      "lease_reclaimed": true,
+      "stale_token_fenced": true,
+      "recovered_attempt": 2,
+      "elapsed_seconds": 5.297
+    },
+    "conditional_gc": {
+      "etag_tombstone_delete": true,
+      "deleted_blob_not_readable": true
+    }
+  },
+  "schema_regressions_found_and_fixed": [
+    "reserved PostgreSQL catalog alias changed from collation to collation_oid",
+    "pg_get_indexdef key position explicitly cast from bigint ordinality to integer",
+    "frozen CHECK expressions aligned to PostgreSQL 16 canonical catalog output"
+  ],
+  "verification": [
+    {
+      "command": "pytest -q tests/v1/test_image_orchestrator_real_shared_storage.py",
+      "result": "1 real integration test passed at 256 jobs / 48 workers"
+    },
+    {
+      "command": "pytest -q tests/v1/test_image_orchestrator_production_storage.py",
+      "result": "56 passed against real PostgreSQL where credential-gated"
+    },
+    {
+      "command": "pytest -q image-orchestrator focused source suite",
+      "result": "90 passed, 2 environment skips"
+    }
+  ],
+  "limitations": [
+    "The local MinIO endpoint used HTTP on loopback; production HTTPS, private-bucket policy and managed KMS evidence remain deployment gates.",
+    "This is a bounded concurrency/fault drill, not a multi-hour multi-node soak.",
+    "No managed image provider bytes or billing endpoint were used."
+  ]
+}

@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ecorex.invalid/schemas/publication-config-v1.json",
+  "title": "EcoreX multi-origin publication configuration v1",
+  "description": "Non-secret endpoint and environment-variable-name configuration. Bearer token values are never valid fields.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "github",
+    "mirror",
+    "cdn"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "github": {
+      "$ref": "#/$defs/github"
+    },
+    "mirror": {
+      "$ref": "#/$defs/replica"
+    },
+    "cdn": {
+      "$ref": "#/$defs/replica"
+    }
+  },
+  "$defs": {
+    "environmentName": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]{2,127}$"
+    },
+    "host": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253,
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$"
+    },
+    "hostList": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/host"
+      }
+    },
+    "github": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner",
+        "repository",
+        "token_env"
+      ],
+      "properties": {
+        "owner": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"
+        },
+        "repository": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"
+        },
+        "token_env": {
+          "$ref": "#/$defs/environmentName"
+        }
+      }
+    },
+    "replica": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_id",
+        "endpoint",
+        "allowed_hosts",
+        "public_hosts",
+        "token_env"
+      ],
+      "properties": {
+        "source_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "endpoint": {
+          "type": "string",
+          "pattern": "^https://[^/?#]+/api/v1/releases$"
+        },
+        "allowed_hosts": {
+          "$ref": "#/$defs/hostList"
+        },
+        "public_hosts": {
+          "$ref": "#/$defs/hostList"
+        },
+        "token_env": {
+          "$ref": "#/$defs/environmentName"
+        }
+      }
+    }
+  }
+}

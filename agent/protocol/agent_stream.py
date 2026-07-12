@@ -16,6 +16,7 @@ from agent.protocol.cancel import AgentCancelledError
 from agent.protocol.models import LLMRequest, LLMModel
 from agent.protocol.message_utils import sanitize_claude_messages, compress_turn_to_text_only
 from agent.protocol.task_observer import TaskObserver
+from agent.core.tool_router import ToolRouterPolicy
 from agent.skills.tool_bridge import SKILL_CALLABLE_TOOL_ALIASES
 from agent.tools.base_tool import BaseTool, ToolResult
 from common.ecorex_public_payload import mask_sensitive_text, redact_public_tool_value
@@ -317,6 +318,10 @@ TOOL_NAME_ALIASES = {
 TOOL_NAME_ALIASES.update(SKILL_CALLABLE_TOOL_ALIASES)
 
 TOOL_SCHEMA_INTENT_KEYWORDS = {
+    "workspace": (
+        "read", "ls", "find", "file", "files", "path", "directory", "folder",
+        "附件", "文件", "路径", "目录", "文件夹", "本地", "读取文件", "找文件", "查看文件",
+    ),
     "browser": (
         "browser", "chrome", "cdp", "devtools", "playwright", "http://", "https://",
         "xhslink", "xiaohongshu", "小红书", "网页", "浏览器", "打开网页", "读取链接", "链接", "点击", "截图",
@@ -392,6 +397,12 @@ IMAGEGEN_PRIORITY_TOOL_NAMES = {
     "optional_abilities",
     "agent_capability",
     "ecorex_cli",
+}
+IMAGEGEN_COMPANION_INTENT_GROUPS = {
+    "browser",
+    "web",
+    "ocr",
+    "workspace",
 }
 IMAGEGEN_SHELL_SEMANTIC_SIGNAL_REGEXES = (
     re.compile(r"(?i)(?:^|[\s;,{(\[])(?:prompt|instruction|description)\s*[:=]"),
@@ -1689,6 +1700,8 @@ class AgentStreamExecutor:
         intent_groups = self._tool_schema_intent_groups(user_text)
         imagegen_intent = "imagegen" in intent_groups
         imagegen_available = "imagegen" in {str(name or "").strip().lower() for name in (self.tools or {})}
+        tool_router = ToolRouterPolicy()
+        imagegen_companion_groups = set()
         inherited_followup_intent = False
         if self._is_tool_schema_followup_confirmation(user_text):
             for historical_text in self._recent_real_user_texts(limit=4)[1:]:
@@ -1698,6 +1711,8 @@ class AgentStreamExecutor:
                     imagegen_intent = imagegen_intent or "imagegen" in historical_groups
                     inherited_followup_intent = True
                     break
+        if imagegen_intent:
+            imagegen_companion_groups = tool_router.companion_groups_for_imagegen(intent_groups)
         selected: Dict[str, Any] = {}
         reasons: Dict[str, str] = {}
         has_deferred_mcp = any(str(name or "").lower().startswith("mcp__") for name in self.tools)
@@ -1718,10 +1733,16 @@ class AgentStreamExecutor:
                     if lowered_name == "imagegen":
                         selected[name] = tool
                         reasons[name] = "imagegen_primary_route"
+                    elif tool_router.allows_imagegen_companion_tool(lowered_name, group, imagegen_companion_groups):
+                        selected[name] = tool
+                        reasons[name] = f"imagegen_companion:{group}"
                     continue
                 if lowered_name in IMAGEGEN_PRIORITY_TOOL_NAMES:
                     selected[name] = tool
                     reasons[name] = "imagegen_visibility_diagnostics"
+                elif tool_router.allows_imagegen_companion_tool(lowered_name, group, imagegen_companion_groups):
+                    selected[name] = tool
+                    reasons[name] = f"imagegen_companion:{group}"
                 continue
             if (
                 lowered_name == "feishu_cli"
@@ -1762,19 +1783,24 @@ class AgentStreamExecutor:
             }
 
         if imagegen_intent:
+            selected_groups = {self._tool_schema_group((name or "").strip().lower()) for name in selected}
+            if imagegen_companion_groups.difference(selected_groups):
+                for name, tool in (self.tools or {}).items():
+                    lowered_name = (name or "").strip().lower()
+                    if lowered_name in IMAGEGEN_PRIORITY_TOOL_NAMES and name not in selected:
+                        selected[name] = tool
+                        reasons[name] = "imagegen_companion_diagnostics"
             deferred = {name: tool for name, tool in self.tools.items() if name not in selected}
+            selection_meta = tool_router.selection_metadata(selected, deferred, reasons)
             return selected, {
                 "enabled": True,
                 "reason": "imagegen_intent_primary_route",
                 "intent_groups": sorted(intent_groups),
+                "companion_intent_groups": sorted(imagegen_companion_groups),
                 "inherited_followup_intent": inherited_followup_intent,
                 "imagegen_intent": True,
                 "imagegen_available": imagegen_available,
-                "selected_count": len(selected),
-                "deferred_count": len(deferred),
-                "selected_tools": sorted(selected.keys()),
-                "deferred_tools": sorted(deferred.keys()),
-                "selection_reasons": reasons,
+                **selection_meta,
             }
 
         if not imagegen_intent:

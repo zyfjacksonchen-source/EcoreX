@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ecorex.local/schemas/release/v1/stage-receipt.schema.json",
+  "title": "EcoreX v1 platform stage receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_type",
+    "stage_id",
+    "commit_sha",
+    "producer",
+    "kind",
+    "platform",
+    "architecture",
+    "pack_id",
+    "source_tree_sha256",
+    "source_tree_file_count",
+    "source_tree_size_bytes",
+    "runtime_interpreter",
+    "install_projection",
+    "gates"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "receipt_type": {"const": "ecorex-candidate-stage"},
+    "stage_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workflow_path", "workflow_run_id", "workflow_run_attempt", "runner_os", "stager_executable_sha256", "stager_adapter_sha256"],
+      "properties": {
+        "workflow_path": {"const": ".github/workflows/ecorex-v1-platform-stage.yml"},
+        "workflow_run_id": {"type": "integer", "minimum": 1},
+        "workflow_run_attempt": {"type": "integer", "minimum": 1},
+        "runner_os": {"enum": ["windows", "macos"]},
+        "stager_executable_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "stager_adapter_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "kind": {"enum": ["core", "bootstrap", "capability-pack"]},
+    "platform": {"enum": ["windows", "macos"]},
+    "architecture": {"enum": ["x64", "arm64"]},
+    "pack_id": {"type": ["string", "null"], "enum": [null, "browser", "channels", "image", "ocr", "office", "sandbox"]},
+    "source_tree_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source_tree_file_count": {"type": "integer", "minimum": 1, "maximum": 50000},
+    "source_tree_size_bytes": {"type": "integer", "minimum": 1, "maximum": 2147483648},
+    "runtime_interpreter": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["relative_path", "size_bytes", "sha256", "closure_file_count", "closure_size_bytes", "closure_sha256"],
+          "properties": {
+            "relative_path": {"enum": ["bin/pack-python/python.exe", "bin/pack-python/bin/python3"]},
+            "size_bytes": {"type": "integer", "minimum": 1, "maximum": 1073741824},
+            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "closure_file_count": {"type": "integer", "minimum": 1, "maximum": 50000},
+            "closure_size_bytes": {"type": "integer", "minimum": 1, "maximum": 1073741824},
+            "closure_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          }
+        }
+      ]
+    },
+    "install_projection": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scope", "entrypoint", "installs"],
+          "properties": {
+            "scope": {"const": "bootstrap"},
+            "entrypoint": {"enum": ["bin/ecorex-bootstrap.exe", "bin/ecorex-bootstrap"]},
+            "installs": {"const": "core-plus-required-packs"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scope", "payload_root", "required_pack_ids"],
+          "properties": {
+            "scope": {"const": "slot-payload"},
+            "payload_root": {"const": "."},
+            "required_pack_ids": {"const": ["browser", "channels", "image", "ocr", "office", "sandbox"]}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scope", "pack_id", "manifest_relative_path", "artifact_relative_path"],
+          "properties": {
+            "scope": {"const": "slot-payload"},
+            "pack_id": {"enum": ["browser", "channels", "image", "ocr", "office", "sandbox"]},
+            "manifest_relative_path": {
+              "type": "string",
+              "pattern": "^capability-packs/(browser|channels|image|ocr|office|sandbox)/ecorex-capability-pack-(browser|channels|image|ocr|office|sandbox)-(windows-x64|macos-arm64|macos-x64)-1\\.0\\.0\\.json$"
+            },
+            "artifact_relative_path": {
+              "type": "string",
+              "pattern": "^capability-packs/(browser|channels|image|ocr|office|sandbox)/ecorex-capability-pack-(browser|channels|image|ocr|office|sandbox)-(windows-x64|macos-arm64|macos-x64)-1\\.0\\.0\\.zip$"
+            }
+          }
+        }
+      ]
+    },
+    "gates": {
+      "type": "object",
+      "minProperties": 3,
+      "maxProperties": 4,
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status", "evidence_sha256"],
+        "properties": {
+          "status": {"const": "passed"},
+          "evidence_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    }
+  }
+}
