@@ -530,6 +530,48 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _validated_native_helper_sha256(
+    output: Path,
+    native_receipt: Mapping[str, Any],
+) -> str:
+    core_helper = output / "stages/windows-x64/core/bin/ecorex-sandbox-host.exe"
+    bootstrap_helper = (
+        output / "stages/windows-x64/bootstrap/bin/ecorex-sandbox-host.exe"
+    )
+    helper_sha256 = _sha256_file(core_helper)
+    if _sha256_file(bootstrap_helper) != helper_sha256:
+        raise DrillError("Bootstrap and Runtime sandbox helpers differ")
+    digest_fields = (
+        "toolchain_manifest_sha256",
+        "source_set_sha256",
+        "msvc_root_sha256",
+        "windows_sdk_root_sha256",
+        "include_roots_sha256",
+        "library_roots_sha256",
+        "library_set_sha256",
+        "compiler_sha256",
+        "linker_sha256",
+        "c1xx_sha256",
+        "c2_sha256",
+        "runtime_launcher_sha256",
+        "sandbox_helper_sha256",
+    )
+    if (
+        native_receipt.get("schema_version") != 2
+        or native_receipt.get("status") != "passed"
+        or native_receipt.get("target") != "windows-x64"
+        or native_receipt.get("authority_mode") != "caller-pinned"
+        or any(
+            not isinstance(native_receipt.get(field), str)
+            or re.fullmatch(r"[0-9a-f]{64}", native_receipt[field]) is None
+            for field in digest_fields
+        )
+        or native_receipt.get("sandbox_helper_sha256") != helper_sha256
+    ):
+        raise DrillError("the caller-pinned native build receipt is invalid")
+    return helper_sha256
+
+
 def _git_head(repo: Path, deadline: Deadline) -> str:
     try:
         result = subprocess.run(
@@ -766,19 +808,7 @@ def _stage_windows(
         raise DrillError("the caller-pinned native build receipt is unavailable") from exc
     if not isinstance(native_receipt, dict):
         raise DrillError("the caller-pinned native build receipt is invalid")
-    core_helper = output / "stages/windows-x64/core/bin/ecorex-sandbox-host.exe"
-    bootstrap_helper = (
-        output / "stages/windows-x64/bootstrap/bin/ecorex-sandbox-host.exe"
-    )
-    helper_sha256 = _sha256_file(core_helper)
-    if (
-        _sha256_file(bootstrap_helper) != helper_sha256
-        or native_receipt.get("schema_version") != 1
-        or native_receipt.get("status") != "passed"
-        or native_receipt.get("target") != "windows-x64"
-        or native_receipt.get("sandbox_helper_sha256") != helper_sha256
-    ):
-        raise DrillError("Bootstrap and Runtime sandbox helpers differ")
+    helper_sha256 = _validated_native_helper_sha256(output, native_receipt)
     return WindowsStage(
         root=output,
         commit_sha=commit,

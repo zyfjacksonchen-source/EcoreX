@@ -173,6 +173,55 @@ def test_private_key_scan_is_streaming_and_catches_chunk_boundary(
         drill._assert_secret_not_persisted(tmp_path, (secret,))
 
 
+def test_native_helper_identity_requires_matching_helpers_and_v2_authority(
+    tmp_path: Path,
+) -> None:
+    drill = _drill_module()
+    core = tmp_path / "stages/windows-x64/core/bin/ecorex-sandbox-host.exe"
+    bootstrap = (
+        tmp_path / "stages/windows-x64/bootstrap/bin/ecorex-sandbox-host.exe"
+    )
+    core.parent.mkdir(parents=True)
+    bootstrap.parent.mkdir(parents=True)
+    core.write_bytes(b"same-current-native-helper")
+    bootstrap.write_bytes(core.read_bytes())
+    digest = drill._sha256_file(core)
+    receipt = {
+        "schema_version": 2,
+        "status": "passed",
+        "target": "windows-x64",
+        "authority_mode": "caller-pinned",
+        **{
+            field: digest
+            for field in (
+                "toolchain_manifest_sha256",
+                "source_set_sha256",
+                "msvc_root_sha256",
+                "windows_sdk_root_sha256",
+                "include_roots_sha256",
+                "library_roots_sha256",
+                "library_set_sha256",
+                "compiler_sha256",
+                "linker_sha256",
+                "c1xx_sha256",
+                "c2_sha256",
+                "runtime_launcher_sha256",
+                "sandbox_helper_sha256",
+            )
+        },
+    }
+
+    assert drill._validated_native_helper_sha256(tmp_path, receipt) == digest
+    with pytest.raises(drill.DrillError, match="receipt is invalid"):
+        drill._validated_native_helper_sha256(
+            tmp_path,
+            {**receipt, "schema_version": 1},
+        )
+    bootstrap.write_bytes(b"different-native-helper")
+    with pytest.raises(drill.DrillError, match="helpers differ"):
+        drill._validated_native_helper_sha256(tmp_path, receipt)
+
+
 def test_local_windows_drill_cannot_relax_fixed_twenty_four_stage_gate() -> None:
     drill = _drill_module()
     expected = {
