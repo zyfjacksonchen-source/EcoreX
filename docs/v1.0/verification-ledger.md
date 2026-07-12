@@ -1217,3 +1217,14 @@ are not represented as complete by this local ledger.
 
 This checkpoint records local Git admission only. It does not claim a commit,
 push, published Candidate, protected-runner provenance or user acceptance yet.
+
+## Local Candidate trust-role regression - 2026-07-12
+
+| Scope / command | Exit | Result |
+| --- | ---: | --- |
+| First signed-Candidate attempt | 1 | failed closed before staging because the drill omitted the newly mandatory independent rollback verification role |
+| Runtime config regression | 0 | release, rollback and session Ed25519 public keyrings are distinct; all private values remain process-only and covered by the persistence scan |
+| Focused drill suite / Ruff / compile | 0 | 7 tests passed; changed build-chain files are lint- and compile-clean |
+
+This correction does not yet claim the repeated end-to-end Windows drill; that
+result is recorded only after the fresh committed-source run completes.

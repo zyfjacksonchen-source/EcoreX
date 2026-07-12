@@ -3741,3 +3741,15 @@ schema fragments, 8 server authorities across 3 roots, design debt, dependency
 locks, legacy cutoff and staged whitespace checks all pass. This changes the
 local boundary from source admission to fresh Candidate construction; it does
 not authorize a push, release publication or rollout.
+
+## 2026-07-12 - Local Candidate trust-role drift correction
+
+The first post-admission Windows signed-Candidate drill failed before staging
+with `ProductRuntimeConfigurationError`. The Runtime configuration authority
+now requires a rollback verification keyring separate from release signing,
+but the local drill still emitted the earlier two-role release/session shape.
+The drill now creates independent process-only Ed25519 release, rollback and
+session keys, writes all three public roles, includes every private value in
+the persistence scan and never serializes private material. Seven focused
+drill tests, Ruff and Python compilation pass. No installation, activation,
+external request, push or publication occurred during the rejected attempt.

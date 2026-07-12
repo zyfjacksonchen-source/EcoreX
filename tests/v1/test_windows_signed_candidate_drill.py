@@ -104,6 +104,27 @@ def test_candidate_assembly_rejects_mutable_python_bytecode(tmp_path: Path) -> N
         drill._assert_no_runtime_bytecode(core)
 
 
+def test_local_runtime_config_uses_distinct_release_and_rollback_trust_roles() -> None:
+    drill = _drill_module()
+    release = drill.Ed25519PrivateKey.generate()
+    rollback = drill.Ed25519PrivateKey.generate()
+    session = drill.Ed25519PrivateKey.generate()
+
+    payload = drill._runtime_config(
+        drill._public_key(release),
+        drill._public_key(rollback),
+        drill._public_key(session),
+    )
+    parsed = drill.ProductRuntimeConfig.from_bytes(payload)
+
+    assert tuple(parsed.release_public_keys) == (drill.SIGNING_KEY_ID,)
+    assert tuple(parsed.rollback_public_keys) == (drill.ROLLBACK_KEY_ID,)
+    assert tuple(parsed.session_public_keys) == (drill.SESSION_KEY_ID,)
+    assert parsed.release_public_keys[drill.SIGNING_KEY_ID] != (
+        parsed.rollback_public_keys[drill.ROLLBACK_KEY_ID]
+    )
+
+
 def test_fault_candidate_excludes_only_cache_and_runtime_site_packages() -> None:
     drill = _drill_module()
     ignored = drill._fault_candidate_ignore(

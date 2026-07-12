@@ -109,6 +109,7 @@ REPORT_SCHEMA_VERSION = 3
 TARGET_PLATFORM = "windows"
 TARGET_ARCHITECTURE = "x64"
 SIGNING_KEY_ID = "ecorex-local-candidate-drill"
+ROLLBACK_KEY_ID = "ecorex-local-rollback-drill"
 SESSION_KEY_ID = "ecorex-local-session-drill"
 CORE_ARTIFACT_ID = "core-windows-x64"
 DEFAULT_TIMEOUT_SECONDS = 1_800.0
@@ -454,7 +455,11 @@ def _sources() -> tuple[ReleaseSource, ...]:
     )
 
 
-def _runtime_config(release_public: bytes, session_public: bytes) -> bytes:
+def _runtime_config(
+    release_public: bytes,
+    rollback_public: bytes,
+    session_public: bytes,
+) -> bytes:
     # All live transports point at the loopback discard port.  A no-session
     # Runtime does not invoke model mutations; even background retries cannot
     # leave the machine during this ceremony.
@@ -473,6 +478,9 @@ def _runtime_config(release_public: bytes, session_public: bytes) -> bytes:
         },
         "release_public_keys": {
             SIGNING_KEY_ID: base64.b64encode(release_public).decode("ascii")
+        },
+        "rollback_public_keys": {
+            ROLLBACK_KEY_ID: base64.b64encode(rollback_public).decode("ascii")
         },
         "session_public_keys": {
             SESSION_KEY_ID: base64.b64encode(session_public).decode("ascii")
@@ -603,6 +611,7 @@ def _stage_windows(
     root: Path,
     *,
     release_public: bytes,
+    rollback_public: bytes,
     session_public: bytes,
     publication_public: bytes,
     deadline: Deadline,
@@ -615,7 +624,9 @@ def _stage_windows(
     inputs = root / "inputs"
     inputs.mkdir(parents=True, exist_ok=False)
     runtime_config = inputs / "runtime-config.json"
-    runtime_config.write_bytes(_runtime_config(release_public, session_public))
+    runtime_config.write_bytes(
+        _runtime_config(release_public, rollback_public, session_public)
+    )
     output = root / "output"
     environment = dict(os.environ)
     environment.update(
@@ -1090,6 +1101,7 @@ def _assemble_core(
     root: Path,
     *,
     release_public: bytes,
+    rollback_public: bytes,
     session_public: bytes,
     deadline: Deadline,
 ) -> tuple[Path, tuple[dict[str, str], ...]]:
@@ -1137,7 +1149,7 @@ def _assemble_core(
     )
     (core / "serve").write_text(entrypoint, encoding="utf-8", newline="\n")
     (core / "runtime-config.json").write_bytes(
-        _runtime_config(release_public, session_public)
+        _runtime_config(release_public, rollback_public, session_public)
     )
     return core, distribution_records
 
@@ -1753,13 +1765,16 @@ def _build_and_run(repo: Path, temporary: Path, deadline: Deadline) -> dict[str,
         raise DrillError("the current content-addressed Web dist is missing")
 
     release_private = Ed25519PrivateKey.generate()
+    rollback_private = Ed25519PrivateKey.generate()
     session_private = Ed25519PrivateKey.generate()
     publication_private = Ed25519PrivateKey.generate()
     release_public = _public_key(release_private)
+    rollback_public = _public_key(rollback_private)
     session_public = _public_key(session_private)
     publication_public = _public_key(publication_private)
     private_material = (
         _private_key_bytes(release_private),
+        _private_key_bytes(rollback_private),
         _private_key_bytes(session_private),
         _private_key_bytes(publication_private),
     )
@@ -1771,6 +1786,7 @@ def _build_and_run(repo: Path, temporary: Path, deadline: Deadline) -> dict[str,
         repo,
         temporary / "windows-stage",
         release_public=release_public,
+        rollback_public=rollback_public,
         session_public=session_public,
         publication_public=publication_public,
         deadline=deadline,
