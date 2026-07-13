@@ -1453,3 +1453,17 @@ The retained eighth slot is root-cause evidence only. A ninth source-pinned
 zero-publication ceremony must build the corrected closure and pass its full
 install/update/rollback sequence. Live managed-model/Image 2 and protected
 macOS evidence remain independent release blockers.
+
+## Multi-activation Candidate deadline closure - 2026-07-13
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Ninth local ceremony from `80a4d6c8` | 1 | All eight Windows receipts were emitted. Core dependency closure passed with 23 distributions including `python-multipart 0.0.26`; isolated Core identity was 2,388 files / 61,937,031 bytes / digest `68742f27189c69c16f68de846f20074f9093d83cefc6aba03bf16c423fce1822`. |
+| Signed product Runtime proof | 0 | First full Runtime completed Pack binding, FastAPI multipart route construction and loopback readiness. v0.3 copy-on-write migration completed, activation receipt was `confirmed`, and two storage-migration receipts existed. This proves the multipart fix in the rebuilt signed Core. |
+| Former total deadline | 1 | Explicit 3,600-second total expired during `post-migration source-removal Runtime restart` while the second Runtime was still progressing. At timeout the expected slot was current/known-good; failure cleanup revoked temporary security and restored final pointers to `current=null`, `previous=null`, `known_good=[]`. No report or publication was created. |
+| Deadline hierarchy correction | 0 | Total default/max is truthfully 5,400 seconds; platform wrapper is independently capped at 3,000 seconds; each of four Runtime readiness windows is independently capped at 900 seconds and cannot exceed the total deadline. Successful evidence reports carry all three limits. |
+| Regression | 0 | Candidate drill, release pipeline, storage migrations, process boundary and Bootstrap supervisor: 82 passed, 2 platform skips. Ruff, CLI help, source-tree and whitespace checks passed. Current-source supply chain remains 23 locked = 23 licensed Runtime packages and 449 scanned files, inventory digest `d0f6e32a8c877cc8666491b5c700e64dcca8d6b756139f3f23df80664e18e96c`; report `.candidate/quality/supply-chain-local-deadline-policy-v2.json`. |
+
+This failed run is strong signed Runtime and migration evidence but is not a
+Candidate receipt. A tenth committed-source ceremony must complete healthy
+update, bad-digest rejection and rollback under the corrected bounded policy.

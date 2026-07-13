@@ -1549,3 +1549,30 @@
 - Consequence: first install and update cannot pass Core staging with a
   Runtime that later fails merely by registering its supported attachment or
   Artifact upload endpoints.
+
+## ADR-095 - Candidate timing uses nested phase deadlines
+
+- Status: accepted.
+- Decision: the complete local Windows ceremony has a truthful 5,400-second
+  default/maximum because it includes one cold platform build and four full
+  signed Runtime readiness exercises. The platform wrapper is independently
+  capped at 3,000 seconds, and each Runtime readiness exercise is independently
+  capped at 900 seconds. A phase deadline is the minimum of its own allowance
+  and the remaining total deadline.
+- Safety boundary: increasing the aggregate ceremony window does not increase
+  the native stager's 2,700-second child limit, the platform wrapper's
+  3,000-second limit or a Runtime startup's 900-second limit. Bootstrap still
+  terminates the complete process tree and follows the same pre-data rollback
+  path when any phase expires.
+- Evidence boundary: a successful local report records the total, platform and
+  Runtime limits plus the count of four independent readiness windows. A
+  timeout after first-install health cannot be presented as healthy-update or
+  rollback evidence, even when its current slot was known-good at the time.
+- Rejected alternatives: one global 3,600-second deadline made later Runtime
+  restarts inherit only the residue of a cold Windows build; an unbounded total
+  or a longer unscoped Runtime wait could hide a real hang. Reusing trust from
+  a previous process would also weaken restart verification and remains
+  rejected.
+- Consequence: the release drill can exercise first install, source-removed
+  migration restart, update-and-refresh and rollback in one ceremony without
+  weakening the bounded failure behavior of any individual process.

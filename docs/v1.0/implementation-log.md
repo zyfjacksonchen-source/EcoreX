@@ -4110,3 +4110,47 @@ production files. Its report is
 ninth ceremony must rebuild the signed Core and complete install, migration,
 update, bad-digest and rollback gates; the retained failed slot cannot prove
 this correction by mutation.
+
+## 2026-07-13 - Candidate timing hierarchy matches multi-activation scope
+
+The ninth zero-publication Windows ceremony ran from committed source
+`80a4d6c8` with the former explicit 3,600-second total limit. It emitted all
+eight Windows receipts, and its Core dependency evidence contained all 23
+locked Runtime distributions including `python-multipart 0.0.26` and
+`tzdata 2026.2`. The isolated Core identity covered 2,388 files and
+61,937,031 bytes with closure digest
+`68742f27189c69c16f68de846f20074f9093d83cefc6aba03bf16c423fce1822`.
+The first full business Runtime successfully crossed Capability Pack binding,
+FastAPI application composition and HTTP readiness, proving the multipart
+correction in the real signed product environment. Released-v0.3 migration
+completed and the source was then removed.
+
+The ceremony subsequently exhausted its total deadline while the second full
+Runtime was still making measurable progress during the post-migration source-
+removal restart. At timeout the activation receipt was `confirmed` and the
+expected slot was current and known-good; failed-ceremony cleanup then revoked
+its temporary sandbox authorization and restored the disposable first-install
+pointers to empty. No Candidate report, healthy-update receipt, rollback
+receipt or publication was created. This was not a Runtime crash: the old
+single deadline combined a 40-minute cold platform build with four independent
+full Runtime readiness exercises plus release/update work, while the public
+CLI help incorrectly advertised a 3,600-second maximum even though the code
+already admitted 5,400 seconds.
+
+The local ceremony now uses a bounded hierarchy. Its truthful default and
+maximum total are 5,400 seconds; the source-pinned platform-stage wrapper has
+an independent 3,000-second ceiling, and every one of the four full Runtime
+readiness exercises receives a fresh 900-second ceiling that can never outlive
+the total ceremony. A stalled Runtime therefore cannot consume the remaining
+update/rollback budget, while normal restarts no longer inherit only the few
+minutes left after a cold platform build. Successful reports include this
+deadline policy as evidence. Focused Candidate, process-boundary and Bootstrap
+regression passed 49 tests with one platform-conditioned skip; Ruff, help-text
+and whitespace checks passed. The expanded Candidate release, storage-
+migration, process-boundary and Bootstrap set passed 82 tests with two skips.
+Current-source supply-chain preflight again records 23 locked = 23 licensed
+Runtime packages and 449 scanned files with inventory digest
+`d0f6e32a8c877cc8666491b5c700e64dcca8d6b756139f3f23df80664e18e96c` in
+`.candidate/quality/supply-chain-local-deadline-policy-v2.json`. A fresh committed
+tenth ceremony must still complete healthy update, bad-digest rejection and
+pre-data rollback before a local Candidate receipt exists.

@@ -122,6 +122,40 @@ def test_runtime_readiness_failure_reports_bounded_process_diagnostics(tmp_path:
     assert "slot-private-identity" not in str(failure.value)
 
 
+def test_candidate_deadlines_separate_total_stage_and_runtime_budgets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    drill = _drill_module()
+    now = 1_000.0
+    monkeypatch.setattr(drill.time, "monotonic", lambda: now)
+
+    ceremony = drill.Deadline.after(drill.DEFAULT_TIMEOUT_SECONDS)
+    ceremony.enter("runtime restart")
+    runtime = ceremony.bounded(drill._RUNTIME_READY_TIMEOUT_SECONDS)
+    platform = ceremony.bounded(drill._PLATFORM_STAGE_TIMEOUT_SECONDS)
+
+    assert drill.DEFAULT_TIMEOUT_SECONDS == drill._MAX_TIMEOUT_SECONDS == 5_400.0
+    assert runtime.expires_at == now + 15 * 60
+    assert runtime.stage == "runtime restart"
+    assert platform.expires_at == now + 50 * 60
+    assert platform.expires_at < ceremony.expires_at
+
+    near_total = drill.Deadline(now + 60, stage="near total deadline")
+    assert near_total.bounded(15 * 60).expires_at == now + 60
+    with pytest.raises(ValueError, match="must be positive"):
+        ceremony.bounded(0)
+
+
+def test_candidate_cli_exposes_the_real_bounded_default() -> None:
+    drill = _drill_module()
+    parser = drill._parser()
+
+    assert parser.parse_args([]).timeout_seconds == 5_400.0
+    help_text = " ".join(parser.format_help().split())
+    assert "between 45 and 5400 seconds" in help_text
+    assert "each Runtime readiness window is bounded to 900 seconds" in help_text
+
+
 def test_candidate_assembly_rejects_mutable_python_bytecode(tmp_path: Path) -> None:
     drill = _drill_module()
     core = tmp_path / "core"

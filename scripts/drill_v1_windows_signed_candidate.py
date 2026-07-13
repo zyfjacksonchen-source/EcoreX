@@ -112,9 +112,11 @@ SIGNING_KEY_ID = "ecorex-local-candidate-drill"
 ROLLBACK_KEY_ID = "ecorex-local-rollback-drill"
 SESSION_KEY_ID = "ecorex-local-session-drill"
 CORE_ARTIFACT_ID = "core-windows-x64"
-DEFAULT_TIMEOUT_SECONDS = 1_800.0
+DEFAULT_TIMEOUT_SECONDS = 5_400.0
 _MIN_TIMEOUT_SECONDS = 45.0
 _MAX_TIMEOUT_SECONDS = 5_400.0
+_PLATFORM_STAGE_TIMEOUT_SECONDS = 50 * 60.0
+_RUNTIME_READY_TIMEOUT_SECONDS = 15 * 60.0
 _SAFE_STAGE_FAILURE_CODE = re.compile(r"^[a-z][a-z0-9_]{2,127}$")
 _RUNTIME_DEPENDENCY_GROUP = "dependencies"
 _NON_RUNTIME_PARTS = frozenset(
@@ -169,6 +171,17 @@ class Deadline:
     def enter(self, stage: str) -> None:
         self.stage = stage
         self.check()
+
+    def bounded(self, seconds: float) -> "Deadline":
+        """Return a phase deadline that can never outlive the ceremony."""
+
+        if seconds <= 0:
+            raise ValueError("bounded deadline seconds must be positive")
+        self.check()
+        return Deadline(
+            min(self.expires_at, time.monotonic() + seconds),
+            stage=self.stage,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -752,13 +765,14 @@ def _stage_windows(
         "--workflow-run-attempt",
         "1",
     )
+    stage_deadline = deadline.bounded(_PLATFORM_STAGE_TIMEOUT_SECONDS)
     try:
         result = run_bounded_process(
             command,
             payload=None,
             cwd=repo,
             environment=environment,
-            timeout_seconds=deadline.remaining(),
+            timeout_seconds=stage_deadline.remaining(),
             max_stdout_bytes=16 * 1024,
             max_stderr_bytes=16 * 1024,
         )
@@ -1757,6 +1771,7 @@ def _run_bootstrap_until_ready(
     expected_slot: str,
     deadline: Deadline,
 ) -> RuntimeRun:
+    runtime_deadline = deadline.bounded(_RUNTIME_READY_TIMEOUT_SECONDS)
     slots = SlotStore(install_root)
     manifest = slots.release_manifest(expected_slot)
     artifact = manifest.artifact(CORE_ARTIFACT_ID)
@@ -1794,7 +1809,7 @@ def _run_bootstrap_until_ready(
             install_root,
             expected_slot=expected_slot,
             port=port,
-            deadline=deadline,
+            deadline=runtime_deadline,
             bootstrap_results=result,
             bootstrap_failures=failure,
         )
@@ -1803,6 +1818,8 @@ def _run_bootstrap_until_ready(
             supervisor.request_stop(int(signal.SIGTERM))
         except Exception:
             pass
+        # Readiness is capped by the phase deadline, while process-tree cleanup
+        # retains its ordinary grace period without exceeding the ceremony.
         remaining = deadline.expires_at - time.monotonic()
         thread.join(timeout=min(15.0, max(0.5, remaining)))
     if thread.is_alive():
@@ -2275,6 +2292,12 @@ def _build_and_run(repo: Path, temporary: Path, deadline: Deadline) -> dict[str,
         "status": "passed",
         "evidence_class": "local-windows-drill",
         "elapsed_seconds": round(time.monotonic() - started_at, 3),
+        "deadline_policy": {
+            "total_timeout_seconds": round(deadline.expires_at - started_at, 3),
+            "platform_stage_timeout_seconds": _PLATFORM_STAGE_TIMEOUT_SECONDS,
+            "runtime_readiness_timeout_seconds": _RUNTIME_READY_TIMEOUT_SECONDS,
+            "runtime_readiness_windows": 4,
+        },
         "target": {"platform": TARGET_PLATFORM, "architecture": TARGET_ARCHITECTURE},
         "version": __version__,
         "signing": {
@@ -2506,7 +2529,11 @@ def _parser() -> argparse.ArgumentParser:
         "--timeout-seconds",
         type=float,
         default=DEFAULT_TIMEOUT_SECONDS,
-        help="total bounded drill time, between 45 and 3600 seconds",
+        help=(
+            f"total bounded drill time, between {_MIN_TIMEOUT_SECONDS:g} and "
+            f"{_MAX_TIMEOUT_SECONDS:g} seconds; each Runtime readiness window "
+            f"is bounded to {_RUNTIME_READY_TIMEOUT_SECONDS:g} seconds"
+        ),
     )
     parser.add_argument(
         "--report",
