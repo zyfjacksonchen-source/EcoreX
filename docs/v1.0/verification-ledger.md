@@ -1419,3 +1419,21 @@ The failed ceremony is evidence that the canonical Browser fix works in the
 integrated package, not a Candidate receipt. The next fixed-commit run must
 name the narrower startup layer before any implementation correction is
 accepted.
+
+## Packaged IANA timezone root-cause closure - 2026-07-13
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Seventh local ceremony from `f6ca3ff1` | 1 | Eight Windows stage receipts, released-v0.3 copy-on-write migration and nonce-bound provisional health passed. Full Runtime exited `64` at exact safe stage `application_composition`; the disposable candidate was retained only for diagnosis and no report/publication was created. |
+| Exact packaged-interpreter reproduction | 1 | The signed slot completed Runtime/Pack composition, then FastAPI application construction raised `ValueError: usage timezone is invalid`; the nested cause was `ZoneInfoNotFoundError: Asia/Shanghai` and `ModuleNotFoundError: tzdata`. Relevant packaged EcoreX modules matched source byte-for-byte. |
+| Dependency and environment correction | 0 | Product and Runtime locks pin `tzdata==2026.2`; the Core closure includes it. The `-I` Core probe and product server explicitly reset `zoneinfo` to an empty search path and clear its cache; Bootstrap also sets `PYTHONTZPATH=""` for non-isolated paths. Lock manifest SHA-256 is `f05ecab2bac52bbbe61b9728ffb0ecc0166aeff8a3bb0e9016a66e8979592097`; Runtime profile contains 22 packages. |
+| Source/runtime regression | 0 | `Asia/Shanghai` resolved with bundled `tzdata 2026.2`; dependency-lock, product entrypoint, Bootstrap environment, usage projection and platform-staging set passed 111 tests with 3 platform-conditioned skips. Ruff, Python compilation and `git diff --check` passed. |
+| Supply-chain completeness correction | 0 | Candidate pipeline regression passed 15 tests. Preflight now derives license inventory from all Runtime lock entries and requires exact name/version coverage: 22 locked = 22 licensed, including `tzdata 2026.2 / Apache-2.0`; 449 production files passed secret scan with inventory digest `25a9ccb296bad4f8973985ea3eac07f523c85e2685fc610f2c452fc9aa5b5cc3`. Report: `.candidate/quality/supply-chain-local-tzdata-fix-v3.json`. |
+| Final related source gate | 0 | Candidate/release integrity, dependency lock, Product Runtime entrypoint, Bootstrap, usage and platform-staging suites passed 134 tests with 3 platform-conditioned skips. Source-tree policy passed with 632 files; Ruff, compilation, progress JSON and whitespace gates passed. |
+| Disposable full-closure side proof | 124 | Uncredited: a second real `_build_python_closure` did not emit a result before the 904-second command limit. Its partial 2,375-file, 61,841,500-byte temp tree was removed after exact-prefix validation and handle release. This does not replace or weaken the next full ceremony. |
+
+The prior signed slot lacks the new dependency and cannot prove the fix by
+mutation without invalidating its signature. A new fixed-commit ceremony must
+build Core again, pass its new timezone probe and complete the entire signed
+install/update/rollback drill. Live managed-model/Image 2 and protected macOS
+admission remain separate release blockers.

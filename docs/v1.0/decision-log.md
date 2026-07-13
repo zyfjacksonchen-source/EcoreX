@@ -1496,3 +1496,28 @@
 - Consequence: Candidate failures become actionable without reopening stderr,
   and an HTTP configuration rejection cannot leak managed transports between
   Bootstrap launches.
+
+## ADR-093 - Signed Core is the timezone-data authority
+
+- Status: accepted.
+- Decision: Core ships an exact hash-locked `tzdata` distribution. The
+  isolated platform probe and product server explicitly call
+  `zoneinfo.reset_tzpath(())` and clear its cache; Bootstrap additionally sets
+  `PYTHONTZPATH=""` for non-isolated paths. Python `zoneinfo` must therefore
+  resolve named IANA zones from the signed product closure on every supported
+  host, independent of a system database or developer environment.
+- Validation boundary: the generated Core interpreter imports the bundled
+  distribution and resolves `Asia/Shanghai` before platform staging may emit
+  a Core receipt. Source-interpreter success is insufficient evidence for a
+  packaged Runtime. Dependency identity remains part of the Candidate lock
+  manifest and SBOM. Supply-chain preflight must license exactly every
+  canonical package/version in the Runtime lock; a successful subset is not a
+  valid receipt.
+- Rejected alternatives: falling back to UTC, the current numeric offset or a
+  host-specific timezone registry would make day/week projections silently
+  wrong and would produce different product behavior across Windows and
+  macOS. Runtime therefore fails closed if its signed named-zone authority is
+  absent or invalid.
+- Consequence: usage windows, scheduler deadlines and audit timestamps share
+  one deterministic timezone authority across install, update and rollback;
+  host drift cannot change application composition after a signed build.

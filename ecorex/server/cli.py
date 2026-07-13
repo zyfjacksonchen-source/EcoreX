@@ -7,6 +7,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import IntEnum
 import sys
+import zoneinfo
 
 from fastapi import FastAPI
 import uvicorn
@@ -80,6 +81,12 @@ def build_product_runtime_server(
     port: int,
     runtime_loader: Callable[..., ProductRuntimeComposition] = _load_product_runtime_for_cli,
 ) -> ProductRuntimeServer:
+    # The native launcher uses Python isolated mode, which intentionally
+    # ignores PYTHON* environment variables. Reset the process authority
+    # explicitly so Windows and macOS both resolve named zones from the
+    # signed tzdata distribution carried by Core, never mutable host files.
+    zoneinfo.reset_tzpath(())
+    zoneinfo.ZoneInfo.clear_cache()
     try:
         composition = runtime_loader(host=host, port=port)
     except ProductRuntimeConfigurationError:

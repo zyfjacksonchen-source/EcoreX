@@ -90,28 +90,17 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _license_inventory(repo: Path) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    runtime_names = {
-        "cryptography",
-        "fastapi",
-        "httpx",
-        "pydantic",
-        "uvicorn",
-        "websockets",
-    }
+def _license_inventory(
+    repo: Path,
+    runtime_names: set[str],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     python: list[dict[str, str]] = []
-    pending = list(sorted(runtime_names))
-    visited: set[str] = set()
-    while pending:
-        requested_name = pending.pop(0)
+    for requested_name in sorted(runtime_names, key=canonicalize_name):
         canonical_name = canonicalize_name(requested_name)
-        if canonical_name in visited:
-            continue
         try:
             package = importlib_metadata.metadata(requested_name)
         except importlib_metadata.PackageNotFoundError:
             raise ValueError(f"license_package_missing:{requested_name}") from None
-        visited.add(canonical_name)
         name = str(package.get("Name") or requested_name)
         classifiers = package.get_all("Classifier") or []
         classifier_license = next(
@@ -143,21 +132,6 @@ def _license_inventory(repo: Path) -> tuple[list[dict[str, str]], list[dict[str,
                 "license": license_value.strip(),
             }
         )
-        for raw_requirement in package.get_all("Requires-Dist") or []:
-            try:
-                requirement = Requirement(raw_requirement)
-                if requirement.marker is not None and not requirement.marker.evaluate(
-                    {"extra": ""}
-                ):
-                    continue
-            except (InvalidRequirement, ValueError):
-                raise ValueError(f"license_requirement_invalid:{name}") from None
-            dependency = canonicalize_name(requirement.name)
-            if dependency not in visited and dependency not in {
-                canonicalize_name(item) for item in pending
-            }:
-                pending.append(requirement.name)
-        pending.sort(key=canonicalize_name)
     python.sort(key=lambda item: canonicalize_name(item["name"]))
     lock_path = repo / "desktop" / "package-lock.json"
     lock = json.loads(lock_path.read_text(encoding="utf-8"))
@@ -261,13 +235,18 @@ def _scan_secret_files(files: tuple[Path, ...]) -> tuple[int, str]:
 
 def _preflight(repo: Path) -> dict[str, Any]:
     resolved = repo.resolve(strict=True)
-    python, node = _license_inventory(resolved)
     dependency_lock = load_dependency_lock_manifest(
         resolved / "requirements" / "locks" / "manifest.json"
     )
     runtime_versions = _lock_versions(
         dependency_lock.path.parent / dependency_lock.profiles["runtime"]["lock"]
     )
+    python, node = _license_inventory(resolved, set(runtime_versions))
+    licensed_versions = {
+        canonicalize_name(item["name"]): item["version"] for item in python
+    }
+    if set(licensed_versions) != set(runtime_versions):
+        raise ValueError("license_runtime_lock_coverage_mismatch")
     for item in python:
         name = canonicalize_name(item["name"])
         if runtime_versions.get(name) != item["version"]:

@@ -75,6 +75,7 @@ _RUNTIME_DISTRIBUTIONS = (
     "fastapi",
     "httpx",
     "pydantic",
+    "tzdata",
     "uvicorn",
     "websockets",
 )
@@ -663,13 +664,7 @@ def _build_python_closure(
         platform=platform,
         architecture=architecture,
     )
-    probe = (
-        str(interpreter),
-        "-I",
-        "-B",
-        "-c",
-        "import cryptography,fastapi,httpx,pydantic,uvicorn,websockets,ecorex;print(ecorex.__version__)",
-    )
+    probe = _pack_python_probe_command(interpreter)
     result = _run(probe, cwd=core, environment=_runtime_environment(), timeout=60, code="pack_python_probe_failed")
     if result.stdout.strip() != __version__.encode("ascii"):
         raise StageError("pack_python_probe_failed")
@@ -677,6 +672,21 @@ def _build_python_closure(
     # Reuse that immutable identity for the remaining synchronous stage instead
     # of scanning the exact same closure a third time before Pack staging.
     return inventory, interpreter, identity
+
+
+def _pack_python_probe_command(interpreter: Path) -> tuple[str, ...]:
+    return (
+        str(interpreter),
+        "-I",
+        "-B",
+        "-c",
+        (
+            "import cryptography,fastapi,httpx,pydantic,tzdata,uvicorn,websockets,ecorex,zoneinfo;"
+            "zoneinfo.reset_tzpath(());zoneinfo.ZoneInfo.clear_cache();"
+            "assert zoneinfo.ZoneInfo('Asia/Shanghai').key == 'Asia/Shanghai';"
+            "print(ecorex.__version__)"
+        ),
+    )
 
 
 def _install_native(native: Path, core: Path, platform: str) -> None:
@@ -2095,6 +2105,9 @@ def _runtime_environment() -> Mapping[str, str]:
             "PYTHONIOENCODING": "utf-8",
             "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONNOUSERSITE": "1",
+            # An empty TZ search path forces zoneinfo to use the signed
+            # tzdata wheel rather than host-specific system files.
+            "PYTHONTZPATH": "",
             "PYTHONUTF8": "1",
         }
     )

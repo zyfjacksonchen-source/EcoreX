@@ -4004,3 +4004,62 @@ redaction and pre-transfer cleanup. A
 fresh committed ceremony is still required to identify and then correct the
 specific application layer; this diagnostic refinement is not a Candidate
 pass.
+
+## 2026-07-13 - Signed Core owns its IANA timezone database
+
+The seventh zero-publication Windows ceremony ran from committed source
+`f6ca3ff1`. It again generated all eight Windows platform-stage receipts,
+completed the released-v0.3 copy-on-write migration and passed the nonce-bound
+provisional activation probe. The full Runtime then failed closed with exit
+code `64` at the newly isolated `application_composition` stage. The retained
+disposable slot was used only for bounded diagnosis; no report, release or
+publication endpoint was written.
+
+The same slot succeeded through signed Runtime composition when loaded from
+the source interpreter, but failed while constructing the FastAPI application
+under its packaged interpreter. The exact nested cause was
+`ZoneInfoNotFoundError` for `Asia/Shanghai`, caused by the packaged Core not
+containing the `tzdata` distribution. Windows does not provide a system IANA
+timezone database, while the developer interpreter happened to have one. This
+made the source-tree result a false proxy for the signed product environment.
+Hashes and file counts confirmed that the relevant packaged EcoreX modules
+matched source; credential-vault and Capability Pack composition were ruled
+out before changing code.
+
+Core now pins and carries `tzdata==2026.2` in the product dependency source,
+all affected hash locks and the platform-stager Runtime closure. Because the
+native launcher correctly uses Python isolated mode and therefore ignores
+`PYTHON*` environment variables, both the Core probe and product server
+explicitly call `zoneinfo.reset_tzpath(())` and clear the zone cache. The
+Bootstrap environment also sets an empty `PYTHONTZPATH` for non-isolated
+diagnostic paths. The Core probe imports `tzdata` and resolves
+`Asia/Shanghai` from the generated `pack-python` before any stage receipt can
+be accepted. There is deliberately no UTC or fixed-offset fallback: such a
+fallback would silently corrupt day/week usage windows and future daylight-
+saving behavior.
+
+Lock admission, product entrypoint, Bootstrap environment, usage projection
+and platform-staging regression passed 111 tests with three platform-
+conditioned skips; Ruff,
+compilation and whitespace checks passed. A separate disposable full-closure
+proof was intentionally uncredited after the command boundary terminated it
+at 904 seconds before the stager emitted a result. Its 61,841,500-byte partial
+tree was safely removed after the child released its file handles. The next
+committed full ceremony remains the authoritative packaged-Core proof and must
+also complete install, update, bad-digest and rollback gates before this work
+can earn a Candidate receipt.
+
+The dependency addition also exposed a supply-chain completeness defect. The
+preflight license collector had six old Runtime roots hard-coded and checked
+only that collected packages matched the lock; it did not require every locked
+package to appear in the license evidence. It could therefore report success
+with 22 locked packages but only 21 licensed packages. The Runtime lock is now
+the sole input set for Python license collection, and exact canonical-name and
+version equality is mandatory in both directions. Candidate pipeline
+regression passed 15 tests. The corrected preflight records all 22 Runtime
+packages, including `tzdata 2026.2` as `Apache-2.0`, and passed the 449-file
+secret inventory with report
+`.candidate/quality/supply-chain-local-tzdata-fix-v3.json`. The final combined
+Candidate/release-integrity, dependency, entrypoint, Bootstrap, usage and
+platform-staging gate passed 134 tests with three platform-conditioned skips;
+the authoritative source-tree check reports 632 files.

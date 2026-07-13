@@ -2008,6 +2008,30 @@ def test_product_server_normalizes_runtime_composition_value_error() -> None:
     assert "native-runtime-composition-secret" not in str(failure.value)
 
 
+def test_product_server_sets_signed_timezone_authority_before_runtime_loader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    order: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(
+        "ecorex.server.cli.zoneinfo.reset_tzpath",
+        lambda paths: order.append(("timezone", paths)),
+    )
+
+    def invalid_loader(**_kwargs):
+        order.append(("runtime", None))
+        raise ValueError("expected-after-timezone-authority")
+
+    with pytest.raises(ProductRuntimeConfigurationError):
+        build_product_runtime_server(
+            host="127.0.0.1",
+            port=8765,
+            runtime_loader=invalid_loader,
+        )
+
+    assert order == [("timezone", ()), ("runtime", None)]
+
+
 def test_product_server_normalizes_application_composition_and_closes_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

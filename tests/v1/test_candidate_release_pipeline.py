@@ -54,6 +54,38 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def test_supply_chain_preflight_licenses_every_runtime_lock_package(
+    tmp_path: Path,
+) -> None:
+    repository = Path(__file__).resolve().parents[2]
+    report_path = tmp_path / "supply-chain-preflight.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(repository / "scripts/check-v1-candidate-supply-chain.py"),
+            "preflight",
+            "--repo",
+            str(repository),
+            "--report",
+            str(report_path),
+        ],
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    runtime_count = report["gates"]["dependency-lock"]["runtime_packages"]
+    licenses = report["gates"]["license"]["python_packages"]
+    assert runtime_count > 0
+    assert len(licenses) == runtime_count
+    assert {
+        (item["name"].casefold(), item["version"], item["license"])
+        for item in licenses
+        if item["name"].casefold() == "tzdata"
+    } == {("tzdata", "2026.2", "Apache-2.0")}
+
+
 def _external_signer(tmp_path: Path) -> tuple[DigestPinnedExternalSigner, bytes, bytes]:
     private = Ed25519PrivateKey.generate()
     private_raw = private.private_bytes(

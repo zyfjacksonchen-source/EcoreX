@@ -1027,6 +1027,10 @@ def _sanitized_environment(source: Mapping[str, str]) -> Mapping[str, str]:
     # must never create or replace ``__pycache__`` inside the signed payload.
     clean["PYTHONDONTWRITEBYTECODE"] = "1"
     clean["PYTHONNOUSERSITE"] = "1"
+    # Runtime calendar projections must use the signed IANA database shipped
+    # in Core on Windows and macOS. An empty path makes zoneinfo fall back to
+    # the bundled tzdata package instead of mutable host data.
+    clean["PYTHONTZPATH"] = ""
     return MappingProxyType(clean)
 
 

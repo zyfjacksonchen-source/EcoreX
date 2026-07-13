@@ -311,6 +311,7 @@ def test_uses_authoritative_pointer_and_launches_with_fixed_safe_argv(
     assert spec.environment["PATH"] != "attacker-path"
     assert spec.environment["PYTHONDONTWRITEBYTECODE"] == "1"
     assert spec.environment["PYTHONNOUSERSITE"] == "1"
+    assert spec.environment["PYTHONTZPATH"] == ""
 
 
 def test_runtime_failure_reports_only_nonce_bound_safe_startup_stage(
@@ -583,6 +584,7 @@ def test_default_launcher_uses_no_shell_and_a_sanitized_environment(
     assert "GITHUB_TOKEN" not in kwargs["env"]
     assert kwargs["env"]["PYTHONDONTWRITEBYTECODE"] == "1"
     assert kwargs["env"]["PYTHONNOUSERSITE"] == "1"
+    assert kwargs["env"]["PYTHONTZPATH"] == ""
     assert Path(kwargs["executable"]).is_absolute()
 
 

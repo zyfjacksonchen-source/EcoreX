@@ -1169,6 +1169,18 @@ def test_platform_stager_binds_installed_runtime_inventory_to_hash_lock() -> Non
         )
 
 
+def test_platform_stager_bundles_and_forces_signed_iana_timezone_data() -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+
+    assert "tzdata" in stager["_RUNTIME_DISTRIBUTIONS"]
+    assert stager["_runtime_environment"]()["PYTHONTZPATH"] == ""
+    probe = stager["_pack_python_probe_command"](Path("pack-python"))
+    assert probe[:4] == ("pack-python", "-I", "-B", "-c")
+    assert "import cryptography,fastapi,httpx,pydantic,tzdata" in probe[4]
+    assert "zoneinfo.reset_tzpath(())" in probe[4]
+    assert "zoneinfo.ZoneInfo('Asia/Shanghai')" in probe[4]
+
+
 @pytest.mark.parametrize("pack_id", ("browser", "sandbox"))
 def test_platform_stager_emits_runtime_canonical_process_pack_descriptor(
     tmp_path: Path,
