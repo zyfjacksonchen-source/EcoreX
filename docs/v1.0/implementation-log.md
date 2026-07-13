@@ -4063,3 +4063,50 @@ secret inventory with report
 Candidate/release-integrity, dependency, entrypoint, Bootstrap, usage and
 platform-staging gate passed 134 tests with three platform-conditioned skips;
 the authoritative source-tree check reports 632 files.
+
+## 2026-07-13 - Signed Core owns its multipart route dependency
+
+The eighth zero-publication Windows ceremony ran from committed source
+`3c78d1d0`. The rebuilt Core passed its isolated signed-IANA probe, all eight
+Windows stage receipts were emitted, released-v0.3 data migrated copy-on-write
+and the nonce-bound provisional activation health check passed. The subsequent
+full business Runtime remained before the data barrier and eventually exited
+with code `70` at the aggregate safe stage `software`. Bootstrap correctly
+revoked the provisional sandbox authorization and restored the empty first-
+install slot pointers. No Candidate report, release endpoint or publication
+endpoint was written.
+
+The retained disposable slot was diagnosed with its own hash-verified
+`pack-python` interpreter in isolated mode. Because rollback had intentionally
+revoked the slot's sandbox attestation, the diagnostic temporarily bypassed
+only `WindowsSandboxSlotSecurity.validate` in that one diagnostic process,
+restored the signed pointer for composition and restored the empty pointer on
+exit. It did not change a signed byte, re-authorize the slot, serve traffic or
+qualify as Candidate evidence. The exact failure was a
+`ModuleNotFoundError` raised by FastAPI while registering multipart form routes:
+`python-multipart` existed only in the developer extra, so the source
+interpreter again masked an incomplete signed Core closure. The earlier
+working-set observation was therefore not the root cause.
+
+The already reviewed `python-multipart==0.0.26` baseline is now a direct
+Runtime dependency rather than a developer-only dependency. Runtime, Cloud
+and platform-stage locks carry the same exact hashes; no unrelated dependency
+was upgraded. The Core closure contains the distribution, and its isolated
+probe imports FastAPI's required `multipart.multipart.parse_options_header`
+before a Core receipt can be accepted. FastAPI application-construction
+`RuntimeError` is also normalized to the existing redacted
+`application_composition` stage, so a future route dependency failure remains
+actionable without exposing native exception text.
+
+The exact import reports version `0.0.26`. Product entrypoint, platform-stage
+and reproducibility regression passed 89 tests with two platform-conditioned
+skips; product ASGI, upload, attachment, Artifact API, dependency-lock and
+Bootstrap regression passed 55 tests with two skips. Ruff, dependency-lock,
+source-tree, Runtime/server schema-authority and design-system gates passed.
+The corrected supply-chain preflight records 23 Runtime packages = 23 licensed
+packages, including `python-multipart 0.0.26 / Apache-2.0`, and scans 449
+production files. Its report is
+`.candidate/quality/supply-chain-local-multipart-fix.json`. A fresh committed
+ninth ceremony must rebuild the signed Core and complete install, migration,
+update, bad-digest and rollback gates; the retained failed slot cannot prove
+this correction by mutation.

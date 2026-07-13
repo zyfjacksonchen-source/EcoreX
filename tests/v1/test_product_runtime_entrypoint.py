@@ -2032,13 +2032,15 @@ def test_product_server_sets_signed_timezone_authority_before_runtime_loader(
     assert order == [("timezone", ()), ("runtime", None)]
 
 
+@pytest.mark.parametrize("error_type", (ValueError, RuntimeError))
 def test_product_server_normalizes_application_composition_and_closes_once(
     monkeypatch: pytest.MonkeyPatch,
+    error_type: type[Exception],
 ) -> None:
     composition = _StartupStageComposition()
 
     def invalid_app(_settings):
-        raise ValueError("native-application-composition-secret")
+        raise error_type("native-application-composition-secret")
 
     monkeypatch.setattr("ecorex.server.cli.create_product_app", invalid_app)
     with pytest.raises(ProductRuntimeConfigurationError) as failure:

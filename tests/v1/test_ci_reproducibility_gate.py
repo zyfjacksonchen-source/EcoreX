@@ -120,10 +120,10 @@ def test_dev_toolchain_is_pinned_and_lint_has_a_cross_platform_entrypoint() -> N
 
     assert project["project"]["optional-dependencies"]["dev"] == [
         "jsonschema==4.26.0",
-        "python-multipart==0.0.26",
         "pytest==9.1.1",
         "ruff==0.15.21",
     ]
+    assert "python-multipart==0.0.26" in project["project"]["dependencies"]
     assert project["tool"]["ruff"]["target-version"] == "py311"
     assert project["tool"]["ruff"]["lint"]["select"] == ["E4", "E7", "E9", "F"]
     assert (ROOT / "scripts" / "run-v1-lint.py").is_file()

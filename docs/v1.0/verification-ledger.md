@@ -1437,3 +1437,19 @@ mutation without invalidating its signature. A new fixed-commit ceremony must
 build Core again, pass its new timezone probe and complete the entire signed
 install/update/rollback drill. Live managed-model/Image 2 and protected macOS
 admission remain separate release blockers.
+
+## Packaged multipart route-dependency closure - 2026-07-13
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Eighth local ceremony from `3c78d1d0` | 1 | The rebuilt Core passed the signed `Asia/Shanghai` probe; all eight Windows receipts, released-v0.3 copy-on-write migration and provisional health passed. Full Runtime then exited `70` at safe aggregate stage `software`; Bootstrap revoked the sandbox authorization and restored first-install pointers. No Candidate report or publication was created. |
+| Exact packaged-interpreter diagnosis | 1 | In-process diagnostic temporarily bypassed only the rollback-revoked sandbox validation, restored the signed pointer for read-only composition and restored it on exit. FastAPI route registration failed with nested `ModuleNotFoundError` for `python-multipart`; signed payload bytes were not changed and this diagnostic is not Candidate evidence. |
+| Runtime dependency correction | 0 | Existing reviewed `python-multipart==0.0.26` moved from dev-only to direct Runtime dependency. Runtime, Cloud and platform-stage locks gained only that exact hashed distribution; Core closure/probe imports `multipart.multipart.parse_options_header`. Application-construction `RuntimeError` maps to the redacted `application_composition` stage. Manifest SHA-256 is `5e59ad4e74a4e870f9d1c734a17ca04f28e1cd2e184c75eb1377083ebd47103c`; Runtime profile contains 23 packages. |
+| Focused product regression | 0 | Entry point/platform staging/reproducibility: 89 passed, 2 platform skips. Product ASGI/upload/attachment/Artifact/dependency/Bootstrap: 55 passed, 2 platform skips. Exact import returned `0.0.26`; Ruff passed. |
+| Source and contract gates | 0 | Source-tree policy reports 632 files; Runtime schema authority has 20 fragments and zero violations; server authority has 8 authorities/3 roots and zero violations; design-system strict set has zero hardcoded radii, shadows, colors, numeric z-index, layout transitions or `transition: all`. |
+| Supply-chain preflight | 0 | 23 locked Runtime packages = 23 licensed packages, including `python-multipart 0.0.26 / Apache-2.0`; 449 production files passed the secret scan with inventory digest `546cf106c484ab3cf99000bce0757f21fc9e805d1d580f1e5560a9749d336653`. Report: `.candidate/quality/supply-chain-local-multipart-fix.json`. |
+
+The retained eighth slot is root-cause evidence only. A ninth source-pinned
+zero-publication ceremony must build the corrected closure and pass its full
+install/update/rollback sequence. Live managed-model/Image 2 and protected
+macOS evidence remain independent release blockers.

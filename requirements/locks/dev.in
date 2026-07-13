@@ -2,7 +2,6 @@
 
 # Source-quality and contract gates. Exact pins mirror the dev extra.
 jsonschema==4.26.0
-python-multipart==0.0.26
 pytest==9.1.1
 ruff==0.15.21
 

@@ -1521,3 +1521,31 @@
 - Consequence: usage windows, scheduler deadlines and audit timestamps share
   one deterministic timezone authority across install, update and rollback;
   host drift cannot change application composition after a signed build.
+
+## ADR-094 - Public ASGI route dependencies belong to signed Core
+
+- Status: accepted.
+- Decision: every Python distribution imported while constructing the public
+  FastAPI application or registering one of its routes is a direct Runtime
+  dependency, part of the hash-locked Core closure and license inventory. A
+  developer extra or an already installed host package cannot satisfy the
+  product contract. Core's isolated probe imports the compatibility symbol
+  FastAPI needs for multipart route registration before a stage receipt is
+  emitted.
+- Version boundary: promote the already reviewed
+  `python-multipart==0.0.26` baseline without opportunistically upgrading it.
+  Runtime, Cloud and platform-stage profiles inherit the same exact hashes;
+  dev inherits it from Runtime rather than declaring a second root.
+- Diagnostic boundary: a `RuntimeError` raised synchronously during FastAPI
+  construction is classified as the fixed redacted
+  `application_composition` stage and closes the unstarted composition once.
+  Trust/integrity failures retain their own handling, and no native exception
+  text, path or form value is persisted by Bootstrap.
+- Rejected alternatives: relying on a source-interpreter import, lazily
+  installing the package on a user machine, or removing upload routes from
+  the probe would reproduce environment-dependent startup. Mutating a failed
+  signed slot for proof would invalidate its identity and is not acceptable
+  Candidate evidence.
+- Consequence: first install and update cannot pass Core staging with a
+  Runtime that later fails merely by registering its supported attachment or
+  Artifact upload endpoints.

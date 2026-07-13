@@ -108,7 +108,7 @@ def build_product_runtime_server(
     except BundleIntegrityError:
         composition.close_unstarted()
         raise
-    except (ServerConfigurationError, ValueError):
+    except (ServerConfigurationError, RuntimeError, ValueError):
         composition.close_unstarted()
         raise ProductRuntimeConfigurationError(
             "Product Runtime application composition is invalid",

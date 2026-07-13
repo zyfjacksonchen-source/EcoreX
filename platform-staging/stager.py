@@ -75,6 +75,7 @@ _RUNTIME_DISTRIBUTIONS = (
     "fastapi",
     "httpx",
     "pydantic",
+    "python-multipart",
     "tzdata",
     "uvicorn",
     "websockets",
@@ -682,6 +683,8 @@ def _pack_python_probe_command(interpreter: Path) -> tuple[str, ...]:
         "-c",
         (
             "import cryptography,fastapi,httpx,pydantic,tzdata,uvicorn,websockets,ecorex,zoneinfo;"
+            "from multipart.multipart import parse_options_header;"
+            "assert parse_options_header;"
             "zoneinfo.reset_tzpath(());zoneinfo.ZoneInfo.clear_cache();"
             "assert zoneinfo.ZoneInfo('Asia/Shanghai').key == 'Asia/Shanghai';"
             "print(ecorex.__version__)"
