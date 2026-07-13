@@ -21,6 +21,7 @@
 .ex-composer-tool,
 .ex-mode-switch button,
 .ex-new-conversation-options button,
+.ex-composer-attachment button,
 .ex-disposition,
 .ex-send-button,
 .ex-artifact-primary,
@@ -42,6 +43,7 @@
 .ex-composer-tool,
 .ex-mode-switch button,
 .ex-new-conversation-options button,
+.ex-composer-attachment button,
 .ex-disposition,
 .ex-send-button {
   min-height: var(--target-desktop);

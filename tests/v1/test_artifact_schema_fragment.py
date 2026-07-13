@@ -16,6 +16,8 @@ _ARTIFACT_OBJECTS = {
     "idx_artifact_entities_visibility_order",
     "idx_artifact_entities_owner_visibility_order",
     "artifact_entity_scope_immutable",
+    "input_attachment_uploads",
+    "idx_input_attachment_uploads_account_created",
     "artifact_display_name_claims",
     "artifact_revisions",
     "idx_artifact_revisions_artifact",
@@ -47,7 +49,7 @@ def _artifact_schema(path: Path) -> tuple[tuple[str, str, str, str], ...]:
 def test_artifact_fragment_declares_the_complete_repository_inventory() -> None:
     assert ARTIFACT_SCHEMA_FRAGMENT.fragment_id == "artifacts"
     assert set(ARTIFACT_SCHEMA_FRAGMENT.object_names) == _ARTIFACT_OBJECTS
-    assert len(ARTIFACT_SCHEMA_FRAGMENT.object_names) == 18
+    assert len(ARTIFACT_SCHEMA_FRAGMENT.object_names) == 20
 
 
 def test_artifact_repository_rejects_missing_index_without_repair(

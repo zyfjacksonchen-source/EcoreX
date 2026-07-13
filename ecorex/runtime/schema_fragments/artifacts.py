@@ -31,6 +31,21 @@ CREATE INDEX IF NOT EXISTS idx_artifact_entities_visibility_order
 CREATE INDEX IF NOT EXISTS idx_artifact_entities_owner_visibility_order
     ON artifact_entities(owner_account_id, visibility, created_order);
 
+CREATE TABLE IF NOT EXISTS input_attachment_uploads (
+    client_request_id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    request_digest TEXT NOT NULL,
+    original_name TEXT NOT NULL,
+    artifact_id TEXT NOT NULL UNIQUE,
+    revision_id TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(artifact_id) REFERENCES artifact_entities(artifact_id) ON DELETE CASCADE,
+    FOREIGN KEY(revision_id) REFERENCES artifact_revisions(revision_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_input_attachment_uploads_account_created
+    ON input_attachment_uploads(account_id, created_at);
+
 CREATE TRIGGER IF NOT EXISTS artifact_entity_scope_immutable
 BEFORE UPDATE OF owner_account_id, thread_id, turn_id, created_by_tool_id
 ON artifact_entities
@@ -193,6 +208,8 @@ CREATE INDEX IF NOT EXISTS idx_artifact_retouch_workspaces_owner
         "artifact_entities",
         "idx_artifact_entities_visibility_order",
         "idx_artifact_entities_owner_visibility_order",
+        "input_attachment_uploads",
+        "idx_input_attachment_uploads_account_created",
         "artifact_entity_scope_immutable",
         "artifact_display_name_claims",
         "artifact_revisions",

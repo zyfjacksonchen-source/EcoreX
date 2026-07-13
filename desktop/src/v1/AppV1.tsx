@@ -704,12 +704,14 @@ export function AppV1() {
             chatModel={runtime.chatModel}
             imageModel={runtime.imageModel}
             quota={bootstrap?.quota || null}
+            usage={runtime.conversationUsage}
             permissionLabel={accessLabel}
             permissionDescription={accessDescription}
             onChatModelChange={runtime.setChatModel}
             onImageModelChange={runtime.setImageModel}
             onModeChange={runtime.setMode}
             onSend={runtime.sendMessage}
+            onUploadAttachment={runtime.uploadInputAttachment}
             onInterrupt={() => void runtime.interrupt()}
           />
         </main>

@@ -581,12 +581,14 @@ class CapabilityService:
         *,
         intent: str,
         explicit_tools: tuple[str, ...] = (),
+        runtime_direct_tools: tuple[str, ...] = (),
         availability: RuntimeAvailability,
         policy: ExecutionPolicy,
     ) -> CapabilityPlan:
         plan = self.planner.plan(
             intent=intent,
             explicit_tools=explicit_tools,
+            runtime_direct_tools=runtime_direct_tools,
             availability=availability,
             policy=policy,
         )

@@ -10,8 +10,10 @@ import {
 import type {
   ArtifactProjection,
   BootstrapResponse,
+  ConversationUsageProjection,
   EventEnvelope,
   InteractionResponse,
+  InputAttachmentProjection,
   ItemProjection,
   LiveReplayResponse,
   MemorySnapshot,
@@ -195,6 +197,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   const [systemHealth, setSystemHealth] = useState<SystemHealthSample | null>(null);
   const [systemHealthLoadState, setSystemHealthLoadState] = useState<LoadState>("loading");
   const [systemHealthError, setSystemHealthError] = useState<string | null>(null);
+  const [conversationUsage, setConversationUsage] = useState<ConversationUsageProjection | null>(null);
   const [mode, setMode] = useState<TaskMode>("office");
   const [chatModel, setChatModel] = useState("");
   const [imageModel, setImageModel] = useState("");
@@ -280,6 +283,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
       bootstrap: stateRef.current.bootstrap,
     };
     watermarkRef.current = 0;
+    setConversationUsage(null);
     dispatch({ type: "thread.cleared" });
   }, []);
 
@@ -552,6 +556,29 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   }, [client]);
 
   const threadId = state.thread?.thread_id ?? null;
+
+  const refreshConversationUsage = useCallback(async (
+    targetThreadId: string,
+    signal?: AbortSignal,
+  ) => {
+    try {
+      const usage = await client.conversationUsage(targetThreadId, signal);
+      if (signal?.aborted || stateRef.current.thread?.thread_id !== targetThreadId) {
+        return false;
+      }
+      setConversationUsage(usage);
+      return true;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return false;
+      // Usage is informational. A temporary failure must not degrade the
+      // conversation transport or make an otherwise ready Composer unusable.
+      if (stateRef.current.thread?.thread_id === targetThreadId) {
+        setConversationUsage(null);
+      }
+      return false;
+    }
+  }, [client]);
+
   useEffect(() => {
     watermarkRef.current = state.watermark;
   }, [state.watermark]);
@@ -568,6 +595,16 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     });
     return () => controller.abort();
   }, [refreshArtifacts, threadId]);
+
+  useEffect(() => {
+    if (!threadId) {
+      setConversationUsage(null);
+      return;
+    }
+    const controller = new AbortController();
+    void refreshConversationUsage(threadId, controller.signal);
+    return () => controller.abort();
+  }, [refreshConversationUsage, threadId]);
 
   useEffect(() => {
     previewCache.reconcile(
@@ -625,6 +662,9 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
       pendingEvents = [];
       if (selectedThreadId.current !== threadId) return;
       applyEventBatch(events);
+      if (events.some((event) => event.event_type === "model.response_completed")) {
+        void refreshConversationUsage(threadId);
+      }
       if (events.some((event) => event.event_type.startsWith("artifact."))) {
         void refreshArtifacts(threadId).catch((error) => {
           setTransportError(errorMessage(error));
@@ -701,7 +741,15 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
       pendingEvents = [];
       dispatch({ type: "stream.state", state: "closed" });
     };
-  }, [applyEventBatch, client, refreshArtifacts, refreshProjection, refreshThreads, threadId]);
+  }, [
+    applyEventBatch,
+    client,
+    refreshArtifacts,
+    refreshConversationUsage,
+    refreshProjection,
+    refreshThreads,
+    threadId,
+  ]);
 
   useEffect(() => {
     if (!threadId || !state.resyncRequired) return;
@@ -1009,6 +1057,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   const sendMessage = useCallback(async (
     rawInput: string,
     disposition: SendDisposition = "steer",
+    attachments: readonly InputAttachmentProjection[] = [],
   ) => {
     const input = rawInput.trim();
     if (!input || submittingRef.current || threadSwitchInProgress.current) return false;
@@ -1039,11 +1088,13 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
         pendingRecord,
         input,
         currentThreadId,
+        attachments,
       )) {
         throw new Error("上一条消息待确认，请保留内容后重试。");
       }
       const operation = pendingRecord?.operation ?? support.module.createClientOperation({
             input,
+            attachments,
             threadId: currentThreadId,
             threadMetadata: currentThreadId ? undefined : pendingNewThreadMetadata.current,
             activeTurn: active,
@@ -1078,6 +1129,15 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     loadOperationSupport,
     refreshProjects,
   ]);
+
+  const uploadInputAttachment = useCallback(async (file: File) => {
+    try {
+      return await client.uploadInputAttachment(file);
+    } catch (error) {
+      setTransportError(errorMessage(error));
+      return null;
+    }
+  }, [client]);
 
   useEffect(() => {
     if (!bootstrapped) return;
@@ -1514,6 +1574,11 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     clearSystemHealthError: () => setSystemHealthError(null),
     refreshSystemHealth: () => void refreshSystemHealth(),
     loadSystemTechnicalHealth,
+    conversationUsage,
+    refreshConversationUsage: () => {
+      const activeThreadId = stateRef.current.thread?.thread_id;
+      return activeThreadId ? refreshConversationUsage(activeThreadId) : Promise.resolve(false);
+    },
     mode,
     setMode,
     chatModel,
@@ -1557,6 +1622,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     artifacts: effectiveArtifacts,
     artifactPreviewUrls,
     sendMessage,
+    uploadInputAttachment,
     interrupt,
     respondInteraction,
     updatePermission,

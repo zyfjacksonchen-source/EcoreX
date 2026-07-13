@@ -4,6 +4,7 @@ import test from "node:test";
 import type {
   ArtifactProjection,
   BootstrapResponse,
+  ConversationUsageProjection,
   ConnectorCatalogResponse,
   EventEnvelope,
   ShareSnapshotProjection,
@@ -23,7 +24,11 @@ import {
   createClientOperation,
   operationMatchesRetry,
 } from "../deferred/clientOperationOutbox.ts";
-import { RuntimeContractError, validateEventEnvelope } from "./runtimeContract.ts";
+import {
+  RuntimeContractError,
+  validateConversationUsageProjection,
+  validateEventEnvelope,
+} from "./runtimeContract.ts";
 import {
   connectorAuthorizationCompleted,
   connectorOverallHealth,
@@ -135,6 +140,45 @@ const bootstrap: BootstrapResponse = {
   csrf_token: "c".repeat(43),
   server_time: "2026-07-10T00:00:00Z",
 };
+
+const conversationUsage: ConversationUsageProjection = {
+  thread_id: "thr_usage",
+  timezone: "Asia/Shanghai",
+  today: { input_tokens: 120, output_tokens: 30, total_tokens: 150 },
+  week: { input_tokens: 640, output_tokens: 80, total_tokens: 720 },
+  context: {
+    used_tokens: 120,
+    window_tokens: 272_000,
+    model_id: "ecorex-chat",
+    measured_at: "2026-07-13T01:00:00Z",
+  },
+  calculated_at: "2026-07-13T01:00:01Z",
+};
+
+test("conversation usage is a strict provider-reported Runtime projection", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: string[] = [];
+  globalThis.fetch = async (input) => {
+    requests.push(String(input));
+    return Response.json(conversationUsage);
+  };
+  try {
+    const client = new RuntimeClient({ apiBase: "http://127.0.0.1:8765" });
+    assert.deepEqual(await client.conversationUsage("thr_usage"), conversationUsage);
+    assert.deepEqual(requests, ["http://127.0.0.1:8765/api/v1/threads/thr_usage/usage"]);
+    assert.throws(
+      () => validateConversationUsageProjection({
+        ...conversationUsage,
+        context: { ...conversationUsage.context, unknown: true },
+      }),
+      (error: unknown) => error instanceof RuntimeContractError
+        && error.contract === "ConversationUsageProjection"
+        && error.path === "context.unknown",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 class MemorySessionStorage {
   readonly values = new Map<string, string>();
@@ -1081,6 +1125,16 @@ test("client operations freeze the active Turn, models, and request identity", (
     disposition: "steer",
     models,
     observedAfterSeq: 19,
+    attachments: [{
+      attachment_id: "attachment_frozen",
+      revision_id: "revision_frozen",
+      display_name: "brief.txt",
+      mime_type: "text/plain",
+      size_bytes: 12,
+      media_kind: "document",
+      sha256: "a".repeat(64),
+      created_at: "2026-07-11T00:00:00.000Z",
+    }],
     operationId: "operation_frozen",
     clientMessageId: "message_frozen",
     now: new Date("2026-07-11T00:00:00Z"),
@@ -1094,6 +1148,7 @@ test("client operations freeze the active Turn, models, and request identity", (
   assert.equal(operation.operation_id, "operation_frozen");
   assert.equal(operation.client_message_id, "message_frozen");
   assert.equal(operation.observed_after_seq, 19);
+  assert.equal(operation.attachments[0]?.attachment_id, "attachment_frozen");
   assert.equal(Object.isFrozen(operation), true);
   assert.equal(Object.isFrozen(operation.models), true);
   assert.equal(Object.isFrozen(operation.turn), true);
@@ -1128,7 +1183,9 @@ test("session outbox survives reload, deduplicates repeated clicks, and rejects 
   );
 
   const serialized = [...storage.values.values()][0] ?? "";
-  assert.doesNotMatch(serialized, /bearerToken|csrfToken|attachment|server_response/u);
+  // Durable retry keeps only opaque Runtime-issued input references; it never
+  // stores browser file bytes, local paths, credentials, or server responses.
+  assert.doesNotMatch(serialized, /bearerToken|csrfToken|server_response|data:[^,]+;base64|[A-Za-z]:\\/u);
   assert.match(serialized, /"version":1/u);
 });
 

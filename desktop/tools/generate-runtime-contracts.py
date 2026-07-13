@@ -30,10 +30,12 @@ from ecorex.artifacts import (  # noqa: E402
 )
 from ecorex.protocol import (  # noqa: E402
     BootstrapResponse,
+    ConversationUsageProjection,
     CreateTurnRequest,
     EventEnvelope,
     InteractionMutationResponse,
     InteractionRequest,
+    InputAttachmentProjection,
     ProjectListResponse,
     QueueTurnRequest,
     ReplaceTurnRequest,
@@ -57,9 +59,11 @@ def _contract_schemas() -> dict[str, dict[str, Any]]:
     return {
         "ArtifactProjection": TypeAdapter(ArtifactProjection).json_schema(),
         "BootstrapResponse": BootstrapResponse.model_json_schema(),
+        "ConversationUsageProjection": ConversationUsageProjection.model_json_schema(),
         "EventEnvelope": EventEnvelope.model_json_schema(),
         "InteractionRequest": InteractionRequest.model_json_schema(),
         "InteractionMutationResponse": InteractionMutationResponse.model_json_schema(),
+        "InputAttachmentProjection": InputAttachmentProjection.model_json_schema(),
         "ProjectListResponse": ProjectListResponse.model_json_schema(),
         "RespondInteractionRequest": RespondInteractionRequest.model_json_schema(),
         "ThreadProjectionResponse": ThreadProjectionResponse.model_json_schema(),

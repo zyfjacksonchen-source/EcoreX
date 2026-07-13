@@ -4,6 +4,7 @@ import type {
   ArtifactExternalActionProjection,
   ArtifactProjection,
   BootstrapResponse,
+  ConversationUsageProjection,
   ConnectorAuthChallenge,
   ConnectorAuthKind,
   ConnectorCatalogResponse,
@@ -17,6 +18,7 @@ import type {
   ExtensionCatalogSnapshot,
   ExtensionMutationResponse,
   InteractionMutationResponse,
+  InputAttachmentProjection,
   InteractionResponse,
   JsonObject,
   LiveReplayResponse,
@@ -49,7 +51,9 @@ import {
   validateArtifactProjection,
   validateArtifactListResponse,
   validateBootstrapResponse,
+  validateConversationUsageProjection,
   validateEventEnvelope,
+  validateInputAttachmentProjection,
 } from "./runtimeContract.ts";
 
 declare global {
@@ -101,6 +105,7 @@ export interface ClientOperation {
   readonly disposition: ClientOperationDisposition;
   readonly models: Readonly<TurnModelSelection>;
   readonly input: string;
+  readonly attachments: readonly InputAttachmentProjection[];
   readonly observed_after_seq: number;
   readonly created_at: string;
   readonly expires_at: string;
@@ -108,6 +113,7 @@ export interface ClientOperation {
 
 export interface CreateClientOperationInput {
   input: string;
+  attachments?: readonly InputAttachmentProjection[];
   threadId: string | null;
   threadMetadata?: JsonObject;
   activeTurn: Readonly<{
@@ -267,7 +273,11 @@ export class RuntimeClient {
     validate?: (value: unknown) => T,
   ): Promise<T> {
     const headers = this.headers(mutation, init.headers);
-    if (init.body != null && !headers.has("Content-Type")) {
+    if (
+      init.body != null
+      && !headers.has("Content-Type")
+      && !(typeof FormData !== "undefined" && init.body instanceof FormData)
+    ) {
       headers.set("Content-Type", "application/json");
     }
     const response = await fetch(`${this.base}${path}`, {
@@ -297,6 +307,34 @@ export class RuntimeClient {
       { signal },
       false,
       validateBootstrapResponse,
+    );
+  }
+
+  conversationUsage(
+    threadId: string,
+    signal?: AbortSignal,
+  ): Promise<ConversationUsageProjection> {
+    return this.json(
+      `/api/v1/threads/${encodeURIComponent(threadId)}/usage`,
+      { signal },
+      false,
+      validateConversationUsageProjection,
+    );
+  }
+
+  uploadInputAttachment(
+    file: File,
+    clientRequestId = createClientRequestId("input_attachment"),
+    signal?: AbortSignal,
+  ): Promise<InputAttachmentProjection> {
+    const body = new FormData();
+    body.set("file", file, file.name);
+    body.set("client_request_id", clientRequestId);
+    return this.json(
+      "/api/v1/input-attachments",
+      { method: "POST", body, signal },
+      true,
+      validateInputAttachmentProjection,
     );
   }
 
@@ -763,6 +801,7 @@ export class RuntimeClient {
           input: operation.input,
           agent_model_id: operation.models.agentModelId,
           image_model_id: operation.models.imageModelId,
+          attachment_ids: operation.attachments.map((attachment) => attachment.attachment_id),
           client_message_id: operation.client_message_id,
           metadata: {},
         }),
@@ -782,6 +821,7 @@ export class RuntimeClient {
           input: operation.input,
           agent_model_id: operation.models.agentModelId,
           image_model_id: operation.models.imageModelId,
+          attachment_ids: operation.attachments.map((attachment) => attachment.attachment_id),
           client_message_id: operation.client_message_id,
           metadata: {},
         }),
@@ -803,6 +843,7 @@ export class RuntimeClient {
           input: operation.input,
           agent_model_id: operation.models.agentModelId,
           image_model_id: operation.models.imageModelId,
+          attachment_ids: operation.attachments.map((attachment) => attachment.attachment_id),
           client_message_id: operation.client_message_id,
           metadata: {},
         }),
@@ -822,6 +863,7 @@ export class RuntimeClient {
           input: operation.input,
           agent_model_id: operation.models.agentModelId,
           image_model_id: operation.models.imageModelId,
+          attachment_ids: operation.attachments.map((attachment) => attachment.attachment_id),
           client_message_id: operation.client_message_id,
           metadata: {},
           reason: "replaced_by_user",

@@ -52,12 +52,14 @@ const CONTROL_BASE_CLASSES = [
 ];
 const CONTEXT_CONTROL_OWNERS = [
   "ex-mode-switch",
+  "ex-composer-attachment",
   "ex-new-conversation-options",
   "ex-retouch-review-tabs",
   "ex-retouch-region-list",
 ];
 const CONTEXT_CONTROL_SELECTORS = [
   ".ex-mode-switch button",
+  ".ex-composer-attachment button",
   ".ex-new-conversation-options button",
   ".ex-retouch-review-tabs button",
   ".ex-retouch-region-list > button",

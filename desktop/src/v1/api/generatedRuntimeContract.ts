@@ -143,7 +143,7 @@ export const GENERATED_RUNTIME_CONTRACT = {
       "failed"
     ]
   },
-  "schemaSha256": "b453faa50f4d1f69d146c0b2c747f3ea8158298cbc67f60f051eb1db99a94798",
+  "schemaSha256": "12bde5be7df8da8325294830cfc96e627cd4a455627468e950c153122661c308",
   "schemaVersion": 1,
   "versions": {
     "api": "v1",
@@ -221,12 +221,23 @@ export const GENERATED_RUNTIME_CONTRACT = {
         "server_time"
       ]
     },
+    "ConversationUsageProjection": {
+      "ConversationUsageProjection": [
+        "thread_id",
+        "timezone",
+        "today",
+        "week",
+        "context",
+        "calculated_at"
+      ]
+    },
     "CreateTurnRequest": {
       "CreateTurnRequest": [
         "input",
         "agent_model_id",
         "image_model_id",
         "explicit_tool_ids",
+        "attachment_ids",
         "client_message_id",
         "metadata"
       ]
@@ -254,6 +265,18 @@ export const GENERATED_RUNTIME_CONTRACT = {
         "payload"
       ]
     },
+    "InputAttachmentProjection": {
+      "InputAttachmentProjection": [
+        "attachment_id",
+        "revision_id",
+        "display_name",
+        "mime_type",
+        "size_bytes",
+        "media_kind",
+        "sha256",
+        "created_at"
+      ]
+    },
     "ProjectListResponse": {
       "ProjectListResponse": [
         "projects"
@@ -265,6 +288,7 @@ export const GENERATED_RUNTIME_CONTRACT = {
         "agent_model_id",
         "image_model_id",
         "explicit_tool_ids",
+        "attachment_ids",
         "client_message_id",
         "metadata"
       ]
@@ -275,6 +299,7 @@ export const GENERATED_RUNTIME_CONTRACT = {
         "agent_model_id",
         "image_model_id",
         "explicit_tool_ids",
+        "attachment_ids",
         "client_message_id",
         "metadata",
         "reason"
@@ -306,6 +331,7 @@ export const GENERATED_RUNTIME_CONTRACT = {
         "agent_model_id",
         "image_model_id",
         "explicit_tool_ids",
+        "attachment_ids",
         "client_message_id",
         "metadata"
       ]

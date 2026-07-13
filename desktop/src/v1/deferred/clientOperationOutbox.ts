@@ -6,6 +6,7 @@ import type {
   ClientOperationOutboxRecord,
   CreateClientOperationInput,
 } from "../api/runtimeClient.ts";
+import type { InputAttachmentProjection } from "../api/contracts.ts";
 
 const OUTBOX_VERSION = 1 as const;
 const OUTBOX_KEY = "ecorex:v1:client-operation-outbox";
@@ -39,6 +40,28 @@ function requestId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`;
 }
 
+function isInputAttachment(value: unknown): value is InputAttachmentProjection {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.attachment_id === "string"
+    && ID_PATTERN.test(value.attachment_id)
+    && typeof value.revision_id === "string"
+    && ID_PATTERN.test(value.revision_id)
+    && typeof value.display_name === "string"
+    && Boolean(value.display_name.trim())
+    && typeof value.mime_type === "string"
+    && Boolean(value.mime_type.trim())
+    && typeof value.size_bytes === "number"
+    && Number.isSafeInteger(value.size_bytes)
+    && value.size_bytes >= 0
+    && (value.media_kind === "image" || value.media_kind === "document" || value.media_kind === "file")
+    && typeof value.sha256 === "string"
+    && /^[0-9a-f]{64}$/u.test(value.sha256)
+    && typeof value.created_at === "string"
+    && Number.isFinite(Date.parse(value.created_at))
+  );
+}
+
 function assertOperation(operation: ClientOperation): void {
   const createdAt = Date.parse(operation.created_at);
   const expiresAt = Date.parse(operation.expires_at);
@@ -57,6 +80,9 @@ function assertOperation(operation: ClientOperation): void {
     )
     || (operation.turn !== null && !ID_PATTERN.test(operation.turn.turn_id))
     || !operation.input.trim()
+    || !Array.isArray(operation.attachments)
+    || operation.attachments.length > 20
+    || operation.attachments.some((attachment) => !isInputAttachment(attachment))
     || !operation.models.agentModelId.trim()
     || !Number.isSafeInteger(operation.observed_after_seq)
     || operation.observed_after_seq < 0
@@ -88,6 +114,21 @@ function freezeDeep<T extends object>(value: T): Readonly<T> {
 }
 
 function fingerprintPayload(operation: Omit<ClientOperation, "fingerprint">): string {
+  return JSON.stringify({
+    schema_version: operation.schema_version,
+    operation_id: operation.operation_id,
+    client_message_id: operation.client_message_id,
+    thread: operation.thread,
+    turn: operation.turn,
+    disposition: operation.disposition,
+    models: operation.models,
+    input: operation.input,
+    attachments: operation.attachments,
+    observed_after_seq: operation.observed_after_seq,
+  });
+}
+
+function legacyFingerprintPayload(operation: Omit<ClientOperation, "fingerprint">): string {
   return JSON.stringify({
     schema_version: operation.schema_version,
     operation_id: operation.operation_id,
@@ -159,6 +200,7 @@ export function createClientOperation(input: CreateClientOperationInput): Client
       imageModelId: input.models.imageModelId,
     },
     input: input.input.trim(),
+    attachments: [...(input.attachments ?? [])].map((attachment) => ({ ...attachment })),
     observed_after_seq: input.observedAfterSeq,
     created_at: now.toISOString(),
     expires_at: new Date(
@@ -196,6 +238,11 @@ function parseOperation(value: unknown): ClientOperation | null {
       && typeof value.turn.status === "string"
       ? { turn_id: value.turn.turn_id, status: value.turn.status }
       : undefined;
+  const rawAttachments = value.attachments;
+  const hadAttachments = Array.isArray(rawAttachments);
+  const attachments = Array.isArray(rawAttachments) && rawAttachments.every(isInputAttachment)
+    ? rawAttachments
+    : null;
   if (
     !thread
     || turn === undefined
@@ -209,6 +256,7 @@ function parseOperation(value: unknown): ClientOperation | null {
     || typeof value.models.agentModelId !== "string"
     || (value.models.imageModelId !== null && typeof value.models.imageModelId !== "string")
     || !["create", "steer", "queue", "replace"].includes(String(value.disposition))
+    || (hadAttachments && attachments === null)
   ) return null;
   const operation = freezeDeep({
     schema_version: value.schema_version,
@@ -223,6 +271,7 @@ function parseOperation(value: unknown): ClientOperation | null {
       imageModelId: value.models.imageModelId,
     },
     input: value.input,
+    attachments: attachments ? attachments.map((attachment) => ({ ...attachment })) : [],
     observed_after_seq: value.observed_after_seq,
     created_at: value.created_at,
     expires_at: value.expires_at,
@@ -231,7 +280,13 @@ function parseOperation(value: unknown): ClientOperation | null {
     validateFingerprint(operation);
     return operation;
   } catch {
-    return null;
+    if (hadAttachments) return null;
+    const { fingerprint: _stored, ...legacyPayload } = operation;
+    if (value.fingerprint !== fingerprint(legacyFingerprintPayload(legacyPayload))) return null;
+    return freezeDeep({
+      ...operation,
+      fingerprint: fingerprint(fingerprintPayload(legacyPayload)),
+    }) as ClientOperation;
   }
 }
 
@@ -243,7 +298,7 @@ function browserSessionStorage(): Pick<Storage, "getItem" | "setItem" | "removeI
   }
 }
 
-/** A bounded request-only journal: never stores auth, attachments, or responses. */
+/** A bounded request-only journal: never stores auth, file bytes, paths, or responses. */
 export class ClientOperationOutbox {
   private readonly storage: Pick<Storage, "getItem" | "setItem" | "removeItem"> | null;
   private readonly key: string;
@@ -424,11 +479,17 @@ export function operationMatchesRetry(
   record: ClientOperationOutboxRecord,
   input: string,
   currentThreadId: string | null,
+  attachments: readonly InputAttachmentProjection[] = [],
 ): boolean {
   const operation = record.operation;
   const resolvedThreadId = resolvedOperationThreadId(record);
   if (
     operation.input !== input
+    || operation.attachments.length !== attachments.length
+    || operation.attachments.some((attachment, index) => (
+      attachment.attachment_id !== attachments[index]?.attachment_id
+      || attachment.revision_id !== attachments[index]?.revision_id
+    ))
     || (
       currentThreadId !== null
       && currentThreadId !== resolvedThreadId

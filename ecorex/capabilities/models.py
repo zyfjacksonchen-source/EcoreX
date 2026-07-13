@@ -684,6 +684,11 @@ class CapabilityPlan:
     decisions: tuple[CapabilityDecision, ...]
     catalog_digest: str = ""
     unresolved_explicit: tuple[str, ...] = ()
+    # Runtime-owned context can promote a narrowly scoped capability without
+    # claiming that the user explicitly selected it.  This keeps replay and
+    # audit able to distinguish a user action from a capability that Core made
+    # available solely because a Turn contains a matching bound resource.
+    runtime_direct_tools: tuple[str, ...] = ()
     routing_policy_id: str = "routing.none"
     routing_policy_version: str = "0.0.0"
     routing_policy_digest: str = ""
@@ -755,6 +760,7 @@ class CapabilityPlan:
             "intent": self.intent,
             "catalog_digest": self.catalog_digest,
             "unresolved_explicit": list(self.unresolved_explicit),
+            "runtime_direct_tools": list(self.runtime_direct_tools),
             "routing_policy_id": self.routing_policy_id,
             "routing_policy_version": self.routing_policy_version,
             "routing_policy_digest": self.routing_policy_digest,

@@ -1,11 +1,13 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { ChevronDown, Image, Plus, Send, ShieldCheck, Square, Workflow } from "lucide-react";
-import { useState } from "react";
+import { ChevronDown, FileText, Image, Plus, Send, ShieldCheck, Square, Workflow, X } from "lucide-react";
+import { useRef, useState } from "react";
 
 import type { SendDisposition, TaskMode } from "../state/useRuntimeSession.ts";
 import type {
   ConnectorCatalogItem,
   ConnectorInstanceProjection,
+  ConversationUsageProjection,
+  InputAttachmentProjection,
   ModelDescriptor,
 } from "../api/contracts.ts";
 import type {
@@ -52,12 +54,18 @@ interface ComposerProps {
     resets_at: string | null;
     limits: Record<string, number>;
   } | null;
+  usage: ConversationUsageProjection | null;
   permissionLabel: string;
   permissionDescription: string;
   onChatModelChange: (modelId: string) => void;
   onImageModelChange: (modelId: string) => void;
   onModeChange: (mode: TaskMode) => void;
-  onSend: (input: string, disposition: SendDisposition) => Promise<boolean>;
+  onSend: (
+    input: string,
+    disposition: SendDisposition,
+    attachments: readonly InputAttachmentProjection[],
+  ) => Promise<boolean>;
+  onUploadAttachment: (file: File) => Promise<InputAttachmentProjection | null>;
   onInterrupt: () => void;
 }
 
@@ -90,33 +98,94 @@ export function Composer({
   chatModel,
   imageModel,
   quota,
+  usage,
   permissionLabel,
   permissionDescription,
   onChatModelChange,
   onImageModelChange,
   onModeChange,
   onSend,
+  onUploadAttachment,
   onInterrupt,
 }: ComposerProps) {
   const [draft, setDraft] = useState("");
   const [disposition, setDisposition] = useState<SendDisposition>("steer");
   const [sendFailed, setSendFailed] = useState(false);
+  const [attachments, setAttachments] = useState<InputAttachmentProjection[]>([]);
+  const [attachmentUploading, setAttachmentUploading] = useState(false);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const activeModels = mode === "image" ? imageModels : chatModels;
   const activeModel = mode === "image" ? imageModel : chatModel;
   const remaining = quota?.remaining;
   const remainingLabel = typeof remaining === "number" ? remaining.toLocaleString("zh-CN") : "—";
+  const formatTokens = (value: number | null | undefined) => {
+    if (typeof value !== "number") return "—";
+    if (value < 1_000) return value.toLocaleString("zh-CN");
+    if (value < 1_000_000) return `${(value / 1_000).toLocaleString("zh-CN", { maximumFractionDigits: 1 })}k`;
+    return `${(value / 1_000_000).toLocaleString("zh-CN", { maximumFractionDigits: 1 })}m`;
+  };
+  const contextLabel = usage?.context.used_tokens == null
+    ? (usage?.context.window_tokens ? `— / ${formatTokens(usage.context.window_tokens)}` : "—")
+    : usage.context.window_tokens
+      ? `${formatTokens(usage.context.used_tokens)} / ${formatTokens(usage.context.window_tokens)}`
+      : formatTokens(usage.context.used_tokens);
+  const quotaUnit = quota?.unit === "managed_requests" ? "次" : (quota?.unit || "");
 
   const submit = async () => {
     if (!draft.trim() || !modelAvailable) return;
-    const sent = await onSend(draft, active ? disposition : "steer");
+    const sent = await onSend(draft, active ? disposition : "steer", attachments);
     setSendFailed(!sent);
-    if (sent) setDraft("");
+    if (sent) {
+      setDraft("");
+      setAttachments([]);
+      setAttachmentError(null);
+    }
+  };
+
+  const addFiles = async (files: FileList | null) => {
+    if (!files?.length || attachmentUploading) return;
+    const candidates = [...files].slice(0, Math.max(0, 20 - attachments.length));
+    if (!candidates.length) {
+      setAttachmentError("一次消息最多可添加 20 个文件。");
+      return;
+    }
+    setAttachmentUploading(true);
+    setAttachmentError(null);
+    const uploaded: InputAttachmentProjection[] = [];
+    for (const file of candidates) {
+      const attachment = await onUploadAttachment(file);
+      if (attachment) uploaded.push(attachment);
+      else {
+        setAttachmentError(`“${file.name}”未能添加，请重试。`);
+        break;
+      }
+    }
+    if (uploaded.length) setAttachments((current) => [...current, ...uploaded]);
+    setAttachmentUploading(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   return (
     <div className="ex-composer-region">
       <div className="ex-composer" data-busy={submitting ? "true" : "false"}>
         <label className="ex-composer-label" htmlFor="ecorex-composer">给 EcoreX 发消息</label>
+        {attachments.length ? (
+          <div className="ex-composer-attachments" aria-label="已添加文件">
+            {attachments.map((attachment) => (
+              <span className="ex-composer-attachment" key={attachment.attachment_id}>
+                {attachment.media_kind === "image" ? <Image aria-hidden="true" /> : <FileText aria-hidden="true" />}
+                <span title={attachment.display_name}>{attachment.display_name}</span>
+                <button
+                  type="button"
+                  aria-label={`移除文件：${attachment.display_name}`}
+                  disabled={attachmentUploading || submitting}
+                  onClick={() => setAttachments((current) => current.filter((item) => item.attachment_id !== attachment.attachment_id))}
+                ><X aria-hidden="true" /></button>
+              </span>
+            ))}
+          </div>
+        ) : null}
         <textarea
           id="ecorex-composer"
           value={draft}
@@ -136,12 +205,22 @@ export function Composer({
         />
         <div className="ex-composer-toolbar">
           <div className="ex-composer-tools">
+            <input
+              ref={fileInputRef}
+              className="ex-visually-hidden"
+              type="file"
+              multiple
+              accept="image/*,text/*,application/pdf,application/json,application/zip,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
+              aria-label="选择要添加的文件"
+              onChange={(event) => void addFiles(event.target.files)}
+            />
             <button
               className="ex-composer-tool ex-attach-trigger"
               type="button"
-              aria-label="添加文件（暂不可用）"
-              title="文件上传服务尚未完成，暂不能添加文件"
-              disabled
+              aria-label={attachmentUploading ? "正在添加文件" : "添加文件"}
+              title={attachmentUploading ? "正在添加文件" : "添加文件"}
+              disabled={attachmentUploading || attachments.length >= 20}
+              onClick={() => fileInputRef.current?.click()}
             >
               <Plus aria-hidden="true" />
             </button>
@@ -240,6 +319,7 @@ export function Composer({
             </button>
           </div>
         </div>
+        {attachmentError ? <p className="ex-composer-attachment-error" role="status">{attachmentError}</p> : null}
       </div>
       <div className="ex-composer-meta">
         <span className="ex-permission-inline" title={permissionDescription}>
@@ -251,11 +331,13 @@ export function Composer({
             : sendUnavailableReason || "模型服务未连接；可查看历史和本地产物。"}
         </p>
         <div className="ex-usage-meter" aria-label="额度与上下文用量">
-          <span title="服务尚未提供今日分项额度">今日 <b>—</b></span>
+          <span title="今日已完成模型响应中由服务返回的 Token 用量">今日 <b>{formatTokens(usage?.today.total_tokens)}</b></span>
           <i aria-hidden="true" />
-          <span title="服务尚未提供本周分项额度">本周 <b>—</b></span>
+          <span title="本周已完成模型响应中由服务返回的 Token 用量">本周 <b>{formatTokens(usage?.week.total_tokens)}</b></span>
           <i aria-hidden="true" />
-          <span title={`托管额度剩余：${remainingLabel}`}>上下文 <b>—</b></span>
+          <span title={usage?.context.model_id ? `模型 ${usage.context.model_id} 最近一次服务端上下文用量` : "等待服务端返回上下文用量"}>上下文 <b>{contextLabel}</b></span>
+          <i aria-hidden="true" />
+          <span title={`托管服务剩余额度：${remainingLabel} ${quotaUnit}`}>额度 <b>{remainingLabel}{remainingLabel === "—" ? "" : quotaUnit}</b></span>
         </div>
       </div>
     </div>

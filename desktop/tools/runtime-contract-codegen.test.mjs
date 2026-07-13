@@ -41,8 +41,10 @@ test("generated manifest pins the canonical full-schema digest", async () => {
   assert.deepEqual(Object.keys(schema.contracts).sort(), [
     "ArtifactProjection",
     "BootstrapResponse",
+    "ConversationUsageProjection",
     "CreateTurnRequest",
     "EventEnvelope",
+    "InputAttachmentProjection",
     "InteractionMutationResponse",
     "InteractionRequest",
     "ProjectListResponse",

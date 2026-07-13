@@ -119,6 +119,7 @@ class CapabilityPlanner:
         *,
         intent: str,
         explicit_tools: tuple[str, ...] = (),
+        runtime_direct_tools: tuple[str, ...] = (),
         availability: RuntimeAvailability,
         policy: ExecutionPolicy,
     ) -> CapabilityPlan:
@@ -136,6 +137,12 @@ class CapabilityPlanner:
             or any(not isinstance(reference, str) for reference in explicit_tools)
         ):
             raise ValueError("explicit tool references are invalid")
+        if (
+            not isinstance(runtime_direct_tools, tuple)
+            or len(runtime_direct_tools) > _MAX_EXPLICIT_TOOLS
+            or any(not isinstance(reference, str) for reference in runtime_direct_tools)
+        ):
+            raise ValueError("runtime direct tool references are invalid")
         for reference in explicit_tools:
             try:
                 reference_size = len(reference.encode("utf-8"))
@@ -143,6 +150,20 @@ class CapabilityPlanner:
                 raise ValueError("explicit tool reference must be valid Unicode") from None
             if reference_size > _MAX_EXPLICIT_REFERENCE_BYTES:
                 raise ValueError("explicit tool reference exceeds the product limit")
+        runtime_direct_ids: set[str] = set()
+        for reference in runtime_direct_tools:
+            try:
+                reference_size = len(reference.encode("utf-8"))
+            except UnicodeEncodeError:
+                raise ValueError("runtime direct tool reference must be valid Unicode") from None
+            if reference_size > _MAX_EXPLICIT_REFERENCE_BYTES:
+                raise ValueError("runtime direct tool reference exceeds the product limit")
+            try:
+                runtime_direct_ids.add(self.registry.resolve(reference).tool_id)
+            except UnknownCapabilityError:
+                raise ValueError(
+                    f"runtime direct tool selection is unavailable: {reference!r}"
+                ) from None
 
         # The immutable snapshot still records a long, valid user intent, but
         # it cannot force unbounded normalization/search work in the routing
@@ -257,6 +278,16 @@ class CapabilityPlanner:
                     f"explicit_reference:{reference}"
                     for reference in explicit_ids[spec.tool_id]
                 ]
+            if spec.tool_id in runtime_direct_ids:
+                # Core may expose a small capability only because immutable
+                # Turn context needs it (for example a bound input
+                # attachment). This is intentionally separate from an
+                # explicit user selection and never bypasses governance.
+                score += _EXPLICIT_REFERENCE_SCORE
+                if exposure is not Exposure.HIDDEN:
+                    exposure = Exposure.DIRECT
+                reasons.append("runtime_context_required")
+                matched_evidence.insert(0, f"runtime_context:{spec.tool_id}")
             if not eligible:
                 exposure = Exposure.HIDDEN
 
@@ -303,6 +334,7 @@ class CapabilityPlanner:
             "policy": policy.to_dict(),
             "intent": intent,
             "explicit_tools": list(explicit_tools),
+            "runtime_direct_tools": list(runtime_direct_tools),
             "decisions": [decision.to_dict() for decision in decisions],
             "unresolved_explicit": unresolved,
         }
@@ -313,6 +345,9 @@ class CapabilityPlanner:
             decisions=tuple(decisions),
             catalog_digest=self.registry.digest,
             unresolved_explicit=tuple(unresolved),
+            runtime_direct_tools=tuple(
+                sorted(runtime_direct_ids)
+            ),
             routing_policy_id=self.routing_policy.policy_id,
             routing_policy_version=self.routing_policy.version,
             routing_policy_digest=self.routing_policy.digest,

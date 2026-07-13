@@ -34,6 +34,36 @@ _READ_INPUT = {
     "required": ["path"],
     "additionalProperties": False,
 }
+_INPUT_ATTACHMENT_READ_INPUT = {
+    "type": "object",
+    "properties": {
+        "attachment_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "offset_chars": {"type": "integer", "minimum": 0},
+        "max_chars": {"type": "integer", "minimum": 1, "maximum": 32768},
+    },
+    "required": ["attachment_id"],
+    "additionalProperties": False,
+}
+_INPUT_ATTACHMENT_READ_OUTPUT = {
+    "type": "object",
+    "properties": {
+        "schema_version": {"type": "integer", "const": 1},
+        "kind": {"type": "string", "enum": ["text", "image"]},
+        "attachment_id": {"type": "string"},
+        "revision_id": {"type": "string"},
+        "mime_type": {"type": "string"},
+        "size_bytes": {"type": "integer", "minimum": 0},
+        "sha256": {"type": "string"},
+        "content": {"type": ["string", "null"]},
+        "next_offset_chars": {"type": "integer", "minimum": 0},
+        "eof": {"type": "boolean"},
+    },
+    "required": [
+        "schema_version", "kind", "attachment_id", "revision_id", "mime_type",
+        "size_bytes", "sha256", "content", "next_offset_chars", "eof",
+    ],
+    "additionalProperties": False,
+}
 _FETCH_INPUT = {
     "type": "object",
     "properties": {
@@ -866,6 +896,22 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             idempotency=IdempotencyClass.READ_ONLY,
             default_exposure=Exposure.DIRECT,
             intent_tags=frozenset({"artifact", "data", "json", "read"}),
+        ),
+        ToolSpec(
+            tool_id="input_attachment_read",
+            version="1.0.0",
+            display_name="读取本条消息的附件",
+            description="分段读取当前 Turn 中用户主动添加的文本附件；图片只返回受保护的引用信息，需通过视觉能力继续检查",
+            input_schema=_INPUT_ATTACHMENT_READ_INPUT,
+            output_schema=_INPUT_ATTACHMENT_READ_OUTPUT,
+            aliases=("read-input-attachment",),
+            effects=frozenset({CapabilityEffect.READ}),
+            idempotency=IdempotencyClass.READ_ONLY,
+            # It is promoted only for a Turn that has backend-bound user
+            # attachments. Other Turns discover it through the ordinary
+            # progressive-disclosure contract.
+            default_exposure=Exposure.DEFERRED,
+            intent_tags=frozenset({"attachment", "file", "document", "read", "upload"}),
         ),
         ToolSpec(
             tool_id="read",

@@ -792,6 +792,7 @@ def test_image_link_intent_keeps_browser_fetch_vision_read_and_shell_discoverabl
         "connector_read",
         "connector_write",
         "artifact_read",
+        "input_attachment_read",
     }
     assert all(decisions[tool_id].eligible for tool_id in decisions)
     assert all(
@@ -800,6 +801,24 @@ def test_image_link_intent_keeps_browser_fetch_vision_read_and_shell_discoverabl
     )
     assert registry.resolve("browser").tool_id == "cdp"
     assert registry.resolve("web-fetch").tool_id == "fetch"
+
+
+def test_turn_bound_input_attachment_promotes_only_its_reader() -> None:
+    registry = builtin_capability_registry()
+    service = CapabilityService(registry)
+    plan = service.create_plan(
+        intent="总结我上传的文件",
+        runtime_direct_tools=("input_attachment_read",),
+        availability=_availability(),
+        policy=_policy(),
+    )
+
+    decision = plan.decision("input_attachment_read")
+    assert decision is not None
+    assert decision.exposure is Exposure.DIRECT
+    assert "runtime_context_required" in decision.reason_codes
+    assert "runtime_context:input_attachment_read" in decision.matched_evidence
+    assert plan.runtime_direct_tools == ("input_attachment_read",)
 
 
 def test_progressive_search_and_explicit_alias_preserve_decision_trace(

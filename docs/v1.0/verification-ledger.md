@@ -1315,3 +1315,19 @@ The first full 31-scenario E2E invocation exceeded the 180-second wrapper
 timeout before producing a receipt, so it is not counted as a pass. It must be
 rerun with the repository's bounded full-suite allowance after the remaining
 Composer upload and usage-contract work lands.
+
+## Composer attachment and usage closure - 2026-07-13
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Input attachment service/API | 0 | 3 focused tests passed: opaque account-scoped upload, idempotency, internal Artifact visibility, cross-account denial and multipart Runtime route. |
+| Usage projection | 0 | 2 focused tests passed: provider-reported daily/week aggregation, exact 272k model threshold, strict read-only API and missing-thread 404. |
+| Runtime regression subset | 0 | 141 passed across attachment, usage, project, schema, capability planner/invocation and Agent Worker coverage. |
+| Web unit/design contracts | 0 | 162 passed, including strict usage projection parsing and GA mock authority. |
+| Typecheck / production build | 0 | TypeScript and contract digest passed; 18 content-addressed assets, 473.37 KiB initial JavaScript / 146.73 KiB gzip, all bundle gates passed. |
+| Focused browser E2E | 0 | Playwright verified server-reported quota/usage/context rendering and non-vertical short user bubbles. |
+| CDP manual browser pass | 0 | Opened a real built artifact conversation, verified `今日 5.2k` / `本周 22.6k` / `上下文 42.2k / 272k` / `额度 128次`, model selector and repaired user bubble layout. |
+
+The prior full E2E wrapper timeout remains an uncredited receipt; only the
+focused deterministic scenarios above are claimed. Live model/image provider
+and release authority blockers remain unchanged.

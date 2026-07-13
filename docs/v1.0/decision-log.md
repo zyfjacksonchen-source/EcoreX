@@ -1357,3 +1357,24 @@
 - Performance consequence: the sidebar may be a same-origin content-addressed
   deferred module with a geometry-preserving fallback. The initial-JavaScript
   budget is not raised to pay for project navigation.
+
+## ADR-086 - Composer attachments and usage are evidence-backed Runtime projections
+
+- Status: accepted.
+- Attachment decision: a selected user file becomes an account-scoped internal
+  source Artifact with a unique opaque attachment/revision identity. The WebUI
+  may retain only that identity and non-sensitive display metadata in its
+  bounded durable message outbox; bytes, paths, credentials and raw model
+  responses are excluded. Runtime resolves identities before Turn acceptance,
+  persists the exact bound list in immutable Turn metadata and fences reads to
+  the same execution scope. The attachment reader is normally deferred and is
+  promoted by a distinct Runtime-context planner fact only for such a bound
+  Turn.
+- Usage decision: the Composer never derives tokens from browser text,
+  character count or an optimistic request. Day/week values aggregate only
+  provider `model.response_completed` usage facts, while context is the most
+  recent provider-reported input size plus the selected model's signed
+  compaction threshold. Managed quota remains a separate signed-session fact.
+- Consequence: a refresh, retry, reconnection or model change cannot silently
+  manufacture an attachment authority or a quota/usage value. The visual
+  meter can be unavailable, but it cannot lie.

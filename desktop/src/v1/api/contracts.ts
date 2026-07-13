@@ -141,6 +141,39 @@ export interface ProjectListResponse {
   projects: ProjectProjection[];
 }
 
+export interface InputAttachmentProjection {
+  attachment_id: string;
+  revision_id: string;
+  display_name: string;
+  mime_type: string;
+  size_bytes: number;
+  media_kind: "image" | "document" | "file";
+  sha256: string;
+  created_at: string;
+}
+
+export interface TokenUsageWindow {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
+export interface ContextUsageProjection {
+  used_tokens: number | null;
+  window_tokens: number | null;
+  model_id: string | null;
+  measured_at: string | null;
+}
+
+export interface ConversationUsageProjection {
+  thread_id: string;
+  timezone: string;
+  today: TokenUsageWindow;
+  week: TokenUsageWindow;
+  context: ContextUsageProjection;
+  calculated_at: string;
+}
+
 export interface TurnProjection {
   turn_id: string;
   thread_id: string;

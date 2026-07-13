@@ -2,7 +2,9 @@ import type {
   ArtifactListResponse,
   ArtifactProjection,
   BootstrapResponse,
+  ConversationUsageProjection,
   EventEnvelope,
+  InputAttachmentProjection,
 } from "./contracts.ts";
 import { GENERATED_RUNTIME_CONTRACT } from "./generatedRuntimeContract.ts";
 
@@ -10,7 +12,9 @@ type ContractName = keyof typeof GENERATED_RUNTIME_CONTRACT.wireFields;
 
 const ARTIFACT_FIELDS = GENERATED_RUNTIME_CONTRACT.wireFields.ArtifactProjection;
 const BOOTSTRAP_FIELDS = GENERATED_RUNTIME_CONTRACT.wireFields.BootstrapResponse;
+const CONVERSATION_USAGE_FIELDS = GENERATED_RUNTIME_CONTRACT.wireFields.ConversationUsageProjection;
 const EVENT_FIELDS = GENERATED_RUNTIME_CONTRACT.wireFields.EventEnvelope;
+const INPUT_ATTACHMENT_FIELDS = GENERATED_RUNTIME_CONTRACT.wireFields.InputAttachmentProjection;
 const BOOTSTRAP_VALUES = GENERATED_RUNTIME_CONTRACT.bootstrap;
 
 export const runtimeContractSchemaSha256 = GENERATED_RUNTIME_CONTRACT.schemaSha256;
@@ -602,6 +606,84 @@ function assertArtifact(value: unknown, path = "root"): asserts value is Artifac
 export function validateArtifactProjection(value: unknown): ArtifactProjection {
   assertArtifact(value);
   return value;
+}
+
+export function validateInputAttachmentProjection(value: unknown): InputAttachmentProjection {
+  const contract = "InputAttachmentProjection";
+  assertRecord(value, contract, "root");
+  assertWireFields(value, INPUT_ATTACHMENT_FIELDS.InputAttachmentProjection, contract, "root");
+  assertString(value.attachment_id, contract, "attachment_id");
+  assertString(value.revision_id, contract, "revision_id");
+  assertString(value.display_name, contract, "display_name");
+  assertString(value.mime_type, contract, "mime_type");
+  assertInteger(value.size_bytes, contract, "size_bytes");
+  assertOneOf(value.media_kind, ["image", "document", "file"] as const, contract, "media_kind");
+  assertString(value.sha256, contract, "sha256");
+  if (!/^[0-9a-f]{64}$/u.test(value.sha256)) {
+    reject(contract, "sha256", "a lowercase SHA-256");
+  }
+  assertString(value.created_at, contract, "created_at");
+  if (!Number.isFinite(Date.parse(value.created_at))) {
+    reject(contract, "created_at", "an ISO timestamp");
+  }
+  return value as unknown as InputAttachmentProjection;
+}
+
+function assertUsageWindow(value: unknown, path: string): void {
+  const contract = "ConversationUsageProjection";
+  assertRecord(value, contract, path);
+  assertWireFields(
+    value,
+    ["input_tokens", "output_tokens", "total_tokens"],
+    contract,
+    path,
+  );
+  assertInteger(value.input_tokens, contract, `${path}.input_tokens`);
+  assertInteger(value.output_tokens, contract, `${path}.output_tokens`);
+  assertInteger(value.total_tokens, contract, `${path}.total_tokens`);
+  if (value.total_tokens < value.input_tokens + value.output_tokens) {
+    reject(contract, `${path}.total_tokens`, "at least input plus output tokens");
+  }
+}
+
+export function validateConversationUsageProjection(value: unknown): ConversationUsageProjection {
+  const contract = "ConversationUsageProjection";
+  assertRecord(value, contract, "root");
+  assertWireFields(
+    value,
+    CONVERSATION_USAGE_FIELDS.ConversationUsageProjection,
+    contract,
+    "root",
+  );
+  assertString(value.thread_id, contract, "thread_id");
+  assertString(value.timezone, contract, "timezone");
+  assertUsageWindow(value.today, "today");
+  assertUsageWindow(value.week, "week");
+  assertRecord(value.context, contract, "context");
+  assertWireFields(
+    value.context,
+    ["used_tokens", "window_tokens", "model_id", "measured_at"],
+    contract,
+    "context",
+  );
+  if (value.context.used_tokens !== null) {
+    assertInteger(value.context.used_tokens, contract, "context.used_tokens");
+  }
+  if (value.context.window_tokens !== null) {
+    assertInteger(value.context.window_tokens, contract, "context.window_tokens", 1_000);
+  }
+  if (
+    value.context.used_tokens !== null
+    && value.context.window_tokens !== null
+    && value.context.used_tokens > value.context.window_tokens
+  ) {
+    // This is not malformed: compaction may happen after the final provider
+    // usage fact. Keep it renderable instead of making the UI invent a cap.
+  }
+  assertNullableString(value.context.model_id, contract, "context.model_id");
+  assertNullableString(value.context.measured_at, contract, "context.measured_at");
+  assertString(value.calculated_at, contract, "calculated_at");
+  return value as unknown as ConversationUsageProjection;
 }
 
 /**

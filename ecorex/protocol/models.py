@@ -819,6 +819,25 @@ class PickProjectFolderRequest(ProtocolModel):
     client_request_id: str = Field(min_length=1, max_length=256)
 
 
+class InputAttachmentProjection(FrozenProtocolModel):
+    """Safe, opaque reference to a user-selected input file.
+
+    Input attachments are internal source Artifacts.  Their identities may be
+    attached to a Turn, but they never enter the office deliverables list.
+    """
+
+    attachment_id: str = Field(min_length=1, max_length=128)
+    revision_id: str = Field(min_length=1, max_length=128)
+    display_name: str = Field(min_length=1, max_length=512)
+    mime_type: str = Field(min_length=1, max_length=256)
+    size_bytes: int = Field(ge=0, le=64 * 1024 * 1024)
+    media_kind: Literal["image", "document", "file"]
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    created_at: datetime
+
+    _created_at_utc = field_validator("created_at")(_ensure_utc)
+
+
 class TurnProjection(FrozenProtocolModel):
     turn_id: str
     thread_id: str
@@ -1107,6 +1126,7 @@ class CreateTurnRequest(ProtocolModel):
     # recognize conservative "use <alias>" prose for compatibility, but a bare
     # mention never receives explicit-selection authority.
     explicit_tool_ids: list[str] = Field(default_factory=list, max_length=64)
+    attachment_ids: list[str] = Field(default_factory=list, max_length=20)
     client_message_id: str | None = None
     metadata: JsonObject = Field(default_factory=dict)
 
@@ -1118,6 +1138,7 @@ class SteerTurnRequest(ProtocolModel):
     agent_model_id: str | None = Field(default=None, min_length=1, max_length=256)
     image_model_id: str | None = Field(default=None, min_length=1, max_length=256)
     explicit_tool_ids: list[str] = Field(default_factory=list, max_length=64)
+    attachment_ids: list[str] = Field(default_factory=list, max_length=20)
     client_message_id: str | None = None
     metadata: JsonObject = Field(default_factory=dict)
 
@@ -1356,6 +1377,43 @@ class QuotaSnapshot(FrozenProtocolModel):
     limits: dict[str, int] = Field(default_factory=dict)
 
     _resets_at_utc = field_validator("resets_at")(_ensure_utc)
+
+
+class TokenUsageWindow(FrozenProtocolModel):
+    """Provider-reported token totals for one calendar window.
+
+    The Runtime deliberately does not estimate token counts in the WebUI. A
+    zero means that no completed model response reported usage in the window;
+    it is not a proxy for a configured quota.
+    """
+
+    input_tokens: int = Field(default=0, ge=0, strict=True)
+    output_tokens: int = Field(default=0, ge=0, strict=True)
+    total_tokens: int = Field(default=0, ge=0, strict=True)
+
+
+class ContextUsageProjection(FrozenProtocolModel):
+    """Latest provider-reported context and the selected model threshold."""
+
+    used_tokens: int | None = Field(default=None, ge=0, strict=True)
+    window_tokens: int | None = Field(default=None, ge=1_000, strict=True)
+    model_id: str | None = None
+    measured_at: datetime | None = None
+
+    _measured_at_utc = field_validator("measured_at")(_ensure_utc)
+
+
+class ConversationUsageProjection(FrozenProtocolModel):
+    """Read-only usage projection for the active conversation composer."""
+
+    thread_id: str = Field(min_length=1)
+    timezone: str = Field(min_length=1, max_length=64)
+    today: TokenUsageWindow = Field(default_factory=TokenUsageWindow)
+    week: TokenUsageWindow = Field(default_factory=TokenUsageWindow)
+    context: ContextUsageProjection = Field(default_factory=ContextUsageProjection)
+    calculated_at: datetime = Field(default_factory=utc_now)
+
+    _calculated_at_utc = field_validator("calculated_at")(_ensure_utc)
 
 
 class ModelServiceSnapshot(FrozenProtocolModel):

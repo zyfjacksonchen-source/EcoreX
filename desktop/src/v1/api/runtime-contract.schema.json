@@ -1369,6 +1369,130 @@
       "title": "BootstrapResponse",
       "type": "object"
     },
+    "ConversationUsageProjection": {
+      "$defs": {
+        "ContextUsageProjection": {
+          "additionalProperties": false,
+          "description": "Latest provider-reported context and the selected model threshold.",
+          "properties": {
+            "measured_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Measured At"
+            },
+            "model_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model Id"
+            },
+            "used_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Used Tokens"
+            },
+            "window_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Window Tokens"
+            }
+          },
+          "title": "ContextUsageProjection",
+          "type": "object"
+        },
+        "TokenUsageWindow": {
+          "additionalProperties": false,
+          "description": "Provider-reported token totals for one calendar window.\n\nThe Runtime deliberately does not estimate token counts in the WebUI. A\nzero means that no completed model response reported usage in the window;\nit is not a proxy for a configured quota.",
+          "properties": {
+            "input_tokens": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Input Tokens",
+              "type": "integer"
+            },
+            "output_tokens": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Output Tokens",
+              "type": "integer"
+            },
+            "total_tokens": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Total Tokens",
+              "type": "integer"
+            }
+          },
+          "title": "TokenUsageWindow",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Read-only usage projection for the active conversation composer.",
+      "properties": {
+        "calculated_at": {
+          "format": "date-time",
+          "title": "Calculated At",
+          "type": "string"
+        },
+        "context": {
+          "$ref": "#/$defs/ContextUsageProjection"
+        },
+        "thread_id": {
+          "minLength": 1,
+          "title": "Thread Id",
+          "type": "string"
+        },
+        "timezone": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Timezone",
+          "type": "string"
+        },
+        "today": {
+          "$ref": "#/$defs/TokenUsageWindow"
+        },
+        "week": {
+          "$ref": "#/$defs/TokenUsageWindow"
+        }
+      },
+      "required": [
+        "thread_id",
+        "timezone"
+      ],
+      "title": "ConversationUsageProjection",
+      "type": "object"
+    },
     "CreateTurnRequest": {
       "additionalProperties": false,
       "properties": {
@@ -1378,6 +1502,14 @@
           "minLength": 1,
           "title": "Agent Model Id",
           "type": "string"
+        },
+        "attachment_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Attachment Ids",
+          "type": "array"
         },
         "client_message_id": {
           "anyOf": [
@@ -1622,6 +1754,73 @@
         "event_type"
       ],
       "title": "EventEnvelope",
+      "type": "object"
+    },
+    "InputAttachmentProjection": {
+      "additionalProperties": false,
+      "description": "Safe, opaque reference to a user-selected input file.\n\nInput attachments are internal source Artifacts.  Their identities may be\nattached to a Turn, but they never enter the office deliverables list.",
+      "properties": {
+        "attachment_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Attachment Id",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "display_name": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Display Name",
+          "type": "string"
+        },
+        "media_kind": {
+          "enum": [
+            "image",
+            "document",
+            "file"
+          ],
+          "title": "Media Kind",
+          "type": "string"
+        },
+        "mime_type": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Mime Type",
+          "type": "string"
+        },
+        "revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "maximum": 67108864,
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "attachment_id",
+        "revision_id",
+        "display_name",
+        "mime_type",
+        "size_bytes",
+        "media_kind",
+        "sha256",
+        "created_at"
+      ],
+      "title": "InputAttachmentProjection",
       "type": "object"
     },
     "InteractionMutationResponse": {
@@ -2893,6 +3092,14 @@
           "title": "Agent Model Id",
           "type": "string"
         },
+        "attachment_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Attachment Ids",
+          "type": "array"
+        },
         "client_message_id": {
           "anyOf": [
             {
@@ -2953,6 +3160,14 @@
           "minLength": 1,
           "title": "Agent Model Id",
           "type": "string"
+        },
+        "attachment_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Attachment Ids",
+          "type": "array"
         },
         "client_message_id": {
           "anyOf": [
@@ -3229,6 +3444,14 @@
           ],
           "default": null,
           "title": "Agent Model Id"
+        },
+        "attachment_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Attachment Ids",
+          "type": "array"
         },
         "client_message_id": {
           "anyOf": [

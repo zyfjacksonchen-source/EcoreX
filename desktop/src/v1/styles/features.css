@@ -300,11 +300,47 @@
 }
 
 .ex-message.is-user .ex-message-body {
+  /* Assistant messages can use inline-size containment because their body
+     owns a stable full-width column. A user bubble is shrink-to-fit: keeping
+     that containment erases its intrinsic width and turns short CJK input
+     into a vertical strip. */
+  contain: none;
   width: auto;
   max-width: min(76%, 620px);
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-card);
   background: var(--color-raised);
+}
+
+.ex-message-attachments {
+  margin-bottom: var(--space-2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.ex-message-attachments > span {
+  max-width: 220px;
+  min-height: 24px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-rule-strong);
+  border-radius: var(--radius-compact);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-ink-muted);
+  background: var(--color-surface);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ex-message-attachments svg {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  flex: none;
 }
 
 .ex-message-plain {
@@ -816,6 +852,70 @@
   background: transparent;
   font-size: var(--text-body-size);
   line-height: var(--text-body-line);
+}
+
+.ex-composer-attachments {
+  padding: var(--space-3) var(--space-3) 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.ex-composer-attachment {
+  max-width: min(100%, 260px);
+  min-height: 28px;
+  padding: 0 var(--space-1) 0 var(--space-2);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-control);
+  display: inline-grid;
+  grid-template-columns: var(--icon-size-sm) minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-ink-muted);
+  background: var(--color-surface);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
+.ex-composer-attachment > svg,
+.ex-composer-attachment button svg {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+}
+
+.ex-composer-attachment > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ex-composer-attachment button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-compact);
+  display: grid;
+  place-items: center;
+  color: var(--color-ink-subtle);
+  background: transparent;
+  cursor: pointer;
+}
+
+.ex-composer-attachment button:focus-visible,
+.ex-composer-attachment button:hover:not(:disabled) {
+  border-color: var(--control-hover-border);
+  color: var(--color-ink);
+  background: var(--control-hover-surface);
+}
+
+.ex-composer-attachment-error {
+  width: min(820px, 100%);
+  margin: var(--space-1) auto 0;
+  color: var(--color-danger);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
 }
 
 .ex-composer textarea::placeholder {
@@ -2394,10 +2494,8 @@ button.ex-artifact-primary {
     max-width: 132px;
   }
 
-  .ex-usage-meter span:first-child,
-  .ex-usage-meter i:first-of-type,
-  .ex-usage-meter span:nth-of-type(2),
-  .ex-usage-meter i:last-of-type {
+  .ex-usage-meter span:nth-of-type(-n + 2),
+  .ex-usage-meter i:nth-of-type(-n + 2) {
     display: none;
   }
 

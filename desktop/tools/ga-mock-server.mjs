@@ -1199,6 +1199,25 @@ function projectionResponse(state, threadId) {
   );
 }
 
+function conversationUsage(state, threadId) {
+  const projection = projectionResponse(state, threadId);
+  if (!projection) return null;
+  const modelId = projection.turns.at(-1)?.agent_model_id ?? null;
+  return {
+    thread_id: threadId,
+    timezone: "Asia/Shanghai",
+    today: { input_tokens: 4_280, output_tokens: 960, total_tokens: 5_240 },
+    week: { input_tokens: 18_840, output_tokens: 3_760, total_tokens: 22_600 },
+    context: {
+      used_tokens: 42_180,
+      window_tokens: modelId === "ecorex-chat" ? 272_000 : null,
+      model_id: modelId,
+      measured_at: NOW,
+    },
+    calculated_at: NOW,
+  };
+}
+
 function threadMutationResponse(state, activeTurn) {
   return { turn: activeTurn, job: null, watermark: state.projection?.watermark ?? 0 };
 }
@@ -1514,6 +1533,12 @@ async function handleApi(holder, req, res, url) {
     state.projections = new Map([[created.thread_id, state.projection]]);
     state.seq = 0;
     return json(res, 201, created);
+  }
+
+  const usageMatch = path.match(/^\/api\/v1\/threads\/([^/]+)\/usage$/);
+  if (usageMatch && req.method === "GET") {
+    const usage = conversationUsage(state, decodeURIComponent(usageMatch[1]));
+    return usage ? json(res, 200, usage) : apiError(res, 404, "thread_not_found", "Thread not found");
   }
 
   const projectionMatch = path.match(/^\/api\/v1\/threads\/([^/]+)\/projection$/);

@@ -21,9 +21,9 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Mapping, Protocol
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from ecorex import __version__
 from ecorex.artifacts import (
@@ -71,6 +71,13 @@ from ecorex.integration import (
     RuntimeRetouchBridge,
 )
 from ecorex.memory import MemoryService, create_memory_router
+from ecorex.input_attachments import (
+    InputAttachmentConflict,
+    InputAttachmentError,
+    InputAttachmentService,
+    InputAttachmentUnavailable,
+    MAX_INPUT_ATTACHMENT_BYTES,
+)
 from ecorex.migration import (
     MigrationQuarantineService,
     create_migration_quarantine_router,
@@ -108,6 +115,7 @@ from ecorex.protocol import (
     ActivateUpdateResponse,
     CheckUpdateResponse,
     ConnectorDescriptor,
+    ConversationUsageProjection,
     CreateThreadRequest,
     CreateTurnRequest,
     EventListResponse,
@@ -120,6 +128,7 @@ from ecorex.protocol import (
     InteractionMutationResponse,
     InteractionStatus,
     InterruptTurnRequest,
+    InputAttachmentProjection,
     LoginSnapshot,
     LiveReplayRequest,
     LiveReplayResponse,
@@ -189,6 +198,7 @@ from .kernel import RuntimeKernel
 from .permissions import PermissionAuthority
 from .shutdown import stop_service_phases_isolated
 from .supervisor import AgentWorkerSupervisor
+from .usage import UsageProjectionService
 from .worker import AgentTurnWorker
 from .composition import (
     RuntimeComposition,
@@ -230,6 +240,9 @@ class RuntimeSettings:
     event_idle_poll_interval_seconds: float = 0.25
     event_notification_fallback_seconds: float = 1.0
     sse_keepalive_seconds: float = 15.0
+    # Calendar windows in the Composer are product-facing usage facts, not a
+    # browser-locale guess. Deployments can bind this to an account preference.
+    usage_timezone: str = "Asia/Shanghai"
     platform: str = field(default_factory=lambda: sys.platform)
     architecture: str = field(default_factory=platform_module.machine)
     extension_service: ExtensionService | None = field(default=None, repr=False)
@@ -1223,6 +1236,12 @@ def create_app(
         else None
     )
     managed_models = signed_models or builtin_models
+    usage_projection_service = UsageProjectionService(
+        kernel.database,
+        model_catalog=managed_models,
+        timezone_name=settings.usage_timezone,
+    )
+    app.state.usage_projection_service = usage_projection_service
     oauth_return_uri = settings.connector_oauth_return_uri
     if oauth_return_uri is None:
         candidate_origin = urlsplit(settings.webui_origins[0])
@@ -1474,6 +1493,10 @@ def create_app(
         artifact_root,
         database_path=settings.database_path,
         create_storage=startup_convergence_allowed,
+    )
+    input_attachment_service = InputAttachmentService(
+        artifact_service,
+        account_id=settings.account_id,
     )
     connector_result_coordinator = RuntimeConnectorResultCoordinator(
         kernel,
@@ -1727,6 +1750,7 @@ def create_app(
         execution_gate=runtime_execution_gate,
     )
     app.state.artifact_service = artifact_service
+    app.state.input_attachment_service = input_attachment_service
     app.state.artifact_event_outbox = artifact_outbox
     app.state.artifact_event_outbox_supervisor = artifact_outbox_supervisor
     app.state.output_service = output_service
@@ -2937,6 +2961,83 @@ def create_app(
             client_request_id=request.client_request_id,
         )
 
+    @app.post(
+        "/api/v1/input-attachments",
+        response_model=InputAttachmentProjection,
+        status_code=201,
+    )
+    async def upload_input_attachment(
+        file: UploadFile = File(...),
+        client_request_id: str = Form(..., min_length=1, max_length=256),
+    ) -> InputAttachmentProjection:
+        filename = str(file.filename or "").strip()
+        if not filename:
+            raise HTTPException(status_code=422, detail="attachment filename is required")
+        chunks: list[bytes] = []
+        total = 0
+        try:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_INPUT_ATTACHMENT_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="attachment exceeds the 64 MiB limit",
+                    )
+                chunks.append(chunk)
+            return input_attachment_service.upload(
+                b"".join(chunks),
+                filename=filename,
+                mime_type=file.content_type,
+                client_request_id=client_request_id,
+            )
+        except InputAttachmentConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except InputAttachmentUnavailable as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except InputAttachmentError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        finally:
+            await file.close()
+
+    @app.get("/api/v1/input-attachments/{attachment_id}/content")
+    def get_input_attachment_content(attachment_id: str) -> Response:
+        try:
+            projection, content = input_attachment_service.read(attachment_id)
+        except InputAttachmentUnavailable as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return Response(
+            content=content,
+            media_type=projection.mime_type,
+            headers={
+                "Cache-Control": "private, no-store",
+                "X-Content-Type-Options": "nosniff",
+                "Content-Disposition": "inline",
+            },
+        )
+
+    def bind_input_attachments(request: CreateTurnRequest) -> CreateTurnRequest:
+        if not request.attachment_ids:
+            return request
+        attachments = input_attachment_service.resolve(request.attachment_ids)
+        metadata = dict(request.metadata)
+        metadata["input_attachments"] = [
+            attachment.model_dump(mode="json") for attachment in attachments
+        ]
+        return request.model_copy(update={"metadata": metadata})
+
+    def bind_steer_attachments(request: SteerTurnRequest) -> SteerTurnRequest:
+        if not request.attachment_ids:
+            return request
+        attachments = input_attachment_service.resolve(request.attachment_ids)
+        metadata = dict(request.metadata)
+        metadata["input_attachments"] = [
+            attachment.model_dump(mode="json") for attachment in attachments
+        ]
+        return request.model_copy(update={"metadata": metadata})
+
     @app.post("/api/v1/threads", status_code=201)
     def create_thread(request: CreateThreadRequest):
         metadata = dict(request.metadata)
@@ -3022,6 +3123,7 @@ def create_app(
     def create_turn(thread_id: str, request: CreateTurnRequest):
         require_model_task_service()
         try:
+            request = bind_input_attachments(request)
             return composition.admit_turn(
                 request,
                 lambda prepared: kernel.create_turn(
@@ -3035,17 +3137,22 @@ def create_app(
             raise HTTPException(status_code=422, detail=str(error)) from error
         except ModelCatalogError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+        except InputAttachmentError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     @app.post("/api/v1/turns/{turn_id}/steer", status_code=202)
     def steer_turn(turn_id: str, request: SteerTurnRequest):
         require_model_task_service()
-        active_turn = kernel.get_turn(turn_id)
         try:
+            request = bind_steer_attachments(request)
+            active_turn = kernel.get_turn(turn_id)
             agent_model_id, image_model_id = composition.resolve_model_selection(
                 agent_model_id=request.agent_model_id or active_turn.agent_model_id,
                 image_model_id=request.image_model_id or active_turn.image_model_id,
             )
         except ModelCatalogError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except InputAttachmentError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return kernel.steer_turn(
             turn_id,
@@ -3060,8 +3167,10 @@ def create_app(
     @app.post("/api/v1/threads/{thread_id}/queue", status_code=202)
     def queue_turn(thread_id: str, request: QueueTurnRequest):
         require_model_task_service()
-        turn_request = CreateTurnRequest.model_validate(request.model_dump())
         try:
+            turn_request = bind_input_attachments(
+                CreateTurnRequest.model_validate(request.model_dump())
+            )
             return composition.admit_turn(
                 turn_request,
                 lambda prepared: kernel.queue_turn(
@@ -3075,13 +3184,18 @@ def create_app(
             raise HTTPException(status_code=422, detail=str(error)) from error
         except ModelCatalogError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+        except InputAttachmentError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     @app.post("/api/v1/turns/{turn_id}/replace", status_code=202)
     def replace_turn(turn_id: str, request: ReplaceTurnRequest):
         require_model_task_service()
-        turn_request = CreateTurnRequest.model_validate(
-            request.model_dump(exclude={"reason"})
-        )
+        try:
+            turn_request = bind_input_attachments(
+                CreateTurnRequest.model_validate(request.model_dump(exclude={"reason"}))
+            )
+        except InputAttachmentError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
         def accept_replacement(prepared):
             canonical = ReplaceTurnRequest.model_validate(
@@ -3106,6 +3220,8 @@ def create_app(
             raise HTTPException(status_code=422, detail=str(error)) from error
         except ModelCatalogError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+        except InputAttachmentError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     @app.post("/api/v1/threads/{thread_id}/fork", status_code=201)
     def fork_thread(thread_id: str, request: ForkThreadRequest):
@@ -3118,6 +3234,16 @@ def create_app(
     @app.get("/api/v1/threads/{thread_id}/projection")
     def projection(thread_id: str):
         return kernel.projection(thread_id)
+
+    @app.get(
+        "/api/v1/threads/{thread_id}/usage",
+        response_model=ConversationUsageProjection,
+    )
+    def conversation_usage(thread_id: str) -> ConversationUsageProjection:
+        try:
+            return usage_projection_service.project(thread_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="thread not found") from error
 
     @app.get(
         "/api/v1/threads/{thread_id}/replay",

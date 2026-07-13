@@ -3789,3 +3789,33 @@ instead of the authoritative `projects` field. Project selection, first-message
 creation, avatarless transcript rendering and the in-Composer GPT-5.6 SOL
 selector were then exercised successfully. File upload and authoritative usage
 aggregation remain unfinished; release remains blocked.
+
+## 2026-07-13 - Composer attachments, provider usage and message-width closure
+
+The Composer `+` control is now a complete Runtime-owned input-attachment
+chain. The browser uploads a bounded file once, receives an opaque
+account-scoped attachment/revision projection, and only persists that safe
+reference for durable retry; it never persists bytes, absolute paths,
+credentials or provider output. Runtime stores the source as an internal
+Artifact, binds it atomically into the accepting Turn, exposes a segmented
+read tool only for that bound Turn and rejects cross-account, unbound or
+idempotency-conflicting input. Images retain their opaque identity for the
+vision/image path rather than being injected into a prompt.
+
+`input_attachment_read` is deferred in ordinary Turns. A Core-owned
+`runtime_context_required` planner fact promotes it only when immutable Turn
+metadata proves an attachment is bound. This preserves progressive tool
+disclosure and avoids pretending that the user manually selected a tool.
+
+The restored Composer meter is now authoritative: `GET
+/api/v1/threads/{id}/usage` aggregates provider-reported completed-response
+facts for the local calendar day and week, and displays the latest actual
+input-context count against the selected model's signed 272k compaction
+threshold. The visible managed-service allowance remains the signed Bootstrap
+quota. No browser-side token estimate or invented period quota is used.
+
+Real browser inspection also exposed a pre-existing CJK layout fault: user
+message bubbles inherited inline-size containment intended for fixed-width
+assistant rows, causing short text to collapse into a vertical strip. The
+containment is now removed only for shrink-to-fit user bubbles, with a focused
+browser regression.

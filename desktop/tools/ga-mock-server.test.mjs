@@ -75,6 +75,15 @@ test("GA harness exposes managed bootstrap, strict CSRF, state reset, and unique
   assert.equal(authenticated.extensions.contract_version, "1.0");
   assert.equal(authenticated.extensions.items.length, 3);
 
+  const usage = await fetch(`${harness.url}/api/v1/threads/thread-ga/usage`).then((response) => response.json());
+  assert.deepEqual(usage.today, { input_tokens: 4280, output_tokens: 960, total_tokens: 5240 });
+  assert.deepEqual(usage.context, {
+    used_tokens: 42180,
+    window_tokens: 272000,
+    model_id: "ecorex-chat",
+    measured_at: usage.context.measured_at,
+  });
+
   const health = await fetch(`${harness.url}/api/v1/system/health`).then((response) => response.json());
   const technicalHealth = await fetch(`${harness.url}/api/v1/system/health?technical=true`).then((response) => response.json());
   assert.equal(health.summary, "EcoreX 运行正常");

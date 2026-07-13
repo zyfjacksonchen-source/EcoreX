@@ -1,9 +1,10 @@
 import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { CircleDashed, FolderOpen, Workflow, WandSparkles } from "lucide-react";
+import { CircleDashed, FileText, FolderOpen, Image, Workflow, WandSparkles } from "lucide-react";
 
 import type {
   ArtifactProjection,
   ItemProjection,
+  InputAttachmentProjection,
   ProjectProjection,
   TurnProjection,
 } from "../api/contracts.ts";
@@ -48,6 +49,28 @@ function messageText(item: ItemProjection): string {
   return typeof value === "string" ? value : "";
 }
 
+function messageAttachments(item: ItemProjection): InputAttachmentProjection[] {
+  const metadata = item.content.metadata;
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return [];
+  const raw = (metadata as Record<string, unknown>).input_attachments;
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const attachment = value as Record<string, unknown>;
+    if (
+      typeof attachment.attachment_id !== "string"
+      || typeof attachment.revision_id !== "string"
+      || typeof attachment.display_name !== "string"
+      || typeof attachment.mime_type !== "string"
+      || typeof attachment.size_bytes !== "number"
+      || !["image", "document", "file"].includes(String(attachment.media_kind))
+      || typeof attachment.sha256 !== "string"
+      || typeof attachment.created_at !== "string"
+    ) return [];
+    return [attachment as unknown as InputAttachmentProjection];
+  });
+}
+
 function artifactFrom(item: ItemProjection): ArtifactProjection | null {
   const raw = item.content.artifact ?? item.content;
   return tryValidateArtifactProjection(raw);
@@ -70,13 +93,24 @@ function phaseLabel(status: TurnProjection["status"] | undefined): string {
 const MessageRow = memo(function MessageRow({ item }: { item: ItemProjection }) {
   const user = role(item) === "user";
   const text = messageText(item);
-  if (!text) return null;
+  const attachments = user ? messageAttachments(item) : [];
+  if (!text && !attachments.length) return null;
   const streaming = item.status === "in_progress";
   return (
     <article
       className={`ex-message is-${user ? "user" : "assistant"}${streaming ? " is-streaming" : ""}`}
     >
       <div className="ex-message-body" aria-busy={streaming || undefined}>
+        {user && attachments.length ? (
+          <div className="ex-message-attachments" aria-label="本条消息的附件">
+            {attachments.map((attachment) => (
+              <span key={attachment.attachment_id} title={attachment.display_name}>
+                {attachment.media_kind === "image" ? <Image aria-hidden="true" /> : <FileText aria-hidden="true" />}
+                {attachment.display_name}
+              </span>
+            ))}
+          </div>
+        ) : null}
         {user ? (
           <p className="ex-message-plain" aria-live="off">{text}</p>
         ) : (

@@ -429,6 +429,7 @@ class RuntimeComposition:
             "connector_read",
             "connector_write",
             "artifact_read",
+            "input_attachment_read",
         ):
             if protected_tool_id in resolved_handlers:
                 raise ValueError(
@@ -453,14 +454,20 @@ class RuntimeComposition:
         if self.connector_agent_runtime is not None:
             resolved_handlers.update(self.connector_agent_runtime.handlers())
         self.artifact_read_runtime = None
+        self.input_attachment_read_runtime = None
         if artifact_service is not None:
             from ecorex.integration.connector_results import ArtifactReadRuntime
+            from ecorex.input_attachments import InputAttachmentReadRuntime, InputAttachmentService
 
             self.artifact_read_runtime = ArtifactReadRuntime(
                 artifact_service,
                 account_id=tenant_id,
             )
             resolved_handlers["artifact_read"] = self.artifact_read_runtime.read
+            self.input_attachment_read_runtime = InputAttachmentReadRuntime(
+                InputAttachmentService(artifact_service, account_id=tenant_id)
+            )
+            resolved_handlers["input_attachment_read"] = self.input_attachment_read_runtime.read
         for tool_id, handler in self.skill_runtime.handlers().items():
             if tool_id in resolved_handlers:
                 raise ValueError("an injected handler cannot replace a Core Skill tool")
@@ -641,6 +648,19 @@ class RuntimeComposition:
             structured=tuple(request.explicit_tool_ids),
             contribution_snapshot=contribution_snapshot,
         )
+        raw_input_attachments = request.metadata.get("input_attachments")
+        has_bound_input_attachments = (
+            isinstance(raw_input_attachments, list)
+            and bool(raw_input_attachments)
+            and all(
+                isinstance(item, Mapping)
+                and isinstance(item.get("attachment_id"), str)
+                and item["attachment_id"]
+                and isinstance(item.get("revision_id"), str)
+                and item["revision_id"]
+                for item in raw_input_attachments
+            )
+        )
         if self._extension_governance_enabled:
             availability = self.extension_service.apply_availability(
                 availability, extension_snapshot
@@ -668,6 +688,9 @@ class RuntimeComposition:
         plan = self.capability_service.create_plan(
             intent=request.input,
             explicit_tools=explicit,
+            runtime_direct_tools=(
+                ("input_attachment_read",) if has_bound_input_attachments else ()
+            ),
             availability=availability,
             policy=permission_policy,
         )

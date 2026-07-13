@@ -257,6 +257,27 @@ test("ordinary controls keep Codex density and reveal a light frame only while i
   expect(isTransparent(contextualFocus.backgroundColor), `context focus background: ${contextualFocus.backgroundColor}`).toBe(false);
 });
 
+test("Composer renders server-reported quota, token usage, and context window", async ({ guardedPage }) => {
+  await openThreadScenario(guardedPage, "artifact");
+  const meter = guardedPage.locator(".ex-usage-meter");
+  await expect(meter).toContainText("今日 5.2k");
+  await expect(meter).toContainText("本周 22.6k");
+  await expect(meter).toContainText("上下文 42.2k / 272k");
+  await expect(meter).toContainText("额度 128次");
+  await expect(meter.locator("span")).toHaveCount(4);
+});
+
+test("short user messages retain their intrinsic bubble width", async ({ guardedPage }) => {
+  await openThreadScenario(guardedPage, "artifact");
+  const bubble = guardedPage.locator(".ex-message.is-user .ex-message-body");
+  const dimensions = await bubble.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    return { width: box.width, height: box.height };
+  });
+  expect(dimensions.width).toBeGreaterThan(80);
+  expect(dimensions.height).toBeLessThan(48);
+});
+
 test("WorkspaceSurface owns the desktop outline without square child shells or ordinary shadows", async ({ guardedPage }) => {
   await openArtifactScenario(guardedPage, "dark");
   const result = await guardedPage.locator(".ex-workspace").evaluate((workspace) => {
