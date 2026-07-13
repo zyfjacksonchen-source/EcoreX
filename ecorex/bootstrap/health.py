@@ -14,6 +14,16 @@ from ecorex.update.activation import (
     verify_activation_health_response,
 )
 
+
+# A provisional Runtime verifies the complete signed Capability Pack set before
+# it can answer the loopback proof.  Browser and OCR Packs are intentionally
+# substantial; a cold disk cache can exceed the former 30-second window even
+# when the candidate is healthy.  Keep the proof bounded, but give the signed
+# cold-start path enough time to complete without a false rollback.
+DEFAULT_ACTIVATION_HEALTH_TIMEOUT_SECONDS = 90.0
+MAX_ACTIVATION_HEALTH_TIMEOUT_SECONDS = 90.0
+
+
 class _Endpoint(Protocol):
     host: str
     port: int
@@ -33,12 +43,14 @@ class LoopbackActivationHealthProbe:
     def __init__(
         self,
         *,
-        timeout_seconds: float = 30.0,
+        timeout_seconds: float = DEFAULT_ACTIVATION_HEALTH_TIMEOUT_SECONDS,
         poll_seconds: float = 0.1,
         max_response_bytes: int = 64 * 1024,
     ) -> None:
-        if not 1.0 <= timeout_seconds <= 60.0:
-            raise ValueError("activation health timeout must be between one and 60 seconds")
+        if not 1.0 <= timeout_seconds <= MAX_ACTIVATION_HEALTH_TIMEOUT_SECONDS:
+            raise ValueError(
+                "activation health timeout must be between one and 90 seconds"
+            )
         if not 0.01 <= poll_seconds <= 1.0:
             raise ValueError("activation health poll interval is invalid")
         if not 1024 <= max_response_bytes <= 1024 * 1024:
@@ -111,4 +123,9 @@ class LoopbackActivationHealthProbe:
                     connection.close()
 
 
-__all__ = ["ActivationHealthProbe", "LoopbackActivationHealthProbe"]
+__all__ = [
+    "ActivationHealthProbe",
+    "DEFAULT_ACTIVATION_HEALTH_TIMEOUT_SECONDS",
+    "LoopbackActivationHealthProbe",
+    "MAX_ACTIVATION_HEALTH_TIMEOUT_SECONDS",
+]

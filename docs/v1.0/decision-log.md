@@ -1416,3 +1416,20 @@
   contradictory state of a direct tool with a verified handler that the same
   availability snapshot says is absent. The same reconciliation pattern is
   available for future trusted Core handlers.
+
+## ADR-089 - Activation health has a bounded cold-Package startup budget
+
+- Status: accepted.
+- Decision: a provisional Runtime receives 90 seconds to produce its
+  nonce-bound loopback health proof. The budget is a named hard maximum, not a
+  retry loop or an unbounded update wait. It covers cold-cache verification of
+  the complete signed Browser/OCR/other Capability Pack set that occurs before
+  the probe-only ASGI app can bind.
+- Safety boundary: signature, slot, Web bundle, sandbox and Pack verification
+  remain mandatory; a missing proof, invalid proof, forbidden response or
+  elapsed 90-second deadline still stops the candidate and follows the existing
+  rollback/roll-forward contract. The activation-process watchdog remains an
+  independent bound after the probe server has started.
+- Consequence: a healthy first install or update on a cold disk does not get a
+  false 30-second rollback, while an unhealthy candidate cannot wait forever
+  or receive any user traffic before the exact proof succeeds.

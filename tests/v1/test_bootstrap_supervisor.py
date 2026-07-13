@@ -28,6 +28,11 @@ from ecorex.bootstrap import (
     RuntimeEndpoint,
     RuntimeLaunchError,
 )
+from ecorex.bootstrap.health import (
+    DEFAULT_ACTIVATION_HEALTH_TIMEOUT_SECONDS,
+    MAX_ACTIVATION_HEALTH_TIMEOUT_SECONDS,
+    LoopbackActivationHealthProbe,
+)
 from ecorex.update import (
     Ed25519SignatureVerifier,
     ReleaseArtifact,
@@ -46,6 +51,16 @@ def _unsigned() -> SignatureEnvelope:
         key_id="bootstrap-test-key",
         value=base64.b64encode(b"0" * 64).decode("ascii"),
     )
+
+
+def test_default_activation_health_budget_covers_bounded_cold_pack_startup() -> None:
+    probe = LoopbackActivationHealthProbe()
+
+    assert probe.timeout_seconds == DEFAULT_ACTIVATION_HEALTH_TIMEOUT_SECONDS == 90.0
+    with pytest.raises(ValueError, match="between one and 90 seconds"):
+        LoopbackActivationHealthProbe(
+            timeout_seconds=MAX_ACTIVATION_HEALTH_TIMEOUT_SECONDS + 0.1
+        )
 
 
 def _signed(

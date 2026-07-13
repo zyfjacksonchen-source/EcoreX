@@ -3873,3 +3873,21 @@ constraint, not a test result: the completed JUnit run reports 1,836 passed,
 745.98 seconds. Source-tree, lint/compile, whitespace and local supply-chain
 preflight passed against the resulting source. No signed Candidate was
 activated, pushed or published.
+
+## 2026-07-13 - Windows signed-candidate cold-start health budget
+
+The first zero-publication Windows x64 signed-candidate ceremony on commit
+`75ac7b49` completed all eight local stage receipts (Core, Bootstrap and the
+six required Packs) and reached a real first-install activation. It failed
+closed while the provisional Runtime was still becoming healthy: the Bootstrap
+reported no child exit code or startup error, only that the 30-second loopback
+window elapsed before readiness. The disposable install root and process-local
+keys were removed; no user slot, release or publication was touched.
+
+This is consistent with a cold cache needing to hash the full signed Browser
+and OCR Pack set before the probe-only ASGI endpoint can answer. The window is
+now a named, bounded 90-second cold-start budget rather than a 30-second false
+rollback threshold. It remains below the activation watchdog and preserves the
+same nonce-bound loopback proof, signature checks and fail-closed behavior.
+Focused Bootstrap/activation coverage passes; a fresh source-pinned signed
+candidate ceremony is required before this change can earn a Candidate receipt.
