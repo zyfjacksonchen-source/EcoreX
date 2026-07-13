@@ -67,6 +67,7 @@ from ecorex.session import (
     SignedManagedSessionLease,
     token_digest,
 )
+from ecorex.startup_diagnostics import STARTUP_DIAGNOSTIC_TOKEN_ENV
 from ecorex.update import (
     ReleaseArtifact,
     ReleaseChannel,
@@ -1851,6 +1852,40 @@ def test_cli_contract_has_no_credential_arguments_and_redacts_failures(
     assert result == int(ProductRuntimeExitCode.CONFIGURATION)
     assert "EcoreX startup stage: update_runtime" in captured.err
     assert "plaintext-configuration-secret" not in captured.err
+
+
+def test_cli_emits_only_safe_nonce_bound_startup_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    product = _stage_product(tmp_path)
+    diagnostic_root = Path(product["install_root"]) / ".runtime-startup"
+    diagnostic_root.mkdir()
+    token = "A" * 43
+    monkeypatch.chdir(product["payload"])
+    monkeypatch.setenv(STARTUP_DIAGNOSTIC_TOKEN_ENV, token)
+
+    def invalid_configuration(**_kwargs):
+        raise ProductRuntimeConfigurationError(
+            "native provider contained plaintext-configuration-secret",
+            stage_code="capability_pack_binding",
+        )
+
+    monkeypatch.setattr(
+        "ecorex.server.cli.build_product_runtime_server", invalid_configuration
+    )
+
+    result = product_main(["serve", "--host", "127.0.0.1", "--port", "8765"])
+
+    assert result == int(ProductRuntimeExitCode.CONFIGURATION)
+    diagnostic = json.loads(
+        (diagnostic_root / f"{token}.json").read_text(encoding="utf-8")
+    )
+    assert diagnostic == {
+        "schema_version": 1,
+        "stage": "capability_pack_binding",
+        "token": token,
+    }
 
 
 def test_failed_product_composition_closes_every_owned_transport_once(

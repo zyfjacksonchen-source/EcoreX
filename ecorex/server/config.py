@@ -962,6 +962,17 @@ def load_product_runtime(
     # platform vault implementation before it can cross the data barrier.
     try:
         vault = vault_factory()
+    except Exception:
+        raise ProductRuntimeConfigurationError(
+            "Platform credential vault is unavailable",
+            stage_code="credential_vault",
+        ) from None
+    if vault is None:
+        raise ProductRuntimeConfigurationError(
+            "Platform credential vault is unavailable",
+            stage_code="credential_vault",
+        )
+    try:
         pack_runtime = load_verified_capability_packs(
             config,
             install_root=install_root,
@@ -974,12 +985,9 @@ def load_product_runtime(
         )
     except Exception:
         raise ProductRuntimeConfigurationError(
-            "Product Runtime preflight dependency validation failed"
+            "Product Runtime capability Pack validation failed",
+            stage_code="capability_pack_binding",
         ) from None
-    if vault is None:
-        raise ProductRuntimeConfigurationError(
-            "Platform credential vault is unavailable"
-        )
 
     migration_manifest = _load_storage_migration_manifest(selected)
     migration_identity = _storage_migration_identity(selected)

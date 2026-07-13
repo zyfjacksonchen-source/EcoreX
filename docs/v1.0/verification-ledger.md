@@ -1375,3 +1375,15 @@ real connector authorization, external release publication or user activation.
 Neither failed attempt is a Candidate receipt. Their staging evidence is local
 and disposable, and the next ceremony must run from the post-separation commit
 before any candidate can be considered for protected-stage admission.
+
+## Full-Runtime startup-stage diagnostic follow-up - 2026-07-13
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Third local Windows ceremony from `37a7b5bc` | 1 | All eight platform-stage receipts and first-install activation passed. The probe confirmed the slot within the normal bounded window; the subsequent full Runtime exited with code `64` before HTTP readiness. The temporary install root and local keys were removed. No Candidate receipt or publication was created. |
+| Safe diagnostic contract | 0 | Bootstrap now passes a fresh opaque launch token only through child environment, Runtime emits at most a schema/version/token/fixed-stage JSON record, and Bootstrap consumes then deletes it. No raw stderr, provider error, local path, key or token value enters the result. |
+| Focused Runtime/Bootstrap/CLI/drill regression | 0 | 4 passed: nonce-bound stage propagation, safe deletion, CLI stage-only output, probe/full separation and the drill's bounded unavailable fallback. |
+
+The next source-pinned ceremony must report the fixed stage from the real
+full-Runtime failure. This observability addition is advisory only and cannot
+alter activation, rollback, trust or release decisions.

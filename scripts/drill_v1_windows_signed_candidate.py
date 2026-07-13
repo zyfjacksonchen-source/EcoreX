@@ -1713,6 +1713,7 @@ def _wait_for_full_runtime(
             raise DrillError(
                 "the signed Bootstrap exited before readiness: "
                 f"{result.reason.value}; runtime_exit_code={result.runtime_exit_code!r}; "
+                f"runtime_startup_stage={result.runtime_startup_stage or 'unavailable'}; "
                 f"launches={result.launches}; requested_restarts={result.requested_restarts}"
             )
         try:

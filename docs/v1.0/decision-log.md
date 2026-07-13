@@ -1435,3 +1435,22 @@
   because the same large immutable Browser/OCR Pack bytes were read twice in
   serial. The activation probe remains fast, no-traffic and cryptographically
   bound rather than becoming a weaker long-wait workaround.
+
+## ADR-090 - Runtime startup diagnostics are fixed, nonce-bound and advisory
+
+- Status: accepted.
+- Decision: Bootstrap issues one opaque token for each Runtime child and
+  permits that child to write only a tiny exact-schema record containing the
+  same token and a fixed safe startup-stage identifier. The record lives under
+  a fixed install-root directory, is consumed and deleted after child exit,
+  and may never contain raw stderr, exception text, provider responses, local
+  paths, credentials or command arguments.
+- Safety boundary: Bootstrap treats a missing, malformed, stale or forged
+  record as unavailable. It never trusts the record for selection, health,
+  confirmation, rollback or process control; signed slot and Pack validation
+  remain the sole activation authorities.
+- Consequence: a bounded Runtime configuration exit can distinguish a
+  credential-vault, immutable Pack binding or later composition stage without
+  reopening a secret-bearing stderr channel. Candidate drills and system
+  observability gain actionable evidence while the release trust boundary is
+  unchanged.

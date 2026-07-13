@@ -105,7 +105,10 @@ def test_runtime_readiness_failure_reports_bounded_process_diagnostics(tmp_path:
 
     with pytest.raises(
         drill.DrillError,
-        match=r"runtime_failed; runtime_exit_code=2; launches=1; requested_restarts=0$",
+        match=(
+            r"runtime_failed; runtime_exit_code=2; "
+            r"runtime_startup_stage=unavailable; launches=1; requested_restarts=0$"
+        ),
     ) as failure:
         drill._wait_for_full_runtime(
             tmp_path,

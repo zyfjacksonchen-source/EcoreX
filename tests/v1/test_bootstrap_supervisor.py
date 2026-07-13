@@ -33,6 +33,7 @@ from ecorex.bootstrap.health import (
     MAX_ACTIVATION_HEALTH_TIMEOUT_SECONDS,
     LoopbackActivationHealthProbe,
 )
+from ecorex.startup_diagnostics import STARTUP_DIAGNOSTIC_TOKEN_ENV
 from ecorex.update import (
     Ed25519SignatureVerifier,
     ReleaseArtifact,
@@ -224,12 +225,30 @@ class _Child:
 
 
 class _Launcher:
-    def __init__(self, children: list[_Child]) -> None:
+    def __init__(
+        self, children: list[_Child], *, startup_stage: str | None = None
+    ) -> None:
         self.children = children
         self.specs = []
+        self.startup_stage = startup_stage
 
     def start(self, spec):
         self.specs.append(spec)
+        if self.startup_stage is not None:
+            token = spec.environment[STARTUP_DIAGNOSTIC_TOKEN_ENV]
+            directory = spec.cwd.parent.parent.parent / ".runtime-startup"
+            (directory / f"{token}.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "stage": self.startup_stage,
+                        "token": token,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
         return self.children.pop(0)
 
 
@@ -292,6 +311,24 @@ def test_uses_authoritative_pointer_and_launches_with_fixed_safe_argv(
     assert spec.environment["PATH"] != "attacker-path"
     assert spec.environment["PYTHONDONTWRITEBYTECODE"] == "1"
     assert spec.environment["PYTHONNOUSERSITE"] == "1"
+
+
+def test_runtime_failure_reports_only_nonce_bound_safe_startup_stage(
+    tmp_path: Path,
+    signing_key: Ed25519PrivateKey,
+) -> None:
+    install_root = tmp_path / "install"
+    _, slot_id = _stage(install_root, signing_key, "1.0.0", activate=True)
+    launcher = _Launcher([_Child(64)], startup_stage="capability_pack_binding")
+
+    result = _supervisor(install_root, signing_key, launcher).run()
+
+    assert result.reason is BootstrapReason.RUNTIME_FAILED
+    assert result.runtime_exit_code == 64
+    assert result.runtime_startup_stage == "capability_pack_binding"
+    token = launcher.specs[0].environment[STARTUP_DIAGNOSTIC_TOKEN_ENV]
+    assert not (install_root / ".runtime-startup" / f"{token}.json").exists()
+    assert result.launched_slots == (slot_id,)
 
 
 def test_current_must_be_known_good_before_any_process_is_created(

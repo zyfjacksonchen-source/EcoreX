@@ -3901,3 +3901,32 @@ on failure. The normal loopback proof budget is therefore restored to a short,
 bounded 30 seconds (60-second maximum). Focused Bootstrap/activation coverage
 passes; a fresh source-pinned signed candidate ceremony is required before this
 change can earn a Candidate receipt.
+
+## 2026-07-13 - Signed Runtime startup-stage diagnostics
+
+The first post-separation Windows ceremony proved the provisional activation
+probe itself: it created the activation receipt inside the ordinary 30-second
+window and safely fell back from the local GitHub-CN mirror fixture to the
+GitHub fixture. The subsequent full Runtime then exited with the bounded
+configuration code `64` before ordinary HTTP readiness. The old Bootstrap
+intentionally discarded child stderr, so the ceremony exposed an exit code but
+not the fixed startup stage needed to distinguish a Pack binding fault from a
+credential-vault or composition fault. The disposable install root was removed
+and no Candidate receipt was produced.
+
+Runtime and Bootstrap now exchange only a one-shot, nonce-bound fixed stage
+code through an internal advisory file under the signed install root. The
+Runtime can record a whitelisted stage such as `credential_vault`,
+`capability_pack_binding` or `update_runtime`; it never writes an exception,
+provider response, filesystem path, token or process argument. Bootstrap reads
+and deletes the matching file only after child exit, returns it as
+`runtime_startup_stage` for observability, and never uses it to select,
+confirm, roll back or trust a slot. The configuration path also separates
+credential-vault construction from immutable Pack binding so that the safe
+stage reflects the actual boundary.
+
+Focused Bootstrap, product-CLI, activation and signed-drill regression covers
+the nonce binding, deletion, stage redaction and unchanged probe-only/full
+Runtime split. A new source-pinned local ceremony is required to identify and
+fix the remaining full-Runtime root cause; no timeout has been enlarged and no
+failed evidence is counted as a Candidate pass.

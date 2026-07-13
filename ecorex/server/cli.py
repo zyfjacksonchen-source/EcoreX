@@ -12,6 +12,7 @@ from fastapi import FastAPI
 import uvicorn
 
 from ecorex.session import ManagedSessionError
+from ecorex.startup_diagnostics import write_runtime_startup_diagnostic
 
 from .activation import create_activation_probe_app
 from .app import create_product_app
@@ -110,32 +111,39 @@ def main(argv: Sequence[str] | None = None) -> int:
         uvicorn.Server(server.uvicorn_config).run()
         return int(ProductRuntimeExitCode.SUCCESS)
     except (ProductRuntimeTrustError, BundleIntegrityError):
+        write_runtime_startup_diagnostic("trust_boundary")
         print("EcoreX refused an untrusted Product Runtime slot.", file=sys.stderr)
         return int(ProductRuntimeExitCode.TRUST_FAILURE)
     except ManagedSessionError:
+        write_runtime_startup_diagnostic("managed_session")
         print("EcoreX Product Runtime configuration is invalid.", file=sys.stderr)
         print("EcoreX startup stage: managed_session", file=sys.stderr)
         return int(ProductRuntimeExitCode.CONFIGURATION)
     except ProductRuntimeConfigurationError as exc:
+        stage = exc.stage_code or "configuration"
+        write_runtime_startup_diagnostic(stage)
         print("EcoreX Product Runtime configuration is invalid.", file=sys.stderr)
         # Only a validated fixed stage code crosses the process boundary; the
         # error message and native cause remain private because providers may
         # include credentials or paths in exception text.
         print(
-            f"EcoreX startup stage: {exc.stage_code or 'configuration'}",
+            f"EcoreX startup stage: {stage}",
             file=sys.stderr,
         )
         return int(ProductRuntimeExitCode.CONFIGURATION)
     except (ServerConfigurationError, ValueError):
+        write_runtime_startup_diagnostic("server_configuration")
         print("EcoreX Product Runtime configuration is invalid.", file=sys.stderr)
         print("EcoreX startup stage: server_configuration", file=sys.stderr)
         return int(ProductRuntimeExitCode.CONFIGURATION)
     except KeyboardInterrupt:
         return 130
     except SystemExit:
+        write_runtime_startup_diagnostic("software")
         print("EcoreX Product Runtime could not start.", file=sys.stderr)
         return int(ProductRuntimeExitCode.SOFTWARE)
     except Exception:
+        write_runtime_startup_diagnostic("software")
         # Do not render exception values: transports and platform vaults may
         # include sensitive implementation details in their native errors.
         print("EcoreX Product Runtime could not start.", file=sys.stderr)

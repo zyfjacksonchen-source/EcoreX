@@ -22,6 +22,12 @@ from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import Protocol
 
+from ecorex.startup_diagnostics import (
+    STARTUP_DIAGNOSTIC_TOKEN_ENV,
+    issue_startup_diagnostic_token,
+    prepare_startup_diagnostic_directory,
+    read_startup_diagnostic,
+)
 from ecorex.update import (
     ACTIVATION_NONCE_ENV,
     ACTIVATION_TRANSACTION_ENV,
@@ -124,6 +130,9 @@ class _SelectedRuntime:
     slot_id: str
     provisional: VerifiedProvisionalActivation | None = None
     health_nonce: str | None = field(default=None, repr=False, compare=False)
+    startup_diagnostic_token: str | None = field(
+        default=None, repr=False, compare=False
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +143,7 @@ class BootstrapRunResult:
     requested_restarts: int
     launched_slots: tuple[str, ...]
     runtime_exit_code: int | None = None
+    runtime_startup_stage: str | None = None
 
 
 class RuntimeChild(Protocol):
@@ -490,6 +500,11 @@ class BootstrapSupervisor:
                     healthy = False
                 if not healthy:
                     self._stop_candidate(child)
+                    # This candidate never becomes known-good. Discard the
+                    # advisory file without allowing it to influence rollback.
+                    read_startup_diagnostic(
+                        self.slots.root, selected.startup_diagnostic_token
+                    )
                     with self._state_lock:
                         self._active_child = None
                     if self._rollback_pending_activation("candidate_health_failed"):
@@ -517,6 +532,9 @@ class BootstrapSupervisor:
                     except Exception:
                         confirmed = False
                 self._stop_candidate(child)
+                read_startup_diagnostic(
+                    self.slots.root, selected.startup_diagnostic_token
+                )
                 with self._state_lock:
                     self._active_child = None
                 if not confirmed:
@@ -576,6 +594,9 @@ class BootstrapSupervisor:
             with self._state_lock:
                 self._active_child = None
                 stop_signal = self._stop_signal
+            runtime_startup_stage = read_startup_diagnostic(
+                self.slots.root, selected.startup_diagnostic_token
+            )
 
             if stop_signal is not None:
                 return self._stop_result(
@@ -583,6 +604,7 @@ class BootstrapSupervisor:
                     launched,
                     requested_restarts,
                     runtime_exit_code=runtime_code,
+                    runtime_startup_stage=runtime_startup_stage,
                 )
             rolled_back, prior_slot = self._rollback_confirmed_activation(
                 f"confirmed_runtime_exit_{runtime_code}"
@@ -598,6 +620,7 @@ class BootstrapSupervisor:
                     requested_restarts=requested_restarts,
                     launched_slots=tuple(launched),
                     runtime_exit_code=runtime_code,
+                    runtime_startup_stage=runtime_startup_stage,
                 )
             if runtime_code == 0:
                 return BootstrapRunResult(
@@ -607,6 +630,7 @@ class BootstrapSupervisor:
                     requested_restarts=requested_restarts,
                     launched_slots=tuple(launched),
                     runtime_exit_code=0,
+                    runtime_startup_stage=runtime_startup_stage,
                 )
             if runtime_code not in {
                 RUNTIME_RESTART_EXIT_CODE,
@@ -621,6 +645,7 @@ class BootstrapSupervisor:
                         requested_restarts=requested_restarts,
                         launched_slots=tuple(launched),
                         runtime_exit_code=runtime_code,
+                        runtime_startup_stage=runtime_startup_stage,
                     )
                 return BootstrapRunResult(
                     exit_code=int(BootstrapExitCode.RUNTIME_FAILURE),
@@ -629,6 +654,7 @@ class BootstrapSupervisor:
                     requested_restarts=requested_restarts,
                     launched_slots=tuple(launched),
                     runtime_exit_code=runtime_code,
+                    runtime_startup_stage=runtime_startup_stage,
                 )
 
             requested_restarts += 1
@@ -640,6 +666,7 @@ class BootstrapSupervisor:
                     requested_restarts=requested_restarts,
                     launched_slots=tuple(launched),
                     runtime_exit_code=runtime_code,
+                    runtime_startup_stage=runtime_startup_stage,
                 )
             previous_slot = (
                 slot_id if runtime_code == RUNTIME_RESTART_EXIT_CODE else None
@@ -706,6 +733,12 @@ class BootstrapSupervisor:
                 )
                 environment = dict(self._environment)
                 health_nonce: str | None = None
+                startup_diagnostic_token: str | None = None
+                if prepare_startup_diagnostic_directory(self.slots.root):
+                    startup_diagnostic_token = issue_startup_diagnostic_token()
+                    environment[STARTUP_DIAGNOSTIC_TOKEN_ENV] = (
+                        startup_diagnostic_token
+                    )
                 if provisional is not None:
                     health_nonce = secrets.token_urlsafe(32)
                     environment[ACTIVATION_TRANSACTION_ENV] = (
@@ -745,6 +778,7 @@ class BootstrapSupervisor:
                     slot_id=slot.slot_id,
                     provisional=provisional,
                     health_nonce=health_nonce,
+                    startup_diagnostic_token=startup_diagnostic_token,
                 )
         except (BootstrapTrustError, RuntimeLaunchError):
             raise
@@ -811,6 +845,7 @@ class BootstrapSupervisor:
         requested_restarts: int,
         *,
         runtime_exit_code: int | None,
+        runtime_startup_stage: str | None = None,
     ) -> BootstrapRunResult:
         normalized_signal = min(max(abs(signum), 1), 127)
         return BootstrapRunResult(
@@ -820,6 +855,7 @@ class BootstrapSupervisor:
             requested_restarts=requested_restarts,
             launched_slots=tuple(launched),
             runtime_exit_code=runtime_exit_code,
+            runtime_startup_stage=runtime_startup_stage,
         )
 
     @staticmethod
