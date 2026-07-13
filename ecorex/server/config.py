@@ -983,6 +983,13 @@ def load_product_runtime(
             runtime_payload_root=payload,
             resolver=pack_adapter_resolver,
         )
+    except ProductRuntimeConfigurationError as exc:
+        if exc.stage_code is not None:
+            raise
+        raise ProductRuntimeConfigurationError(
+            "Product Runtime capability Pack validation failed",
+            stage_code="capability_pack_binding",
+        ) from None
     except Exception:
         raise ProductRuntimeConfigurationError(
             "Product Runtime capability Pack validation failed",
@@ -1392,34 +1399,34 @@ def load_verified_capability_packs(
             "Configured Capability Packs have no trusted product adapter"
         )
     for definition in config.capability_packs:
-        expected_prefix = (
-            f"capability-packs/{definition.pack_id}/ecorex-capability-pack-"
-            f"{definition.pack_id}-{platform}-{architecture}-{config.identity.version}"
-        )
-        if (
-            definition.manifest != expected_prefix + ".json"
-            or definition.artifact != expected_prefix + ".zip"
-        ):
-            raise ProductRuntimeConfigurationError(
-                "Capability Pack path does not match the active slot projection"
-            )
-        manifest_path = _resolve_existing_file(
-            runtime_payload_root,
-            definition.manifest,
-            label="Capability Pack manifest",
-        )
-        artifact_path = _resolve_existing_file(
-            runtime_payload_root,
-            definition.artifact,
-            label="Capability Pack artifact",
-        )
-        payload = _read_stable_file(
-            manifest_path,
-            max_bytes=256 * 1024,
-            label="Capability Pack manifest",
-            stop=runtime_payload_root,
-        )
         try:
+            expected_prefix = (
+                f"capability-packs/{definition.pack_id}/ecorex-capability-pack-"
+                f"{definition.pack_id}-{platform}-{architecture}-{config.identity.version}"
+            )
+            if (
+                definition.manifest != expected_prefix + ".json"
+                or definition.artifact != expected_prefix + ".zip"
+            ):
+                raise ProductRuntimeConfigurationError(
+                    "Capability Pack path does not match the active slot projection"
+                )
+            manifest_path = _resolve_existing_file(
+                runtime_payload_root,
+                definition.manifest,
+                label="Capability Pack manifest",
+            )
+            artifact_path = _resolve_existing_file(
+                runtime_payload_root,
+                definition.artifact,
+                label="Capability Pack artifact",
+            )
+            payload = _read_stable_file(
+                manifest_path,
+                max_bytes=256 * 1024,
+                label="Capability Pack manifest",
+                stop=runtime_payload_root,
+            )
             manifest = CapabilityPackManifest.from_bytes(payload)
             if manifest.pack_id != definition.pack_id:
                 raise ProductRuntimeConfigurationError(
@@ -1439,11 +1446,17 @@ def load_verified_capability_packs(
                 else {}
             )
             runtime.bind(verified, handlers)
-        except ProductRuntimeConfigurationError:
-            raise
+        except ProductRuntimeConfigurationError as exc:
+            if exc.stage_code is not None:
+                raise
+            raise ProductRuntimeConfigurationError(
+                "Capability Pack validation failed",
+                stage_code=f"capability_pack_{definition.pack_id}",
+            ) from None
         except Exception:
-            raise ProductRuntimeTrustError(
-                "Capability Pack verification or binding failed"
+            raise ProductRuntimeConfigurationError(
+                "Capability Pack verification or binding failed",
+                stage_code=f"capability_pack_{definition.pack_id}",
             ) from None
     return runtime
 
