@@ -131,6 +131,7 @@ export function Composer({
       ? `${formatTokens(usage.context.used_tokens)} / ${formatTokens(usage.context.window_tokens)}`
       : formatTokens(usage.context.used_tokens);
   const quotaUnit = quota?.unit === "managed_requests" ? "次" : (quota?.unit || "");
+  const sendLabel = submitting ? "发送中" : sendFailed ? "重试发送" : "发送";
 
   const submit = async () => {
     if (!draft.trim() || !modelAvailable) return;
@@ -171,7 +172,7 @@ export function Composer({
       <div className="ex-composer" data-busy={submitting ? "true" : "false"}>
         <label className="ex-composer-label" htmlFor="ecorex-composer">给 EcoreX 发消息</label>
         {attachments.length ? (
-          <div className="ex-composer-attachments" aria-label="已添加文件">
+          <div className="ex-composer-attachments" role="group" aria-label="已添加文件">
             {attachments.map((attachment) => (
               <span className="ex-composer-attachment" key={attachment.attachment_id}>
                 {attachment.media_kind === "image" ? <Image aria-hidden="true" /> : <FileText aria-hidden="true" />}
@@ -274,7 +275,7 @@ export function Composer({
               <ChevronDown aria-hidden="true" />
             </label>
           </div>
-          <div className="ex-send-tools">
+          <div className="ex-send-tools" data-active={active ? "true" : "false"}>
             {active ? (
               <DropdownMenu.Root>
                 <DropdownMenu.Trigger asChild>
@@ -310,12 +311,13 @@ export function Composer({
               className="ex-send-button"
               type="button"
               disabled={!draft.trim() || submitting || !modelAvailable}
+              aria-label={sendLabel}
               aria-busy={submitting}
               aria-describedby={!modelAvailable ? "ecorex-composer-note" : undefined}
               onClick={() => void submit()}
             >
               <Send aria-hidden="true" />
-              <span>{submitting ? "发送中" : sendFailed ? "重试发送" : "发送"}</span>
+              <span className="ex-send-button-label">{sendLabel}</span>
             </button>
           </div>
         </div>
@@ -330,7 +332,7 @@ export function Composer({
             ? "需要权限或信息时会询问；长任务可排队，重启后继续。"
             : sendUnavailableReason || "模型服务未连接；可查看历史和本地产物。"}
         </p>
-        <div className="ex-usage-meter" aria-label="额度与上下文用量">
+        <div className="ex-usage-meter" role="group" aria-label="额度与上下文用量">
           <span title="今日已完成模型响应中由服务返回的 Token 用量">今日 <b>{formatTokens(usage?.today.total_tokens)}</b></span>
           <i aria-hidden="true" />
           <span title="本周已完成模型响应中由服务返回的 Token 用量">本周 <b>{formatTokens(usage?.week.total_tokens)}</b></span>

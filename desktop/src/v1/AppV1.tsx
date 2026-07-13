@@ -355,6 +355,7 @@ export function AppV1() {
         : update?.state === "available" || update?.state === "downloading"
           ? `正在后台准备 EcoreX ${update.target_version ?? "新版"}…`
           : null;
+  const isNewConversation = !runtime.state.thread;
 
   const handleArtifactAction = async (artifact: ArtifactProjection, action: string) => {
     if (action === "thumbs_up" || action === "thumbs_down") {
@@ -466,6 +467,42 @@ export function AppV1() {
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
+  );
+
+  const composer = (
+    <Composer
+      connectors={runtime.connectorCatalog}
+      connectorLoadState={runtime.connectorCatalogState}
+      connectorError={runtime.connectorError}
+      connectorNotice={runtime.connectorNotice}
+      connectorOperations={runtime.connectorOperations}
+      onRefreshConnectors={runtime.refreshConnectors}
+      onConnectConnector={runtime.connectConnector}
+      onReconnectConnector={runtime.reconnectConnector}
+      onCheckConnector={runtime.refreshConnectorHealth}
+      onDisconnectConnector={runtime.disconnectConnector}
+      onClearConnectorError={runtime.clearConnectorError}
+      onClearConnectorNotice={runtime.clearConnectorNotice}
+      mode={runtime.mode}
+      active={runtime.activeTurn !== null}
+      submitting={runtime.submitting || Boolean(runtime.switchingThreadId)}
+      modelAvailable={modelAvailable}
+      sendUnavailableReason={modelAvailable ? null : modelUnavailable}
+      chatModels={bootstrap?.models.chat || []}
+      imageModels={bootstrap?.models.image || []}
+      chatModel={runtime.chatModel}
+      imageModel={runtime.imageModel}
+      quota={bootstrap?.quota || null}
+      usage={runtime.conversationUsage}
+      permissionLabel={accessLabel}
+      permissionDescription={accessDescription}
+      onChatModelChange={runtime.setChatModel}
+      onImageModelChange={runtime.setImageModel}
+      onModeChange={runtime.setMode}
+      onSend={runtime.sendMessage}
+      onUploadAttachment={runtime.uploadInputAttachment}
+      onInterrupt={() => void runtime.interrupt()}
+    />
   );
 
   return (
@@ -659,61 +696,33 @@ export function AppV1() {
               projectPickerBusy={runtime.projectPickerBusy}
               onSelectConversationProject={runtime.newTask}
               onPickProject={runtime.pickProject}
+              newConversationComposer={isNewConversation ? composer : null}
             />
           </section>
 
-          {runtime.pendingInteractions.length ? (
-            <Suspense fallback={(
-              <section
-                className="ex-interaction-stack is-loading"
-                role="status"
-                aria-live="polite"
-                aria-busy="true"
-              >
-                正在准备需要你确认的内容…
-              </section>
-            )}>
-              <InteractionStack
-                interactions={runtime.pendingInteractions}
-                connectorRuntime={runtime}
-                onRespond={runtime.respondInteraction}
-              />
-            </Suspense>
+          {!isNewConversation ? (
+            <div className="ex-workspace-bottom">
+              {runtime.pendingInteractions.length ? (
+                <Suspense fallback={(
+                  <section
+                    className="ex-interaction-stack is-loading"
+                    role="status"
+                    aria-live="polite"
+                    aria-busy="true"
+                  >
+                    正在准备需要你确认的内容…
+                  </section>
+                )}>
+                  <InteractionStack
+                    interactions={runtime.pendingInteractions}
+                    connectorRuntime={runtime}
+                    onRespond={runtime.respondInteraction}
+                  />
+                </Suspense>
+              ) : null}
+              {composer}
+            </div>
           ) : null}
-
-          <Composer
-            connectors={runtime.connectorCatalog}
-            connectorLoadState={runtime.connectorCatalogState}
-            connectorError={runtime.connectorError}
-            connectorNotice={runtime.connectorNotice}
-            connectorOperations={runtime.connectorOperations}
-            onRefreshConnectors={runtime.refreshConnectors}
-            onConnectConnector={runtime.connectConnector}
-            onReconnectConnector={runtime.reconnectConnector}
-            onCheckConnector={runtime.refreshConnectorHealth}
-            onDisconnectConnector={runtime.disconnectConnector}
-            onClearConnectorError={runtime.clearConnectorError}
-            onClearConnectorNotice={runtime.clearConnectorNotice}
-            mode={runtime.mode}
-            active={runtime.activeTurn !== null}
-            submitting={runtime.submitting || Boolean(runtime.switchingThreadId)}
-            modelAvailable={modelAvailable}
-            sendUnavailableReason={modelAvailable ? null : modelUnavailable}
-            chatModels={bootstrap?.models.chat || []}
-            imageModels={bootstrap?.models.image || []}
-            chatModel={runtime.chatModel}
-            imageModel={runtime.imageModel}
-            quota={bootstrap?.quota || null}
-            usage={runtime.conversationUsage}
-            permissionLabel={accessLabel}
-            permissionDescription={accessDescription}
-            onChatModelChange={runtime.setChatModel}
-            onImageModelChange={runtime.setImageModel}
-            onModeChange={runtime.setMode}
-            onSend={runtime.sendMessage}
-            onUploadAttachment={runtime.uploadInputAttachment}
-            onInterrupt={() => void runtime.interrupt()}
-          />
         </main>
 
         <LazyFeatureBoundary

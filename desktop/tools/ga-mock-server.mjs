@@ -171,7 +171,10 @@ const VIEWPORT_JS = `
       const label = (element.innerText || "").trim().replace(/\\s+/g, " ");
       if (!label) return [];
       const walker = documentNode.createTreeWalker(element, view.NodeFilter.SHOW_TEXT);
-      const lineTops = new Set();
+      // Caption-sized metadata can have a different glyph baseline from its
+      // label. Merge vertically overlapping boxes instead of treating their
+      // raw top coordinates as different visual lines.
+      const lineBands = [];
       while (walker.nextNode()) {
         const node = walker.currentNode;
         if (!node.textContent?.trim()) continue;
@@ -179,11 +182,19 @@ const VIEWPORT_JS = `
         range.selectNodeContents(node);
         for (const rect of range.getClientRects()) {
           if (rect.width <= 0 || rect.height <= 0) continue;
-          lineTops.add(Math.round(rect.top * 2) / 2);
+          const match = lineBands.find((band) => (
+            rect.top < band.bottom - 1 && rect.bottom > band.top + 1
+          ));
+          if (match) {
+            match.top = Math.min(match.top, rect.top);
+            match.bottom = Math.max(match.bottom, rect.bottom);
+          } else {
+            lineBands.push({ top: rect.top, bottom: rect.bottom });
+          }
         }
       }
-      return lineTops.size > 1
-        ? [{ label, lines: lineTops.size }]
+      return lineBands.length > 1
+        ? [{ label, lines: lineBands.length }]
         : [];
     });
   };
@@ -205,8 +216,8 @@ const VIEWPORT_JS = `
         visible: navigationCandidates.some((element) => visible(element, view)),
       },
       model_selector: {
-        present: Boolean(find('[aria-label="模型选择"]')),
-        visible: visible(find('[aria-label="模型选择"]'), view),
+        present: Boolean(find('[aria-label="对话模型"], [aria-label="图片模型"]')),
+        visible: visible(find('[aria-label="对话模型"], [aria-label="图片模型"]'), view),
       },
       composer: {
         present: Boolean(find("#ecorex-composer")),

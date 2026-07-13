@@ -209,6 +209,17 @@
   padding-inline: var(--space-6);
 }
 
+.ex-new-conversation-composer {
+  width: 100%;
+  margin: var(--space-8) auto 0;
+}
+
+.ex-new-conversation-composer .ex-composer-region {
+  padding: 0;
+  border-top: 0;
+  background: transparent;
+}
+
 .ex-new-conversation-options,
 .ex-new-project-options {
   width: 100%;
@@ -310,6 +321,10 @@
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-card);
   background: var(--color-raised);
+}
+
+.ex-section-toggle {
+  white-space: nowrap;
 }
 
 .ex-message-attachments {
@@ -2459,6 +2474,52 @@ button.ex-artifact-primary {
 
   .ex-artifact-actions > :not(.ex-artifact-more) {
     display: none;
+  }
+}
+
+@container workspace (max-width: 420px) {
+  .ex-composer-tools {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: var(--space-1);
+  }
+
+  .ex-composer-model {
+    margin-left: auto;
+  }
+
+  .ex-composer-model select {
+    max-width: 120px;
+  }
+
+  .ex-send-tools[data-active="true"] {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) var(--target-touch) var(--target-touch);
+    align-items: center;
+  }
+
+  .ex-send-tools[data-active="true"] .ex-disposition {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    justify-content: flex-start;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .ex-send-tools[data-active="true"] .ex-send-button {
+    width: var(--target-touch);
+    min-width: var(--target-touch);
+    padding: 0;
+  }
+
+  .ex-send-button-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 }
 

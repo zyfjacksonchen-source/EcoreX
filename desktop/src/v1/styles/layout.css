@@ -65,13 +65,30 @@ textarea {
   border-radius: var(--radius-panel);
   overflow: clip;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   container-type: inline-size;
   container-name: workspace;
 }
 
 .ex-status-stack:empty {
   display: none;
+}
+
+.ex-workspace-header {
+  grid-row: 1;
+}
+
+.ex-status-stack {
+  grid-row: 2;
+}
+
+.ex-timeline {
+  grid-row: 3;
+}
+
+.ex-workspace-bottom {
+  grid-row: 4;
+  min-width: 0;
 }
 
 .ex-sidebar-brand {

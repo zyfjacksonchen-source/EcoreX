@@ -3819,3 +3819,30 @@ message bubbles inherited inline-size containment intended for fixed-width
 assistant rows, causing short text to collapse into a vertical strip. The
 containment is now removed only for shrink-to-fit user bubbles, with a focused
 browser regression.
+
+## 2026-07-13 - Composer placement, compact navigation and mobile queue closure
+
+Composer placement is now an explicit conversation-mode contract rather than a
+side effect of CSS Grid auto-placement. A new general/project conversation
+passes the same Composer into the centered chooser surface. Once a Thread
+exists, the Composer moves into a dedicated `workspace-bottom` region and
+remains at the actual bottom of the Workspace.
+
+The underlying layout defect was an empty status stack using `display: none`:
+without explicit grid slots, the Timeline and Composer were re-auto-placed into
+earlier rows and a large blank area appeared beneath the Composer. Header,
+status, Timeline and bottom actions now own fixed grid rows, so hiding the
+status stack cannot change semantic layout order.
+
+On 320px touch screens, an active Turn's disposition, stop action and send
+action now use a bounded three-column layout. The send action keeps an explicit
+accessible name while its redundant text label becomes visually compact; it no
+longer falls outside the viewport before a queue request is sent. The compact
+sidebar now gives project/session toggles explicit accessible names and renders
+an icon-plus-semantic-label project-session creation action instead of leaving
+low-contrast text compressed inside the 88px rail.
+
+The first complete E2E rerun surfaced these compact-sidebar accessibility
+defects at 1024px and failed closed. They were corrected before a second full
+run; no timeout, assertion relaxation, or production deployment was used to
+turn that result green.

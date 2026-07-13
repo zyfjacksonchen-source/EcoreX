@@ -1,4 +1,4 @@
-import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { CircleDashed, FileText, FolderOpen, Image, Workflow, WandSparkles } from "lucide-react";
 
 import type {
@@ -38,6 +38,7 @@ interface TimelineProps {
   projectPickerBusy: boolean;
   onSelectConversationProject: (project: ProjectProjection | null) => void;
   onPickProject: () => Promise<ProjectProjection | null>;
+  newConversationComposer: ReactNode;
 }
 
 function role(item: ItemProjection): string {
@@ -139,6 +140,7 @@ export function Timeline({
   projectPickerBusy,
   onSelectConversationProject,
   onPickProject,
+  newConversationComposer,
 }: TimelineProps) {
   const messages = useMemo(
     () => items.filter((item) => item.kind === "message"),
@@ -267,6 +269,11 @@ export function Timeline({
             ? `将从 ${newConversationProject.name} 项目开始，不会自动复用旧项目会话。`
             : "将从不绑定项目的通用会话开始，不会串入项目文件夹上下文。"}
         </p>
+        {newConversationComposer ? (
+          <div className="ex-new-conversation-composer">
+            {newConversationComposer}
+          </div>
+        ) : null}
       </div>
     );
   }

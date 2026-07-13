@@ -291,6 +291,7 @@ export function Sidebar({
               <button
                 className="ex-sidebar-action ex-section-toggle"
                 type="button"
+                aria-label={projectsCollapsed ? "展开项目" : "折叠项目"}
                 aria-expanded={!projectsCollapsed}
                 onClick={() => setProjectsCollapsed((value) => !value)}
               >
@@ -350,10 +351,19 @@ export function Sidebar({
                           </IconButton>
                         </div>
                         {!collapsed ? (
-                          <div className="ex-project-session-list" aria-label={`${project.name} 的会话`}>
+                          <div className="ex-project-session-list" role="group" aria-label={`${project.name} 的会话`}>
                             {projectThreads.length
                               ? projectThreads.map(renderThreadEntry)
-                              : <button className="ex-sidebar-action ex-project-session-empty" type="button" onClick={() => onNewTask(project)}>新建项目会话</button>}
+                              : (
+                                <button
+                                  className="ex-sidebar-action ex-project-session-empty"
+                                  type="button"
+                                  aria-label={`为 ${project.name} 创建新会话`}
+                                  onClick={() => onNewTask(project)}
+                                >
+                                  <Plus aria-hidden="true" /><span>新建项目会话</span>
+                                </button>
+                              )}
                           </div>
                         ) : null}
                       </div>
@@ -383,7 +393,13 @@ export function Sidebar({
 
           <section className="ex-sidebar-section" aria-label="会话">
             <div className="ex-nav-heading">
-              <button className="ex-sidebar-action ex-section-toggle" type="button" aria-expanded={!sessionsCollapsed} onClick={() => setSessionsCollapsed((value) => !value)}>
+              <button
+                className="ex-sidebar-action ex-section-toggle"
+                type="button"
+                aria-label={sessionsCollapsed ? "展开会话" : "折叠会话"}
+                aria-expanded={!sessionsCollapsed}
+                onClick={() => setSessionsCollapsed((value) => !value)}
+              >
                 <ChevronDown className={sessionsCollapsed ? "is-collapsed" : ""} aria-hidden="true" />
                 <span>会话</span><small>{generalThreads.length}</small>
               </button>

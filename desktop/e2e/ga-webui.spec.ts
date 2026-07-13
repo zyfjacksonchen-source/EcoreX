@@ -267,6 +267,29 @@ test("Composer renders server-reported quota, token usage, and context window", 
   await expect(meter.locator("span")).toHaveCount(4);
 });
 
+test("Composer is centered only while choosing a new conversation and otherwise stays at the workspace bottom", async ({ guardedPage }) => {
+  await openThreadScenario(guardedPage, "artifact");
+  const workspace = guardedPage.locator(".ex-workspace");
+  const normalComposer = guardedPage.locator(".ex-workspace-bottom .ex-composer-region");
+  await expect(normalComposer).toBeVisible();
+  const [workspaceBox, normalComposerBox] = await Promise.all([workspace.boundingBox(), normalComposer.boundingBox()]);
+  expect(workspaceBox).not.toBeNull();
+  expect(normalComposerBox).not.toBeNull();
+  expect(Math.abs((workspaceBox?.y ?? 0) + (workspaceBox?.height ?? 0) - ((normalComposerBox?.y ?? 0) + (normalComposerBox?.height ?? 0)))).toBeLessThanOrEqual(2);
+
+  await guardedPage.getByRole("button", { name: "新建任务" }).click();
+  const chooser = guardedPage.locator(".ex-new-conversation-start");
+  const newConversationComposer = chooser.locator(".ex-composer-region");
+  await expect(chooser).toBeVisible();
+  await expect(newConversationComposer).toBeVisible();
+  await expect(guardedPage.locator(".ex-workspace-bottom")).toHaveCount(0);
+  const [chooserBox, newComposerBox] = await Promise.all([chooser.boundingBox(), newConversationComposer.boundingBox()]);
+  expect(chooserBox).not.toBeNull();
+  expect(newComposerBox).not.toBeNull();
+  expect(newComposerBox?.y ?? 0).toBeGreaterThanOrEqual(chooserBox?.y ?? 0);
+  expect((newComposerBox?.y ?? 0) + (newComposerBox?.height ?? 0)).toBeLessThanOrEqual((chooserBox?.y ?? 0) + (chooserBox?.height ?? 0) + 1);
+});
+
 test("short user messages retain their intrinsic bubble width", async ({ guardedPage }) => {
   await openThreadScenario(guardedPage, "artifact");
   const bubble = guardedPage.locator(".ex-message.is-user .ex-message-body");
@@ -680,7 +703,9 @@ test("320px touch Composer keeps the durable queue action reachable and single-l
       await page.getByRole("menuitem", { name: "排到下一轮" }).click();
       await expect(page.getByRole("button", { name: "排到下一轮" })).toBeVisible();
       await page.getByLabel("给 EcoreX 发消息").fill("下一轮整理附件");
-      await page.getByRole("button", { name: "发送" }).click();
+      const send = page.getByRole("button", { name: "发送" });
+      await expect(send).toBeInViewport();
+      await send.click();
       await expect(page.getByText("下一轮整理附件", { exact: true })).toBeVisible();
       await expect(page.locator(".ex-thinking")).toContainText("已排队");
       expect(await page.evaluate(() => (

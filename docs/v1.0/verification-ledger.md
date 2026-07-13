@@ -1331,3 +1331,19 @@ Composer upload and usage-contract work lands.
 The prior full E2E wrapper timeout remains an uncredited receipt; only the
 focused deterministic scenarios above are claimed. Live model/image provider
 and release authority blockers remain unchanged.
+
+## Composer placement and compact-navigation closure - 2026-07-13
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Initial complete WebUI E2E rerun | 1 | 32/34 passed. Both 1024x768 themes failed closed: the compact project toggle had no discernible name after label hiding, and a plain project-session action yielded an indeterminate contrast check. |
+| Composer structural regression | 0 | The normal-Thread Composer is within 2 CSS pixels of the Workspace bottom; the new-conversation Composer is rendered only inside the centered general/project chooser. |
+| 320px touch queue regression | 0 | The queued disposition, stop and send controls remain reachable; the send button is inside the viewport and creates the queued message/Turn. |
+| 1024x768 light and dark GA rerun | 0 | Both exact-frame reports passed after semantic compact-sidebar controls replaced the compressed plain-text action. |
+| Full WebUI E2E matrix | 0 | 34/34 passed across 1440, 1024, 768, 390 and 320 CSS-pixel viewports; both themes, axe, forced colors, reduced motion, artifact touch actions, reasoning/HITL and Composer behavior passed. |
+| Web unit/design contracts | 0 | 162/162 passed, including generated Runtime contracts, design density, GA harness, artifact preview, reducer and durable outbox coverage. |
+| Typecheck / production build | 0 | TypeScript plus generated-contract check passed; 18 content-addressed production assets and all bundle gates passed. |
+
+This closes the local WebUI placement and responsive-accessibility receipt. It
+does not supersede the separate live managed-model/Image 2 provider admission
+or protected release-authority blockers.

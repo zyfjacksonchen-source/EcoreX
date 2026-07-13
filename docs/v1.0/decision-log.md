@@ -1378,3 +1378,24 @@
 - Consequence: a refresh, retry, reconnection or model change cannot silently
   manufacture an attachment authority or a quota/usage value. The visual
   meter can be unavailable, but it cannot lie.
+
+## ADR-087 - Composer placement follows conversation state, not implicit Grid order
+
+- Status: accepted.
+- Decision: the only centered Composer is the one presented while the user is
+  choosing a new general or project conversation. It is rendered as part of
+  that chooser and uses the same Runtime-backed input contract. An established
+  Thread renders the Composer in a dedicated bottom Workspace region.
+- Layout boundary: Workspace children own explicit Header, status, Timeline
+  and bottom grid rows. An empty status stack may be absent from paint, but it
+  cannot cause later children to auto-place into a different semantic row.
+  Mobile active-Turn controls have bounded columns with a persistent accessible
+  send name rather than relying on an offscreen text button.
+- Compact-navigation boundary: when the 88px rail visually hides a label,
+  every action retains an explicit accessible name. Project-session creation
+  uses the same icon-plus-label pattern as other compact actions; it must not
+  leave direct low-contrast text as the only compact affordance.
+- Consequence: conversation mode, viewport size and a transient empty banner
+  cannot make the Composer appear mid-workspace or make a queue action
+  unreachable. The behavior is protected by exact viewport, axe and browser
+  interaction regressions.
