@@ -67,12 +67,15 @@ jobs:
       - name: Lint v1 Python
         run: python scripts/run-v1-lint.py --compile --output-format=github
 
-      - name: Test v1 Runtime
-        run: python -m pytest -q
-
+      # The Python release-pipeline tests invoke the real Vite build. Install
+      # the reviewed Web lock before pytest so those tests exercise the same
+      # dependency closure as the later WebUI gates.
       - name: Install WebUI dependencies
         working-directory: desktop
         run: npm ci
+
+      - name: Test v1 Runtime
+        run: python -m pytest -q
 
       - name: Reject high-severity WebUI dependency vulnerabilities
         working-directory: desktop

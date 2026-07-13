@@ -252,20 +252,31 @@ if ($sourceSetSha256 -cne $ExpectedSourceSetSha256) {
   throw 'source_set_caller_authority_mismatch'
 }
 
-$programFilesX86 = [Environment]::GetFolderPath(
-  [Environment+SpecialFolder]::ProgramFilesX86
-)
-$vsRoot = Assert-RealDirectory (Join-Path $programFilesX86 'Microsoft Visual Studio\2022') 'visual_studio_root'
-$matches = @()
-foreach ($edition in Get-ChildItem -LiteralPath $vsRoot -Directory -Force) {
-  if (($edition.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { continue }
-  $candidate = Join-Path $edition.FullName ('VC\Tools\MSVC\' + $toolchain.msvc_tools_version)
-  $compiler = Join-Path $candidate 'bin\HostX64\x64\cl.exe'
-  if ((Test-Path -LiteralPath $compiler -PathType Leaf) -and
-      (Get-Sha256Hex $compiler) -ceq [string]$toolchain.tools.compiler.sha256) {
-    $matches += $candidate
+$programFileRoots = @(
+  [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles),
+  [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFilesX86)
+) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+$vsRoots = @()
+foreach ($programFiles in $programFileRoots) {
+  $candidateRoot = Join-Path $programFiles 'Microsoft Visual Studio\2022'
+  if (Test-Path -LiteralPath $candidateRoot -PathType Container) {
+    $vsRoots += Assert-RealDirectory $candidateRoot 'visual_studio_root'
   }
 }
+if ($vsRoots.Count -lt 1) { throw 'trusted_visual_studio_layout_unavailable' }
+$matches = @()
+foreach ($vsRoot in $vsRoots) {
+  foreach ($edition in Get-ChildItem -LiteralPath $vsRoot -Directory -Force) {
+    if (($edition.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { continue }
+    $candidate = Join-Path $edition.FullName ('VC\Tools\MSVC\' + $toolchain.msvc_tools_version)
+    $compiler = Join-Path $candidate 'bin\HostX64\x64\cl.exe'
+    if ((Test-Path -LiteralPath $compiler -PathType Leaf) -and
+        (Get-Sha256Hex $compiler) -ceq [string]$toolchain.tools.compiler.sha256) {
+      $matches += $candidate
+    }
+  }
+}
+$matches = @($matches | Select-Object -Unique)
 if ($matches.Count -ne 1) { throw 'trusted_msvc_layout_unavailable' }
 $msvcRoot = Assert-RealDirectory $matches[0] 'msvc_root'
 $toolBin = Assert-RealDirectory (Join-Path $msvcRoot 'bin\HostX64\x64') 'msvc_bin'

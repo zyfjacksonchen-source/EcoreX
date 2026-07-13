@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import subprocess
 import sys
 
@@ -84,6 +85,34 @@ def test_supply_chain_preflight_licenses_every_runtime_lock_package(
         for item in licenses
         if item["name"].casefold() == "tzdata"
     } == {("tzdata", "2026.2", "Apache-2.0")}
+
+
+def test_supply_chain_uses_reviewed_license_for_inactive_marker_dependency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = Path(__file__).resolve().parents[2]
+    module = runpy.run_path(
+        str(repository / "scripts/check-v1-candidate-supply-chain.py")
+    )
+    metadata_module = module["importlib_metadata"]
+
+    def missing(_name: str):
+        raise metadata_module.PackageNotFoundError
+
+    monkeypatch.setattr(metadata_module, "metadata", missing)
+    python, _node = module["_license_inventory"](
+        repository,
+        {"colorama": "0.4.6"},
+    )
+
+    assert python == [
+        {"name": "colorama", "version": "0.4.6", "license": "BSD-3-Clause"}
+    ]
+    with pytest.raises(ValueError, match="license_package_missing:fastapi"):
+        module["_license_inventory"](
+            repository,
+            {"fastapi": "0.120.4"},
+        )
 
 
 def _external_signer(tmp_path: Path) -> tuple[DigestPinnedExternalSigner, bytes, bytes]:

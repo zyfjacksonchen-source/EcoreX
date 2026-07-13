@@ -1754,6 +1754,8 @@ def create_app(
     app.state.artifact_event_outbox = artifact_outbox
     app.state.artifact_event_outbox_supervisor = artifact_outbox_supervisor
     app.state.output_service = output_service
+    output_service_lifecycle = _AsyncResourceCloser(output_service)
+    app.state.output_service_lifecycle = output_service_lifecycle
     app.include_router(create_output_router(output_service))
     artifact_action_executor = ArtifactActionExecutor(
         artifact_service,
@@ -2213,6 +2215,7 @@ def create_app(
         (4, "image_gateway", image_client_lifecycle),
         (1, "retouch_worker", retouch_supervisor),
         (1, "update", update_service),
+        (4, "output_filesystem", output_service_lifecycle),
     ]
     lifecycle_candidates.extend(
         (4, f"connector_adapter_{index}", service)
@@ -2812,7 +2815,7 @@ def create_app(
             (
                 (phase, name, service)
                 for phase, name, service in lifecycle_services
-                if name != "update"
+                if name not in {"update", "output_filesystem"}
             ),
             timeout_seconds=settings.lifecycle_shutdown_seconds,
         )

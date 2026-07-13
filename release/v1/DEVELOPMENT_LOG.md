@@ -129,3 +129,22 @@ python -m pytest -q -p no:cacheprovider tests/v1
 The focused skip is the real Windows symlink case on a host without symlink
 privilege; reparse-bit handling has a privilege-free test. The warning remains
 Starlette's upstream `python_multipart` pending-deprecation notice.
+
+## 2026-07-14 - hosted CI portability and output-root identity
+
+- The first real GitHub-hosted matrix passed macOS arm64/x64 and identified
+  deterministic Ubuntu and Windows gaps rather than release-product failures.
+- Windows native discovery now accepts either standard VS 2022 installation
+  root while preserving manifest digest, Authenticode, library and exact-one
+  toolchain fences.
+- Universal Runtime license accounting remains complete when a lock marker is
+  inactive on the gate host; unknown missing packages still fail closed.
+- CI installs the reviewed npm closure before Python release tests invoke Vite.
+- Cross-platform tests bind to staged Candidate identity and resolved regular
+  executables, removing host-path and host-platform coupling.
+- POSIX output locations are descriptor-pinned for the Runtime lifetime so
+  unlink/recreate inode reuse cannot bypass a frozen output policy.
+- Verification: complete Python v1 suite `1,916 passed, 17 skipped`; Web
+  contracts `162 passed`; npm vulnerabilities `0`; all static, schema,
+  reproducibility, source and supply-chain gates pass. Remote revalidation is
+  required before any promotion claim.

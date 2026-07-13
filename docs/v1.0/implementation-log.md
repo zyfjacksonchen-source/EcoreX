@@ -4654,3 +4654,48 @@ bytes, SHA-256
 `c8d7d0f323e5d7e079ecfd884fd102707348295b917fe2edabb87946bd48a114`.
 No repository setting, ref, workflow dispatch, provider session, release origin,
 Control Plane state or user update was changed.
+
+## 2026-07-14 - First hosted CI matrix closes hermetic and cross-platform gaps
+
+OAuth workflow authorization was restored, branch
+`codex/ecorex-v0.3.0-hardening` was pushed and draft PR #2 created. The first
+real `EcoreX v1 CI` run (`29292576944`, commit `f772d0c1`) proved both macOS
+targets, then failed the Ubuntu quality job in 13 tests and the Windows x64
+smoke in 27 tests. No failed test was waived. The Windows failures shared one
+root: `windows-2025` installs Visual Studio 2022 below 64-bit `Program Files`,
+while the digest-pinned builder searched only `Program Files (x86)`. The Ubuntu
+failures exposed an inactive Windows-only lock marker, Web dependencies being
+installed after a Python test that performs the real Vite build, and tests
+that accidentally used Windows/macOS identities or a symlinked interpreter
+from the host instead of the staged Candidate identity.
+
+The native builder now searches both standard SpecialFolder roots, deduplicates
+matches and still accepts exactly one compiler whose complete toolchain identity
+matches the reviewed manifest. CI installs the npm lock before the Runtime
+suite. The license gate remains fail-closed for unknown packages but carries a
+reviewed BSD-3-Clause fallback for locked `colorama==0.4.6`, which is inactive
+off Windows. Candidate, activation, sandbox and platform-stager tests now bind
+their expectations to the Candidate or actual host boundary instead of
+fabricating a platform.
+
+Two real Runtime issues found by the Linux run were also fixed. Credential
+quarantine link/reparse rejection is normalized to the public
+`QuarantineStateError`. POSIX output roots retain a Runtime-owned directory
+descriptor so an unlinked inode cannot be immediately recycled and mistaken
+for the frozen output policy; descriptors close during Runtime shutdown but
+remain available across account logout so local output functions continue.
+
+The 13 original failure cases pass locally (12 passed and one privilege skip),
+the affected ten-module regression passes 171 tests with five explicit platform
+skips, and the complete v1 suite passes 1,916 tests with 17 explicit skips and
+zero failures in 777.01 seconds. npm audit reports zero vulnerabilities;
+TypeScript, 162 Web contract tests and the production content-addressed build
+pass. Ruff, Python compilation, workflow YAML, design/legacy/download,
+dependency-lock, Runtime/Server schema-authority, reproducibility and all 653
+source-file gates pass. Supply-chain preflight covers 23 Runtime and 282 npm
+packages plus 464 production files, inventory SHA-256
+`e3698863ef20ac363a0bca2b89061ed51a7cbe4740e2dcf3079b59e54888fac1`.
+The ignored 21,857-byte report is `.ci/ci-fix-supply-chain.json`, SHA-256
+`3985d06e199b964be74f289d3e3b6f29a018c8a0f0de39196d6c1d9762093ef0`.
+The corrected remote matrix has not yet been claimed; it must pass after this
+change is pushed before protected release workflows are considered.

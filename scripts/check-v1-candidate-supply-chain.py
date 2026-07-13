@@ -75,6 +75,12 @@ _LICENSE_OVERRIDES = {
     "fastapi": "MIT",
     "websockets": "BSD-3-Clause",
 }
+_INACTIVE_MARKER_LICENSES = {
+    # colorama is present in the universal Runtime lock only for Windows. A
+    # Linux/macOS release gate must still account for this exact reviewed lock
+    # entry without treating arbitrary missing Runtime packages as licensed.
+    "colorama": ("0.4.6", "BSD-3-Clause"),
+}
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -92,15 +98,28 @@ def _parser() -> argparse.ArgumentParser:
 
 def _license_inventory(
     repo: Path,
-    runtime_names: set[str],
+    runtime_versions: dict[str, str],
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     python: list[dict[str, str]] = []
-    for requested_name in sorted(runtime_names, key=canonicalize_name):
+    for requested_name in sorted(runtime_versions, key=canonicalize_name):
         canonical_name = canonicalize_name(requested_name)
         try:
             package = importlib_metadata.metadata(requested_name)
         except importlib_metadata.PackageNotFoundError:
-            raise ValueError(f"license_package_missing:{requested_name}") from None
+            reviewed = _INACTIVE_MARKER_LICENSES.get(canonical_name)
+            if (
+                reviewed is None
+                or reviewed[0] != runtime_versions[canonical_name]
+            ):
+                raise ValueError(f"license_package_missing:{requested_name}") from None
+            python.append(
+                {
+                    "name": requested_name,
+                    "version": runtime_versions[canonical_name],
+                    "license": reviewed[1],
+                }
+            )
+            continue
         name = str(package.get("Name") or requested_name)
         classifiers = package.get_all("Classifier") or []
         classifier_license = next(
@@ -241,7 +260,7 @@ def _preflight(repo: Path) -> dict[str, Any]:
     runtime_versions = _lock_versions(
         dependency_lock.path.parent / dependency_lock.profiles["runtime"]["lock"]
     )
-    python, node = _license_inventory(resolved, set(runtime_versions))
+    python, node = _license_inventory(resolved, runtime_versions)
     licensed_versions = {
         canonicalize_name(item["name"]): item["version"] for item in python
     }

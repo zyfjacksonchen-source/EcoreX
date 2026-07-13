@@ -1656,3 +1656,19 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Current-source supply chain | 0 | 23 locked/licensed Runtime packages, 282 npm packages and 464 production files pass; inventory `5515c74a...9bf58`. Ignored 21,857-byte report SHA-256 `5ace12cb...a54e`. |
 | Live repository audit | 2 | 18 blockers remain: Actions 3, branch 1, OAuth workflow scope 1, Environments 6, privileged Runners 3 and inactive v1 workflows 4. Report SHA-256 `c8d7d0f3...a114`, 3,226 bytes. |
 | External mutation | 0 | No repository setting/ref, workflow dispatch, provider request, origin write, Control Plane mutation or user update occurred. |
+
+## First hosted CI matrix correction - 2026-07-14
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Initial remote CI | 1 | Run `29292576944` on commit `f772d0c1`: macOS arm64 and x64 passed; Ubuntu reported 13 failures; Windows x64 reported 27 failures from one native-build root. Cross-runner byte stability correctly stayed closed. |
+| Windows root cause | 0 | `windows-2025` uses 64-bit `Program Files` for VS 2022. The builder now searches both standard SpecialFolder roots, rejects reparse roots, deduplicates candidates and still requires one exact manifest-pinned compiler/toolchain. |
+| Ubuntu root causes | 0 | npm lock installation now precedes the real Web build inside pytest; inactive `colorama` remains license-accounted without host installation; Candidate/platform tests use staged identities and a resolved regular interpreter rather than host assumptions/symlinks. |
+| Runtime consistency | 0 | POSIX output roots are held by Runtime-owned descriptors to prevent inode-reuse replacement; quarantine filesystem errors are normalized at the domain boundary. Output descriptors close on Runtime shutdown and intentionally survive logout. |
+| Original failure selection | 0 | 12 passed / 1 explicit Windows symlink-privilege skip / 0 failed. |
+| Affected regression | 0 | 171 passed / 5 explicit platform skips / 0 failed in 135.42 seconds. |
+| Complete Python v1 suite | 0 | 1,916 passed / 17 explicit environment skips / 0 failed in 777.01 seconds. Five warnings are upstream deprecation notices only. |
+| WebUI | 0 | npm lock install and audit passed with 0 vulnerabilities; TypeScript passed; 162 contract tests passed; production build emitted 18 content-addressed assets and 17 chunks. |
+| Static/release gates | 0 | Ruff, Python compilation, workflow YAML, design system, legacy cutoff, public download, dependency locks, Runtime/Server schema authority, reproducibility, `git diff --check` and 653 source files pass. |
+| Current-source supply chain | 0 | 23 locked/licensed Runtime packages, 282 npm packages and 464 production files pass; inventory `e3698863...4888fac1`; ignored report SHA-256 `3985d06e...62093ef0`. |
+| Remote revalidation | pending | The fix must be pushed and the exact new commit must pass Ubuntu, Windows x64, both macOS targets and cross-runner byte stability before release promotion. |

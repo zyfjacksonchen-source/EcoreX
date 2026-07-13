@@ -427,7 +427,11 @@ def test_workspace_shell_is_fail_closed_without_a_verified_os_backend(
     )
     assert adapter.sandbox_profile_availability == {
         "workspace-write": "sandbox_probe_not_verified",
-        "danger-full-access": "windows_process_tree_supervisor_unavailable",
+        "danger-full-access": (
+            "windows_process_tree_supervisor_unavailable"
+            if os.name == "nt"
+            else None
+        ),
         "read-only": "shell_read_only_profile_unsupported",
     }
     service = CapabilityService(
@@ -497,7 +501,9 @@ def test_explicit_full_access_uses_auditable_danger_contract_without_claiming_sa
     )
     assert result.record.effective_sandbox == "danger-full-access"
     assert result.value["sandbox"] == "danger-full-access"
-    assert result.value["sandbox_backend_id"] == "unit-contract-only"
+    assert result.value["sandbox_backend_id"] == (
+        "unit-contract-only" if os.name == "nt" else "explicit-unrestricted-process"
+    )
     assert result.value["sandbox_os_enforced"] is False
     assert result.value["read_scope"] == "host-unrestricted"
     assert result.value["write_scope"] == "host-unrestricted"

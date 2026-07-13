@@ -158,6 +158,12 @@ class OutputService:
             )
         return normalized
 
+    def close(self) -> None:
+        self.filesystem.close()
+
+    async def aclose(self) -> None:
+        self.close()
+
     # ------------------------------------------------------------------
     # Location preferences and immutable policy snapshots
     # ------------------------------------------------------------------

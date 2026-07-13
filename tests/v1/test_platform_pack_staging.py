@@ -712,6 +712,7 @@ def test_windows_helper_source_contains_real_appcontainer_and_job_boundaries() -
     assert "ExpectedToolchainManifestSha256" in build
     assert "ExpectedSourceSetSha256" in build
     assert "authority_mode = 'caller-pinned'" in build
+    assert "SpecialFolder]::ProgramFiles)" in build
     assert "SpecialFolder]::ProgramFilesX86" in build
     assert "SpecialFolder]::Windows" in build
     assert "${env:ProgramFiles(x86)}" not in build

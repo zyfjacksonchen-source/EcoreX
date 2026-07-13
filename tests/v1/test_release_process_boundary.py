@@ -110,6 +110,7 @@ def test_platform_stager_wrapper_fails_closed_on_adapter_output_flood(
     tmp_path: Path,
 ) -> None:
     repository = Path(__file__).resolve().parents[2]
+    executable = Path(sys.executable).resolve(strict=True)
     adapter = tmp_path / "flood_stager.py"
     adapter.write_text(
         "import sys,time\n"
@@ -124,9 +125,9 @@ def test_platform_stager_wrapper_fails_closed_on_adapter_output_flood(
     environment = dict(os.environ)
     environment.update(
         {
-            "ECOREX_PLATFORM_STAGER_EXECUTABLE": sys.executable,
+            "ECOREX_PLATFORM_STAGER_EXECUTABLE": str(executable),
             "ECOREX_PLATFORM_STAGER_EXECUTABLE_SHA256": hashlib.sha256(
-                Path(sys.executable).read_bytes()
+                executable.read_bytes()
             ).hexdigest(),
             "ECOREX_PLATFORM_STAGER_ADAPTER": str(adapter),
             "ECOREX_PLATFORM_STAGER_ADAPTER_SHA256": hashlib.sha256(
@@ -178,6 +179,7 @@ def test_platform_stager_wrapper_retains_only_adapter_public_failure_code(
     tmp_path: Path,
 ) -> None:
     repository = Path(__file__).resolve().parents[2]
+    executable = Path(sys.executable).resolve(strict=True)
     adapter = tmp_path / "rejecting_stager.py"
     adapter.write_text(
         "import json,sys\n"
@@ -192,9 +194,9 @@ def test_platform_stager_wrapper_retains_only_adapter_public_failure_code(
     environment = dict(os.environ)
     environment.update(
         {
-            "ECOREX_PLATFORM_STAGER_EXECUTABLE": sys.executable,
+            "ECOREX_PLATFORM_STAGER_EXECUTABLE": str(executable),
             "ECOREX_PLATFORM_STAGER_EXECUTABLE_SHA256": hashlib.sha256(
-                Path(sys.executable).read_bytes()
+                executable.read_bytes()
             ).hexdigest(),
             "ECOREX_PLATFORM_STAGER_ADAPTER": str(adapter),
             "ECOREX_PLATFORM_STAGER_ADAPTER_SHA256": hashlib.sha256(

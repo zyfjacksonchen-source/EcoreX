@@ -80,7 +80,7 @@ def _sha256_file(path: Path) -> str:
         return digest
     except QuarantineStateError:
         raise
-    except OSError:
+    except (OSError, MigrationError):
         raise QuarantineStateError("credential quarantine is unreadable") from None
 
 

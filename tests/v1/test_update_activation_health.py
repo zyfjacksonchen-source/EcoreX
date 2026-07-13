@@ -754,7 +754,7 @@ def test_real_signed_product_candidate_uses_probe_only_composition_without_openi
     install_root = product["install_root"]
     slots = SlotStore(install_root)
     manifest = slots.release_manifest("slot-product-entrypoint")
-    artifact = manifest.artifact("core-windows-x64")
+    artifact = manifest.artifact(product["artifact_id"])
     prior = SlotPointers()
     slots.write_pointers(prior)
     transaction_id = "a" * 32
@@ -808,8 +808,8 @@ def test_real_signed_product_candidate_uses_probe_only_composition_without_openi
     controller = ProvisionalActivationController(
         install_root,
         verifier=verifier,
-        host_platform="windows",
-        host_architecture="x64",
+        host_platform=product["platform"],
+        host_architecture=product["architecture"],
     )
     intent = controller.create_intent(
         active=active,
@@ -839,8 +839,8 @@ def test_real_signed_product_candidate_uses_probe_only_composition_without_openi
             ACTIVATION_NONCE_ENV: nonce,
         },
         vault_factory=unexpected_probe_vault,
-        host_platform="windows",
-        host_architecture="x64",
+        host_platform=product["platform"],
+        host_architecture=product["architecture"],
     )
 
     assert isinstance(composition, ActivationProbeComposition)
@@ -876,8 +876,8 @@ def test_real_signed_product_candidate_uses_probe_only_composition_without_openi
         port=9451,
         environment={"ECOREX_BOOTSTRAPPED": "1"},
         vault_factory=full_runtime_vault,
-        host_platform="windows",
-        host_architecture="x64",
+        host_platform=product["platform"],
+        host_architecture=product["architecture"],
     )
     assert isinstance(full, ProductRuntimeComposition)
     assert full_vault_calls == 1

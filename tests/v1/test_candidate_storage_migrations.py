@@ -236,8 +236,8 @@ def test_product_schema_authorizer_requires_applied_signed_live_receipt(
         verifier=Ed25519SignatureVerifier(
             {"release-key": _public(product["release_private"])}
         ),
-        platform="windows",
-        architecture="x64",
+        platform=product["platform"],
+        architecture=product["architecture"],
     )
     assert authorizer(live.target_schema_version, live.target_schema_sha256)
     assert not authorizer(live.target_schema_version + 1, live.target_schema_sha256)
@@ -1169,20 +1169,23 @@ def test_admission_reverifies_candidate_payload_before_writing_receipt(
         product["slot_path"],
         config=config,
         install_root=product["install_root"],
-        platform="windows",
-        architecture="x64",
+        platform=product["platform"],
+        architecture=product["architecture"],
     )
     receipt_root = product["database"].parent / "migration-receipts"
     before = {path.name: path.read_bytes() for path in receipt_root.iterdir()}
 
-    executable = product["payload"] / "bin/ecorex.exe"
+    executable_name = (
+        "ecorex.exe" if product["platform"] == "windows" else "ecorex"
+    )
+    executable = product["payload"] / "bin" / executable_name
     executable.write_bytes(b"unsigned-candidate-mutation")
     assert not product_config_module._migration_dry_run(
         product["database"],
         product["slot_path"],
         config=config,
         install_root=product["install_root"],
-        platform="windows",
-        architecture="x64",
+        platform=product["platform"],
+        architecture=product["architecture"],
     )
     assert {path.name: path.read_bytes() for path in receipt_root.iterdir()} == before

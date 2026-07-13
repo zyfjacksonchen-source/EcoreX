@@ -77,8 +77,11 @@ def test_webchannel_module_is_no_longer_importable() -> None:
             "-c",
             (
                 "import importlib.util; "
-                "raise SystemExit(0 if "
-                "importlib.util.find_spec('channel.web.web_channel') is None else 1)"
+                "\ntry:\n"
+                " spec = importlib.util.find_spec('channel.web.web_channel')\n"
+                "except ModuleNotFoundError:\n"
+                " spec = None\n"
+                "raise SystemExit(0 if spec is None else 1)"
             ),
         ],
         cwd=ROOT,

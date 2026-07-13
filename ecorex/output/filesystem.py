@@ -56,6 +56,12 @@ class SafeOutputFilesystem:
         *,
         prepare_roots: bool = True,
     ) -> None:
+        # Keep POSIX directory descriptors open for the Runtime lifetime. An
+        # unlinked directory whose inode is pinned cannot be recycled for a
+        # replacement path, closing the inode-reuse gap between policy capture
+        # and publication. Windows acquires an exclusive directory handle per
+        # publication in ``_lease_policy_root`` instead.
+        self._pinned_roots: dict[Path, int] = {}
         roots: dict[OutputLocationAlias, Path] = {}
         for raw_alias, raw_root in configured_roots.items():
             try:
@@ -70,6 +76,18 @@ class SafeOutputFilesystem:
                 else self._configured_root_path(raw_root)
             )
         self._roots = roots
+
+    def close(self) -> None:
+        descriptors = tuple(self._pinned_roots.values())
+        self._pinned_roots.clear()
+        for descriptor in descriptors:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+    def __del__(self) -> None:
+        self.close()
 
     def is_configured(self, alias: OutputLocationAlias) -> bool:
         return alias in self._roots
@@ -572,8 +590,7 @@ class SafeOutputFilesystem:
             raise OutputValidationError("configured output roots must be absolute")
         return Path(os.path.abspath(root))
 
-    @staticmethod
-    def _inspect_root(root: Path) -> tuple[Path, int, int, str]:
+    def _inspect_root(self, root: Path) -> tuple[Path, int, int, str]:
         try:
             value = os.lstat(root)
             resolved = root.resolve(strict=True)
@@ -587,6 +604,13 @@ class SafeOutputFilesystem:
             raise OutputRootUnsafe(
                 "the selected output location contains a symbolic redirect"
             )
+        if os.name != "nt":
+            pinned = self._pinned_root_stat(root)
+            if (int(value.st_dev), int(value.st_ino)) != (
+                int(pinned.st_dev),
+                int(pinned.st_ino),
+            ):
+                raise OutputRootChanged("the frozen output location was replaced")
         device, inode = int(value.st_dev), int(value.st_ino)
         fingerprint = hashlib.sha256(
             canonical_json(
@@ -598,6 +622,44 @@ class SafeOutputFilesystem:
             ).encode("utf-8")
         ).hexdigest()
         return root, device, inode, fingerprint
+
+    def _pinned_root_stat(self, root: Path) -> os.stat_result:
+        descriptor = self._pinned_roots.get(root)
+        if descriptor is None:
+            flags = (
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+            )
+            try:
+                before = os.lstat(root)
+                descriptor = os.open(root, flags)
+                opened = os.fstat(descriptor)
+                after = os.lstat(root)
+            except OSError as error:
+                if descriptor is not None:
+                    os.close(descriptor)
+                raise OutputLocationUnavailable(
+                    "the selected output location cannot be pinned"
+                ) from error
+            identities = {
+                (int(before.st_dev), int(before.st_ino), int(before.st_ctime_ns)),
+                (int(opened.st_dev), int(opened.st_ino), int(opened.st_ctime_ns)),
+                (int(after.st_dev), int(after.st_ino), int(after.st_ctime_ns)),
+            }
+            if (
+                len(identities) != 1
+                or not stat.S_ISDIR(opened.st_mode)
+                or stat.S_ISLNK(after.st_mode)
+                or _is_reparse(after)
+            ):
+                os.close(descriptor)
+                raise OutputRootChanged("the output location changed while being pinned")
+            self._pinned_roots[root] = descriptor
+        try:
+            return os.fstat(descriptor)
+        except OSError as error:
+            raise OutputRootChanged("the pinned output location is unavailable") from error
 
     def _validate_policy_root(self, policy: StoredPolicy) -> Path:
         inspected = self._inspect_root(Path(policy.root_path))
