@@ -4526,3 +4526,35 @@ the 21,857-byte ignored report SHA-256 is
 `8756db7125a8fe020743b9b02e2ed2ac17c7eb3fcd5307a3704946cd937b673e`.
 The Git-admission gate accepts 646 source files. No protected Candidate was
 available and no publication, deployment or user rollout was attempted.
+
+## 2026-07-14 - Split-workflow dependency contract and complete convergence rerun
+
+The first complete rerun after separating Candidate acceptance from publication
+produced 1,894 passes, 17 explicit skips and one failure. The failure was kept as
+a release-chain defect: the dependency-lock checker still described the former
+combined workflow and required five Runtime-profile installations from the
+Candidate alone. It therefore rejected the intentional three/two split between
+Candidate construction and protected publication.
+
+The workflow dependency gate now uses an explicit per-workflow capability
+contract. Candidate requires three locked Runtime installs plus its fixed
+dev/cloud and Node/npm build inputs. Publication independently requires exactly
+two locked Runtime installs and rejects any Node/npm install because it consumes
+already-built immutable Web bytes. CI and platform-stage retain their own exact
+profiles and toolchain requirements; floating pip/npm installs and unpinned
+Actions remain rejected.
+
+The corrected dependency check reports 23 locked Runtime packages and 282 npm
+packages. The affected publication/Candidate suite passes 59 tests. The complete
+current-source Python v1 rerun passes 1,895 tests with 17 explicit environment
+skips and zero failures in 758.93 seconds. Ruff, Python compilation,
+dependency-lock validation, the 646-file source-tree gate and `git diff --check`
+pass. Supply-chain preflight passes 23 locked/licensed Runtime packages and 459
+production files, inventory SHA-256
+`2f169bf36d5d6eb509d1dafa25383fa44589f9930e0ba6e2b8e6054b734c9540`;
+the ignored 21,857-byte report is
+`.candidate/quality/supply-chain-local-candidate-handoff-contract-fix.json`,
+SHA-256
+`ac3ac6f993e3f664af7c214094b2b7b2c49997e37b40bb94223ff795bdc9b3a8`.
+No Candidate was dispatched and no origin, Control Plane or user rollout was
+mutated.

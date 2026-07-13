@@ -234,31 +234,52 @@ def _validate_workflows(repo: Path) -> None:
         path.name: path.read_text(encoding="utf-8")
         for path in sorted((repo / ".github" / "workflows").glob("ecorex-v1-*.yml"))
     }
-    expected_profiles = {
-        "ecorex-v1-ci.yml": {"cloud": 1, "dev": 2},
-        "ecorex-v1-platform-stage.yml": {"platform-stage": 1},
+    workflow_profiles = {
+        "ecorex-v1-ci.yml": {
+            "profiles": {"cloud": 1, "dev": 2},
+            "npm_ci": 2,
+            "node": True,
+        },
+        "ecorex-v1-platform-stage.yml": {
+            "profiles": {"platform-stage": 1},
+            "npm_ci": 1,
+            "node": True,
+        },
         # Source quality plus the isolated shared-storage and protected soak
-        # jobs each install the reviewed dev/cloud pair.  Candidate assembly,
-        # The provenance verifier, Candidate assembly, publication, signed
-        # gate finalization and promotion use the smaller runtime profile.
-        "ecorex-v1-candidate.yml": {"cloud": 3, "dev": 3, "runtime": 5},
+        # jobs each install the reviewed dev/cloud pair. Candidate assembly,
+        # provenance verification and signed gate finalization use the smaller
+        # runtime profile. Publication is deliberately a separate workflow.
+        "ecorex-v1-candidate.yml": {
+            "profiles": {"cloud": 3, "dev": 3, "runtime": 3},
+            "npm_ci": 1,
+            "node": True,
+        },
+        # Accepted-Candidate verification and the protected mutation boundary
+        # each install the exact runtime profile. This workflow only consumes
+        # immutable Web bytes, so it must not install Node dependencies.
+        "ecorex-v1-promote-candidate.yml": {
+            "profiles": {"runtime": 2},
+            "npm_ci": 0,
+            "node": False,
+        },
     }
-    for name, expected in expected_profiles.items():
+    for name, contract in workflow_profiles.items():
         text = workflows.get(name)
         if text is None or "python -m pip install" in text or re.search(r"\bnpm install\b", text):
             raise ValueError(f"workflow_dependency_install_floating:{name}")
-        if text.count("npm ci") < (2 if name == "ecorex-v1-ci.yml" else 1):
+        if text.count("npm ci") != contract["npm_ci"]:
             raise ValueError(f"workflow_npm_ci_missing:{name}")
         if 'python-version: "3.11"' in text or 'python-version: "3.11.9"' not in text:
             raise ValueError(f"workflow_python_toolchain_floating:{name}")
-        if 'node-version: "22"' in text or 'node-version: "22.23.1"' not in text:
+        has_exact_node = 'node-version: "22.23.1"' in text
+        if 'node-version: "22"' in text or has_exact_node is not contract["node"]:
             raise ValueError(f"workflow_node_toolchain_floating:{name}")
         if name == "ecorex-v1-platform-stage.yml" and (
             'go-version: "1.26.5"' not in text
             or "platform-staging/bootstrap/go.mod" not in text
         ):
             raise ValueError("workflow_go_toolchain_floating:ecorex-v1-platform-stage.yml")
-        for profile, count in expected.items():
+        for profile, count in contract["profiles"].items():
             marker = f"python scripts/install-v1-python-profile.py --profile {profile}"
             if text.count(marker) != count:
                 raise ValueError(f"workflow_lock_profile_missing:{name}:{profile}")

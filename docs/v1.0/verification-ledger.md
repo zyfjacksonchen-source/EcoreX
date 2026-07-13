@@ -1614,3 +1614,15 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Replay stress | 0 | Coarse-clock and clock-regression identity tests pass; the real Live Replay revision/restart/idempotency case passes 20/20 independent iterations. |
 | Complete Python v1 suite | 0 | Final current-source rerun: 1,881 passed / 17 explicit environment skips / 0 failed in 763.48 seconds. Five warnings are upstream deprecation notices only. |
 | Current-source supply chain | 0 | 23 locked/licensed Runtime packages; 454 production files pass the bounded secret scan, inventory `86135129...91bf`; all 640 authoritative v1 source files are Git-admitted. Ignored local report SHA-256 `d4e32fd9...e100`, 21,857 bytes. |
+
+## Split-workflow dependency convergence - 2026-07-14
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Initial full-suite diagnostic | 1 | 1,894 passed / 17 skipped / 1 failed. The sole failure was the stale five-site Candidate Runtime-lock count after publication moved to its own workflow; it was not waived. |
+| Workflow dependency authority | 0 | Candidate now requires exact dev/cloud/runtime and Node/npm inputs; publication independently requires exactly two Runtime-profile installs and zero Node/npm installs. CI/platform profiles, Python 3.11.9, Node 22.23.1 where applicable and digest-pinned Actions remain enforced. |
+| Affected regression | 0 | Dependency, Candidate, immutable handoff, asset/Bootstrap publication and signed Windows drill selection: 59 passed / 0 failed. |
+| Complete Python v1 suite | 0 | 1,895 passed / 17 explicit environment skips / 0 failed in 758.93 seconds. Five warnings are upstream deprecation notices only. |
+| Static/source gates | 0 | Ruff, Python compilation, dependency-lock validation, `git diff --check` and the 646-file source-tree admission gate pass. Dependency inventory covers 23 Runtime and 282 npm packages. |
+| Current-source supply chain | 0 | 23 locked/licensed Runtime packages; 459 production files pass the bounded secret scan, inventory `2f169bf3...4c9540`. Ignored 21,857-byte report SHA-256 `ac3ac6f9...c9b3a8`. |
+| Publication | blocked | No protected 24-receipt Candidate or real managed Model/Image/CDP session exists. No workflow dispatch, origin write, Control Plane mutation or user update occurred. |
