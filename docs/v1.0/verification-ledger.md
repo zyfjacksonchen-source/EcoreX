@@ -1543,3 +1543,22 @@ installed-user migration gates and does not authorize deployment.
 
 This local acceptance closes the deterministic WebUI/CDP work item but is not
 live managed-model or protected-platform evidence. It cannot authorize a push.
+
+## Thirteenth zero-publication Windows ceremony - 2026-07-14
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Source-pinned platform build | 0 | Clean product commit `89fab32ae0884e9df5549f2b92e3a76d63fe6de1`; source-pinned production Stager emitted Core, Bootstrap, browser, channels, image, OCR, office and sandbox Windows x64 receipts. |
+| Signed release identity | 0 | 15 artifacts; build digest `67c9133d...bf4d`; Web bundle `a19c9094...3d99`; 19 Web files / 18 immutable assets; Ed25519 manifest and every artifact digest verified. |
+| First install | 0 | Injected domestic-mirror failure → local GitHub fallback; background preparation stopped at `awaiting_user`; explicit activation reached `completed`, Runtime HTTP 200 and registration pin release. |
+| Migration and source removal | 0 | Released-v0.3 schema imported copy-on-write to a committed receipt; source was deleted; packaged source-removed restart returned HTTP 200 and remained idempotent. |
+| Update and refresh | 0 | Distinct same-version replacement stayed inactive at `awaiting_user`, activated only after confirmation, reached `completed` and Runtime HTTP 200; HTML remained `no-store` and assets immutable. |
+| Bad digest | 0 | All three local sources rejected the corrupt artifact; active slot unchanged and corrupt slot never activated. |
+| Pre-data rollback | 0 | Rebound fault Core passed exit-70 preflight, activated provisionally, reached terminal `rollback`, discarded the fault slot, restored the healthy slot and recovered Runtime HTTP 200. |
+| Long-job drain | 0 | Three activations stopped admission and persisted three distinct durable checkpoint receipts before pointer mutation; no real external long-job claim is made. |
+| Cleanup and report | 0 | Completed in 1,439.328 seconds; disposable directory removed and no drill Runtime remained. Report `.candidate/quality/windows-signed-candidate-local-thirteenth.json`, SHA-256 `7144c39a...eccc4`, 43,536 bytes. |
+| Post-report gate | 0 | `test_windows_signed_candidate_drill.py`: 15 passed; v1 lint and report JSON validation passed. |
+| Production promotion gate | blocked | `promotion_claimed=false`, `fixed_gate_relaxed=false`; 8 local Windows receipts do not replace the 16 missing protected macOS arm64/x64 receipts. No external publication or live service was contacted. |
+
+This report supersedes the twelfth ceremony only as current local Windows
+evidence. It still cannot satisfy protected-runner or live-provider gates.

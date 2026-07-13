@@ -4339,3 +4339,43 @@ v1 lint, and a successful 18-asset / 17-chunk content-addressed production
 build. Live managed inference is still not proven: `gpt-5.6-sol` and
 `gpt-image-2` remain provider-unavailable in the current external environment.
 No release, deployment or user update was attempted.
+
+## 2026-07-14 - Thirteenth zero-publication Windows ceremony
+
+Because media intent policy `1.5.0` changes signed Runtime behavior, the prior
+local Windows receipt could not represent the accepted WebUI/routing batch.
+The thirteenth ceremony therefore rebuilt every platform artifact from clean
+product commit `89fab32ae0884e9df5549f2b92e3a76d63fe6de1`; no prior Core,
+Web bundle, Pack or temporary slot was reused. The source-pinned production
+Stager emitted Core, Bootstrap and all six Windows x64 Capability Pack receipts.
+The resulting signed release binds 15 artifacts, the 18 immutable Web assets,
+build digest
+`67c9133deffb9c54c98e146b1d55c042a64505f75eeac9d66818874bcdf5bf4d`
+and Web bundle digest
+`a19c9094d553b593a8af6c0bd4ad7b6b887b772c03d9a684e916b07573323d99`.
+
+The 1,439.328-second transaction reproduced domestic-mirror failure and local
+GitHub fallback, background preparation, `awaiting_user`, explicit first
+activation and full Runtime HTTP 200. Released-v0.3 data migrated copy-on-write
+to a committed receipt, the source was deleted, and the packaged Runtime
+restarted with HTTP 200. A distinct same-version replacement again stayed
+inactive until explicit confirmation, then completed and returned HTTP 200.
+The injected bad digest was rejected before activation.
+
+The archive-aware fault release regenerated `pack-python.json`, passed the
+expected exit-70 preflight, activated provisionally and reached the rollback
+terminal state before the data barrier. The fault slot was discarded, the
+healthy slot restored, and the recovered full Runtime returned HTTP 200.
+Three activation attempts each stopped new admission and persisted a durable
+long-job checkpoint first. The disposable directory was removed and no drill
+Runtime process remained.
+
+The schema-3 report is
+`.candidate/quality/windows-signed-candidate-local-thirteenth.json`, SHA-256
+`7144c39a140aa74e91a5a28886a6846b41773d554ded3305102ad36473beccc4`.
+It remains evidence class `local-windows-drill`: production preflight is
+`blocked`, `promotion_claimed=false`, `fixed_gate_relaxed=false`, and all 16
+protected macOS receipts are missing. The report explicitly records that no
+live mirror, GitHub Release, CDN, Control Plane, Model/Image Gateway, connector,
+OTLP endpoint or tenant credential was contacted. Fifteen post-report drill
+tests and the v1 static gate passed. No deployment or user update was attempted.
