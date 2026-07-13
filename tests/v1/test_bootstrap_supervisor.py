@@ -53,11 +53,11 @@ def _unsigned() -> SignatureEnvelope:
     )
 
 
-def test_default_activation_health_budget_covers_bounded_cold_pack_startup() -> None:
+def test_default_activation_health_budget_remains_bounded_for_probe_only_startup() -> None:
     probe = LoopbackActivationHealthProbe()
 
-    assert probe.timeout_seconds == DEFAULT_ACTIVATION_HEALTH_TIMEOUT_SECONDS == 90.0
-    with pytest.raises(ValueError, match="between one and 90 seconds"):
+    assert probe.timeout_seconds == DEFAULT_ACTIVATION_HEALTH_TIMEOUT_SECONDS == 30.0
+    with pytest.raises(ValueError, match="between one and 60 seconds"):
         LoopbackActivationHealthProbe(
             timeout_seconds=MAX_ACTIVATION_HEALTH_TIMEOUT_SECONDS + 0.1
         )

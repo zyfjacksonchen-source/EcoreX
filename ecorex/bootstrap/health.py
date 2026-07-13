@@ -15,13 +15,12 @@ from ecorex.update.activation import (
 )
 
 
-# A provisional Runtime verifies the complete signed Capability Pack set before
-# it can answer the loopback proof.  Browser and OCR Packs are intentionally
-# substantial; a cold disk cache can exceed the former 30-second window even
-# when the candidate is healthy.  Keep the proof bounded, but give the signed
-# cold-start path enough time to complete without a false rollback.
-DEFAULT_ACTIVATION_HEALTH_TIMEOUT_SECONDS = 90.0
-MAX_ACTIVATION_HEALTH_TIMEOUT_SECONDS = 90.0
+# The provisional Runtime intentionally avoids repeating Bootstrap's complete
+# Pack hash; it proves only its nonce-bound, no-traffic activation endpoint.
+# Keep this recovery boundary short and finite. The full Runtime verifies and
+# binds every Pack after confirmation, before it can cross the data barrier.
+DEFAULT_ACTIVATION_HEALTH_TIMEOUT_SECONDS = 30.0
+MAX_ACTIVATION_HEALTH_TIMEOUT_SECONDS = 60.0
 
 
 class _Endpoint(Protocol):
@@ -49,7 +48,7 @@ class LoopbackActivationHealthProbe:
     ) -> None:
         if not 1.0 <= timeout_seconds <= MAX_ACTIVATION_HEALTH_TIMEOUT_SECONDS:
             raise ValueError(
-                "activation health timeout must be between one and 90 seconds"
+                "activation health timeout must be between one and 60 seconds"
             )
         if not 0.01 <= poll_seconds <= 1.0:
             raise ValueError("activation health poll interval is invalid")

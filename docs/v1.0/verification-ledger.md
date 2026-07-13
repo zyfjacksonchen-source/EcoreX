@@ -1363,14 +1363,15 @@ The gate proves the current local source is internally consistent. It does not
 claim signed platform Candidate creation, live managed model/Image 2 success,
 real connector authorization, external release publication or user activation.
 
-## Windows signed-candidate cold-start diagnostic - 2026-07-13
+## Windows signed-candidate provisional-startup diagnostic - 2026-07-13
 
 | Scope | Exit | Result |
 | --- | ---: | --- |
 | Current-commit Windows x64 stage | 0 | Eight local receipts were generated for Core, Bootstrap, Browser, Channels, Image, OCR, Office and Sandbox on commit `75ac7b49`; each source-pinned stage reached content verification. |
 | First-install provisional health | 1 | Correctly failed closed: the signed Bootstrap stopped the candidate before health readiness. Result had no child exit code or redacted startup-stage error, which is consistent with a still-running cold Pack verification path rather than an accepted unhealthy Runtime. |
-| Cold-start health budget regression | 0 | 43 passed, 1 platform-conditioned skip across Bootstrap and activation tests. Default loopback proof budget is now 90 seconds, bounded at 90 seconds; values above that bound are rejected. |
+| Second source-pinned first-install health | 1 | Commit `da840b11` again generated all eight local Windows receipts, then reached the 90-second provisional health limit without a child exit. This disproved a timeout-only fix and isolated duplicate Pack verification as the root cause. |
+| Probe/full-runtime separation regression | 0 | 89 passed, 3 platform-conditioned skips across Bootstrap, activation, product-Runtime and storage-migration coverage. The provisional process does not open a credential vault; Bootstrap verifies Pack content before launch, and the full Runtime retains Pack binding before the data barrier. |
 
-The first attempt is not a Candidate receipt. Its staging evidence is local
-and disposable, and the next ceremony must run from the post-budget-fix commit
+Neither failed attempt is a Candidate receipt. Their staging evidence is local
+and disposable, and the next ceremony must run from the post-separation commit
 before any candidate can be considered for protected-stage admission.

@@ -3874,7 +3874,7 @@ constraint, not a test result: the completed JUnit run reports 1,836 passed,
 preflight passed against the resulting source. No signed Candidate was
 activated, pushed or published.
 
-## 2026-07-13 - Windows signed-candidate cold-start health budget
+## 2026-07-13 - Windows signed-candidate provisional-startup closure
 
 The first zero-publication Windows x64 signed-candidate ceremony on commit
 `75ac7b49` completed all eight local stage receipts (Core, Bootstrap and the
@@ -3884,10 +3884,20 @@ reported no child exit code or startup error, only that the 30-second loopback
 window elapsed before readiness. The disposable install root and process-local
 keys were removed; no user slot, release or publication was touched.
 
-This is consistent with a cold cache needing to hash the full signed Browser
-and OCR Pack set before the probe-only ASGI endpoint can answer. The window is
-now a named, bounded 90-second cold-start budget rather than a 30-second false
-rollback threshold. It remains below the activation watchdog and preserves the
-same nonce-bound loopback proof, signature checks and fail-closed behavior.
-Focused Bootstrap/activation coverage passes; a fresh source-pinned signed
-candidate ceremony is required before this change can earn a Candidate receipt.
+The first response was to extend the bounded probe budget to 90 seconds. A
+second source-pinned ceremony also failed at that exact boundary, proving that
+the root cause was not merely an undersized timeout: the provisional Runtime
+was redundantly re-hashing the complete Browser/OCR/other Pack set that the
+Bootstrap had just verified before launch.
+
+The product boundary is now explicit. A provisional process verifies its signed
+slot identity, sandbox attestation, Web bundle and nonce-bound activation proof
+only; it does not open the platform credential vault or reconstruct Pack
+adapters while it exposes no business endpoint. Bootstrap remains responsible
+for exact Pack-content verification immediately before launch. After
+confirmation, the full Runtime still verifies and binds every Pack before it
+can cross the data barrier or serve user traffic, preserving pre-data rollback
+on failure. The normal loopback proof budget is therefore restored to a short,
+bounded 30 seconds (60-second maximum). Focused Bootstrap/activation coverage
+passes; a fresh source-pinned signed candidate ceremony is required before this
+change can earn a Candidate receipt.

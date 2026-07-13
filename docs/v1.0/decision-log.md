@@ -1417,19 +1417,21 @@
   availability snapshot says is absent. The same reconciliation pattern is
   available for future trusted Core handlers.
 
-## ADR-089 - Activation health has a bounded cold-Package startup budget
+## ADR-089 - Provisional activation does not duplicate Pack verification
 
 - Status: accepted.
-- Decision: a provisional Runtime receives 90 seconds to produce its
-  nonce-bound loopback health proof. The budget is a named hard maximum, not a
-  retry loop or an unbounded update wait. It covers cold-cache verification of
-  the complete signed Browser/OCR/other Capability Pack set that occurs before
-  the probe-only ASGI app can bind.
-- Safety boundary: signature, slot, Web bundle, sandbox and Pack verification
-  remain mandatory; a missing proof, invalid proof, forbidden response or
-  elapsed 90-second deadline still stops the candidate and follows the existing
-  rollback/roll-forward contract. The activation-process watchdog remains an
-  independent bound after the probe server has started.
-- Consequence: a healthy first install or update on a cold disk does not get a
-  false 30-second rollback, while an unhealthy candidate cannot wait forever
-  or receive any user traffic before the exact proof succeeds.
+- Decision: Bootstrap verifies the exact signed Capability Pack set immediately
+  before it starts a provisional Runtime. The nonce-bound probe then validates
+  the selected signed slot, sandbox attestation and verified Web bundle, but it
+  does not re-hash every Pack, construct Pack adapters or open the credential
+  vault while it exposes no business endpoints. Once Bootstrap confirms the
+  proof, it starts a full Runtime that still verifies/binds every Pack before
+  it crosses the data barrier or accepts traffic.
+- Safety boundary: a missing/invalid proof still stops the candidate within the
+  ordinary bounded loopback window. The Bootstrap's Pack verification and the
+  full Runtime's independent verification are retained; a Pack failure before
+  data writes follows the existing pre-data rollback path.
+- Consequence: first install and update health cannot falsely fail merely
+  because the same large immutable Browser/OCR Pack bytes were read twice in
+  serial. The activation probe remains fast, no-traffic and cryptographically
+  bound rather than becoming a weaker long-wait workaround.

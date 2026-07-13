@@ -869,8 +869,6 @@ def load_product_runtime(
             "Runtime process is not executing from the active slot"
         )
     _verify_runtime_identity(config, selected, release_verifier)
-    migration_manifest = _load_storage_migration_manifest(selected)
-    migration_identity = _storage_migration_identity(selected)
 
     database_path = _resolve_writable_file(
         install_root,
@@ -935,8 +933,33 @@ def load_product_runtime(
             "Signed Web bundle verification did not succeed"
         ) from None
 
-    # Probe startup validates every immutable capability binding and platform
-    # vault implementation without reading credentials or opening live SQLite.
+    if activation_launch is not None:
+        assert provisional is not None
+        if provisional.intent.health_identity.slot_id != selected.slot_id:
+            raise ProductRuntimeTrustError(
+                "Activation health identity does not match the selected slot"
+            )
+        # Bootstrap has already verified the exact signed Pack set immediately
+        # before it starts this one-shot candidate. Do not repeat a complete
+        # cold-disk Pack hash or construct the credential vault merely to
+        # answer the nonce-bound probe: this process exposes no business
+        # endpoint and is stopped after confirmation. The next, full Runtime
+        # launch still verifies and binds every Pack before it can cross the
+        # data barrier or serve user traffic.
+        return ActivationProbeComposition(
+            install_root=install_root,
+            slot=selected,
+            config=config,
+            server_settings=ActivationProbeSettings(
+                host=endpoint.host,
+                port=endpoint.port,
+                identity=provisional.intent.health_identity,
+                nonce=activation_launch.nonce,
+            ),
+        )
+
+    # Full Runtime startup validates every immutable capability binding and
+    # platform vault implementation before it can cross the data barrier.
     try:
         vault = vault_factory()
         pack_runtime = load_verified_capability_packs(
@@ -958,24 +981,8 @@ def load_product_runtime(
             "Platform credential vault is unavailable"
         )
 
-    if activation_launch is not None:
-        assert provisional is not None
-        if provisional.intent.health_identity.slot_id != selected.slot_id:
-            raise ProductRuntimeTrustError(
-                "Activation health identity does not match the selected slot"
-            )
-        return ActivationProbeComposition(
-            install_root=install_root,
-            slot=selected,
-            config=config,
-            server_settings=ActivationProbeSettings(
-                host=endpoint.host,
-                port=endpoint.port,
-                identity=provisional.intent.health_identity,
-                nonce=activation_launch.nonce,
-            ),
-        )
-
+    migration_manifest = _load_storage_migration_manifest(selected)
+    migration_identity = _storage_migration_identity(selected)
     migration_receipt_root = database_path.parent / "migration-receipts"
     storage_schema_authorizer = _verified_applied_storage_schema_authorizer(
         database_path=database_path,

@@ -826,6 +826,9 @@ def test_real_signed_product_candidate_uses_probe_only_composition_without_openi
     controller.ensure_pending_current(transaction_id)
     nonce = "P" * 43
 
+    def unexpected_probe_vault():
+        raise AssertionError("the probe-only activation process must not open a vault")
+
     composition = load_product_runtime(
         payload_root=product["payload"],
         host="127.0.0.1",
@@ -835,7 +838,7 @@ def test_real_signed_product_candidate_uses_probe_only_composition_without_openi
             ACTIVATION_TRANSACTION_ENV: transaction_id,
             ACTIVATION_NONCE_ENV: nonce,
         },
-        vault_factory=InMemoryCredentialVault,
+        vault_factory=unexpected_probe_vault,
         host_platform="windows",
         host_architecture="x64",
     )
@@ -859,16 +862,25 @@ def test_real_signed_product_candidate_uses_probe_only_composition_without_openi
     assert nonce not in response.text
 
     controller.confirm(transaction_id, intent.health_identity)
+    full_vault_calls = 0
+    full_vault = InMemoryCredentialVault()
+
+    def full_runtime_vault():
+        nonlocal full_vault_calls
+        full_vault_calls += 1
+        return full_vault
+
     full = load_product_runtime(
         payload_root=product["payload"],
         host="127.0.0.1",
         port=9451,
         environment={"ECOREX_BOOTSTRAPPED": "1"},
-        vault_factory=InMemoryCredentialVault,
+        vault_factory=full_runtime_vault,
         host_platform="windows",
         host_architecture="x64",
     )
     assert isinstance(full, ProductRuntimeComposition)
+    assert full_vault_calls == 1
     assert full.update.coordinator.bootstrap_health_confirmation is True
     receipt = json.loads(controller.receipt_path.read_text(encoding="utf-8"))
     assert receipt["data_barrier_crossed"] is True
