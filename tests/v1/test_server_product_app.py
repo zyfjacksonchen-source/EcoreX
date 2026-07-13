@@ -218,11 +218,16 @@ def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
         "connector_read",
         "connector_write",
         "artifact_read",
+        "input_attachment_read",
     }
     connector_runtime = app.state.runtime_composition.connector_agent_runtime
     artifact_runtime = app.state.runtime_composition.artifact_read_runtime
+    input_attachment_runtime = (
+        app.state.runtime_composition.input_attachment_read_runtime
+    )
     assert connector_runtime is not None
     assert artifact_runtime is not None
+    assert input_attachment_runtime is not None
     for tool_id in (
         "connector_search",
         "connector_describe",
@@ -231,6 +236,10 @@ def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
     ):
         assert capability_service.handlers[tool_id].__self__ is connector_runtime
     assert capability_service.handlers["artifact_read"].__self__ is artifact_runtime
+    assert (
+        capability_service.handlers["input_attachment_read"].__self__
+        is input_attachment_runtime
+    )
     assert app.state.runtime_composition.availability.installed_packs == frozenset()
     assert app.state.runtime_composition.availability.disabled_tools == {
         "cdp": "verified_handler_not_installed",

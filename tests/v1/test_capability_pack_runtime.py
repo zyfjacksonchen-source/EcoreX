@@ -351,6 +351,7 @@ def test_handler_set_reports_real_executability_not_declared_pack_flags(
             "connector_read",
             "connector_write",
             "artifact_read",
+            "input_attachment_read",
         }
     }
 

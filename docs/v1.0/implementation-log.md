@@ -3846,3 +3846,30 @@ The first complete E2E rerun surfaced these compact-sidebar accessibility
 defects at 1024px and failed closed. They were corrected before a second full
 run; no timeout, assertion relaxation, or production deployment was used to
 turn that result green.
+
+## 2026-07-13 - Attachment-runtime availability and full local candidate gate
+
+The post-Composer candidate run found a real consistency fault instead of
+treating three changed catalog assertions as a reason to simply relax tests.
+`RuntimeComposition` correctly bound the trusted `input_attachment_read`
+handler when the Artifact service existed, but its `RuntimeAvailability`
+projection retained the lower-level `verified_handler_not_installed` fact.
+That meant a Turn with an immutable, backend-bound upload could promote the
+reader to direct exposure while availability still rejected it.
+
+Runtime now reconciles that specific stale handler-absence fact after binding
+the Core reader, both at startup and when a dynamic availability projection is
+sampled. It never clears an administrator, policy, sandbox or offline denial.
+Without a reader, the projection now explicitly reports
+`input_attachment_runtime_not_bound`; with a reader it remains deferred for
+ordinary Turns and is promoted only by the immutable per-Turn attachment fact.
+The tests cover both halves of that contract, in addition to the product App's
+actual handler binding.
+
+The complete Python gate was restarted as a background process after the
+interactive command channel enforced its 60-second limit. This was a transport
+constraint, not a test result: the completed JUnit run reports 1,836 passed,
+17 platform-conditioned skips and five third-party deprecation warnings in
+745.98 seconds. Source-tree, lint/compile, whitespace and local supply-chain
+preflight passed against the resulting source. No signed Candidate was
+activated, pushed or published.

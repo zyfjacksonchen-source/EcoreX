@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from ecorex.capabilities import (
     CapabilitySnapshotRepository,
+    Exposure,
     ManagedModelCatalog,
     ManagedModelSpec,
     ModelModality,
@@ -131,7 +132,7 @@ def test_bootstrap_and_turns_are_generated_from_backend_catalogs(tmp_path) -> No
         "read", "fetch", "vision", "cdp", "shell", "imagegen",
         "skill_search", "skill_read", "tool_search", "tool_describe",
         "connector_search", "connector_describe", "connector_read",
-        "connector_write", "artifact_read",
+        "connector_write", "artifact_read", "input_attachment_read",
     }
     assert decisions["imagegen"].eligible is True
     assert not any(
@@ -143,6 +144,11 @@ def test_bootstrap_and_turns_are_generated_from_backend_catalogs(tmp_path) -> No
         "image": frozenset({"image-edit", "image-generation"}),
     }
     assert decisions["read"].eligible is True
+    # The trusted attachment reader remains discoverable for ordinary Turns;
+    # only a Turn with backend-bound uploads promotes it to direct exposure.
+    assert decisions["input_attachment_read"].eligible is True
+    assert decisions["input_attachment_read"].exposure is Exposure.DEFERRED
+    assert "runtime_context_required" not in decisions["input_attachment_read"].reason_codes
     assert decisions["shell"].eligible is True
     assert {decision.tool_id for decision in plan.direct} >= {
         "read",
@@ -214,10 +220,11 @@ def test_projection_only_composition_does_not_publish_execution_authority(
         )
 
 
-def test_core_connector_and_artifact_availability_normalizes_only_handler_absence() -> None:
+def test_core_runtime_availability_normalizes_only_handler_absence() -> None:
     composition = object.__new__(RuntimeComposition)
     composition.connector_service = None
     composition.artifact_service = None
+    composition.input_attachment_read_runtime = None
     unbound = RuntimeAvailability(
         platform="windows",
         disabled_tools={
@@ -228,12 +235,14 @@ def test_core_connector_and_artifact_availability_normalizes_only_handler_absenc
                 "connector_read",
                 "connector_write",
                 "artifact_read",
+                "input_attachment_read",
             )
         },
     )
 
     unbound = composition._apply_connector_execution_availability(unbound)
     unbound = composition._apply_artifact_read_availability(unbound)
+    unbound = composition._apply_input_attachment_read_availability(unbound)
 
     assert unbound.disabled_tools == {
         "connector_search": "connector_runtime_not_bound",
@@ -241,12 +250,14 @@ def test_core_connector_and_artifact_availability_normalizes_only_handler_absenc
         "connector_read": "connector_runtime_not_bound",
         "connector_write": "connector_runtime_not_bound",
         "artifact_read": "artifact_runtime_not_bound",
+        "input_attachment_read": "input_attachment_runtime_not_bound",
     }
 
     # Binding proves only that the Core handlers exist.  It must not erase a
     # denial from another availability authority.
     composition.connector_service = object()
     composition.artifact_service = object()
+    composition.input_attachment_read_runtime = object()
     bound = RuntimeAvailability(
         platform="windows",
         disabled_tools={
@@ -255,11 +266,13 @@ def test_core_connector_and_artifact_availability_normalizes_only_handler_absenc
             "connector_read": "offline",
             "connector_write": "sandbox_profile_unavailable",
             "artifact_read": "capability_pack_disabled",
+            "input_attachment_read": "verified_handler_not_installed",
         },
     )
 
     bound = composition._apply_connector_execution_availability(bound)
     bound = composition._apply_artifact_read_availability(bound)
+    bound = composition._apply_input_attachment_read_availability(bound)
 
     assert bound.disabled_tools == {
         "connector_describe": "administrator_hard_deny",

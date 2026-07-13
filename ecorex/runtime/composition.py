@@ -535,6 +535,9 @@ class RuntimeComposition:
             self.availability
         )
         self.availability = self._apply_artifact_read_availability(self.availability)
+        self.availability = self._apply_input_attachment_read_availability(
+            self.availability
+        )
         self._availability_provider = availability_provider or (lambda: self.availability)
         self.capability_service.bind_current_availability_provider(
             self._availability_provider
@@ -616,6 +619,7 @@ class RuntimeComposition:
             raise TypeError("Runtime availability provider returned an invalid value")
         availability = self._apply_connector_execution_availability(availability)
         availability = self._apply_artifact_read_availability(availability)
+        availability = self._apply_input_attachment_read_availability(availability)
         selected_modalities = {"chat"}
         selected_model_capabilities = {
             "chat": self.model_catalog.get(agent_model_id).capabilities,
@@ -923,6 +927,35 @@ class RuntimeComposition:
                 disabled["artifact_read"] = reason
         elif disabled.get("artifact_read") in handler_missing_reasons:
             disabled.pop("artifact_read", None)
+        return replace(availability, disabled_tools=disabled)
+
+    def _apply_input_attachment_read_availability(
+        self,
+        availability: RuntimeAvailability,
+    ) -> RuntimeAvailability:
+        """Keep handler availability separate from per-Turn attachment scope.
+
+        The reader is a verified Core handler when an Artifact service is bound.
+        A later per-Turn check promotes it only for backend-bound uploads, so the
+        low-level pack builder's absence fact must not leave it globally
+        unavailable after RuntimeComposition has attached the handler.
+        """
+        disabled = dict(availability.disabled_tools)
+        reason = "input_attachment_runtime_not_bound"
+        handler_missing_reasons = frozenset(
+            {"verified_handler_not_installed", reason}
+        )
+        if self.input_attachment_read_runtime is None:
+            if (
+                "input_attachment_read" not in disabled
+                or disabled["input_attachment_read"] in handler_missing_reasons
+            ):
+                disabled["input_attachment_read"] = reason
+        elif disabled.get("input_attachment_read") in handler_missing_reasons:
+            # Do not override an administrator or policy denial.  The only
+            # stale fact we clear is that a low-level capability-pack builder
+            # did not know about this trusted Runtime handler yet.
+            disabled.pop("input_attachment_read", None)
         return replace(availability, disabled_tools=disabled)
 
     def _record_config(

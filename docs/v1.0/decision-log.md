@@ -1399,3 +1399,20 @@
   cannot make the Composer appear mid-workspace or make a queue action
   unreachable. The behavior is protected by exact viewport, axe and browser
   interaction regressions.
+
+## ADR-088 - Runtime handler binding reconciles stale absence facts only
+
+- Status: accepted.
+- Decision: `RuntimeAvailability` represents executable handler availability,
+  while a Turn's immutable attachment list represents resource scope. When
+  RuntimeComposition binds the non-replaceable `input_attachment_read` Core
+  handler, it clears only its own low-level
+  `verified_handler_not_installed`/`input_attachment_runtime_not_bound` facts.
+  It must preserve administrator hard-deny, network, sandbox, Pack and any
+  other independent denial. If no Artifact-backed reader exists, it emits the
+  explicit `input_attachment_runtime_not_bound` fact.
+- Consequence: progressive disclosure can keep the reader deferred on ordinary
+  Turns and promote it only for backend-bound uploads, without producing the
+  contradictory state of a direct tool with a verified handler that the same
+  availability snapshot says is absent. The same reconciliation pattern is
+  available for future trusted Core handlers.

@@ -1347,3 +1347,18 @@ and release authority blockers remain unchanged.
 This closes the local WebUI placement and responsive-accessibility receipt. It
 does not supersede the separate live managed-model/Image 2 provider admission
 or protected release-authority blockers.
+
+## Attachment-runtime availability and current-source candidate gate - 2026-07-13
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Initial full Python candidate run | 1 | The interactive command transport terminated the process at its 60-second ceiling; this is explicitly uncredited and was not an assertion failure. |
+| Attachment availability root-cause regression | 0 | 35 passed, 1 platform-conditioned skip. A bound `input_attachment_read` Core handler clears only the stale `verified_handler_not_installed` fact; an unbound reader reports `input_attachment_runtime_not_bound`, and policy denials remain authoritative. |
+| Full Python v1 gate | 0 | 1,836 passed, 17 platform-conditioned skips, 5 third-party deprecation warnings, 745.98 seconds; JUnit receipt: `.candidate/quality/full-pytest-current.xml`. |
+| Current-source tree gate | 0 | 631 authoritative source files; no legacy or source-tree policy violation. |
+| Lint / Python compilation / whitespace | 0 | Repository lint and compile gate passed; `git diff --check` was clean. |
+| Local supply-chain preflight | 0 | Dependency-lock, license and secret-scan gates passed; report: `.candidate/quality/supply-chain-local-post-attachment-runtime.json`. |
+
+The gate proves the current local source is internally consistent. It does not
+claim signed platform Candidate creation, live managed model/Image 2 success,
+real connector authorization, external release publication or user activation.
