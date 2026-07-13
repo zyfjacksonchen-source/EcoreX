@@ -865,61 +865,89 @@ def test_candidate_cli_writes_typed_failure_when_protected_signer_is_missing(
     assert not (tmp_path / "release").exists()
 
 
-def test_candidate_workflow_is_dispatch_only_protected_and_default_safe() -> None:
-    workflow = (
+def test_candidate_and_publication_workflows_are_split_and_default_safe() -> None:
+    candidate = (
         Path(__file__).resolve().parents[2]
         / ".github"
         / "workflows"
         / "ecorex-v1-candidate.yml"
     ).read_text(encoding="utf-8")
+    publication = (
+        Path(__file__).resolve().parents[2]
+        / ".github"
+        / "workflows"
+        / "ecorex-v1-promote-candidate.yml"
+    ).read_text(encoding="utf-8")
 
-    assert "pull_request:" not in workflow
-    assert "workflow_dispatch:" in workflow
-    assert "github.ref_protected" in workflow
-    assert "default: false" in workflow
-    assert "default: dry-run" in workflow
-    assert 'default: "1"' in workflow
-    assert "contents: write" in workflow
-    assert "id-token: write" in workflow
-    assert "cancel-in-progress: false" in workflow
-    assert "ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256" in workflow
-    assert "--publish-github" in workflow
-    assert workflow.index("publish-assets") < workflow.index(
+    assert "pull_request:" not in candidate
+    assert "workflow_dispatch:" in candidate
+    assert "github.ref_protected" in candidate
+    assert "cancel-in-progress: false" in candidate
+    assert "ecorex-release-signing-${{ inputs.channel }}" in candidate
+    assert "ecorex-v1-accepted-${{ inputs.channel }}" in candidate
+    assert "publish-assets" not in candidate
+    assert "contents: write" not in candidate
+    assert "ECOREX_CONTROL_PLANE_TOKEN" not in candidate
+
+    assert "pull_request:" not in publication
+    assert "workflow_dispatch:" in publication
+    assert "github.ref_protected" in publication
+    assert "default: verify-only" in publication
+    assert 'default: "1"' in publication
+    assert "candidate_run_id:" in publication
+    assert "candidate_run_attempt:" in publication
+    assert "candidate_artifact_id:" in publication
+    assert "scripts/select-v1-accepted-candidate.py" in publication
+    assert "scripts/verify-v1-accepted-candidate.py" in publication
+    assert "actions/artifacts/${CANDIDATE_ARTIFACT_ID}/zip" in publication
+    assert publication.count("curl --fail --location --silent --show-error") == 2
+    assert publication.count("X-GitHub-Api-Version: 2026-03-10") == 4
+    assert "steps.candidate.outputs.artifact_sha256" in publication
+    assert "scripts/extract-v1-workflow-artifact.py" in publication
+    assert "publication_artifact_sha256:" in publication
+    assert "actions/download-artifact" not in publication
+    assert "ecorex-release-publication-${{ inputs.channel }}" in publication
+    assert "contents: write" in publication
+    assert "id-token: write" in publication
+    assert "cancel-in-progress: false" in publication
+    assert "ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256" in publication
+    assert "--expected-workflow-run-id ${{ inputs.candidate_run_id }}" in publication
+    assert "--publish-github" in publication
+    assert publication.index("verify-v1-accepted-candidate.py") < publication.index(
+        "publish-assets"
+    )
+    assert publication.index("publish-assets") < publication.index(
         "build-public-bootstrap-index"
     )
-    assert workflow.index("build-public-bootstrap-index") < workflow.index(
+    assert publication.index("build-public-bootstrap-index") < publication.index(
         "stage-public-bootstrap-index"
     )
-    assert workflow.index("stage-public-bootstrap-index") < workflow.index(
+    assert publication.index("stage-public-bootstrap-index") < publication.index(
         "assemble-v1-release-evidence.py"
     )
-    assert "sign-v1-release-gate-bundle.py" in workflow
-    assert workflow.index("assemble-v1-release-evidence.py") < workflow.index(
+    assert "sign-v1-release-gate-bundle.py" in publication
+    assert publication.index("assemble-v1-release-evidence.py") < publication.index(
         "sign-v1-release-gate-bundle.py"
     )
-    assert workflow.index("sign-v1-release-gate-bundle.py") < workflow.index(
-        "Upload publication receipts and evidence"
-    )
-    assert "release-evidence-prepare-unsigned.json" in workflow
-    assert "release-evidence-unsigned.json" in workflow
-    assert workflow.count('--trusted-key "$KEY_ID=$PUBLIC_KEY"') >= 8
-    assert "ECOREX_PUBLICATION_SIGNER_EXECUTABLE_SHA256" in workflow
-    assert "--trusted-publication-key" in workflow
-    assert workflow.index(
+    assert "release-evidence-prepare-unsigned.json" in publication
+    assert "release-evidence-unsigned.json" in publication
+    assert publication.count('--trusted-key "$KEY_ID=$PUBLIC_KEY"') >= 7
+    assert "ECOREX_PUBLICATION_SIGNER_EXECUTABLE_SHA256" in publication
+    assert "--trusted-publication-key" in publication
+    assert publication.index(
         "Create stable candidate gates and paused draft rollout"
-    ) < workflow.index("activate-public-bootstrap-index")
-    assert "always() && inputs.promotion_mode != 'dry-run'" in workflow
-    assert "bootstrap-index-stage-receipt.json" in workflow
-    assert "bootstrap-index-publication-receipt.json" in workflow
-    assert "ecorex-v1-promotion-${{ inputs.channel }}-${{ github.run_id }}" in workflow
-    assert workflow.index("activate-public-bootstrap-index") < workflow.index(
+    ) < publication.index("activate-public-bootstrap-index")
+    assert "bootstrap-index-stage-receipt.json" in publication
+    assert "bootstrap-index-publication-receipt.json" in publication
+    assert "ecorex-v1-publication-result-${{ inputs.channel }}-${{ github.run_id }}" in publication
+    assert publication.index("activate-public-bootstrap-index") < publication.index(
         "Assemble stable active-and-readback evidence"
     )
-    assert workflow.index("Assemble stable active-and-readback evidence") < workflow.index(
+    assert publication.index("Assemble stable active-and-readback evidence") < publication.index(
         "Publish release then activate stable rollout"
     )
-    assert workflow.index("Publish release then activate stable rollout") < workflow.index(
-        "Retain promotion journal and public activation evidence"
+    assert publication.index("Publish release then activate stable rollout") < publication.index(
+        "Retain publication receipts, signed evidence and recovery journal"
     )
 
 
@@ -1112,6 +1140,8 @@ def test_evidence_assembler_requires_all_nonpublication_gates(tmp_path: Path) ->
             str(manifest_path),
             "--expected-commit",
             COMMIT,
+            "--expected-workflow-run-id",
+            str(RUN_ID),
             "--output",
             str(output),
         ],
@@ -1146,6 +1176,7 @@ def test_evidence_assembler_requires_all_nonpublication_gates(tmp_path: Path) ->
             "--publication-receipt", str(publication),
             "--manifest", str(manifest_path),
             "--expected-commit", COMMIT,
+            "--expected-workflow-run-id", str(RUN_ID),
             "--output", str(tmp_path / "mixed.json"),
         ],
         capture_output=True,
@@ -1163,6 +1194,7 @@ def test_evidence_assembler_requires_all_nonpublication_gates(tmp_path: Path) ->
             "--publication-receipt", str(publication),
             "--manifest", str(manifest_path),
             "--expected-commit", COMMIT,
+            "--expected-workflow-run-id", str(RUN_ID),
             "--output", str(tmp_path / "nonfinite.json"),
         ],
         capture_output=True,

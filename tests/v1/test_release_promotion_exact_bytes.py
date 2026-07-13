@@ -163,6 +163,8 @@ def test_real_builder_bytes_flow_through_receipt_evidence_and_promotion(
             str(built.manifest_path),
             "--expected-commit",
             COMMIT,
+            "--expected-workflow-run-id",
+            "42",
             "--output",
             str(evidence_path),
         ],

@@ -4486,3 +4486,43 @@ The Git-admission source-tree gate accepts all 640 authoritative v1 source files
 The ignored local report is
 `.candidate/quality/supply-chain-local-signed-gate-bundle-final.json`, SHA-256
 `d4e32fd94e15fe2f9ef0444c9bdf78a333a6a6a9b327c8d53fa43a0f6b41e100`.
+
+## 2026-07-14 - Immutable Candidate handoff and resumable administrator publication
+
+The protected-chain audit found that the requested “build/test first, publish
+after approval” flow was not actually resumable. Candidate construction and
+publication lived in one workflow; a later dispatch rebuilt under a new run ID,
+so it could not reuse the exact live-accepted Artifact. A runner loss also lost
+the randomly generated Control Plane request journal.
+
+Candidate now stops after `ecorex-v1-accepted-<channel>` and has no origin or
+Control Plane credential path. A separate protected publication workflow
+requires the exact Candidate run ID, attempt and Artifact ID; validates the
+successful protected-main workflow, repository/head repository, commit,
+timestamps, non-expiration, unique accepted name and archive digest; then
+re-authenticates the signed Candidate and complete gate set before approval.
+The default is `verify-only`. `create` and `create-and-activate` are the only
+remote mutation modes.
+
+Cross-workflow downloads no longer rely on a digest warning. Both the selected
+accepted Artifact and the verified same-run publication input are fetched by
+exact Artifact ID, SHA-256 checked and extracted by a bounded ZIP reader that
+rejects traversal, Windows path aliases, links/special files, case collisions,
+duplicate members, unexpected roots, excessive size/member counts and
+insufficient disk. Evidence assembly additionally requires the exact original
+Candidate workflow run ID.
+
+Promotion request IDs are now deterministic across lost journals and workflow
+reruns while remaining bound to the release, exact manifest, publication
+receipt, rollout target, preparation evidence and operation. The focused
+handoff, workflow, live-gate, promotion and Control Plane regression passes 57
+tests. The broader release/Candidate/Control Plane/update/public-Bootstrap/live
+selection passes 474 tests with seven explicit platform skips and 1,431
+deselected. Python compile/Ruff, workflow YAML parsing and `git diff --check`
+pass. Current supply-chain preflight passes 23 locked/licensed Runtime packages
+and 459 production files, inventory SHA-256
+`2f8f67bacb8439bfbbc32b0a9d4e52c737e329447220758a349077e6f23ee05f`;
+the 21,857-byte ignored report SHA-256 is
+`8756db7125a8fe020743b9b02e2ed2ac17c7eb3fcd5307a3704946cd937b673e`.
+The Git-admission gate accepts 646 source files. No protected Candidate was
+available and no publication, deployment or user rollout was attempted.

@@ -1764,3 +1764,33 @@
   existing same-time secondary indexes deterministic within a serialized writer.
 - Consequence: Item, Job, Artifact and other durable tables cannot reorder rapid
   same-process creations merely because the OS clock is coarse or moves backward.
+
+## ADR-104 - Accepted Candidate and administrator publication are separate workflows
+
+- Status: accepted.
+- Root cause: the former protected workflow combined Candidate construction,
+  live acceptance and publication inputs. Building with publication disabled
+  produced valid evidence but offered no later way to publish those exact bytes;
+  rerunning rebuilt under a new workflow run ID and invalidated the prior manual/
+  live acceptance identity. Local promotion journals also generated random
+  request IDs, so runner loss could create a second rollout.
+- Decision: the Candidate workflow ends after uploading one live-accepted
+  Artifact. A second protected workflow must name its exact run, attempt and
+  Artifact ID, prove the run was the successful protected-main Candidate
+  workflow for the current commit, and re-authenticate the signed Candidate plus
+  complete pre-publication gate set. `verify-only` is the non-mutating default;
+  only a separately reviewed publication environment can reach origins or the
+  Control Plane.
+- Byte-boundary decision: cross-workflow archives are downloaded through the
+  exact Artifact REST identity and SHA-256 checked before a bounded safe
+  extractor accepts them. A download action warning is not release authority.
+  The same rule applies to the verified input passed into the protected mutation
+  job.
+- Recovery decision: Control Plane request IDs are deterministically derived
+  from release, manifest, publication, rollout-target and preparation-evidence
+  identity plus the operation name. Deleting a local journal or rerunning a job
+  therefore replays the same server request instead of creating a new rollout.
+- Consequence: an administrator may build and test first, approve publication
+  later, resume after runner loss and still publish only the exact previously
+  accepted bytes. A stale, foreign, expired, ambiguous, corrupted or unsafe
+  Artifact fails before any external mutation.

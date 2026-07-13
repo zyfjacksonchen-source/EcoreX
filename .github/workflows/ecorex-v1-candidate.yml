@@ -23,25 +23,6 @@ on:
         description: Exact successful attempt number of the EcoreX v1 CI run
         required: true
         type: string
-      publish_assets:
-        description: Mutate domestic mirror, GitHub Release and CDN
-        required: true
-        type: boolean
-        default: false
-      promotion_mode:
-        description: Control Plane action after publication
-        required: true
-        type: choice
-        default: dry-run
-        options:
-          - dry-run
-          - create
-          - create-and-activate
-      rollout_percentage:
-        description: Initial rollout percentage (defaults to 1%)
-        required: true
-        type: string
-        default: "1"
       delta_base_tag:
         description: Optional prior immutable GitHub Release tag used to derive signed Core deltas
         required: false
@@ -62,16 +43,13 @@ jobs:
     timeout-minutes: 5
     permissions: {}
     steps:
-      - name: Refuse PR, unprotected ref or contradictory mutation inputs
+      - name: Refuse PR, unprotected ref or malformed immutable inputs
         env:
           EVENT_NAME: ${{ github.event_name }}
           REF_PROTECTED: ${{ github.ref_protected }}
           STAGING_RUN_ID: ${{ inputs.staging_run_id }}
           CI_RUN_ID: ${{ inputs.ci_run_id }}
           CI_RUN_ATTEMPT: ${{ inputs.ci_run_attempt }}
-          PUBLISH_ASSETS: ${{ inputs.publish_assets }}
-          PROMOTION_MODE: ${{ inputs.promotion_mode }}
-          ROLLOUT_PERCENTAGE: ${{ inputs.rollout_percentage }}
           DELTA_BASE_TAG: ${{ inputs.delta_base_tag }}
         run: |
           python - <<'PY'
@@ -82,14 +60,9 @@ jobs:
               and re.fullmatch(r"[1-9][0-9]{0,18}", os.environ["STAGING_RUN_ID"] or "")
               and re.fullmatch(r"[1-9][0-9]{0,18}", os.environ["CI_RUN_ID"] or "")
               and re.fullmatch(r"[1-9][0-9]{0,8}", os.environ["CI_RUN_ATTEMPT"] or "")
-              and re.fullmatch(r"(?:[1-9]|[1-9][0-9]|100)", os.environ["ROLLOUT_PERCENTAGE"] or "")
               and (
                   not os.environ["DELTA_BASE_TAG"]
                   or re.fullmatch(r"v[0-9A-Za-z][0-9A-Za-z.+-]{0,126}", os.environ["DELTA_BASE_TAG"])
-              )
-              and not (
-                  os.environ["PUBLISH_ASSETS"] != "true"
-                  and os.environ["PROMOTION_MODE"] != "dry-run"
               )
           )
           raise SystemExit(0 if ok else 1)
@@ -184,14 +157,15 @@ jobs:
 
       - name: Install, audit, type-check, test and build WebUI once
         working-directory: desktop
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_FILE: ../.candidate/quality/playwright-report.json
         run: |
           npm ci
           npm audit --audit-level=high
           npm run typecheck
           npm run test:v1
           npm run build
-          npx playwright test --config=playwright.config.ts --reporter=json \
-            > ../.candidate/quality/playwright-report.json
+          npx playwright test --config=playwright.config.ts --reporter=json
 
       - name: Static product gates
         run: |
@@ -566,7 +540,7 @@ jobs:
       - image-shared-storage
       - image-soak
     environment:
-      name: ecorex-release-${{ inputs.channel }}
+      name: ecorex-release-signing-${{ inputs.channel }}
     runs-on: [self-hosted, linux, x64, ecorex-release-sign]
     timeout-minutes: 30
     permissions:
@@ -926,323 +900,3 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 30
-
-  publish:
-    name: Publish mirror, GitHub and CDN exact bytes
-    if: ${{ inputs.publish_assets == true }}
-    needs: live-acceptance
-    environment:
-      name: ecorex-release-${{ inputs.channel }}
-    runs-on: [self-hosted, linux, x64, ecorex-release-publish]
-    timeout-minutes: 45
-    permissions:
-      actions: read
-      contents: write
-      id-token: write
-    steps:
-      - name: Checkout release CLI without persisted credentials
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: "3.11.9"
-
-      - name: Install runner-only publisher dependencies
-        run: python scripts/install-v1-python-profile.py --profile runtime
-
-      - name: Download exact signed and live-accepted Candidate
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: ecorex-v1-accepted-${{ inputs.channel }}
-          path: .candidate
-
-      - name: Publish in signed source order and make GitHub public last
-        env:
-          ECOREX_GITHUB_TOKEN: ${{ github.token }}
-          ECOREX_MIRROR_TOKEN: ${{ secrets.ECOREX_MIRROR_TOKEN }}
-          ECOREX_CDN_TOKEN: ${{ secrets.ECOREX_CDN_TOKEN }}
-          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
-          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
-          PUBLICATION_CONFIG: ${{ vars.ECOREX_RELEASE_PUBLICATION_CONFIG }}
-        run: >-
-          ecorex-release publish-assets
-          --release-dir .candidate/output/release
-          --publication-config "$PUBLICATION_CONFIG"
-          --receipt .candidate/output/publication-receipt.json
-          --trusted-key "$KEY_ID=$PUBLIC_KEY"
-          --publish-github
-
-      - name: Reproduce the stable public Bootstrap discovery bytes
-        if: ${{ inputs.channel == 'stable' }}
-        env:
-          ECOREX_RELEASE_SIGNER_EXECUTABLE: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE }}
-          ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256 }}
-          ECOREX_RELEASE_SIGNER_ADAPTER: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER }}
-          ECOREX_RELEASE_SIGNER_ADAPTER_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER_SHA256 }}
-          ECOREX_RELEASE_SIGNER_KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
-          ECOREX_RELEASE_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
-          ECOREX_PUBLICATION_SIGNER_EXECUTABLE: ${{ vars.ECOREX_PUBLICATION_SIGNER_EXECUTABLE }}
-          ECOREX_PUBLICATION_SIGNER_EXECUTABLE_SHA256: ${{ vars.ECOREX_PUBLICATION_SIGNER_EXECUTABLE_SHA256 }}
-          ECOREX_PUBLICATION_SIGNER_ADAPTER: ${{ vars.ECOREX_PUBLICATION_SIGNER_ADAPTER }}
-          ECOREX_PUBLICATION_SIGNER_ADAPTER_SHA256: ${{ vars.ECOREX_PUBLICATION_SIGNER_ADAPTER_SHA256 }}
-          ECOREX_PUBLICATION_SIGNER_KEY_ID: ${{ vars.ECOREX_PUBLICATION_SIGNER_KEY_ID }}
-          ECOREX_PUBLICATION_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_PUBLICATION_SIGNER_PUBLIC_KEY }}
-          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
-          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
-          PUBLICATION_KEY_ID: ${{ vars.ECOREX_PUBLICATION_SIGNER_KEY_ID }}
-          PUBLICATION_PUBLIC_KEY: ${{ vars.ECOREX_PUBLICATION_SIGNER_PUBLIC_KEY }}
-        run: >-
-          ecorex-release build-public-bootstrap-index
-          --release-dir .candidate/output/release
-          --publication-receipt .candidate/output/publication-receipt.json
-          --output .candidate/output/public-bootstrap-index.json
-          --trusted-key "$KEY_ID=$PUBLIC_KEY"
-          --trusted-publication-key "$PUBLICATION_KEY_ID=$PUBLICATION_PUBLIC_KEY"
-
-      - name: Stage the stable Bootstrap index without changing public authority
-        if: ${{ inputs.channel == 'stable' }}
-        env:
-          ECOREX_BOOTSTRAP_INDEX_TOKEN: ${{ secrets.ECOREX_BOOTSTRAP_INDEX_TOKEN }}
-          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
-          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
-          PUBLICATION_KEY_ID: ${{ vars.ECOREX_PUBLICATION_SIGNER_KEY_ID }}
-          PUBLICATION_PUBLIC_KEY: ${{ vars.ECOREX_PUBLICATION_SIGNER_PUBLIC_KEY }}
-          BOOTSTRAP_INDEX_PUBLICATION_CONFIG: ${{ vars.ECOREX_BOOTSTRAP_INDEX_PUBLICATION_CONFIG }}
-        run: >-
-          ecorex-release stage-public-bootstrap-index
-          --release-dir .candidate/output/release
-          --publication-receipt .candidate/output/publication-receipt.json
-          --index .candidate/output/public-bootstrap-index.json
-          --publication-config "$BOOTSTRAP_INDEX_PUBLICATION_CONFIG"
-          --receipt .candidate/output/bootstrap-index-stage-receipt.json
-          --trusted-key "$KEY_ID=$PUBLIC_KEY"
-          --trusted-publication-key "$PUBLICATION_KEY_ID=$PUBLICATION_PUBLIC_KEY"
-
-      - name: Assemble exact channel-specific preparation evidence
-        env:
-          RELEASE_CHANNEL: ${{ inputs.channel }}
-        run: |
-          args=(
-            --receipts-dir .candidate/gates
-            --manifest .candidate/output/release/release-manifest.json
-            --publication-receipt .candidate/output/publication-receipt.json
-            --expected-commit ${{ github.sha }}
-          )
-          if [[ "$RELEASE_CHANNEL" == "stable" ]]; then
-            args+=(--phase prepare --output .candidate/output/release-evidence-prepare-unsigned.json)
-          else
-            args+=(--phase finalize --output .candidate/output/release-evidence-unsigned.json)
-          fi
-          python scripts/assemble-v1-release-evidence.py "${args[@]}"
-
-      - name: Sign the exact Candidate-bound gate bundle
-        env:
-          ECOREX_RELEASE_SIGNER_EXECUTABLE: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE }}
-          ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256 }}
-          ECOREX_RELEASE_SIGNER_ADAPTER: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER }}
-          ECOREX_RELEASE_SIGNER_ADAPTER_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER_SHA256 }}
-          ECOREX_RELEASE_SIGNER_KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
-          ECOREX_RELEASE_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
-          RELEASE_CHANNEL: ${{ inputs.channel }}
-        run: |
-          if [[ "$RELEASE_CHANNEL" == "stable" ]]; then
-            unsigned=.candidate/output/release-evidence-prepare-unsigned.json
-            output=.candidate/output/release-evidence-prepare.json
-          else
-            unsigned=.candidate/output/release-evidence-unsigned.json
-            output=.candidate/output/release-evidence.json
-          fi
-          python scripts/sign-v1-release-gate-bundle.py \
-            --unsigned "$unsigned" \
-            --manifest .candidate/output/release/release-manifest.json \
-            --output "$output"
-
-      - name: Upload publication receipts and evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: ecorex-v1-published-${{ inputs.channel }}
-          path: .candidate
-          if-no-files-found: error
-          include-hidden-files: true
-          retention-days: 90
-
-  promote:
-    name: ${{ inputs.promotion_mode == 'dry-run' && 'Dry-run 1% promotion' || 'Explicit Control Plane promotion' }}
-    if: ${{ inputs.publish_assets == true }}
-    needs: publish
-    environment:
-      name: ecorex-release-${{ inputs.channel }}
-    runs-on: [self-hosted, linux, x64, ecorex-release-publish]
-    timeout-minutes: 15
-    permissions:
-      actions: read
-      contents: read
-      id-token: write
-    steps:
-      - name: Checkout release CLI without persisted credentials
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: "3.11.9"
-
-      - name: Install runner-only promotion dependencies
-        run: python scripts/install-v1-python-profile.py --profile runtime
-
-      - name: Download published exact bytes and evidence
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: ecorex-v1-published-${{ inputs.channel }}
-          path: .candidate
-
-      - name: Dry-run promotion without Control Plane credentials
-        if: ${{ inputs.promotion_mode == 'dry-run' }}
-        env:
-          RELEASE_CHANNEL: ${{ inputs.channel }}
-          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
-          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
-        run: |
-          args=(
-            promote
-            --manifest .candidate/output/release/release-manifest.json
-            --publication-receipt .candidate/output/publication-receipt.json
-            --trusted-key "$KEY_ID=$PUBLIC_KEY"
-            --journal .candidate/output/promotion-dry-run-journal.json
-            --percentage "${{ inputs.rollout_percentage }}"
-            --dry-run
-          )
-          if [[ "$RELEASE_CHANNEL" == "stable" ]]; then
-            args+=(--phase prepare --evidence .candidate/output/release-evidence-prepare.json)
-          else
-            args+=(--phase auto --evidence .candidate/output/release-evidence.json)
-          fi
-          ecorex-release "${args[@]}"
-
-      - name: Create stable candidate gates and paused draft rollout
-        if: ${{ inputs.channel == 'stable' && inputs.promotion_mode != 'dry-run' }}
-        env:
-          ECOREX_CONTROL_PLANE_URL: ${{ vars.ECOREX_CONTROL_PLANE_URL }}
-          ECOREX_CONTROL_PLANE_HOSTS: ${{ vars.ECOREX_CONTROL_PLANE_HOSTS }}
-          ECOREX_CONTROL_PLANE_TOKEN: ${{ secrets.ECOREX_CONTROL_PLANE_TOKEN }}
-          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
-          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
-        run: >-
-          ecorex-release promote
-          --phase prepare
-          --manifest .candidate/output/release/release-manifest.json
-          --evidence .candidate/output/release-evidence-prepare.json
-          --publication-receipt .candidate/output/publication-receipt.json
-          --trusted-key "$KEY_ID=$PUBLIC_KEY"
-          --journal .candidate/output/promotion-journal.json
-          --percentage "${{ inputs.rollout_percentage }}"
-
-      - name: Create or activate canary rollout
-        if: ${{ inputs.channel == 'canary' && inputs.promotion_mode != 'dry-run' }}
-        env:
-          ECOREX_CONTROL_PLANE_URL: ${{ vars.ECOREX_CONTROL_PLANE_URL }}
-          ECOREX_CONTROL_PLANE_HOSTS: ${{ vars.ECOREX_CONTROL_PLANE_HOSTS }}
-          ECOREX_CONTROL_PLANE_TOKEN: ${{ secrets.ECOREX_CONTROL_PLANE_TOKEN }}
-          PROMOTION_MODE: ${{ inputs.promotion_mode }}
-          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
-          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
-        run: |
-          args=(
-            promote --phase auto
-            --manifest .candidate/output/release/release-manifest.json
-            --evidence .candidate/output/release-evidence.json
-            --publication-receipt .candidate/output/publication-receipt.json
-            --trusted-key "$KEY_ID=$PUBLIC_KEY"
-            --journal .candidate/output/promotion-journal.json
-            --percentage "${{ inputs.rollout_percentage }}"
-          )
-          if [[ "$PROMOTION_MODE" == "create-and-activate" ]]; then args+=(--activate); fi
-          ecorex-release "${args[@]}"
-
-      - name: CAS-activate and publicly read back the stable Bootstrap index
-        if: ${{ inputs.channel == 'stable' && inputs.promotion_mode == 'create-and-activate' }}
-        env:
-          ECOREX_BOOTSTRAP_INDEX_TOKEN: ${{ secrets.ECOREX_BOOTSTRAP_INDEX_TOKEN }}
-          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
-          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
-          PUBLICATION_KEY_ID: ${{ vars.ECOREX_PUBLICATION_SIGNER_KEY_ID }}
-          PUBLICATION_PUBLIC_KEY: ${{ vars.ECOREX_PUBLICATION_SIGNER_PUBLIC_KEY }}
-          BOOTSTRAP_INDEX_PUBLICATION_CONFIG: ${{ vars.ECOREX_BOOTSTRAP_INDEX_PUBLICATION_CONFIG }}
-        run: >-
-          ecorex-release activate-public-bootstrap-index
-          --release-dir .candidate/output/release
-          --publication-receipt .candidate/output/publication-receipt.json
-          --index .candidate/output/public-bootstrap-index.json
-          --stage-receipt .candidate/output/bootstrap-index-stage-receipt.json
-          --publication-config "$BOOTSTRAP_INDEX_PUBLICATION_CONFIG"
-          --receipt .candidate/output/bootstrap-index-publication-receipt.json
-          --trusted-key "$KEY_ID=$PUBLIC_KEY"
-          --trusted-publication-key "$PUBLICATION_KEY_ID=$PUBLICATION_PUBLIC_KEY"
-
-      - name: Assemble stable active-and-readback evidence
-        if: ${{ inputs.channel == 'stable' && inputs.promotion_mode == 'create-and-activate' }}
-        run: >-
-          python scripts/assemble-v1-release-evidence.py
-          --phase finalize
-          --receipts-dir .candidate/gates
-          --manifest .candidate/output/release/release-manifest.json
-          --publication-receipt .candidate/output/publication-receipt.json
-          --bootstrap-index-receipt .candidate/output/bootstrap-index-publication-receipt.json
-          --expected-commit ${{ github.sha }}
-          --output .candidate/output/release-evidence-unsigned.json
-
-      - name: Sign stable active-and-readback gate bundle
-        if: ${{ inputs.channel == 'stable' && inputs.promotion_mode == 'create-and-activate' }}
-        env:
-          ECOREX_RELEASE_SIGNER_EXECUTABLE: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE }}
-          ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256 }}
-          ECOREX_RELEASE_SIGNER_ADAPTER: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER }}
-          ECOREX_RELEASE_SIGNER_ADAPTER_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER_SHA256 }}
-          ECOREX_RELEASE_SIGNER_KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
-          ECOREX_RELEASE_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
-        run: >-
-          python scripts/sign-v1-release-gate-bundle.py
-          --unsigned .candidate/output/release-evidence-unsigned.json
-          --manifest .candidate/output/release/release-manifest.json
-          --output .candidate/output/release-evidence.json
-
-      - name: Publish release then activate stable rollout
-        if: ${{ inputs.channel == 'stable' && inputs.promotion_mode == 'create-and-activate' }}
-        env:
-          ECOREX_CONTROL_PLANE_URL: ${{ vars.ECOREX_CONTROL_PLANE_URL }}
-          ECOREX_CONTROL_PLANE_HOSTS: ${{ vars.ECOREX_CONTROL_PLANE_HOSTS }}
-          ECOREX_CONTROL_PLANE_TOKEN: ${{ secrets.ECOREX_CONTROL_PLANE_TOKEN }}
-          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
-          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
-        run: >-
-          ecorex-release promote
-          --phase finalize
-          --manifest .candidate/output/release/release-manifest.json
-          --evidence .candidate/output/release-evidence.json
-          --publication-receipt .candidate/output/publication-receipt.json
-          --bootstrap-index-receipt .candidate/output/bootstrap-index-publication-receipt.json
-          --trusted-key "$KEY_ID=$PUBLIC_KEY"
-          --journal .candidate/output/promotion-journal.json
-          --percentage "${{ inputs.rollout_percentage }}"
-          --activate
-
-      - name: Retain promotion journal and public activation evidence
-        if: ${{ always() && inputs.promotion_mode != 'dry-run' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: ecorex-v1-promotion-${{ inputs.channel }}-${{ github.run_id }}
-          path: |
-            .candidate/output/promotion-journal.json
-            .candidate/output/bootstrap-index-publication-receipt.json
-          if-no-files-found: warn
-          include-hidden-files: true
-          retention-days: 90

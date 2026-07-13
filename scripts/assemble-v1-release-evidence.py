@@ -44,6 +44,7 @@ def _parser() -> argparse.ArgumentParser:
         "--phase", choices=("prepare", "finalize"), default="finalize"
     )
     parser.add_argument("--expected-commit", required=True)
+    parser.add_argument("--expected-workflow-run-id", required=True, type=int)
     parser.add_argument("--output", required=True, type=Path)
     return parser
 
@@ -51,7 +52,11 @@ def _parser() -> argparse.ArgumentParser:
 def run(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        if _COMMIT.fullmatch(args.expected_commit) is None:
+        if (
+            _COMMIT.fullmatch(args.expected_commit) is None
+            or isinstance(args.expected_workflow_run_id, bool)
+            or args.expected_workflow_run_id < 1
+        ):
             raise ValueError("release_evidence_commit_invalid")
         manifest_payload = read_stable_regular_file(
             args.manifest,
@@ -169,6 +174,8 @@ def run(argv: list[str] | None = None) -> int:
             raise ValueError("release_evidence_incomplete")
         if receipt_run_id is None:
             raise ValueError("release_gate_receipt_set_incomplete")
+        if receipt_run_id != args.expected_workflow_run_id:
+            raise ValueError("release_gate_receipt_workflow_run_mismatch")
         unsigned = build_unsigned_gate_bundle(
             phase=(
                 "prepare"

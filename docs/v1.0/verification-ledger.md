@@ -1592,6 +1592,19 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Broad affected regression | 0 | Release/Candidate/Control Plane/update selection: 342 passed / 4 explicit platform skips / 1,552 deselected / 0 failed in 259.48 seconds. Web contract: 162 passed. Full Playwright: 36 passed. TypeScript and production build passed; 18 content-addressed assets and 17 chunks were emitted. |
 | Publication | blocked | The protected Windows/macOS Candidate, protected live provider/CDP receipts and external origin readback remain unavailable. No push, deployment, publication or user update was attempted. |
 
+## Immutable Candidate handoff and publication recovery - 2026-07-14
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Workflow authority split | 0 | Candidate has no `publish-assets`, origin write permission or Control Plane token. A separate `verify-only`-default workflow is the sole protected publication path. |
+| Exact run selection | 0 | Handoff binds protected Candidate workflow path, successful run/attempt, current protected commit, repository/head repository IDs, empty PR association, timestamps, channel, exact accepted Artifact ID and non-expiration. Foreign, failed, stale, mixed and duplicate inputs fail closed. |
+| Exact archive bytes | 0 | Both cross-workflow archives are fetched by Artifact ID and must match their SHA-256. Safe extraction rejects traversal, drive/backslash aliases, links/special files, duplicate/case-colliding members, unexpected roots, member/size limits and insufficient disk. |
+| Candidate re-authentication | 0 | Mutation boundary re-verifies handoff, signed Candidate receipt, exact manifest bytes/signature, staging provenance and every required pre-publication gate against the original Candidate workflow run ID. |
+| Lost-runner recovery | 0 | Promotion request IDs deterministically bind release, manifest, publication receipt, rollout target, preparation evidence and operation. Two empty journals reproduce the same IDs; different operation/target does not. |
+| Focused regression | 0 | Handoff/workflow/live-gate/promotion/Control Plane selection: 57 passed. Broader release/Candidate/Control Plane/update/public-Bootstrap/live selection: 474 passed / 7 explicit platform skips / 1,431 deselected. Python compile/Ruff, workflow YAML and `git diff --check` pass. |
+| Current-source supply chain | 0 | 23 locked/licensed Runtime packages; 459 production files pass the bounded secret scan, inventory `2f8f67ba...3ee05f`; all 646 source files are Git-admitted. Ignored report SHA-256 `8756db71...7b673e`, 21,857 bytes. |
+| Publication | blocked | No protected 24-receipt accepted Candidate or live provider/CDP session exists. No origin, Control Plane, deployment or user update was contacted. |
+
 ## Complete signed-gate batch rerun and durable ordering correction - 2026-07-14
 
 | Scope | Exit | Result |

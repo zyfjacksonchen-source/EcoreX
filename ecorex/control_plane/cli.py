@@ -406,7 +406,25 @@ class PromotionJournal:
         existing = request_ids.get(step)
         if isinstance(existing, str) and existing:
             return existing
-        request_id = "release_" + secrets.token_hex(16)
+        # The journal is an optimization, not the sole idempotency authority.
+        # Derive the same request ID after a runner loss or workflow rerun so
+        # Control Plane replay still converges instead of creating a second
+        # rollout with fresh randomness.
+        request_id = "release_" + hashlib.sha256(
+            (
+                self.release_id
+                + "\0"
+                + self.manifest_sha256
+                + "\0"
+                + self.publication_evidence
+                + "\0"
+                + self.rollout_target_sha256
+                + "\0"
+                + self.prepare_evidence_sha256
+                + "\0"
+                + step
+            ).encode("utf-8")
+        ).hexdigest()[:32]
         request_ids[step] = request_id
         self._write(self.data)
         return request_id

@@ -215,32 +215,43 @@ wheel closure cannot be installed, staging fails before any receipt is issued.
 
 ## Protected automated Candidate chain
 
-`.github/workflows/ecorex-v1-candidate.yml` is the only automated signing and
-publication entrypoint. It is `workflow_dispatch` only, holds a channel-wide
-non-cancelling concurrency lock, checks `github.ref_protected`, and has no PR
-trigger. Configure both `ecorex-release-canary` and `ecorex-release-stable` as
-protected GitHub Environments with required reviewers. Signing, publication
-and promotion are separate environment-bound jobs, so an approval for building
-a Candidate is not implicit authority to mutate an origin or activate users.
+The protected chain has two deliberate administrator boundaries:
 
-The default dispatch is safe:
+- `.github/workflows/ecorex-v1-candidate.yml` builds, externally signs and runs
+  protected Model/Image/CDP acceptance. It can only emit an immutable
+  `ecorex-v1-accepted-<channel>` Artifact; it has no origin or Control Plane
+  publication job.
+- `.github/workflows/ecorex-v1-promote-candidate.yml` is the sole remote
+  publication entrypoint. It accepts the exact successful Candidate run ID,
+  attempt and accepted Artifact ID, authenticates all three against the current
+  protected commit, then waits at `ecorex-release-publication-<channel>` for the
+  administrator's separate publication approval.
+
+Both workflows are `workflow_dispatch` only, hold channel-wide non-cancelling
+concurrency locks, require `github.ref_protected` and have no PR trigger.
+Configure `ecorex-release-signing-canary/stable`, `ecorex-live-acceptance` and
+`ecorex-release-publication-canary/stable` as protected GitHub Environments.
+An approval to create/test a Candidate is never authority to mutate an origin
+or activate users.
+
+The Candidate dispatch names immutable upstream evidence:
 
 - `channel=canary`;
-- `publish_assets=false`;
-- `promotion_mode=dry-run`;
-- `rollout_percentage=1`.
-
-It must additionally name immutable upstream evidence:
-
 - `staging_run_id`: the successful protected platform-stage run for the same
   commit;
 - `ci_run_id`: the successful protected `EcoreX v1 CI` run for the same commit;
 - `ci_run_attempt`: the exact successful attempt of `ci_run_id`.
 
-Changing `publish_assets` is the explicit authority for remote mutation. A
-non-dry-run promotion is rejected unless publication was also explicitly
-selected. `create-and-activate` is the only input that can activate the 1–100%
-rollout.
+After the accepted Artifact exists, dispatch the publication workflow with its
+exact `candidate_run_id`, `candidate_run_attempt` and `candidate_artifact_id`.
+Its default `publication_mode=verify-only` performs no remote mutation.
+`create` publishes exact bytes and creates a paused 1–100% rollout;
+`create-and-activate` is the only option that activates that rollout. The
+selected Artifact archive and the second same-run handoff archive are fetched
+by immutable Artifact ID, checked against their SHA-256 values and safely
+extracted. Digest mismatch, expiration, duplicate names, mixed attempts,
+symlinks, case-colliding members, path traversal, insufficient disk or an
+unexpected root fails before publication.
 
 Before Candidate dispatch, run
 `.github/workflows/ecorex-v1-platform-stage.yml` on the same protected commit.
@@ -279,13 +290,15 @@ loggable response by EcoreX. Workload identity/OIDC may be inherited by the
 digest-pinned adapter. The returned signature is independently checked against
 the protected public key before ReleaseBuilder accepts it.
 
-The workflow runs lint, compile, full unit/contract/integration/E2E suites,
-WebUI audit/typecheck/tests/build, migration dry-run, schema authority,
-reproducibility, license, secret, SBOM, signature and size gates. Remote upload
-then reuses `ReleaseAssetPublicationCoordinator`, which finalizes the domestic
-mirror first, creates/uploads GitHub second, finalizes CDN third and makes the
-GitHub draft public only after all three contain the same signed bytes. The
-three publication gates share one immutable publication-receipt digest.
+The Candidate workflow runs lint, compile, full unit/contract/integration/E2E
+suites, WebUI audit/typecheck/tests/build, migration dry-run, schema authority,
+reproducibility, license, secret, SBOM, signature, size and protected live
+acceptance gates. The separate publication workflow re-authenticates the signed
+Candidate and every gate before reusing `ReleaseAssetPublicationCoordinator`,
+which finalizes the domestic mirror first, creates/uploads GitHub second,
+finalizes CDN third and makes the GitHub draft public only after all three
+contain the same signed bytes. The three publication gates share one immutable
+publication-receipt digest.
 
 Required protected configuration is deliberately operational, not committed:
 
@@ -294,11 +307,12 @@ Required protected configuration is deliberately operational, not committed:
   `WINDOWS_X64`, `MACOS_ARM64` and `MACOS_X64`; each protected runner also
   provides the matching native toolchain, while the locked platform-stage
   Python profile and Chromium are installed by the workflow;
-- channel environments: release signer executable/digest, optional adapter/
-  digest, signer key ID/public key, version-qualified mirror/CDN base URLs
-  (the workflow appends `/canary` or `/stable`);
-- publish environment: publication config path and mirror/CDN credentials;
-- promotion environment: Control Plane URL/host allowlist/token.
+- signing environments: release signer executable/digest, optional adapter/
+  digest, signer key ID/public key and version-qualified mirror/CDN base URLs;
+- live-acceptance environment: digest-pinned Windows acceptance driver and the
+  managed Model/Image/CDP test session held outside repository files;
+- publication environments: publication config, mirror/CDN/Bootstrap
+  credentials, Control Plane URL/host allowlist/token and required reviewers.
 
 The stager, production Windows sandbox helper, platform launchers and Pack
 implementations are repository-owned sources. Their compiled bytes and the

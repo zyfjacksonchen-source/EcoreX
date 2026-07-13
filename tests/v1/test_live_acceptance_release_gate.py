@@ -238,18 +238,25 @@ def test_candidate_workflow_cannot_publish_the_pre_acceptance_artifact() -> None
         encoding="utf-8"
     )
     live_job = source.index("  live-acceptance:")
-    publish_job = source.index("  publish:")
-    promotion_job = source.index("  promote:")
-    accepted = source[live_job:publish_job]
-    publication = source[publish_job:promotion_job]
+    accepted = source[live_job:]
     assert "needs: build-and-sign" in accepted
     assert "name: ecorex-live-acceptance" in accepted
     assert "run-v1-protected-live-acceptance.py" in accepted
     assert accepted.count("bind-v1-release-gate-evidence.py") == 3
     assert "name: ecorex-v1-accepted-${{ inputs.channel }}" in accepted
-    assert "needs: live-acceptance" in publication
-    assert "name: ecorex-v1-accepted-${{ inputs.channel }}" in publication
-    assert "name: ecorex-v1-candidate-${{ inputs.channel }}" not in publication
+    assert "publish-assets" not in source
+
+    publication = (
+        ROOT / ".github/workflows/ecorex-v1-promote-candidate.yml"
+    ).read_text(encoding="utf-8")
+    assert "candidate_run_id:" in publication
+    assert "candidate_artifact_id:" in publication
+    assert "scripts/select-v1-accepted-candidate.py" in publication
+    assert "actions/artifacts/${CANDIDATE_ARTIFACT_ID}/zip" in publication
+    assert "scripts/extract-v1-workflow-artifact.py" in publication
+    assert publication.index("verify-v1-accepted-candidate.py") < publication.index(
+        "publish-assets"
+    )
 
 
 def test_acceptance_driver_cannot_run_before_candidate_authentication() -> None:

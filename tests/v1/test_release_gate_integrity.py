@@ -68,6 +68,11 @@ def test_candidate_workflow_executes_instead_of_auto_declaring_runtime_gates() -
     assert "check-v1-release-baseline.py" in workflow
     assert "fetch-depth: 0" in workflow
     assert "--reporter=json" in workflow
+    assert (
+        "PLAYWRIGHT_JSON_OUTPUT_FILE: "
+        "../.candidate/quality/playwright-report.json"
+    ) in workflow
+    assert "> ../.candidate/quality/playwright-report.json" not in workflow
     assert "--full-pytest-junit" in workflow
     assert "--migration-pytest-junit" in workflow
     assert "--gate integration --gate e2e" not in workflow
