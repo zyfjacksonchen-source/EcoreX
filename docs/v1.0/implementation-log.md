@@ -3971,3 +3971,36 @@ was 190,153,571 bytes, contained the exact 128-byte descriptor without LF, and
 the production adapter bound exactly `cdp` and `fetch` in 116.969 seconds. This
 is focused root-cause evidence, not a signed Candidate receipt; the complete
 zero-publication ceremony must still be rerun from a committed source identity.
+
+## 2026-07-13 - Full Runtime application-composition diagnostic boundary
+
+The sixth zero-publication Windows ceremony ran from full source identity
+`ada2c1f5fdf825df5edc10b193fc626ac7df408b`. It generated all eight Windows
+stage receipts, retained the exact 190,153,571-byte Browser artifact, completed
+the released-v0.3 copy-on-write migration and confirmed the nonce-bound
+first-install probe. The following full Runtime advanced beyond
+`capability_pack_browser`, proving the descriptor/Pack-Python correction in the
+integrated chain, then exited safely at the previous aggregate stage
+`server_configuration`. The disposable root was removed, the repository
+remained clean and no Candidate report or release was published.
+
+The aggregate stage covered three materially different boundaries: loading the
+signed Runtime composition, constructing the FastAPI application, and building
+the loopback Uvicorn configuration. The product entrypoint now maps only
+configuration/value failures at those boundaries to the fixed redacted stages
+`runtime_composition`, `application_composition` and
+`http_server_configuration`. Existing loader stages and trust failures retain
+their stronger identities; no native exception text, path or provider detail
+crosses the process boundary.
+
+The same correction closes a resource-lifecycle gap. Managed transports are no
+longer transferred to application ownership before Uvicorn configuration has
+successfully completed. A synchronous application or HTTP configuration
+failure closes the unstarted composition exactly once. Product-entrypoint
+regression is 32 passed and one platform-conditioned skip; the broader
+entrypoint, Bootstrap supervisor, activation-health and signed-drill set is 87
+passed and two skips, with dedicated checks for all three stage mappings,
+redaction and pre-transfer cleanup. A
+fresh committed ceremony is still required to identify and then correct the
+specific application layer; this diagnostic refinement is not a Candidate
+pass.

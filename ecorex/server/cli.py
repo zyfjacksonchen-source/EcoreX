@@ -80,7 +80,17 @@ def build_product_runtime_server(
     port: int,
     runtime_loader: Callable[..., ProductRuntimeComposition] = _load_product_runtime_for_cli,
 ) -> ProductRuntimeServer:
-    composition = runtime_loader(host=host, port=port)
+    try:
+        composition = runtime_loader(host=host, port=port)
+    except ProductRuntimeConfigurationError:
+        # The Runtime loader already owns a more precise, fixed diagnostic
+        # stage. Preserve it without exposing the native exception text.
+        raise
+    except (ServerConfigurationError, ValueError):
+        raise ProductRuntimeConfigurationError(
+            "Product Runtime composition is invalid",
+            stage_code="runtime_composition",
+        ) from None
     try:
         app = (
             create_activation_probe_app(composition.server_settings)
@@ -88,14 +98,37 @@ def build_product_runtime_server(
             else create_product_app(composition.server_settings)
         )
         app.state.product_runtime_composition = composition
+    except BundleIntegrityError:
+        composition.close_unstarted()
+        raise
+    except (ServerConfigurationError, ValueError):
+        composition.close_unstarted()
+        raise ProductRuntimeConfigurationError(
+            "Product Runtime application composition is invalid",
+            stage_code="application_composition",
+        ) from None
     except BaseException:
         composition.close_unstarted()
         raise
+    try:
+        uvicorn_config = build_uvicorn_config(app, composition.server_settings)
+    except (ServerConfigurationError, ValueError):
+        composition.close_unstarted()
+        raise ProductRuntimeConfigurationError(
+            "Product Runtime HTTP server configuration is invalid",
+            stage_code="http_server_configuration",
+        ) from None
+    except BaseException:
+        composition.close_unstarted()
+        raise
+    # Transfer resource ownership only after every synchronous startup layer
+    # has been composed. A Uvicorn configuration failure must not orphan the
+    # already-created managed transports.
     composition.transfer_to_app()
     return ProductRuntimeServer(
         composition=composition,
         app=app,
-        uvicorn_config=build_uvicorn_config(app, composition.server_settings),
+        uvicorn_config=uvicorn_config,
     )
 
 

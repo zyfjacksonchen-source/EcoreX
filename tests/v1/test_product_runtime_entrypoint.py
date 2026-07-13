@@ -1980,6 +1980,83 @@ def test_second_bundle_verification_failure_closes_completed_composition(
     assert broker.close_count == 1
 
 
+class _StartupStageComposition:
+    def __init__(self) -> None:
+        self.server_settings = object()
+        self.close_count = 0
+        self.transfer_count = 0
+
+    def close_unstarted(self) -> None:
+        self.close_count += 1
+
+    def transfer_to_app(self) -> None:
+        self.transfer_count += 1
+
+
+def test_product_server_normalizes_runtime_composition_value_error() -> None:
+    def invalid_loader(**_kwargs):
+        raise ValueError("native-runtime-composition-secret")
+
+    with pytest.raises(ProductRuntimeConfigurationError) as failure:
+        build_product_runtime_server(
+            host="127.0.0.1",
+            port=8765,
+            runtime_loader=invalid_loader,
+        )
+
+    assert failure.value.stage_code == "runtime_composition"
+    assert "native-runtime-composition-secret" not in str(failure.value)
+
+
+def test_product_server_normalizes_application_composition_and_closes_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    composition = _StartupStageComposition()
+
+    def invalid_app(_settings):
+        raise ValueError("native-application-composition-secret")
+
+    monkeypatch.setattr("ecorex.server.cli.create_product_app", invalid_app)
+    with pytest.raises(ProductRuntimeConfigurationError) as failure:
+        build_product_runtime_server(
+            host="127.0.0.1",
+            port=8765,
+            runtime_loader=lambda **_kwargs: composition,
+        )
+
+    assert failure.value.stage_code == "application_composition"
+    assert "native-application-composition-secret" not in str(failure.value)
+    assert composition.close_count == 1
+    assert composition.transfer_count == 0
+
+
+def test_product_server_normalizes_http_configuration_before_ownership_transfer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    composition = _StartupStageComposition()
+    app = SimpleNamespace(state=SimpleNamespace())
+    monkeypatch.setattr("ecorex.server.cli.create_product_app", lambda _settings: app)
+
+    def invalid_http_config(_app, _settings):
+        raise ValueError("native-http-configuration-secret")
+
+    monkeypatch.setattr(
+        "ecorex.server.cli.build_uvicorn_config",
+        invalid_http_config,
+    )
+    with pytest.raises(ProductRuntimeConfigurationError) as failure:
+        build_product_runtime_server(
+            host="127.0.0.1",
+            port=8765,
+            runtime_loader=lambda **_kwargs: composition,
+        )
+
+    assert failure.value.stage_code == "http_server_configuration"
+    assert "native-http-configuration-secret" not in str(failure.value)
+    assert composition.close_count == 1
+    assert composition.transfer_count == 0
+
+
 def test_cli_normalizes_uvicorn_process_failure_without_echoing_details(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

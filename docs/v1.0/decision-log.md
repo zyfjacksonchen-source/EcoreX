@@ -1475,3 +1475,24 @@
   gates instead of performing a third identical scan. This removes redundant
   cold-start/build work without weakening activation-time or restart-time
   verification.
+
+## ADR-092 - Product startup stages follow ownership boundaries
+
+- Status: accepted.
+- Decision: the packaged entrypoint distinguishes signed Runtime composition,
+  ASGI application composition and loopback HTTP-server configuration with the
+  fixed safe stage identifiers `runtime_composition`,
+  `application_composition` and `http_server_configuration`. A more precise
+  stage already produced by the Runtime loader is never collapsed into these
+  aggregate stages, and trust/integrity failures keep their existing handling.
+- Resource boundary: a completed dependency composition remains owned by the
+  synchronous entrypoint until application construction and Uvicorn
+  configuration both succeed. Either failure invokes idempotent unstarted
+  cleanup; only then may ownership transfer to the FastAPI lifespan.
+- Observability boundary: the stage code is advisory and contains no exception
+  text, path, credential or provider response. It can locate a failed startup
+  layer but cannot affect signed-slot selection, activation, rollback or
+  readiness.
+- Consequence: Candidate failures become actionable without reopening stderr,
+  and an HTTP configuration rejection cannot leak managed transports between
+  Bootstrap launches.

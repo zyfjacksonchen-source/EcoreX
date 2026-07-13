@@ -1405,3 +1405,17 @@ The two failed ceremonies remain uncredited. The fix preserves Runtime's exact
 descriptor check and changes the producer to emit its contract. A new fixed-
 commit signed ceremony is required to prove first install, migration restart,
 healthy update, bad-digest rejection and rollback end to end.
+
+## Full Runtime application-composition diagnostic follow-up - 2026-07-13
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Sixth local ceremony from `ada2c1f5` | 1 | All eight Windows receipts, released-v0.3 copy-on-write migration and nonce-bound first-install health passed. The full Runtime advanced beyond Browser Pack binding and failed closed at aggregate stage `server_configuration`; the disposable root was removed, the worktree remained clean and no report/publication was created. |
+| Startup-layer diagnostic contract | 0 | Runtime load, ASGI application composition and Uvicorn configuration now emit only `runtime_composition`, `application_composition` or `http_server_configuration` when their bounded configuration/value boundary fails. Existing precise loader and trust stages are preserved. |
+| Resource ownership regression | 0 | Managed transports transfer to the App only after HTTP configuration succeeds; application/HTTP failure closes the unstarted composition once and cannot orphan it. |
+| Product Runtime entrypoint regression | 0 | Focused entrypoint: 32 passed, 1 platform-conditioned skip. Broader entrypoint, Bootstrap supervisor, activation-health and signed-drill set: 87 passed, 2 skips. Stage redaction, exact cleanup, signed-slot App construction and existing CLI contracts passed. |
+
+The failed ceremony is evidence that the canonical Browser fix works in the
+integrated package, not a Candidate receipt. The next fixed-commit run must
+name the narrower startup layer before any implementation correction is
+accepted.
