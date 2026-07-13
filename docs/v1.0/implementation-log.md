@@ -3930,3 +3930,44 @@ the nonce binding, deletion, stage redaction and unchanged probe-only/full
 Runtime split. A new source-pinned local ceremony is required to identify and
 fix the remaining full-Runtime root cause; no timeout has been enlarged and no
 failed evidence is counted as a Candidate pass.
+
+## 2026-07-13 - Browser Pack canonical descriptor and startup-scan closure
+
+The next source-pinned Windows ceremony from `326526fb` completed the real
+Core, Bootstrap and six-Pack platform stage, generated all eight local stage
+receipts, migrated the released v0.3 schema copy-on-write and confirmed the
+nonce-bound first-install probe. The following full business Runtime failed
+closed with configuration exit `64`; the new bounded diagnostic identified
+`capability_pack_browser`. The disposable slot and process-local signing keys
+were removed, no report was promoted, and no release endpoint was contacted.
+
+A minimal reproduction then built the real 190,153,573-byte Browser Pack with
+the locked Playwright 1.52.0/Chromium closure and passed it directly through
+the Runtime ZipApp inspector. It returned `pack_descriptor_invalid` in
+161.312 seconds. The signed Pack contained a 129-byte `ecorex-pack.json`; its
+semantic content was correct, but the source-file LF made it differ from the
+128-byte canonical Runtime contract. An older retained real Core independently
+verified all 1,733 Pack-Python closure files and 61,188,898 bytes against its
+manifest, ruling out the closure algorithm as the descriptor failure.
+
+Platform staging now treats process-Pack descriptors as generated wire
+artifacts. It validates the source template against the authoritative Pack
+catalog, writes exact sorted compact UTF-8 bytes without a trailing newline,
+and makes both Browser and Sandbox gates re-read that exact form before
+signing. Runtime's strict comparison is unchanged. A semantically drifted
+template still fails closed instead of being overwritten.
+
+The diagnosis also exposed unnecessary cold-start amplification. Browser and
+Sandbox previously rescanned the same signed relocatable Python closure in one
+Runtime composition, while the platform stager scanned it three times in one
+stage. Production CLI now creates a resolver whose cache exists only for one
+synchronous composition: one startup verifies once, a restart verifies again.
+The stager retains its independent post-write verification and reuses that
+identity for later gates, eliminating only the third scan. No persisted or
+cross-process trust cache was introduced.
+
+A fresh post-fix real Browser Pack then completed the same inspection path. It
+was 190,153,571 bytes, contained the exact 128-byte descriptor without LF, and
+the production adapter bound exactly `cdp` and `fetch` in 116.969 seconds. This
+is focused root-cause evidence, not a signed Candidate receipt; the complete
+zero-publication ceremony must still be rerun from a committed source identity.

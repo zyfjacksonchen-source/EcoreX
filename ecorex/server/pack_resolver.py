@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -11,17 +12,25 @@ from ecorex.capabilities import VerifiedCapabilityPack
 from ecorex.pack_catalog import CAPABILITY_PACK_SERVICE_IDS
 from ecorex.integration.image_tools import production_pack_adapter_resolver as image_resolver
 from ecorex.integration.pack_process import ProcessCapabilityPackAdapter
-from ecorex.integration.pack_python import resolve_pack_python
+from ecorex.integration.pack_python import PackPythonIdentity, resolve_pack_python
 from ecorex.integration.sandbox import (
     MacOSSandboxExecBackend,
     WindowsAppContainerSandboxBackend,
 )
 
 
-def production_pack_adapter_resolver(
+PackPythonResolver = Callable[
+    ...,
+    tuple[Path, PackPythonIdentity],
+]
+
+
+def _resolve_production_pack_adapter(
     pack: VerifiedCapabilityPack,
     workspace_roots: tuple[Path, ...],
     runtime_payload_root: Path,
+    *,
+    pack_python_resolver: PackPythonResolver,
 ) -> Mapping[str, Callable[..., Any]]:
     """Resolve only Core-known implementations for a verified signed pack."""
 
@@ -36,7 +45,7 @@ def production_pack_adapter_resolver(
         # they do not create synthetic model-callable tools.
         return {}
     if pack.manifest.pack_id in {"browser", "sandbox"}:
-        interpreter, _identity = resolve_pack_python(
+        interpreter, _identity = pack_python_resolver(
             runtime_payload_root,
             platform=pack.manifest.platform,
             architecture=pack.manifest.architecture,
@@ -70,4 +79,82 @@ def production_pack_adapter_resolver(
     raise ValueError(
         f"no production adapter exists for pack {pack.manifest.pack_id!r}"
     )
-__all__ = ["production_pack_adapter_resolver"]
+
+
+def production_pack_adapter_resolver(
+    pack: VerifiedCapabilityPack,
+    workspace_roots: tuple[Path, ...],
+    runtime_payload_root: Path,
+) -> Mapping[str, Callable[..., Any]]:
+    """Resolve one Pack with an independent interpreter verification.
+
+    This public function intentionally remains stateless for tests and callers
+    that resolve a Pack outside a complete Product Runtime composition.
+    """
+
+    return _resolve_production_pack_adapter(
+        pack,
+        workspace_roots,
+        runtime_payload_root,
+        pack_python_resolver=resolve_pack_python,
+    )
+
+
+def create_production_pack_adapter_resolver() -> Callable[
+    [VerifiedCapabilityPack, tuple[Path, ...], Path],
+    Mapping[str, Callable[..., Any]],
+]:
+    """Create one resolver scoped to exactly one Runtime composition.
+
+    Browser and Sandbox share the same signed relocatable interpreter.  Its
+    complete closure is therefore verified once per process startup and reused
+    only while the synchronous Pack set is being bound.  A later composition,
+    restart or process receives a fresh resolver and performs a fresh scan.
+    """
+
+    verified_interpreters: dict[
+        tuple[str, str, str],
+        tuple[Path, PackPythonIdentity],
+    ] = {}
+
+    def cached_pack_python(
+        payload_root: Path,
+        *,
+        platform: str,
+        architecture: str,
+    ) -> tuple[Path, PackPythonIdentity]:
+        key = (
+            os.path.normcase(os.path.abspath(os.fspath(payload_root))),
+            platform,
+            architecture,
+        )
+        try:
+            return verified_interpreters[key]
+        except KeyError:
+            resolved = resolve_pack_python(
+                payload_root,
+                platform=platform,
+                architecture=architecture,
+            )
+            verified_interpreters[key] = resolved
+            return resolved
+
+    def resolver(
+        pack: VerifiedCapabilityPack,
+        workspace_roots: tuple[Path, ...],
+        runtime_payload_root: Path,
+    ) -> Mapping[str, Callable[..., Any]]:
+        return _resolve_production_pack_adapter(
+            pack,
+            workspace_roots,
+            runtime_payload_root,
+            pack_python_resolver=cached_pack_python,
+        )
+
+    return resolver
+
+
+__all__ = [
+    "create_production_pack_adapter_resolver",
+    "production_pack_adapter_resolver",
+]

@@ -37,6 +37,7 @@ if str(ROOT) not in sys.path:
 
 from ecorex import __version__  # noqa: E402
 from ecorex.integration.pack_python import (  # noqa: E402
+    PackPythonIdentity,
     build_pack_python_manifest,
     resolve_pack_python,
 )
@@ -218,15 +219,12 @@ def _stage(request: Mapping[str, Any]) -> None:
     packs.mkdir(parents=True)
 
     native = _build_native(platform, architecture, evidence / "native")
-    distributions = _build_python_closure(core, platform, architecture)
+    distributions, interpreter, interpreter_identity = _build_python_closure(
+        core, platform, architecture
+    )
     _install_native(native, core, platform)
     config_digest = _write_runtime_config(core, platform, architecture)
     web = _scan_final_web()
-    interpreter, interpreter_identity = resolve_pack_python(
-        core,
-        platform=platform,
-        architecture=architecture,
-    )
     _stage_packs(
         packs,
         platform=platform,
@@ -613,7 +611,11 @@ def _build_python_closure(
     core: Path,
     platform: str,
     architecture: str,
-) -> tuple[dict[str, str], ...]:
+) -> tuple[
+    tuple[dict[str, str], ...],
+    Path,
+    PackPythonIdentity,
+]:
     destination = core / "bin" / "pack-python"
     destination.mkdir(parents=True)
     source_prefix = Path(sys.base_prefix).resolve(strict=True)
@@ -656,7 +658,7 @@ def _build_python_closure(
         architecture=architecture,
     )
     (core / "pack-python.json").write_bytes(manifest)
-    interpreter, _identity = resolve_pack_python(
+    interpreter, identity = resolve_pack_python(
         core,
         platform=platform,
         architecture=architecture,
@@ -671,7 +673,10 @@ def _build_python_closure(
     result = _run(probe, cwd=core, environment=_runtime_environment(), timeout=60, code="pack_python_probe_failed")
     if result.stdout.strip() != __version__.encode("ascii"):
         raise StageError("pack_python_probe_failed")
-    return inventory
+    # The independent post-write resolution above is the security boundary.
+    # Reuse that immutable identity for the remaining synchronous stage instead
+    # of scanning the exact same closure a third time before Pack staging.
+    return inventory, interpreter, identity
 
 
 def _install_native(native: Path, core: Path, platform: str) -> None:
@@ -952,6 +957,7 @@ def _stage_packs(
         _copy_tree(source, destination, excluded=frozenset({"__pycache__"}))
         if pack_id in {"browser", "sandbox"}:
             _copy_regular(common, destination / common.name)
+            _normalize_process_pack_descriptor(destination, pack_id=pack_id)
     browser_inventory = _vendor_browser_runtime(root / "browser")
     channel_inventory = _write_dependency_inventory(
         root / "channels",
@@ -1008,6 +1014,81 @@ def _stage_packs(
         native=native,
         evidence=evidence / "sandbox",
     )
+
+
+def _expected_process_pack_descriptor(pack_id: str) -> dict[str, Any]:
+    if pack_id not in {"browser", "sandbox"}:
+        raise StageError("capability_pack_descriptor_invalid")
+    return {
+        "schema_version": 1,
+        "protocol": "ecorex-stdio-tool-v1",
+        "pack_id": pack_id,
+        "runtime_api_version": "1.0.0",
+        "tools": list(PACK_TOOLS[pack_id]),
+    }
+
+
+def _canonical_process_pack_descriptor(pack_id: str) -> bytes:
+    return json.dumps(
+        _expected_process_pack_descriptor(pack_id),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _normalize_process_pack_descriptor(pack: Path, *, pack_id: str) -> Mapping[str, Any]:
+    """Validate the source template, then emit Runtime-canonical bytes.
+
+    Repository JSON files conventionally end in LF.  The signed process-pack
+    protocol intentionally does not: Runtime compares the exact canonical
+    descriptor bytes before it constructs a handler.  Staging owns that
+    generated wire artifact so formatting can never make a signed Pack
+    uninstallable.
+    """
+
+    path = pack / "ecorex-pack.json"
+    payload = _stable_bytes(
+        path,
+        64 * 1024,
+        "capability_pack_descriptor_invalid",
+    )
+    try:
+        value = json.loads(
+            payload.decode("utf-8"),
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError):
+        raise StageError("capability_pack_descriptor_invalid") from None
+    expected = _expected_process_pack_descriptor(pack_id)
+    if value != expected:
+        raise StageError("capability_pack_descriptor_invalid")
+    canonical = _canonical_process_pack_descriptor(pack_id)
+    path.write_bytes(canonical)
+    if _stable_bytes(
+        path,
+        64 * 1024,
+        "capability_pack_descriptor_invalid",
+    ) != canonical:
+        raise StageError("capability_pack_descriptor_invalid")
+    return expected
+
+
+def _read_canonical_process_pack_descriptor(
+    pack: Path,
+    *,
+    pack_id: str,
+) -> Mapping[str, Any]:
+    payload = _stable_bytes(
+        pack / "ecorex-pack.json",
+        64 * 1024,
+        "capability_pack_descriptor_invalid",
+    )
+    expected = _expected_process_pack_descriptor(pack_id)
+    if payload != _canonical_process_pack_descriptor(pack_id):
+        raise StageError("capability_pack_descriptor_invalid")
+    return expected
 
 
 def _vendor_dependency_runtime(
@@ -1259,7 +1340,10 @@ def _browser_gates(
 ) -> None:
     zipapp = _temporary_zipapp(pack)
     try:
-        descriptor = json.loads((pack / "ecorex-pack.json").read_text(encoding="utf-8"))
+        descriptor = _read_canonical_process_pack_descriptor(
+            pack,
+            pack_id="browser",
+        )
         _gate(evidence, "pack-contract", {"descriptor": descriptor, "zipapp_sha256": _sha256(zipapp)})
         request = _pack_request(
             "browser",
@@ -1538,7 +1622,10 @@ def _sandbox_gates(
     workspace = pack.parent.parent.parent / ".sandbox-probe-workspace"
     workspace.mkdir()
     try:
-        descriptor = json.loads((pack / "ecorex-pack.json").read_text(encoding="utf-8"))
+        descriptor = _read_canonical_process_pack_descriptor(
+            pack,
+            pack_id="sandbox",
+        )
         _gate(evidence, "pack-contract", {"descriptor": descriptor, "zipapp_sha256": _sha256(zipapp)})
         if platform == "windows":
             helper = native / "ecorex-sandbox-host.exe"

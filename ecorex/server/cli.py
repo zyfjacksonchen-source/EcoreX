@@ -25,7 +25,7 @@ from .config import (
 )
 from .errors import BundleIntegrityError, ServerConfigurationError
 from .launcher import build_uvicorn_config
-from .pack_resolver import production_pack_adapter_resolver
+from .pack_resolver import create_production_pack_adapter_resolver
 
 
 class ProductRuntimeExitCode(IntEnum):
@@ -53,7 +53,7 @@ def _load_product_runtime_for_cli(**kwargs) -> ProductRuntimeComposition:
     """Production CLI always supplies executable signed-pack adapters."""
 
     return load_product_runtime(
-        pack_adapter_resolver=production_pack_adapter_resolver,
+        pack_adapter_resolver=create_production_pack_adapter_resolver(),
         **kwargs,
     )
 

@@ -16,6 +16,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 import pytest
 
+import ecorex.server.pack_resolver as pack_resolver_module
 from ecorex.capabilities import (
     ApprovalRequiredError,
     CapabilityPackManifest,
@@ -41,7 +42,10 @@ from ecorex.integration.sandbox import (
     UnavailableSandboxBackend,
 )
 from ecorex.integration.pack_python import build_pack_python_manifest
-from ecorex.server.pack_resolver import production_pack_adapter_resolver
+from ecorex.server.pack_resolver import (
+    create_production_pack_adapter_resolver,
+    production_pack_adapter_resolver,
+)
 from ecorex.update import Ed25519SignatureVerifier, SignatureEnvelope
 
 
@@ -255,6 +259,46 @@ def test_product_resolver_binds_browser_pack_only_with_resolved_workspace(
     )
     handlers = production_pack_adapter_resolver(pack, (workspace,), payload)
     assert set(handlers) == {"fetch"}
+
+
+def test_product_composition_verifies_shared_pack_python_once_per_startup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    pack = _verified_pack(
+        tmp_path,
+        pack_id="browser",
+        tools=("fetch",),
+        main=ECHO_MAIN,
+    )
+    payload = tmp_path / "payload"
+    interpreter = payload / "bin" / "pack-python" / "python.exe"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_bytes(Path(sys.executable).read_bytes())
+    (payload / "pack-python.json").write_bytes(
+        build_pack_python_manifest(payload, platform="windows", architecture="x64")
+    )
+    original = pack_resolver_module.resolve_pack_python
+    calls = 0
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(pack_resolver_module, "resolve_pack_python", counted)
+    first_startup = create_production_pack_adapter_resolver()
+    assert set(first_startup(pack, (workspace,), payload)) == {"fetch"}
+    assert set(first_startup(pack, (workspace,), payload)) == {"fetch"}
+    assert calls == 1
+
+    # Cache lifetime is exactly one composition. A restart gets a new
+    # resolver and independently verifies the signed closure again.
+    second_startup = create_production_pack_adapter_resolver()
+    assert set(second_startup(pack, (workspace,), payload)) == {"fetch"}
+    assert calls == 2
 
 
 def test_product_resolver_injects_the_slot_owned_windows_sandbox_helper(

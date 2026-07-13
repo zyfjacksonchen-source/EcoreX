@@ -1454,3 +1454,24 @@
   reopening a secret-bearing stderr channel. Candidate drills and system
   observability gain actionable evidence while the release trust boundary is
   unchanged.
+
+## ADR-091 - Process-Pack descriptors are generated and Pack Python is verified once per startup
+
+- Status: accepted.
+- Descriptor decision: repository `ecorex-pack.json` files are semantic source
+  templates, not signed wire artifacts. Platform staging validates every field
+  against the authoritative Pack/tool catalog, then emits exact sorted compact
+  UTF-8 JSON with no trailing byte. Browser and Sandbox gates read those exact
+  bytes before signing. Runtime retains its strict canonical-byte comparison;
+  formatting drift is fixed at generation rather than accepted at execution.
+- Interpreter decision: Browser and Sandbox share one signed relocatable
+  Python closure. A full Runtime verifies that complete closure once for one
+  synchronous composition and reuses only the resulting immutable identity
+  while binding the remaining Pack set. A new composition, restart or process
+  creates a new resolver and scans again; no cross-process or persisted trust
+  cache exists.
+- Build consequence: the platform stager keeps one independent post-write
+  closure verification, but reuses that result for its remaining synchronous
+  gates instead of performing a third identical scan. This removes redundant
+  cold-start/build work without weakening activation-time or restart-time
+  verification.

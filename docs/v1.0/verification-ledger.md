@@ -1387,3 +1387,21 @@ before any candidate can be considered for protected-stage admission.
 The next source-pinned ceremony must report the fixed stage from the real
 full-Runtime failure. This observability addition is advisory only and cannot
 alter activation, rollback, trust or release decisions.
+
+## Browser Pack descriptor root-cause closure - 2026-07-13
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Fourth local ceremony from `84207f69` | 1 | All eight Windows stage receipts and the nonce-bound first-install probe passed; full Runtime failed with exit `64` and the first safe stage `capability_pack_binding`. No Candidate receipt or publication was created. |
+| Fifth local ceremony from `326526fb` | 1 | All eight Windows stage receipts, copy-on-write v0.3 migration and first-install provisional health passed. Full Runtime failed closed with exact stage `capability_pack_browser`; the temporary install root was removed and the worktree remained clean. |
+| Real Browser-only reproduction | 1 | The locked Playwright 1.52.0/Chromium Pack was 190,153,573 bytes. Runtime inspection returned `pack_descriptor_invalid` in 161.312 seconds: the 129-byte descriptor had one trailing LF while the canonical contract was 128 bytes. |
+| Post-fix real Browser Pack | 0 | A fresh locked Playwright 1.52.0/Chromium Pack was 190,153,571 bytes. Its generated descriptor was exactly 128 bytes with no LF; the production ZipApp inspector passed and Runtime bound exactly `cdp` and `fetch` in 116.969 seconds. |
+| Independent Pack-Python check | 0 | A retained real Core matched 1,733 closure files, 61,188,898 bytes and manifest digest `c9aff462...0819fe`; this supporting diagnostic ruled out the interpreter closure algorithm for this failure. |
+| Canonical descriptor regression | 0 | 4 passed. Browser and Sandbox source-style descriptors are normalized into exact Runtime bytes, accepted by the production ZipApp inspector, and semantic drift remains rejected. |
+| Pack/Runtime/Bootstrap regression | 0 | 123 passed, 3 platform-conditioned skips across process Packs, platform staging, Pack Runtime, Product Runtime entrypoint, local Bootstrap install and activation health. |
+| Current-source quality and supply chain | 0 | Source-tree policy passed with 632 authoritative files; dependency-lock, Ruff/compile, whitespace, progress-JSON, license and secret-scan preflight passed. Report: `.candidate/quality/supply-chain-local-browser-descriptor-fix.json`. |
+
+The two failed ceremonies remain uncredited. The fix preserves Runtime's exact
+descriptor check and changes the producer to emit its contract. A new fixed-
+commit signed ceremony is required to prove first install, migration restart,
+healthy update, bad-digest rejection and rollback end to end.

@@ -26,7 +26,10 @@ from ecorex.integration.pack_python import (
     build_pack_python_manifest,
     resolve_pack_python,
 )
-from ecorex.integration.pack_process import ProcessCapabilityPackAdapter
+from ecorex.integration.pack_process import (
+    ProcessCapabilityPackAdapter,
+    _inspect_zipapp,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -1163,6 +1166,90 @@ def test_platform_stager_binds_installed_runtime_inventory_to_hash_lock() -> Non
             changed,
             profile="runtime",
             require_complete=True,
+        )
+
+
+@pytest.mark.parametrize("pack_id", ("browser", "sandbox"))
+def test_platform_stager_emits_runtime_canonical_process_pack_descriptor(
+    tmp_path: Path,
+    pack_id: str,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    pack = tmp_path / pack_id
+    pack.mkdir()
+    expected = stager["_expected_process_pack_descriptor"](pack_id)
+    source_style = (
+        json.dumps(
+            expected,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("utf-8")
+    (pack / "ecorex-pack.json").write_bytes(source_style)
+
+    observed = stager["_normalize_process_pack_descriptor"](
+        pack,
+        pack_id=pack_id,
+    )
+    canonical = json.dumps(
+        expected,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    assert observed == expected
+    assert (pack / "ecorex-pack.json").read_bytes() == canonical
+    assert not canonical.endswith(b"\n")
+    assert stager["_read_canonical_process_pack_descriptor"](
+        pack,
+        pack_id=pack_id,
+    ) == expected
+
+    (pack / "__main__.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
+    artifact = tmp_path / f"{pack_id}.zip"
+    with zipfile.ZipFile(artifact, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(pack.iterdir()):
+            archive.write(path, path.name)
+    inspected = _inspect_zipapp(
+        SimpleNamespace(
+            artifact_path=artifact,
+            manifest=SimpleNamespace(
+                pack_id=pack_id,
+                runtime_api_version="1.0.0",
+                tools=tuple(
+                    SimpleNamespace(tool_id=tool_id)
+                    for tool_id in expected["tools"]
+                ),
+            ),
+        )
+    )
+    assert inspected.pack_id == pack_id
+    assert inspected.tools == tuple(expected["tools"])
+
+
+def test_platform_stager_rejects_semantically_drifted_process_pack_descriptor(
+    tmp_path: Path,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    pack = tmp_path / "browser"
+    pack.mkdir()
+    drifted = stager["_expected_process_pack_descriptor"]("browser")
+    drifted["tools"] = ["fetch"]
+    (pack / "ecorex-pack.json").write_text(
+        json.dumps(drifted, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        stager["StageError"],
+        match="capability_pack_descriptor_invalid",
+    ):
+        stager["_normalize_process_pack_descriptor"](
+            pack,
+            pack_id="browser",
         )
 
 
