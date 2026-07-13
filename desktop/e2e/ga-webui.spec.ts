@@ -306,6 +306,43 @@ test("WorkspaceSurface owns the desktop outline without square child shells or o
   expect(result.ordinary.every((surface) => surface.boxShadow === "none")).toBe(true);
 });
 
+test("workspace title uses the v0.3 workbench geometry with a Codex-like inline task menu", async ({ guardedPage }) => {
+  await openArtifactScenario(guardedPage, "dark");
+  const header = guardedPage.locator(".ex-workspace-header");
+  const title = header.locator(".ex-title-row");
+  const menu = title.getByRole("button", { name: "打开任务更多菜单" });
+
+  await expect(header.locator(".ex-workspace-symbol")).toBeVisible();
+  await expect(title.locator("h1")).toBeVisible();
+  await expect(menu).toBeVisible();
+  await expect(
+    guardedPage.locator(".ex-header-actions").getByRole("button", { name: "打开任务更多菜单" }),
+  ).toHaveCount(0);
+
+  const geometry = await guardedPage.locator(".ex-app-shell").evaluate((shell) => {
+    const sidebar = shell.querySelector<HTMLElement>(".ex-sidebar");
+    const workspace = shell.querySelector<HTMLElement>(".ex-workspace");
+    if (!sidebar || !workspace) throw new Error("workbench surfaces are missing");
+    const shellStyle = getComputedStyle(shell);
+    const sidebarStyle = getComputedStyle(sidebar);
+    const workspaceStyle = getComputedStyle(workspace);
+    return {
+      columns: shellStyle.gridTemplateColumns,
+      gap: shellStyle.gap,
+      padding: shellStyle.padding,
+      sidebarRightBorder: sidebarStyle.borderRightWidth,
+      workspaceRadius: workspaceStyle.borderTopLeftRadius,
+    };
+  });
+  expect(geometry).toMatchObject({
+    gap: "0px",
+    padding: "0px",
+    sidebarRightBorder: "1px",
+    workspaceRadius: "16px",
+  });
+  expect(geometry.columns.split(" ")[0]).toBe("280px");
+});
+
 test("task ID continuation keeps the current task on 404 and restores a valid task from Enter", async ({ guardedPage }) => {
   await openThreadScenario(guardedPage, "thread-switch");
   await expect(guardedPage.getByText("当前任务原始内容", { exact: true })).toBeVisible();

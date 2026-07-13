@@ -4,6 +4,7 @@ import {
   AlertCircle,
   Copy,
   Ellipsis,
+  Folder,
   History,
   Menu,
   RefreshCw,
@@ -395,6 +396,76 @@ export function AppV1() {
     }
   };
 
+  const taskMenu = (
+    <DropdownMenu.Root>
+      <Tooltip.Root delayDuration={850}>
+        <Tooltip.Trigger asChild>
+          <DropdownMenu.Trigger
+            type="button"
+            className="ex-icon-button ex-title-menu"
+            aria-label="打开任务更多菜单"
+            data-ecorex-feature-trigger="task-menu"
+          >
+            <Ellipsis aria-hidden="true" />
+          </DropdownMenu.Trigger>
+        </Tooltip.Trigger>
+        <Tooltip.Portal>
+          <Tooltip.Content className="ex-tooltip" side="top" sideOffset={8}>
+            更多
+            <Tooltip.Arrow className="ex-tooltip-arrow" />
+          </Tooltip.Content>
+        </Tooltip.Portal>
+      </Tooltip.Root>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content className="ex-menu" sideOffset={8} align="start">
+          <DropdownMenu.Item
+            className="ex-menu-item"
+            disabled={!currentThreadId}
+            onSelect={() => void copyCurrentThreadId()}
+          >
+            <Copy aria-hidden="true" />
+            复制任务 ID
+          </DropdownMenu.Item>
+          {currentThreadId ? (
+            <DropdownMenu.Label className="ex-menu-note">{currentThreadId}</DropdownMenu.Label>
+          ) : null}
+          <DropdownMenu.Separator className="ex-menu-separator" />
+          <DropdownMenu.Item
+            className="ex-menu-item"
+            disabled={!currentThreadId}
+            onFocus={() => warmFeature(loadReplayDialog)}
+            onPointerEnter={() => warmFeature(loadReplayDialog)}
+            onSelect={() => {
+              captureFeatureTrigger(replayReturnFocusRef);
+              warmFeature(loadReplayDialog);
+              setReplayOpen(true);
+            }}
+          >
+            <History aria-hidden="true" />
+            任务检查与重新运行
+          </DropdownMenu.Item>
+          {!currentThreadId ? (
+            <DropdownMenu.Label className="ex-menu-note">发送首条消息后可查看任务记录。</DropdownMenu.Label>
+          ) : null}
+          <DropdownMenu.Separator className="ex-menu-separator" />
+          <DropdownMenu.Item
+            className="ex-menu-item"
+            onFocus={() => warmFeature(loadSettingsDialog)}
+            onPointerEnter={() => warmFeature(loadSettingsDialog)}
+            onSelect={() => {
+              captureFeatureTrigger(settingsReturnFocusRef);
+              warmFeature(loadSettingsDialog);
+              setSettingsOpen(true);
+            }}
+          >
+            <Settings2 aria-hidden="true" />
+            设置
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+
   return (
     <Tooltip.Provider skipDelayDuration={250}>
       <div className="ex-app-shell">
@@ -451,8 +522,12 @@ export function AppV1() {
               >
                 <Menu aria-hidden="true" />
               </IconButton>
-              <div>
-                <h1>{runtime.state.thread?.title || "新任务"}</h1>
+              <Folder className="ex-workspace-symbol" aria-hidden="true" />
+              <div className="ex-header-copy">
+                <div className="ex-title-row">
+                  <h1>{runtime.state.thread?.title || "新任务"}</h1>
+                  {taskMenu}
+                </div>
                 <span className={`ex-connection is-${connected ? "online" : "retrying"}`}>
                   {connected ? <Wifi aria-hidden="true" /> : <WifiOff aria-hidden="true" />}
                   {connected ? "本机已连接" : "连接中，正在恢复"}
@@ -507,77 +582,6 @@ export function AppV1() {
                 <ShieldCheck aria-hidden="true" />
                 {accessLabel}
               </span>
-              <DropdownMenu.Root>
-                <Tooltip.Root delayDuration={850}>
-                  <Tooltip.Trigger asChild>
-                    <DropdownMenu.Trigger
-                      type="button"
-                      className="ex-icon-button"
-                      aria-label="打开任务更多菜单"
-                      data-ecorex-feature-trigger="task-menu"
-                    >
-                      <Ellipsis aria-hidden="true" />
-                    </DropdownMenu.Trigger>
-                  </Tooltip.Trigger>
-                  <Tooltip.Portal>
-                    <Tooltip.Content className="ex-tooltip" side="top" sideOffset={8}>
-                      更多
-                      <Tooltip.Arrow className="ex-tooltip-arrow" />
-                    </Tooltip.Content>
-                  </Tooltip.Portal>
-                </Tooltip.Root>
-                <DropdownMenu.Portal>
-                  <DropdownMenu.Content className="ex-menu" sideOffset={8} align="end">
-                    <DropdownMenu.Item
-                      className="ex-menu-item"
-                      disabled={!currentThreadId}
-                      onSelect={() => void copyCurrentThreadId()}
-                    >
-                      <Copy aria-hidden="true" />
-                      复制任务 ID
-                    </DropdownMenu.Item>
-                    {currentThreadId ? (
-                      <DropdownMenu.Label className="ex-menu-note">
-                        {currentThreadId}
-                      </DropdownMenu.Label>
-                    ) : null}
-                    <DropdownMenu.Separator className="ex-menu-separator" />
-                    <DropdownMenu.Item
-                      className="ex-menu-item"
-                      disabled={!currentThreadId}
-                      onFocus={() => warmFeature(loadReplayDialog)}
-                      onPointerEnter={() => warmFeature(loadReplayDialog)}
-                      onSelect={() => {
-                        captureFeatureTrigger(replayReturnFocusRef);
-                        warmFeature(loadReplayDialog);
-                        setReplayOpen(true);
-                      }}
-                    >
-                      <History aria-hidden="true" />
-                      任务检查与重新运行
-                    </DropdownMenu.Item>
-                    {!currentThreadId ? (
-                      <DropdownMenu.Label className="ex-menu-note">
-                        发送首条消息后可查看任务记录。
-                      </DropdownMenu.Label>
-                    ) : null}
-                    <DropdownMenu.Separator className="ex-menu-separator" />
-                    <DropdownMenu.Item
-                      className="ex-menu-item"
-                      onFocus={() => warmFeature(loadSettingsDialog)}
-                      onPointerEnter={() => warmFeature(loadSettingsDialog)}
-                      onSelect={() => {
-                        captureFeatureTrigger(settingsReturnFocusRef);
-                        warmFeature(loadSettingsDialog);
-                        setSettingsOpen(true);
-                      }}
-                    >
-                      <Settings2 aria-hidden="true" />
-                      设置
-                    </DropdownMenu.Item>
-                  </DropdownMenu.Content>
-                </DropdownMenu.Portal>
-              </DropdownMenu.Root>
             </div>
           </header>
 

@@ -1,4 +1,5 @@
 /* Hallmark · genre: modern-minimal · macrostructure: Workbench · design-system: design.md · designed-as-app */
+/* Hallmark · pre-emit critique: P5 H5 E5 S5 R5 V4 */
 
 html,
 body,
@@ -33,10 +34,10 @@ textarea {
 .ex-app-shell {
   width: 100%;
   height: 100dvh;
-  padding: var(--workspace-inset);
+  padding: 0;
   display: grid;
-  grid-template-columns: 236px minmax(0, 1fr);
-  gap: var(--workspace-inset);
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 0;
   color: var(--color-ink);
   background: var(--color-canvas);
 }
@@ -45,18 +46,22 @@ textarea {
 .ex-workspace {
   min-width: 0;
   min-height: 0;
-  border: 1px solid var(--color-rule);
   background: var(--color-surface);
 }
 
 .ex-sidebar {
-  border-radius: var(--radius-panel);
+  border: 0;
+  border-right: 1px solid var(--color-rule);
+  border-radius: var(--radius-none);
   display: flex;
   flex-direction: column;
   overflow: clip;
 }
 
 .ex-workspace {
+  border: 1px solid var(--color-rule);
+  border-block-width: 0;
+  border-right-width: 0;
   border-radius: var(--radius-panel);
   overflow: clip;
   display: grid;
@@ -78,6 +83,16 @@ textarea {
   font-family: var(--font-display);
   font-size: var(--text-title-size);
   font-weight: 600;
+}
+
+@media (min-width: 840px) {
+  .ex-sidebar-brand {
+    display: none;
+  }
+
+  .ex-new-task {
+    margin-top: var(--space-3);
+  }
 }
 
 .ex-brand-mark {
@@ -319,13 +334,13 @@ textarea {
 }
 
 .ex-workspace-header {
-  min-height: 64px;
-  padding: var(--space-2) var(--space-4);
+  min-height: 56px;
+  padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--color-rule);
   display: grid;
   grid-template-columns: minmax(160px, 1fr) auto minmax(160px, 1fr);
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--space-3);
   background: var(--color-surface);
 }
 
@@ -341,10 +356,25 @@ textarea {
   gap: var(--space-2);
 }
 
-.ex-header-title > div {
+.ex-workspace-symbol {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  color: var(--color-ink-muted);
+  stroke-width: 1.7;
+}
+
+.ex-header-copy {
   min-width: 0;
   display: flex;
   flex-direction: column;
+}
+
+.ex-title-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
 }
 
 .ex-header-title h1 {
@@ -356,6 +386,14 @@ textarea {
   font-size: var(--text-title-size);
   line-height: var(--text-title-line);
   font-weight: 600;
+}
+
+.ex-title-menu {
+  width: var(--target-desktop);
+  height: var(--target-desktop);
+  min-width: var(--target-desktop);
+  flex: none;
+  color: var(--color-ink-subtle);
 }
 
 .ex-connection {
@@ -572,6 +610,8 @@ textarea {
     transform: translateX(calc(-100% - var(--space-4)));
     visibility: hidden;
     pointer-events: none;
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-panel);
     transition: transform var(--duration-base) var(--ease-out);
   }
 

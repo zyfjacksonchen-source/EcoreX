@@ -168,9 +168,12 @@ test("ordinary controls are frameless until hover, focus, or active state", () =
     assert.match(state, /background:\s*var\(--control-hover-surface\);/);
   }
 
-  const primary = rule(primitives, ".ex-button.is-primary,\n.ex-new-task,");
+  const primary = rule(primitives, ".ex-button.is-primary,\n.ex-send-button {");
   assert.match(primary, /border-color:\s*transparent;/);
   assert.match(primary, /background:\s*var\(--color-accent\);/);
+  const newTaskHover = rule(primitives, ".ex-new-task:not(:disabled):hover,");
+  assert.match(newTaskHover, /border-color:\s*var\(--control-hover-border\);/);
+  assert.match(newTaskHover, /background:\s*var\(--control-hover-surface\);/);
   const danger = rule(primitives, ".ex-button.is-danger {");
   assert.match(danger, /border-color:\s*transparent;/);
   assert.match(danger, /background:\s*transparent;/);

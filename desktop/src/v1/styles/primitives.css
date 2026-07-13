@@ -69,7 +69,6 @@
 }
 
 .ex-button.is-primary,
-.ex-new-task,
 .ex-send-button {
   border-color: transparent;
   color: var(--color-accent-ink);
@@ -126,6 +125,7 @@
 
 .ex-button:not(.is-primary):not(.is-danger):not(:disabled):active,
 .ex-icon-button:not(.is-selected):not([aria-pressed="true"]):not(:disabled):active,
+.ex-new-task:not(:disabled):active,
 .ex-sidebar-action:not(:disabled):active,
 .ex-task-row:not(.is-current):not(:disabled):active,
 .ex-composer-tool:not(:disabled):active,
@@ -176,6 +176,7 @@
 
 .ex-button:not(.is-primary):not(.is-danger):focus-visible,
 .ex-icon-button:not(.is-selected):not([aria-pressed="true"]):focus-visible,
+.ex-new-task:focus-visible,
 .ex-sidebar-action:focus-visible,
 .ex-task-row:not(.is-current):focus-visible,
 .ex-composer-tool:focus-visible,
@@ -190,7 +191,6 @@
 }
 
 .ex-button.is-primary:focus-visible,
-.ex-new-task:focus-visible,
 .ex-send-button:focus-visible {
   box-shadow: var(--focus-primary-ring);
   outline-offset: 3px;
@@ -199,6 +199,7 @@
 @media (hover: hover) {
   .ex-button:not(.is-primary):not(.is-danger):not(:disabled):hover,
   .ex-icon-button:not(.is-selected):not([aria-pressed="true"]):not(:disabled):hover,
+  .ex-new-task:not(:disabled):hover,
   .ex-sidebar-action:not(:disabled):hover,
   .ex-task-row:not(.is-current):not(:disabled):hover,
   .ex-composer-tool:not(:disabled):hover,
@@ -218,7 +219,6 @@
   }
 
   .ex-button.is-primary:hover,
-  .ex-new-task:hover,
   .ex-send-button:hover:not(:disabled) {
     border-color: var(--color-accent-strong);
     background: var(--color-accent-strong);
@@ -328,7 +328,6 @@
   }
 
   .ex-button.is-primary,
-  .ex-new-task,
   .ex-send-button {
     border-color: Highlight;
     color: HighlightText;
