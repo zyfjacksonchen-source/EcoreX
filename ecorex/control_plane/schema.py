@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS control_releases (
     channel TEXT NOT NULL,
     manifest_json TEXT NOT NULL,
     manifest_sha256 TEXT NOT NULL,
+    manifest_file_sha256 TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('candidate','published','withdrawn')),
     created_at TEXT NOT NULL,
     published_at TEXT
@@ -79,6 +80,22 @@ CREATE TABLE IF NOT EXISTS control_release_gates (
     updated_at TEXT NOT NULL,
     PRIMARY KEY(release_id, gate_name)
 );
+CREATE TABLE IF NOT EXISTS control_release_gate_attestations (
+    attestation_sha256 TEXT PRIMARY KEY,
+    release_id TEXT NOT NULL REFERENCES control_releases(release_id),
+    phase TEXT NOT NULL CHECK (phase IN ('prepare','finalize')),
+    attestation_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(release_id, phase)
+);
+CREATE TRIGGER IF NOT EXISTS control_release_gate_attestations_no_update
+BEFORE UPDATE ON control_release_gate_attestations BEGIN
+    SELECT RAISE(ABORT, 'release gate attestations are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS control_release_gate_attestations_no_delete
+BEFORE DELETE ON control_release_gate_attestations BEGIN
+    SELECT RAISE(ABORT, 'release gate attestations are immutable');
+END;
 CREATE TABLE IF NOT EXISTS control_rollouts (
     rollout_id TEXT PRIMARY KEY,
     release_id TEXT NOT NULL REFERENCES control_releases(release_id),

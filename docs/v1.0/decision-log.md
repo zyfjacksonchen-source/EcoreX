@@ -1722,3 +1722,45 @@
   browser diagnostics or Candidate identity drift all stop before publication.
   Local fixture/CDP reports remain useful diagnostics but cannot satisfy these
   protected live gates.
+
+## ADR-102 - Machine gate passes require one signed Candidate-bound bundle
+
+- Status: accepted.
+- Root cause: accepting independent administrator-written `passed` rows left a
+  mutable database path that could bypass the immutable workflow receipts and
+  their Candidate identity.
+- Decision: the sole positive gate authority is an exact-schema release-gate
+  bundle signed by the trusted release signer. It binds the Candidate manifest
+  digest, release/build/channel identity, commit, workflow run, phase and the
+  exact expected gate names/evidence tokens. The signing adapter remains
+  digest-pinned and the verifier uses the manifest trust anchor.
+- Persistence decision: one immutable attestation and all derived passed rows
+  are committed atomically. The final bundle is reloaded and re-verified at
+  publication; missing, duplicate, drifted or prepare-only evidence fails closed.
+  Manual failures can conservatively block only before attestation; manual passes
+  and all post-attestation mutation are forbidden.
+- Byte-identity decision: Candidate registration stores the exact uploaded
+  manifest-file SHA-256 separately from the canonical stored JSON digest. CLI
+  and administrator Web compute it from file bytes, and bundle import plus final
+  publication independently require an exact match.
+- Presentation decision: the administrator dashboard is a read-only projection
+  of signed machine evidence. It cannot upload a bundle or manufacture a pass.
+- Consequence: CI evidence, Control Plane state and publication authorization
+  converge on one cryptographic fact instead of three mutable interpretations.
+
+## ADR-103 - Same-tick durable identities are monotonic
+
+- Status: accepted.
+- Root cause: Windows may return an unchanged high-resolution wall-clock value
+  across several writes. Ordering records by `(created_at, ULID)` was therefore
+  nondeterministic because the prior ULID suffix was independently random. Live
+  Replay exposed the defect by restoring user revisions in a different order.
+- Decision: the shared ULID authority keeps a process-local monotonic timestamp
+  and 80-bit suffix under one lock. A new millisecond receives a fresh random
+  seed; additional IDs increment it. Clock rollback retains the prior timestamp,
+  and a process identity change resets the seed boundary.
+- Scope: IDs remain opaque record identities, never authentication tokens. Event
+  `seq` remains the cross-process conversational fact source; monotonic ULIDs make
+  existing same-time secondary indexes deterministic within a serialized writer.
+- Consequence: Item, Job, Artifact and other durable tables cannot reorder rapid
+  same-process creations merely because the OS clock is coarse or moves backward.

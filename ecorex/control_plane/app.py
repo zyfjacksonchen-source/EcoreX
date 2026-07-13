@@ -67,6 +67,7 @@ from .models import (
     CreateRollbackRequest,
     CreateRolloutRequest,
     DistributionProjection,
+    GateBundleRequest,
     GateResultRequest,
     KillSwitchProjection,
     RolloutActionRequest,
@@ -790,7 +791,10 @@ def create_control_plane_app(
     ) -> CandidateProjection:
         manifest = ReleaseManifest.from_dict(request.manifest)
         return repository.create_candidate(
-            manifest, actor=current, client_request_id=request.client_request_id
+            manifest,
+            manifest_file_sha256=request.manifest_sha256,
+            actor=current,
+            client_request_id=request.client_request_id,
         )
 
     @app.put(
@@ -964,6 +968,22 @@ def create_control_plane_app(
             gate_name,
             status=request.status,
             evidence=request.evidence,
+            actor=current,
+            client_request_id=request.client_request_id,
+        )
+
+    @app.put(
+        "/api/v1/admin/releases/{release_id}/gate-bundle",
+        response_model=CandidateProjection,
+    )
+    def record_gate_bundle(
+        release_id: str,
+        request: GateBundleRequest,
+        current: ControlPrincipal = Depends(admin),
+    ) -> CandidateProjection:
+        return repository.record_gate_bundle(
+            release_id,
+            request.attestation,
             actor=current,
             client_request_id=request.client_request_id,
         )

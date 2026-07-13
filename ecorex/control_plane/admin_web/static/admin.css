@@ -638,18 +638,6 @@ tbody tr:last-child td {
   border-bottom: 0;
 }
 
-.gate-status {
-  min-width: 6.5rem;
-}
-
-.gate-evidence {
-  min-width: 15rem;
-}
-
-.gate-action {
-  min-width: 7.5rem;
-}
-
 .rollout-form {
   grid-template-columns: minmax(0, 1fr);
 }

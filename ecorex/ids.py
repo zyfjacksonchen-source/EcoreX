@@ -2,12 +2,34 @@
 
 from __future__ import annotations
 
+import os
 import secrets
+import threading
 import time
 
 
 _CROCKFORD32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _CROCKFORD32_SET = frozenset(_CROCKFORD32)
+_ULID_RANDOM_MASK = (1 << 80) - 1
+_monotonic_lock = threading.Lock()
+_monotonic_pid = os.getpid()
+_last_timestamp_ms = -1
+_last_randomness = 0
+
+
+def _reset_monotonic_state_after_fork() -> None:
+    global _last_randomness, _last_timestamp_ms, _monotonic_lock, _monotonic_pid
+    # A forked child must not inherit a lock that another vanished parent
+    # thread held at the fork boundary.  It also needs an independent random
+    # suffix stream so parent and child cannot replay the same next identity.
+    _monotonic_lock = threading.Lock()
+    _monotonic_pid = os.getpid()
+    _last_timestamp_ms = -1
+    _last_randomness = 0
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_monotonic_state_after_fork)
 
 
 def _valid_prefix(prefix: object) -> bool:
@@ -32,10 +54,32 @@ def _encode_base32(value: int, length: int) -> str:
 
 
 def new_ulid() -> str:
-    """Return a 26-character ULID-shaped, time-sortable opaque identity."""
+    """Return a monotonic, time-sortable 26-character ULID identity.
 
-    timestamp_ms = int(time.time_ns() // 1_000_000) & ((1 << 48) - 1)
-    randomness = secrets.randbits(80)
+    The random suffix alone does not define insertion order when the operating
+    system clock returns the same millisecond for several durable records.  A
+    process-local monotonic suffix preserves that order while retaining a fresh
+    80-bit seed for every new millisecond and process.
+    """
+
+    global _last_randomness, _last_timestamp_ms, _monotonic_pid
+    process_id = os.getpid()
+    with _monotonic_lock:
+        timestamp_ms = int(time.time_ns() // 1_000_000) & ((1 << 48) - 1)
+        if process_id != _monotonic_pid:
+            _monotonic_pid = process_id
+            _last_timestamp_ms = -1
+            _last_randomness = 0
+        if timestamp_ms > _last_timestamp_ms:
+            randomness = secrets.randbits(80)
+        else:
+            timestamp_ms = _last_timestamp_ms
+            randomness = _last_randomness + 1
+            if randomness > _ULID_RANDOM_MASK:
+                timestamp_ms = (_last_timestamp_ms + 1) & ((1 << 48) - 1)
+                randomness = secrets.randbits(80)
+        _last_timestamp_ms = timestamp_ms
+        _last_randomness = randomness
     return _encode_base32(timestamp_ms, 10) + _encode_base32(randomness, 16)
 
 

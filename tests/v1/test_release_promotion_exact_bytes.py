@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -17,6 +18,7 @@ from ecorex.release import (
     Ed25519MemorySigner,
     ReleaseBuildSpec,
     ReleaseBuilder,
+    sign_gate_bundle,
 )
 from ecorex.update import ReleaseChannel, ReleaseSource, SourceKind
 
@@ -168,6 +170,22 @@ def test_real_builder_bytes_flow_through_receipt_evidence_and_promotion(
         check=False,
     )
     assert assembled.returncode == 0, assembled.stderr.decode(errors="replace")
+    unsigned = json.loads(evidence_path.read_text(encoding="utf-8"))
+    evidence_path.write_text(
+        json.dumps(
+            sign_gate_bundle(
+                unsigned,
+                signer=signer,
+                manifest=built.manifest,
+            ),
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+    trusted_key = "release-key-2026=" + base64.b64encode(
+        signer.public_key_bytes
+    ).decode("ascii")
 
     journal = tmp_path / "dry-run-journal.json"
     assert (
@@ -178,6 +196,8 @@ def test_real_builder_bytes_flow_through_receipt_evidence_and_promotion(
                 str(built.manifest_path),
                 "--evidence",
                 str(evidence_path),
+                "--trusted-key",
+                trusted_key,
                 "--publication-receipt",
                 str(publication_path),
                 "--journal",

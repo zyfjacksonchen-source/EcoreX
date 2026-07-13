@@ -22,6 +22,11 @@ from ecorex.release.public_index import (
     validate_public_bootstrap_index,
 )
 from ecorex.release.live_acceptance import LIVE_ACCEPTANCE_GATES
+from ecorex.release.gate_attestation import (
+    GateAttestationError,
+    gate_bundle_sha256,
+    validate_signed_gate_bundle,
+)
 from ecorex.update import (
     ReleaseChannel,
     ReleaseManifest,
@@ -246,14 +251,20 @@ class ControlPlaneRepository:
         self,
         manifest: ReleaseManifest,
         *,
+        manifest_file_sha256: str,
         actor: ControlPrincipal,
         client_request_id: str,
     ) -> CandidateProjection:
+        if _SHA256.fullmatch(manifest_file_sha256) is None:
+            raise ValueError("release manifest file digest is invalid")
         verify_manifest_signature(manifest, self.verifier)
         for artifact in manifest.artifacts:
             verify_artifact_signature(manifest, artifact, self.verifier)
         manifest_json = manifest.to_json()
-        request = {"manifest_sha256": _sha(manifest_json)}
+        request = {
+            "manifest_sha256": _sha(manifest_json),
+            "manifest_file_sha256": manifest_file_sha256,
+        }
         with self._transaction() as connection:
             replay = self._replay(
                 connection, actor, client_request_id, "candidate.create", request
@@ -261,7 +272,8 @@ class ControlPlaneRepository:
             if replay is not None:
                 return CandidateProjection.model_validate(replay)
             existing = connection.execute(
-                "SELECT manifest_sha256 FROM control_releases WHERE release_id = ?",
+                "SELECT manifest_sha256,manifest_file_sha256 "
+                "FROM control_releases WHERE release_id = ?",
                 (manifest.release_id,),
             ).fetchone()
             digest = _sha(manifest_json)
@@ -269,11 +281,19 @@ class ControlPlaneRepository:
                 raise ControlPlaneConflict(
                     "release_id was reused with a different manifest"
                 )
+            if (
+                existing is not None
+                and existing["manifest_file_sha256"] != manifest_file_sha256
+            ):
+                raise ControlPlaneConflict(
+                    "release_id was reused with different manifest bytes"
+                )
             if existing is None:
                 connection.execute(
                     "INSERT INTO control_releases("
                     "release_id,version,build_digest,channel,manifest_json,manifest_sha256,"
-                    "status,created_at) VALUES (?,?,?,?,?,?,'candidate',?)",
+                    "manifest_file_sha256,status,created_at) "
+                    "VALUES (?,?,?,?,?,?,?,'candidate',?)",
                     (
                         manifest.release_id,
                         manifest.version,
@@ -281,6 +301,7 @@ class ControlPlaneRepository:
                         manifest.channel.value,
                         manifest_json,
                         digest,
+                        manifest_file_sha256,
                         _now(),
                     ),
                 )
@@ -312,6 +333,10 @@ class ControlPlaneRepository:
             raise ValueError("release gate is not part of the v1 publication contract")
         if status not in {"passed", "failed"}:
             raise ValueError("release gate status is invalid")
+        if status == "passed":
+            raise ReleaseGateError(
+                "passed release gates require a signed Candidate-bound bundle"
+            )
         if not isinstance(evidence, str) or len(evidence) > 4096:
             raise ValueError("release gate evidence is invalid")
         request = {
@@ -329,12 +354,13 @@ class ControlPlaneRepository:
             release = self._require_release(connection, release_id)
             if release["status"] != "candidate":
                 raise ControlPlaneConflict("published release gates are immutable")
-            if gate_name == "bootstrap-index" and status == "passed":
-                self._require_bootstrap_index_proof(
-                    connection,
-                    release=release,
-                    evidence=evidence,
-                )
+            attested = connection.execute(
+                "SELECT 1 FROM control_release_gate_attestations "
+                "WHERE release_id=? LIMIT 1",
+                (release_id,),
+            ).fetchone()
+            if attested is not None:
+                raise ControlPlaneConflict("signed release gates are immutable")
             connection.execute(
                 "INSERT INTO control_release_gates(release_id,gate_name,status,evidence,updated_at) "
                 "VALUES (?,?,?,?,?) ON CONFLICT(release_id,gate_name) DO UPDATE SET "
@@ -348,6 +374,107 @@ class ControlPlaneRepository:
                 actor,
                 client_request_id,
                 "gate.record",
+                request,
+                result.model_dump(),
+            )
+            return result
+
+    def record_gate_bundle(
+        self,
+        release_id: str,
+        attestation: dict[str, Any],
+        *,
+        actor: ControlPrincipal,
+        client_request_id: str,
+    ) -> CandidateProjection:
+        """Atomically accept machine gates only through release-key authority."""
+
+        if not isinstance(attestation, dict):
+            raise ValueError("release gate bundle is invalid")
+        attestation_sha256 = gate_bundle_sha256(attestation)
+        request = {
+            "release_id": release_id,
+            "attestation_sha256": attestation_sha256,
+        }
+        with self._transaction() as connection:
+            replay = self._replay(
+                connection, actor, client_request_id, "gate-bundle.record", request
+            )
+            if replay is not None:
+                return CandidateProjection.model_validate(replay)
+            release = self._require_release(connection, release_id)
+            if release["status"] != "candidate":
+                raise ControlPlaneConflict("published release gates are immutable")
+            manifest = self._verified_manifest(release)
+            phase = attestation.get("phase")
+            if phase not in {"prepare", "finalize"}:
+                raise ReleaseGateError("release gate bundle phase is invalid")
+            expected = required_release_gates(manifest.channel)
+            if manifest.channel is ReleaseChannel.STABLE and phase == "prepare":
+                expected -= {"bootstrap-index"}
+            elif phase != "finalize":
+                raise ReleaseGateError("release gate bundle phase is invalid")
+            try:
+                gates = validate_signed_gate_bundle(
+                    attestation,
+                    manifest=manifest,
+                    expected_gates=frozenset(expected),
+                    expected_phase=str(phase),
+                    verifier=self.verifier,
+                    expected_manifest_sha256=str(release["manifest_file_sha256"]),
+                )
+            except GateAttestationError:
+                raise ReleaseGateError("release gate bundle is untrusted") from None
+            existing = connection.execute(
+                "SELECT attestation_sha256,attestation_json FROM "
+                "control_release_gate_attestations WHERE release_id=? AND phase=?",
+                (release_id, phase),
+            ).fetchone()
+            attestation_json = _json(attestation)
+            if existing is not None and (
+                existing["attestation_sha256"] != attestation_sha256
+                or existing["attestation_json"] != attestation_json
+            ):
+                raise ControlPlaneConflict(
+                    "release gate bundle phase is already bound to different evidence"
+                )
+            if existing is None:
+                connection.execute(
+                    "INSERT INTO control_release_gate_attestations("
+                    "attestation_sha256,release_id,phase,attestation_json,created_at) "
+                    "VALUES(?,?,?,?,?)",
+                    (
+                        attestation_sha256,
+                        release_id,
+                        phase,
+                        attestation_json,
+                        _now(),
+                    ),
+                )
+            for gate, result in sorted(gates.items()):
+                if gate == "bootstrap-index":
+                    self._require_bootstrap_index_proof(
+                        connection,
+                        release=release,
+                        evidence=result["evidence"],
+                    )
+                connection.execute(
+                    "INSERT INTO control_release_gates("
+                    "release_id,gate_name,status,evidence,updated_at) "
+                    "VALUES(?,?,?,?,?) ON CONFLICT(release_id,gate_name) DO UPDATE SET "
+                    "status=excluded.status,evidence=excluded.evidence,"
+                    "updated_at=excluded.updated_at",
+                    (release_id, gate, "passed", result["evidence"], _now()),
+                )
+            result = self._candidate(connection, release_id)
+            self._audit(
+                connection, actor, "gate-bundle.record", release_id, request
+            )
+            self._remember(
+                connection,
+                actor,
+                client_request_id,
+                "gate-bundle.record",
                 request,
                 result.model_dump(),
             )
@@ -1756,6 +1883,7 @@ class ControlPlaneRepository:
                     "all required release gates must pass before publication"
                 )
             release = self._require_release(connection, release_id)
+            self._require_final_gate_attestation(connection, release)
             self._require_current_release_bootstrap_gate(connection, release)
             # Publication is monotonic.  A later idempotent administrator
             # request must not rewrite the original publication time, which is
@@ -3544,6 +3672,58 @@ class ControlPlaneRepository:
             release=release,
             evidence=str(gate["evidence"]),
         )
+
+    def _require_final_gate_attestation(
+        self,
+        connection: sqlite3.Connection,
+        release: sqlite3.Row,
+    ) -> None:
+        row = connection.execute(
+            "SELECT attestation_sha256,attestation_json FROM "
+            "control_release_gate_attestations "
+            "WHERE release_id=? AND phase='finalize'",
+            (release["release_id"],),
+        ).fetchone()
+        if row is None:
+            raise ReleaseGateError(
+                "release gates lack a final signed Candidate-bound bundle"
+            )
+        payload = str(row["attestation_json"])
+        if _sha(payload) != row["attestation_sha256"]:
+            raise ReleaseGateError("stored release gate bundle digest is invalid")
+        try:
+            value = json.loads(payload)
+        except (json.JSONDecodeError, RecursionError):
+            raise ReleaseGateError("stored release gate bundle is invalid") from None
+        if not isinstance(value, dict):
+            raise ReleaseGateError("stored release gate bundle is invalid")
+        manifest = self._verified_manifest(release)
+        try:
+            expected = validate_signed_gate_bundle(
+                value,
+                manifest=manifest,
+                expected_gates=required_release_gates(manifest.channel),
+                expected_phase="finalize",
+                verifier=self.verifier,
+                expected_manifest_sha256=str(release["manifest_file_sha256"]),
+            )
+        except GateAttestationError:
+            raise ReleaseGateError("stored release gate bundle is untrusted") from None
+        observed = {
+            str(item["gate_name"]): {
+                "status": str(item["status"]),
+                "evidence": str(item["evidence"]),
+            }
+            for item in connection.execute(
+                "SELECT gate_name,status,evidence FROM control_release_gates "
+                "WHERE release_id=?",
+                (release["release_id"],),
+            )
+        }
+        if observed != expected:
+            raise ReleaseGateError(
+                "stored release gates drifted from their signed bundle"
+            )
 
     def _require_bootstrap_freshness_verifier(self) -> SignatureVerifier:
         if self.bootstrap_freshness_verifier is None:

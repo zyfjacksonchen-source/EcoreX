@@ -1034,11 +1034,33 @@ jobs:
             --expected-commit ${{ github.sha }}
           )
           if [[ "$RELEASE_CHANNEL" == "stable" ]]; then
-            args+=(--phase prepare --output .candidate/output/release-evidence-prepare.json)
+            args+=(--phase prepare --output .candidate/output/release-evidence-prepare-unsigned.json)
           else
-            args+=(--phase finalize --output .candidate/output/release-evidence.json)
+            args+=(--phase finalize --output .candidate/output/release-evidence-unsigned.json)
           fi
           python scripts/assemble-v1-release-evidence.py "${args[@]}"
+
+      - name: Sign the exact Candidate-bound gate bundle
+        env:
+          ECOREX_RELEASE_SIGNER_EXECUTABLE: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE }}
+          ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256 }}
+          ECOREX_RELEASE_SIGNER_ADAPTER: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER }}
+          ECOREX_RELEASE_SIGNER_ADAPTER_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER_SHA256 }}
+          ECOREX_RELEASE_SIGNER_KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          ECOREX_RELEASE_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+        run: |
+          if [[ "$RELEASE_CHANNEL" == "stable" ]]; then
+            unsigned=.candidate/output/release-evidence-prepare-unsigned.json
+            output=.candidate/output/release-evidence-prepare.json
+          else
+            unsigned=.candidate/output/release-evidence-unsigned.json
+            output=.candidate/output/release-evidence.json
+          fi
+          python scripts/sign-v1-release-gate-bundle.py \
+            --unsigned "$unsigned" \
+            --manifest .candidate/output/release/release-manifest.json \
+            --output "$output"
 
       - name: Upload publication receipts and evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -1060,6 +1082,7 @@ jobs:
     permissions:
       actions: read
       contents: read
+      id-token: write
     steps:
       - name: Checkout release CLI without persisted credentials
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -1086,11 +1109,14 @@ jobs:
         if: ${{ inputs.promotion_mode == 'dry-run' }}
         env:
           RELEASE_CHANNEL: ${{ inputs.channel }}
+          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
         run: |
           args=(
             promote
             --manifest .candidate/output/release/release-manifest.json
             --publication-receipt .candidate/output/publication-receipt.json
+            --trusted-key "$KEY_ID=$PUBLIC_KEY"
             --journal .candidate/output/promotion-dry-run-journal.json
             --percentage "${{ inputs.rollout_percentage }}"
             --dry-run
@@ -1108,12 +1134,15 @@ jobs:
           ECOREX_CONTROL_PLANE_URL: ${{ vars.ECOREX_CONTROL_PLANE_URL }}
           ECOREX_CONTROL_PLANE_HOSTS: ${{ vars.ECOREX_CONTROL_PLANE_HOSTS }}
           ECOREX_CONTROL_PLANE_TOKEN: ${{ secrets.ECOREX_CONTROL_PLANE_TOKEN }}
+          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
         run: >-
           ecorex-release promote
           --phase prepare
           --manifest .candidate/output/release/release-manifest.json
           --evidence .candidate/output/release-evidence-prepare.json
           --publication-receipt .candidate/output/publication-receipt.json
+          --trusted-key "$KEY_ID=$PUBLIC_KEY"
           --journal .candidate/output/promotion-journal.json
           --percentage "${{ inputs.rollout_percentage }}"
 
@@ -1124,12 +1153,15 @@ jobs:
           ECOREX_CONTROL_PLANE_HOSTS: ${{ vars.ECOREX_CONTROL_PLANE_HOSTS }}
           ECOREX_CONTROL_PLANE_TOKEN: ${{ secrets.ECOREX_CONTROL_PLANE_TOKEN }}
           PROMOTION_MODE: ${{ inputs.promotion_mode }}
+          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
         run: |
           args=(
             promote --phase auto
             --manifest .candidate/output/release/release-manifest.json
             --evidence .candidate/output/release-evidence.json
             --publication-receipt .candidate/output/publication-receipt.json
+            --trusted-key "$KEY_ID=$PUBLIC_KEY"
             --journal .candidate/output/promotion-journal.json
             --percentage "${{ inputs.rollout_percentage }}"
           )
@@ -1166,6 +1198,21 @@ jobs:
           --publication-receipt .candidate/output/publication-receipt.json
           --bootstrap-index-receipt .candidate/output/bootstrap-index-publication-receipt.json
           --expected-commit ${{ github.sha }}
+          --output .candidate/output/release-evidence-unsigned.json
+
+      - name: Sign stable active-and-readback gate bundle
+        if: ${{ inputs.channel == 'stable' && inputs.promotion_mode == 'create-and-activate' }}
+        env:
+          ECOREX_RELEASE_SIGNER_EXECUTABLE: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE }}
+          ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256 }}
+          ECOREX_RELEASE_SIGNER_ADAPTER: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER }}
+          ECOREX_RELEASE_SIGNER_ADAPTER_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER_SHA256 }}
+          ECOREX_RELEASE_SIGNER_KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          ECOREX_RELEASE_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+        run: >-
+          python scripts/sign-v1-release-gate-bundle.py
+          --unsigned .candidate/output/release-evidence-unsigned.json
+          --manifest .candidate/output/release/release-manifest.json
           --output .candidate/output/release-evidence.json
 
       - name: Publish release then activate stable rollout
@@ -1174,6 +1221,8 @@ jobs:
           ECOREX_CONTROL_PLANE_URL: ${{ vars.ECOREX_CONTROL_PLANE_URL }}
           ECOREX_CONTROL_PLANE_HOSTS: ${{ vars.ECOREX_CONTROL_PLANE_HOSTS }}
           ECOREX_CONTROL_PLANE_TOKEN: ${{ secrets.ECOREX_CONTROL_PLANE_TOKEN }}
+          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
         run: >-
           ecorex-release promote
           --phase finalize
@@ -1181,6 +1230,7 @@ jobs:
           --evidence .candidate/output/release-evidence.json
           --publication-receipt .candidate/output/publication-receipt.json
           --bootstrap-index-receipt .candidate/output/bootstrap-index-publication-receipt.json
+          --trusted-key "$KEY_ID=$PUBLIC_KEY"
           --journal .candidate/output/promotion-journal.json
           --percentage "${{ inputs.rollout_percentage }}"
           --activate

@@ -4429,3 +4429,60 @@ files; report
 `f9dced93aead52c7f7eddad61a59d274ef1e6065d70f842ccaf85b63de8132b3`.
 No live driver or provider was available in the current shell, so the three new
 gates are correctly unresolved and no publication was attempted.
+
+## 2026-07-14 - Candidate-bound gate authority and read-only administrator projection
+
+A second publication-path audit found that the Control Plane still accepted
+individual administrator-written `passed` gate rows. That made the database a
+parallel pass authority even though CI had produced stronger immutable evidence.
+The release contract now has one pass authority: an exact Candidate-bound gate
+bundle signed with the same trusted release identity as the manifest. The bundle
+binds phase, commit, workflow run, release ID, version, channel, build digest,
+manifest digest and the complete expected gate set. Prepare and final stable
+bundles are distinct; only a verified final bundle can authorize publication.
+
+The Control Plane stores each attestation once under an immutable database
+constraint, materializes all passed gate projections in the same transaction,
+and re-verifies the stored final bundle before publication. Manual `passed`
+writes are rejected; a conservative manual failure may block an unattested
+Candidate, while all manual gate mutations stop after attestation. The CLI now
+authenticates the manifest, every artifact, the signed bundle, publication
+receipts and Bootstrap index proof as independent trust boundaries.
+
+The Candidate registration contract also persists the SHA-256 of the exact
+uploaded `release-manifest.json` bytes separately from its canonical database
+JSON digest. The promotion CLI supplies the already authenticated file digest;
+the administrator Web computes it from the selected `ArrayBuffer` through Web
+Crypto before parsing. Gate-bundle import and final publication both compare the
+signed bundle digest with that immutable Candidate fact, closing the remaining
+raw-byte/semantic-manifest ambiguity.
+
+The administrator Web surface was reduced to a read-only machine-gate table.
+There is no per-gate status selector, evidence field, pass button or browser
+bundle-upload path. Two real-browser tests exercise desktop and 390 px layouts,
+server-authoritative publish confirmation, reload token clearing and missing-live-
+image blocking. The complete Playwright suite now has 36 passing tests, including
+the fixed Composer rule: centered only while choosing a new general/project task,
+and bottom-anchored in every normal conversation. The Web contract suite has 162
+passes. Broad release/Candidate/Control Plane regression has 342 passes, four
+explicit platform skips and zero failures. No release or user rollout occurred.
+
+The first complete Python rerun deliberately stopped the batch with 1,877 passes,
+17 skips and two failures. One was a stale dependency-lock occurrence count after
+adding the signed-gate finalization job. The other exposed a real durable-ordering
+defect: multiple Replay user Items created within one coarse Windows clock tick
+shared a timestamp, while the random ULID suffix could sort them as revision 2,
+3, 1 after restart. The identity authority now emits process-local monotonic ULIDs,
+retaining a fresh 80-bit seed for every new millisecond and remaining monotonic
+during a wall-clock rollback. Two direct clock tests and 20 independent SQLite/
+Runtime restart repetitions pass. The final current-source v1 suite passes 1,881
+tests with 17 explicit environment skips and zero failures in 763.48 seconds.
+
+Current-source supply-chain preflight also passes: 23 locked Runtime packages
+have complete license inventory, and 454 production files pass the bounded secret
+scan with inventory digest
+`861351298970c08fb1bb28d55884c32c11acc97e64d0ab2af1fa3a44ccf991bf`.
+The Git-admission source-tree gate accepts all 640 authoritative v1 source files.
+The ignored local report is
+`.candidate/quality/supply-chain-local-signed-gate-bundle-final.json`, SHA-256
+`d4e32fd94e15fe2f9ef0444c9bdf78a333a6a6a9b327c8d53fa43a0f6b41e100`.

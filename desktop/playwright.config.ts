@@ -37,12 +37,22 @@ export default defineConfig({
       },
     },
   ],
-  webServer: {
-    command: `node tools/ga-mock-server.mjs --port=${port} --scenario=artifact`,
-    url: `${baseURL}/__ga/viewport-matrix`,
-    reuseExistingServer: false,
-    timeout: 30_000,
-    stdout: "pipe",
-    stderr: "pipe",
-  },
+  webServer: [
+    {
+      command: `node tools/ga-mock-server.mjs --port=${port} --scenario=artifact`,
+      url: `${baseURL}/__ga/viewport-matrix`,
+      reuseExistingServer: false,
+      timeout: 30_000,
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+    {
+      command: "python ../scripts/serve-v1-admin-e2e.py --port=4180",
+      url: "http://127.0.0.1:4180/__admin_e2e/ready",
+      reuseExistingServer: false,
+      timeout: 30_000,
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  ],
 });

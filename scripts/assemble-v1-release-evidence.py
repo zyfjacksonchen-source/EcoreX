@@ -26,6 +26,7 @@ from ecorex.release.evidence_io import (  # noqa: E402
     strict_json_loads,
     write_new_json_file,
 )
+from ecorex.release.gate_attestation import build_unsigned_gate_bundle  # noqa: E402
 
 
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
@@ -166,10 +167,25 @@ def run(argv: list[str] | None = None) -> int:
         )
         if set(result) != expected_result:
             raise ValueError("release_evidence_incomplete")
+        if receipt_run_id is None:
+            raise ValueError("release_gate_receipt_set_incomplete")
+        unsigned = build_unsigned_gate_bundle(
+            phase=(
+                "prepare"
+                if manifest.channel is ReleaseChannel.STABLE
+                and args.phase == "prepare"
+                else "finalize"
+            ),
+            commit_sha=args.expected_commit,
+            workflow_run_id=receipt_run_id,
+            manifest=manifest,
+            manifest_sha256=manifest_sha256,
+            gates=result,
+        )
         output = args.output.resolve()
         if os.path.lexists(output):
             raise ValueError("release_evidence_exists")
-        write_new_json_file(result, output, code="release_evidence_exists")
+        write_new_json_file(unsigned, output, code="release_evidence_exists")
         print(json.dumps({"ok": True, "gate_count": len(result)}, sort_keys=True))
         return 0
     except Exception as exc:

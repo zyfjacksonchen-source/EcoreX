@@ -45,6 +45,17 @@ _MIGRATION_CORPUS = (
     "tests.v1.test_candidate_storage_migrations",
     "tests.v1.test_update_activation_health",
 )
+_BROWSER_E2E_COUNT = 36
+_BROWSER_SENTINELS = (
+    "1440x900 light GA report passes with zero axe violations",
+    "390x844 dark GA report passes with zero axe violations",
+    "320x568 dark GA report passes with zero axe violations",
+    "Composer is centered only while choosing a new conversation and otherwise stays at the workspace bottom",
+    "reasoning stays visible until replacement and terminal facts clear the first-turn indicator",
+    "image artifact opens fitted, keeps zoom controls, and restores keyboard focus",
+    "administrator gates are a signed read-only projection and publication stays server-authoritative",
+    "administrator gate table remains non-mutating and page-safe at 390px",
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -133,7 +144,7 @@ def _playwright(path: Path) -> dict[str, Any]:
     if (
         isinstance(expected, bool)
         or not isinstance(expected, int)
-        or expected != 11
+        or expected != _BROWSER_E2E_COUNT
         or unexpected != 0
         or flaky != 0
         or skipped != 0
@@ -157,9 +168,16 @@ def _playwright(path: Path) -> dict[str, Any]:
         pending.extend(children)
         specs.extend(raw_specs)
     executed = 0
+    titles: set[str] = set()
     for spec in specs:
-        if not isinstance(spec, dict) or spec.get("ok") is not True:
+        if (
+            not isinstance(spec, dict)
+            or spec.get("ok") is not True
+            or not isinstance(spec.get("title"), str)
+            or not spec["title"]
+        ):
             raise ValueError("playwright_report_not_clean")
+        titles.add(spec["title"])
         tests = spec.get("tests")
         if not isinstance(tests, list) or len(tests) != 1:
             raise ValueError("playwright_report_invalid")
@@ -173,8 +191,11 @@ def _playwright(path: Path) -> dict[str, Any]:
         ):
             raise ValueError("playwright_report_not_clean")
         executed += 1
-    if executed != 11:
+    if executed != _BROWSER_E2E_COUNT:
         raise ValueError("playwright_report_execution_count_invalid")
+    missing = [title for title in _BROWSER_SENTINELS if title not in titles]
+    if missing:
+        raise ValueError("playwright_required_corpus_missing")
     return {
         "report_sha256": hashlib.sha256(payload).hexdigest(),
         "tests": executed,
@@ -182,6 +203,7 @@ def _playwright(path: Path) -> dict[str, Any]:
         "failed": 0,
         "skipped": 0,
         "duration_milliseconds": duration,
+        "required_corpus": list(_BROWSER_SENTINELS),
     }
 
 

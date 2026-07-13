@@ -200,7 +200,8 @@ def test_admin_dom_and_script_contract_are_csp_safe_and_ephemeral() -> None:
     assert 'type="password"' in html
     assert 'autocomplete="off"' in html
     assert 'id="refresh-state-button"' in html
-    assert "16 项发布门禁" in html
+    assert "全部必需发布门禁" in html
+    assert "签名门禁包的只读投影" in html
     assert "activate" in html and "pause" in html and "halt" in html
     assert "stable" in html and "canary" in html
     assert "__ADMIN_CSS_SRI__" in html and "__ADMIN_JS_SRI__" in html
@@ -224,14 +225,15 @@ def test_admin_dom_and_script_contract_are_csp_safe_and_ephemeral() -> None:
     assert 'cache: "no-store"' in script
     assert 'credentials: "same-origin"' in script
     assert "crypto.randomUUID" in script
+    assert 'crypto.subtle.digest("SHA-256", bytes)' in script
+    assert "manifest_sha256: manifestSha256" in script
     assert "const requestIds = new Map()" in script
     assert "adminToken = \"\"" in script
     assert "beforeunload" in script
     assert "showModal()" in script
-    assert script.count("askConfirmation({") >= 6
+    assert script.count("askConfirmation({") >= 5
     for contract in (
         'apiRequest("/releases"',
-        '/gates/${gate}',
         '/publish',
         'apiRequest("/rollouts"',
         '/rollouts/${rolloutId}/${action}',
@@ -242,6 +244,11 @@ def test_admin_dom_and_script_contract_are_csp_safe_and_ephemeral() -> None:
         'apiRequest("/distribution"',
     ):
         assert contract in script
+    assert '/gates/${gate}' not in script
+    assert "/gate-bundle" not in script
+    assert ".gate-action" not in script
+    assert "gate-status" not in script
+    assert "gate-evidence" not in script
     assert "latest_candidate_id" in script and "latest_rollout_id" in script
     assert "candidates[0]" not in script and "rollouts[0]" not in script
     for mutation in (

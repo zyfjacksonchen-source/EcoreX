@@ -142,14 +142,18 @@ def _junit(path: Path, *, tests: int, modules: tuple[str, ...], skipped: int = 0
     return path
 
 
-def _playwright(path: Path) -> Path:
+def _playwright(path: Path, required_titles: tuple[str, ...]) -> Path:
     specs = [
         {
-            "title": f"case-{index}",
+            "title": (
+                required_titles[index]
+                if index < len(required_titles)
+                else f"case-{index}"
+            ),
             "ok": True,
             "tests": [{"results": [{"status": "passed"}]}],
         }
-        for index in range(11)
+        for index in range(36)
     ]
     return _json(
         path,
@@ -157,7 +161,7 @@ def _playwright(path: Path) -> Path:
             "config": {},
             "errors": [],
             "stats": {
-                "expected": 11,
+                "expected": 36,
                 "skipped": 0,
                 "unexpected": 0,
                 "flaky": 0,
@@ -180,7 +184,10 @@ def _quality_args(tmp_path: Path) -> tuple[object, list[str], Path]:
     migration = _junit(
         tmp_path / "migration.xml", tests=len(migration_modules), modules=migration_modules
     )
-    browser = _playwright(tmp_path / "playwright.json")
+    browser = _playwright(
+        tmp_path / "playwright.json",
+        tuple(writer._BROWSER_SENTINELS),
+    )
     output = tmp_path / "quality.json"
     return (
         writer,
@@ -215,7 +222,7 @@ def test_quality_receipt_requires_machine_readable_non_skipped_execution(
     assert writer.run(arguments) == 0
     value = json.loads(output.read_text(encoding="utf-8"))
     assert value["schema_version"] == 3
-    assert value["executions"]["browser-e2e"]["tests"] == 11
+    assert value["executions"]["browser-e2e"]["tests"] == 36
     assert value["executions"]["full-pytest"]["tests"] == 1000
     assert value["executions"]["migration-pytest"]["skipped"] == 0
 
@@ -229,6 +236,16 @@ def test_quality_receipt_requires_machine_readable_non_skipped_execution(
     bad[bad.index("--migration-pytest-junit") + 1] = str(skipped)
     bad[bad.index("--output") + 1] = str(tmp_path / "bad.json")
     assert writer.run(bad) == 1
+
+    browser_path = Path(arguments[arguments.index("--playwright-json") + 1])
+    browser_value = json.loads(browser_path.read_text(encoding="utf-8"))
+    browser_value["suites"][0]["specs"][0]["title"] = "unrelated passing test"
+    browser_path.write_text(json.dumps(browser_value), encoding="utf-8")
+    missing_browser_corpus = list(arguments)
+    missing_browser_corpus[missing_browser_corpus.index("--output") + 1] = str(
+        tmp_path / "missing-browser-corpus.json"
+    )
+    assert writer.run(missing_browser_corpus) == 1
 
 
 def _signed_candidate(tmp_path: Path) -> tuple[Path, Path, Path, str]:

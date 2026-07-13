@@ -27,7 +27,7 @@ Local locked-toolchain verification on 2026-07-12 (not a release receipt):
 - The official Node archive matched SHA-256 `7df0bc9375723f4a86b3aa1b7cc73342423d9677a8df4538aca31a049e309c29`.
 - Production bundle: 16 chunks; bundle gate passed; entry SHA-256 `0aa2c19358be01bccfc452d6177de6962cd82810cbdc5a53104e220162d1aced`.
 - Web unit/contract suite: 144/144 passed with zero skipped tests.
-- Chromium E2E suite: 11/11 passed with zero skipped tests (Playwright reported 25.4 seconds on the final run).
+- Chromium E2E suite: 36 tests with zero skipped tests, including the 10-case light/dark viewport matrix and two real-browser administrator-console contracts.
 - `npm audit`: 0 known vulnerabilities.
 
 Protected release runners must execute the commands again with the pinned

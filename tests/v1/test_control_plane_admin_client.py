@@ -57,11 +57,13 @@ def test_admin_client_uses_bearer_strict_contract_and_refuses_redirect() -> None
         assert request.url.path == "/api/v1/admin/releases"
         payload = json.loads(request.content)
         assert payload["client_request_id"] == "candidate-one"
+        assert payload["manifest_sha256"] == "b" * 64
         return httpx.Response(201, json=candidate())
 
     control = client(handler)
     result = control.create_candidate(
         {"release_id": "release-1.0.0"},
+        manifest_sha256="b" * 64,
         client_request_id="candidate-one",
     )
     assert result.release_id == "release-1.0.0"
@@ -99,6 +101,38 @@ def test_admin_client_fails_closed_on_auth_error_and_invalid_response() -> None:
     )
     with pytest.raises(ControlPlaneAuthenticationError, match="invalid"):
         weak.distribution()
+
+
+def test_admin_client_submits_one_candidate_bound_gate_bundle() -> None:
+    observed: list[tuple[str, str, dict]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        observed.append((request.method, request.url.path, body))
+        return httpx.Response(200, json=candidate())
+
+    control = client(handler)
+    attestation = {
+        "schema_version": 1,
+        "attestation_type": "ecorex-release-gate-bundle",
+    }
+    result = control.record_gate_bundle(
+        "release-1.0.0",
+        attestation,
+        client_request_id="gate-bundle-one",
+    )
+
+    assert result.release_id == "release-1.0.0"
+    assert observed == [
+        (
+            "PUT",
+            "/api/v1/admin/releases/release-1.0.0/gate-bundle",
+            {
+                "attestation": attestation,
+                "client_request_id": "gate-bundle-one",
+            },
+        )
+    ]
 
 
 def test_admin_client_rejects_unallowlisted_or_credentialed_endpoint() -> None:

@@ -1578,3 +1578,26 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Broad release regression | 0 | Full v1 collection filtered to release/Candidate/Control Plane/live acceptance: 335 passed / 4 explicit platform skips / 1,551 deselected / 0 failed in 210.51 seconds. Source-tree gate: 635 files. |
 | Current-source supply chain | 0 | 23 locked Runtime packages have complete license inventory; 451 production files passed secret scan, inventory `62582b16...80a3`. Report `.candidate/quality/supply-chain-local-live-acceptance-gates-final-v3.json`, SHA-256 `f9dced93...32b3`, 21,857 bytes. |
 | Live execution | blocked | No protected driver configuration or live managed provider session exists in the current environment. No evidence was fabricated, no publication job was dispatched and no user rollout was activated. |
+
+## Signed release-gate authority and administrator projection - 2026-07-14
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Gate-bundle cryptography | 0 | Exact Candidate identity, phase-specific gate set, evidence token grammar, manifest-key convergence, canonical signature and tamper rejection are covered. The real signing-script integration uses a child signer adapter and verifies the resulting bundle locally. |
+| Control Plane authority | 0 | Signed bundle import is atomic and immutable; manual pass, duplicate attestation, prepare-only stable publish, database drift and stored-bundle tamper all fail closed. Publication re-verifies the final bundle. |
+| Administrator Web | 0 | Real content-addressed FastAPI assets render 24 read-only machine gates with no select/input/pass control or upload path. Desktop and 390 px browser cases preserve server-authoritative publish confirmation and have no horizontal page overflow. |
+| Release workflow | 0 | Prepare/final unsigned bundles are assembled from immutable receipts, signed only after their respective evidence boundary, and every promotion command supplies a trusted key. Stable final evidence includes publication and Bootstrap readback. |
+| Quality receipt | 0 | The parser requires exactly 36 passed Playwright tests, zero failed/skipped/flaky tests and eight named sentinel scenarios. The current 499,454-byte report passed with SHA-256 `f16ed3ca...a1f2`, including Composer placement, persistent reasoning, fit-first preview and both administrator cases. |
+| Exact manifest-byte authority | 0 | Candidate registration persists the uploaded manifest-file SHA-256 separately from canonical JSON. CLI uses authenticated file bytes; administrator Web uses Web Crypto over the selected `ArrayBuffer`; mismatched signed bundle digest is rejected before any gate row is written and checked again at publication. |
+| Broad affected regression | 0 | Release/Candidate/Control Plane/update selection: 342 passed / 4 explicit platform skips / 1,552 deselected / 0 failed in 259.48 seconds. Web contract: 162 passed. Full Playwright: 36 passed. TypeScript and production build passed; 18 content-addressed assets and 17 chunks were emitted. |
+| Publication | blocked | The protected Windows/macOS Candidate, protected live provider/CDP receipts and external origin readback remain unavailable. No push, deployment, publication or user update was attempted. |
+
+## Complete signed-gate batch rerun and durable ordering correction - 2026-07-14
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| First full-suite diagnostic | 1 | 1,877 passed / 17 skipped / 2 failed. The failures were not waived: Candidate workflow Runtime lock-profile count had drifted from four to five, and same-tick random ULIDs reordered three Replay user Items after restart. |
+| Root correction | 0 | Dependency-lock contract now fixes all five Candidate Runtime profile install sites. Shared ULIDs are monotonic under a process lock, use a fresh 80-bit seed per new millisecond, preserve order through clock rollback and reset across process identity change. |
+| Replay stress | 0 | Coarse-clock and clock-regression identity tests pass; the real Live Replay revision/restart/idempotency case passes 20/20 independent iterations. |
+| Complete Python v1 suite | 0 | Final current-source rerun: 1,881 passed / 17 explicit environment skips / 0 failed in 763.48 seconds. Five warnings are upstream deprecation notices only. |
+| Current-source supply chain | 0 | 23 locked/licensed Runtime packages; 454 production files pass the bounded secret scan, inventory `86135129...91bf`; all 640 authoritative v1 source files are Git-admitted. Ignored local report SHA-256 `d4e32fd9...e100`, 21,857 bytes. |

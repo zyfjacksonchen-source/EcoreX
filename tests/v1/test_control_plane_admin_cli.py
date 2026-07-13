@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import base64
+from dataclasses import replace
 import hashlib
 import json
 from urllib.parse import quote
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from ecorex.control_plane import (
     BootstrapFreshnessRunProjection,
@@ -14,6 +17,12 @@ from ecorex.control_plane import (
     RolloutProjection,
 )
 from ecorex.control_plane.cli import run
+from ecorex.release import (
+    Ed25519MemorySigner,
+    build_unsigned_gate_bundle,
+    sign_gate_bundle,
+)
+from ecorex.release.signing import sign_envelope
 from ecorex.update import (
     ReleaseArtifact,
     ReleaseChannel,
@@ -24,14 +33,40 @@ from ecorex.update import (
 )
 
 
+_SIGNER = Ed25519MemorySigner("release-key", Ed25519PrivateKey.generate())
+_TRUSTED_KEY = "release-key=" + base64.b64encode(
+    _SIGNER.public_key_bytes
+).decode("ascii")
+
+
 def manifest() -> ReleaseManifest:
-    signature = SignatureEnvelope(
+    placeholder = SignatureEnvelope(
         algorithm="ed25519",
         key_id="release-key",
-        value=base64.b64encode(b"test-signature").decode(),
+        value=base64.b64encode(b"\0" * 64).decode(),
     )
     payload = b"core package"
-    return ReleaseManifest(
+    artifact = ReleaseArtifact(
+        artifact_id="core-windows-x64",
+        platform="windows",
+        architecture="x64",
+        file_name="ecorex-core.zip",
+        size_bytes=len(payload),
+        sha256=hashlib.sha256(payload).hexdigest(),
+        signature=placeholder,
+    )
+    artifact = replace(
+        artifact,
+        signature=sign_envelope(
+            _SIGNER,
+            artifact.signed_payload(
+                release_id="release-stable-" + "a" * 24,
+                version="1.0.0",
+                build_digest=hashlib.sha256(b"build").hexdigest(),
+            ),
+        ),
+    )
+    release = ReleaseManifest(
         schema_version=1,
         release_id="release-stable-" + "a" * 24,
         version="1.0.0",
@@ -55,19 +90,10 @@ def manifest() -> ReleaseManifest:
                 "cdn", SourceKind.ECOREX_CDN, 2, "https://cdn.example/releases"
             ),
         ),
-        artifacts=(
-            ReleaseArtifact(
-                artifact_id="core-windows-x64",
-                platform="windows",
-                architecture="x64",
-                file_name="ecorex-core.zip",
-                size_bytes=len(payload),
-                sha256=hashlib.sha256(payload).hexdigest(),
-                signature=signature,
-            ),
-        ),
-        signature=signature,
+        artifacts=(artifact,),
+        signature=placeholder,
     )
+    return replace(release, signature=sign_envelope(_SIGNER, release.canonical_payload()))
 
 
 class FakeClient:
@@ -95,19 +121,19 @@ class FakeClient:
             missing_gates=[],
         )
 
-    def create_candidate(self, _manifest, *, client_request_id):
+    def create_candidate(
+        self, _manifest, *, manifest_sha256, client_request_id
+    ):
+        assert len(manifest_sha256) == 64
         self.calls.append(("candidate", client_request_id))
         return self._candidate()
 
-    def record_gate(self, _release_id, gate, *, status, evidence, client_request_id):
-        assert status == "passed"
-        if gate in {"github-release", "mirror-sync", "cdn-sync"}:
-            assert evidence.startswith("publication-receipt:sha256:")
-        elif gate == "bootstrap-index":
-            assert evidence.startswith("bootstrap-index-proof:bread_")
-        else:
-            assert evidence.startswith("ci://")
-        self.calls.append((f"gate:{gate}", client_request_id))
+    def record_gate_bundle(
+        self, _release_id, attestation, *, client_request_id
+    ):
+        assert attestation["attestation_type"] == "ecorex-release-gate-bundle"
+        assert attestation["signature"]["key_id"] == "release-key"
+        self.calls.append(("gate-bundle", client_request_id))
         return self._candidate()
 
     def publish(self, _release_id, *, client_request_id):
@@ -338,6 +364,37 @@ def bootstrap_index_receipt(tmp_path, release: ReleaseManifest, publication_path
     return path, proof_token
 
 
+def signed_gate_bundle(
+    release: ReleaseManifest,
+    *,
+    publication_token: str,
+    bootstrap_token: str | None,
+    phase: str,
+) -> dict:
+    names = set(REQUIRED_RELEASE_GATES)
+    if phase == "prepare":
+        names.remove("bootstrap-index")
+    gates = {}
+    for gate in names:
+        if gate in {"github-release", "mirror-sync", "cdn-sync"}:
+            evidence = publication_token
+        elif gate == "bootstrap-index":
+            assert bootstrap_token is not None
+            evidence = bootstrap_token
+        else:
+            evidence = "gate-receipt:sha256:" + hashlib.sha256(gate.encode()).hexdigest()
+        gates[gate] = {"status": "passed", "evidence": evidence}
+    unsigned = build_unsigned_gate_bundle(
+        phase=phase,
+        commit_sha="a" * 40,
+        workflow_run_id=7001,
+        manifest=release,
+        manifest_sha256=hashlib.sha256(release.to_json().encode()).hexdigest(),
+        gates=gates,
+    )
+    return sign_gate_bundle(unsigned, signer=_SIGNER, manifest=release)
+
+
 def test_promote_journal_reuses_request_ids_and_never_duplicates_rollout(
     tmp_path, capsys
 ) -> None:
@@ -352,19 +409,12 @@ def test_promote_journal_reuses_request_ids_and_never_duplicates_rollout(
     )
     evidence_path.write_text(
         json.dumps(
-            {
-                gate: {
-                    "status": "passed",
-                    "evidence": (
-                        publication_token
-                        if gate in {"github-release", "mirror-sync", "cdn-sync"}
-                        else bootstrap_token
-                        if gate == "bootstrap-index"
-                        else f"ci://run/{gate}"
-                    ),
-                }
-                for gate in REQUIRED_RELEASE_GATES
-            }
+            signed_gate_bundle(
+                release,
+                publication_token=publication_token,
+                bootstrap_token=bootstrap_token,
+                phase="finalize",
+            )
         ),
         encoding="utf-8",
     )
@@ -379,6 +429,8 @@ def test_promote_journal_reuses_request_ids_and_never_duplicates_rollout(
         str(manifest_path),
         "--evidence",
         str(evidence_path),
+        "--trusted-key",
+        _TRUSTED_KEY,
         "--publication-receipt",
         str(receipt_path),
         "--bootstrap-index-receipt",
@@ -403,9 +455,9 @@ def test_promote_journal_reuses_request_ids_and_never_duplicates_rollout(
     assert sum(name == "rollout" for name, _request_id in first_calls) == 1
     assert sum(name.startswith("activate:") for name, _request_id in first_calls) == 1
     names = [name for name, _request_id in first_calls]
-    assert names.index("rollout") < names.index("bootstrap-proof")
-    assert names.index("bootstrap-proof") < names.index("gate:bootstrap-index")
-    assert names.index("gate:bootstrap-index") < names.index("publish")
+    assert names.index("bootstrap-proof") < names.index("gate-bundle")
+    assert names.index("gate-bundle") < names.index("rollout")
+    assert names.index("rollout") < names.index("publish")
     assert names.index("publish") < names.index("activate:rollout-one")
 
     fake.calls.clear()
@@ -413,10 +465,7 @@ def test_promote_journal_reuses_request_ids_and_never_duplicates_rollout(
     second_ids = dict(fake.calls)
     assert second_ids["candidate"] == first_ids["candidate"]
     assert second_ids["publish"] == first_ids["publish"]
-    assert all(
-        second_ids[f"gate:{gate}"] == first_ids[f"gate:{gate}"]
-        for gate in REQUIRED_RELEASE_GATES
-    )
+    assert second_ids["gate-bundle"] == first_ids["gate-bundle"]
     assert all(name != "rollout" for name, _request_id in fake.calls)
     assert all(not name.startswith("activate:") for name, _request_id in fake.calls)
     assert fake.closed == 2
@@ -425,7 +474,7 @@ def test_promote_journal_reuses_request_ids_and_never_duplicates_rollout(
     assert output["activated"] is True
     stored = json.loads(journal_path.read_text(encoding="utf-8"))
     assert "token" not in json.dumps(stored).casefold()
-    assert stored["schema_version"] == 3
+    assert stored["schema_version"] == 4
     assert len(stored["rollout_target_sha256"]) == 64
     assert len(stored["prepare_evidence_sha256"]) == 64
     assert len(stored["final_evidence_sha256"]) == 64
@@ -455,13 +504,15 @@ def test_promote_dry_run_rejects_incomplete_or_failed_evidence(
             str(manifest_path),
             "--evidence",
             str(evidence_path),
+            "--trusted-key",
+            _TRUSTED_KEY,
             "--journal",
             str(tmp_path / "unused.json"),
             "--dry-run",
         ]
     )
     assert result == 1
-    assert "required gates" in capsys.readouterr().err
+    assert "bundle" in capsys.readouterr().err
     assert not (tmp_path / "unused.json").exists()
 
 
@@ -474,21 +525,12 @@ def test_promote_rejects_publication_gates_bound_to_unrelated_receipts(
     evidence_path = tmp_path / "evidence.json"
     manifest_path.write_text(release.to_json(), encoding="utf-8")
     receipt_path, publication_token = publication_receipt(tmp_path, release)
-    evidence = {
-        gate: {
-            "status": "passed",
-            "evidence": (
-                publication_token
-                if gate in {"github-release", "mirror-sync"}
-                else (
-                    "publication-receipt:sha256:" + "f" * 64
-                    if gate == "cdn-sync"
-                    else f"ci://run/{gate}"
-                )
-            ),
-        }
-        for gate in REQUIRED_RELEASE_GATES
-    }
+    evidence = signed_gate_bundle(
+        release,
+        publication_token="publication-receipt:sha256:" + "f" * 64,
+        bootstrap_token=None,
+        phase="prepare",
+    )
     evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
     result = run(
         [
@@ -497,6 +539,10 @@ def test_promote_rejects_publication_gates_bound_to_unrelated_receipts(
             str(manifest_path),
             "--evidence",
             str(evidence_path),
+            "--trusted-key",
+            _TRUSTED_KEY,
+            "--phase",
+            "prepare",
             "--publication-receipt",
             str(receipt_path),
             "--journal",

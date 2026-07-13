@@ -53,6 +53,7 @@ from .models import (
     CreateRolloutRequest,
     DistributionProjection,
     GateResultRequest,
+    GateBundleRequest,
     KillSwitchProjection,
     RejectingControlPlaneAuthenticator,
     RollbackProjection,

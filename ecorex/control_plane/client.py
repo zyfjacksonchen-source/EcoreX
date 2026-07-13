@@ -22,6 +22,7 @@ from .models import (
     CreateRollbackRequest,
     CreateRolloutRequest,
     DistributionProjection,
+    GateBundleRequest,
     GateResultRequest,
     KillSwitchProjection,
     RolloutActionRequest,
@@ -125,10 +126,16 @@ class AdminControlPlaneClient:
         self.close()
 
     def create_candidate(
-        self, manifest: dict[str, Any], *, client_request_id: str
+        self,
+        manifest: dict[str, Any],
+        *,
+        manifest_sha256: str,
+        client_request_id: str,
     ) -> CandidateProjection:
         request = CreateCandidateRequest(
-            manifest=manifest, client_request_id=client_request_id
+            manifest=manifest,
+            manifest_sha256=manifest_sha256,
+            client_request_id=client_request_id,
         )
         return self._request(
             "POST", "/api/v1/admin/releases", CandidateProjection, request
@@ -151,6 +158,24 @@ class AdminControlPlaneClient:
         return self._request(
             "PUT",
             f"/api/v1/admin/releases/{_segment(release_id)}/gates/{_segment(gate_name)}",
+            CandidateProjection,
+            request,
+        )
+
+    def record_gate_bundle(
+        self,
+        release_id: str,
+        attestation: dict[str, Any],
+        *,
+        client_request_id: str,
+    ) -> CandidateProjection:
+        request = GateBundleRequest(
+            attestation=attestation,
+            client_request_id=client_request_id,
+        )
+        return self._request(
+            "PUT",
+            f"/api/v1/admin/releases/{_segment(release_id)}/gate-bundle",
             CandidateProjection,
             request,
         )

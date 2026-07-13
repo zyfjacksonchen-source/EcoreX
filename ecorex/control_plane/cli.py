@@ -40,11 +40,13 @@ from ecorex.release import (
     build_public_bootstrap_index,
     stable_pointer_sequence,
     write_public_bootstrap_index,
+    gate_bundle_sha256,
+    validate_signed_gate_bundle,
 )
 from ecorex.update.locking import ProductFileLock
 
 from .client import AdminControlPlaneClient, EnvironmentAdminCredential
-from .repository import REQUIRED_RELEASE_GATES, required_release_gates
+from .repository import required_release_gates
 
 
 MAX_MANIFEST_BYTES = 16 * 1024 * 1024
@@ -78,6 +80,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     promote.add_argument("--manifest", required=True, type=Path)
     promote.add_argument("--evidence", required=True, type=Path)
+    promote.add_argument(
+        "--trusted-key",
+        action="append",
+        required=True,
+        metavar="KEY_ID=BASE64_PUBLIC_KEY",
+    )
     promote.add_argument("--publication-receipt", type=Path)
     promote.add_argument("--bootstrap-index-receipt", type=Path)
     promote.add_argument(
@@ -310,7 +318,7 @@ class PromotionJournal:
     def _load_or_create(self) -> dict[str, Any]:
         if not self.path.exists():
             data = {
-                "schema_version": 3,
+                "schema_version": 4,
                 "release_id": self.release_id,
                 "manifest_sha256": self.manifest_sha256,
                 "publication_evidence": self.publication_evidence,
@@ -329,7 +337,8 @@ class PromotionJournal:
             "release.publish",
             "rollout.create",
             "rollout.activate",
-            *(f"gate.{gate}" for gate in REQUIRED_RELEASE_GATES),
+            "gate-bundle.prepare",
+            "gate-bundle.finalize",
         }
         request_ids = value.get("request_ids") if isinstance(value, dict) else None
         rollout_id = value.get("rollout_id") if isinstance(value, dict) else None
@@ -348,7 +357,7 @@ class PromotionJournal:
                 "rollout_id",
                 "activated",
             }
-            or value.get("schema_version") != 3
+            or value.get("schema_version") != 4
             or value.get("release_id") != self.release_id
             or value.get("manifest_sha256") != self.manifest_sha256
             or value.get("publication_evidence") != self.publication_evidence
@@ -1919,6 +1928,11 @@ def _promote(
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
         raise ValueError("release manifest is invalid JSON") from None
     manifest = ReleaseManifest.from_dict(manifest_value)
+    digest = hashlib.sha256(manifest_payload).hexdigest()
+    verifier = Ed25519SignatureVerifier(_trusted_release_keys(args.trusted_key))
+    verify_manifest_signature(manifest, verifier)
+    for artifact in manifest.artifacts:
+        verify_artifact_signature(manifest, artifact, verifier)
     evidence = _read_json(
         args.evidence, limit=MAX_EVIDENCE_BYTES, label="release evidence"
     )
@@ -1935,21 +1949,18 @@ def _promote(
         if manifest.channel is ReleaseChannel.STABLE and phase == "prepare"
         else required_gates
     )
-    if set(evidence) != set(expected_gates):
-        missing = sorted(set(expected_gates) - set(evidence))
-        extra = sorted(set(evidence) - set(expected_gates))
-        raise ValueError(
-            "release evidence must cover exactly the required gates; "
-            f"missing={missing}, extra={extra}"
-        )
-    normalized: dict[str, str] = {}
-    for gate, value in evidence.items():
-        if not isinstance(value, dict) or value.get("status") != "passed":
-            raise ValueError(f"release gate {gate!r} has not passed")
-        detail = value.get("evidence", "")
-        if not isinstance(detail, str) or len(detail) > 4096:
-            raise ValueError(f"release gate {gate!r} evidence is invalid")
-        normalized[gate] = detail
+    bundle_phase = "prepare" if phase == "prepare" else "finalize"
+    validated = validate_signed_gate_bundle(
+        evidence,
+        manifest=manifest,
+        expected_gates=frozenset(expected_gates),
+        expected_phase=bundle_phase,
+        verifier=verifier,
+        expected_manifest_sha256=digest,
+    )
+    normalized = {
+        gate: result["evidence"] for gate, result in validated.items()
+    }
     if not 1 <= args.percentage <= 100:
         raise ValueError("rollout percentage must be between one and 100")
     rollout_target, rollout_target_sha256 = _promotion_rollout_target(manifest, args)
@@ -1957,7 +1968,6 @@ def _promote(
     # bytes, including their deterministic formatting and terminal newline.
     # Re-serializing the parsed object here would create a second, incompatible
     # identity and make a real ReleaseBuilder output impossible to promote.
-    digest = hashlib.sha256(manifest_payload).hexdigest()
     if args.publication_receipt is None:
         raise ValueError("--publication-receipt is required to bind publication gates")
     publication_token = _publication_evidence_token(
@@ -2002,6 +2012,7 @@ def _promote(
             "percentage": args.percentage,
             "activate": args.activate,
             "phase": phase,
+            "gate_bundle_sha256": gate_bundle_sha256(evidence),
             "publication_receipt": publication_token,
             "bootstrap_index_receipt": bootstrap_index_token,
         }
@@ -2041,16 +2052,29 @@ def _promote(
         )
         candidate = client.create_candidate(
             manifest_value,
+            manifest_sha256=digest,
             client_request_id=journal.request_id("candidate.create"),
         )
-        for gate in sorted(prepare_gates):
-            candidate = client.record_gate(
-                manifest.release_id,
-                gate,
-                status="passed",
-                evidence=prepare_gates[gate],
-                client_request_id=journal.request_id(f"gate.{gate}"),
+        trusted_bootstrap_proof = None
+        if manifest.channel is ReleaseChannel.STABLE and phase != "prepare":
+            assert bootstrap_index_token is not None
+            trusted_bootstrap_proof = client.trusted_bootstrap_index_proof(
+                manifest.release_id
             )
+            if (
+                trusted_bootstrap_proof.proof_token != bootstrap_index_token
+                or trusted_bootstrap_proof.version != manifest.version
+                or trusted_bootstrap_proof.build_digest != manifest.build_digest
+                or trusted_bootstrap_proof.revision != manifest.release_id
+                or trusted_bootstrap_proof.target.manifest_sha256 != digest
+                or trusted_bootstrap_proof.target.release_id != manifest.release_id
+            ):
+                raise ValueError("trusted Bootstrap proof does not match the release")
+        candidate = client.record_gate_bundle(
+            manifest.release_id,
+            evidence,
+            client_request_id=journal.request_id(f"gate-bundle.{bundle_phase}"),
+        )
         rollout_id = journal.data.get("rollout_id")
         if rollout_id is None:
             rollout = client.create_rollout(
@@ -2076,28 +2100,6 @@ def _promote(
                 "activated": False,
                 "journal": str(journal.path),
             }
-        trusted_bootstrap_proof = None
-        if manifest.channel is ReleaseChannel.STABLE:
-            assert bootstrap_index_token is not None
-            trusted_bootstrap_proof = client.trusted_bootstrap_index_proof(
-                manifest.release_id
-            )
-            if (
-                trusted_bootstrap_proof.proof_token != bootstrap_index_token
-                or trusted_bootstrap_proof.version != manifest.version
-                or trusted_bootstrap_proof.build_digest != manifest.build_digest
-                or trusted_bootstrap_proof.revision != manifest.release_id
-                or trusted_bootstrap_proof.target.manifest_sha256 != digest
-                or trusted_bootstrap_proof.target.release_id != manifest.release_id
-            ):
-                raise ValueError("trusted Bootstrap proof does not match the release")
-            candidate = client.record_gate(
-                manifest.release_id,
-                "bootstrap-index",
-                status="passed",
-                evidence=bootstrap_index_token,
-                client_request_id=journal.request_id("gate.bootstrap-index"),
-            )
         candidate = client.publish(
             manifest.release_id,
             client_request_id=journal.request_id("release.publish"),

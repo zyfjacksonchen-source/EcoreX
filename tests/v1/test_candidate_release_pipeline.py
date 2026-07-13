@@ -893,6 +893,16 @@ def test_candidate_workflow_is_dispatch_only_protected_and_default_safe() -> Non
     assert workflow.index("stage-public-bootstrap-index") < workflow.index(
         "assemble-v1-release-evidence.py"
     )
+    assert "sign-v1-release-gate-bundle.py" in workflow
+    assert workflow.index("assemble-v1-release-evidence.py") < workflow.index(
+        "sign-v1-release-gate-bundle.py"
+    )
+    assert workflow.index("sign-v1-release-gate-bundle.py") < workflow.index(
+        "Upload publication receipts and evidence"
+    )
+    assert "release-evidence-prepare-unsigned.json" in workflow
+    assert "release-evidence-unsigned.json" in workflow
+    assert workflow.count('--trusted-key "$KEY_ID=$PUBLIC_KEY"') >= 8
     assert "ECOREX_PUBLICATION_SIGNER_EXECUTABLE_SHA256" in workflow
     assert "--trusted-publication-key" in workflow
     assert workflow.index(
@@ -1110,8 +1120,18 @@ def test_evidence_assembler_requires_all_nonpublication_gates(tmp_path: Path) ->
     )
     assert result.returncode == 0, result.stderr.decode(errors="replace")
     evidence = json.loads(output.read_text())
-    assert set(evidence) == required
-    assert len({evidence[gate]["evidence"] for gate in publication_gates}) == 1
+    assert evidence["attestation_type"] == "ecorex-release-gate-bundle"
+    assert evidence["phase"] == "finalize"
+    assert evidence["commit_sha"] == COMMIT
+    assert evidence["workflow_run_id"] == RUN_ID
+    assert set(evidence["gates"]) == required
+    assert "signature" not in evidence
+    assert len(
+        {
+            evidence["gates"][gate]["evidence"]
+            for gate in publication_gates
+        }
+    ) == 1
 
     gate = sorted(required - publication_gates)[0]
     receipt_path = receipts / f"{gate}.json"

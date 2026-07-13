@@ -27,6 +27,7 @@ from ecorex.control_plane import (
     create_control_plane_app,
     migrate_control_plane_database,
 )
+from ecorex.release import build_unsigned_gate_bundle
 from ecorex.update import (
     ReleaseArtifact,
     ReleaseChannel,
@@ -131,6 +132,35 @@ def _manifest() -> ReleaseManifest:
     )
 
 
+def _gate_bundle(manifest: ReleaseManifest) -> dict:
+    publication = "publication-receipt:sha256:" + "a" * 64
+    gates = {}
+    for gate in REQUIRED_RELEASE_GATES:
+        if gate in {"github-release", "mirror-sync", "cdn-sync"}:
+            evidence = publication
+        elif gate == "bootstrap-index":
+            evidence = (
+                "bootstrap-index-proof:bread_"
+                + "b" * 32
+                + ":sha256:"
+                + "c" * 64
+            )
+        else:
+            evidence = "gate-receipt:sha256:" + hashlib.sha256(
+                gate.encode()
+            ).hexdigest()
+        gates[gate] = {"status": "passed", "evidence": evidence}
+    unsigned = build_unsigned_gate_bundle(
+        phase="finalize",
+        commit_sha="d" * 40,
+        workflow_run_id=1,
+        manifest=manifest,
+        manifest_sha256=hashlib.sha256(manifest.to_json().encode()).hexdigest(),
+        gates=gates,
+    )
+    return {**unsigned, "signature": _signature().to_dict()}
+
+
 def _prepare_rollout(
     repository: ControlPlaneRepository,
     authenticator: Authenticator,
@@ -138,18 +168,16 @@ def _prepare_rollout(
     manifest = _manifest()
     repository.create_candidate(
         manifest,
+        manifest_file_sha256=hashlib.sha256(manifest.to_json().encode()).hexdigest(),
         actor=authenticator.admin,
         client_request_id="candidate-wss",
     )
-    for gate in sorted(REQUIRED_RELEASE_GATES):
-        repository.record_gate(
-            manifest.release_id,
-            gate,
-            status="passed",
-            evidence=f"ci://wss/{gate}",
-            actor=authenticator.admin,
-            client_request_id=f"wss-gate-{gate}",
-        )
+    repository.record_gate_bundle(
+        manifest.release_id,
+        _gate_bundle(manifest),
+        actor=authenticator.admin,
+        client_request_id="wss-gate-bundle",
+    )
     repository.publish(
         manifest.release_id,
         actor=authenticator.admin,

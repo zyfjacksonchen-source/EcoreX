@@ -20,6 +20,7 @@ from ecorex.control_plane import (
     migrate_control_plane_database,
 )
 from ecorex.control_plane.app import _ClientConnection
+from ecorex.release import build_unsigned_gate_bundle
 from ecorex.update import (
     ReleaseArtifact,
     ReleaseChannel,
@@ -139,6 +140,35 @@ def _repository(tmp_path) -> tuple[ControlPlaneRepository, _CountingVerifier]:
     return ControlPlaneRepository(database, verifier=verifier), verifier
 
 
+def _gate_bundle(manifest: ReleaseManifest) -> dict:
+    publication = "publication-receipt:sha256:" + "a" * 64
+    gates = {}
+    for gate in REQUIRED_RELEASE_GATES:
+        if gate in {"github-release", "mirror-sync", "cdn-sync"}:
+            evidence = publication
+        elif gate == "bootstrap-index":
+            evidence = (
+                "bootstrap-index-proof:bread_"
+                + "b" * 32
+                + ":sha256:"
+                + "c" * 64
+            )
+        else:
+            evidence = "gate-receipt:sha256:" + hashlib.sha256(
+                gate.encode()
+            ).hexdigest()
+        gates[gate] = {"status": "passed", "evidence": evidence}
+    unsigned = build_unsigned_gate_bundle(
+        phase="finalize",
+        commit_sha="d" * 40,
+        workflow_run_id=1,
+        manifest=manifest,
+        manifest_sha256=hashlib.sha256(manifest.to_json().encode()).hexdigest(),
+        gates=gates,
+    )
+    return {**unsigned, "signature": _signature().to_dict()}
+
+
 def _seed(
     repository: ControlPlaneRepository,
     *,
@@ -150,18 +180,16 @@ def _seed(
     manifest = _manifest()
     repository.create_candidate(
         manifest,
+        manifest_file_sha256=hashlib.sha256(manifest.to_json().encode()).hexdigest(),
         actor=_ADMIN,
         client_request_id="hint-batch-candidate",
     )
-    for gate in sorted(REQUIRED_RELEASE_GATES):
-        repository.record_gate(
-            manifest.release_id,
-            gate,
-            status="passed",
-            evidence=f"ci://hint-batch/{gate}",
-            actor=_ADMIN,
-            client_request_id=f"hint-batch-gate-{gate}",
-        )
+    repository.record_gate_bundle(
+        manifest.release_id,
+        _gate_bundle(manifest),
+        actor=_ADMIN,
+        client_request_id="hint-batch-gate-bundle",
+    )
     repository.publish(
         manifest.release_id,
         actor=_ADMIN,

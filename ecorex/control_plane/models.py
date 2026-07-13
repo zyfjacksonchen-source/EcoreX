@@ -33,12 +33,18 @@ class RejectingControlPlaneAuthenticator:
 
 class CreateCandidateRequest(ControlModel):
     manifest: dict
+    manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     client_request_id: str = Field(min_length=1, max_length=256)
 
 
 class GateResultRequest(ControlModel):
     status: Literal["passed", "failed"]
     evidence: str = Field(default="", max_length=4096)
+    client_request_id: str = Field(min_length=1, max_length=256)
+
+
+class GateBundleRequest(ControlModel):
+    attestation: dict
     client_request_id: str = Field(min_length=1, max_length=256)
 
 

@@ -239,9 +239,9 @@ def _validate_workflows(repo: Path) -> None:
         "ecorex-v1-platform-stage.yml": {"platform-stage": 1},
         # Source quality plus the isolated shared-storage and protected soak
         # jobs each install the reviewed dev/cloud pair.  Candidate assembly,
-        # The provenance verifier, Candidate assembly, publication and
-        # promotion use the smaller runtime profile.
-        "ecorex-v1-candidate.yml": {"cloud": 3, "dev": 3, "runtime": 4},
+        # The provenance verifier, Candidate assembly, publication, signed
+        # gate finalization and promotion use the smaller runtime profile.
+        "ecorex-v1-candidate.yml": {"cloud": 3, "dev": 3, "runtime": 5},
     }
     for name, expected in expected_profiles.items():
         text = workflows.get(name)

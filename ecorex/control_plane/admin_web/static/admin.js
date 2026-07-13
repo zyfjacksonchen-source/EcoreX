@@ -8,6 +8,7 @@
 
   let adminToken = "";
   let manifest = null;
+  let manifestSha256 = null;
   let candidate = null;
   let rollout = null;
   let rollback = null;
@@ -25,6 +26,14 @@
     const element = document.getElementById(id);
     if (!element) throw new Error(`管理台缺少必要节点：${id}`);
     return element;
+  };
+
+  const sha256Hex = async (bytes) => {
+    if (!globalThis.crypto?.subtle) {
+      throw new Error("当前浏览器无法校验 Manifest 摘要");
+    }
+    const digest = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", bytes));
+    return Array.from(digest, (value) => value.toString(16).padStart(2, "0")).join("");
   };
 
   const elements = {
@@ -434,6 +443,7 @@
     elements.sessionLabel.textContent = "未连接";
     if (clearWorkflow) {
       manifest = null;
+      manifestSha256 = null;
       elements.manifestFile.value = "";
       elements.manifestHelp.textContent = "仅接受不超过 16 MiB 的 JSON；文件只在本地解析后提交给 Control Plane。";
       clearProjection();
@@ -455,7 +465,8 @@
     elements.manifestFile.disabled = busy;
     elements.clearTokenButton.disabled = !hasToken || busy;
     elements.refreshDistributionButton.disabled = !connected || busy;
-    elements.createCandidateButton.disabled = !connected || !manifest || busy;
+    elements.createCandidateButton.disabled =
+      !connected || !manifest || !manifestSha256 || busy;
     elements.publishButton.disabled = !connected
       || !candidate
       || candidate.missing_gates.length > 0
@@ -466,7 +477,7 @@
       || candidate.status !== "published"
       || busy;
     elements.createRollbackButton.disabled = !connected || busy;
-    for (const button of document.querySelectorAll("[data-rollout-action], [data-rollback-action], [data-kill-action], .gate-action")) {
+    for (const button of document.querySelectorAll("[data-rollout-action], [data-rollback-action], [data-kill-action]")) {
       button.disabled = !connected
         || busy
         || (button.hasAttribute("data-rollout-action") && !rollout)
@@ -529,7 +540,7 @@
     const missing = new Set(projection.missing_gates);
     const gates = Object.entries(projection.gates).sort(([left], [right]) => left.localeCompare(right));
     const passed = gates.filter(([, status]) => status === "passed").length;
-    elements.gateSummary.textContent = `${passed}/${gates.length} 已通过 · ${missing.size} 项仍缺失`;
+    elements.gateSummary.textContent = `${passed}/${gates.length} 已通过 · ${missing.size} 项仍缺失 · 由签名 Candidate 门禁包导入`;
     const rows = gates.map(([gateName, gateStatus]) => {
       const row = document.createElement("tr");
       const nameCell = document.createElement("th");
@@ -543,45 +554,7 @@
       badge.dataset.state = gateStatus.toLowerCase();
       currentCell.append(badge);
 
-      const resultCell = document.createElement("td");
-      const result = document.createElement("select");
-      result.className = "gate-status";
-      result.setAttribute("aria-label", `${gateName} 的门禁结果`);
-      for (const status of ["passed", "failed"]) {
-        const option = document.createElement("option");
-        option.value = status;
-        option.textContent = status === "passed" ? "通过" : "失败";
-        result.append(option);
-      }
-      resultCell.append(result);
-
-      const evidenceCell = document.createElement("td");
-      const evidence = document.createElement("input");
-      evidence.className = "gate-evidence";
-      evidence.type = "text";
-      evidence.maxLength = 4096;
-      evidence.placeholder = "CI 地址或证据摘要";
-      evidence.setAttribute("aria-label", `${gateName} 的门禁证据`);
-      evidenceCell.append(evidence);
-
-      const actionCell = document.createElement("td");
-      const action = document.createElement("button");
-      action.className = "button gate-action";
-      action.type = "button";
-      action.textContent = "记录结果";
-      action.addEventListener("click", () => {
-        const status = result.value;
-        const detail = evidence.value.trim();
-        askConfirmation({
-          title: "确认记录门禁",
-          description: `${gateName} 将记录为“${status === "passed" ? "通过" : "失败"}”。证据会进入发布审计。`,
-          confirmLabel: "记录门禁",
-          danger: status === "failed",
-          operation: () => recordGate(gateName, status, detail, action),
-        });
-      });
-      actionCell.append(action);
-      row.append(nameCell, currentCell, resultCell, evidenceCell, actionCell);
+      row.append(nameCell, currentCell);
       return row;
     });
     elements.gateTableBody.replaceChildren(...rows);
@@ -708,25 +681,6 @@
     },
   );
 
-  const recordGate = (gateName, status, evidence, button) => withBusy(
-    button,
-    "正在记录",
-    async () => {
-      const releaseId = safeSegment(candidate.release_id);
-      const gate = safeSegment(gateName);
-      const key = `gate:${candidate.release_id}:${gateName}:${status}:${evidence}`;
-      const payload = await apiRequest(`/releases/${releaseId}/gates/${gate}`, {
-        method: "PUT",
-        body: {
-          status,
-          evidence,
-          client_request_id: requestId(key),
-        },
-      });
-      renderCandidate(normalizeCandidate(payload));
-    },
-  );
-
   const parseTargetList = (value, label) => {
     const values = value.split(/[\r\n,]+/u).map((entry) => entry.trim()).filter(Boolean);
     if (values.length > 500 || values.some((entry) => entry.length > 256)) {
@@ -769,6 +723,7 @@
     const generation = ++fileReadGeneration;
     const file = elements.manifestFile.files?.[0] || null;
     manifest = null;
+    manifestSha256 = null;
     clearProjection();
     if (!file) {
       elements.manifestHelp.textContent = "请选择 Release Manifest JSON。";
@@ -783,10 +738,13 @@
       return;
     }
     try {
-      const parsed = JSON.parse(await file.text());
+      const bytes = await file.arrayBuffer();
+      const parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+      const digest = await sha256Hex(bytes);
       if (generation !== fileReadGeneration) return;
       if (!isRecord(parsed)) throw new Error("Manifest 顶层必须是 JSON 对象。");
       manifest = parsed;
+      manifestSha256 = digest;
       elements.manifestFile.removeAttribute("aria-invalid");
       const releaseId = typeof parsed.release_id === "string" ? parsed.release_id : "等待 API 校验";
       const version = typeof parsed.version === "string" ? parsed.version : "未知版本";
@@ -804,7 +762,7 @@
 
   elements.manifestForm.addEventListener("submit", (event) => {
     event.preventDefault();
-    if (!manifest) return;
+    if (!manifest || !manifestSha256) return;
     const releaseId = typeof manifest.release_id === "string" ? manifest.release_id : "未标识候选";
     askConfirmation({
       title: "确认创建发布候选",
@@ -816,6 +774,7 @@
           method: "POST",
           body: {
             manifest,
+            manifest_sha256: manifestSha256,
             client_request_id: requestId(`candidate:${fingerprint}`),
           },
         });

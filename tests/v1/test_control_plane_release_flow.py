@@ -15,6 +15,7 @@ import ecorex.control_plane.repository as repository_module
 
 from ecorex.control_plane import (
     REQUIRED_RELEASE_GATES,
+    required_release_gates,
     ControlPlaneConflict,
     ControlPlaneRepository,
     ControlPrincipal,
@@ -22,6 +23,7 @@ from ecorex.control_plane import (
     migrate_control_plane_database,
 )
 from ecorex.control_plane.app import UpdateSignalHub, _ClientConnection
+from ecorex.release import build_unsigned_gate_bundle
 from ecorex.release.signing import Ed25519MemorySigner
 from ecorex.update import (
     Ed25519SignatureVerifier,
@@ -130,8 +132,42 @@ def _manifest_variant(*, release_id: str, version: str) -> ReleaseManifest:
     return ReleaseManifest.from_dict(payload)
 
 
+def _manifest_file_sha256(manifest: ReleaseManifest) -> str:
+    return hashlib.sha256(manifest.to_json().encode()).hexdigest()
+
+
 def _headers(token):
     return {"Authorization": f"Bearer {token}"}
+
+
+def _gate_bundle(manifest: ReleaseManifest, *, phase: str = "finalize") -> dict:
+    names = required_release_gates(manifest.channel)
+    if manifest.channel is ReleaseChannel.STABLE and phase == "prepare":
+        names -= {"bootstrap-index"}
+    publication = "publication-receipt:sha256:" + "a" * 64
+    gates = {}
+    for gate in names:
+        if gate in {"github-release", "mirror-sync", "cdn-sync"}:
+            evidence = publication
+        elif gate == "bootstrap-index":
+            evidence = (
+                "bootstrap-index-proof:bread_"
+                + "b" * 32
+                + ":sha256:"
+                + "c" * 64
+            )
+        else:
+            evidence = "gate-receipt:sha256:" + hashlib.sha256(gate.encode()).hexdigest()
+        gates[gate] = {"status": "passed", "evidence": evidence}
+    unsigned = build_unsigned_gate_bundle(
+        phase=phase,
+        commit_sha="d" * 40,
+        workflow_run_id=7001,
+        manifest=manifest,
+        manifest_sha256=hashlib.sha256(manifest.to_json().encode()).hexdigest(),
+        gates=gates,
+    )
+    return {**unsigned, "signature": _signature().to_dict()}
 
 
 def _published_rollout(client: TestClient):
@@ -139,7 +175,11 @@ def _published_rollout(client: TestClient):
     admin = _headers("admin-token-12345678901234567890")
     created = client.post(
         "/api/v1/admin/releases",
-        json={"manifest": manifest.to_dict(), "client_request_id": "candidate-1"},
+        json={
+            "manifest": manifest.to_dict(),
+            "manifest_sha256": _manifest_file_sha256(manifest),
+            "client_request_id": "candidate-1",
+        },
         headers=admin,
     )
     assert created.status_code == 201
@@ -149,17 +189,15 @@ def _published_rollout(client: TestClient):
         headers=admin,
     )
     assert blocked.status_code == 409
-    for gate in sorted(REQUIRED_RELEASE_GATES):
-        response = client.put(
-            f"/api/v1/admin/releases/{manifest.release_id}/gates/{gate}",
-            json={
-                "status": "passed",
-                "evidence": f"ci://run/{gate}",
-                "client_request_id": f"gate-{gate}",
-            },
-            headers=admin,
-        )
-        assert response.status_code == 200
+    response = client.put(
+        f"/api/v1/admin/releases/{manifest.release_id}/gate-bundle",
+        json={
+            "attestation": _gate_bundle(manifest),
+            "client_request_id": "gate-bundle",
+        },
+        headers=admin,
+    )
+    assert response.status_code == 200
     published = client.post(
         f"/api/v1/admin/releases/{manifest.release_id}/publish",
         json={"client_request_id": "publish-1"},
@@ -194,20 +232,19 @@ def _publish_release(
         "/api/v1/admin/releases",
         json={
             "manifest": manifest.to_dict(),
+            "manifest_sha256": _manifest_file_sha256(manifest),
             "client_request_id": f"{prefix}-candidate",
         },
         headers=admin,
     ).status_code == 201
-    for gate in sorted(REQUIRED_RELEASE_GATES):
-        assert client.put(
-            f"/api/v1/admin/releases/{manifest.release_id}/gates/{gate}",
-            json={
-                "status": "passed",
-                "evidence": f"ci://{prefix}/{gate}",
-                "client_request_id": f"{prefix}-gate-{gate}",
-            },
-            headers=admin,
-        ).status_code == 200
+    assert client.put(
+        f"/api/v1/admin/releases/{manifest.release_id}/gate-bundle",
+        json={
+            "attestation": _gate_bundle(manifest),
+            "client_request_id": f"{prefix}-gate-bundle",
+        },
+        headers=admin,
+    ).status_code == 200
     assert client.post(
         f"/api/v1/admin/releases/{manifest.release_id}/publish",
         json={"client_request_id": f"{prefix}-publish"},
@@ -595,6 +632,7 @@ def test_admin_page_and_resume_restore_persisted_state_after_app_rebuild(tmp_pat
             "/api/v1/admin/releases",
             json={
                 "manifest": next_manifest.to_dict(),
+                "manifest_sha256": _manifest_file_sha256(next_manifest),
                 "client_request_id": "candidate-after-kill",
             },
             headers=admin_headers,
@@ -711,6 +749,9 @@ def test_admin_resume_uses_one_read_snapshot_during_concurrent_commit(tmp_path) 
             ) is None
             writer.create_candidate(
                 concurrent_manifest,
+                manifest_file_sha256=hashlib.sha256(
+                    concurrent_manifest.to_json().encode()
+                ).hexdigest(),
                 actor=admin_principal,
                 client_request_id="candidate-during-read-snapshot",
             )
@@ -756,23 +797,26 @@ def test_admin_resume_latest_ids_use_persisted_sequence_when_times_tie(
     )
     repository.create_candidate(
         first_manifest,
+        manifest_file_sha256=hashlib.sha256(
+            first_manifest.to_json().encode()
+        ).hexdigest(),
         actor=admin,
         client_request_id="tied-candidate-first",
     )
     repository.create_candidate(
         second_manifest,
+        manifest_file_sha256=hashlib.sha256(
+            second_manifest.to_json().encode()
+        ).hexdigest(),
         actor=admin,
         client_request_id="tied-candidate-second",
     )
-    for gate in sorted(REQUIRED_RELEASE_GATES):
-        repository.record_gate(
-            first_manifest.release_id,
-            gate,
-            status="passed",
-            evidence=f"ci://tied/{gate}",
-            actor=admin,
-            client_request_id=f"tied-gate-{gate}",
-        )
+    repository.record_gate_bundle(
+        first_manifest.release_id,
+        _gate_bundle(first_manifest),
+        actor=admin,
+        client_request_id="tied-gate-bundle",
+    )
     repository.publish(
         first_manifest.release_id,
         actor=admin,
@@ -818,18 +862,16 @@ def test_repeated_publish_preserves_original_publication_time(
     manifest = _manifest()
     repository.create_candidate(
         manifest,
+        manifest_file_sha256=hashlib.sha256(manifest.to_json().encode()).hexdigest(),
         actor=admin,
         client_request_id="immutable-time-candidate",
     )
-    for gate in sorted(REQUIRED_RELEASE_GATES):
-        repository.record_gate(
-            manifest.release_id,
-            gate,
-            status="passed",
-            evidence=f"ci://immutable/{gate}",
-            actor=admin,
-            client_request_id=f"immutable-time-{gate}",
-        )
+    repository.record_gate_bundle(
+        manifest.release_id,
+        _gate_bundle(manifest),
+        actor=admin,
+        client_request_id="immutable-time-bundle",
+    )
     clock = {"value": "2026-07-10T08:00:00+00:00"}
     monkeypatch.setattr(repository_module, "_now", lambda: clock["value"])
     repository.publish(
@@ -861,6 +903,7 @@ def test_repository_bounds_gate_evidence_even_without_http_validation(
     manifest = _manifest()
     repository.create_candidate(
         manifest,
+        manifest_file_sha256=hashlib.sha256(manifest.to_json().encode()).hexdigest(),
         actor=admin,
         client_request_id="bounded-evidence-candidate",
     )
@@ -868,7 +911,7 @@ def test_repository_bounds_gate_evidence_even_without_http_validation(
         repository.record_gate(
             manifest.release_id,
             "lint",
-            status="passed",
+            status="failed",
             evidence="x" * 4097,
             actor=admin,
             client_request_id="bounded-evidence-gate",
