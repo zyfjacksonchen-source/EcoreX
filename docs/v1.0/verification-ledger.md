@@ -1641,3 +1641,18 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Complete Python v1 suite | 0 | 1,904 passed / 17 explicit environment skips / 0 failed in 753.89 seconds. Five warnings are upstream deprecation notices only. |
 | Current-source supply chain | 0 | 23 locked/licensed Runtime packages; 462 production files pass the bounded secret scan, inventory `46f9c75f...d32210`. Ignored 21,857-byte report SHA-256 `573c9141...5507a8`. |
 | External mutation | 0 | No repository setting, ref, workflow dispatch, release asset, Control Plane state or user update was changed. |
+
+## Ephemeral non-privileged release capacity - 2026-07-14
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Hosted platform mapping | 0 | Windows x64 uses fixed `windows-2025`; macOS arm64 uses `macos-15`; macOS x64 uses `macos-15-intel`. All remain protected-Environment-gated and emit the same content-bound stage receipts. |
+| Hosted image soak | 0 | Candidate uses fresh `ubuntu-24.04`, retains PostgreSQL 16.9/MinIO, 256 jobs, 48 workers, two node IDs and the 14,400-second minimum inside the documented six-hour hosted-job ceiling. |
+| Runtime config transport | 0 | Base64 is capped at GitHub's 48 KiB variable limit/36 KiB decoded; independent SHA-256, strict JSON/duplicate-key checks, exact output name, exclusive materialization, stable file identity and digest-fenced `always()` cleanup fail closed. No config bytes or path enter the receipt. |
+| Privilege boundary | 0 | Repository readiness now requires only three distinct self-hosted roles: external signing, Windows live Model/Image/CDP acceptance and publication. Provider sessions, HSM/workload identity and origin credentials remain off hosted build VMs. |
+| Focused/affected regression | 0 | Transport/governance/gate/dependency: 32 passed. Platform/Candidate/package selection: 103 passed / 1 explicit platform skip / 0 failed. Workflow YAML parses. |
+| Complete Python v1 suite | 0 | 1,915 passed / 17 explicit environment skips / 0 failed in 758.22 seconds. Five warnings are upstream deprecation notices only. |
+| Static/source gates | 0 | Full Ruff over `ecorex`, `scripts`, `tests/v1`, Python compilation, dependency locks, `git diff --check` and all 653 Git-admitted source files pass. Five old dynamic-import E402 annotations were made explicit. |
+| Current-source supply chain | 0 | 23 locked/licensed Runtime packages, 282 npm packages and 464 production files pass; inventory `5515c74a...9bf58`. Ignored 21,857-byte report SHA-256 `5ace12cb...a54e`. |
+| Live repository audit | 2 | 18 blockers remain: Actions 3, branch 1, OAuth workflow scope 1, Environments 6, privileged Runners 3 and inactive v1 workflows 4. Report SHA-256 `c8d7d0f3...a114`, 3,226 bytes. |
+| External mutation | 0 | No repository setting/ref, workflow dispatch, provider request, origin write, Control Plane mutation or user update occurred. |

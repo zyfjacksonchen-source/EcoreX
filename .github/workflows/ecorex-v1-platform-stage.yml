@@ -24,20 +24,20 @@ jobs:
             label: Windows x64
             platform: windows
             architecture: x64
-            runs_on: '["self-hosted","windows","x64","ecorex-release-stage"]'
+            runs_on: windows-2025
           - id: macos-arm64
             config_key: MACOS_ARM64
             label: macOS arm64
             platform: macos
             architecture: arm64
-            runs_on: '["self-hosted","macOS","ARM64","ecorex-release-stage"]'
+            runs_on: macos-15
           - id: macos-x64
             config_key: MACOS_X64
             label: macOS x64
             platform: macos
             architecture: x64
-            runs_on: '["self-hosted","macOS","X64","ecorex-release-stage"]'
-    runs-on: ${{ fromJSON(matrix.runs_on) }}
+            runs_on: macos-15-intel
+    runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 60
 
     steps:
@@ -78,6 +78,15 @@ jobs:
           python scripts/check-v1-dependency-locks.py
           python -m playwright install chromium
 
+      - name: Materialize digest-fenced production Runtime config
+        env:
+          ECOREX_STAGE_RUNTIME_CONFIG_BASE64: ${{ vars[format('ECOREX_STAGE_RUNTIME_CONFIG_{0}_BASE64', matrix.config_key)] }}
+          ECOREX_STAGE_RUNTIME_CONFIG_SHA256: ${{ vars[format('ECOREX_STAGE_RUNTIME_CONFIG_{0}_SHA256', matrix.config_key)] }}
+        run: >-
+          python scripts/materialize-v1-stage-runtime-config.py materialize
+          --output "${{ runner.temp }}/ecorex-runtime-config.json"
+          --receipt .candidate/stage-runtime-config-materialization.json
+
       - name: Build the final content-addressed Web dist
         working-directory: desktop
         run: |
@@ -88,7 +97,7 @@ jobs:
 
       - name: Build real Core and six Packs with the source-pinned stager
         env:
-          ECOREX_STAGE_RUNTIME_CONFIG_TEMPLATE: ${{ vars[format('ECOREX_STAGE_RUNTIME_CONFIG_{0}_PATH', matrix.config_key)] }}
+          ECOREX_STAGE_RUNTIME_CONFIG_TEMPLATE: ${{ runner.temp }}/ecorex-runtime-config.json
           ECOREX_STAGE_RUNTIME_CONFIG_TEMPLATE_SHA256: ${{ vars[format('ECOREX_STAGE_RUNTIME_CONFIG_{0}_SHA256', matrix.config_key)] }}
           ECOREX_PUBLIC_BOOTSTRAP_INDEX_URL: ${{ vars.ECOREX_PUBLIC_BOOTSTRAP_INDEX_URL }}
           ECOREX_PUBLICATION_PUBLIC_KEYS_JSON: ${{ vars.ECOREX_PUBLICATION_PUBLIC_KEYS_JSON }}
@@ -119,3 +128,11 @@ jobs:
           if-no-files-found: ignore
           include-hidden-files: true
           retention-days: 7
+
+      - name: Remove materialized Runtime config
+        if: ${{ always() }}
+        env:
+          ECOREX_STAGE_RUNTIME_CONFIG_SHA256: ${{ vars[format('ECOREX_STAGE_RUNTIME_CONFIG_{0}_SHA256', matrix.config_key)] }}
+        run: >-
+          python scripts/materialize-v1-stage-runtime-config.py remove
+          --output "${{ runner.temp }}/ecorex-runtime-config.json"

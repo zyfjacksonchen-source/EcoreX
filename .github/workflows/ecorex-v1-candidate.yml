@@ -292,7 +292,7 @@ jobs:
   image-soak:
     name: Protected four-hour PostgreSQL and MinIO image soak
     needs: validate-request
-    runs-on: [self-hosted, linux, x64, ecorex-image-soak]
+    runs-on: ubuntu-24.04
     timeout-minutes: 300
     permissions:
       contents: read

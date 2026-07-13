@@ -16,6 +16,12 @@ Candidate 只接受同一仓库、同一 commit、同一成功 `workflow_dispatc
 身份、workflow run、固定 gate 证据和 supply-chain 清单。少一棵、目标
 重复、路径碰撞、链接/reparse point、内容变化或 gate 缺失都会停止签名。
 
+三个目标的公开生产 Runtime 配置以 Base64 + SHA-256 存入受保护
+Environment 变量。单个 Base64 值不得超过 GitHub 官方 48 KiB
+边界，即解码后最多 36 KiB；它只能包含最终会随 Core 发布的公开
+配置，不得包含凭证或模型私钥。作业开始后在 `runner.temp` 内排他
+创建、按摘要复验，结束时由 `always()` 摘要围栏删除。
+
 用户机器上的激活单位不是四个互相独立的目录，而是一个 slot：
 
 ```text
@@ -146,9 +152,11 @@ v1.0 Candidate recipe 和 platform stage 固定要求二十四棵树，因此正
 ## 5. 受保护 runner gate 与本地证据边界
 
 仓库拥有 stager、Windows helper、Windows/macOS launcher、Pack 源码和
-探针。runner 仍必须提供正确架构的 MSVC/clang、锁定的 Python profile、
-最终 Web dist、受摘要约束的生产 `runtime-config` 模板，以及由 Playwright
-安装的真实 Chromium。运行期间不满足任一条件都会生成 typed failure，
+探针。三个 Environment-gated GitHub 托管 runner 使用固定 OS 标签并提供
+正确架构的 MSVC/clang；工作流安装锁定的 Python profile、最终 Web dist
+与真实 Chromium。生产 `runtime-config` 以 Base64 Environment 变量传输，
+在 `${{ runner.temp }}` 中做 SHA-256/JSON/重复键校验后才交给 stager，并在
+`always()` 阶段删除。运行期间不满足任一条件都会生成 typed failure，
 不会生成“占位通过”收据。
 
 platform-stage 依赖入口固定为
@@ -174,7 +182,7 @@ containment。
 当前 Windows 开发机可以运行协议、安装、篡改和静态边界测试，但没有
 MSVC/clang 工具链，因而不能声称 Windows helper 或 macOS launcher 已在
 本机编译通过。对应二进制、Seatbelt/AppContainer 行为与可重定位 Python
-必须以三个受保护 runner 的原始 receipt 为 GA 证据。
+必须以三个受保护 Environment 下 GitHub 托管作业的原始 receipt 为 GA 证据。
 本次非发布权威的原始本地观察值记录在
 `evidence/platform-pack-local-2026-07-11.json`。
 

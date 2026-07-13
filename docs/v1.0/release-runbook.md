@@ -59,7 +59,8 @@ Remove-Item Env:\ECOREX_GITHUB_ADMIN_TOKEN
 `ready=true` requires the four v1 workflows, strict PR/status protection,
 protected-branch-only Environment deployment, one reviewer per Environment,
 the complete variable/Secret name inventory and online distinct signing, live
-acceptance and publication Runners. A busy online Runner may queue work; an
+acceptance and publication Runners. These are the only three self-hosted roles.
+A busy online Runner may queue work; an
 offline or label-mismatched Runner does not satisfy the contract.
 
 ## Candidate asset publication
@@ -203,7 +204,7 @@ Together with Ubuntu they upload timestamp-free canonical byte contracts; the
 final CI job rejects any checkout, JSON, HTML or JS/CSS digest difference. The
 runner mapping follows GitHub's official
 [hosted-runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners):
-`windows-latest` is x64, `macos-15` is arm64 and `macos-15-intel` is x64.
+`windows-2025` is x64, `macos-15` is arm64 and `macos-15-intel` is x64.
 
 This workflow is deliberately read-only. It does not receive release-signing
 or origin credentials, create Releases, publish a pointer, or state that a
@@ -217,10 +218,12 @@ The protected Candidate adds gates that ordinary read-only CI cannot claim. It
 fetches and verifies the complete fixed v0.3.0 Git object set, executes the
 full copy-on-write/Product/quarantine/released-schema/activation-rollback
 migration contract, and starts isolated digest-pinned PostgreSQL 16.9 and MinIO
-for a 256-job/48-worker/two-node-ID image run. A dedicated
-`ecorex-image-soak` protected runner repeats that real integration for at least
-four hours. If that runner is unavailable, Candidate construction remains
-blocked; there is no allowed skip receipt. Browser E2E and image evidence are
+for a 256-job/48-worker/two-node-ID image run. A fresh `ubuntu-24.04`
+GitHub-hosted VM repeats that real integration for at least four hours, within
+GitHub's documented
+[six-hour hosted-job limit](https://docs.github.com/en/actions/reference/limits).
+Capacity or timeout failure keeps Candidate construction blocked; there is no
+allowed skip receipt. Browser E2E and image evidence are
 converted to release gates only after they are bound to the signed Candidate's
 commit, workflow run, `release_id`, `build_digest` and Windows platform-stage
 receipt set.
@@ -299,7 +302,7 @@ unexpected root fails before publication.
 
 Before Candidate dispatch, run
 `.github/workflows/ecorex-v1-platform-stage.yml` on the same protected commit.
-Its three protected self-hosted runners invoke the repository-owned
+Its three protected-Environment-gated GitHub-hosted VMs invoke the repository-owned
 `platform-staging/stager.py` through a wrapper that binds the exact interpreter
 and adapter SHA-256 before and after execution. The stager must emit real
 redistributable Runtime trees and all six required Capability Pack trees;
@@ -347,10 +350,15 @@ publication-receipt digest.
 Required protected configuration is deliberately operational, not committed:
 
 - stage environment: target-qualified
-  `ECOREX_STAGE_RUNTIME_CONFIG_<TARGET>_PATH` and `_SHA256` values for
-  `WINDOWS_X64`, `MACOS_ARM64` and `MACOS_X64`; each protected runner also
-  provides the matching native toolchain, while the locked platform-stage
-  Python profile and Chromium are installed by the workflow;
+  `ECOREX_STAGE_RUNTIME_CONFIG_<TARGET>_BASE64` and `_SHA256` values for
+  `WINDOWS_X64`, `MACOS_ARM64` and `MACOS_X64`. The public production config is
+  limited to GitHub's documented
+  [48 KiB single-variable boundary](https://docs.github.com/en/actions/reference/workflows-and-actions/variables#limits-for-configuration-variables)
+  (36 KiB decoded), decoded only into `${{ runner.temp }}`, authenticated before use and
+  removed in an `always()` cleanup. It must contain no credential or private
+  model key. The fixed hosted images provide the matching native toolchain; the
+  locked platform-stage Python profile and Chromium are installed by the
+  workflow;
 - signing environments: release signer executable/digest, optional adapter/
   digest, signer key ID/public key and version-qualified mirror/CDN base URLs;
 - live-acceptance environment: digest-pinned Windows acceptance driver and the
@@ -360,7 +368,7 @@ Required protected configuration is deliberately operational, not committed:
 
 The stager, production Windows sandbox helper, platform launchers and Pack
 implementations are repository-owned sources. Their compiled bytes and the
-real Chromium/Python closure exist only after the named protected runners
+real Chromium/Python closure exist only after the named protected hosted jobs
 produce passing receipts. Missing MSVC/clang, failed AppContainer/Seatbelt
 behavior, a non-relocatable Python closure or a browser smoke failure keeps the
 workflow red; local fixtures do not satisfy this GA gate. Runner network

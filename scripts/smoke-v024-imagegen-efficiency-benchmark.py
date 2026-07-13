@@ -27,7 +27,10 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from agent.tools.imagegen.provider_runner import image_generation_env_with_config, run_image_generation_payload
+from agent.tools.imagegen.provider_runner import (  # noqa: E402
+    image_generation_env_with_config,
+    run_image_generation_payload,
+)
 
 GENERATE = ROOT / "skills" / "image-generation" / "scripts" / "generate.py"
 GENERATION_ROUTE_SUFFIX = "/images/generations"

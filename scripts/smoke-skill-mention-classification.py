@@ -12,9 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from agent.extensions.registry import ExtensionRegistry
-from agent.skills.manager import SkillManager
-from agent.skills.service import SkillService, _decorate_mention_metadata
+from agent.extensions.registry import ExtensionRegistry  # noqa: E402
+from agent.skills.manager import SkillManager  # noqa: E402
+from agent.skills.service import SkillService, _decorate_mention_metadata  # noqa: E402
 
 
 def normalize(value: Any) -> str:

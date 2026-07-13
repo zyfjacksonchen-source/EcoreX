@@ -124,11 +124,11 @@ _PUBLICATION_SECRETS = frozenset(
 )
 _STAGE_VARIABLES = frozenset(
     {
-        "ECOREX_STAGE_RUNTIME_CONFIG_WINDOWS_X64_PATH",
+        "ECOREX_STAGE_RUNTIME_CONFIG_WINDOWS_X64_BASE64",
         "ECOREX_STAGE_RUNTIME_CONFIG_WINDOWS_X64_SHA256",
-        "ECOREX_STAGE_RUNTIME_CONFIG_MACOS_ARM64_PATH",
+        "ECOREX_STAGE_RUNTIME_CONFIG_MACOS_ARM64_BASE64",
         "ECOREX_STAGE_RUNTIME_CONFIG_MACOS_ARM64_SHA256",
-        "ECOREX_STAGE_RUNTIME_CONFIG_MACOS_X64_PATH",
+        "ECOREX_STAGE_RUNTIME_CONFIG_MACOS_X64_BASE64",
         "ECOREX_STAGE_RUNTIME_CONFIG_MACOS_X64_SHA256",
         "ECOREX_PUBLIC_BOOTSTRAP_INDEX_URL",
         "ECOREX_PUBLICATION_PUBLIC_KEYS_JSON",
@@ -191,22 +191,6 @@ def default_release_repository_contract() -> ReleaseRepositoryContract:
             ),
         ),
         runners=(
-            RunnerContract(
-                "stage-windows-x64",
-                frozenset({"self-hosted", "windows", "x64", "ecorex-release-stage"}),
-            ),
-            RunnerContract(
-                "stage-macos-arm64",
-                frozenset({"self-hosted", "macos", "arm64", "ecorex-release-stage"}),
-            ),
-            RunnerContract(
-                "stage-macos-x64",
-                frozenset({"self-hosted", "macos", "x64", "ecorex-release-stage"}),
-            ),
-            RunnerContract(
-                "image-soak",
-                frozenset({"self-hosted", "linux", "x64", "ecorex-image-soak"}),
-            ),
             RunnerContract(
                 "release-sign",
                 frozenset({"self-hosted", "linux", "x64", "ecorex-release-sign"}),

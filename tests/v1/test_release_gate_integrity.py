@@ -87,7 +87,8 @@ def test_candidate_workflow_executes_instead_of_auto_declaring_runtime_gates() -
     assert "--node-id candidate-soak-a" in workflow
     assert "--node-id candidate-soak-b" in workflow
     assert "--minimum-duration-seconds 14400" in workflow
-    assert "runs-on: [self-hosted, linux, x64, ecorex-image-soak]" in workflow
+    assert "name: Protected four-hour PostgreSQL and MinIO image soak" in workflow
+    assert "runs-on: ubuntu-24.04" in workflow
     assert "bind-v1-release-gate-evidence.py" in workflow
     assert "--output .candidate/output/migration-release-bound.json" in workflow
     assert "--evidence-file .candidate/output/migration-release-bound.json" in workflow

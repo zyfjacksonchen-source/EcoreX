@@ -1823,3 +1823,30 @@
   is deployable.” Missing OAuth scope, inactive remote workflows, repository
   governance, Runner capacity and protected configuration have stable machine
   codes and block before Candidate dispatch.
+
+## ADR-106 - Non-privileged release work uses ephemeral hosted runners
+
+- Status: accepted; supersedes ADR-105 only for the non-privileged Runner count.
+- Root cause: requiring permanent self-hosted Windows x64, macOS arm64/x64 and
+  image-soak hosts made a personal/small-team WebUI release fleet seven machines
+  wide even though those jobs receive no signing, provider-session or origin
+  credentials. That contradicted the lightweight release objective and left the
+  real repository with zero usable capacity.
+- Decision: platform stage runs on fixed `windows-2025`, `macos-15` and
+  `macos-15-intel` GitHub-hosted VM labels. The four-hour PostgreSQL/MinIO image
+  soak runs on fresh `ubuntu-24.04`, inside GitHub's six-hour hosted-job limit.
+  Protected Environments still gate platform configuration and artifact
+  provenance; hosted execution does not weaken receipt or Candidate binding.
+- Config boundary: target Runtime config is public configuration, not a Secret.
+  It is supplied as Base64 capped at GitHub's 48 KiB single-variable boundary
+  (36 KiB decoded) plus an independent SHA-256, decoded into the
+  ephemeral runner temp directory with exclusive/private creation, duplicate-key
+  JSON validation and TOCTOU-safe hashing, then removed by an `always()` step.
+  The stager performs the full production config/schema/secret scan again.
+- Privileged boundary: only three distinct self-hosted roles remain: external
+  signing, persistent Windows live Model/Image/CDP acceptance, and publication.
+  Their host-local HSM/session/origin capabilities are not moved to hosted VMs.
+- Consequence: four machines and their registration/patching burden disappear
+  without replacing real Windows/macOS builds or the four-hour concurrency soak
+  with mocks. Runner readiness becomes smaller while cryptographic and human
+  approval boundaries remain unchanged.

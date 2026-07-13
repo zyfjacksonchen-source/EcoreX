@@ -106,6 +106,14 @@ from .repository_readiness import (
     default_release_repository_contract,
     evaluate_release_repository,
 )
+from .stage_runtime_config import (
+    MAX_RUNTIME_CONFIG_BASE64_BYTES,
+    MAX_RUNTIME_CONFIG_BYTES,
+    StageRuntimeConfigError,
+    decode_stage_runtime_config,
+    materialize_stage_runtime_config,
+    remove_stage_runtime_config,
+)
 
 __all__ = [
     "ArtifactBuildInput",
@@ -141,6 +149,8 @@ __all__ = [
     "MAX_CAPABILITY_PACK_BYTES",
     "MAX_CORE_BYTES",
     "MAX_PUBLIC_BOOTSTRAP_INDEX_BYTES",
+    "MAX_RUNTIME_CONFIG_BASE64_BYTES",
+    "MAX_RUNTIME_CONFIG_BYTES",
     "PUBLIC_BOOTSTRAP_AUTHORITY_DOMAIN",
     "PUBLIC_BOOTSTRAP_AUTHORITY_FUTURE_SKEW_SECONDS",
     "PUBLIC_BOOTSTRAP_AUTHORITY_MAX_TTL_SECONDS",
@@ -172,13 +182,17 @@ __all__ = [
     "ReleaseSigner",
     "SUPPORTED_TARGETS",
     "SigningError",
+    "StageRuntimeConfigError",
     "WebBundleBuildInput",
     "build_public_bootstrap_index",
     "default_release_repository_contract",
+    "decode_stage_runtime_config",
     "evaluate_release_repository",
+    "materialize_stage_runtime_config",
     "public_bootstrap_authority_signing_bytes",
     "public_bootstrap_freshness_signing_bytes",
     "refresh_public_bootstrap_freshness",
+    "remove_stage_runtime_config",
     "build_candidate",
     "candidate_receipt_signing_payload",
     "load_dependency_lock_manifest",

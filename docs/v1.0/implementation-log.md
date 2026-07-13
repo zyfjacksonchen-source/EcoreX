@@ -4602,3 +4602,55 @@ the ignored 21,857-byte report is
 `.candidate/quality/supply-chain-local-github-readiness-split.json`, SHA-256
 `573c9141dff494b6ffe7f7a212ccedfe4ee66a530d1d5e3f547225f1d55507a8`.
 No repository setting, ref, workflow, release or user rollout was changed.
+
+## 2026-07-14 - Non-privileged release capacity moves to ephemeral hosted runners
+
+The prior repository contract correctly isolated signing, live provider/CDP
+acceptance and origin publication, but also required four permanent machines for
+jobs that receive none of those privileges: Windows x64 stage, macOS arm64/x64
+stage and the four-hour image soak. For a personal/small-team Web product this
+made the release fleet heavier than the product and left seven Runner blockers
+in an otherwise deterministic chain.
+
+Platform stage now uses the fixed GitHub-hosted labels `windows-2025`,
+`macos-15` and `macos-15-intel`. The real PostgreSQL 16.9/MinIO soak uses a fresh
+`ubuntu-24.04` VM for its required 14,400 seconds, inside GitHub's documented
+six-hour job limit. Protected Environments and the immutable workflow/commit/
+receipt contract remain unchanged. Only external signing, persistent Windows
+live Model/Image/CDP acceptance and publication remain distinct self-hosted
+roles.
+
+Hosted jobs cannot consume a host-local Runtime config path, so the public
+production config now crosses the protected Environment boundary as canonical
+Base64 plus an independent SHA-256. The materializer enforces GitHub's 48 KiB
+single-variable limit (36 KiB decoded), strict Base64/UTF-8/JSON, duplicate-key
+rejection, required identity shape, exclusive file creation, stable file
+identity hashing and digest-fenced cleanup. It writes only a redacted receipt;
+the stager repeats its full production schema and secret scan. Credentials and
+managed model keys remain forbidden from this public config.
+
+The exact provider-boundary, digest, duplicate-key, conflict/alias, cleanup and
+workflow/Runner contracts pass 32 focused tests. The affected platform,
+Candidate, dependency and package selection passes 103 tests with one explicit
+platform skip. The complete current-source v1 suite passes 1,915 tests with 17
+explicit environment skips and zero failures in 758.22 seconds. Full Ruff over
+`ecorex`, `scripts` and `tests/v1`, Python compilation, workflow YAML parsing,
+dependency locks, `git diff --check` and the 653-file Git-admission gate pass;
+five pre-existing dynamic-path import annotations in three old scripts were
+made explicit so the full Ruff claim no longer depends on a narrowed target.
+
+Current supply-chain preflight passes 23 locked/licensed Runtime packages, 282
+npm packages and 464 production files, inventory SHA-256
+`5515c74a6183ad1bdd9f279f8c77441ba750799315eaf70f8d56c0c42389bf58`.
+The ignored 21,857-byte report is
+`.candidate/quality/supply-chain-local-hosted-release-runners-final.json`, SHA-256
+`5ace12cb9481bb48543f1fd92f8a73003683db0d88b2670a94d9ed2f75a8a54e`.
+
+A fresh read-only audit of the actual private repository exits 2 with 18
+blockers: Actions policy 3, branch protection 1, missing OAuth `workflow` scope
+1, Environments 6, privileged Runners 3 and inactive v1 workflows 4. Evidence
+is `.candidate/quality/github-release-readiness-hosted-runners.json`, 3,226
+bytes, SHA-256
+`c8d7d0f323e5d7e079ecfd884fd102707348295b917fe2edabb87946bd48a114`.
+No repository setting, ref, workflow dispatch, provider session, release origin,
+Control Plane state or user update was changed.

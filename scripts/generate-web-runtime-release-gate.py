@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from common.ecorex_public_payload import mask_sensitive_text
+from common.ecorex_public_payload import mask_sensitive_text  # noqa: E402
 
 
 SCHEMA_VERSION = "web-release-gate-v1"
