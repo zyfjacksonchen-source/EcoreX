@@ -1503,3 +1503,20 @@ are unresolved.
 This run is not a Candidate receipt. The next authoritative action is a
 twelfth ceremony from the committed archive-aware fixture; no release or
 rollout is authorized by these local observations.
+
+## Twelfth zero-publication Windows ceremony - 2026-07-14
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Source-pinned local ceremony | 0 | Commit `7bf9d89b60ea2c8a8881a22bf8d855cc8bf46876`; schema-3 `local-windows-drill`; 1,308.297 seconds under 5,400-second total and four independent 900-second Runtime windows. |
+| Cold Runtime and platform stages | 0 | Pack-Python compacted from 2,389 to 437 physical files; import archive 5,503,338 bytes. Core, Bootstrap, browser, channels, image, OCR, office and sandbox emitted eight signed Windows x64 receipts. |
+| First install and migration | 0 | Domestic-mirror failure → GitHub fallback, `awaiting_user`, explicit activation, full Runtime HTTP 200 and registration passed. Released-v0.3 copy-on-write migration committed; source deletion and source-removed restart HTTP 200 passed. |
+| Update and refresh | 0 | Distinct same-version update remained inactive before confirmation, then reached completed/current/known-good and full Runtime HTTP 200; hashed assets remained immutable and HTML `no-store`. |
+| Digest rejection and rollback | 0 | Bad digest rejected with active slot unchanged. Rebound exit-70 fault Core activated provisionally, reached rollback terminal state, was discarded, restored the healthy slot and recovered full Runtime HTTP 200. |
+| Cleanup and report | 0 | Disposable root removed; no child Runtime remained. Report SHA-256 `a6d823cc...cdc0b` at `.candidate/quality/windows-signed-candidate-local-twelfth.json`. |
+| Production promotion gate | blocked | `fixed_gate_relaxed=false`, `promotion_claimed=false`; only 8/24 local stage receipts exist and 16 protected macOS receipts remain missing. No external mirror, GitHub Release, CDN, Control Plane, Model/Image Gateway, connector or OTLP endpoint was contacted. |
+| Post-report source gate | 0 | Provenance wording and explicit exit-70/manifest-rebound fields pass 15 drill tests and Ruff. Supply chain remains 23 locked = 23 licensed / 449 files, inventory `df8027e8...374e4a`, report `.candidate/quality/supply-chain-local-runtime-trust-scan-v4.json`. |
+
+This is the authoritative passing local Windows ceremony for commit `7bf9d89b`.
+It does not supersede protected-runner, live-provider, CDP acceptance or real
+installed-user migration gates and does not authorize deployment.

@@ -382,6 +382,10 @@ def test_local_windows_drill_cannot_relax_fixed_twenty_four_stage_gate() -> None
     assert "run_bounded_process(" in source
     assert '"fixed_gate_relaxed": False' in source
     assert '"promotion_claimed": False' in source
+    assert '"fault_preflight_exit_code": 70' in source
+    assert '"pack_python_manifest_rebound": True' in source
+    assert "local workstation drill" in source
+    assert "dirty-worktree drill" not in source
 
 
 def test_local_windows_drill_forbids_cross_source_partial_splicing() -> None:

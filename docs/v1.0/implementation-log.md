@@ -4257,3 +4257,41 @@ supply-chain preflight records 23 locked = 23 licensed Runtime packages and
 449 files with inventory digest
 `29eab98fe9742876a76c496ddaed9cae2d53055dea7f3124a147cd56c1090ff3` in
 `.candidate/quality/supply-chain-local-runtime-trust-scan-v3.json`.
+
+## 2026-07-14 - Twelfth Windows ceremony passed without promotion
+
+The twelfth zero-publication Windows ceremony ran from clean committed source
+`7bf9d89b60ea2c8a8881a22bf8d855cc8bf46876` and completed in 1,308.297
+seconds under the unchanged 5,400-second aggregate limit. Cold Pack-Python
+again compacted from 2,389 physical inputs to 437 files with a 5,503,338-byte
+import archive. The production stager emitted all eight Windows x64 receipts;
+Core, Bootstrap and all six Capability Packs were newly built and signed.
+
+The install chain exercised domestic-mirror-first failure and GitHub fallback,
+background download, `awaiting_user`, explicit activation, durable drain
+checkpoints and full Runtime HTTP 200. Released-v0.3 data migrated copy-on-write
+and committed, the legacy source was deleted, and the source-removed Runtime
+restart returned HTTP 200. A distinct same-version update stayed inactive until
+confirmation, then activated and returned HTTP 200. A bad digest was rejected
+after all three sources without changing the active slot.
+
+The archive-aware fault Core regenerated and resolved `pack-python.json`,
+passed the direct exit-70 preflight, was signed as a distinct release and
+activated provisionally. Health failure produced the rollback terminal state,
+discarded the fault slot, restored the healthy slot and returned HTTP 200 from
+the recovered full Runtime. The disposable root was removed and no child
+process remained.
+
+The schema-3 report is
+`.candidate/quality/windows-signed-candidate-local-twelfth.json`, SHA-256
+`a6d823ccc73a7de28cc6d993e54730e19a64ebcec10173e482d9f8d1b8bcdc0b`.
+It explicitly records `promotion_claimed=false`, `fixed_gate_relaxed=false`
+and 16 missing protected macOS receipts. This is a successful local Windows
+ceremony, not a production Candidate or publication authorization. A small
+post-report correction changes only the provenance wording from the inaccurate
+static phrase “dirty worktree” to “local workstation” and makes the already
+asserted fault exit code / manifest rebound explicit in future reports. The
+post-correction current-source supply-chain preflight remains 23 locked = 23
+licensed Runtime packages and 449 files, with inventory digest
+`df8027e874b8a3b74f5770acd7e951db77eafcc8c9be1f773f7c2d6242374e4a` in
+`.candidate/quality/supply-chain-local-runtime-trust-scan-v4.json`.

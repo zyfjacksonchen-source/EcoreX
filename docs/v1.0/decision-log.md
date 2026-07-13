@@ -1632,3 +1632,22 @@
 - Consequence: the rollback ceremony exercises a valid, internally consistent
   signed Runtime whose process fails before the data barrier. Directory-only
   assumptions and unsigned local launch shims are not reintroduced.
+
+## ADR-098 - A passing local Windows ceremony cannot promote a release
+
+- Status: accepted.
+- Decision: the passing local Windows signed ceremony is an evidence class of
+  `local-windows-drill`, not a production Candidate or release authorization.
+  It may prove the eight Windows stage contracts, signed install/update,
+  migration, digest rejection and pre-data rollback, but the fixed 24-stage
+  gate remains blocked until protected Windows and both protected macOS target
+  receipts are bound to one immutable recipe.
+- Evidence decision: the redacted local report stays under ignored
+  `.candidate/quality`; its path, source commit and SHA-256 are recorded in the
+  durable ledger. Private signing material and disposable slots are removed.
+- Reporting decision: local provenance is described as an unprotected
+  workstation even when the Git worktree is clean. `worktree_dirty=false` and
+  absence of protected runner provenance are independent facts.
+- Consequence: no local success can set `promotion_claimed=true`, relax the
+  missing receipt count or authorize publication. Live provider, CDP acceptance
+  and protected runner gates remain independent blockers.
