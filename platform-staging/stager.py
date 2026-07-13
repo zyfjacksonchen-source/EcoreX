@@ -91,6 +91,15 @@ _SECRET_PATTERNS = (
 )
 _FIXED_TIME = (1980, 1, 1, 0, 0, 0)
 _MAX_FILE_BYTES = 512 * 1024 * 1024
+_IMPORT_ARCHIVE_NATIVE_SUFFIXES = frozenset(
+    {".dll", ".dylib", ".exe", ".pyd", ".so"}
+)
+_IMPORT_ARCHIVE_PURE_SUFFIXES = frozenset({".py", ".pyi", ".typed"})
+# These packages intentionally expose data through importlib.resources and are
+# covered by the isolated post-compaction Runtime probe.  Other packages with
+# non-Python data stay on disk so code that requires a real __file__ path keeps
+# working.
+_IMPORT_ARCHIVE_RESOURCE_PACKAGES = frozenset({"certifi", "ecorex", "tzdata"})
 _DEPENDENCY_PACK_ADAPTERS = {
     "channels": "managed-channel-contracts-v1",
     "ocr": "python-rapidocr-runtime-v1",
@@ -654,6 +663,12 @@ def _build_python_closure(
         site_packages / "ecorex",
         excluded=frozenset({"__pycache__"}),
     )
+    _compact_python_import_closure(
+        destination,
+        target_stdlib=target_stdlib,
+        site_packages=site_packages,
+        platform=platform,
+    )
     manifest = build_pack_python_manifest(
         core,
         platform=platform,
@@ -675,6 +690,184 @@ def _build_python_closure(
     return inventory, interpreter, identity
 
 
+def _compact_python_import_closure(
+    destination: Path,
+    *,
+    target_stdlib: Path,
+    site_packages: Path,
+    platform: str,
+) -> Mapping[str, Any]:
+    """Collapse zip-safe Python files without weakening closure verification.
+
+    CPython already places its versioned standard-library archive before the
+    unpacked Lib directory.  The signed Core therefore needs one content hash
+    for this deterministic archive instead of thousands of cold small-file
+    opens on every independent Runtime verification.  Native-backed packages
+    and packages with path-sensitive data remain unpacked.
+    """
+
+    root = destination.resolve(strict=True)
+    stdlib = target_stdlib.resolve(strict=True)
+    packages = site_packages.resolve(strict=True)
+    if packages.parent != stdlib or packages.name != "site-packages":
+        raise StageError("pack_python_import_layout_invalid")
+    try:
+        stdlib.relative_to(root)
+    except ValueError:
+        raise StageError("pack_python_import_layout_invalid") from None
+    if platform == "windows":
+        archive_path = root / f"python{sys.version_info.major}{sys.version_info.minor}.zip"
+    elif platform == "macos":
+        archive_path = (
+            root
+            / "lib"
+            / f"python{sys.version_info.major}{sys.version_info.minor}.zip"
+        )
+    else:
+        raise StageError("pack_python_import_layout_invalid")
+    if os.path.lexists(archive_path):
+        raise StageError("pack_python_import_archive_collision")
+
+    selected: list[tuple[str, Path]] = []
+    for entry in sorted(stdlib.iterdir(), key=lambda item: item.name.casefold()):
+        if entry == packages:
+            continue
+        if _zip_safe_import_entry(entry, allow_resources=False):
+            selected.extend(_import_archive_members(entry, base=stdlib))
+    for entry in sorted(packages.iterdir(), key=lambda item: item.name.casefold()):
+        allow_resources = (
+            entry.name.casefold() in _IMPORT_ARCHIVE_RESOURCE_PACKAGES
+            or entry.name.casefold().endswith((".dist-info", ".egg-info"))
+        )
+        if _zip_safe_import_entry(entry, allow_resources=allow_resources):
+            selected.extend(_import_archive_members(entry, base=packages))
+    selected.sort(key=lambda item: item[0].casefold())
+    if not selected:
+        raise StageError("pack_python_import_archive_empty")
+    seen: set[str] = set()
+    total = 0
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{archive_path.name}.", suffix=".tmp", dir=archive_path.parent
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        with zipfile.ZipFile(
+            temporary,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=9,
+            allowZip64=True,
+            strict_timestamps=True,
+        ) as archive:
+            for relative, source in selected:
+                collision = relative.casefold()
+                if collision in seen:
+                    raise StageError("pack_python_import_archive_collision")
+                seen.add(collision)
+                payload = _stable_bytes(
+                    source,
+                    _MAX_FILE_BYTES,
+                    "pack_python_import_source_invalid",
+                    minimum=0,
+                )
+                total += len(payload)
+                if total > 1024 * 1024 * 1024:
+                    raise StageError("pack_python_import_archive_too_large")
+                info = zipfile.ZipInfo(relative, date_time=_FIXED_TIME)
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.create_system = 3
+                info.external_attr = (stat.S_IFREG | 0o644) << 16
+                archive.writestr(info, payload)
+        with temporary.open("r+b") as stream:
+            os.fsync(stream.fileno())
+        os.replace(temporary, archive_path)
+        for _relative, source in selected:
+            source.unlink()
+        for base in (packages, stdlib):
+            directories = sorted(
+                (path for path in base.rglob("*") if path.is_dir()),
+                key=lambda path: len(path.parts),
+                reverse=True,
+            )
+            for directory in directories:
+                try:
+                    directory.rmdir()
+                except OSError:
+                    pass
+        packages.mkdir(parents=True, exist_ok=True)
+        return {
+            "relative_path": archive_path.relative_to(root).as_posix(),
+            "member_count": len(selected),
+            "uncompressed_size_bytes": total,
+            "size_bytes": archive_path.stat().st_size,
+            "sha256": _sha256(archive_path),
+        }
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _zip_safe_import_entry(path: Path, *, allow_resources: bool) -> bool:
+    try:
+        metadata = path.lstat()
+    except OSError:
+        raise StageError("pack_python_import_source_invalid") from None
+    if stat.S_ISLNK(metadata.st_mode) or bool(
+        getattr(metadata, "st_file_attributes", 0)
+        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    ):
+        raise StageError("pack_python_import_source_invalid")
+    if stat.S_ISREG(metadata.st_mode):
+        return path.suffix.casefold() in _IMPORT_ARCHIVE_PURE_SUFFIXES
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise StageError("pack_python_import_source_invalid")
+    files = _regular_import_tree(path)
+    if not files:
+        return False
+    if any(
+        item.suffix.casefold() in _IMPORT_ARCHIVE_NATIVE_SUFFIXES
+        for item in files
+    ):
+        return False
+    return allow_resources or all(
+        item.suffix.casefold() in _IMPORT_ARCHIVE_PURE_SUFFIXES for item in files
+    )
+
+
+def _regular_import_tree(root: Path) -> tuple[Path, ...]:
+    files: list[Path] = []
+    for path in sorted(root.rglob("*"), key=lambda item: item.as_posix().casefold()):
+        metadata = path.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or bool(
+            getattr(metadata, "st_file_attributes", 0)
+            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        ):
+            raise StageError("pack_python_import_source_invalid")
+        if stat.S_ISDIR(metadata.st_mode):
+            continue
+        if not stat.S_ISREG(metadata.st_mode):
+            raise StageError("pack_python_import_source_invalid")
+        files.append(path)
+    return tuple(files)
+
+
+def _import_archive_members(path: Path, *, base: Path) -> tuple[tuple[str, Path], ...]:
+    files = (path,) if path.is_file() else _regular_import_tree(path)
+    members: list[tuple[str, Path]] = []
+    for source in files:
+        relative = source.relative_to(base).as_posix()
+        value = PurePosixPath(relative)
+        if (
+            value.is_absolute()
+            or not value.parts
+            or any(part in {"", ".", ".."} or ":" in part for part in value.parts)
+        ):
+            raise StageError("pack_python_import_source_invalid")
+        members.append((relative, source))
+    return tuple(members)
+
+
 def _pack_python_probe_command(interpreter: Path) -> tuple[str, ...]:
     return (
         str(interpreter),
@@ -682,9 +875,13 @@ def _pack_python_probe_command(interpreter: Path) -> tuple[str, ...]:
         "-B",
         "-c",
         (
-            "import cryptography,fastapi,httpx,pydantic,tzdata,uvicorn,websockets,ecorex,zoneinfo;"
+            "import certifi,cryptography,fastapi,httpx,pydantic,tzdata,uvicorn,websockets,ecorex,zoneinfo;"
+            "from pathlib import Path;"
+            "from ecorex.control_plane.admin_web.assets import AdminWebAssets;"
             "from multipart.multipart import parse_options_header;"
             "assert parse_options_header;"
+            "assert Path(certifi.where()).is_file();"
+            "assert len(AdminWebAssets.load().assets)==2;"
             "zoneinfo.reset_tzpath(());zoneinfo.ZoneInfo.clear_cache();"
             "assert zoneinfo.ZoneInfo('Asia/Shanghai').key == 'Asia/Shanghai';"
             "print(ecorex.__version__)"
@@ -1826,7 +2023,9 @@ def _supply_chain(
     records = _tree_records(root)
     for record in records:
         path = root.joinpath(*PurePosixPath(record["path"]).parts)
-        if path.stat().st_size <= 4 * 1024 * 1024:
+        if path.suffix.casefold() == ".zip":
+            _scan_archive_secrets(path)
+        elif path.stat().st_size <= 4 * 1024 * 1024:
             payload = path.read_bytes()
             if any(pattern.search(payload) for pattern in _SECRET_PATTERNS):
                 raise StageError("stage_supply_chain_secret_match")
@@ -1844,6 +2043,51 @@ def _supply_chain(
         ),
         "secret_scan": "passed",
     }
+
+
+def _scan_archive_secrets(path: Path) -> None:
+    try:
+        with zipfile.ZipFile(path) as archive:
+            members = archive.infolist()
+            if len(members) > 50_000:
+                raise StageError("stage_supply_chain_archive_invalid")
+            seen: set[str] = set()
+            total = 0
+            for member in members:
+                original = member.filename
+                normalized = original.replace("\\", "/")
+                relative = PurePosixPath(normalized)
+                mode = member.external_attr >> 16
+                file_type = stat.S_IFMT(mode)
+                canonical = relative.as_posix()
+                expected = f"{canonical}/" if member.is_dir() else canonical
+                collision = canonical.casefold()
+                if (
+                    not normalized
+                    or original != normalized
+                    or normalized != expected
+                    or relative.is_absolute()
+                    or any(part in {"", ".", ".."} or ":" in part for part in relative.parts)
+                    or collision in seen
+                    or member.flag_bits & 0x1
+                    or stat.S_ISLNK(mode)
+                    or file_type not in {0, stat.S_IFREG, stat.S_IFDIR}
+                ):
+                    raise StageError("stage_supply_chain_archive_invalid")
+                seen.add(collision)
+                if member.is_dir():
+                    continue
+                total += member.file_size
+                if total > 1024 * 1024 * 1024:
+                    raise StageError("stage_supply_chain_archive_invalid")
+                if member.file_size <= 4 * 1024 * 1024:
+                    payload = archive.read(member)
+                    if any(pattern.search(payload) for pattern in _SECRET_PATTERNS):
+                        raise StageError("stage_supply_chain_secret_match")
+    except StageError:
+        raise
+    except (OSError, zipfile.BadZipFile, RuntimeError):
+        raise StageError("stage_supply_chain_archive_invalid") from None
 
 
 def _locked_inventory_evidence(

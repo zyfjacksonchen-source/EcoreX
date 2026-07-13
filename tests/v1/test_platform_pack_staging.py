@@ -1177,10 +1177,105 @@ def test_platform_stager_bundles_and_forces_signed_iana_timezone_data() -> None:
     assert stager["_runtime_environment"]()["PYTHONTZPATH"] == ""
     probe = stager["_pack_python_probe_command"](Path("pack-python"))
     assert probe[:4] == ("pack-python", "-I", "-B", "-c")
-    assert "import cryptography,fastapi,httpx,pydantic,tzdata" in probe[4]
+    assert "import certifi,cryptography,fastapi,httpx,pydantic,tzdata" in probe[4]
+    assert "AdminWebAssets.load" in probe[4]
+    assert "certifi.where" in probe[4]
     assert "from multipart.multipart import parse_options_header" in probe[4]
     assert "zoneinfo.reset_tzpath(())" in probe[4]
     assert "zoneinfo.ZoneInfo('Asia/Shanghai')" in probe[4]
+
+
+def test_platform_stager_compacts_only_zip_safe_runtime_imports(
+    tmp_path: Path,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    runtime = tmp_path / "pack-python"
+    stdlib = runtime / "Lib"
+    packages = stdlib / "site-packages"
+    (stdlib / "encodings").mkdir(parents=True)
+    (stdlib / "encodings" / "__init__.py").write_text("codec = True\n")
+    (stdlib / "pathdata").mkdir()
+    (stdlib / "pathdata" / "__init__.py").write_text("value = True\n")
+    (stdlib / "pathdata" / "template.txt").write_text("keep-on-disk\n")
+    (packages / "ecorex").mkdir(parents=True)
+    (packages / "ecorex" / "__init__.py").write_text("version = 'test'\n")
+    (packages / "ecorex" / "asset.json").write_text("{}\n")
+    (packages / "native_pkg").mkdir()
+    (packages / "native_pkg" / "__init__.py").write_text("native = True\n")
+    (packages / "native_pkg" / "speedups.pyd").write_bytes(b"native")
+    (packages / "demo-1.0.dist-info").mkdir()
+    (packages / "demo-1.0.dist-info" / "METADATA").write_text("Name: demo\n")
+    (packages / "typing_extensions.py").write_text("value = True\n")
+    (packages / "policy.pth").write_text("do-not-archive\n")
+
+    evidence = stager["_compact_python_import_closure"](
+        runtime,
+        target_stdlib=stdlib,
+        site_packages=packages,
+        platform="windows",
+    )
+
+    archive_path = runtime / f"python{sys.version_info.major}{sys.version_info.minor}.zip"
+    assert evidence["relative_path"] == archive_path.name
+    assert evidence["member_count"] == 5
+    with zipfile.ZipFile(archive_path) as archive:
+        assert set(archive.namelist()) == {
+            "demo-1.0.dist-info/METADATA",
+            "ecorex/__init__.py",
+            "ecorex/asset.json",
+            "encodings/__init__.py",
+            "typing_extensions.py",
+        }
+    assert not (stdlib / "encodings").exists()
+    assert (stdlib / "pathdata" / "template.txt").is_file()
+    assert (packages / "native_pkg" / "speedups.pyd").is_file()
+    assert (packages / "native_pkg" / "__init__.py").is_file()
+    assert (packages / "policy.pth").is_file()
+
+
+def test_platform_supply_chain_scans_compacted_import_archive(
+    tmp_path: Path,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    archive = tmp_path / "python311.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as output:
+        output.writestr(
+            "module.py",
+            b"TOKEN = 'ghp_abcdefghijklmnopqrstuvwxyz123456'\n",
+        )
+
+    with pytest.raises(stager["StageError"], match="stage_supply_chain_secret_match"):
+        stager["_supply_chain"](
+            tmp_path,
+            (),
+            lock_profile="runtime",
+            require_complete=False,
+        )
+
+    unsafe_root = tmp_path / "unsafe"
+    unsafe_root.mkdir()
+    with zipfile.ZipFile(unsafe_root / "python311.zip", "w") as output:
+        output.writestr("Package/module.py", b"first = True\n")
+        output.writestr("package/module.py", b"second = True\n")
+    with pytest.raises(stager["StageError"], match="stage_supply_chain_archive_invalid"):
+        stager["_supply_chain"](
+            unsafe_root,
+            (),
+            lock_profile="runtime",
+            require_complete=False,
+        )
+
+    noncanonical_root = tmp_path / "noncanonical"
+    noncanonical_root.mkdir()
+    with zipfile.ZipFile(noncanonical_root / "python311.zip", "w") as output:
+        output.writestr("package//module.py", b"value = True\n")
+    with pytest.raises(stager["StageError"], match="stage_supply_chain_archive_invalid"):
+        stager["_supply_chain"](
+            noncanonical_root,
+            (),
+            lock_profile="runtime",
+            require_complete=False,
+        )
 
 
 @pytest.mark.parametrize("pack_id", ("browser", "sandbox"))

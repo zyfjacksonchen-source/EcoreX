@@ -1467,3 +1467,24 @@ macOS evidence remain independent release blockers.
 This failed run is strong signed Runtime and migration evidence but is not a
 Candidate receipt. A tenth committed-source ceremony must complete healthy
 update, bad-digest rejection and rollback under the corrected bounded policy.
+
+## Tenth ceremony and trust-scan performance closure - 2026-07-13
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Tenth local ceremony from `078d0e81` | 1 | All eight Windows receipts emitted. Domestic-mirror-first fallback, background `awaiting_user`, explicit first activation, full Runtime readiness, released-v0.3 copy-on-write migration, source removal and source-removed Runtime restart passed. |
+| Healthy update | 0 | A distinct same-version build staged in the background, waited for confirmation, activated, reached full Runtime health and completed its Bootstrap journal. |
+| Bad digest and rollback | 0 | The bad digest was rejected before pointer mutation. A valid signed fault slot failed before the data barrier and emitted `bootstrap_health_failed_rolled_back`; the recovered healthy slot was `current` and `known_good`. |
+| Aggregate deadline | 1 | The 5,400-second total expired during the final recovered-Runtime health wait after rollback. The child was still progressing and no error was emitted. Failed-ceremony cleanup restored `current=null`, `previous=null`, `known_good=[]`; no report or publication was created. |
+| Serial root-cause lower bound | 124 | Two read-only serial scans of the retained 2,388-file / 61,937,031-byte Pack-Python closure did not finish within 904 seconds. This is diagnostic evidence only. |
+| Representative import compaction | 0 | A temporary copy placed 1,952 zip-safe members / 21,609,256 uncompressed bytes into a deterministic 5,502,287-byte archive and reduced the physical closure to 437 files / 45,830,062 bytes. Critical isolated imports passed in 3.095 seconds. |
+| Exact digest performance comparison | 0 | The compact closure first reproduced digest `212b286c...0efa6` serially in 181.044 seconds, then reproduced the same digest with bounded streaming workers in 0.274 seconds; its payload tree took 0.384 seconds. The original 2,388-file closure reproduced digest `68742f27...1822` in 1.470 seconds. Timings are same-host focused diagnostics, not a cold Candidate claim. |
+| Trust and supply-chain regression | 0 | Canonical/case-fold-unique archive paths, encryption, links, member and expanded-size bounds are checked; bounded members remain secret-scanned; every file retains content, size, identity, mtime/ctime, path-mode and reparse-attribute TOCTOU checks; the isolated Core probe opens zipped administrator/CA resources; no process-persistent trust cache exists. The final versions of these checks are included in the complete affected regression below. |
+| Complete affected regression | 0 | Platform staging, process Packs, atomic install, update durability/coordinator, Candidate pipeline, Runtime entrypoint, administrator Web and signed-drill set: 182 passed / 5 platform skips. Ruff, compilation and zipimport asset tests passed. |
+| Current-source gates | 0 | 23 locked = 23 licensed Runtime packages; 449 files passed secret scan with inventory digest `7a1c2a1c...270e8` in `.candidate/quality/supply-chain-local-runtime-trust-scan-v2.json`. Source-tree count is 632; Runtime schema, Server authority and design-system gates report zero violations. |
+
+The tenth run is not a Candidate receipt because its final health phase did not
+finish before the aggregate deadline. The next authoritative action is an
+eleventh ceremony from the committed performance correction. Production
+publication remains forbidden while live provider and protected macOS gates
+are unresolved.

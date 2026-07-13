@@ -4154,3 +4154,70 @@ Runtime packages and 449 scanned files with inventory digest
 `.candidate/quality/supply-chain-local-deadline-policy-v2.json`. A fresh committed
 tenth ceremony must still complete healthy update, bad-digest rejection and
 pre-data rollback before a local Candidate receipt exists.
+
+## 2026-07-13 - Tenth ceremony coverage and Runtime trust-scan performance
+
+The tenth zero-publication Windows ceremony ran from committed source
+`078d0e81` with the nested 5,400-second total, 3,000-second platform phase and
+independent 900-second Runtime windows. It emitted all eight Windows receipts
+and reproduced the exact 2,388-file / 61,937,031-byte Core interpreter closure.
+First install used the domestic-mirror-first source order, rejected the
+injected first-source failure, fell back to GitHub, stopped at
+`awaiting_user`, and activated only after explicit confirmation. The full
+signed Runtime reached HTTP readiness. Released-v0.3 data then migrated
+copy-on-write, registration pinning ended, the legacy source was removed, and
+the source-removed Runtime restart completed.
+
+The same ceremony built a distinct healthy update, stopped its background
+download at `awaiting_user`, activated it after confirmation and completed its
+full Runtime health. A bad-digest artifact was rejected before pointer
+mutation. A separately signed fault candidate activated provisionally, failed
+before the data barrier and produced `bootstrap_health_failed_rolled_back`;
+the prior healthy slot was again both `current` and `known_good`, while the
+fault slot was no longer current. The final recovered Runtime was still making
+progress when the aggregate 90-minute deadline expired during the last
+rollback-health wait. Failure cleanup restored the disposable pointers to
+empty and left no child process. No Candidate report, release or publication
+was created. This is complete functional evidence through rollback pointer
+recovery, but not a successful ceremony receipt.
+
+Read-only profiling on the retained tenth slot found the remaining product
+problem rather than extending the deadline again. Two consecutive serial
+Pack-Python closure scans did not finish within 904 seconds. The closure held
+2,388 files but only 61.9 MB, proving that Windows small-file open/metadata
+cost, not byte throughput or ASGI/model traffic, dominated. A representative
+temporary compaction moved 1,952 zip-safe members into a 5,502,287-byte
+`python311.zip`, reduced the physical closure to 437 files / 45,830,062 bytes,
+and preserved isolated imports of cryptography, FastAPI, HTTPX, Pydantic,
+multipart, tzdata, Uvicorn, WebSockets and EcoreX. The first serial verification
+of that compact copy took 181.044 seconds; after the bounded parallel verifier
+was introduced, the same closure digest completed in 0.274 seconds and the
+slot-tree digest in 0.384 seconds. The original uncompressed 2,388-file closure
+also reproduced its exact digest in 1.470 seconds. These focused timings are
+diagnostic comparisons on one host, not Candidate readiness receipts.
+
+Platform staging now creates that deterministic CPython import archive only
+for zip-safe modules and reviewed resource packages. Native `.pyd/.dll/.exe`
+trees and path-sensitive data stay unpacked. Secret scanning explicitly opens
+and validates canonical, case-fold-unique archive members, and administrator
+assets now use package resources so their exact allowlist works under
+zipimport. The isolated Core probe opens both administrator assets and the
+zipped `certifi` CA resource. Pack-Python and slot-tree verifiers use at most
+16 streaming workers with content, size, object identity, mtime/ctime,
+path-mode and reparse-attribute fences plus pre-admission size limits. Slot
+receipt validation computes full and Core-only digests from one verified
+record set. Nothing is cached across a process boundary.
+
+The focused safety set passed 73 tests with three platform-conditioned skips.
+The complete affected platform-staging, process-Pack, atomic install, update
+durability/coordinator, Candidate pipeline, product Runtime entrypoint,
+administrator Web and signed-drill set passed 182 tests with five skips. Ruff,
+Python compilation and zipimport asset regression passed. The current-source
+supply-chain preflight records 23 locked = 23 licensed Runtime packages and
+449 scanned production files with inventory digest
+`7a1c2a1c837c4acb615d7a18e7b65b16cf865dad30a19efad84373fc3d5270e8` in
+`.candidate/quality/supply-chain-local-runtime-trust-scan-v2.json`; Runtime and
+Server schema-authority plus design-system gates have zero violations. An
+eleventh fresh committed zero-publication ceremony is required to measure a
+cold signed build and complete the final recovered-Runtime health within the
+bounded policy.

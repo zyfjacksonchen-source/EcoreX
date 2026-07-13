@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import hashlib
 import os
@@ -31,6 +32,9 @@ class StorageError(RuntimeError):
 
 class UnsafePackage(StorageError):
     pass
+
+
+MAX_PAYLOAD_SCAN_WORKERS = 16
 
 
 @dataclass(frozen=True, slots=True)
@@ -653,13 +657,7 @@ def _package_payload_digest(package_path: Path, artifact: ReleaseArtifact) -> st
 
 
 def _payload_tree_digest(root: Path) -> str:
-    _require_real_directory(root, label="slot payload")
-    records: list[tuple[str, int, str]] = []
-    for path in _walk_regular_files(root):
-        relative = path.relative_to(root).as_posix()
-        mode = stat.S_IMODE(path.stat().st_mode) if os.name != "nt" else 0
-        records.append((relative, mode, _sha256_path(path)))
-    return _records_digest(records)
+    return _records_digest(_payload_tree_records(root))
 
 
 def _validate_payload_receipt(
@@ -671,7 +669,8 @@ def _validate_payload_receipt(
     """Validate either a Core-only or Core+signed-supplemental payload."""
 
     expected_core = _package_payload_digest(receipt_package, artifact)
-    actual = _payload_tree_digest(payload_root)
+    records = _payload_tree_records(payload_root)
+    actual = _records_digest(records)
     supplemental = marker.get("supplemental")
     if supplemental is None:
         if "core_payload_digest" in marker:
@@ -689,9 +688,12 @@ def _validate_payload_receipt(
     # it is local metadata rather than signed release material. Reconstruct
     # the Core sub-tree independently of the fixed Pack projection and bind it
     # back to the retained, signed Core archive on every verification.
-    actual_core = _payload_tree_digest_excluding_top_level(
-        payload_root,
-        frozenset({"capability-packs"}),
+    actual_core = _records_digest(
+        [
+            record
+            for record in records
+            if PurePosixPath(record[0]).parts[0] != "capability-packs"
+        ]
     )
     if actual_core != expected_core:
         raise StorageError("supplemental slot Core payload was modified")
@@ -704,16 +706,64 @@ def _payload_tree_digest_excluding_top_level(
     root: Path,
     excluded: frozenset[str],
 ) -> str:
-    _require_real_directory(root, label="slot payload")
-    records: list[tuple[str, int, str]] = []
-    for path in _walk_regular_files(root):
-        relative_path = path.relative_to(root)
-        if relative_path.parts and relative_path.parts[0] in excluded:
-            continue
-        relative = relative_path.as_posix()
-        mode = stat.S_IMODE(path.stat().st_mode) if os.name != "nt" else 0
-        records.append((relative, mode, _sha256_path(path)))
+    records = [
+        record
+        for record in _payload_tree_records(root)
+        if PurePosixPath(record[0]).parts[0] not in excluded
+    ]
     return _records_digest(records)
+
+
+def _payload_tree_records(root: Path) -> list[tuple[str, int, str]]:
+    _require_real_directory(root, label="slot payload")
+    files = _walk_regular_files(root)
+    if not files:
+        return []
+    workers = min(MAX_PAYLOAD_SCAN_WORKERS, len(files))
+    with ThreadPoolExecutor(
+        max_workers=workers,
+        thread_name_prefix="ecorex-slot-verify",
+    ) as executor:
+        records = list(
+            executor.map(
+                _payload_file_record,
+                ((root, path) for path in files),
+            )
+        )
+    records.sort(key=lambda item: item[0])
+    return records
+
+
+def _payload_file_record(candidate: tuple[Path, Path]) -> tuple[str, int, str]:
+    root, path = candidate
+    try:
+        before = path.lstat()
+        if _metadata_is_link_or_reparse(before) or not stat.S_ISREG(before.st_mode):
+            raise StorageError(f"slot payload contains an unsafe file: {path}")
+        digest = hashlib.sha256()
+        observed_size = 0
+        with path.open("rb") as stream:
+            opened = os.fstat(stream.fileno())
+            while chunk := stream.read(1024 * 1024):
+                observed_size += len(chunk)
+                digest.update(chunk)
+            after = os.fstat(stream.fileno())
+        current = path.lstat()
+    except StorageError:
+        raise
+    except OSError as exc:
+        raise StorageError(f"slot payload cannot be verified: {path}") from exc
+    identity = _stat_identity(before)
+    path_identity = _path_identity(before)
+    if (
+        _stat_identity(opened) != identity
+        or _stat_identity(after) != identity
+        or _path_identity(current) != path_identity
+        or observed_size != before.st_size
+    ):
+        raise StorageError(f"slot payload changed while being verified: {path}")
+    mode = stat.S_IMODE(before.st_mode) if os.name != "nt" else 0
+    return path.relative_to(root).as_posix(), mode, digest.hexdigest()
 
 
 def _walk_regular_files(root: Path) -> list[Path]:
@@ -815,9 +865,31 @@ def _is_link_or_reparse(path: Path) -> bool:
         metadata = path.lstat()
     except FileNotFoundError:
         return False
+    return _metadata_is_link_or_reparse(metadata)
+
+
+def _metadata_is_link_or_reparse(metadata: os.stat_result) -> bool:
     attributes = getattr(metadata, "st_file_attributes", 0)
     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
     return stat.S_ISLNK(metadata.st_mode) or bool(attributes & reparse_flag)
+
+
+def _stat_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _path_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    return (
+        *_stat_identity(metadata),
+        metadata.st_mode,
+        int(getattr(metadata, "st_file_attributes", 0)),
+    )
 
 
 def _require_real_directory(path: Path, *, label: str) -> None:

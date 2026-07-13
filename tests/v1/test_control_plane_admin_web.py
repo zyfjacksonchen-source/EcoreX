@@ -7,6 +7,9 @@ from html.parser import HTMLParser
 from pathlib import Path
 import re
 import shutil
+import subprocess
+import sys
+import zipfile
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
@@ -138,6 +141,46 @@ def test_asset_verifier_fails_closed_for_tamper_extra_files_and_bad_prefix(tmp_p
 
     with pytest.raises(ValueError, match="prefix"):
         create_admin_web_router(prefix="//unsafe")
+
+
+def test_asset_verifier_reads_signed_resources_through_zipimport(tmp_path: Path) -> None:
+    archive = tmp_path / "admin-resources.zip"
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "ecorex"
+        / "control_plane"
+        / "admin_web"
+        / "assets.py"
+    )
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as output:
+        output.writestr("zipped_admin/__init__.py", b"")
+        output.write(source, "zipped_admin/assets.py")
+        for path in sorted(STATIC.iterdir()):
+            output.write(path, f"zipped_admin/static/{path.name}")
+    completed = subprocess.run(
+        (
+            sys.executable,
+            "-I",
+            "-S",
+            "-c",
+            (
+                "import sys;"
+                f"sys.path.insert(0,{str(archive)!r});"
+                "from zipped_admin.assets import AdminWebAssets;"
+                "bundle=AdminWebAssets.load();"
+                "assert len(bundle.assets)==2;"
+                "assert len(bundle.index_digest)==64"
+            ),
+        ),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=30,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr.decode(
+        "utf-8", errors="replace"
+    )
 
 
 def test_admin_dom_and_script_contract_are_csp_safe_and_ephemeral() -> None:

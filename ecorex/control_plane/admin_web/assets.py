@@ -5,6 +5,7 @@ from __future__ import annotations
 from base64 import b64encode
 from dataclasses import dataclass
 import hashlib
+from importlib import resources
 import json
 from pathlib import Path
 import re
@@ -73,29 +74,12 @@ class AdminWebAssets:
 
     @classmethod
     def load(cls, static_directory: Path | None = None) -> "AdminWebAssets":
-        candidate_root = (
-            static_directory
+        payloads = (
+            _directory_asset_payloads(static_directory)
             if static_directory is not None
-            else Path(__file__).resolve().parent / "static"
+            else _package_asset_payloads()
         )
-        if candidate_root.is_symlink():
-            raise AdminWebAssetError("administrator static directory is invalid")
-        root = candidate_root.resolve()
-        if not root.is_dir():
-            raise AdminWebAssetError("administrator static directory is invalid")
-        present = frozenset(entry.name for entry in root.iterdir())
-        if present != _EXPECTED_FILES:
-            raise AdminWebAssetError("administrator static allowlist does not match")
-        for name in _EXPECTED_FILES:
-            path = root / name
-            if not path.is_file() or path.is_symlink() or path.resolve().parent != root:
-                raise AdminWebAssetError(f"administrator static file is invalid: {name}")
-
-        manifest_path = root / "asset-manifest.json"
-        try:
-            manifest_bytes = manifest_path.read_bytes()
-        except OSError as error:
-            raise AdminWebAssetError("administrator asset manifest cannot be read") from error
+        manifest_bytes = payloads["asset-manifest.json"]
         if not 1 <= len(manifest_bytes) <= 64 * 1024:
             raise AdminWebAssetError("administrator asset manifest size is invalid")
         try:
@@ -116,10 +100,7 @@ class AdminWebAssets:
             expected_digest = manifest["assets"].get(name)
             if not isinstance(expected_digest, str) or _DIGEST.fullmatch(expected_digest) is None:
                 raise AdminWebAssetError(f"administrator asset digest is invalid: {name}")
-            try:
-                content = (root / name).read_bytes()
-            except OSError as error:
-                raise AdminWebAssetError(f"administrator asset cannot be read: {name}") from error
+            content = payloads[name]
             if not 1 <= len(content) <= _SIZE_LIMITS[name]:
                 raise AdminWebAssetError(f"administrator asset size is invalid: {name}")
             verified_by_source[name] = VerifiedAdminAsset.from_content(
@@ -173,6 +154,51 @@ class AdminWebAssets:
 
     def get(self, public_name: str) -> VerifiedAdminAsset | None:
         return self.assets.get(public_name)
+
+
+def _directory_asset_payloads(candidate_root: Path) -> dict[str, bytes]:
+    if candidate_root.is_symlink():
+        raise AdminWebAssetError("administrator static directory is invalid")
+    root = candidate_root.resolve()
+    if not root.is_dir():
+        raise AdminWebAssetError("administrator static directory is invalid")
+    present = frozenset(entry.name for entry in root.iterdir())
+    if present != _EXPECTED_FILES:
+        raise AdminWebAssetError("administrator static allowlist does not match")
+    payloads: dict[str, bytes] = {}
+    for name in _EXPECTED_FILES:
+        path = root / name
+        if not path.is_file() or path.is_symlink() or path.resolve().parent != root:
+            raise AdminWebAssetError(f"administrator static file is invalid: {name}")
+        try:
+            payloads[name] = path.read_bytes()
+        except OSError as error:
+            raise AdminWebAssetError(
+                f"administrator asset cannot be read: {name}"
+            ) from error
+    return payloads
+
+
+def _package_asset_payloads() -> dict[str, bytes]:
+    """Read signed package resources from a directory or zipimport archive."""
+
+    try:
+        root = resources.files(__package__).joinpath("static")
+        entries = tuple(root.iterdir())
+        present = frozenset(entry.name for entry in entries)
+        if present != _EXPECTED_FILES or any(
+            not root.joinpath(name).is_file() for name in _EXPECTED_FILES
+        ):
+            raise AdminWebAssetError(
+                "administrator static allowlist does not match"
+            )
+        return {name: root.joinpath(name).read_bytes() for name in _EXPECTED_FILES}
+    except AdminWebAssetError:
+        raise
+    except (FileNotFoundError, OSError, TypeError) as error:
+        raise AdminWebAssetError(
+            "administrator static directory is invalid"
+        ) from error
 
 
 __all__ = [

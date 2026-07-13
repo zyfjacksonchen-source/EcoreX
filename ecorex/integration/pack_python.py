@@ -9,6 +9,7 @@ contract without PATH lookup, symlink following or fallback.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import hashlib
 import json
@@ -25,6 +26,7 @@ PACK_PYTHON_MANIFEST = "pack-python.json"
 MAX_MANIFEST_BYTES = 64 * 1024
 MAX_CLOSURE_FILES = 50_000
 MAX_CLOSURE_BYTES = 1024 * 1024 * 1024
+MAX_CLOSURE_SCAN_WORKERS = 16
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _TARGETS = frozenset(
     {("windows", "x64"), ("macos", "arm64"), ("macos", "x64")}
@@ -199,10 +201,10 @@ def build_pack_python_manifest(
 
 def scan_pack_python_closure(root: Path) -> Mapping[str, Any]:
     directory = _trusted_directory(root, code="pack_python_closure_invalid")
-    records: list[dict[str, Any]] = []
+    candidates: list[tuple[Path, str]] = []
     pending = [directory]
     seen: set[str] = set()
-    total = 0
+    declared_total = 0
     while pending:
         current = pending.pop()
         try:
@@ -230,26 +232,25 @@ def scan_pack_python_closure(root: Path) -> Mapping[str, Any]:
                 continue
             if not stat.S_ISREG(metadata.st_mode):
                 raise PackPythonError("pack_python_closure_invalid")
-            if len(records) >= MAX_CLOSURE_FILES:
+            if len(candidates) >= MAX_CLOSURE_FILES:
                 raise PackPythonError("pack_python_closure_file_limit")
-            payload = _stable_regular_bytes(
-                path,
-                maximum=MAX_CLOSURE_BYTES,
-                code="pack_python_closure_invalid",
-                minimum=0,
-            )
-            total += len(payload)
-            if total > MAX_CLOSURE_BYTES:
+            if metadata.st_size > MAX_CLOSURE_BYTES:
+                raise PackPythonError("pack_python_closure_invalid")
+            declared_total += metadata.st_size
+            if declared_total > MAX_CLOSURE_BYTES:
                 raise PackPythonError("pack_python_closure_size_limit")
-            records.append(
-                {
-                    "path": relative,
-                    "size_bytes": len(payload),
-                    "sha256": hashlib.sha256(payload).hexdigest(),
-                }
-            )
-    if not records:
+            candidates.append((path, relative))
+    if not candidates:
         raise PackPythonError("pack_python_closure_invalid")
+    workers = min(MAX_CLOSURE_SCAN_WORKERS, len(candidates))
+    with ThreadPoolExecutor(
+        max_workers=workers,
+        thread_name_prefix="ecorex-pack-verify",
+    ) as executor:
+        records = list(executor.map(_closure_file_record, candidates))
+    total = sum(int(record["size_bytes"]) for record in records)
+    if total != declared_total or total > MAX_CLOSURE_BYTES:
+        raise PackPythonError("pack_python_closure_size_limit")
     records.sort(key=lambda item: item["path"])
     digest = hashlib.sha256(
         b"ecorex-pack-python-v1\n"
@@ -257,6 +258,17 @@ def scan_pack_python_closure(root: Path) -> Mapping[str, Any]:
         + b"\n"
     ).hexdigest()
     return {"file_count": len(records), "size_bytes": total, "sha256": digest}
+
+
+def _closure_file_record(candidate: tuple[Path, str]) -> dict[str, Any]:
+    path, relative = candidate
+    size, digest = _stable_regular_digest(
+        path,
+        maximum=MAX_CLOSURE_BYTES,
+        code="pack_python_closure_invalid",
+        minimum=0,
+    )
+    return {"path": relative, "size_bytes": size, "sha256": digest}
 
 
 def _contained_path(root: Path, relative: PurePosixPath) -> Path:
@@ -313,21 +325,82 @@ def _stable_regular_bytes(
         raise
     except OSError:
         raise PackPythonError(code) from None
-    identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+    identity = _stat_identity(before)
+    path_identity = _path_identity(before)
     if (
-        (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) != identity
-        or (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != identity
-        or (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns) != identity
+        _stat_identity(opened) != identity
+        or _stat_identity(after) != identity
+        or _path_identity(current) != path_identity
         or len(payload) != before.st_size
     ):
         raise PackPythonError(code)
     return payload
 
 
+def _stable_regular_digest(
+    path: Path,
+    *,
+    maximum: int,
+    code: str,
+    minimum: int = 1,
+) -> tuple[int, str]:
+    try:
+        before = path.lstat()
+        if (
+            _is_link_or_reparse(before)
+            or not stat.S_ISREG(before.st_mode)
+            or not minimum <= before.st_size <= maximum
+        ):
+            raise PackPythonError(code)
+        digest = hashlib.sha256()
+        observed_size = 0
+        with path.open("rb") as stream:
+            opened = os.fstat(stream.fileno())
+            while chunk := stream.read(1024 * 1024):
+                observed_size += len(chunk)
+                if observed_size > maximum:
+                    raise PackPythonError(code)
+                digest.update(chunk)
+            after = os.fstat(stream.fileno())
+        current = path.lstat()
+    except PackPythonError:
+        raise
+    except OSError:
+        raise PackPythonError(code) from None
+    identity = _stat_identity(before)
+    path_identity = _path_identity(before)
+    if (
+        _stat_identity(opened) != identity
+        or _stat_identity(after) != identity
+        or _path_identity(current) != path_identity
+        or observed_size != before.st_size
+    ):
+        raise PackPythonError(code)
+    return observed_size, digest.hexdigest()
+
+
 def _is_link_or_reparse(metadata: os.stat_result) -> bool:
     return stat.S_ISLNK(metadata.st_mode) or bool(
         getattr(metadata, "st_file_attributes", 0)
         & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    )
+
+
+def _stat_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _path_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    return (
+        *_stat_identity(metadata),
+        metadata.st_mode,
+        int(getattr(metadata, "st_file_attributes", 0)),
     )
 
 

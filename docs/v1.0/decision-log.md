@@ -1576,3 +1576,39 @@
 - Consequence: the release drill can exercise first install, source-removed
   migration restart, update-and-refresh and rollback in one ceremony without
   weakening the bounded failure behavior of any individual process.
+
+## ADR-096 - Runtime trust scans are compacted, bounded and process-local
+
+- Status: accepted.
+- Decision: platform staging writes zip-safe standard-library modules, EcoreX
+  modules, distribution metadata and reviewed resource packages into the
+  deterministic versioned archive CPython already places first on `sys.path`.
+  Native-backed packages and path-sensitive data remain ordinary files. The
+  complete resulting layout, including the import archive, remains covered by
+  the signed Core and `pack-python.json` closure digest.
+- Verification decision: closure and slot-tree hashing use at most 16 bounded
+  workers and stream file contents instead of loading a parallel working set
+  into memory. Every worker independently checks pre-open metadata, open-handle
+  identity, size, mtime/ctime and post-read path mode/reparse attributes.
+  File-count, per-file and aggregate byte limits are enforced before workers
+  start. Slot receipt
+  validation derives its full-tree and Core-only digests from one verified
+  record set rather than reopening the same files.
+- Supply-chain boundary: compacting files may not hide them from scanning. The
+  platform gate validates archive paths, encryption flags, links, member
+  count and expanded size, then applies the same secret patterns to bounded
+  members. Member names must already be canonical POSIX paths and remain unique
+  under case folding. Administrator Web assets use `importlib.resources`, so
+  their exact allowlist and content digests still work from a directory or
+  zipimport; the isolated Core probe opens those assets and `certifi` data.
+- Trust boundary: no digest result survives the process or Runtime
+  composition. Bootstrap, a full Runtime and a later restart each independently
+  verify signed content. There is no persisted trust cache, mtime-only shortcut,
+  PATH fallback or acceptance of a local marker as signed truth.
+- Rejected alternatives: merely raising the ceremony budget would preserve
+  multi-minute user refreshes; trusting the Windows AppContainer ACL receipt
+  would confuse sandbox read-only policy with host-user content integrity; and
+  caching a previous process's result would weaken restart verification.
+- Consequence: signed install, restart, update and rollback retain the same
+  fail-closed byte identity while eliminating repeated serial small-file
+  storms that dominated local Windows readiness.
