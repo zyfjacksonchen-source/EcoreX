@@ -19,6 +19,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from ecorex.release import candidate_receipt_signing_payload  # noqa: E402
+from ecorex.release.live_acceptance import (  # noqa: E402
+    LIVE_ACCEPTANCE_GATES,
+    validate_live_acceptance_evidence,
+)
 from ecorex.pack_catalog import REQUIRED_CAPABILITY_PACK_IDS  # noqa: E402
 from ecorex.release.candidate import STAGE_WORKFLOW_PATH, TARGETS  # noqa: E402
 from ecorex.release.evidence_io import (  # noqa: E402
@@ -75,7 +79,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--gate",
         required=True,
-        choices=("e2e", "migration-dry-run", "image-shared-storage", "image-soak"),
+        choices=(
+            "e2e",
+            "migration-dry-run",
+            "image-shared-storage",
+            "image-soak",
+            *sorted(LIVE_ACCEPTANCE_GATES),
+        ),
     )
     parser.add_argument("--source-evidence", required=True, type=Path)
     parser.add_argument("--candidate-receipt", required=True, type=Path)
@@ -247,12 +257,27 @@ def _staging(path: Path, *, commit: str, run_id: int) -> tuple[dict[str, Any], s
 
 
 def _validate_source(
-    gate: str, value: dict[str, Any], *, commit: str, workflow_run_id: int
+    gate: str,
+    value: dict[str, Any],
+    *,
+    commit: str,
+    workflow_run_id: int,
+    expected_candidate: dict[str, object] | None = None,
 ) -> dict[str, Any]:
     if value.get("status") != "passed" or value.get("commit_sha") != commit:
         raise ValueError("gate_source_identity_invalid")
     if value.get("workflow_run_id") != workflow_run_id:
         raise ValueError("gate_source_workflow_invalid")
+    if gate in LIVE_ACCEPTANCE_GATES:
+        if expected_candidate is None:
+            raise ValueError("live_acceptance_candidate_missing")
+        executions = validate_live_acceptance_evidence(
+            value,
+            expected_commit=commit,
+            expected_workflow_run_id=workflow_run_id,
+            expected_candidate=expected_candidate,
+        )
+        return executions[gate]
     if gate in {"e2e", "migration-dry-run"}:
         executions = value.get("executions")
         selected_key = "browser-e2e" if gate == "e2e" else "migration-pytest"
@@ -435,6 +460,7 @@ def build_release_bound_evidence(
         "migration-dry-run",
         "image-shared-storage",
         "image-soak",
+        *LIVE_ACCEPTANCE_GATES,
     }:
         raise ValueError("release_bound_gate_invalid")
     if _COMMIT.fullmatch(commit_sha) is None or workflow_run_id < 1:
@@ -454,6 +480,15 @@ def build_release_bound_evidence(
         source,
         commit=commit_sha,
         workflow_run_id=workflow_run_id,
+        expected_candidate={
+            "release_id": manifest.release_id,
+            "version": manifest.version,
+            "channel": manifest.channel.value,
+            "build_digest": manifest.build_digest,
+            "manifest_sha256": authenticated["manifest_sha256"],
+            "web_tree_sha256": authenticated["web_tree_sha256"],
+            "candidate_receipt_sha256": authenticated["candidate_sha256"],
+        },
     )
     return {
         "schema_version": 2,

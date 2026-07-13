@@ -48,6 +48,13 @@ from .replica import (
 )
 from .publication import PublishedReleaseAssets, ReleaseAssetPublicationCoordinator
 from .identity import release_tag
+from .live_acceptance import (
+    LIVE_ACCEPTANCE_GATES,
+    REQUIRED_CDP_SCENARIOS,
+    REQUIRED_CDP_VIEWPORTS,
+    REQUIRED_LIVE_TOOL_IDS,
+    validate_live_acceptance_evidence,
+)
 from .public_index import (
     MAX_PUBLIC_BOOTSTRAP_INDEX_BYTES,
     PUBLIC_BOOTSTRAP_AUTHORITY_DOMAIN,
@@ -96,6 +103,7 @@ __all__ = [
     "GitHubPublicationError",
     "GitHubReleaseDraft",
     "GitHubReleasePublisher",
+    "LIVE_ACCEPTANCE_GATES",
     "release_tag",
     "HTTPSReleaseReplicaPublisher",
     "HTTPSPublicBootstrapIndexPublisher",
@@ -117,6 +125,9 @@ __all__ = [
     "PublicBootstrapPublicationError",
     "PublicBootstrapPublicationReceipt",
     "PublicBootstrapStageReceipt",
+    "REQUIRED_CDP_SCENARIOS",
+    "REQUIRED_CDP_VIEWPORTS",
+    "REQUIRED_LIVE_TOOL_IDS",
     "ReleaseAssetPublicationCoordinator",
     "ReleaseBuildError",
     "ReleaseBuilder",
@@ -139,6 +150,7 @@ __all__ = [
     "stable_pointer_sequence",
     "unpublished_public_bootstrap_index",
     "validate_public_bootstrap_index",
+    "validate_live_acceptance_evidence",
     "write_failure_receipt",
     "write_stage_receipt",
     "write_public_bootstrap_index",

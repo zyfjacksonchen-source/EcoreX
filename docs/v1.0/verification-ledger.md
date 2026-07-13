@@ -1563,3 +1563,18 @@ live managed-model or protected-platform evidence. It cannot authorize a push.
 
 This report supersedes the twelfth ceremony only as current local Windows
 evidence. It still cannot satisfy protected-runner or live-provider gates.
+
+## Protected live-acceptance publication contract - 2026-07-14
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Root-cause audit | 0 | Confirmed that the former 21-gate Control Plane contract omitted real Model Gateway, real Image Gateway and post-build Chrome CDP acceptance. The old `publish` job depended directly on `build-and-sign`. |
+| Fixed gate set | 0 | Added `live-model`, `live-image` and `cdp-acceptance` to the central required set for canary and stable. Promotion journals, missing-gate projections and evidence assembly inherit the same authority. |
+| Post-signing workflow fence | 0 | Protected Windows x64 `live-acceptance` now needs `build-and-sign`; it downloads the exact Candidate, binds all three executions and emits `ecorex-v1-accepted-*`. `publish` needs this job and cannot download the earlier Candidate artifact. |
+| Process/secret boundary | 0 | The signed manifest, signed Candidate receipt and exact protected staging provenance are authenticated before the driver can run. The executable is digest-pinned and rechecked before/after execution; stdin-only request, bounded stdout/stderr, process-tree kill, exact environment allowlist, redacted failure codes and exact JSON shape prevent argv/env/path evidence leakage or detached children. |
+| Model/Image/CDP evidence | 0 | Validator requires GPT-5.6 SOL medium/272,000, four unique concurrent Image 2 completions, non-exclusive discovery of read/fetch/vision/CDP/shell/imagegen, structured precise retouch, 18 fixed CDP scenarios, four viewports and zero browser diagnostics. |
+| New regression | 0 | `test_live_acceptance_release_gate.py`: 13 passed; malformed model, typed tool discovery/counts/digests, retouch, CDP and Candidate identity evidence all fail closed; pre-driver authentication and failure redaction are fixed contracts. |
+| Affected release regression | 0 | Gate integrity, exact-byte promotion, Candidate pipeline, Control Plane release/admin CLI, real Web pipeline and new live gate: 52 passed / 0 failed. Python compilation, Ruff and YAML parse passed. |
+| Broad release regression | 0 | Full v1 collection filtered to release/Candidate/Control Plane/live acceptance: 335 passed / 4 explicit platform skips / 1,551 deselected / 0 failed in 210.51 seconds. Source-tree gate: 635 files. |
+| Current-source supply chain | 0 | 23 locked Runtime packages have complete license inventory; 451 production files passed secret scan, inventory `62582b16...80a3`. Report `.candidate/quality/supply-chain-local-live-acceptance-gates-final-v3.json`, SHA-256 `f9dced93...32b3`, 21,857 bytes. |
+| Live execution | blocked | No protected driver configuration or live managed provider session exists in the current environment. No evidence was fabricated, no publication job was dispatched and no user rollout was activated. |

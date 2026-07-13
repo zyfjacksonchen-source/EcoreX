@@ -25,6 +25,7 @@ from ecorex.release.ci_reproducibility import (  # noqa: E402
     bind_to_candidate as bind_reproducibility_to_candidate,
     canonical_json_bytes,
 )
+from ecorex.release.live_acceptance import LIVE_ACCEPTANCE_GATES  # noqa: E402
 from ecorex.release.evidence_io import (  # noqa: E402
     read_stable_regular_file,
     strict_json_loads,
@@ -42,7 +43,13 @@ _QUALITY_GATES = frozenset(
     {"lint", "typecheck", "unit", "contract", "integration", "migration-dry-run"}
 )
 _BOUND_GATES = frozenset(
-    {"e2e", "migration-dry-run", "image-shared-storage", "image-soak"}
+    {
+        "e2e",
+        "migration-dry-run",
+        "image-shared-storage",
+        "image-soak",
+        *LIVE_ACCEPTANCE_GATES,
+    }
 )
 _REPRODUCIBILITY_GATES = frozenset({"reproducibility"})
 _PLATFORM_GATES = frozenset({"windows-build", "macos-build"})

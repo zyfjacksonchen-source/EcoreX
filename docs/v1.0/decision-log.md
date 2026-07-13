@@ -1687,3 +1687,38 @@
 - Consequence: deterministic browser acceptance cannot report a false terminal
   transition or misleading edit summary, and it exercises the same authority
   boundaries expected from the production Runtime.
+
+## ADR-101 - Live providers and CDP are immutable publication gates
+
+- Status: accepted.
+- Root cause: the protected Candidate workflow previously required source,
+  platform, image-soak, signing and supply-chain evidence but did not include
+  real `gpt-5.6-sol`, real `gpt-image-2` or real-user Chrome CDP execution in
+  `REQUIRED_RELEASE_GATES`. A signed Candidate could therefore reach the
+  publication job while all three user-critical paths were unavailable.
+- Decision: `live-model`, `live-image` and `cdp-acceptance` are fixed Control
+  Plane gates for canary and stable. They run only after the immutable Candidate
+  exists and before any mirror, GitHub Release or CDN mutation. The publication
+  job downloads only `ecorex-v1-accepted-*`; the earlier signed-but-unaccepted
+  artifact is structurally ineligible.
+- Runner boundary: a protected self-hosted Windows x64 runner invokes one
+  digest-pinned acceptance driver. The driver reads a canonical request from
+  stdin, uses the runner's Windows Credential Manager session and production
+  managed endpoints, and returns bounded JSON on stdout. Credentials, prompts,
+  responses, URLs and paths are forbidden from evidence. The wrapper inherits
+  only a small OS/Chrome environment allowlist and kills the complete process
+  tree on timeout or output overflow. It authenticates the signed manifest,
+  signed Candidate receipt and protected platform provenance before the driver
+  is allowed to inspect or activate Candidate bytes.
+- Evidence boundary: one exact-schema record proves the signed release/build/
+  Web identity, GPT-5.6 SOL medium reasoning with the 272,000-token compaction
+  threshold, four-way live Image 2 completion, non-exclusive tool discovery,
+  structured retouch preservation, and the fixed Chrome CDP scenario matrix.
+  It contains only identifiers, counts, scores and SHA-256 values. Each of the
+  three projections is then recomputed and release-bound before a gate receipt
+  can be written.
+- Consequence: missing driver configuration, unavailable providers, partial
+  scenarios, a model alias drift, a reused image, a non-precise retouch result,
+  browser diagnostics or Candidate identity drift all stop before publication.
+  Local fixture/CDP reports remain useful diagnostics but cannot satisfy these
+  protected live gates.

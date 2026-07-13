@@ -4386,3 +4386,46 @@ Its local report is
 `.candidate/quality/supply-chain-local-current-89fab32a.json`, SHA-256
 `2df5d8288560ee5d476eb6f447be3e79383379d264940069ac2eacca3260a2db`.
 No deployment or user update was attempted.
+
+## 2026-07-14 - Live provider and CDP publication gates made fail-closed
+
+An audit of the protected Candidate workflow found a release-contract gap:
+platform, soak, signing and supply-chain receipts were mandatory, but real
+managed inference and the requested post-build CDP pass were not members of the
+Control Plane's authoritative gate set. The workflow could therefore publish a
+correctly signed but unusable product if Model/Image Gateway access was broken.
+
+The release contract now adds `live-model`, `live-image` and `cdp-acceptance`
+for both canary and stable. A new post-signing job runs on the protected
+`ecorex-live-acceptance` Windows x64 runner, downloads the exact signed
+Candidate, invokes a digest-pinned environment driver through a bounded process
+boundary, validates one redaction-safe exact-schema result and binds each
+execution independently to the authenticated Candidate receipt, release
+manifest, platform provenance and current workflow run. The remote publication
+job now depends on that job and downloads only the newly uploaded
+`ecorex-v1-accepted-*` artifact.
+
+The evidence validator fixes the required product assertions: GPT-5.6 SOL,
+medium reasoning and 272,000-token compaction; Image 2 selected through ranked,
+non-exclusive routing while read/fetch/vision/CDP/shell remain discoverable;
+four concurrent unique live images with zero server errors; rectangle retouch
+with a changed revision and at least 0.95 unchanged-region similarity; and 18
+real-user CDP scenarios over the four responsive viewports with zero console,
+page or request errors. Evidence may contain only bounded metadata and hashes.
+
+The wrapper authenticates the signed release manifest, signed Candidate receipt
+and protected staging provenance before the environment driver can inspect or
+activate bytes. Its failure channel now emits only controlled error codes or
+exception class names, so loader, filesystem and provider paths cannot escape.
+
+The new gate suite passes 13 tests. The affected Candidate, exact-byte
+promotion, Control Plane publication/admin and real Web release suites pass 52
+tests. The broader release/Candidate/Control Plane selection passes 335 tests
+with four explicit platform skips. Python compilation, Ruff, the 635-file
+source-tree gate and workflow YAML parsing pass. Current-source supply-chain
+preflight passes with 23 locked/licensed Runtime packages and 451 secret-scanned
+files; report
+`.candidate/quality/supply-chain-local-live-acceptance-gates-final-v3.json`, SHA-256
+`f9dced93aead52c7f7eddad61a59d274ef1e6065d70f842ccaf85b63de8132b3`.
+No live driver or provider was available in the current shell, so the three new
+gates are correctly unresolved and no publication was attempted.

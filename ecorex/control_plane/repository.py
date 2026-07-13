@@ -21,6 +21,7 @@ from ecorex.release.public_index import (
     PublicBootstrapIndexError,
     validate_public_bootstrap_index,
 )
+from ecorex.release.live_acceptance import LIVE_ACCEPTANCE_GATES
 from ecorex.update import (
     ReleaseChannel,
     ReleaseManifest,
@@ -65,7 +66,7 @@ REQUIRED_RELEASE_GATES = frozenset(
         "cdn-sync",
         "bootstrap-index",
     }
-)
+) | LIVE_ACCEPTANCE_GATES
 STABLE_ONLY_RELEASE_GATES = frozenset({"bootstrap-index"})
 
 
