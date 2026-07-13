@@ -4221,3 +4221,39 @@ Server schema-authority plus design-system gates have zero violations. An
 eleventh fresh committed zero-publication ceremony is required to measure a
 cold signed build and complete the final recovered-Runtime health within the
 bounded policy.
+
+## 2026-07-14 - Eleventh ceremony and archive-aware fault candidate
+
+The eleventh zero-publication Windows ceremony started from committed source
+`6cd7ccd8` with the unchanged 5,400-second aggregate, 3,000-second platform and
+900-second per-Runtime limits. Its cold Core input reached 2,389 physical files,
+then atomically compacted to 437 files with a 5,503,338-byte `python311.zip`.
+The platform stager completed Core, Bootstrap and all six required Capability
+Packs. First install again exercised domestic-mirror-first failure and GitHub
+fallback, waited at `awaiting_user`, activated only after explicit confirmation,
+reached full Runtime health and completed registration. Released-v0.3 data
+migrated copy-on-write, the source-removed Runtime restarted, and a distinct
+healthy update was prepared, confirmed, activated and healthchecked.
+
+At 1,450.3 seconds the ceremony failed before building the deliberate fault
+release. The fixture still searched only for an unpacked
+`ecorex/server/__main__.py`; the production Core now correctly stores that
+module in the signed import archive. No Candidate report or publication was
+created. Failure cleanup removed the temporary install/stage root and left no
+child Runtime. This failure does not invalidate the completed install,
+migration or healthy-update observations, but it is not a ceremony receipt.
+
+The fixture now accepts exactly one directory or zipimport entrypoint. Its ZIP
+reader rejects non-canonical/case-colliding names, encryption, links/special
+files and member/expanded-size excess, rewrites through a same-directory
+temporary archive and validates the result. It then regenerates and resolves
+`pack-python.json`, ensuring the signed fault Core is internally consistent and
+actually reaches the bounded exit-70 module instead of failing on a stale
+closure digest. The Windows drill unit suite passes 15 tests; a fresh committed
+twelfth zero-publication ceremony is required. The complete affected staging,
+Pack, install/update, Candidate, Runtime entrypoint, administrator Web and
+Windows-drill suite passes 184 tests with five platform skips. Current-source
+supply-chain preflight records 23 locked = 23 licensed Runtime packages and
+449 files with inventory digest
+`29eab98fe9742876a76c496ddaed9cae2d53055dea7f3124a147cd56c1090ff3` in
+`.candidate/quality/supply-chain-local-runtime-trust-scan-v3.json`.

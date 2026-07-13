@@ -25,12 +25,13 @@ import importlib.metadata
 from io import BytesIO
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import platform
 import re
 import shutil
 import signal
 import sqlite3
+import stat
 import subprocess
 import sys
 import sysconfig
@@ -71,6 +72,11 @@ from ecorex.release import (
     load_dependency_lock_manifest,
 )
 from ecorex.integration.pack_verification import verify_product_capability_pack
+from ecorex.integration.pack_python import (
+    PackPythonError,
+    build_pack_python_manifest,
+    resolve_pack_python,
+)
 from ecorex.integration.windows_sandbox_security import WindowsSandboxSlotSecurity
 from ecorex.migration import (
     PRODUCT_MIGRATION_RECEIPT_NAME,
@@ -117,6 +123,10 @@ _MIN_TIMEOUT_SECONDS = 45.0
 _MAX_TIMEOUT_SECONDS = 5_400.0
 _PLATFORM_STAGE_TIMEOUT_SECONDS = 50 * 60.0
 _RUNTIME_READY_TIMEOUT_SECONDS = 15 * 60.0
+_FAULT_ENTRYPOINT_MEMBER = "ecorex/server/__main__.py"
+_FAULT_ENTRYPOINT_PAYLOAD = b"raise SystemExit(70)\n"
+_MAX_FAULT_ARCHIVE_MEMBERS = 50_000
+_MAX_FAULT_ARCHIVE_BYTES = 1024 * 1024 * 1024
 _SAFE_STAGE_FAILURE_CODE = re.compile(r"^[a-z][a-z0-9_]{2,127}$")
 _RUNTIME_DEPENDENCY_GROUP = "dependencies"
 _NON_RUNTIME_PARTS = frozenset(
@@ -1263,6 +1273,153 @@ def _fault_candidate_ignore(directory: str, names: list[str]) -> set[str]:
     return ignored
 
 
+def _inject_fault_runtime_entrypoint(core: Path) -> str:
+    """Replace exactly one Runtime entrypoint in a directory or import ZIP."""
+
+    try:
+        root = core.resolve(strict=True)
+    except OSError:
+        raise DrillError("the packaged Runtime module entrypoint is ambiguous") from None
+    disk_matches = tuple(
+        path
+        for path in root.rglob(_FAULT_ENTRYPOINT_MEMBER)
+        if path.is_file() and not path.is_symlink()
+    )
+    archive_matches: list[Path] = []
+    archive_root = root / "bin" / "pack-python"
+    for archive_path in sorted(archive_root.glob("python*.zip")):
+        matches = _validated_fault_archive_members(archive_path)
+        archive_matches.extend(archive_path for _member in matches)
+    if len(disk_matches) + len(archive_matches) != 1:
+        raise DrillError("the packaged Runtime module entrypoint is ambiguous")
+    if disk_matches:
+        entrypoint = disk_matches[0]
+        try:
+            entrypoint.resolve(strict=True).relative_to(root)
+            entrypoint.write_bytes(_FAULT_ENTRYPOINT_PAYLOAD)
+        except (OSError, ValueError):
+            raise DrillError(
+                "the packaged Runtime module entrypoint is ambiguous"
+            ) from None
+        return "directory"
+    _rewrite_fault_import_archive(archive_matches[0])
+    return "zipimport"
+
+
+def _validated_fault_archive_members(archive_path: Path) -> tuple[zipfile.ZipInfo, ...]:
+    try:
+        if archive_path.is_symlink() or not archive_path.is_file():
+            raise DrillError("the packaged Runtime import archive is invalid")
+        with zipfile.ZipFile(archive_path) as archive:
+            members = archive.infolist()
+            if len(members) > _MAX_FAULT_ARCHIVE_MEMBERS:
+                raise DrillError("the packaged Runtime import archive is invalid")
+            seen: set[str] = set()
+            total = 0
+            matches: list[zipfile.ZipInfo] = []
+            for member in members:
+                original = member.filename
+                relative = PurePosixPath(original)
+                canonical = relative.as_posix()
+                expected = f"{canonical}/" if member.is_dir() else canonical
+                collision = canonical.casefold()
+                mode = member.external_attr >> 16
+                file_type = stat.S_IFMT(mode)
+                total += member.file_size
+                if (
+                    not original
+                    or "\\" in original
+                    or original != expected
+                    or relative.is_absolute()
+                    or any(
+                        part in {"", ".", ".."} or ":" in part
+                        for part in relative.parts
+                    )
+                    or collision in seen
+                    or member.flag_bits & 0x1
+                    or stat.S_ISLNK(mode)
+                    or file_type not in {0, stat.S_IFREG, stat.S_IFDIR}
+                    or total > _MAX_FAULT_ARCHIVE_BYTES
+                ):
+                    raise DrillError("the packaged Runtime import archive is invalid")
+                seen.add(collision)
+                if original == _FAULT_ENTRYPOINT_MEMBER and not member.is_dir():
+                    matches.append(member)
+            return tuple(matches)
+    except DrillError:
+        raise
+    except (OSError, RuntimeError, zipfile.BadZipFile):
+        raise DrillError("the packaged Runtime import archive is invalid") from None
+
+
+def _rewrite_fault_import_archive(archive_path: Path) -> None:
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{archive_path.name}.",
+        suffix=".fault.tmp",
+        dir=archive_path.parent,
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        with (
+            zipfile.ZipFile(archive_path) as source,
+            zipfile.ZipFile(
+                temporary,
+                "w",
+                compression=zipfile.ZIP_DEFLATED,
+                compresslevel=9,
+                allowZip64=True,
+                strict_timestamps=True,
+            ) as destination,
+        ):
+            replaced = 0
+            for member in source.infolist():
+                payload = source.read(member)
+                if member.filename == _FAULT_ENTRYPOINT_MEMBER:
+                    payload = _FAULT_ENTRYPOINT_PAYLOAD
+                    replaced += 1
+                destination.writestr(member, payload)
+        if replaced != 1:
+            raise DrillError("the packaged Runtime module entrypoint is ambiguous")
+        with temporary.open("r+b") as stream:
+            os.fsync(stream.fileno())
+        os.replace(temporary, archive_path)
+        if len(_validated_fault_archive_members(archive_path)) != 1:
+            raise DrillError("the packaged Runtime module entrypoint is ambiguous")
+    except DrillError:
+        raise
+    except (OSError, RuntimeError, zipfile.BadZipFile):
+        raise DrillError("the packaged Runtime import archive is invalid") from None
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _rebind_fault_pack_python(core: Path) -> None:
+    manifest_path = core / "pack-python.json"
+    temporary = manifest_path.with_name(f".{manifest_path.name}.fault.tmp")
+    try:
+        payload = build_pack_python_manifest(
+            core,
+            platform=TARGET_PLATFORM,
+            architecture=TARGET_ARCHITECTURE,
+        )
+        temporary.write_bytes(payload)
+        with temporary.open("r+b") as stream:
+            os.fsync(stream.fileno())
+        os.replace(temporary, manifest_path)
+        resolve_pack_python(
+            core,
+            platform=TARGET_PLATFORM,
+            architecture=TARGET_ARCHITECTURE,
+        )
+    except (OSError, PackPythonError):
+        raise DrillError(
+            "the fault candidate Pack-Python identity could not be rebound"
+        ) from None
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _preflight_fault_candidate(core: Path, deadline: Deadline) -> None:
     try:
         completed = subprocess.run(
@@ -2135,14 +2292,8 @@ def _build_and_run(repo: Path, temporary: Path, deadline: Deadline) -> dict[str,
     deadline.enter("fault-candidate Core fixture")
     fault_core = temporary / "fault-core"
     shutil.copytree(baseline_core, fault_core)
-    entrypoints = tuple(fault_core.rglob("ecorex/server/__main__.py"))
-    if len(entrypoints) != 1:
-        raise DrillError("the packaged Runtime module entrypoint is ambiguous")
-    entrypoints[0].write_text(
-        "raise SystemExit(70)\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+    _inject_fault_runtime_entrypoint(fault_core)
+    _rebind_fault_pack_python(fault_core)
     _preflight_fault_candidate(fault_core, deadline)
     deadline.check()
     deadline.enter("fault-candidate release build")

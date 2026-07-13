@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sys
 import threading
+import zipfile
 
 import pytest
 
@@ -224,6 +225,84 @@ def test_fault_candidate_excludes_only_cache_and_runtime_site_packages() -> None
         ["site-packages", "encodings", "__pycache__", "module.pyc"],
     )
     assert ignored == {"site-packages", "__pycache__", "module.pyc"}
+
+
+def test_fault_candidate_rewrites_directory_or_zipimport_entrypoint(
+    tmp_path: Path,
+) -> None:
+    drill = _drill_module()
+    directory_core = tmp_path / "directory-core"
+    directory_entrypoint = directory_core / drill._FAULT_ENTRYPOINT_MEMBER
+    directory_entrypoint.parent.mkdir(parents=True)
+    directory_entrypoint.write_text("raise SystemExit(0)\n", encoding="utf-8")
+
+    assert drill._inject_fault_runtime_entrypoint(directory_core) == "directory"
+    assert directory_entrypoint.read_bytes() == drill._FAULT_ENTRYPOINT_PAYLOAD
+
+    archive_core = tmp_path / "archive-core"
+    archive = archive_core / "bin/pack-python/python311.zip"
+    archive.parent.mkdir(parents=True)
+    (archive.parent / "python.exe").write_bytes(b"product-python")
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as output:
+        output.writestr(drill._FAULT_ENTRYPOINT_MEMBER, b"raise SystemExit(0)\n")
+        output.writestr("ecorex/__init__.py", b"__version__ = '1.0.0'\n")
+    (archive_core / "pack-python.json").write_bytes(
+        drill.build_pack_python_manifest(
+            archive_core,
+            platform=drill.TARGET_PLATFORM,
+            architecture=drill.TARGET_ARCHITECTURE,
+        )
+    )
+    _interpreter, before = drill.resolve_pack_python(
+        archive_core,
+        platform=drill.TARGET_PLATFORM,
+        architecture=drill.TARGET_ARCHITECTURE,
+    )
+
+    assert drill._inject_fault_runtime_entrypoint(archive_core) == "zipimport"
+    drill._rebind_fault_pack_python(archive_core)
+    _interpreter, after = drill.resolve_pack_python(
+        archive_core,
+        platform=drill.TARGET_PLATFORM,
+        architecture=drill.TARGET_ARCHITECTURE,
+    )
+    assert after.closure_sha256 != before.closure_sha256
+    with zipfile.ZipFile(archive) as output:
+        assert output.namelist() == [
+            drill._FAULT_ENTRYPOINT_MEMBER,
+            "ecorex/__init__.py",
+        ]
+        assert output.read(drill._FAULT_ENTRYPOINT_MEMBER) == (
+            drill._FAULT_ENTRYPOINT_PAYLOAD
+        )
+        assert output.read("ecorex/__init__.py") == b"__version__ = '1.0.0'\n"
+
+
+def test_fault_candidate_rejects_missing_or_ambiguous_entrypoint(
+    tmp_path: Path,
+) -> None:
+    drill = _drill_module()
+    missing = tmp_path / "missing"
+    missing.mkdir()
+    with pytest.raises(drill.DrillError, match="entrypoint is ambiguous"):
+        drill._inject_fault_runtime_entrypoint(missing)
+
+    ambiguous = tmp_path / "ambiguous"
+    for name in ("python311.zip", "python312.zip"):
+        archive = ambiguous / "bin/pack-python" / name
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as output:
+            output.writestr(drill._FAULT_ENTRYPOINT_MEMBER, b"raise SystemExit(0)\n")
+    with pytest.raises(drill.DrillError, match="entrypoint is ambiguous"):
+        drill._inject_fault_runtime_entrypoint(ambiguous)
+
+    unsafe = tmp_path / "unsafe"
+    archive = unsafe / "bin/pack-python/python311.zip"
+    archive.parent.mkdir(parents=True)
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as output:
+        output.writestr("ecorex//server/__main__.py", b"raise SystemExit(0)\n")
+    with pytest.raises(drill.DrillError, match="import archive is invalid"):
+        drill._inject_fault_runtime_entrypoint(unsafe)
 
 
 def test_private_key_scan_is_streaming_and_catches_chunk_boundary(

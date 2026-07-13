@@ -1612,3 +1612,23 @@
 - Consequence: signed install, restart, update and rollback retain the same
   fail-closed byte identity while eliminating repeated serial small-file
   storms that dominated local Windows readiness.
+
+## ADR-097 - Fault candidates preserve Pack-Python internal identity
+
+- Status: accepted.
+- Context: the eleventh zero-publication ceremony proved the compact Runtime
+  through first install, migration, source-removed restart and healthy update,
+  then its rollback fixture could no longer find the Runtime module because
+  `ecorex/server/__main__.py` correctly lived in `python311.zip`.
+- Decision: the local failure fixture resolves exactly one entrypoint from
+  either the legacy directory shape or the canonical CPython import archive.
+  An archive fixture rejects non-canonical or case-colliding paths, encrypted
+  members, links/special files, excess members and excess expanded bytes. It
+  rewrites through a same-directory temporary archive and atomic replacement.
+- Identity decision: changing an import member must also regenerate and
+  independently resolve `pack-python.json` before ReleaseBuilder signs the
+  fault Core. A stale closure manifest is not an acceptable substitute for a
+  real Runtime process that reaches the bounded exit-70 entrypoint.
+- Consequence: the rollback ceremony exercises a valid, internally consistent
+  signed Runtime whose process fails before the data barrier. Directory-only
+  assumptions and unsigned local launch shims are not reintroduced.

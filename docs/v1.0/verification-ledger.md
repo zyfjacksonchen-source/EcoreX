@@ -1488,3 +1488,18 @@ finish before the aggregate deadline. The next authoritative action is an
 eleventh ceremony from the committed performance correction. Production
 publication remains forbidden while live provider and protected macOS gates
 are unresolved.
+
+## Eleventh ceremony and fault-fixture correction - 2026-07-14
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Eleventh local ceremony from `6cd7ccd8` | 1 | Cold input compacted from 2,389 to 437 physical files; `python311.zip` is 5,503,338 bytes. Core, Bootstrap and six Pack staging completed. First install/fallback/confirmation/full health, released-v0.3 migration, source-removed restart and distinct healthy update health passed. |
+| Failure boundary | 1 | At 1,450.3 seconds the rollback fixture assumed an unpacked `ecorex/server/__main__.py`; production correctly placed it in the import archive. Failure occurred before fault-release construction. No Candidate report/publication was created; disposable state and child processes were removed. |
+| Root correction | 0 | Fault injection resolves exactly one directory or zipimport member, validates canonical/case-fold-unique paths, encryption, links/special files and size bounds, atomically rewrites the archive, then rebuilds and independently resolves `pack-python.json`. |
+| Focused regression | 0 | Windows signed-drill suite: 15 passed. Ruff, compilation and whitespace checks pass. The test proves the archive closure digest changes and the rebound manifest resolves. |
+| Complete affected regression | 0 | Staging, process Packs, atomic install, update durability/coordinator, Candidate pipeline, Runtime entrypoint, administrator Web and Windows drill: 184 passed / 5 platform skips. |
+| Current-source supply chain | 0 | 23 locked = 23 licensed Runtime packages; 449 production files passed secret scan with inventory digest `29eab98f...90ff3` in `.candidate/quality/supply-chain-local-runtime-trust-scan-v3.json`. |
+
+This run is not a Candidate receipt. The next authoritative action is a
+twelfth ceremony from the committed archive-aware fixture; no release or
+rollout is authorized by these local observations.
