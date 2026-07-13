@@ -1709,9 +1709,11 @@ def _wait_for_full_runtime(
                 f"{type(bootstrap_failures[0]).__name__}"
             )
         if bootstrap_results:
+            result = bootstrap_results[0]
             raise DrillError(
                 "the signed Bootstrap exited before readiness: "
-                f"{bootstrap_results[0].reason.value}"
+                f"{result.reason.value}; runtime_exit_code={result.runtime_exit_code!r}; "
+                f"launches={result.launches}; requested_restarts={result.requested_restarts}"
             )
         try:
             deadline.check()

@@ -92,6 +92,33 @@ def test_webui_readiness_uses_injected_bearer_without_exposing_it() -> None:
     assert bearer not in repr({"status": 200})
 
 
+def test_runtime_readiness_failure_reports_bounded_process_diagnostics(tmp_path: Path) -> None:
+    drill = _drill_module()
+    result = drill.BootstrapRunResult(
+        exit_code=70,
+        reason=drill.BootstrapReason.RUNTIME_FAILED,
+        launches=1,
+        requested_restarts=0,
+        launched_slots=("slot-private-identity",),
+        runtime_exit_code=2,
+    )
+
+    with pytest.raises(
+        drill.DrillError,
+        match=r"runtime_failed; runtime_exit_code=2; launches=1; requested_restarts=0$",
+    ) as failure:
+        drill._wait_for_full_runtime(
+            tmp_path,
+            expected_slot="slot-private-identity",
+            port=65534,
+            deadline=drill.Deadline.after(1),
+            bootstrap_results=(result,),
+            bootstrap_failures=(),
+        )
+
+    assert "slot-private-identity" not in str(failure.value)
+
+
 def test_candidate_assembly_rejects_mutable_python_bytecode(tmp_path: Path) -> None:
     drill = _drill_module()
     core = tmp_path / "core"
