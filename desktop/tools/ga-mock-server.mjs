@@ -1117,6 +1117,8 @@ function scheduleThinkingTerminal(state) {
   if (state.scenario !== "thinking" || state.terminalScheduled || !state.projection) return;
   state.terminalScheduled = true;
   schedule(state, () => {
+    const active = state.projection.turns.find((candidate) => candidate.turn_id === "turn-ga");
+    if (!active || active.status !== "model_requested") return;
     const previous = state.projection.items.find((candidate) => candidate.item_id === "reasoning-ga-1");
     if (!previous || previous.kind !== "reasoning") return;
     previous.status = "completed";
@@ -1145,7 +1147,7 @@ function scheduleThinkingTerminal(state) {
   }, 600);
   schedule(state, () => {
     const active = state.projection.turns.find((candidate) => candidate.turn_id === "turn-ga");
-    if (!active) return;
+    if (!active || active.status !== "model_requested") return;
     active.status = "completed";
     active.terminal_reason = "completed";
     const terminal = envelope(state, "turn.status_changed", {
@@ -1202,6 +1204,34 @@ function scheduleTurnCompletion(state, activeTurn, selectedModel) {
       payload: { from: "model_requested", to: "completed", reason: "completed" },
     }));
   }, 350);
+}
+
+function retouchChangeSummary(workspace) {
+  const annotations = Array.isArray(workspace.annotations) ? workspace.annotations : [];
+  const instructions = annotations
+    .map((annotation) => String(annotation?.instruction ?? "")
+      .trim()
+      .replace(/\s+/gu, " ")
+      .replace(/[。.!！?？]+$/u, ""))
+    .filter(Boolean);
+  const instruction = instructions[0]?.slice(0, 160) ?? "";
+  if (annotations.length === 1 && instruction) {
+    return `已按标注完成局部调整：${instruction}。`;
+  }
+  if (annotations.length > 1) {
+    const details = instructions.join("；").slice(0, 160);
+    return details
+      ? `已按 ${annotations.length} 个标注区域完成局部调整：${details}。未标注区域保持不变。`
+      : `已按 ${annotations.length} 个标注区域完成局部调整，并保持未标注区域不变。`;
+  }
+  const globalInstruction = String(workspace.global_instruction ?? "")
+    .trim()
+    .replace(/\s+/gu, " ")
+    .replace(/[。.!！?？]+$/u, "")
+    .slice(0, 160);
+  return globalInstruction
+    ? `已按整体说明完成调整：${globalInstruction}。`
+    : "已完成精准修图，并保持未指定区域不变。";
 }
 
 function projectionResponse(state, threadId) {
@@ -1698,7 +1728,7 @@ async function handleApi(holder, req, res, url) {
     scheduleTurnCompletion(
       state,
       activeTurn,
-      /(?:image|图|海报)/iu.test(activeTurn.input)
+      /(?:image|图|海报|主视觉|key\s+visual)/iu.test(activeTurn.input)
         ? activeTurn.image_model_id
         : null,
     );
@@ -2251,7 +2281,7 @@ async function handleApi(holder, req, res, url) {
         workspace.result_surface = editSurface(result);
         workspace.job.status = "completed";
         workspace.job.result_revision_id = result.revision_id;
-        workspace.job.change_summary = "已移除标注区域中的干扰物，保留主体轮廓与整体光线。";
+        workspace.job.change_summary = retouchChangeSummary(workspace);
         workspace.job.inspection_regions = workspace.annotations.map((annotation) => ({
           normalized_geometry: annotation.normalized_geometry,
           summary: annotation.instruction,
@@ -2342,6 +2372,11 @@ async function handleApi(holder, req, res, url) {
       const result = artifact(`artifact-retouch-${state.seq + 1}`, `revision-retouch-${state.seq + 1}`, "精准修图_20260710-1534_01.png");
       result.lineage = { source_artifact_ids: [source.artifact_id], supersedes_revision_id: source.revision_id };
       state.artifacts.push(result);
+      const requestedAnnotations = Array.isArray(request.annotations) ? request.annotations : [];
+      const changeSummary = retouchChangeSummary({
+        annotations: requestedAnnotations,
+        global_instruction: request.global_instruction,
+      });
       const artifactItem = {
         item_id: `item-${result.artifact_id}`,
         thread_id: "thread-ga",
@@ -2351,11 +2386,11 @@ async function handleApi(holder, req, res, url) {
         content: {
           retouch_job_id: `retouch-${state.seq + 1}`,
           artifact: result,
-          change_summary: "已移除标注区域中的干扰物，保留主体轮廓与整体光线。",
-          inspection_regions: [
-            { normalized_geometry: { x: 0.12, y: 0.18, width: 0.3, height: 0.24 }, summary: "主体区域已检查" },
-            { normalized_geometry: { x: 0.72, y: 0.22 }, summary: "标题边缘已检查" },
-          ],
+          change_summary: changeSummary,
+          inspection_regions: requestedAnnotations.map((annotation) => ({
+            normalized_geometry: annotation.normalized_geometry,
+            summary: String(annotation.instruction ?? "").trim() || "已检查标注区域",
+          })),
           preview: { artifact_id: result.artifact_id, revision_id: result.revision_id, mime_type: result.mime_type },
         },
         created_at: new Date().toISOString(),

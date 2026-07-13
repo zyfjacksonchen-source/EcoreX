@@ -246,7 +246,7 @@ def test_image_intent_ranks_imagegen_for_discovery_without_removing_other_tools(
         for evidence in by_id["imagegen"].matched_evidence
     )
     assert plan.routing_policy_id == "ecorex.intent-routing"
-    assert plan.routing_policy_version == "1.4.0"
+    assert plan.routing_policy_version == "1.5.0"
 
 
 def test_english_image_generation_intent_uses_the_same_non_exclusive_route(
@@ -276,6 +276,8 @@ def test_english_image_generation_intent_uses_the_same_non_exclusive_route(
         "用 image2 做海报",
         "设计封面",
         "创作插画",
+        "生成一张夏季新品发布会主视觉，保留标题安全区并检查主体边缘",
+        "Create a launch key visual from the campaign brief",
         "draw a poster",
         "请生成一张新海报",
         "把现有图片的背景换成夜景",
@@ -331,6 +333,7 @@ def test_strong_create_or_edit_intent_ranks_reviewed_media_capability_first(
         "设计一套图片生成架构",
         "优化精修功能的交互逻辑",
         "请给我海报设计方案",
+        "请给我主视觉设计方案",
         "检查一下封面设计规范",
         "Summarize the poster design guidelines",
         "How can I generate an image?",

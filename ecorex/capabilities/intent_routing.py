@@ -680,11 +680,11 @@ def builtin_intent_routing_policy() -> IntentRoutingPolicy:
     )
     return IntentRoutingPolicy(
         policy_id="ecorex.intent-routing",
-        version="1.4.0",
+        version="1.5.0",
         rules=(
             IntentRoutingRule(
                 rule_id="media.image.create",
-                version="1.4.0",
+                version="1.5.0",
                 required_facets_any=frozenset({"media.image.create"}),
                 required_effects=frozenset({CapabilityEffect.GENERATE_MEDIA}),
                 positive_phrases=(
@@ -747,7 +747,7 @@ def builtin_intent_routing_policy() -> IntentRoutingPolicy:
             ),
             IntentRoutingRule(
                 rule_id="media.image.deliverable",
-                version="1.4.0",
+                version="1.5.0",
                 required_facets_any=frozenset({"media.image.create"}),
                 required_effects=frozenset({CapabilityEffect.GENERATE_MEDIA}),
                 positive_phrases=(),
@@ -776,6 +776,8 @@ def builtin_intent_routing_policy() -> IntentRoutingPolicy:
                         "插畫",
                         "宣传图",
                         "配图",
+                        "主视觉",
+                        "key visual",
                         "poster",
                         "illustration",
                         "artwork",
@@ -811,7 +813,7 @@ def builtin_intent_routing_policy() -> IntentRoutingPolicy:
             ),
             IntentRoutingRule(
                 rule_id="media.image.edit",
-                version="1.4.0",
+                version="1.5.0",
                 required_facets_any=frozenset({"media.image.edit"}),
                 required_effects=frozenset({CapabilityEffect.GENERATE_MEDIA}),
                 positive_phrases=(

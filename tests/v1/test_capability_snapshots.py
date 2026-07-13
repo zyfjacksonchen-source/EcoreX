@@ -94,7 +94,7 @@ def test_routing_score_evidence_and_suppression_survive_immutable_replay(
 
     assert replayed.to_dict() == plan.to_dict()
     assert replayed.routing_policy_id == "ecorex.intent-routing"
-    assert replayed.routing_policy_version == "1.4.0"
+    assert replayed.routing_policy_version == "1.5.0"
     assert len(replayed.routing_policy_digest) == 64
     assert replayed.discovery_policy_id == "ecorex.discovery"
     assert replayed.discovery_policy_version == "1.2.0"

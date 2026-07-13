@@ -4295,3 +4295,47 @@ post-correction current-source supply-chain preflight remains 23 locked = 23
 licensed Runtime packages and 449 files, with inventory digest
 `df8027e874b8a3b74f5770acd7e951db77eafcc8c9be1f773f7c2d6242374e4a` in
 `.candidate/quality/supply-chain-local-runtime-trust-scan-v4.json`.
+
+## 2026-07-14 - Local WebUI acceptance and media-intent closure
+
+The user-confirmed Composer rule is now verified as a conversation-state
+invariant rather than a viewport heuristic. A brand-new task keeps the Composer
+inside the general/project chooser. Existing tasks, restored tasks and a
+project task immediately after its first message render only the workspace-
+bottom Composer; the real in-app browser measured a normal-chat bottom delta of
+`0.000030517578125px`. The automated E2E contract independently covers the
+same transition across the responsive matrix.
+
+A realistic image request exposed a missing product vocabulary unit: selecting
+Image 2 and asking to generate a `主视觉` initially stayed on the office path.
+The Runtime policy, not the WebUI, now owns the correction. Intent policy
+`1.5.0` adds reviewed `主视觉` / `key visual` media-deliverable evidence and a
+negative design-plan case. The resulting plan ranks imagegen first while read,
+fetch, vision, CDP and shell remain eligible or progressively discoverable.
+The local page then generated the image result through the expected image flow.
+
+The same real-user pass found two fixture-contract defects. Retouch completion
+used fixed prose unrelated to the submitted annotation; it now derives its
+bounded summary from the actual annotation instruction or global instruction.
+A post-fix run displayed `只将整体亮度提高 10%...` identically in the chat
+result and comparison canvas. Delayed thinking timers could also reopen an
+already superseded Turn; both callbacks now require the exact
+`model_requested` state, and a replace-before-timer regression waits past both
+callbacks to prove the original remains superseded and the replacement queued.
+
+The in-app browser also exercised first-message model selection, the 272k
+context projection, image fit/zoom, structured rectangle retouch with normalized
+geometry and a reference revision, unique share snapshots with inline/full
+images, reasoning replacement without a blank interval, steer/queue/replace,
+task-ID continuation, project placement, full-access revoke, memory reset/undo,
+output-location persistence, the unified extension catalog and formal Feishu /
+Tencent Docs entries. The main, share and raw-image tabs emitted zero console
+warnings or errors. Seven screenshots and their hashes are recorded in
+`.candidate/quality/cdp/webui-local-acceptance-20260714.json`.
+
+Verification completed with 1,860 Python v1 passes and 17 explicit environment
+skips, 162 Web contract passes, 34 Playwright E2E passes, clean TypeScript and
+v1 lint, and a successful 18-asset / 17-chunk content-addressed production
+build. Live managed inference is still not proven: `gpt-5.6-sol` and
+`gpt-image-2` remain provider-unavailable in the current external environment.
+No release, deployment or user update was attempted.

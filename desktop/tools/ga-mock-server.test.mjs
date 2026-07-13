@@ -333,6 +333,32 @@ test("GA harness models thinking terminal, HITL, retry, and retouch result scena
   assert.match(terminal, /\"to\":\"completed\"/);
   assert.match(terminal, /\"extension_snapshot_id\":\"extensions-ga-/);
 
+  await fetch(`${harness.url}/__ga/reset?scenario=thinking`, { method: "POST" });
+  const replacedThinkingStream = await fetch(
+    `${harness.url}/api/v1/threads/thread-ga/events/stream?after_seq=2&follow=true`,
+  );
+  const replacedBeforeTimer = await fetch(`${harness.url}/api/v1/turns/turn-ga/replace`, {
+    method: "POST",
+    headers: MUTATION_HEADERS,
+    body: JSON.stringify({
+      input: "改为先输出风险清单",
+      agent_model_id: "ecorex-chat",
+      image_model_id: "gpt-image-2",
+      client_message_id: "message-replace-before-thinking-timer",
+      metadata: {},
+      reason: "replaced_by_user",
+    }),
+  }).then((response) => response.json());
+  assert.equal(replacedBeforeTimer.superseded_turn.status, "superseded");
+  await new Promise((resolve) => setTimeout(resolve, 1_300));
+  const afterThinkingTimer = await fetch(
+    `${harness.url}/api/v1/threads/thread-ga/projection`,
+  ).then((response) => response.json());
+  assert.equal(afterThinkingTimer.turns[0].status, "superseded");
+  assert.equal(afterThinkingTimer.turns[1].status, "queued");
+  assert.equal(afterThinkingTimer.turns[1].metadata.replaces_turn_id, "turn-ga");
+  await replacedThinkingStream.body?.cancel();
+
   await fetch(`${harness.url}/__ga/reset?scenario=hitl`, { method: "POST" });
   const hitl = await fetch(`${harness.url}/api/v1/threads/thread-ga/projection`).then((response) => response.json());
   assert.equal(hitl.interactions[0].status, "pending");
@@ -450,8 +476,9 @@ test("GA harness models thinking terminal, HITL, retry, and retouch result scena
   assert.equal(retouchedArtifacts.count, 2);
   const retouchedProjection = await fetch(`${harness.url}/api/v1/threads/thread-ga/projection`).then((response) => response.json());
   assert.equal(retouchedProjection.turns.at(-1).status, "completed");
-  assert.match(retouchedProjection.items.at(-1).content.change_summary, /保留主体轮廓/);
-  assert.equal(retouchedProjection.items.at(-1).content.inspection_regions.length, 2);
+  assert.match(retouchedProjection.items.at(-1).content.change_summary, /移除干扰物/);
+  assert.doesNotMatch(retouchedProjection.items.at(-1).content.change_summary, /主体轮廓/);
+  assert.equal(retouchedProjection.items.at(-1).content.inspection_regions.length, 0);
 
   const workspace = await fetch(
     `${harness.url}/api/v1/artifacts/artifact-ga-source/retouch-workspaces`,
@@ -523,7 +550,8 @@ test("GA harness models thinking terminal, HITL, retry, and retouch result scena
   ).then((response) => response.json());
   assert.equal(workspaceProjection.turns.at(-1).status, "completed");
   assert.equal(workspaceProjection.items.at(-1).turn_id, workspaceProjection.turns.at(-1).turn_id);
-  assert.match(workspaceProjection.items.at(-1).content.change_summary, /保留主体轮廓/);
+  assert.match(workspaceProjection.items.at(-1).content.change_summary, /移除标记物/);
+  assert.doesNotMatch(workspaceProjection.items.at(-1).content.change_summary, /主体轮廓/);
 });
 
 test("GA viewport matrix includes the 320px Hallmark floor in both themes", async (context) => {

@@ -1651,3 +1651,39 @@
 - Consequence: no local success can set `promotion_claimed=true`, relax the
   missing receipt count or authorize publication. Live provider, CDP acceptance
   and protected runner gates remain independent blockers.
+
+## ADR-099 - Media intent promotion is versioned, semantic and non-exclusive
+
+- Status: accepted.
+- Decision: an image-mode selection chooses the image model surface but never
+  forces an image tool route. The Runtime-owned intent policy promotes imagegen
+  only when reviewed semantic evidence is present; every positive phrase,
+  suppression phrase, weight and policy digest is versioned. Chinese
+  `主视觉` and English `key visual` are product media-deliverable evidence in
+  policy `1.5.0`, while requests for a design plan remain suppressed.
+- Capability boundary: promotion changes ordering only. Read, fetch, vision,
+  CDP, shell and other eligible capabilities remain direct or progressively
+  discoverable from the same immutable snapshot. No WebUI mode, model alias or
+  individual phrase may delete them or bypass Governance.
+- Evidence boundary: local fixture success proves product routing and UI
+  behavior, not managed-provider availability. Live `gpt-5.6-sol` and
+  `gpt-image-2` inference must pass independently before publication.
+- Consequence: new media vocabulary can be reviewed and replayed without
+  hard-coded tool branches, while ordinary office requests cannot be silently
+  converted into image jobs merely because the user last selected Image 2.
+
+## ADR-100 - Acceptance fixtures obey terminal-state and structured-copy authority
+
+- Status: accepted.
+- Decision: a delayed acceptance-fixture callback may mutate a Turn only while
+  it remains in the exact source state the callback owns. Once replaced,
+  interrupted, cancelled or terminal, an old thinking timer is a no-op. The
+  same invariant applies to any future deterministic simulator used for UI
+  Replay or release acceptance.
+- Presentation decision: retouch result copy is derived from the persisted
+  structured annotation set or global instruction. Fixed prose that describes
+  work not present in the request is forbidden; a bounded generic summary is
+  allowed only when no specific instruction exists.
+- Consequence: deterministic browser acceptance cannot report a false terminal
+  transition or misleading edit summary, and it exercises the same authority
+  boundaries expected from the production Runtime.

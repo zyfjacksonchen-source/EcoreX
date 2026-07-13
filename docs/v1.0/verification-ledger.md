@@ -1520,3 +1520,26 @@ rollout is authorized by these local observations.
 This is the authoritative passing local Windows ceremony for commit `7bf9d89b`.
 It does not supersede protected-runner, live-provider, CDP acceptance or real
 installed-user migration gates and does not authorize deployment.
+
+## Local WebUI/CDP acceptance and media-intent regression - 2026-07-14
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| In-app browser acceptance | 0 | New-task chooser Composer centered; normal/restored/project-after-first-message Composer bottom-anchored with `0.000030517578125px` measured delta. Model selector works before the first message; GPT-5.6 SOL medium reasoning and 272k context are projected. |
+| Image routing | 0 | Intent policy `1.5.0` recognizes `主视觉` / `key visual`, ranks imagegen first and keeps read/fetch/vision/CDP/shell discoverable. Negative `主视觉设计方案` remains an office-planning request. Live provider success is not claimed. |
+| Image preview and retouch | 0 | Preview opens complete in fit mode and retains bounded zoom. Structured retouch persisted normalized geometry, exact instruction, reference and global constraints; a new revision, preview and inspection region appeared. Post-fix global-only run rendered the exact submitted instruction in chat and canvas. |
+| Share and conversation flow | 0 | Two share snapshot IDs were distinct; shared chat separates user instruction and EcoreX response, renders inline media and opens the full 1800x1100 image. Reasoning remains visible until replacement/terminal; steer, queue, replace and task-ID continuation passed. |
+| Settings and extension product surface | 0 | Full-access confirmation/revoke, memory reset/undo, output location, update check, unified Skill/MCP/tool extension catalog and formal Feishu/Tencent Docs connector entries passed locally. No external credential was used. |
+| Browser diagnostics | 0 | Main, share and raw-image tabs: zero warnings/errors. Evidence report `.candidate/quality/cdp/webui-local-acceptance-20260714.json`; seven screenshots have SHA-256 and byte length recorded there. |
+| Focused image concurrency | 0 | 33 passed: deadlines, durable rate fences, half-open single probe, bounded retry, slow-CAS lease renewal, staged-result recovery and lost-commit reconciliation. |
+| Focused structured retouch | 0 | 27 passed: workspace/version fencing, geometry, atomic submit/result, permission races, stable external identity, crash recovery and late-result rejection. |
+| Capability and Runtime discovery | 0 | 265 passed / 1 environment skip: capability snapshots, search/describe grants, projection budgets, Agent Worker, Runtime composition, Skill/MCP/connector discovery and invocation. |
+| Web contracts | 0 | 162 passed; TypeScript and generated Runtime contract checks pass. |
+| Production Web build | 0 | 2,080 modules; 18 content-addressed assets; 17 chunks; entry gzip 14.40 KiB, initial JS gzip 146.78 KiB, deferred features gzip 33.67 KiB. |
+| Playwright E2E | 0 | 34 passed in 68 seconds: five viewport classes in both themes, zero axe violations, frameless-until-interaction controls, Composer state placement, reasoning, share, full-image preview, forced colors, reduced motion, keyboard and touch parity. |
+| Complete Python v1 regression | 0 | 1,860 passed / 17 explicit skips / 0 failures in 786.84 seconds; five third-party deprecation warnings. |
+| Static gate | 0 | `python scripts/run-v1-lint.py` passed. |
+| Publication gate | blocked | No publication attempted. Live `gpt-5.6-sol` and `gpt-image-2`, protected 24-receipt Candidate, real connectors/OTLP and external download-source evidence remain unresolved. |
+
+This local acceptance closes the deterministic WebUI/CDP work item but is not
+live managed-model or protected-platform evidence. It cannot authorize a push.
