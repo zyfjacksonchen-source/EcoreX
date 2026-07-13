@@ -1626,3 +1626,18 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Static/source gates | 0 | Ruff, Python compilation, dependency-lock validation, `git diff --check` and the 646-file source-tree admission gate pass. Dependency inventory covers 23 Runtime and 282 npm packages. |
 | Current-source supply chain | 0 | 23 locked/licensed Runtime packages; 459 production files pass the bounded secret scan, inventory `2f169bf3...4c9540`. Ignored 21,857-byte report SHA-256 `ac3ac6f9...c9b3a8`. |
 | Publication | blocked | No protected 24-receipt Candidate or real managed Model/Image/CDP session exists. No workflow dispatch, origin write, Control Plane mutation or user update occurred. |
+
+## Live GitHub repository governance audit - 2026-07-14
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Remote inventory | 2 | Private repository default branch is `main` at `b52999b0...66e71`; four legacy workflows are active, while all four v1 workflows are absent. No Environment or self-hosted Runner exists. |
+| Credential boundary | 1 | The branch push was rejected by GitHub because the active OAuth identity lacks `workflow`. The remote ref did not move and no partial workflow update occurred. |
+| Actions policy | blocked | Actions are enabled with read-only default `GITHUB_TOKEN` and no PR-approval permission, but `allowed_actions=all`; three allowlist findings remain. |
+| Repository contract | 0 | Exact workflows/status contexts, strict protected-main policy, six protected Environments, variable/Secret names and seven Runner roles are represented without Secret values. Signing/live/publication Runner overlap fails closed. |
+| Governance mutation fence | 0 | Bootstrap requires exact repository confirmation, default-branch SHA and reviewer; a head race produces zero writes. Only idempotent Environment, Actions-policy and branch-protection PUTs are available. |
+| Live audit receipt | 2 | 22 blockers: Actions 3, branch 1, credential 1, Environment 6, Runner 7, workflow 4. Report SHA-256 `a81a2f26...c0c15e`, 3,621 bytes. |
+| Regression | 0 | Governance unit/transport tests: 9 passed. Affected package/release/Candidate/dependency/Control Plane selection: 51 passed. Ruff, Python compilation, dependency locks, diff and the 650-file source gate pass. Contract/evaluator and administration transport are separate modules. |
+| Complete Python v1 suite | 0 | 1,904 passed / 17 explicit environment skips / 0 failed in 753.89 seconds. Five warnings are upstream deprecation notices only. |
+| Current-source supply chain | 0 | 23 locked/licensed Runtime packages; 462 production files pass the bounded secret scan, inventory `46f9c75f...d32210`. Ignored 21,857-byte report SHA-256 `573c9141...5507a8`. |
+| External mutation | 0 | No repository setting, ref, workflow dispatch, release asset, Control Plane state or user update was changed. |

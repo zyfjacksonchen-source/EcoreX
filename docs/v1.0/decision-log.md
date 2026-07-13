@@ -1794,3 +1794,32 @@
   later, resume after runner loss and still publish only the exact previously
   accepted bytes. A stale, foreign, expired, ambiguous, corrupted or unsafe
   Artifact fails before any external mutation.
+
+## ADR-105 - Repository governance is a versioned release contract
+
+- Status: accepted.
+- Root cause: the productized Candidate/update chain existed in source while the
+  real GitHub repository had no protected default branch, protected Environment,
+  privileged Runner, release variable or Secret inventory. The administrator
+  token also lacked the `workflow` scope, so GitHub rejected the first push that
+  introduced the v1 workflows. Source tests alone could not expose or explain
+  this operational split-brain.
+- Decision: repository release readiness is a backend contract covering the
+  exact default branch, active workflow paths, required status contexts,
+  protected-branch rules, six protected Environments, configuration-name
+  inventory and seven isolated Runner roles. The audit records names and state
+  only; Secret values are neither requested nor returned.
+- Bootstrap boundary: the repository tool defaults to read-only audit. Governance
+  mutation requires the exact repository repeated as confirmation, the current
+  40-character default-branch head and a resolved reviewer. It applies only
+  idempotent Environment and branch-protection PUTs, then re-audits. A head race
+  fails before the first write. Runner registration and variable/Secret values
+  stay out-of-band and remain visible as blockers until genuinely provisioned.
+- Privilege decision: signing, live acceptance and publication must resolve to
+  distinct online Runner identities. Candidate construction, live provider
+  exercise and origin mutation therefore cannot silently collapse onto one
+  long-lived host credential boundary.
+- Consequence: “workflow files exist” is no longer confused with “release chain
+  is deployable.” Missing OAuth scope, inactive remote workflows, repository
+  governance, Runner capacity and protected configuration have stable machine
+  codes and block before Candidate dispatch.

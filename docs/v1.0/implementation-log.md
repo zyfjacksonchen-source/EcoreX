@@ -4558,3 +4558,47 @@ SHA-256
 `ac3ac6f993e3f664af7c214094b2b7b2c49997e37b40bb94223ff795bdc9b3a8`.
 No Candidate was dispatched and no origin, Control Plane or user rollout was
 mutated.
+
+## 2026-07-14 - GitHub release repository readiness becomes machine-verifiable
+
+A read-only audit of the actual private repository found that local source
+readiness and remote release readiness had diverged. `main` remained at
+`b52999b07a753e103a993a4da9d3c83c3f366e71`, the v1 branch was not current on
+the remote, only four legacy workflows were active, branch protection and
+protected Environments were absent, and no self-hosted Runner, Actions variable
+or Secret name was registered. The repository allowed all Actions. The active
+administrator OAuth identity had `repo`, `read:org` and `gist`, but not
+`workflow`; GitHub rejected the attempted branch push before changing any ref.
+
+Added separate backend repository-readiness contract/evaluator and bounded
+GitHub administration transport modules plus an administrator CLI, avoiding a
+new mixed-responsibility release monolith. The contract covers the four exact
+v1 workflows, five required CI status contexts,
+strict PR/admin/linear-history protection, GitHub-owned-only Actions with
+read-only default workflow permissions, six protected Environments, every
+required variable/Secret name and seven online Runner roles. Signing, live
+acceptance and publication roles must not resolve to the same Runner identity.
+The report never requests or contains Secret values.
+
+`audit` is read-only. `bootstrap` requires the exact repository twice, an exact
+40-character default-branch head and a resolved reviewer before applying only
+idempotent Environment, Actions-policy and branch-protection PUTs. A changed
+head fails before any write. Runner registration and configuration values remain
+external facts, so governance creation cannot manufacture a green result.
+
+The live audit exits 2 with 22 stable blockers: three Actions-policy findings,
+one unprotected branch, one missing OAuth workflow scope, six Environments,
+seven Runner roles and four inactive v1 workflows. Evidence is
+`.candidate/quality/github-release-readiness-live-v2.json`, 3,621 bytes,
+SHA-256 `a81a2f26bc4b7f674441ee340b17a368bb0478b40fec9ae69996aa7cefc0c15e`.
+Nine direct governance tests and the 51-test affected release/Candidate/package
+selection pass; Ruff, Python compilation, dependency locks, the 650-file source
+gate and diff checks pass. The complete current-source v1 suite passes 1,904
+tests with 17 explicit environment skips and zero failures in 753.89 seconds.
+Supply-chain preflight passes 23 locked/licensed
+Runtime packages and 462 production files, inventory SHA-256
+`46f9c75f4517e47103249cbf27a65b21e3ed2933dae8aa9800d410849ed32210`;
+the ignored 21,857-byte report is
+`.candidate/quality/supply-chain-local-github-readiness-split.json`, SHA-256
+`573c9141dff494b6ffe7f7a212ccedfe4ee66a530d1d5e3f547225f1d55507a8`.
+No repository setting, ref, workflow, release or user rollout was changed.

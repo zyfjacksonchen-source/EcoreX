@@ -18,6 +18,50 @@ The mirror/CDN endpoints are upload control roots, not public download roots.
 Each service returns the public asset URL; the coordinator rejects it unless it
 exactly equals the corresponding signed manifest source plus the asset name.
 
+## GitHub release repository bootstrap and readiness
+
+The workflows are not considered installed merely because their YAML exists in
+a local checkout. Audit the real repository before the first v1 pull request and
+before every Candidate ceremony. The token is read only from the named process
+environment and the report contains configuration names, never Secret values.
+
+```powershell
+$env:ECOREX_GITHUB_ADMIN_TOKEN = gh auth token
+python scripts/manage-v1-github-release-repository.py audit `
+  --repository zhangyifanjackson-dotcom/EcoreX `
+  --output C:\ecorex-admin\github-release-readiness.json
+Remove-Item Env:\ECOREX_GITHUB_ADMIN_TOKEN
+```
+
+An OAuth finding `workflow_push_scope_missing` means GitHub will reject commits
+that add or change `.github/workflows/*`. Refresh that administrator identity
+once with `gh auth refresh --scopes workflow`; do not remove workflow files or
+use an unrelated token to bypass the finding.
+
+After the v1 workflows are on `main`, apply the stable governance shape with an
+exact head fence. This creates/updates only the protected branch and six
+protected Environments. It does not invent Runner registrations, configuration
+values or credentials, so the follow-up audit remains blocked until those real
+inputs exist.
+
+```powershell
+$head = git rev-parse origin/main
+$env:ECOREX_GITHUB_ADMIN_TOKEN = gh auth token
+python scripts/manage-v1-github-release-repository.py bootstrap `
+  --repository zhangyifanjackson-dotcom/EcoreX `
+  --confirm-repository zhangyifanjackson-dotcom/EcoreX `
+  --expected-head $head `
+  --reviewer-login zhangyifanjackson-dotcom `
+  --output C:\ecorex-admin\github-release-bootstrap.json
+Remove-Item Env:\ECOREX_GITHUB_ADMIN_TOKEN
+```
+
+`ready=true` requires the four v1 workflows, strict PR/status protection,
+protected-branch-only Environment deployment, one reviewer per Environment,
+the complete variable/Secret name inventory and online distinct signing, live
+acceptance and publication Runners. A busy online Runner may queue work; an
+offline or label-mismatched Runner does not satisfy the contract.
+
 ## Candidate asset publication
 
 Export the three credentials through the variable names above, then run one
