@@ -4378,4 +4378,11 @@ It remains evidence class `local-windows-drill`: production preflight is
 protected macOS receipts are missing. The report explicitly records that no
 live mirror, GitHub Release, CDN, Control Plane, Model/Image Gateway, connector,
 OTLP endpoint or tenant credential was contacted. Fifteen post-report drill
-tests and the v1 static gate passed. No deployment or user update was attempted.
+tests and the v1 static gate passed. Current-source supply-chain preflight also
+passed: 23 locked Runtime packages have complete license inventory, and 449
+production files passed the bounded secret scan with inventory digest
+`ce27b97be6d9d70524aad546b1d8e73f5aaf2f8dc75560c128e2686c4d70c0fa`.
+Its local report is
+`.candidate/quality/supply-chain-local-current-89fab32a.json`, SHA-256
+`2df5d8288560ee5d476eb6f447be3e79383379d264940069ac2eacca3260a2db`.
+No deployment or user update was attempted.

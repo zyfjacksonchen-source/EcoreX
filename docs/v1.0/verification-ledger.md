@@ -1558,6 +1558,7 @@ live managed-model or protected-platform evidence. It cannot authorize a push.
 | Long-job drain | 0 | Three activations stopped admission and persisted three distinct durable checkpoint receipts before pointer mutation; no real external long-job claim is made. |
 | Cleanup and report | 0 | Completed in 1,439.328 seconds; disposable directory removed and no drill Runtime remained. Report `.candidate/quality/windows-signed-candidate-local-thirteenth.json`, SHA-256 `7144c39a...eccc4`, 43,536 bytes. |
 | Post-report gate | 0 | `test_windows_signed_candidate_drill.py`: 15 passed; v1 lint and report JSON validation passed. |
+| Current-source supply chain | 0 | 23 locked Runtime packages have complete license inventory; 449 files passed secret scan, inventory `ce27b97b...0c0fa`; report `.candidate/quality/supply-chain-local-current-89fab32a.json`, SHA-256 `2df5d828...0a2db`. |
 | Production promotion gate | blocked | `promotion_claimed=false`, `fixed_gate_relaxed=false`; 8 local Windows receipts do not replace the 16 missing protected macOS arm64/x64 receipts. No external publication or live service was contacted. |
 
 This report supersedes the twelfth ceremony only as current local Windows
