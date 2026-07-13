@@ -2818,6 +2818,71 @@
       "title": "InteractionRequest",
       "type": "object"
     },
+    "ProjectListResponse": {
+      "$defs": {
+        "ProjectProjection": {
+          "additionalProperties": false,
+          "properties": {
+            "created_at": {
+              "default": "",
+              "title": "Created At",
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "pinned": {
+              "default": false,
+              "title": "Pinned",
+              "type": "boolean"
+            },
+            "project_id": {
+              "title": "Project Id",
+              "type": "string"
+            },
+            "project_path": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Project Path",
+              "type": "string"
+            },
+            "thread_count": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Thread Count",
+              "type": "integer"
+            },
+            "updated_at": {
+              "default": "",
+              "title": "Updated At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "project_id",
+            "name",
+            "project_path"
+          ],
+          "title": "ProjectProjection",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "projects": {
+          "items": {
+            "$ref": "#/$defs/ProjectProjection"
+          },
+          "title": "Projects",
+          "type": "array"
+        }
+      },
+      "title": "ProjectListResponse",
+      "type": "object"
+    },
     "QueueTurnRequest": {
       "additionalProperties": false,
       "properties": {
@@ -4536,6 +4601,7 @@
     "EventEnvelope": "ecorex.protocol.EventEnvelope",
     "InteractionMutationResponse": "ecorex.protocol.InteractionMutationResponse",
     "InteractionRequest": "ecorex.protocol.InteractionRequest",
+    "ProjectListResponse": "ecorex.protocol.ProjectListResponse",
     "QueueTurnRequest": "ecorex.protocol.QueueTurnRequest",
     "ReplaceTurnRequest": "ecorex.protocol.ReplaceTurnRequest",
     "RespondInteractionRequest": "ecorex.protocol.RespondInteractionRequest",

@@ -1342,3 +1342,18 @@
 - Consequence: routine rollback is operable from the product console without
   weakening downgrade protection, and concurrent installs reuse immutable
   verified bytes instead of racing separate scripts.
+
+## ADR-085 - Project identity and Composer facts remain Runtime-owned
+
+- Status: accepted.
+- Decision: a project is a Runtime record backed by a canonical directory, not
+  a browser preference. New-Thread metadata carries only the selected project
+  identity; Runtime validates it and publishes the canonical name/path. The
+  first-message durable outbox freezes that metadata with the message intent.
+- UI consequence: v0.3 project/general conversation choices, model selectors,
+  permission label and usage meters are view projections. Unknown quota or
+  context dimensions display `—`; character counts and local estimates cannot
+  be presented as provider usage.
+- Performance consequence: the sidebar may be a same-origin content-addressed
+  deferred module with a geometry-preserving fallback. The initial-JavaScript
+  budget is not raised to pay for project navigation.

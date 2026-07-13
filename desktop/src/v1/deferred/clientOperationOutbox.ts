@@ -50,6 +50,11 @@ function assertOperation(operation: ClientOperation): void {
     || !ID_PATTERN.test(operation.operation_id)
     || !ID_PATTERN.test(operation.client_message_id)
     || !ID_PATTERN.test(threadId)
+    || (
+      operation.thread.kind === "create"
+      && operation.thread.metadata !== undefined
+      && !isRecord(operation.thread.metadata)
+    )
     || (operation.turn !== null && !ID_PATTERN.test(operation.turn.turn_id))
     || !operation.input.trim()
     || !operation.models.agentModelId.trim()
@@ -138,7 +143,13 @@ export function createClientOperation(input: CreateClientOperationInput): Client
     client_message_id: input.clientMessageId ?? requestId("message"),
     thread: input.threadId
       ? { kind: "existing", thread_id: input.threadId }
-      : { kind: "create", client_request_id: operationId },
+      : {
+          kind: "create",
+          client_request_id: operationId,
+          ...(input.threadMetadata && Object.keys(input.threadMetadata).length
+            ? { metadata: input.threadMetadata }
+            : {}),
+        },
     turn: input.activeTurn
       ? { turn_id: input.activeTurn.turn_id, status: input.activeTurn.status }
       : null,
@@ -164,10 +175,19 @@ export function createClientOperation(input: CreateClientOperationInput): Client
 
 function parseOperation(value: unknown): ClientOperation | null {
   if (!isRecord(value) || !isRecord(value.thread) || !isRecord(value.models)) return null;
+  const threadMetadata = isRecord(value.thread.metadata)
+    ? value.thread.metadata as import("../api/contracts.ts").JsonObject
+    : undefined;
   const thread = value.thread.kind === "existing"
     ? { kind: "existing" as const, thread_id: value.thread.thread_id }
     : value.thread.kind === "create"
-      ? { kind: "create" as const, client_request_id: value.thread.client_request_id }
+      ? {
+          kind: "create" as const,
+          client_request_id: value.thread.client_request_id,
+          ...(threadMetadata && Object.keys(threadMetadata).length
+            ? { metadata: threadMetadata }
+            : {}),
+        }
       : null;
   const turn = value.turn === null
     ? null

@@ -18,6 +18,7 @@ import type {
   ExtensionMutationResponse,
   InteractionMutationResponse,
   InteractionResponse,
+  JsonObject,
   LiveReplayResponse,
   MemoryMutationResponse,
   MemorySnapshot,
@@ -28,6 +29,8 @@ import type {
   OutputMaterialization,
   OutputPreference,
   PermissionMutationResponse,
+  ProjectListResponse,
+  ProjectProjection,
   ShareListResponse,
   ShareSnapshotProjection,
   SystemHealthSample,
@@ -76,6 +79,7 @@ export type ClientOperationThreadTarget =
   | Readonly<{
       kind: "create";
       client_request_id: string;
+      metadata?: JsonObject;
     }>;
 
 export interface ClientOperationTurnTarget {
@@ -105,6 +109,7 @@ export interface ClientOperation {
 export interface CreateClientOperationInput {
   input: string;
   threadId: string | null;
+  threadMetadata?: JsonObject;
   activeTurn: Readonly<{
     turn_id: string;
     status: string;
@@ -605,9 +610,24 @@ export class RuntimeClient {
         method: "POST",
         body: JSON.stringify({
           title: title?.trim() || null,
-          metadata: {},
+          metadata: operation.thread.metadata ?? {},
           client_request_id: operation.thread.client_request_id,
         }),
+      },
+      true,
+    );
+  }
+
+  listProjects(signal?: AbortSignal): Promise<ProjectListResponse> {
+    return this.json("/api/v1/projects", { signal });
+  }
+
+  pickProject(clientRequestId: string): Promise<ProjectProjection> {
+    return this.json(
+      "/api/v1/projects/pick",
+      {
+        method: "POST",
+        body: JSON.stringify({ client_request_id: clientRequestId }),
       },
       true,
     );

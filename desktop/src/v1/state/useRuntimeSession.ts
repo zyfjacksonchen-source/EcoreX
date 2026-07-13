@@ -20,6 +20,7 @@ import type {
   OutputLocationOption,
   OutputMaterialization,
   OutputPreference,
+  ProjectProjection,
   RetouchAnnotation,
   RetouchViewState,
   RetouchWorkspaceProjection,
@@ -198,6 +199,11 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   const [chatModel, setChatModel] = useState("");
   const [imageModel, setImageModel] = useState("");
   const [threads, setThreads] = useState<ThreadProjection[]>([]);
+  const [projects, setProjects] = useState<ProjectProjection[]>([]);
+  const [projectCatalogState, setProjectCatalogState] = useState<LoadState>("loading");
+  const [projectCatalogError, setProjectCatalogError] = useState<string | null>(null);
+  const [projectPickerBusy, setProjectPickerBusy] = useState(false);
+  const [newConversationProject, setNewConversationProject] = useState<ProjectProjection | null>(null);
   const [threadCatalogState, setThreadCatalogState] = useState<LoadState>("loading");
   const [threadCatalogError, setThreadCatalogError] = useState<string | null>(null);
   const [switchingThreadId, setSwitchingThreadId] = useState<string | null>(null);
@@ -207,6 +213,9 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   const threadSwitchAbort = useRef<AbortController | null>(null);
   const threadSwitchInProgress = useRef(false);
   const selectedThreadId = useRef<string | null>(null);
+  const pendingNewThreadMetadata = useRef<Record<string, string>>({
+    conversation_kind: "general",
+  });
   const pendingThreadMutations = useRef(new Map<string, PendingThreadMutation>());
   const pendingLiveReplayRequests = useRef(new Map<string, string>());
   const [artifacts, setArtifacts] = useState<ArtifactProjection[]>([]);
@@ -405,6 +414,40 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     }
   }, [client]);
 
+  const refreshProjects = useCallback(async (signal?: AbortSignal) => {
+    setProjectCatalogState((current) => current === "ready" ? current : "loading");
+    try {
+      const response = await client.listProjects(signal);
+      if (signal?.aborted) return false;
+      setProjects(response.projects);
+      setProjectCatalogState("ready");
+      setProjectCatalogError(null);
+      return true;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return false;
+      setProjectCatalogState("error");
+      setProjectCatalogError(errorMessage(error));
+      return false;
+    }
+  }, [client]);
+
+  const pickProject = useCallback(async (): Promise<ProjectProjection | null> => {
+    if (projectPickerBusy) return null;
+    setProjectPickerBusy(true);
+    setProjectCatalogError(null);
+    try {
+      const project = await client.pickProject(createClientRequestId("project_pick"));
+      await refreshProjects();
+      return project;
+    } catch (error) {
+      if (error instanceof RuntimeApiError && error.status === 409) return null;
+      setProjectCatalogError(errorMessage(error));
+      return null;
+    } finally {
+      setProjectPickerBusy(false);
+    }
+  }, [client, projectPickerBusy, refreshProjects]);
+
   const applyUpdateSnapshot = useCallback((update: UpdateSnapshot) => {
     const bootstrap = stateRef.current.bootstrap;
     if (!bootstrap) return;
@@ -459,6 +502,13 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     void refreshThreads(controller.signal);
     return () => controller.abort();
   }, [bootstrapped, refreshThreads]);
+
+  useEffect(() => {
+    if (!bootstrapped) return;
+    const controller = new AbortController();
+    void refreshProjects(controller.signal);
+    return () => controller.abort();
+  }, [bootstrapped, refreshProjects]);
 
   useEffect(() => {
     if (!bootstrapped) return;
@@ -691,6 +741,8 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
       // blank the existing conversation, and its in-flight event stream must
       // not silently discard events while the lookup is pending.
       selectedThreadId.current = targetThreadId;
+      pendingNewThreadMetadata.current = { conversation_kind: "general" };
+      setNewConversationProject(null);
       clearArtifactView();
       applyProjection(projection);
       return true;
@@ -993,13 +1045,20 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
       const operation = pendingRecord?.operation ?? support.module.createClientOperation({
             input,
             threadId: currentThreadId,
+            threadMetadata: currentThreadId ? undefined : pendingNewThreadMetadata.current,
             activeTurn: active,
             disposition,
             models: selectedModels,
             observedAfterSeq: current.watermark,
           });
       pendingSendOperation.current = operation;
-      return await deliverClientOperation(operation, true);
+      const delivered = await deliverClientOperation(operation, true);
+      if (delivered && operation.thread.kind === "create") {
+        pendingNewThreadMetadata.current = { conversation_kind: "general" };
+        setNewConversationProject(null);
+        void refreshProjects();
+      }
+      return delivered;
     } catch (error) {
       const pending = pendingSendOperation.current;
       if (pending && operationOutbox && !operationOutbox.get(pending.operation_id)) {
@@ -1017,6 +1076,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     deliverClientOperation,
     imageModel,
     loadOperationSupport,
+    refreshProjects,
   ]);
 
   useEffect(() => {
@@ -1278,12 +1338,20 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     }
   }, [client, outputBusy, outputPreference, refreshOutput]);
 
-  const newTask = useCallback(() => {
+  const newTask = useCallback((project: ProjectProjection | null = null) => {
     ++threadSwitchGeneration.current;
     threadSwitchAbort.current?.abort();
     threadSwitchAbort.current = null;
     threadSwitchInProgress.current = false;
     selectedThreadId.current = null;
+    pendingNewThreadMetadata.current = project
+      ? {
+          conversation_kind: "project",
+          project_id: project.project_id,
+          project_name: project.name,
+        }
+      : { conversation_kind: "general" };
+    setNewConversationProject(project);
     setSwitchingThreadId(null);
     clearArtifactView();
     clearThreadProjection();
@@ -1453,6 +1521,14 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     imageModel,
     setImageModel,
     threads,
+    projects,
+    projectCatalogState,
+    projectCatalogError,
+    projectPickerBusy,
+    newConversationProject,
+    clearProjectCatalogError: () => setProjectCatalogError(null),
+    refreshProjects: () => void refreshProjects(),
+    pickProject,
     threadCatalogState,
     threadCatalogError,
     clearThreadCatalogError: () => setThreadCatalogError(null),

@@ -127,6 +127,20 @@ export interface ThreadProjection {
   updated_at: string;
 }
 
+export interface ProjectProjection {
+  project_id: string;
+  name: string;
+  project_path: string;
+  pinned: boolean;
+  thread_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectListResponse {
+  projects: ProjectProjection[];
+}
+
 export interface TurnProjection {
   turn_id: string;
   thread_id: string;

@@ -143,7 +143,7 @@ export const GENERATED_RUNTIME_CONTRACT = {
       "failed"
     ]
   },
-  "schemaSha256": "9eed15f5fbcef4bb951fcde4010d0da7312d4dbf1f3620dbb9b943e30ea1818a",
+  "schemaSha256": "b453faa50f4d1f69d146c0b2c747f3ea8158298cbc67f60f051eb1db99a94798",
   "schemaVersion": 1,
   "versions": {
     "api": "v1",
@@ -252,6 +252,11 @@ export const GENERATED_RUNTIME_CONTRACT = {
         "event_type",
         "created_at",
         "payload"
+      ]
+    },
+    "ProjectListResponse": {
+      "ProjectListResponse": [
+        "projects"
       ]
     },
     "QueueTurnRequest": {

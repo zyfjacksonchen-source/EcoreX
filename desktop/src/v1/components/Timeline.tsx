@@ -1,9 +1,10 @@
 import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { Bot, CircleDashed, UserRound, WandSparkles } from "lucide-react";
+import { CircleDashed, FolderOpen, Workflow, WandSparkles } from "lucide-react";
 
 import type {
   ArtifactProjection,
   ItemProjection,
+  ProjectProjection,
   TurnProjection,
 } from "../api/contracts.ts";
 import { tryValidateArtifactProjection } from "../api/runtimeContract.ts";
@@ -31,6 +32,11 @@ interface TimelineProps {
   onArtifactPreviewVisible: (artifact: ArtifactProjection) => void;
   retouchAvailable: boolean;
   retouchUnavailableReason: string | null;
+  projects: ProjectProjection[];
+  newConversationProject: ProjectProjection | null;
+  projectPickerBusy: boolean;
+  onSelectConversationProject: (project: ProjectProjection | null) => void;
+  onPickProject: () => Promise<ProjectProjection | null>;
 }
 
 function role(item: ItemProjection): string {
@@ -70,11 +76,7 @@ const MessageRow = memo(function MessageRow({ item }: { item: ItemProjection }) 
     <article
       className={`ex-message is-${user ? "user" : "assistant"}${streaming ? " is-streaming" : ""}`}
     >
-      <span className="ex-message-avatar" aria-hidden="true">
-        {user ? <UserRound /> : <Bot />}
-      </span>
       <div className="ex-message-body" aria-busy={streaming || undefined}>
-        <span className="ex-message-author">{user ? "你" : "EcoreX"}</span>
         {user ? (
           <p className="ex-message-plain" aria-live="off">{text}</p>
         ) : (
@@ -98,6 +100,11 @@ export function Timeline({
   onArtifactPreviewVisible,
   retouchAvailable,
   retouchUnavailableReason,
+  projects,
+  newConversationProject,
+  projectPickerBusy,
+  onSelectConversationProject,
+  onPickProject,
 }: TimelineProps) {
   const messages = useMemo(
     () => items.filter((item) => item.kind === "message"),
@@ -186,10 +193,46 @@ export function Timeline({
     && !visibleReasoning
   ) {
     return (
-      <div className="ex-empty-state">
-        <Bot aria-hidden="true" />
-        <h1>今天要完成什么？</h1>
-        <p>写报告、整理表格、制作演示或修改图片。模型与权限会在发送前确定。</p>
+      <div className="ex-empty-state ex-new-conversation-start">
+        <h1>和 EcoreX 一起开始工作</h1>
+        <p>{newConversationProject ? `${newConversationProject.name} 项目会话` : "选择一个开始方式"}</p>
+        <div className="ex-new-conversation-options" aria-label="新会话入口">
+          <button
+            className={!newConversationProject ? "is-selected" : ""}
+            type="button"
+            aria-pressed={!newConversationProject}
+            onClick={() => onSelectConversationProject(null)}
+          >
+            <Workflow aria-hidden="true" />
+            <span><strong>通用会话</strong><small>不绑定项目，适合临时问答、资料整理和轻量任务。</small></span>
+          </button>
+          <div className="ex-new-project-options">
+            {projects.map((project) => (
+              <button
+                className={newConversationProject?.project_id === project.project_id ? "is-selected" : ""}
+                type="button"
+                key={project.project_id}
+                aria-pressed={newConversationProject?.project_id === project.project_id}
+                title={project.project_path}
+                onClick={() => onSelectConversationProject(project)}
+              >
+                <FolderOpen aria-hidden="true" />
+                <span><strong>{project.name}</strong><small>使用此项目文件夹开启独立项目会话。</small></span>
+              </button>
+            ))}
+            <button type="button" disabled={projectPickerBusy} onClick={() => void onPickProject().then((project) => {
+              if (project) onSelectConversationProject(project);
+            })}>
+              <FolderOpen className={projectPickerBusy ? "ex-spin" : ""} aria-hidden="true" />
+              <span><strong>{projectPickerBusy ? "正在选择" : "项目文件夹"}</strong><small>选择已有目录，作为本次会话的项目上下文。</small></span>
+            </button>
+          </div>
+        </div>
+        <p className="ex-new-conversation-note">
+          {newConversationProject
+            ? `将从 ${newConversationProject.name} 项目开始，不会自动复用旧项目会话。`
+            : "将从不绑定项目的通用会话开始，不会串入项目文件夹上下文。"}
+        </p>
       </div>
     );
   }

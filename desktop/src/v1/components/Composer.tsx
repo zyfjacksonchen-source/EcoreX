@@ -1,11 +1,12 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { ChevronDown, Image, Send, Square, Workflow } from "lucide-react";
+import { ChevronDown, Image, Plus, Send, ShieldCheck, Square, Workflow } from "lucide-react";
 import { useState } from "react";
 
 import type { SendDisposition, TaskMode } from "../state/useRuntimeSession.ts";
 import type {
   ConnectorCatalogItem,
   ConnectorInstanceProjection,
+  ModelDescriptor,
 } from "../api/contracts.ts";
 import type {
   ConnectorCatalogLoadState,
@@ -41,6 +42,20 @@ interface ComposerProps {
   submitting: boolean;
   modelAvailable: boolean;
   sendUnavailableReason: string | null;
+  chatModels: ModelDescriptor[];
+  imageModels: ModelDescriptor[];
+  chatModel: string;
+  imageModel: string;
+  quota: {
+    remaining: number | null;
+    unit: string;
+    resets_at: string | null;
+    limits: Record<string, number>;
+  } | null;
+  permissionLabel: string;
+  permissionDescription: string;
+  onChatModelChange: (modelId: string) => void;
+  onImageModelChange: (modelId: string) => void;
   onModeChange: (mode: TaskMode) => void;
   onSend: (input: string, disposition: SendDisposition) => Promise<boolean>;
   onInterrupt: () => void;
@@ -70,6 +85,15 @@ export function Composer({
   submitting,
   modelAvailable,
   sendUnavailableReason,
+  chatModels,
+  imageModels,
+  chatModel,
+  imageModel,
+  quota,
+  permissionLabel,
+  permissionDescription,
+  onChatModelChange,
+  onImageModelChange,
   onModeChange,
   onSend,
   onInterrupt,
@@ -77,6 +101,10 @@ export function Composer({
   const [draft, setDraft] = useState("");
   const [disposition, setDisposition] = useState<SendDisposition>("steer");
   const [sendFailed, setSendFailed] = useState(false);
+  const activeModels = mode === "image" ? imageModels : chatModels;
+  const activeModel = mode === "image" ? imageModel : chatModel;
+  const remaining = quota?.remaining;
+  const remainingLabel = typeof remaining === "number" ? remaining.toLocaleString("zh-CN") : "—";
 
   const submit = async () => {
     if (!draft.trim() || !modelAvailable) return;
@@ -108,6 +136,15 @@ export function Composer({
         />
         <div className="ex-composer-toolbar">
           <div className="ex-composer-tools">
+            <button
+              className="ex-composer-tool ex-attach-trigger"
+              type="button"
+              aria-label="添加文件（暂不可用）"
+              title="文件上传服务尚未完成，暂不能添加文件"
+              disabled
+            >
+              <Plus aria-hidden="true" />
+            </button>
             <div className="ex-mode-switch" role="group" aria-label="任务类型">
               <button
                 type="button"
@@ -140,6 +177,23 @@ export function Composer({
               onClearError={onClearConnectorError}
               onClearNotice={onClearConnectorNotice}
             />
+            <label className="ex-composer-model">
+              <span className="ex-visually-hidden">{mode === "image" ? "图片模型" : "对话模型"}</span>
+              <select
+                value={activeModel}
+                disabled={!activeModels.length}
+                aria-label={mode === "image" ? "图片模型" : "对话模型"}
+                onChange={(event) => {
+                  if (mode === "image") onImageModelChange(event.target.value);
+                  else onChatModelChange(event.target.value);
+                }}
+              >
+                {activeModels.map((model) => (
+                  <option value={model.model_id} key={model.model_id}>{model.display_name}</option>
+                ))}
+              </select>
+              <ChevronDown aria-hidden="true" />
+            </label>
           </div>
           <div className="ex-send-tools">
             {active ? (
@@ -187,11 +241,23 @@ export function Composer({
           </div>
         </div>
       </div>
-      <p className="ex-composer-note" id="ecorex-composer-note" role={!modelAvailable ? "status" : undefined}>
-        {modelAvailable
-          ? "需要权限或信息时会询问；长任务可排队，重启后继续。"
-          : sendUnavailableReason || "模型服务未连接；可查看历史和本地产物。"}
-      </p>
+      <div className="ex-composer-meta">
+        <span className="ex-permission-inline" title={permissionDescription}>
+          <ShieldCheck aria-hidden="true" />{permissionLabel}
+        </span>
+        <p className="ex-composer-note" id="ecorex-composer-note" role={!modelAvailable ? "status" : undefined}>
+          {modelAvailable
+            ? "需要权限或信息时会询问；长任务可排队，重启后继续。"
+            : sendUnavailableReason || "模型服务未连接；可查看历史和本地产物。"}
+        </p>
+        <div className="ex-usage-meter" aria-label="额度与上下文用量">
+          <span title="服务尚未提供今日分项额度">今日 <b>—</b></span>
+          <i aria-hidden="true" />
+          <span title="服务尚未提供本周分项额度">本周 <b>—</b></span>
+          <i aria-hidden="true" />
+          <span title={`托管额度剩余：${remainingLabel}`}>上下文 <b>—</b></span>
+        </div>
+      </div>
     </div>
   );
 }

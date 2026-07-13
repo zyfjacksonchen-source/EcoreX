@@ -3,20 +3,21 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   Archive,
   ArchiveRestore,
+  ChevronDown,
   Copy,
+  FolderOpen,
   LoaderCircle,
   MessageSquare,
   MoreHorizontal,
   Pencil,
   Plus,
   RefreshCw,
-  Search,
   Settings2,
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import type { ThreadProjection } from "../api/contracts.ts";
+import type { ProjectProjection, ThreadProjection } from "../api/contracts.ts";
 import type { LoadState } from "../state/useRuntimeSession.ts";
 import { IconButton } from "./IconButton.tsx";
 
@@ -25,12 +26,18 @@ interface SidebarProps {
   modal: boolean;
   currentThreadId: string | null;
   threads: ThreadProjection[];
+  projects: ProjectProjection[];
+  projectCatalogState: LoadState;
+  projectCatalogError: string | null;
+  projectPickerBusy: boolean;
   catalogState: LoadState;
   catalogError: string | null;
   switchingThreadId: string | null;
   mutationKey: string | null;
   onClose: () => void;
-  onNewTask: () => void;
+  onNewTask: (project?: ProjectProjection | null) => void;
+  onPickProject: () => Promise<ProjectProjection | null>;
+  onClearProjectError: () => void;
   onOpenThread: (threadId: string) => Promise<boolean>;
   onRenameThread: (threadId: string, title: string) => Promise<boolean>;
   onArchiveThread: (threadId: string) => Promise<boolean>;
@@ -44,13 +51,19 @@ export function Sidebar({
   open,
   modal,
   currentThreadId,
-  threads,
+  threads = [],
+  projects = [],
+  projectCatalogState,
+  projectCatalogError,
+  projectPickerBusy,
   catalogState,
   catalogError,
   switchingThreadId,
   mutationKey,
   onClose,
   onNewTask,
+  onPickProject,
+  onClearProjectError,
   onOpenThread,
   onRenameThread,
   onArchiveThread,
@@ -67,6 +80,10 @@ export function Sidebar({
   const [continueError, setContinueError] = useState<string | null>(null);
   const [continuing, setContinuing] = useState(false);
   const [threadIdNotice, setThreadIdNotice] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [projectsCollapsed, setProjectsCollapsed] = useState(false);
+  const [sessionsCollapsed, setSessionsCollapsed] = useState(false);
+  const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({});
   const renameInputRef = useRef<HTMLInputElement>(null);
   const continueInputRef = useRef<HTMLInputElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
@@ -75,6 +92,15 @@ export function Sidebar({
   const renaming = renameTarget ? mutationKey === `rename:${renameTarget.thread_id}` : false;
   const activeThreads = threads.filter((thread) => thread.status === "active");
   const archivedThreads = threads.filter((thread) => thread.status === "archived");
+  const normalizedSearch = searchQuery.trim().toLocaleLowerCase("zh-CN");
+  const visibleThreads = activeThreads.filter((thread) => (
+    !normalizedSearch
+    || (thread.title || "未命名会话").toLocaleLowerCase("zh-CN").includes(normalizedSearch)
+  ));
+  const projectIdOf = (thread: ThreadProjection) => (
+    typeof thread.metadata.project_id === "string" ? thread.metadata.project_id : null
+  );
+  const generalThreads = visibleThreads.filter((thread) => !projectIdOf(thread));
 
   useEffect(() => {
     if (!renameTarget) return;
@@ -176,6 +202,56 @@ export function Sidebar({
     setContinueError("未找到任务，或记录暂不可读。请核对 ID。");
   };
 
+  const renderThreadEntry = (thread: ThreadProjection) => {
+    const current = thread.thread_id === currentThreadId;
+    const switching = switchingThreadId === thread.thread_id;
+    const archiving = mutationKey === `archive:${thread.thread_id}`;
+    const label = thread.title || "未命名会话";
+    return (
+      <div className="ex-task-entry" key={thread.thread_id}>
+        <button
+          className={`ex-task-row${current ? " is-current" : ""}`}
+          type="button"
+          title={label}
+          aria-current={current ? "page" : undefined}
+          aria-label={`打开任务：${label}`}
+          disabled={switching || archiving}
+          onClick={() => void onOpenThread(thread.thread_id)}
+        >
+          {switching
+            ? <LoaderCircle className="ex-spin" aria-hidden="true" />
+            : <MessageSquare aria-hidden="true" />}
+          <span>{label}</span>
+        </button>
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger asChild>
+            <IconButton
+              className="ex-task-more"
+              label={`管理任务：${label}`}
+              disabled={Boolean(switchingThreadId) || archiving}
+              tooltipSide="right"
+            >
+              <MoreHorizontal aria-hidden="true" />
+            </IconButton>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content className="ex-menu" side="right" align="start" sideOffset={8} collisionPadding={12}>
+              <DropdownMenu.Item className="ex-menu-item" onSelect={() => void copyThreadId(thread.thread_id)}>
+                <Copy aria-hidden="true" />复制任务 ID
+              </DropdownMenu.Item>
+              <DropdownMenu.Item className="ex-menu-item" onSelect={() => setRenameTarget(thread)}>
+                <Pencil aria-hidden="true" />重命名
+              </DropdownMenu.Item>
+              <DropdownMenu.Item className="ex-menu-item is-danger" onSelect={() => void onArchiveThread(thread.thread_id)}>
+                <Archive aria-hidden="true" />归档
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      </div>
+    );
+  };
+
   return (
     <>
       <aside
@@ -193,32 +269,100 @@ export function Sidebar({
           </IconButton>
         </div>
 
-        <button className="ex-new-task" type="button" aria-label="新建任务" onClick={onNewTask}>
+        <button className="ex-new-task" type="button" aria-label="新建任务" onClick={() => onNewTask(null)}>
           <Plus aria-hidden="true" />
-          <span>新建任务</span>
+          <span>新对话</span>
         </button>
-        <button
-          className="ex-button ex-continue-task"
-          type="button"
-          aria-label="按任务 ID 继续"
-          onClick={() => setContinueOpen(true)}
-        >
-          <Search aria-hidden="true" />
-          <span>按任务 ID 继续</span>
-        </button>
+        <div className="ex-session-search">
+          <input
+            value={searchQuery}
+            aria-label="搜索会话"
+            placeholder="搜索会话"
+            onChange={(event) => setSearchQuery(event.target.value)}
+          />
+          <IconButton label="按任务 ID 继续" onClick={() => setContinueOpen(true)}>
+            <MessageSquare aria-hidden="true" />
+          </IconButton>
+        </div>
 
-        <nav className="ex-task-nav" aria-label="活动任务">
-          <div className="ex-nav-heading">
-            <p className="ex-nav-label">活动任务</p>
-            <IconButton
-              className="ex-task-refresh"
-              label="刷新任务目录"
-              disabled={catalogState === "loading"}
-              onClick={onRefreshThreads}
-            >
-              <RefreshCw className={catalogState === "loading" ? "ex-spin" : ""} aria-hidden="true" />
-            </IconButton>
-          </div>
+        <nav className="ex-task-nav" aria-label="会话与项目">
+          <section className="ex-sidebar-section" aria-label="项目">
+            <div className="ex-nav-heading">
+              <button
+                className="ex-sidebar-action ex-section-toggle"
+                type="button"
+                aria-expanded={!projectsCollapsed}
+                onClick={() => setProjectsCollapsed((value) => !value)}
+              >
+                <ChevronDown className={projectsCollapsed ? "is-collapsed" : ""} aria-hidden="true" />
+                <span>项目</span>
+              </button>
+              <IconButton
+                className="ex-task-refresh"
+                label={projectPickerBusy ? "正在选择项目文件夹" : "添加项目文件夹"}
+                disabled={projectPickerBusy}
+                onClick={() => void onPickProject()}
+              >
+                {projectPickerBusy
+                  ? <LoaderCircle className="ex-spin" aria-hidden="true" />
+                  : <FolderOpen aria-hidden="true" />}
+              </IconButton>
+            </div>
+            {projectCatalogError ? (
+              <div className="ex-task-catalog-error" role="alert">
+                <span>{projectCatalogError}</span>
+                <IconButton label="关闭项目错误" onClick={onClearProjectError}><X aria-hidden="true" /></IconButton>
+              </div>
+            ) : null}
+            {!projectsCollapsed ? (
+              projectCatalogState === "loading" && projects.length === 0 ? (
+                <p className="ex-task-loading" role="status"><LoaderCircle className="ex-spin" aria-hidden="true" /><span>正在加载项目…</span></p>
+              ) : projects.length === 0 ? (
+                <button className="ex-sidebar-action ex-project-empty" type="button" onClick={() => void onPickProject()} disabled={projectPickerBusy}>
+                  <FolderOpen aria-hidden="true" /><span>添加项目文件夹</span>
+                </button>
+              ) : (
+                <div className="ex-project-list">
+                  {projects.map((project) => {
+                    const projectThreads = visibleThreads.filter((thread) => projectIdOf(thread) === project.project_id);
+                    const collapsed = Boolean(collapsedProjects[project.project_id]) && !normalizedSearch;
+                    return (
+                      <div className="ex-project-group" key={project.project_id}>
+                        <div className="ex-project-row">
+                          <button
+                            className="ex-sidebar-action ex-project-main"
+                            type="button"
+                            title={`${project.name}\n${project.project_path}`}
+                            onClick={() => projectThreads[0]
+                              ? void onOpenThread(projectThreads[0].thread_id)
+                              : onNewTask(project)}
+                          >
+                            <FolderOpen aria-hidden="true" /><span>{project.name}</span>
+                          </button>
+                          <IconButton
+                            label={collapsed ? `展开 ${project.name} 会话` : `折叠 ${project.name} 会话`}
+                            onClick={() => setCollapsedProjects((current) => ({ ...current, [project.project_id]: !collapsed }))}
+                          >
+                            <ChevronDown className={collapsed ? "is-collapsed" : ""} aria-hidden="true" />
+                          </IconButton>
+                          <IconButton label={`为 ${project.name} 创建新会话`} onClick={() => onNewTask(project)}>
+                            <Plus aria-hidden="true" />
+                          </IconButton>
+                        </div>
+                        {!collapsed ? (
+                          <div className="ex-project-session-list" aria-label={`${project.name} 的会话`}>
+                            {projectThreads.length
+                              ? projectThreads.map(renderThreadEntry)
+                              : <button className="ex-sidebar-action ex-project-session-empty" type="button" onClick={() => onNewTask(project)}>新建项目会话</button>}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              )
+            ) : null}
+          </section>
 
           {catalogError ? (
             <div className="ex-task-catalog-error" role="alert">
@@ -237,83 +381,24 @@ export function Sidebar({
             </div>
           ) : null}
 
-          {catalogState === "loading" && threads.length === 0 ? (
-            <p className="ex-task-loading" role="status">
-              <LoaderCircle className="ex-spin" aria-hidden="true" />
-              <span>正在加载任务…</span>
-            </p>
-          ) : activeThreads.length === 0 ? (
-            <p className="ex-nav-empty">还没有活动任务。发送消息后会出现在这里。</p>
-          ) : (
-            <div className="ex-task-list">
-              {activeThreads.map((thread) => {
-                const current = thread.thread_id === currentThreadId;
-                const switching = switchingThreadId === thread.thread_id;
-                const archiving = mutationKey === `archive:${thread.thread_id}`;
-                const label = thread.title || "未命名任务";
-                return (
-                  <div className="ex-task-entry" key={thread.thread_id}>
-                    <button
-                      className={`ex-task-row${current ? " is-current" : ""}`}
-                      type="button"
-                      title={label}
-                      aria-current={current ? "page" : undefined}
-                      aria-label={`打开任务：${label}`}
-                      disabled={switching || archiving}
-                      onClick={() => void onOpenThread(thread.thread_id)}
-                    >
-                      {switching ? (
-                        <LoaderCircle className="ex-spin" aria-hidden="true" />
-                      ) : (
-                        <MessageSquare aria-hidden="true" />
-                      )}
-                      <span>{label}</span>
-                    </button>
-                    <DropdownMenu.Root>
-                      <DropdownMenu.Trigger asChild>
-                        <IconButton
-                          className="ex-task-more"
-                          label={`管理任务：${label}`}
-                          disabled={Boolean(switchingThreadId) || archiving}
-                          tooltipSide="right"
-                        >
-                          <MoreHorizontal aria-hidden="true" />
-                        </IconButton>
-                      </DropdownMenu.Trigger>
-                      <DropdownMenu.Portal>
-                        <DropdownMenu.Content
-                          className="ex-menu"
-                          side="right"
-                          align="start"
-                          sideOffset={8}
-                          collisionPadding={12}
-                        >
-                          <DropdownMenu.Item
-                            className="ex-menu-item"
-                            onSelect={() => void copyThreadId(thread.thread_id)}
-                          >
-                            <Copy aria-hidden="true" />
-                            复制任务 ID
-                          </DropdownMenu.Item>
-                          <DropdownMenu.Item className="ex-menu-item" onSelect={() => setRenameTarget(thread)}>
-                            <Pencil aria-hidden="true" />
-                            重命名
-                          </DropdownMenu.Item>
-                          <DropdownMenu.Item
-                            className="ex-menu-item is-danger"
-                            onSelect={() => void onArchiveThread(thread.thread_id)}
-                          >
-                            <Archive aria-hidden="true" />
-                            归档
-                          </DropdownMenu.Item>
-                        </DropdownMenu.Content>
-                      </DropdownMenu.Portal>
-                    </DropdownMenu.Root>
-                  </div>
-                );
-              })}
+          <section className="ex-sidebar-section" aria-label="会话">
+            <div className="ex-nav-heading">
+              <button className="ex-sidebar-action ex-section-toggle" type="button" aria-expanded={!sessionsCollapsed} onClick={() => setSessionsCollapsed((value) => !value)}>
+                <ChevronDown className={sessionsCollapsed ? "is-collapsed" : ""} aria-hidden="true" />
+                <span>会话</span><small>{generalThreads.length}</small>
+              </button>
+              <IconButton className="ex-task-refresh" label="刷新会话" disabled={catalogState === "loading"} onClick={onRefreshThreads}>
+                <RefreshCw className={catalogState === "loading" ? "ex-spin" : ""} aria-hidden="true" />
+              </IconButton>
             </div>
-          )}
+            {!sessionsCollapsed ? (
+              catalogState === "loading" && threads.length === 0 ? (
+                <p className="ex-task-loading" role="status"><LoaderCircle className="ex-spin" aria-hidden="true" /><span>正在加载会话…</span></p>
+              ) : generalThreads.length === 0 ? (
+                <p className="ex-nav-empty">暂无会话</p>
+              ) : <div className="ex-task-list">{generalThreads.map(renderThreadEntry)}</div>
+            ) : null}
+          </section>
           {archivedThreads.length ? (
             <details className="ex-archived-tasks">
               <summary>

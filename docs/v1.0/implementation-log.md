@@ -3763,3 +3763,29 @@ now ordered at 45 minutes for staging, 50 minutes for wrapper verification and
 a ten-minute cleanup/receipt margin. Seventeen focused process-boundary and
 Windows drill tests pass; this is a timeout-contract correction, not a skipped
 probe or an unbounded build.
+
+## 2026-07-13 - v0.3 workbench expansion and backend-owned projects
+
+The WebUI restoration boundary was expanded from outer geometry to the full
+v0.3 workbench interaction model. Runtime now owns a typed ProjectService and
+`/api/v1/projects` catalog, validates native folder selections, deduplicates
+canonical paths and replaces forged project display metadata before a new
+Thread is created. The first-message outbox freezes that authoritative project
+binding so a retry cannot jump from a project conversation into a general one.
+
+The React shell now exposes project folders, nested project sessions, general
+sessions, search and continue-by-ID navigation. The empty transcript lets the
+user choose a general or project conversation before the first message. Chat
+rows no longer render Agent or user avatars. Model selection, permission state
+and the v0.3 daily/weekly/context meter positions moved into the Composer.
+Missing usage dimensions render an explicit dash; the UI does not estimate
+tokens or invent daily/weekly quota facts.
+
+Sidebar was split into a local deferred chunk after expanded navigation crossed
+the existing initial-JavaScript budget. The production gate passes at 467.14
+KiB initial JS (144.86 KiB gzip) without increasing the budget. A real browser
+pass found and corrected a GA fixture drift where the mock returned `items`
+instead of the authoritative `projects` field. Project selection, first-message
+creation, avatarless transcript rendering and the in-Composer GPT-5.6 SOL
+selector were then exercised successfully. File upload and authoritative usage
+aggregation remain unfinished; release remains blocked.

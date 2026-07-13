@@ -801,6 +801,24 @@ class ThreadProjection(FrozenProtocolModel):
     _timestamps_utc = field_validator("created_at", "updated_at")(_ensure_utc)
 
 
+class ProjectProjection(FrozenProtocolModel):
+    project_id: str
+    name: str = Field(min_length=1, max_length=200)
+    project_path: str = Field(min_length=1, max_length=4096)
+    pinned: bool = False
+    thread_count: int = Field(default=0, ge=0)
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class ProjectListResponse(FrozenProtocolModel):
+    projects: list[ProjectProjection] = Field(default_factory=list)
+
+
+class PickProjectFolderRequest(ProtocolModel):
+    client_request_id: str = Field(min_length=1, max_length=256)
+
+
 class TurnProjection(FrozenProtocolModel):
     turn_id: str
     thread_id: str

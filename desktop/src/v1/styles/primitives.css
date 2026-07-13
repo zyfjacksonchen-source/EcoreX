@@ -20,6 +20,7 @@
 .ex-task-row,
 .ex-composer-tool,
 .ex-mode-switch button,
+.ex-new-conversation-options button,
 .ex-disposition,
 .ex-send-button,
 .ex-artifact-primary,
@@ -40,6 +41,7 @@
 .ex-task-row,
 .ex-composer-tool,
 .ex-mode-switch button,
+.ex-new-conversation-options button,
 .ex-disposition,
 .ex-send-button {
   min-height: var(--target-desktop);

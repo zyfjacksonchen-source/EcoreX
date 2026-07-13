@@ -1299,3 +1299,19 @@ correct ownership boundary for all one-shot executable Capability Packs.
 Protected native runners must provision from the hashed lock before staging;
 locally installed newer packages are intentionally rejected even when their
 functional smoke succeeds.
+
+## v0.3 workbench expansion checkpoint - 2026-07-13
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Project Runtime tests | 0 | 2 passed; native project creation is canonicalized and thread metadata is backend-authoritative. |
+| Web typecheck and generated contracts | 0 | TypeScript and Python-schema digest checks passed with `ProjectListResponse` included. |
+| Web unit/design contracts | 0 | 161 passed; frameless controls, typography, accessibility, stream rendering and Runtime contracts remained locked. |
+| Production Web build | 0 | 18 content-addressed assets; entry 44.41 KiB, initial JS 467.05 KiB and all bundle budgets passed. |
+| Real browser project conversation | 0 | Selected `季度报告`, sent the first message, observed the Thread under the project group and verified user/Agent rows without avatars. |
+| Real browser model surface | 0 | GPT-5.6 SOL medium reasoning is selectable before the first Turn; image mode exposes the independent `Image 2` selector. |
+
+The first full 31-scenario E2E invocation exceeded the 180-second wrapper
+timeout before producing a receipt, so it is not counted as a pass. It must be
+rerun with the repository's bounded full-suite allowance after the remaining
+Composer upload and usage-contract work lands.

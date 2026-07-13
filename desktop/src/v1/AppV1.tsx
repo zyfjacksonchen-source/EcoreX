@@ -10,7 +10,6 @@ import {
   RefreshCw,
   Settings2,
   Share2,
-  ShieldCheck,
   Wifi,
   WifiOff,
   X,
@@ -22,7 +21,6 @@ import type { ArtifactProjection } from "./api/contracts.ts";
 import { Composer } from "./components/Composer.tsx";
 import { IconButton } from "./components/IconButton.tsx";
 import { LazyFeatureBoundary } from "./components/LazyFeatureBoundary.tsx";
-import { Sidebar } from "./components/Sidebar.tsx";
 import { Timeline } from "./components/Timeline.tsx";
 import { useRuntimeSession } from "./state/useRuntimeSession.ts";
 import { serviceReasonMessage } from "./state/userLanguage.ts";
@@ -32,6 +30,7 @@ import "./styles/features.css";
 import "./styles/plain-language.css";
 
 const loadArtifactPreviewDialog = () => import("./components/ArtifactPreviewDialog.tsx");
+const loadSidebar = () => import("./components/Sidebar.tsx");
 const loadDeviceLoginCard = () => import("./components/DeviceLoginCard.tsx");
 const loadExtensionManagerDialog = () => import("./components/ExtensionManagerDialog.tsx");
 const loadInteractionStack = () => import("./components/InteractionStack.tsx");
@@ -42,6 +41,9 @@ const loadShareDialog = () => import("./components/ShareDialog.tsx");
 
 const ArtifactPreviewDialog = lazy(async () => ({
   default: (await loadArtifactPreviewDialog()).ArtifactPreviewDialog,
+}));
+const Sidebar = lazy(async () => ({
+  default: (await loadSidebar()).Sidebar,
 }));
 const DeviceLoginCard = lazy(async () => ({
   default: (await loadDeviceLoginCard()).DeviceLoginCard,
@@ -469,20 +471,27 @@ export function AppV1() {
   return (
     <Tooltip.Provider skipDelayDuration={250}>
       <div className="ex-app-shell">
-        <Sidebar
+        <Suspense fallback={<aside className="ex-sidebar is-loading" aria-label="正在加载任务导航" />}>
+          <Sidebar
           open={sidebarOpen}
           modal={sidebarOpen && mobileNavigation}
           currentThreadId={currentThreadId}
           threads={runtime.threads}
+          projects={runtime.projects}
+          projectCatalogState={runtime.projectCatalogState}
+          projectCatalogError={runtime.projectCatalogError}
+          projectPickerBusy={runtime.projectPickerBusy}
           catalogState={runtime.threadCatalogState}
           catalogError={runtime.threadCatalogError}
           switchingThreadId={runtime.switchingThreadId}
           mutationKey={runtime.threadMutationKey}
           onClose={() => setSidebarOpen(false)}
-          onNewTask={() => {
-            runtime.newTask();
+          onNewTask={(project) => {
+            runtime.newTask(project ?? null);
             setSidebarOpen(false);
           }}
+          onPickProject={runtime.pickProject}
+          onClearProjectError={runtime.clearProjectCatalogError}
           onOpenThread={async (threadId) => {
             const opened = await runtime.openThread(threadId);
             if (opened) setSidebarOpen(false);
@@ -499,7 +508,8 @@ export function AppV1() {
             setSettingsOpen(true);
             setSidebarOpen(false);
           }}
-        />
+          />
+        </Suspense>
         {sidebarOpen ? (
           <button
             className="ex-sidebar-scrim"
@@ -535,35 +545,6 @@ export function AppV1() {
               </div>
             </div>
 
-            <div className="ex-model-controls" role="group" aria-label="模型选择">
-              <label>
-                <span>对话模型</span>
-                <select
-                  value={runtime.chatModel}
-                  disabled={!modelServiceReady || !(bootstrap?.models.chat.length)}
-                  aria-label="对话模型"
-                  onChange={(event) => runtime.setChatModel(event.target.value)}
-                >
-                  {bootstrap?.models.chat.map((model) => (
-                    <option value={model.model_id} key={model.model_id}>{model.display_name}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span>图片模型</span>
-                <select
-                  value={runtime.imageModel}
-                  disabled={!modelServiceReady || !(bootstrap?.models.image.length)}
-                  aria-label="图片模型"
-                  onChange={(event) => runtime.setImageModel(event.target.value)}
-                >
-                  {bootstrap?.models.image.map((model) => (
-                    <option value={model.model_id} key={model.model_id}>{model.display_name}</option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
             <div className="ex-header-actions">
               <IconButton
                 label={shareUnavailableReason || "分享当前任务"}
@@ -578,10 +559,6 @@ export function AppV1() {
               >
                 <Share2 aria-hidden="true" />
               </IconButton>
-              <span className="ex-permission-badge" title={accessDescription}>
-                <ShieldCheck aria-hidden="true" />
-                {accessLabel}
-              </span>
             </div>
           </header>
 
@@ -677,6 +654,11 @@ export function AppV1() {
               onArtifactPreviewVisible={runtime.prefetchArtifactPreview}
               retouchAvailable={authenticated && bootstrap?.retouch_service.state === "ready"}
               retouchUnavailableReason={retouchUnavailableReason}
+              projects={runtime.projects}
+              newConversationProject={runtime.newConversationProject}
+              projectPickerBusy={runtime.projectPickerBusy}
+              onSelectConversationProject={runtime.newTask}
+              onPickProject={runtime.pickProject}
             />
           </section>
 
@@ -717,6 +699,15 @@ export function AppV1() {
             submitting={runtime.submitting || Boolean(runtime.switchingThreadId)}
             modelAvailable={modelAvailable}
             sendUnavailableReason={modelAvailable ? null : modelUnavailable}
+            chatModels={bootstrap?.models.chat || []}
+            imageModels={bootstrap?.models.image || []}
+            chatModel={runtime.chatModel}
+            imageModel={runtime.imageModel}
+            quota={bootstrap?.quota || null}
+            permissionLabel={accessLabel}
+            permissionDescription={accessDescription}
+            onChatModelChange={runtime.setChatModel}
+            onImageModelChange={runtime.setImageModel}
             onModeChange={runtime.setMode}
             onSend={runtime.sendMessage}
             onInterrupt={() => void runtime.interrupt()}

@@ -727,6 +727,15 @@ function scenarioState(name) {
     authenticated: name !== "unauthenticated",
     permissionProfile: "default",
     permissionRevision: 1,
+    projects: [{
+      project_id: "project-ga-office",
+      name: "季度报告",
+      project_path: "C:\\EcoreX-GA\\季度报告",
+      pinned: false,
+      thread_count: 0,
+      created_at: NOW,
+      updated_at: NOW,
+    }],
     threads: [],
     projection: null,
     projections: new Map(),
@@ -1483,9 +1492,23 @@ async function handleApi(holder, req, res, url) {
   if (path === "/api/v1/threads" && req.method === "GET") {
     return json(res, 200, { items: state.threads, next_cursor: null });
   }
+  if (path === "/api/v1/projects" && req.method === "GET") {
+    return json(res, 200, { projects: state.projects });
+  }
+  if (path === "/api/v1/projects/pick" && req.method === "POST") {
+    const request = await body(req);
+    if (typeof request.client_request_id !== "string") {
+      return apiError(res, 422, "invalid_project_request", "Project request identity is required");
+    }
+    return json(res, 201, state.projects[0]);
+  }
   if (path === "/api/v1/threads" && req.method === "POST") {
     if (!state.authenticated) return apiError(res, 401, "managed_session_unavailable", "Managed login is required");
-    const created = thread("thread-ga", null);
+    const request = await body(req);
+    const created = {
+      ...thread("thread-ga", null),
+      metadata: request.metadata && typeof request.metadata === "object" ? request.metadata : {},
+    };
     state.threads = [created];
     state.projection = { thread: created, turns: [], items: [], jobs: [], interactions: [], watermark: 0 };
     state.projections = new Map([[created.thread_id, state.projection]]);

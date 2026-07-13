@@ -45,6 +45,7 @@ test("generated manifest pins the canonical full-schema digest", async () => {
     "EventEnvelope",
     "InteractionMutationResponse",
     "InteractionRequest",
+    "ProjectListResponse",
     "QueueTurnRequest",
     "ReplaceTurnRequest",
     "RespondInteractionRequest",

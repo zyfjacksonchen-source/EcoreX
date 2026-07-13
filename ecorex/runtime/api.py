@@ -76,6 +76,13 @@ from ecorex.migration import (
     create_migration_quarantine_router,
 )
 from ecorex.output import OutputService, create_output_router
+from ecorex.projects import (
+    FolderPicker,
+    ProjectFolderSelectionCancelled,
+    ProjectNotFound,
+    ProjectService,
+    pick_project_folder,
+)
 from ecorex.observability import (
     AuditDispatcher,
     AuditError,
@@ -123,7 +130,10 @@ from ecorex.protocol import (
     MockReplayResponse,
     PermissionMutationResponse,
     PermissionSnapshot,
+    PickProjectFolderRequest,
     PolicyLeaseSnapshot,
+    ProjectListResponse,
+    ProjectProjection,
     QueueTurnRequest,
     RenameThreadRequest,
     QuotaSnapshot,
@@ -291,6 +301,7 @@ class RuntimeSettings:
     trace_max_spans_per_batch: int = 64
     trace_max_request_bytes: int = 1024 * 1024
     trace_retention_days: int = 7
+    project_folder_picker: FolderPicker = field(default=pick_project_folder, repr=False)
 
 
 class _ManagedSessionRestartRequired(RuntimeError):
@@ -1065,6 +1076,7 @@ def create_app(
     # preparation can change semantic state. A failed preflight remains
     # projection-only for the complete process lifetime.
     kernel = RuntimeKernel(settings.database_path)
+    project_service = ProjectService(kernel.database)
     runtime_execution_gate = RuntimeExecutionGate()
     recovery_execution_gate = RecoveryExecutionGate()
     kernel.jobs.bind_execution_gate(runtime_execution_gate)
@@ -1189,6 +1201,7 @@ def create_app(
         )
     app.state.runtime_execution_gate = runtime_execution_gate
     app.state.recovery_execution_gate = recovery_execution_gate
+    app.state.project_service = project_service
     app.state.interaction_maintenance_supervisor = interaction_maintenance_supervisor
     app.state.invariant_supervisor = invariant_supervisor
     permission_authority = PermissionAuthority(
@@ -2550,6 +2563,20 @@ def create_app(
     async def domain_handler(_request: Request, error: RuntimeDomainError):
         return JSONResponse(status_code=422, content={"detail": str(error)})
 
+    @app.exception_handler(ProjectNotFound)
+    async def project_not_found_handler(_request: Request, _error: ProjectNotFound):
+        return JSONResponse(status_code=404, content={"detail": "project_not_found"})
+
+    @app.exception_handler(ProjectFolderSelectionCancelled)
+    async def project_selection_cancelled_handler(
+        _request: Request,
+        _error: ProjectFolderSelectionCancelled,
+    ):
+        return JSONResponse(
+            status_code=409,
+            content={"detail": "project_folder_selection_cancelled"},
+        )
+
     @app.exception_handler(ReplayIntegrityError)
     async def replay_integrity_handler(_request: Request, _error: ReplayIntegrityError):
         return JSONResponse(
@@ -2894,8 +2921,35 @@ def create_app(
             kernel.events.default_permission_snapshot_id = permissions.snapshot_id
             return PermissionMutationResponse(permissions=permissions)
 
+    @app.get("/api/v1/projects", response_model=ProjectListResponse)
+    def list_projects() -> ProjectListResponse:
+        return project_service.list()
+
+    @app.post(
+        "/api/v1/projects/pick",
+        response_model=ProjectProjection,
+        status_code=201,
+    )
+    def pick_project(request: PickProjectFolderRequest) -> ProjectProjection:
+        selected = settings.project_folder_picker()
+        return project_service.create_from_path(
+            selected,
+            client_request_id=request.client_request_id,
+        )
+
     @app.post("/api/v1/threads", status_code=201)
     def create_thread(request: CreateThreadRequest):
+        metadata = dict(request.metadata)
+        project_id = metadata.get("project_id")
+        if project_id is not None:
+            if not isinstance(project_id, str) or not project_id:
+                raise HTTPException(status_code=422, detail="project_id is invalid")
+            metadata.update(project_service.thread_metadata(project_id))
+            request = CreateThreadRequest(
+                title=request.title,
+                metadata=metadata,
+                client_request_id=request.client_request_id,
+            )
         return kernel.create_thread(request)
 
     @app.get("/api/v1/threads", response_model=ThreadListResponse)
