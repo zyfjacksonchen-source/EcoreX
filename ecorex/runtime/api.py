@@ -147,12 +147,16 @@ from ecorex.protocol import (
     RenameThreadRequest,
     QuotaSnapshot,
     ReplaceTurnRequest,
+    ReplaceTurnResponse,
     RespondInteractionRequest,
     SteerTurnRequest,
     ThreadListResponse,
+    ThreadProjection,
+    ThreadProjectionResponse,
     ThreadStatus,
     ThreadStatusRequest,
     TraceProjectionResponse,
+    TurnMutationResponse,
     UpdateSnapshot,
     UpdatePermissionRequest,
 )
@@ -3041,8 +3045,12 @@ def create_app(
         ]
         return request.model_copy(update={"metadata": metadata})
 
-    @app.post("/api/v1/threads", status_code=201)
-    def create_thread(request: CreateThreadRequest):
+    @app.post(
+        "/api/v1/threads",
+        status_code=201,
+        response_model=ThreadProjection,
+    )
+    def create_thread(request: CreateThreadRequest) -> ThreadProjection:
         metadata = dict(request.metadata)
         project_id = metadata.get("project_id")
         if project_id is not None:
@@ -3099,8 +3107,13 @@ def create_app(
             ),
         )
 
-    @app.put("/api/v1/threads/{thread_id}")
-    def rename_thread(thread_id: str, request: RenameThreadRequest):
+    @app.put(
+        "/api/v1/threads/{thread_id}",
+        response_model=ThreadProjection,
+    )
+    def rename_thread(
+        thread_id: str, request: RenameThreadRequest
+    ) -> ThreadProjection:
         try:
             return kernel.rename_thread(
                 thread_id,
@@ -3110,20 +3123,36 @@ def create_app(
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
-    @app.post("/api/v1/threads/{thread_id}/archive")
-    def archive_thread(thread_id: str, request: ThreadStatusRequest):
+    @app.post(
+        "/api/v1/threads/{thread_id}/archive",
+        response_model=ThreadProjection,
+    )
+    def archive_thread(
+        thread_id: str, request: ThreadStatusRequest
+    ) -> ThreadProjection:
         return kernel.archive_thread(
             thread_id, client_request_id=request.client_request_id
         )
 
-    @app.post("/api/v1/threads/{thread_id}/restore")
-    def restore_thread(thread_id: str, request: ThreadStatusRequest):
+    @app.post(
+        "/api/v1/threads/{thread_id}/restore",
+        response_model=ThreadProjection,
+    )
+    def restore_thread(
+        thread_id: str, request: ThreadStatusRequest
+    ) -> ThreadProjection:
         return kernel.restore_thread(
             thread_id, client_request_id=request.client_request_id
         )
 
-    @app.post("/api/v1/threads/{thread_id}/turns", status_code=202)
-    def create_turn(thread_id: str, request: CreateTurnRequest):
+    @app.post(
+        "/api/v1/threads/{thread_id}/turns",
+        status_code=202,
+        response_model=TurnMutationResponse,
+    )
+    def create_turn(
+        thread_id: str, request: CreateTurnRequest
+    ) -> TurnMutationResponse:
         require_model_task_service()
         try:
             request = bind_input_attachments(request)
@@ -3143,8 +3172,14 @@ def create_app(
         except InputAttachmentError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
-    @app.post("/api/v1/turns/{turn_id}/steer", status_code=202)
-    def steer_turn(turn_id: str, request: SteerTurnRequest):
+    @app.post(
+        "/api/v1/turns/{turn_id}/steer",
+        status_code=202,
+        response_model=TurnMutationResponse,
+    )
+    def steer_turn(
+        turn_id: str, request: SteerTurnRequest
+    ) -> TurnMutationResponse:
         require_model_task_service()
         try:
             request = bind_steer_attachments(request)
@@ -3167,8 +3202,14 @@ def create_app(
             ),
         )
 
-    @app.post("/api/v1/threads/{thread_id}/queue", status_code=202)
-    def queue_turn(thread_id: str, request: QueueTurnRequest):
+    @app.post(
+        "/api/v1/threads/{thread_id}/queue",
+        status_code=202,
+        response_model=TurnMutationResponse,
+    )
+    def queue_turn(
+        thread_id: str, request: QueueTurnRequest
+    ) -> TurnMutationResponse:
         require_model_task_service()
         try:
             turn_request = bind_input_attachments(
@@ -3190,8 +3231,14 @@ def create_app(
         except InputAttachmentError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
-    @app.post("/api/v1/turns/{turn_id}/replace", status_code=202)
-    def replace_turn(turn_id: str, request: ReplaceTurnRequest):
+    @app.post(
+        "/api/v1/turns/{turn_id}/replace",
+        status_code=202,
+        response_model=ReplaceTurnResponse,
+    )
+    def replace_turn(
+        turn_id: str, request: ReplaceTurnRequest
+    ) -> ReplaceTurnResponse:
         require_model_task_service()
         try:
             turn_request = bind_input_attachments(
@@ -3226,16 +3273,30 @@ def create_app(
         except InputAttachmentError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
-    @app.post("/api/v1/threads/{thread_id}/fork", status_code=201)
-    def fork_thread(thread_id: str, request: ForkThreadRequest):
+    @app.post(
+        "/api/v1/threads/{thread_id}/fork",
+        status_code=201,
+        response_model=ThreadProjection,
+    )
+    def fork_thread(
+        thread_id: str, request: ForkThreadRequest
+    ) -> ThreadProjection:
         return kernel.fork_thread(thread_id, request)
 
-    @app.post("/api/v1/turns/{turn_id}/interrupt")
-    def interrupt_turn(turn_id: str, request: InterruptTurnRequest):
+    @app.post(
+        "/api/v1/turns/{turn_id}/interrupt",
+        response_model=TurnMutationResponse,
+    )
+    def interrupt_turn(
+        turn_id: str, request: InterruptTurnRequest
+    ) -> TurnMutationResponse:
         return kernel.interrupt_turn(turn_id, reason=request.reason)
 
-    @app.get("/api/v1/threads/{thread_id}/projection")
-    def projection(thread_id: str):
+    @app.get(
+        "/api/v1/threads/{thread_id}/projection",
+        response_model=ThreadProjectionResponse,
+    )
+    def projection(thread_id: str) -> ThreadProjectionResponse:
         return kernel.projection(thread_id)
 
     @app.get(

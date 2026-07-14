@@ -29,6 +29,7 @@ import {
   validateConversationUsageProjection,
   validateEventEnvelope,
 } from "./runtimeContract.ts";
+import { validateThreadProjectionResponse } from "./runtimeProjectionContract.ts";
 import {
   connectorAuthorizationCompleted,
   connectorOverallHealth,
@@ -1081,8 +1082,54 @@ test("turn mutations always send separate Agent and image model identities", asy
   const originalFetch = globalThis.fetch;
   const requests: Request[] = [];
   globalThis.fetch = async (input, init) => {
-    requests.push(new Request(input, init));
-    return Response.json({ turn: {}, job: null, watermark: 0 });
+    const request = new Request(input, init);
+    requests.push(request);
+    const replacement = {
+      turn_id: "turn-replacement",
+      thread_id: "thread-one",
+      status: "queued",
+      input: "replace",
+      agent_model_id: "ecorex-chat",
+      image_model_id: "gpt-image-2",
+      client_message_id: "message-replacement",
+      metadata: {},
+      terminal_reason: null,
+      inherited: false,
+      created_at: bootstrap.server_time,
+      updated_at: bootstrap.server_time,
+    };
+    if (request.url.endsWith("/replace")) {
+      return Response.json({
+        superseded_turn: {
+          ...replacement,
+          turn_id: "turn-one",
+          status: "superseded",
+          terminal_reason: "replaced_by_user",
+        },
+        replacement_turn: replacement,
+        job: {
+          job_id: "job-replacement",
+          kind: "agent_turn",
+          status: "queued",
+          priority: 0,
+          attempt: 0,
+          max_attempts: 3,
+          thread_id: "thread-one",
+          turn_id: "turn-replacement",
+          available_at: bootstrap.server_time,
+          deadline: null,
+          reason_code: null,
+          created_at: bootstrap.server_time,
+          updated_at: bootstrap.server_time,
+        },
+        watermark: 4,
+      });
+    }
+    return Response.json({
+      turn: { ...replacement, turn_id: "turn-mutation", input: "mutation" },
+      job: null,
+      watermark: 3,
+    });
   };
   try {
     const client = new RuntimeClient({ apiBase: "http://127.0.0.1:8765" });
@@ -1281,7 +1328,24 @@ test("new-thread first message is a recoverable two-phase operation after lost r
       loseMessageResponse = false;
       throw new TypeError("connection closed after commit");
     }
-    return Response.json({ turn: {}, job: null, watermark: 3 });
+    return Response.json({
+      turn: {
+        turn_id: "turn-two-phase",
+        thread_id: "thread-two-phase",
+        status: "queued",
+        input: "first message",
+        agent_model_id: "ecorex-chat",
+        image_model_id: "gpt-image-2",
+        client_message_id: "message_two_phase",
+        metadata: {},
+        terminal_reason: null,
+        inherited: false,
+        created_at: now.toISOString(),
+        updated_at: now.toISOString(),
+      },
+      job: null,
+      watermark: 3,
+    });
   };
   try {
     const client = new RuntimeClient({ apiBase: "http://127.0.0.1:8765" });
@@ -1359,6 +1423,7 @@ test("only durable projection or event facts expose message confirmations", () =
     client_message_id: "message-from-projection",
     metadata: {},
     terminal_reason: null,
+    inherited: false,
     created_at: bootstrap.server_time,
     updated_at: bootstrap.server_time,
   };
@@ -1390,6 +1455,60 @@ test("only durable projection or event facts expose message confirmations", () =
   assert.deepEqual(eventClientMessageIds([event, { ...event, client_message_id: null }]), [
     "message-from-event",
   ]);
+});
+
+test("thread projections reject stale nested wire shapes before reducer state", () => {
+  const projection = {
+    thread: {
+      thread_id: "thread-contract",
+      status: "active",
+      title: null,
+      metadata: {},
+      forked_from_thread_id: null,
+      forked_from_turn_id: null,
+      forked_from_seq: null,
+      created_at: bootstrap.server_time,
+      updated_at: bootstrap.server_time,
+    },
+    turns: [{
+      turn_id: "turn-contract",
+      thread_id: "thread-contract",
+      status: "queued",
+      input: "hello",
+      agent_model_id: "ecorex-chat",
+      image_model_id: null,
+      client_message_id: "message-contract",
+      metadata: {},
+      terminal_reason: null,
+      inherited: false,
+      created_at: bootstrap.server_time,
+      updated_at: bootstrap.server_time,
+    }],
+    items: [],
+    jobs: [],
+    interactions: [],
+    watermark: 3,
+  };
+  assert.equal(
+    validateThreadProjectionResponse(projection).turns[0]?.turn_id,
+    "turn-contract",
+  );
+  const stale = structuredClone(projection);
+  Reflect.deleteProperty(stale.turns[0]!, "inherited");
+  assert.throws(
+    () => validateThreadProjectionResponse(stale),
+    (error: unknown) => error instanceof RuntimeContractError
+      && error.contract === "TurnProjection"
+      && error.path === "turns[0].inherited",
+  );
+  const crossThread = structuredClone(projection);
+  crossThread.turns[0]!.thread_id = "different-thread";
+  assert.throws(
+    () => validateThreadProjectionResponse(crossThread),
+    (error: unknown) => error instanceof RuntimeContractError
+      && error.contract === "ThreadProjectionResponse"
+      && error.path === "turns[0].thread_id",
+  );
 });
 
 test("event pages retain the caller cursor used to confirm a pending message", async () => {

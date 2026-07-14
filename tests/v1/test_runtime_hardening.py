@@ -732,6 +732,24 @@ def test_api_requires_bearer_exact_origin_csrf_and_resyncs_ahead_cursor(tmp_path
     openapi = client.get("/api/v1/openapi.json", headers=auth).json()
     assert openapi["security"] == [{"RuntimeBearer": []}]
     assert "RuntimeBearer" in openapi["components"]["securitySchemes"]
+    response_contracts = {
+        ("/api/v1/threads", "post", "201"): "ThreadProjection",
+        ("/api/v1/threads/{thread_id}", "put", "200"): "ThreadProjection",
+        ("/api/v1/threads/{thread_id}/archive", "post", "200"): "ThreadProjection",
+        ("/api/v1/threads/{thread_id}/restore", "post", "200"): "ThreadProjection",
+        ("/api/v1/threads/{thread_id}/turns", "post", "202"): "TurnMutationResponse",
+        ("/api/v1/turns/{turn_id}/steer", "post", "202"): "TurnMutationResponse",
+        ("/api/v1/threads/{thread_id}/queue", "post", "202"): "TurnMutationResponse",
+        ("/api/v1/turns/{turn_id}/replace", "post", "202"): "ReplaceTurnResponse",
+        ("/api/v1/threads/{thread_id}/fork", "post", "201"): "ThreadProjection",
+        ("/api/v1/turns/{turn_id}/interrupt", "post", "200"): "TurnMutationResponse",
+        ("/api/v1/threads/{thread_id}/projection", "get", "200"): "ThreadProjectionResponse",
+    }
+    for (path, method, status), schema_name in response_contracts.items():
+        schema = openapi["paths"][path][method]["responses"][status]["content"][
+            "application/json"
+        ]["schema"]
+        assert schema == {"$ref": f"#/components/schemas/{schema_name}"}
     create_thread_parameters = openapi["paths"]["/api/v1/threads"]["post"][
         "parameters"
     ]

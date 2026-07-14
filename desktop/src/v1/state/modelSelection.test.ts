@@ -45,6 +45,7 @@ test("image mode never replaces the Agent model and selector changes affect only
     client_message_id: "message-one",
     metadata: {},
     terminal_reason: null,
+    inherited: false,
     created_at: "2026-07-11T00:00:00Z",
     updated_at: "2026-07-11T00:00:00Z",
   } satisfies TurnProjection;

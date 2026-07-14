@@ -235,6 +235,7 @@ function reduceKnownEvent(state: RuntimeViewState, event: EventEnvelope): Runtim
         kind: (stringValue(event.payload.kind) ?? "message") as ItemProjection["kind"],
         status: (stringValue(event.payload.status) ?? "created") as ItemProjection["status"],
         content: objectValue(event.payload.content),
+        inherited: false,
         created_at: event.created_at,
         updated_at: event.created_at,
       };
@@ -254,6 +255,7 @@ function reduceKnownEvent(state: RuntimeViewState, event: EventEnvelope): Runtim
           metadata: objectValue(event.payload.metadata),
           steer: true,
         },
+        inherited: false,
         created_at: event.created_at,
         updated_at: event.created_at,
       };
@@ -295,6 +297,7 @@ function reduceKnownEvent(state: RuntimeViewState, event: EventEnvelope): Runtim
           presentation: stringValue(event.payload.presentation) ?? "visible",
           archived_reason: null,
         },
+        inherited: false,
         created_at: event.created_at,
         updated_at: event.created_at,
       };

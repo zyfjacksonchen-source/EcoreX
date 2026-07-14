@@ -11,46 +11,25 @@ import type {
   GeneratedQualityStatus,
   GeneratedRenditionKind,
 } from "./generatedRuntimeContract.ts";
+import type {
+  GeneratedInteractionKind,
+  GeneratedInteractionStatus,
+  GeneratedItemKind,
+  GeneratedItemStatus,
+  GeneratedJobStatus,
+  GeneratedThreadStatus,
+  GeneratedTurnStatus,
+} from "./generatedRuntimeProjectionContract.ts";
 
 export type JsonObject = Record<string, unknown>;
 
-export type TurnStatus =
-  | "accepted"
-  | "queued"
-  | "preparing"
-  | "model_requested"
-  | "streaming"
-  | "tool_pending"
-  | "waiting_human"
-  | "tool_running"
-  | "retry_wait"
-  | "finalizing"
-  | "completed"
-  | "failed"
-  | "cancelled"
-  | "interrupted"
-  | "superseded";
-
-export type ItemStatus =
-  | "created"
-  | "in_progress"
-  | "waiting_human"
-  | "completed"
-  | "failed"
-  | "cancelled";
-
-export type JobStatus =
-  | "queued"
-  | "leased"
-  | "running"
-  | "waiting_human"
-  | "retry_scheduled"
-  | "completed"
-  | "failed"
-  | "cancelled"
-  | "dead_letter";
-
-export type InteractionStatus = "pending" | "resolved" | "cancelled" | "expired";
+export type ThreadStatus = GeneratedThreadStatus;
+export type TurnStatus = GeneratedTurnStatus;
+export type ItemKind = GeneratedItemKind;
+export type ItemStatus = GeneratedItemStatus;
+export type JobStatus = GeneratedJobStatus;
+export type InteractionKind = GeneratedInteractionKind;
+export type InteractionStatus = GeneratedInteractionStatus;
 
 export type InteractionFieldControl = "text" | "textarea" | "select" | "checkbox";
 export type InteractionActionType =
@@ -117,7 +96,7 @@ export interface InteractionResponse {
 
 export interface ThreadProjection {
   thread_id: string;
-  status: "active" | "archived";
+  status: ThreadStatus;
   title: string | null;
   metadata: JsonObject;
   forked_from_thread_id: string | null;
@@ -184,6 +163,7 @@ export interface TurnProjection {
   client_message_id: string | null;
   metadata: JsonObject;
   terminal_reason: string | null;
+  inherited: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -192,9 +172,10 @@ export interface ItemProjection {
   item_id: string;
   thread_id: string;
   turn_id: string;
-  kind: "message" | "reasoning" | "tool_call" | "artifact" | "interaction" | "checkpoint";
+  kind: ItemKind;
   status: ItemStatus;
   content: JsonObject;
+  inherited: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -248,12 +229,7 @@ export interface JobProjection {
 
 export interface InteractionProjection {
   interaction_id: string;
-  kind:
-    | "permission_approval"
-    | "information"
-    | "connector_login"
-    | "conflict_resolution"
-    | "artifact_review";
+  kind: InteractionKind;
   status: InteractionStatus;
   prompt: string;
   contract: InteractionContract;
@@ -328,6 +304,13 @@ export interface ThreadListResponse {
 export interface TurnMutationResponse {
   turn: TurnProjection;
   job: JobProjection | null;
+  watermark: number;
+}
+
+export interface ReplaceTurnResponse {
+  superseded_turn: TurnProjection;
+  replacement_turn: TurnProjection;
+  job: JobProjection;
   watermark: number;
 }
 

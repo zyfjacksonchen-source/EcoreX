@@ -4848,3 +4848,54 @@ protected device-flow session, and the WebUI used a loopback Runtime fixture.
 The immutable Candidate, managed Gateway, protected runner, repository
 governance and publication readback remain mandatory. Evidence:
 `evidence/live-provider-local-diagnostic-2026-07-14.json`.
+
+## 2026-07-14 - Core Thread/Turn projections become generated fail-closed contracts
+
+The Runtime/Web boundary still contained one architectural exception to the
+backend-authoritative rule. The Python kernel returned typed Thread, Turn,
+Item, Job and Interaction projections, but eleven critical FastAPI routes did
+not declare response models. The Web client then accepted those bodies through
+compile-time casts; its handwritten types also omitted the durable `inherited`
+facts carried by Turn and Item projections. A stale or cross-thread response
+could therefore enter the reducer before contract drift was detected.
+
+All create/rename/archive/restore/fork Thread routes, create/steer/queue/
+replace/interrupt Turn routes and the complete Thread projection route now
+declare their exact Pydantic response model. OpenAPI assertions pin the status
+code and component schema for every route. The deterministic contract generator
+now includes Thread/List/Turn/Item/Job/Interaction, mutation, replace and full
+projection schemas plus their Runtime enums. TypeScript consumes the generated
+status/kind unions and includes both `inherited` fields.
+
+The Web transport validates every affected response before reducer state. It
+rejects missing or extra wire fields, unknown state-machine values, malformed
+timestamps, Thread identity contamination, Job/Turn mismatches and inconsistent
+replace identities. Projection validation is a self-contained dynamic boundary:
+the initial Runtime client remains below its fixed budget, while the strict
+11.09 KiB projection validator loads only when these endpoints are used. A
+shared branded error preserves one user-facing incompatibility path across the
+deferred module without creating a content-addressed dependency cycle.
+
+Focused Runtime/OpenAPI integration passes 44 tests. The complete Python v1
+suite passes 1,916 tests with 17 explicit environment/platform skips and zero
+failures in 831.79 seconds. TypeScript, all 163 Web contract tests and the
+production build pass. The build contains 19 content-addressed assets / 18 JS
+chunks; initial JavaScript is 474.65 KiB (147.02 KiB gzip), within the unchanged
+475 KiB hard limit. Ruff, Python compilation, design, legacy, public-download,
+dependency-lock, Runtime/Server schema authority, diff and the 655-file source
+admission gates pass.
+
+The current-source supply-chain preflight also passes: 23 locked Runtime and
+282 npm packages are license-accounted, and 466 production files pass the
+bounded secret scan. Inventory SHA-256 is
+`669aa0f4d23ef9aca2b7eb91e785c70438a3d315d0726756cd723b2198fe8394`.
+The ignored 21,857-byte report is
+`.ci/projection-contract-supply-chain.json`, SHA-256
+`f50da3a5b4412c547c1c35f0c4dea6a956f6f5b3e4485140c3c77c660f56857a`.
+
+The previous committed head `ea7afec7c4365628aba8acc0d7b8a35c2bd38995`
+is independently green in hosted run `29298952742` across Ubuntu quality,
+Windows x64, macOS arm64/x64 and cross-runner byte stability. This new local
+contract batch still requires its own committed hosted matrix. No protected
+Candidate, repository-governance mutation, publication or user rollout was
+performed.

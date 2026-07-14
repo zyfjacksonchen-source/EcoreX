@@ -1704,3 +1704,18 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Browser diagnostics | 0 | Main and share/raw-image tabs emitted zero console warnings or errors. |
 | Tracked evidence | 0 | `evidence/live-provider-local-diagnostic-2026-07-14.json` records only policy identities, status, timing, byte counts, hashes and quality metrics; prompts, output text, provider origin and credentials are absent. |
 | Publication authority | blocked | These are direct-upstream and loopback diagnostics, not Candidate-bound protected live-acceptance receipts. Repository audit still has 17 blockers; no Candidate, publication or rollout was attempted. |
+
+## Generated Thread/Turn projection authority - 2026-07-14
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| FastAPI response authority | 0 | Eleven critical Thread/Turn mutation and projection routes declare exact Pydantic response models; OpenAPI status/schema references are executable assertions. |
+| Generated contract | 0 | Deterministic schema digest `70cf8d1...a2ac6` includes Thread/List/Turn/Item/Job/Interaction, mutation, replace and full projection wire shapes plus Runtime enums. Generator freshness and digest tests pass. |
+| Web transport boundary | 0 | A deferred strict validator rejects missing/extra fields, invalid states/timestamps, cross-Thread contamination and Job/Turn/replace identity drift before reducer state. Turn/Item `inherited` facts are no longer omitted. |
+| Focused Runtime | 0 | 44 Runtime hardening, kernel API and projection-invariant integration tests passed. Ruff and Python compilation passed. |
+| Complete Python v1 suite | 0 | 1,916 passed / 17 explicit environment-platform skips / 0 failed in 831.79 seconds. Five warnings are unchanged upstream Starlette/websockets deprecations. |
+| WebUI | 0 | TypeScript passed; 163/163 Web contract tests passed; the content-addressed production build emitted 19 assets / 18 chunks. Initial JS is 474.65 KiB (147.02 KiB gzip) under the unchanged 475 KiB limit; deferred projection validation is 11.09 KiB. |
+| Static/source gates | 0 | Design, legacy cutoff, public download, dependency locks, Runtime/Server schema authority, `git diff --check` and all 655 admitted source files pass. |
+| Current-source supply chain | 0 | 23 locked/licensed Runtime packages, 282 npm packages and 466 production files pass; inventory `669aa0f4...e8394`. Ignored 21,857-byte report SHA-256 `f50da3a5...6857a`. npm audit reports zero vulnerabilities. |
+| Prior hosted head | 0 | Run `29298952742` on exact commit `ea7afec7c4365628aba8acc0d7b8a35c2bd38995` passed Ubuntu quality, Windows x64, macOS arm64/x64 and cross-runner byte stability. The uncommitted contract batch does not inherit that result. |
+| Publication | blocked | The local batch still requires its own committed hosted matrix. The 17 repository-governance/Runner/workflow prerequisites remain; no protected Candidate, publication or rollout was attempted. |

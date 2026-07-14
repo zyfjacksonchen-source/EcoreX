@@ -34,13 +34,19 @@ from ecorex.protocol import (  # noqa: E402
     CreateTurnRequest,
     EventEnvelope,
     InteractionMutationResponse,
+    InteractionProjection,
     InteractionRequest,
     InputAttachmentProjection,
+    ItemProjection,
+    JobProjection,
     ProjectListResponse,
     QueueTurnRequest,
     ReplaceTurnRequest,
+    ReplaceTurnResponse,
     SteerTurnRequest,
     RespondInteractionRequest,
+    ThreadListResponse,
+    ThreadProjection,
     ThreadProjectionResponse,
     TurnMutationResponse,
     TurnProjection,
@@ -51,8 +57,22 @@ from ecorex.artifacts.api import RetouchBody, RetouchWorkspaceSubmitBody  # noqa
 OUTPUT_DIRECTORY = REPOSITORY_ROOT / "desktop" / "src" / "v1" / "api"
 SCHEMA_OUTPUT = OUTPUT_DIRECTORY / "runtime-contract.schema.json"
 TYPESCRIPT_OUTPUT = OUTPUT_DIRECTORY / "generatedRuntimeContract.ts"
+PROJECTION_TYPESCRIPT_OUTPUT = OUTPUT_DIRECTORY / "generatedRuntimeProjectionContract.ts"
 
 SCHEMA_VERSION = 1
+PROJECTION_CONTRACT_NAMES = frozenset(
+    {
+        "InteractionProjection",
+        "ItemProjection",
+        "JobProjection",
+        "ReplaceTurnResponse",
+        "ThreadListResponse",
+        "ThreadProjection",
+        "ThreadProjectionResponse",
+        "TurnMutationResponse",
+        "TurnProjection",
+    }
+)
 
 
 def _contract_schemas() -> dict[str, dict[str, Any]]:
@@ -63,7 +83,10 @@ def _contract_schemas() -> dict[str, dict[str, Any]]:
         "EventEnvelope": EventEnvelope.model_json_schema(),
         "InteractionRequest": InteractionRequest.model_json_schema(),
         "InteractionMutationResponse": InteractionMutationResponse.model_json_schema(),
+        "InteractionProjection": InteractionProjection.model_json_schema(),
         "InputAttachmentProjection": InputAttachmentProjection.model_json_schema(),
+        "ItemProjection": ItemProjection.model_json_schema(),
+        "JobProjection": JobProjection.model_json_schema(),
         "ProjectListResponse": ProjectListResponse.model_json_schema(),
         "RespondInteractionRequest": RespondInteractionRequest.model_json_schema(),
         "ThreadProjectionResponse": ThreadProjectionResponse.model_json_schema(),
@@ -73,6 +96,9 @@ def _contract_schemas() -> dict[str, dict[str, Any]]:
         "SteerTurnRequest": SteerTurnRequest.model_json_schema(),
         "QueueTurnRequest": QueueTurnRequest.model_json_schema(),
         "ReplaceTurnRequest": ReplaceTurnRequest.model_json_schema(),
+        "ReplaceTurnResponse": ReplaceTurnResponse.model_json_schema(),
+        "ThreadListResponse": ThreadListResponse.model_json_schema(),
+        "ThreadProjection": ThreadProjection.model_json_schema(),
         "RetouchBody": RetouchBody.model_json_schema(),
         "RetouchWorkspaceSubmitBody": RetouchWorkspaceSubmitBody.model_json_schema(),
     }
@@ -183,7 +209,7 @@ def _property_const(
     return candidate
 
 
-def build_outputs() -> tuple[bytes, bytes, str]:
+def build_outputs() -> tuple[bytes, bytes, bytes, str]:
     schemas = _contract_schemas()
     public_families = [family.value for family in PUBLIC_ARTIFACT_FAMILIES]
     public_visibilities = [visibility.value for visibility in PUBLIC_ARTIFACT_VISIBILITIES]
@@ -196,6 +222,10 @@ def build_outputs() -> tuple[bytes, bytes, str]:
             "EventEnvelope": "ecorex.protocol.EventEnvelope",
             "InteractionRequest": "ecorex.protocol.InteractionRequest",
             "InteractionMutationResponse": "ecorex.protocol.InteractionMutationResponse",
+            "InteractionProjection": "ecorex.protocol.InteractionProjection",
+            "InputAttachmentProjection": "ecorex.protocol.InputAttachmentProjection",
+            "ItemProjection": "ecorex.protocol.ItemProjection",
+            "JobProjection": "ecorex.protocol.JobProjection",
             "ProjectListResponse": "ecorex.protocol.ProjectListResponse",
             "RespondInteractionRequest": "ecorex.protocol.RespondInteractionRequest",
             "ThreadProjectionResponse": "ecorex.protocol.ThreadProjectionResponse",
@@ -205,6 +235,9 @@ def build_outputs() -> tuple[bytes, bytes, str]:
             "SteerTurnRequest": "ecorex.protocol.SteerTurnRequest",
             "QueueTurnRequest": "ecorex.protocol.QueueTurnRequest",
             "ReplaceTurnRequest": "ecorex.protocol.ReplaceTurnRequest",
+            "ReplaceTurnResponse": "ecorex.protocol.ReplaceTurnResponse",
+            "ThreadListResponse": "ecorex.protocol.ThreadListResponse",
+            "ThreadProjection": "ecorex.protocol.ThreadProjection",
             "RetouchBody": "ecorex.artifacts.api.RetouchBody",
             "RetouchWorkspaceSubmitBody": "ecorex.artifacts.api.RetouchWorkspaceSubmitBody",
         },
@@ -220,6 +253,7 @@ def build_outputs() -> tuple[bytes, bytes, str]:
     artifact_schema = schemas["ArtifactProjection"]
     bootstrap_schema = schemas["BootstrapResponse"]
     event_schema = schemas["EventEnvelope"]
+    runtime_schema = schemas["ThreadProjectionResponse"]
     manifest = {
         "schemaVersion": SCHEMA_VERSION,
         "schemaSha256": digest,
@@ -244,15 +278,15 @@ def build_outputs() -> tuple[bytes, bytes, str]:
                 # boundary, so their complete nested shape is pinned here.
                 # Bootstrap/Event nested objects are validated field-by-field
                 # in the WebUI while their authoritative root stays exact.
-                include_definitions=name
-                in {"ArtifactProjection", "ThreadProjectionResponse"},
+                include_definitions=name == "ArtifactProjection",
             )
             for name, schema in schemas.items()
             # Interaction payloads are already decoded from the authoritative
             # Event/response contract at their feature boundary. Keep their
             # complete JSON Schemas in the hash-pinned schema artifact without
             # paying to duplicate field-name manifests in initial Web JS.
-            if name not in {
+            if name not in PROJECTION_CONTRACT_NAMES
+            and name not in {
                 "InteractionMutationResponse",
                 "InteractionRequest",
                 "RespondInteractionRequest",
@@ -341,7 +375,70 @@ def build_outputs() -> tuple[bytes, bytes, str]:
         "export type GeneratedRenditionKind = "
         "typeof GENERATED_RUNTIME_CONTRACT.artifact.renditionKinds[number];\n"
     ).encode("utf-8")
-    return schema_bytes, typescript, digest
+    projection_manifest = {
+        "schemaVersion": SCHEMA_VERSION,
+        "schemaSha256": digest,
+        "wireFields": {
+            name: _wire_object_fields(
+                schemas[name],
+                name,
+                include_definitions=name == "ThreadProjectionResponse",
+            )
+            for name in sorted(PROJECTION_CONTRACT_NAMES)
+        },
+        "runtime": {
+            "threadStatuses": _enum_values(runtime_schema, "ThreadStatus"),
+            "turnStatuses": _enum_values(runtime_schema, "TurnStatus"),
+            "itemKinds": _enum_values(runtime_schema, "ItemKind"),
+            "itemStatuses": _enum_values(runtime_schema, "ItemStatus"),
+            "jobStatuses": _enum_values(runtime_schema, "JobStatus"),
+            "interactionKinds": _enum_values(runtime_schema, "InteractionKind"),
+            "interactionStatuses": _enum_values(
+                runtime_schema, "InteractionStatus"
+            ),
+            "interactionFieldControls": _enum_values(
+                runtime_schema, "InteractionFieldControl"
+            ),
+            "interactionActionTypes": _enum_values(
+                runtime_schema, "InteractionActionType"
+            ),
+            "interactionActionStyles": _enum_values(
+                runtime_schema, "InteractionActionStyle"
+            ),
+            "connectorInteractionStates": _enum_values(
+                runtime_schema, "ConnectorInteractionState"
+            ),
+        },
+    }
+    rendered_projection_manifest = json.dumps(
+        projection_manifest,
+        ensure_ascii=False,
+        sort_keys=True,
+        indent=2,
+    )
+    projection_typescript = (
+        "// Generated by tools/generate-runtime-contracts.py. DO NOT EDIT.\n"
+        "// Deferred Thread/Turn projection boundary; Python schemas remain authoritative.\n"
+        "export const GENERATED_RUNTIME_PROJECTION_CONTRACT = "
+        f"{rendered_projection_manifest} as const;\n"
+        "export type GeneratedRuntimeProjectionContractName = "
+        "keyof typeof GENERATED_RUNTIME_PROJECTION_CONTRACT.wireFields;\n"
+        "export type GeneratedThreadStatus = "
+        "typeof GENERATED_RUNTIME_PROJECTION_CONTRACT.runtime.threadStatuses[number];\n"
+        "export type GeneratedTurnStatus = "
+        "typeof GENERATED_RUNTIME_PROJECTION_CONTRACT.runtime.turnStatuses[number];\n"
+        "export type GeneratedItemKind = "
+        "typeof GENERATED_RUNTIME_PROJECTION_CONTRACT.runtime.itemKinds[number];\n"
+        "export type GeneratedItemStatus = "
+        "typeof GENERATED_RUNTIME_PROJECTION_CONTRACT.runtime.itemStatuses[number];\n"
+        "export type GeneratedJobStatus = "
+        "typeof GENERATED_RUNTIME_PROJECTION_CONTRACT.runtime.jobStatuses[number];\n"
+        "export type GeneratedInteractionKind = "
+        "typeof GENERATED_RUNTIME_PROJECTION_CONTRACT.runtime.interactionKinds[number];\n"
+        "export type GeneratedInteractionStatus = "
+        "typeof GENERATED_RUNTIME_PROJECTION_CONTRACT.runtime.interactionStatuses[number];\n"
+    ).encode("utf-8")
+    return schema_bytes, typescript, projection_typescript, digest
 
 
 def _check_file(path: Path, expected: bytes) -> bool:
@@ -374,16 +471,21 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    schema_bytes, typescript_bytes, digest = build_outputs()
+    schema_bytes, typescript_bytes, projection_typescript_bytes, digest = build_outputs()
     if args.check:
         valid = _check_file(SCHEMA_OUTPUT, schema_bytes)
         valid = _check_file(TYPESCRIPT_OUTPUT, typescript_bytes) and valid
+        valid = (
+            _check_file(PROJECTION_TYPESCRIPT_OUTPUT, projection_typescript_bytes)
+            and valid
+        )
         if not valid:
             return 1
     else:
         OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
         SCHEMA_OUTPUT.write_bytes(schema_bytes)
         TYPESCRIPT_OUTPUT.write_bytes(typescript_bytes)
+        PROJECTION_TYPESCRIPT_OUTPUT.write_bytes(projection_typescript_bytes)
         print(f"generated Runtime Web contract {digest}")
     if args.print_digest:
         print(digest)

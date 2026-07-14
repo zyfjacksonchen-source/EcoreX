@@ -33,6 +33,7 @@ import type {
   PermissionMutationResponse,
   ProjectListResponse,
   ProjectProjection,
+  ReplaceTurnResponse,
   ShareListResponse,
   ShareSnapshotProjection,
   SystemHealthSample,
@@ -223,6 +224,31 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+async function validateThreadProjectionBoundary(value: unknown): Promise<ThreadProjection> {
+  const contract = await import("./runtimeProjectionContract.ts");
+  return contract.validateThreadProjection(value);
+}
+
+async function validateThreadListBoundary(value: unknown): Promise<ThreadListResponse> {
+  const contract = await import("./runtimeProjectionContract.ts");
+  return contract.validateThreadListResponse(value);
+}
+
+async function validateProjectionBoundary(value: unknown): Promise<ThreadProjectionResponse> {
+  const contract = await import("./runtimeProjectionContract.ts");
+  return contract.validateThreadProjectionResponse(value);
+}
+
+async function validateTurnMutationBoundary(value: unknown): Promise<TurnMutationResponse> {
+  const contract = await import("./runtimeProjectionContract.ts");
+  return contract.validateTurnMutationResponse(value);
+}
+
+async function validateReplaceTurnBoundary(value: unknown): Promise<ReplaceTurnResponse> {
+  const contract = await import("./runtimeProjectionContract.ts");
+  return contract.validateReplaceTurnResponse(value);
+}
+
 function validateClientEventPage(value: unknown): ClientEventPage {
   if (
     !isRecord(value)
@@ -270,7 +296,7 @@ export class RuntimeClient {
     path: string,
     init: RequestInit = {},
     mutation = false,
-    validate?: (value: unknown) => T,
+    validate?: (value: unknown) => T | Promise<T>,
   ): Promise<T> {
     const headers = this.headers(mutation, init.headers);
     if (
@@ -298,7 +324,7 @@ export class RuntimeClient {
       }
       throw new RuntimeApiError(error.message, response.status, error.code);
     }
-    return validate ? validate(payload) : payload as T;
+    return validate ? await validate(payload) : payload as T;
   }
 
   bootstrap(signal?: AbortSignal): Promise<BootstrapResponse> {
@@ -653,6 +679,7 @@ export class RuntimeClient {
         }),
       },
       true,
+      validateThreadProjectionBoundary,
     );
   }
 
@@ -679,7 +706,12 @@ export class RuntimeClient {
   ): Promise<ThreadListResponse> {
     const query = new URLSearchParams({ status, limit: String(limit) });
     if (cursor) query.set("cursor", cursor);
-    return this.json(`/api/v1/threads?${query.toString()}`, { signal });
+    return this.json(
+      `/api/v1/threads?${query.toString()}`,
+      { signal },
+      false,
+      validateThreadListBoundary,
+    );
   }
 
   renameThread(
@@ -694,6 +726,7 @@ export class RuntimeClient {
         body: JSON.stringify({ title, client_request_id: clientRequestId }),
       },
       true,
+      validateThreadProjectionBoundary,
     );
   }
 
@@ -709,6 +742,7 @@ export class RuntimeClient {
         body: JSON.stringify({ client_request_id: clientRequestId }),
       },
       true,
+      validateThreadProjectionBoundary,
     );
   }
 
@@ -716,6 +750,8 @@ export class RuntimeClient {
     return this.json(
       `/api/v1/threads/${encodeURIComponent(threadId)}/projection`,
       { signal },
+      false,
+      validateProjectionBoundary,
     );
   }
 
@@ -807,6 +843,7 @@ export class RuntimeClient {
         }),
       },
       true,
+      validateTurnMutationBoundary,
     );
   }
 
@@ -827,6 +864,7 @@ export class RuntimeClient {
         }),
       },
       true,
+      validateTurnMutationBoundary,
     );
   }
 
@@ -849,10 +887,11 @@ export class RuntimeClient {
         }),
       },
       true,
+      validateTurnMutationBoundary,
     );
   }
 
-  replaceTurn(operation: ClientOperation): Promise<unknown> {
+  replaceTurn(operation: ClientOperation): Promise<ReplaceTurnResponse> {
     assertOperationDisposition(operation, "replace");
     if (!operation.turn) throw new TypeError("Invalid client operation.");
     return this.json(
@@ -870,6 +909,7 @@ export class RuntimeClient {
         }),
       },
       true,
+      validateReplaceTurnBoundary,
     );
   }
 
@@ -881,6 +921,7 @@ export class RuntimeClient {
         body: JSON.stringify({ reason: "interrupted_by_user" }),
       },
       true,
+      validateTurnMutationBoundary,
     );
   }
 

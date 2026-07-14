@@ -7,8 +7,10 @@ import type {
   InputAttachmentProjection,
 } from "./contracts.ts";
 import { GENERATED_RUNTIME_CONTRACT } from "./generatedRuntimeContract.ts";
+import type { GeneratedRuntimeProjectionContractName } from "./generatedRuntimeProjectionContract.ts";
 
 type ContractName = keyof typeof GENERATED_RUNTIME_CONTRACT.wireFields;
+type AnyContractName = ContractName | GeneratedRuntimeProjectionContractName;
 
 const ARTIFACT_FIELDS = GENERATED_RUNTIME_CONTRACT.wireFields.ArtifactProjection;
 const BOOTSTRAP_FIELDS = GENERATED_RUNTIME_CONTRACT.wireFields.BootstrapResponse;
@@ -19,13 +21,16 @@ const BOOTSTRAP_VALUES = GENERATED_RUNTIME_CONTRACT.bootstrap;
 
 export const runtimeContractSchemaSha256 = GENERATED_RUNTIME_CONTRACT.schemaSha256;
 
+const RUNTIME_CONTRACT_ERROR_BRAND = Symbol.for("ecorex.runtime-contract-error.v1");
+
 export class RuntimeContractError extends Error {
-  readonly contract: ContractName | "ArtifactListResponse";
+  readonly [RUNTIME_CONTRACT_ERROR_BRAND] = true;
+  readonly contract: AnyContractName | "ArtifactListResponse";
   readonly path: string;
   readonly expectation: string;
 
   constructor(
-    contract: ContractName | "ArtifactListResponse",
+    contract: AnyContractName | "ArtifactListResponse",
     path: string,
     expectation: string,
   ) {
@@ -34,6 +39,11 @@ export class RuntimeContractError extends Error {
     this.contract = contract;
     this.path = path;
     this.expectation = expectation;
+  }
+
+  static [Symbol.hasInstance](value: unknown): boolean {
+    return value instanceof Error
+      && Reflect.get(value, RUNTIME_CONTRACT_ERROR_BRAND) === true;
   }
 }
 

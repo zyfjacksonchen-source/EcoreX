@@ -7,6 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { GENERATED_RUNTIME_CONTRACT } from "../src/v1/api/generatedRuntimeContract.ts";
+import { GENERATED_RUNTIME_PROJECTION_CONTRACT } from "../src/v1/api/generatedRuntimeProjectionContract.ts";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const generator = path.join(desktopRoot, "tools", "generate-runtime-contracts.py");
@@ -46,14 +47,20 @@ test("generated manifest pins the canonical full-schema digest", async () => {
     "EventEnvelope",
     "InputAttachmentProjection",
     "InteractionMutationResponse",
+    "InteractionProjection",
     "InteractionRequest",
+    "ItemProjection",
+    "JobProjection",
     "ProjectListResponse",
     "QueueTurnRequest",
     "ReplaceTurnRequest",
+    "ReplaceTurnResponse",
     "RespondInteractionRequest",
     "RetouchBody",
     "RetouchWorkspaceSubmitBody",
     "SteerTurnRequest",
+    "ThreadListResponse",
+    "ThreadProjection",
     "ThreadProjectionResponse",
     "TurnMutationResponse",
     "TurnProjection",
@@ -65,6 +72,7 @@ test("generated manifest pins the canonical full-schema digest", async () => {
     extensionContract: "1.0",
     storageSchema: 1,
   });
+  assert.equal(GENERATED_RUNTIME_PROJECTION_CONTRACT.schemaSha256, digest);
   assert.deepEqual(
     GENERATED_RUNTIME_CONTRACT.artifact.families,
     schema.public_artifact_policy.families,
@@ -84,7 +92,7 @@ test("generated manifest pins the canonical full-schema digest", async () => {
     true,
   );
   assert.deepEqual(
-    GENERATED_RUNTIME_CONTRACT.wireFields.ThreadProjectionResponse.ThreadProjectionResponse,
+    GENERATED_RUNTIME_PROJECTION_CONTRACT.wireFields.ThreadProjectionResponse.ThreadProjectionResponse,
     ["thread", "turns", "items", "jobs", "interactions", "watermark"],
   );
   for (const contract of [
@@ -94,7 +102,10 @@ test("generated manifest pins the canonical full-schema digest", async () => {
     "ReplaceTurnRequest",
     "TurnProjection",
   ]) {
-    const fields = GENERATED_RUNTIME_CONTRACT.wireFields[contract][contract];
+    const source = contract === "TurnProjection"
+      ? GENERATED_RUNTIME_PROJECTION_CONTRACT.wireFields
+      : GENERATED_RUNTIME_CONTRACT.wireFields;
+    const fields = source[contract][contract];
     assert.equal(fields.includes("agent_model_id"), true);
     assert.equal(fields.includes("image_model_id"), true);
     assert.equal(fields.includes("model"), false);
