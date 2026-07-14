@@ -4801,3 +4801,11 @@ Current-source supply-chain preflight remains green for 23 Runtime packages,
 The ignored 21,857-byte report is `.ci/typescript-eol-supply-chain.json`,
 SHA-256
 `9084448e1b414a3a734139493f48426053c84ca746e982f24800884ba2a157a2`.
+
+The fifth hosted run (`29296609455`) completed successfully on exact commit
+`a70d65c3105d9156bce21fea98eeddb779ba4c90`. Ubuntu quality, Windows x64,
+macOS arm64, macOS x64 and the final four-contract byte comparison all passed.
+Windows crossed the previous generated-contract failure, then completed
+TypeScript, the content-addressed Web build and byte upload. This is read-only
+CI evidence; it does not claim protected platform-stage, signing, live provider
+acceptance, publication or user rollout.

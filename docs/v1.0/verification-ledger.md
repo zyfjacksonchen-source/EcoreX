@@ -1685,4 +1685,5 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Fourth remote Web gate | 1 | Windows failed only at generated TypeScript byte check: checkout used CRLF because `.ts/.tsx` were absent from `.gitattributes`; build and byte upload correctly stayed closed. |
 | TypeScript byte policy | 0 | `*.ts` and `*.tsx` now require LF in Git attributes and the reproducibility gate. Generated contract check, reproducibility, 8 focused tests and Web typecheck pass; no generated schema bytes changed. |
 | Current-source supply chain after EOL policy | 0 | 23 Runtime, 282 npm and 464 production files pass; inventory `cfb99101...d0e00`, ignored 21,857-byte report `9084448e...157a2`. |
-| Remote revalidation | pending | The exact dual-mode commit must pass Ubuntu, Windows x64, both macOS targets and cross-runner byte stability before release promotion. |
+| Fifth remote matrix | 0 | Run `29296609455`, exact commit `a70d65c3`: Ubuntu quality, Windows x64, macOS arm64/x64 and Cross-runner byte stability all passed. Windows completed contracts, TypeScript, content-addressed Web build and byte upload. |
+| Evidence boundary | 0 | The green matrix is read-only CI evidence, not protected platform-stage, Candidate signing, live Model/Image/CDP acceptance, publication or rollout evidence. |
