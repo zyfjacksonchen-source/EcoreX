@@ -711,7 +711,14 @@ def test_windows_helper_source_contains_real_appcontainer_and_job_boundaries() -
     assert "ecorex_sandbox_process.cpp" in build
     assert "ExpectedToolchainManifestSha256" in build
     assert "ExpectedSourceSetSha256" in build
-    assert "authority_mode = 'caller-pinned'" in build
+    assert "else { 'caller-pinned' }" in build
+    assert "GitHubHostedCompatibility" in build
+    assert "github-hosted-ci-compatibility" in build
+    assert "github_hosted_compatibility_boundary_invalid" in build
+    assert "$env:GITHUB_ACTIONS -cne 'true'" in build
+    assert "$env:RUNNER_OS -cne 'Windows'" in build
+    assert "$env:ImageOS -cne 'win22'" in build
+    assert "observedLibraryDigests" in build
     assert "SpecialFolder]::ProgramFiles)" in build
     assert "SpecialFolder]::ProgramFilesX86" in build
     assert "SpecialFolder]::Windows" in build
@@ -848,6 +855,19 @@ def test_windows_native_receipt_is_bound_to_pinned_toolchain_and_binaries(
         toolchain_manifest=manifest,
     )
 
+    receipt["authority_mode"] = "github-hosted-ci-compatibility"
+    receipt_path.write_text(
+        json.dumps(receipt, separators=(",", ":")) + "\n", encoding="utf-8"
+    )
+    with pytest.raises(
+        stager["StageError"], match="windows_native_build_receipt_invalid"
+    ):
+        stager["_validate_windows_native_receipt"](
+            output,
+            toolchain_manifest=manifest,
+        )
+
+    receipt["authority_mode"] = "caller-pinned"
     receipt["compiler_sha256"] = "0" * 64
     receipt_path.write_text(
         json.dumps(receipt, separators=(",", ":")) + "\n", encoding="utf-8"

@@ -58,9 +58,10 @@ Remove-Item Env:\ECOREX_GITHUB_ADMIN_TOKEN
 
 `ready=true` requires the four v1 workflows, strict PR/status protection,
 protected-branch-only Environment deployment, one reviewer per Environment,
-the complete variable/Secret name inventory and online distinct signing, live
-acceptance and publication Runners. These are the only three self-hosted roles.
-A busy online Runner may queue work; an
+the complete variable/Secret name inventory and four isolated Runners: exact
+Windows platform build, signing, live acceptance and publication. Only the last
+three carry privileged signing/provider/origin authority; the Windows build
+Runner must contain none of those credentials. A busy online Runner may queue work; an
 offline or label-mismatched Runner does not satisfy the contract.
 
 ## Candidate asset publication
@@ -204,10 +205,23 @@ Together with Ubuntu they upload timestamp-free canonical byte contracts; the
 final CI job rejects any checkout, JSON, HTML or JS/CSS digest difference. The
 runner mapping follows GitHub's official
 [hosted-runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners):
-`windows-2022` is x64, `macos-15` is arm64 and `macos-15-intel` is x64.
-Windows is intentionally not an alias: the reviewed native manifest binds VS
-2022 MSVC 14.44/19.44 and Windows SDK 10.0.26100.0. A move to VS 2026 requires a
-new reviewed manifest and deterministic rebuild evidence.
+Read-only compatibility CI uses `windows-2022` x64; platform stage uses isolated
+`[self-hosted, windows, x64, ecorex-platform-windows]`. macOS arm64 uses
+`macos-15` and macOS x64 uses `macos-15-intel`. The release Windows Runner is
+intentionally not a hosted alias: the reviewed manifest binds VS 2022 MSVC
+14.44/19.44 and Windows SDK 10.0.26100.0. A move to VS 2026 requires a new
+reviewed manifest and deterministic rebuild evidence.
+
+The `ecorex-platform-windows` Runner is a release-build worker, not a desktop
+application host. Register it with all four labels shown above, install only the
+reviewed VS 2022/MSVC 14.44 and Windows SDK 10.0.26100.0 set, and verify the
+checked-in toolchain manifest before enabling it. Its service identity must not
+have release signing keys, Model/Image Gateway sessions, CDP acceptance
+credentials, mirror/CDN tokens or Control Plane publication authority. Do not
+assign `ecorex-release-sign`, `ecorex-live-acceptance` or
+`ecorex-release-publish` to the same physical Runner. It may be ephemeral and
+online only for a protected stage; repository readiness treats offline capacity
+as a release blocker, while ordinary read-only CI remains hosted.
 
 This workflow is deliberately read-only. It does not receive release-signing
 or origin credentials, create Releases, publish a pointer, or state that a

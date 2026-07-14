@@ -1826,13 +1826,14 @@
 
 ## ADR-106 - Non-privileged release work uses ephemeral hosted runners
 
-- Status: accepted; supersedes ADR-105 only for the non-privileged Runner count.
+- Status: accepted; supersedes ADR-105 for macOS stage and image soak;
+  ADR-107 restores a dedicated exact-toolchain Windows stage boundary.
 - Root cause: requiring permanent self-hosted Windows x64, macOS arm64/x64 and
   image-soak hosts made a personal/small-team WebUI release fleet seven machines
   wide even though those jobs receive no signing, provider-session or origin
   credentials. That contradicted the lightweight release objective and left the
   real repository with zero usable capacity.
-- Decision: platform stage runs on fixed `windows-2022`, `macos-15` and
+- Decision: macOS platform stage runs on fixed `macos-15` and
   `macos-15-intel` GitHub-hosted VM labels. The four-hour PostgreSQL/MinIO image
   soak runs on fresh `ubuntu-24.04`, inside GitHub's six-hour hosted-job limit.
   Protected Environments still gate platform configuration and artifact
@@ -1843,28 +1844,35 @@
   ephemeral runner temp directory with exclusive/private creation, duplicate-key
   JSON validation and TOCTOU-safe hashing, then removed by an `always()` step.
   The stager performs the full production config/schema/secret scan again.
-- Privileged boundary: only three distinct self-hosted roles remain: external
-  signing, persistent Windows live Model/Image/CDP acceptance, and publication.
-  Their host-local HSM/session/origin capabilities are not moved to hosted VMs.
-- Consequence: four machines and their registration/patching burden disappear
-  without replacing real Windows/macOS builds or the four-hour concurrency soak
-  with mocks. Runner readiness becomes smaller while cryptographic and human
-  approval boundaries remain unchanged.
+- Privileged boundary: signing, persistent Windows live Model/Image/CDP
+  acceptance and publication remain three distinct privileged self-hosted
+  roles. Their host-local HSM/session/origin capabilities are not moved to
+  hosted VMs.
+- Consequence: the two macOS machines and image-soak machine disappear without
+  replacing real builds or the four-hour concurrency soak with mocks. The
+  separate Windows stage retained by ADR-107 has no signer, provider session or
+  origin credentials.
 
 ## ADR-107 - Windows release builds stay on the reviewed VS 2022 image family
 
-- Status: accepted; narrows the Windows label selected by ADR-106.
+- Status: accepted; supersedes ADR-106 for Windows builds.
 - Root cause: GitHub moved `windows-latest` and `windows-2025` to Windows Server
   2025 with Visual Studio 2026 in June 2026. EcoreX's reviewed native manifest
   instead binds MSVC 14.44/19.44 and Windows SDK 10.0.26100.0. A current hosted
   run therefore had no VS 2022 installation to validate, regardless of which
   standard Program Files root the builder searched.
-- Decision: ordinary Windows compatibility CI and protected Windows platform
-  staging both use fixed `windows-2022`. The native builder continues to search
-  both standard VS 2022 roots, but still requires one exact manifest-matching,
-  Authenticode-valid toolchain. It must not accept VS 2026 merely because its
-  image contains a v143 compatibility component.
-- Consequence: the Runner label and reviewed compiler identity remain one
-  contract. Moving to a newer Visual Studio image requires an explicit toolchain
-  manifest review, deterministic rebuild evidence and a new decision; a hosted
-  image alias may not silently redefine a release build.
+- Decision: read-only Windows compatibility CI uses fixed `windows-2022` and an
+  explicit non-release trust mode. It requires the exact MSVC 14.44 family,
+  exact SDK/layout, Microsoft-valid Authenticode signatures, locked regular
+  files and a source pin, but records the observed weekly-image hashes in a
+  `github-hosted-ci-compatibility` receipt. Protected Windows platform staging
+  instead targets the isolated labels
+  `[self-hosted, windows, x64, ecorex-platform-windows]` and keeps the original
+  caller-pinned per-file/tool/library hash and certificate-thumbprint contract.
+  The production stager rejects compatibility receipts.
+- Isolation: the Windows stage Runner has no signing, Model/Image/CDP session or
+  publication credentials and cannot overlap any of those three Runner roles.
+- Consequence: hosted CI remains a real native behavior check without pretending
+  its mutable image is a reproducible release compiler. Moving the release
+  toolchain requires an explicit manifest review and deterministic rebuild
+  evidence; a hosted alias cannot silently redefine a Candidate.

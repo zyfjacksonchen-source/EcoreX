@@ -159,7 +159,7 @@ def default_release_repository_contract() -> ReleaseRepositoryContract:
         status_checks=frozenset(
             {
                 "v1 quality and deterministic build",
-                "Windows compatibility",
+                "Windows x64 compatibility",
                 "macOS arm64 compatibility",
                 "macOS x64 compatibility",
                 "Cross-runner byte stability",
@@ -191,6 +191,12 @@ def default_release_repository_contract() -> ReleaseRepositoryContract:
             ),
         ),
         runners=(
+            RunnerContract(
+                "platform-windows",
+                frozenset(
+                    {"self-hosted", "windows", "x64", "ecorex-platform-windows"}
+                ),
+            ),
             RunnerContract(
                 "release-sign",
                 frozenset({"self-hosted", "linux", "x64", "ecorex-release-sign"}),
@@ -383,15 +389,18 @@ def evaluate_release_repository(
                 )
             )
 
-    privileged = (
+    isolated = (
+        role_matches.get("platform-windows", set()),
         role_matches.get("release-sign", set()),
         role_matches.get("release-publication", set()),
         role_matches.get("live-acceptance", set()),
     )
-    if any(left & right for index, left in enumerate(privileged) for right in privileged[index + 1 :]):
+    if any(left & right for index, left in enumerate(isolated) for right in isolated[index + 1 :]):
         findings.append(
             ReadinessFinding(
-                "privileged_runner_role_overlap", "runner", "sign/live/publication"
+                "privileged_runner_role_overlap",
+                "runner",
+                "platform/sign/live/publication",
             )
         )
 

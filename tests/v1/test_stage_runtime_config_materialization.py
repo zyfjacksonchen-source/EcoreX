@@ -194,7 +194,7 @@ def test_cli_receipt_contains_identity_but_not_config_or_path(tmp_path: Path) ->
     assert str(output) not in serialized
 
 
-def test_workflows_use_ephemeral_hosted_builds_and_three_privileged_runners() -> None:
+def test_workflows_isolate_exact_windows_stage_and_privileged_runners() -> None:
     stage = (ROOT / ".github/workflows/ecorex-v1-platform-stage.yml").read_text(
         encoding="utf-8"
     )
@@ -203,12 +203,12 @@ def test_workflows_use_ephemeral_hosted_builds_and_three_privileged_runners() ->
     )
     contract = default_release_repository_contract()
 
-    assert "runs_on: windows-2022" in stage
+    assert "ecorex-platform-windows" in stage
+    assert "fromJSON(matrix.runs_on)" in stage
     assert "runs_on: windows-2025" not in stage
     assert "runs_on: windows-latest" not in stage
-    assert "runs_on: macos-15" in stage
-    assert "runs_on: macos-15-intel" in stage
-    assert "runs-on: ${{ matrix.runs_on }}" in stage
+    assert "macos-15" in stage
+    assert "macos-15-intel" in stage
     assert "ECOREX_STAGE_RUNTIME_CONFIG_{0}_BASE64" in stage
     assert "materialize-v1-stage-runtime-config.py materialize" in stage
     assert "materialize-v1-stage-runtime-config.py remove" in stage
@@ -216,6 +216,7 @@ def test_workflows_use_ephemeral_hosted_builds_and_three_privileged_runners() ->
     assert "runs-on: [self-hosted, linux, x64, ecorex-image-soak]" not in candidate
     assert {runner.role for runner in contract.runners} == {
         "live-acceptance",
+        "platform-windows",
         "release-publication",
         "release-sign",
     }

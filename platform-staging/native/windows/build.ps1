@@ -3,10 +3,19 @@ param(
   [string]$SourceDirectory = '',
   [string]$ToolchainManifest = '',
   [string]$ExpectedToolchainManifestSha256 = '',
-  [string]$ExpectedSourceSetSha256 = ''
+  [string]$ExpectedSourceSetSha256 = '',
+  [switch]$GitHubHostedCompatibility
 )
 
 $ErrorActionPreference = 'Stop'
+$compatibilityMode = $GitHubHostedCompatibility.IsPresent
+if ($compatibilityMode -and
+    ($env:GITHUB_ACTIONS -cne 'true' -or
+     $env:RUNNER_OS -cne 'Windows' -or
+     $env:ImageOS -cne 'win22' -or
+     $env:GITHUB_EVENT_NAME -notin @('pull_request', 'push', 'workflow_dispatch'))) {
+  throw 'github_hosted_compatibility_boundary_invalid'
+}
 $output = [System.IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Force -Path $output | Out-Null
 $outputItem = Get-Item -LiteralPath $output -Force -ErrorAction Stop
@@ -205,6 +214,47 @@ function Resolve-TrustedTool($Descriptor, [string]$Path, [string]$Label) {
   return $authority
 }
 
+function Resolve-GitHubHostedCompatibilityTool($Descriptor, [string]$Path, [string]$Label) {
+  Assert-ExactProperties $Descriptor @(
+    'file_name', 'file_version', 'product_version', 'sha256',
+    'authenticode_subject', 'authenticode_thumbprint'
+  ) ($Label + '_manifest')
+  if ($Descriptor.file_name -notmatch '^(cl|link)\.exe$|^(c1xx|c2)\.dll$' -or
+      $Descriptor.sha256 -notmatch '^[0-9a-f]{64}$' -or
+      $Descriptor.file_version -notmatch '^[0-9]+(?:\.[0-9]+){3}$' -or
+      $Descriptor.product_version -notmatch '^[0-9]+(?:\.[0-9]+){3}$' -or
+      $Descriptor.authenticode_thumbprint -notmatch '^[0-9a-f]{40}$' -or
+      [string]::IsNullOrWhiteSpace($Descriptor.authenticode_subject)) {
+    throw ($Label + '_compatibility_manifest_invalid')
+  }
+  $authority = Lock-AuthorityFile $Path $Label
+  $resolved = $authority.Path
+  if ([IO.Path]::GetFileName($resolved) -cne [string]$Descriptor.file_name) {
+    throw ($Label + '_file_name_untrusted')
+  }
+  $version = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($resolved)
+  $signature = Get-AuthenticodeSignature -LiteralPath $resolved
+  $expectedFile = @(([string]$Descriptor.file_version).Split('.'))
+  $actualFile = @(([string]$version.FileVersion).Split('.'))
+  $expectedProduct = @(([string]$Descriptor.product_version).Split('.'))
+  $actualProduct = @(([string]$version.ProductVersion).Split('.'))
+  if ($actualFile.Count -ne 4 -or $actualProduct.Count -ne 4 -or
+      $actualFile[0] -cne $expectedFile[0] -or
+      $actualFile[1] -cne $expectedFile[1] -or
+      $actualProduct[0] -cne $expectedProduct[0] -or
+      $actualProduct[1] -cne $expectedProduct[1] -or
+      $signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+      $null -eq $signature.SignerCertificate -or
+      $signature.SignerCertificate.Subject -cne [string]$Descriptor.authenticode_subject) {
+    throw ($Label + '_github_hosted_compatibility_untrusted')
+  }
+  $authority | Add-Member -NotePropertyName AuthenticodeThumbprint -NotePropertyValue $signature.SignerCertificate.Thumbprint.ToLowerInvariant()
+  $authority | Add-Member -NotePropertyName AuthenticodeSubject -NotePropertyValue $signature.SignerCertificate.Subject
+  $authority | Add-Member -NotePropertyName FileVersion -NotePropertyValue $version.FileVersion
+  $authority | Add-Member -NotePropertyName ProductVersion -NotePropertyValue $version.ProductVersion
+  return $authority
+}
+
 $sourceRoot = Assert-RealDirectory $sourceRoot 'source_root'
 $manifestAuthority = Lock-AuthorityFile ([System.IO.Path]::GetFullPath($ToolchainManifest)) 'toolchain_manifest'
 $toolchainManifestPath = $manifestAuthority.Path
@@ -270,8 +320,10 @@ foreach ($vsRoot in $vsRoots) {
     if (($edition.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { continue }
     $candidate = Join-Path $edition.FullName ('VC\Tools\MSVC\' + $toolchain.msvc_tools_version)
     $compiler = Join-Path $candidate 'bin\HostX64\x64\cl.exe'
-    if ((Test-Path -LiteralPath $compiler -PathType Leaf) -and
-        (Get-Sha256Hex $compiler) -ceq [string]$toolchain.tools.compiler.sha256) {
+    $compilerMatches = (Test-Path -LiteralPath $compiler -PathType Leaf) -and
+      ($compatibilityMode -or
+       (Get-Sha256Hex $compiler) -ceq [string]$toolchain.tools.compiler.sha256)
+    if ($compilerMatches) {
       $matches += $candidate
     }
   }
@@ -280,10 +332,15 @@ $matches = @($matches | Select-Object -Unique)
 if ($matches.Count -ne 1) { throw 'trusted_msvc_layout_unavailable' }
 $msvcRoot = Assert-RealDirectory $matches[0] 'msvc_root'
 $toolBin = Assert-RealDirectory (Join-Path $msvcRoot 'bin\HostX64\x64') 'msvc_bin'
-$compilerAuthority = Resolve-TrustedTool $toolchain.tools.compiler (Join-Path $toolBin 'cl.exe') 'compiler'
-$linkerAuthority = Resolve-TrustedTool $toolchain.tools.linker (Join-Path $toolBin 'link.exe') 'linker'
-$c1xxAuthority = Resolve-TrustedTool $toolchain.tools.c1xx (Join-Path $toolBin 'c1xx.dll') 'c1xx'
-$c2Authority = Resolve-TrustedTool $toolchain.tools.c2 (Join-Path $toolBin 'c2.dll') 'c2'
+$toolResolver = if ($compatibilityMode) {
+  ${function:Resolve-GitHubHostedCompatibilityTool}
+} else {
+  ${function:Resolve-TrustedTool}
+}
+$compilerAuthority = & $toolResolver $toolchain.tools.compiler (Join-Path $toolBin 'cl.exe') 'compiler'
+$linkerAuthority = & $toolResolver $toolchain.tools.linker (Join-Path $toolBin 'link.exe') 'linker'
+$c1xxAuthority = & $toolResolver $toolchain.tools.c1xx (Join-Path $toolBin 'c1xx.dll') 'c1xx'
+$c2Authority = & $toolResolver $toolchain.tools.c2 (Join-Path $toolBin 'c2.dll') 'c2'
 $clPath = $compilerAuthority.Path
 $linkPath = $linkerAuthority.Path
 
@@ -309,6 +366,7 @@ $expectedLibraries = @(
 Assert-ExactProperties $toolchain.libraries $expectedLibraries 'toolchain_libraries'
 $libraries = [ordered]@{}
 $libraryAuthorities = [ordered]@{}
+$observedLibraryDigests = [ordered]@{}
 foreach ($name in $expectedLibraries) {
   $root = if ($name -in @('libcmt.lib', 'libcpmt.lib', 'libvcruntime.lib', 'oldnames.lib')) {
     $msvcLibRoot
@@ -319,11 +377,13 @@ foreach ($name in $expectedLibraries) {
   }
   $authority = Lock-AuthorityFile (Join-Path $root $name) ('library_' + $name)
   $expected = [string]$toolchain.libraries.PSObject.Properties[$name].Value
-  if ($expected -notmatch '^[0-9a-f]{64}$' -or $authority.Sha256 -cne $expected) {
+  if ($expected -notmatch '^[0-9a-f]{64}$' -or
+      (-not $compatibilityMode -and $authority.Sha256 -cne $expected)) {
     throw ('library_identity_untrusted:' + $name)
   }
   $libraries[$name] = $authority.Path
   $libraryAuthorities[$name] = $authority
+  $observedLibraryDigests[$name] = $authority.Sha256
 }
 
 # No compiler/linker option or search path is inherited by either child.
@@ -369,7 +429,12 @@ Remove-Item -LiteralPath $launcherObject, $sandboxHostObject, $sandboxSecurityOb
 Remove-Item -LiteralPath $sourceSnapshot -Recurse -Force -ErrorAction Stop
 
 $libraryBinding = ($expectedLibraries | Sort-Object | ForEach-Object {
-  $_ + '=' + [string]$toolchain.libraries.PSObject.Properties[$_].Value
+  $digest = if ($compatibilityMode) {
+    [string]$observedLibraryDigests[$_]
+  } else {
+    [string]$toolchain.libraries.PSObject.Properties[$_].Value
+  }
+  $_ + '=' + $digest
 }) -join "`0"
 Assert-AuthorityUnchanged $manifestAuthority 'toolchain_manifest'
 foreach ($name in $sourceNames) {
@@ -391,11 +456,27 @@ foreach ($entry in $toolChecks) {
   Assert-AuthorityUnchanged $authority $label
   $postSignature = Get-AuthenticodeSignature -LiteralPath $authority.Path
   $postVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($authority.Path)
+  $expectedThumbprint = if ($compatibilityMode) {
+    [string]$authority.AuthenticodeThumbprint
+  } else {
+    [string]$descriptor.authenticode_thumbprint
+  }
+  $expectedFileVersion = if ($compatibilityMode) {
+    [string]$authority.FileVersion
+  } else {
+    [string]$descriptor.file_version
+  }
+  $expectedProductVersion = if ($compatibilityMode) {
+    [string]$authority.ProductVersion
+  } else {
+    [string]$descriptor.product_version
+  }
   if ($postSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
       $null -eq $postSignature.SignerCertificate -or
-      $postSignature.SignerCertificate.Thumbprint.ToLowerInvariant() -cne [string]$descriptor.authenticode_thumbprint -or
-      $postVersion.FileVersion -cne [string]$descriptor.file_version -or
-      $postVersion.ProductVersion -cne [string]$descriptor.product_version) {
+      $postSignature.SignerCertificate.Subject -cne [string]$descriptor.authenticode_subject -or
+      $postSignature.SignerCertificate.Thumbprint.ToLowerInvariant() -cne $expectedThumbprint -or
+      $postVersion.FileVersion -cne $expectedFileVersion -or
+      $postVersion.ProductVersion -cne $expectedProductVersion) {
     throw ($label + '_changed_during_build')
   }
 }
@@ -403,7 +484,7 @@ $receipt = [ordered]@{
   schema_version = 2
   status = 'passed'
   target = 'windows-x64'
-  authority_mode = 'caller-pinned'
+  authority_mode = if ($compatibilityMode) { 'github-hosted-ci-compatibility' } else { 'caller-pinned' }
   toolchain_manifest_sha256 = $manifestAuthority.Sha256
   source_set_sha256 = $sourceSetSha256
   msvc_tools_version = [string]$toolchain.msvc_tools_version

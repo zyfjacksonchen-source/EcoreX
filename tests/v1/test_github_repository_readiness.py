@@ -144,7 +144,7 @@ def test_environment_configuration_is_scoped_and_fail_closed() -> None:
     ) in findings
 
 
-def test_privileged_signing_live_and_publication_roles_must_not_overlap() -> None:
+def test_platform_signing_live_and_publication_roles_must_not_overlap() -> None:
     snapshot = _healthy_snapshot()
     shared = {
         "busy": False,
@@ -153,6 +153,7 @@ def test_privileged_signing_live_and_publication_roles_must_not_overlap() -> Non
             "linux",
             "windows",
             "x64",
+            "ecorex-platform-windows",
             "ecorex-release-sign",
             "ecorex-live-acceptance",
             "ecorex-release-publish",
@@ -165,6 +166,7 @@ def test_privileged_signing_live_and_publication_roles_must_not_overlap() -> Non
         for runner in snapshot["runners"]
         if runner["name"]
         not in {
+            "runner-platform-windows",
             "runner-release-sign",
             "runner-live-acceptance",
             "runner-release-publication",
@@ -193,6 +195,10 @@ def test_contract_covers_every_protected_workflow_and_environment() -> None:
         ".github/workflows/ecorex-v1-candidate.yml",
         ".github/workflows/ecorex-v1-promote-candidate.yml",
     }
+    assert (
+        "Windows x64 compatibility"
+        in default_release_repository_contract().status_checks
+    )
     for environment in contract.environments:
         if environment.name.endswith(("-canary", "-stable")):
             assert environment.name.rsplit("-", 1)[0] in combined

@@ -4614,8 +4614,8 @@ stage and the four-hour image soak. For a personal/small-team Web product this
 made the release fleet heavier than the product and left seven Runner blockers
 in an otherwise deterministic chain.
 
-Platform stage now uses the fixed GitHub-hosted labels `windows-2022`,
-`macos-15` and `macos-15-intel`. The real PostgreSQL 16.9/MinIO soak uses a fresh
+macOS platform stage now uses the fixed GitHub-hosted labels `macos-15` and
+`macos-15-intel`. The real PostgreSQL 16.9/MinIO soak uses a fresh
 `ubuntu-24.04` VM for its required 14,400 seconds, inside GitHub's documented
 six-hour job limit. Protected Environments and the immutable workflow/commit/
 receipt contract remain unchanged. Only external signing, persistent Windows
@@ -4712,13 +4712,12 @@ image migration record confirms that `windows-latest` and `windows-2025` moved
 to Visual Studio 2026 in June 2026; those images no longer provide the VS 2022
 layout required by the reviewed EcoreX manifest.
 
-Read-only CI and protected platform staging now both select fixed
-`windows-2022`, matching the MSVC 14.44/19.44 and Windows SDK 10.0.26100.0
-family. The two-root discovery correction remains, and exact file digests,
-Authenticode, libraries, reparse rejection and the one-toolchain rule remain
-fail-closed. A v143 compatibility component on VS 2026 is not treated as an
-equivalent compiler without a future manifest review and deterministic rebuild
-evidence. A third exact-commit matrix must pass before promotion.
+Read-only CI now selects fixed `windows-2022`, matching the MSVC 14.44/19.44 and
+Windows SDK 10.0.26100.0 family. The two-root discovery correction remains, and
+exact file digests, Authenticode, libraries, reparse rejection and the
+one-toolchain rule remain fail-closed in release mode. A v143 compatibility
+component on VS 2026 is not treated as equivalent without a future manifest
+review and deterministic rebuild evidence.
 
 The runner/workflow contract passes 19 focused tests. Workflow YAML, progress
 JSON, dependency locks, the 653-file admission gate, reproducibility and
@@ -4728,3 +4727,58 @@ Runtime packages, 282 npm packages and 464 production files, inventory SHA-256
 The ignored 21,857-byte report is
 `.ci/windows-runner-contract-supply-chain.json`, SHA-256
 `716078b019b6c5b0ef21abf252fd1343d256e1e8b25ecaad25f4e601e6057c9a`.
+
+## 2026-07-14 - Mutable hosted compiler is separated from Candidate authority
+
+The third hosted run (`29294972413`, commit `ba595b5b`) confirmed the fixed
+`windows-2022` image and VS 2022 layout, but failed at
+`trusted_msvc_layout_unavailable`: its weekly image carries a different
+`cl.exe` digest from the exact locally reviewed manifest. This is not repaired
+by updating the hash to whichever weekly image happens to run. A GitHub OS
+label is an image family, not an immutable toolchain identity.
+
+The Windows builder now has two non-interchangeable modes. Default/release mode
+is unchanged: caller-pinned manifest and source digests, exact tool/library file
+hashes, exact versions and certificate thumbprints, locked files and a
+`caller-pinned` receipt. The opt-in compatibility mode is accepted only with an
+explicit switch inside GitHub Actions on Windows `win22` for pull request, push
+or manual CI. It still fixes the MSVC 14.44 family and SDK version/layout,
+requires valid Microsoft Authenticode, rejects links/injection, locks every
+tool/library and records observed hashes, but emits
+`github-hosted-ci-compatibility`. The production platform stager rejects that
+authority mode.
+
+Read-only CI alone sets the compatibility request. Protected Windows staging
+now targets `[self-hosted, windows, x64, ecorex-platform-windows]`; macOS remains
+on hosted fixed labels. Repository readiness requires the Windows build Runner
+as a fourth isolated role and rejects any physical Runner overlap with signing,
+live Model/Image/CDP acceptance or publication. The build host receives none of
+those privileged credentials.
+
+Local default exact-mode execution passed 90 tests with two explicit platform
+skips; the one initial failure was a stale static string assertion. The corrected
+workflow/stager/native contracts pass 57 tests with one skip. A separately
+simulated GitHub `win22` compatibility invocation compiled the real native
+helpers and passed the canonical Runtime probe. Full Ruff/compile validation
+passes. The complete current-source v1 suite passes 1,916 tests with 17 explicit
+environment/platform skips and zero failures in 761.34 seconds; five warnings
+are unchanged upstream Starlette/websockets deprecations. Repository governance
+also uses the real `Windows x64 compatibility` Job context rather than the stale
+short name, preventing an impossible branch-protection requirement. Remote CI
+must still revalidate the exact new commit before promotion.
+
+Final current-source supply-chain preflight passes 23 locked/licensed Runtime
+packages, 282 npm packages and 464 production files, inventory SHA-256
+`450831462f495c7d522af97f5ebd6cf7353e7e2ce1ed1b9aa041cd9d8e4b8528`.
+The ignored 21,857-byte report is
+`.ci/windows-ci-release-separation-supply-chain.json`, SHA-256
+`a087fbc2a34a26e67b4f15c08dcbc426c7c01f00457db9d102748218e43887ad`.
+
+A fresh read-only audit of the actual private repository exits 2 with 17
+blockers: Actions policy 3, branch protection 1, Environments 6, isolated
+Runners 4 and inactive protected workflows 3. OAuth now includes `workflow`,
+and the v1 CI workflow is active, so those two former blockers are closed. The
+new `platform-windows` Runner appears explicitly. Evidence is
+`.ci/github-release-readiness-dual-mode.json`, 3,167 bytes, SHA-256
+`d9eb1f478307b94f418de7f855be36700fd140e294b8ab4693f10cd01338a2c8`.
+No governance mutation was performed.

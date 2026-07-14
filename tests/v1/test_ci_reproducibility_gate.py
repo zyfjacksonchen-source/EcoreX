@@ -110,11 +110,16 @@ def test_v1_ci_matrix_is_read_only_and_covers_supported_architectures() -> None:
     assert "python-version: \"3.11.9\"" in workflow
     assert "--expected-count 4" in workflow
     assert "python scripts/run-v1-lint.py --compile --output-format=github" in workflow
+    assert "ECOREX_GITHUB_HOSTED_WINDOWS_NATIVE_COMPATIBILITY" in workflow
     assert "npm audit --audit-level=high" in workflow
     assert "secrets." not in workflow
     assert "continue-on-error" not in workflow
     assert "contents: write" not in workflow
     assert "packages: write" not in workflow
+    release_stage = (
+        ROOT / ".github" / "workflows" / "ecorex-v1-platform-stage.yml"
+    ).read_text(encoding="utf-8")
+    assert "ECOREX_GITHUB_HOSTED_WINDOWS_NATIVE_COMPATIBILITY" not in release_stage
 
 
 def test_dev_toolchain_is_pinned_and_lint_has_a_cross_platform_entrypoint() -> None:

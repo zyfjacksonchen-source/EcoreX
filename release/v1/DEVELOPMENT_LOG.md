@@ -157,10 +157,39 @@ Starlette's upstream `python_multipart` pending-deprecation notice.
 - GitHub moved `windows-latest`/`windows-2025` to Visual Studio 2026 in June
   2026. The EcoreX native manifest remains bound to reviewed MSVC 14.44/19.44
   and Windows SDK 10.0.26100.0 rather than accepting a compatibility component.
-- Both read-only compatibility CI and protected platform staging now select
-  `windows-2022`; contract tests reject the mutable/latest and VS 2026 labels.
+- Read-only compatibility CI selects `windows-2022`; protected platform staging
+  targets the isolated `ecorex-platform-windows` exact-toolchain Runner.
 - The two-root VS discovery fix remains, along with exact digests,
   Authenticode, reparse rejection and the exact-one-toolchain fence.
 - Local runner contracts pass 19 tests; workflow/YAML/JSON, dependency,
   reproducibility, source and supply-chain gates pass for the fixed labels.
 - A third exact-commit remote matrix is required before any promotion claim.
+
+## 2026-07-14 - hosted compatibility and release authority are separated
+
+- GitHub's fixed OS label still points at a weekly mutable image; the current
+  `windows-2022` compiler hash differs from the reviewed release manifest even
+  though the VS/MSVC family is correct.
+- CI therefore has an explicit GitHub `win22`-only compatibility mode. It pins
+  sources, MSVC 14.44 and SDK layout, requires valid Microsoft Authenticode,
+  locks tools/libraries for the build and records observed hashes.
+- Its receipt is `github-hosted-ci-compatibility`; the production stager only
+  accepts `caller-pinned`, so CI output cannot become a Candidate.
+- Protected Windows staging targets a fourth, non-privileged isolated Runner
+  labelled `ecorex-platform-windows`. Repository readiness forbids overlap with
+  signing, live provider/CDP acceptance and publication hosts.
+- Local exact-mode regression passed 90 executable tests with two platform
+  skips; the only initial miss was corrected static text. Focused contracts then
+  passed 57 tests with one skip, and a simulated GitHub compatibility build
+  compiled and passed its native Runtime probe.
+- Complete current-source v1 regression passed 1,916 tests with 17 explicit
+  environment/platform skips and zero failures in 761.34 seconds. Five warnings
+  are pre-existing upstream deprecations.
+- Branch governance now names the actual `Windows x64 compatibility` Job
+  context, eliminating a status-check label that GitHub could never satisfy.
+- Final supply-chain preflight covers 23 Runtime packages, 282 npm packages and
+  464 production files; inventory `45083146...4b8528`, ignored report
+  `a087fbc2...3887ad`.
+- A fresh read-only repository audit has 17 blockers: Actions 3, branch 1,
+  Environments 6, isolated Runners 4 and protected workflows 3. OAuth workflow
+  scope and active v1 CI are confirmed; no governance mutation was made.
