@@ -148,3 +148,19 @@ Starlette's upstream `python_multipart` pending-deprecation notice.
   contracts `162 passed`; npm vulnerabilities `0`; all static, schema,
   reproducibility, source and supply-chain gates pass. Remote revalidation is
   required before any promotion claim.
+
+## 2026-07-14 - reviewed Windows runner identity
+
+- The second hosted matrix passed Ubuntu quality and both macOS architectures,
+  then failed closed before native compilation because GitHub's
+  current `windows-latest` image no longer contains Visual Studio 2022.
+- GitHub moved `windows-latest`/`windows-2025` to Visual Studio 2026 in June
+  2026. The EcoreX native manifest remains bound to reviewed MSVC 14.44/19.44
+  and Windows SDK 10.0.26100.0 rather than accepting a compatibility component.
+- Both read-only compatibility CI and protected platform staging now select
+  `windows-2022`; contract tests reject the mutable/latest and VS 2026 labels.
+- The two-root VS discovery fix remains, along with exact digests,
+  Authenticode, reparse rejection and the exact-one-toolchain fence.
+- Local runner contracts pass 19 tests; workflow/YAML/JSON, dependency,
+  reproducibility, source and supply-chain gates pass for the fixed labels.
+- A third exact-commit remote matrix is required before any promotion claim.

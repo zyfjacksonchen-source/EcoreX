@@ -203,7 +203,9 @@ def test_workflows_use_ephemeral_hosted_builds_and_three_privileged_runners() ->
     )
     contract = default_release_repository_contract()
 
-    assert "runs_on: windows-2025" in stage
+    assert "runs_on: windows-2022" in stage
+    assert "runs_on: windows-2025" not in stage
+    assert "runs_on: windows-latest" not in stage
     assert "runs_on: macos-15" in stage
     assert "runs_on: macos-15-intel" in stage
     assert "runs-on: ${{ matrix.runs_on }}" in stage

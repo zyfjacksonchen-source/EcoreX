@@ -204,7 +204,10 @@ Together with Ubuntu they upload timestamp-free canonical byte contracts; the
 final CI job rejects any checkout, JSON, HTML or JS/CSS digest difference. The
 runner mapping follows GitHub's official
 [hosted-runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners):
-`windows-2025` is x64, `macos-15` is arm64 and `macos-15-intel` is x64.
+`windows-2022` is x64, `macos-15` is arm64 and `macos-15-intel` is x64.
+Windows is intentionally not an alias: the reviewed native manifest binds VS
+2022 MSVC 14.44/19.44 and Windows SDK 10.0.26100.0. A move to VS 2026 requires a
+new reviewed manifest and deterministic rebuild evidence.
 
 This workflow is deliberately read-only. It does not receive release-signing
 or origin credentials, create Releases, publish a pointer, or state that a

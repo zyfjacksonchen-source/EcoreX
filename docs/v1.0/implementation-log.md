@@ -2129,10 +2129,12 @@ these focused results do not replace it.
   runs pinned Python/Ruff/pytest, full v1 tests, compileall, a clean Node 22
   install, high-severity npm audit, TypeScript/Web tests, the content-addressed
   production build and all static v1 gates.
-- Added an explicit compatibility matrix for `windows-latest` (x64),
-  `macos-15` (arm64) and `macos-15-intel` (x64), matching GitHub's current
-  hosted-runner labels. These jobs run platform-sensitive Runtime smoke tests,
-  Web typecheck/build and the same byte gate. They neither sign nor publish.
+- Added an explicit compatibility matrix for Windows x64, macOS arm64 and
+  macOS x64. The current fixed labels are `windows-2022`, `macos-15` and
+  `macos-15-intel`; ADR-107 supersedes the original mutable Windows alias after
+  GitHub's 2026 move to VS 2026. These jobs run platform-sensitive Runtime
+  smoke tests, Web typecheck/build and the same byte gate. They neither sign nor
+  publish.
 - Added `scripts/run-v1-lint.py` as the cross-shell lint entrypoint. Ruff checks
   the complete v1 Runtime/test/gate surface for syntax, undefined-name,
   duplicate-definition and import-structure failures. Existing public
@@ -4612,7 +4614,7 @@ stage and the four-hour image soak. For a personal/small-team Web product this
 made the release fleet heavier than the product and left seven Runner blockers
 in an otherwise deterministic chain.
 
-Platform stage now uses the fixed GitHub-hosted labels `windows-2025`,
+Platform stage now uses the fixed GitHub-hosted labels `windows-2022`,
 `macos-15` and `macos-15-intel`. The real PostgreSQL 16.9/MinIO soak uses a fresh
 `ubuntu-24.04` VM for its required 14,400 seconds, inside GitHub's documented
 six-hour job limit. Protected Environments and the immutable workflow/commit/
@@ -4661,9 +4663,9 @@ OAuth workflow authorization was restored, branch
 `codex/ecorex-v0.3.0-hardening` was pushed and draft PR #2 created. The first
 real `EcoreX v1 CI` run (`29292576944`, commit `f772d0c1`) proved both macOS
 targets, then failed the Ubuntu quality job in 13 tests and the Windows x64
-smoke in 27 tests. No failed test was waived. The Windows failures shared one
-root: `windows-2025` installs Visual Studio 2022 below 64-bit `Program Files`,
-while the digest-pinned builder searched only `Program Files (x86)`. The Ubuntu
+smoke in 27 tests. No failed test was waived. The first Windows diagnostic
+showed that the builder needed to support both standard VS 2022 Program Files
+roots. The Ubuntu
 failures exposed an inactive Windows-only lock marker, Web dependencies being
 installed after a Python test that performs the real Vite build, and tests
 that accidentally used Windows/macOS identities or a symlinked interpreter
@@ -4699,3 +4701,30 @@ The ignored 21,857-byte report is `.ci/ci-fix-supply-chain.json`, SHA-256
 `3985d06e199b964be74f289d3e3b6f29a018c8a0f0de39196d6c1d9762093ef0`.
 The corrected remote matrix has not yet been claimed; it must pass after this
 change is pushed before protected release workflows are considered.
+
+## 2026-07-14 - Windows hosted image is bound to the reviewed compiler family
+
+The second hosted run (`29294544893`, commit `7411c561`) passed the Ubuntu
+quality job and both macOS architectures. Windows again produced 27
+native-build cascades, now with the precise
+`trusted_visual_studio_layout_unavailable` boundary. GitHub's official runner
+image migration record confirms that `windows-latest` and `windows-2025` moved
+to Visual Studio 2026 in June 2026; those images no longer provide the VS 2022
+layout required by the reviewed EcoreX manifest.
+
+Read-only CI and protected platform staging now both select fixed
+`windows-2022`, matching the MSVC 14.44/19.44 and Windows SDK 10.0.26100.0
+family. The two-root discovery correction remains, and exact file digests,
+Authenticode, libraries, reparse rejection and the one-toolchain rule remain
+fail-closed. A v143 compatibility component on VS 2026 is not treated as an
+equivalent compiler without a future manifest review and deterministic rebuild
+evidence. A third exact-commit matrix must pass before promotion.
+
+The runner/workflow contract passes 19 focused tests. Workflow YAML, progress
+JSON, dependency locks, the 653-file admission gate, reproducibility and
+`git diff --check` pass. Current-source supply-chain preflight covers 23
+Runtime packages, 282 npm packages and 464 production files, inventory SHA-256
+`5132465547eb7323d6fb2b9c7a481c170a1648c9fe4229b4b006ca6faf21d068`.
+The ignored 21,857-byte report is
+`.ci/windows-runner-contract-supply-chain.json`, SHA-256
+`716078b019b6c5b0ef21abf252fd1343d256e1e8b25ecaad25f4e601e6057c9a`.

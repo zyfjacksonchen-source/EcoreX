@@ -1646,7 +1646,7 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 
 | Scope | Exit | Result |
 | --- | ---: | --- |
-| Hosted platform mapping | 0 | Windows x64 uses fixed `windows-2025`; macOS arm64 uses `macos-15`; macOS x64 uses `macos-15-intel`. All remain protected-Environment-gated and emit the same content-bound stage receipts. |
+| Hosted platform mapping | 0 | Windows x64 uses fixed `windows-2022`; macOS arm64 uses `macos-15`; macOS x64 uses `macos-15-intel`. All remain protected-Environment-gated and emit the same content-bound stage receipts. |
 | Hosted image soak | 0 | Candidate uses fresh `ubuntu-24.04`, retains PostgreSQL 16.9/MinIO, 256 jobs, 48 workers, two node IDs and the 14,400-second minimum inside the documented six-hour hosted-job ceiling. |
 | Runtime config transport | 0 | Base64 is capped at GitHub's 48 KiB variable limit/36 KiB decoded; independent SHA-256, strict JSON/duplicate-key checks, exact output name, exclusive materialization, stable file identity and digest-fenced `always()` cleanup fail closed. No config bytes or path enter the receipt. |
 | Privilege boundary | 0 | Repository readiness now requires only three distinct self-hosted roles: external signing, Windows live Model/Image/CDP acceptance and publication. Provider sessions, HSM/workload identity and origin credentials remain off hosted build VMs. |
@@ -1662,7 +1662,7 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Scope | Exit | Result |
 | --- | ---: | --- |
 | Initial remote CI | 1 | Run `29292576944` on commit `f772d0c1`: macOS arm64 and x64 passed; Ubuntu reported 13 failures; Windows x64 reported 27 failures from one native-build root. Cross-runner byte stability correctly stayed closed. |
-| Windows root cause | 0 | `windows-2025` uses 64-bit `Program Files` for VS 2022. The builder now searches both standard SpecialFolder roots, rejects reparse roots, deduplicates candidates and still requires one exact manifest-pinned compiler/toolchain. |
+| Windows first diagnostic | 0 | The builder now searches both standard VS 2022 SpecialFolder roots, rejects reparse roots, deduplicates candidates and still requires one exact manifest-pinned compiler/toolchain. |
 | Ubuntu root causes | 0 | npm lock installation now precedes the real Web build inside pytest; inactive `colorama` remains license-accounted without host installation; Candidate/platform tests use staged identities and a resolved regular interpreter rather than host assumptions/symlinks. |
 | Runtime consistency | 0 | POSIX output roots are held by Runtime-owned descriptors to prevent inode-reuse replacement; quarantine filesystem errors are normalized at the domain boundary. Output descriptors close on Runtime shutdown and intentionally survive logout. |
 | Original failure selection | 0 | 12 passed / 1 explicit Windows symlink-privilege skip / 0 failed. |
@@ -1671,4 +1671,7 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | WebUI | 0 | npm lock install and audit passed with 0 vulnerabilities; TypeScript passed; 162 contract tests passed; production build emitted 18 content-addressed assets and 17 chunks. |
 | Static/release gates | 0 | Ruff, Python compilation, workflow YAML, design system, legacy cutoff, public download, dependency locks, Runtime/Server schema authority, reproducibility, `git diff --check` and 653 source files pass. |
 | Current-source supply chain | 0 | 23 locked/licensed Runtime packages, 282 npm packages and 464 production files pass; inventory `e3698863...4888fac1`; ignored report SHA-256 `3985d06e...62093ef0`. |
-| Remote revalidation | pending | The fix must be pushed and the exact new commit must pass Ubuntu, Windows x64, both macOS targets and cross-runner byte stability before release promotion. |
+| Second remote CI | 1 | Run `29294544893` on commit `7411c561`: Ubuntu quality and macOS arm64/x64 passed; Windows failed closed because current `windows-latest` has VS 2026 and no VS 2022 installation; byte comparison correctly remained closed. |
+| Windows image contract | 0 | Read-only CI and protected platform staging now use fixed `windows-2022`, matching the reviewed MSVC 14.44/19.44 and SDK 10.0.26100.0 family. `windows-latest` and `windows-2025` are contractually rejected until a future VS 2026 manifest is reviewed. |
+| Local runner-contract regression | 0 | 19 focused tests pass; workflow YAML, progress JSON, dependency locks, 653-file admission, reproducibility and diff gates pass. Supply-chain preflight covers 23 Runtime, 282 npm and 464 production files; inventory `51324655...21d068`, ignored report `716078b0...057c9a`. |
+| Remote revalidation | pending | The exact runner-label fix must pass Ubuntu, Windows x64, both macOS targets and cross-runner byte stability before release promotion. |

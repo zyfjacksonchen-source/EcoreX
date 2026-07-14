@@ -121,7 +121,7 @@ jobs:
         include:
           - id: windows-x64
             label: Windows x64
-            os: windows-latest
+            os: windows-2022
           - id: macos-arm64
             label: macOS arm64
             os: macos-15

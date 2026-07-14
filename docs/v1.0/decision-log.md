@@ -1832,7 +1832,7 @@
   wide even though those jobs receive no signing, provider-session or origin
   credentials. That contradicted the lightweight release objective and left the
   real repository with zero usable capacity.
-- Decision: platform stage runs on fixed `windows-2025`, `macos-15` and
+- Decision: platform stage runs on fixed `windows-2022`, `macos-15` and
   `macos-15-intel` GitHub-hosted VM labels. The four-hour PostgreSQL/MinIO image
   soak runs on fresh `ubuntu-24.04`, inside GitHub's six-hour hosted-job limit.
   Protected Environments still gate platform configuration and artifact
@@ -1850,3 +1850,21 @@
   without replacing real Windows/macOS builds or the four-hour concurrency soak
   with mocks. Runner readiness becomes smaller while cryptographic and human
   approval boundaries remain unchanged.
+
+## ADR-107 - Windows release builds stay on the reviewed VS 2022 image family
+
+- Status: accepted; narrows the Windows label selected by ADR-106.
+- Root cause: GitHub moved `windows-latest` and `windows-2025` to Windows Server
+  2025 with Visual Studio 2026 in June 2026. EcoreX's reviewed native manifest
+  instead binds MSVC 14.44/19.44 and Windows SDK 10.0.26100.0. A current hosted
+  run therefore had no VS 2022 installation to validate, regardless of which
+  standard Program Files root the builder searched.
+- Decision: ordinary Windows compatibility CI and protected Windows platform
+  staging both use fixed `windows-2022`. The native builder continues to search
+  both standard VS 2022 roots, but still requires one exact manifest-matching,
+  Authenticode-valid toolchain. It must not accept VS 2026 merely because its
+  image contains a v143 compatibility component.
+- Consequence: the Runner label and reviewed compiler identity remain one
+  contract. Moving to a newer Visual Studio image requires an explicit toolchain
+  manifest review, deterministic rebuild evidence and a new decision; a hosted
+  image alias may not silently redefine a release build.

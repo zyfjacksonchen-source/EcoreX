@@ -101,7 +101,9 @@ def test_v1_ci_matrix_is_read_only_and_covers_supported_architectures() -> None:
     )
 
     assert "permissions:\n  contents: read" in workflow
-    assert "windows-latest" in workflow
+    assert "windows-2022" in workflow
+    assert "windows-latest" not in workflow
+    assert "windows-2025" not in workflow
     assert "macos-15\n" in workflow
     assert "macos-15-intel" in workflow
     assert "node-version: \"22.23.1\"" in workflow
