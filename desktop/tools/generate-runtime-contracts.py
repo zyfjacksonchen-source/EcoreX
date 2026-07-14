@@ -30,6 +30,9 @@ from ecorex.artifacts import (  # noqa: E402
 )
 from ecorex.protocol import (  # noqa: E402
     BootstrapResponse,
+    ConnectorLoginBeginResponse,
+    ConnectorLoginCancelResponse,
+    ConnectorLoginCheckResponse,
     ConversationUsageProjection,
     CreateTurnRequest,
     EventEnvelope,
@@ -62,6 +65,10 @@ PROJECTION_TYPESCRIPT_OUTPUT = OUTPUT_DIRECTORY / "generatedRuntimeProjectionCon
 SCHEMA_VERSION = 1
 PROJECTION_CONTRACT_NAMES = frozenset(
     {
+        "ConnectorLoginBeginResponse",
+        "ConnectorLoginCancelResponse",
+        "ConnectorLoginCheckResponse",
+        "InteractionMutationResponse",
         "InteractionProjection",
         "ItemProjection",
         "JobProjection",
@@ -79,6 +86,9 @@ def _contract_schemas() -> dict[str, dict[str, Any]]:
     return {
         "ArtifactProjection": TypeAdapter(ArtifactProjection).json_schema(),
         "BootstrapResponse": BootstrapResponse.model_json_schema(),
+        "ConnectorLoginBeginResponse": ConnectorLoginBeginResponse.model_json_schema(),
+        "ConnectorLoginCancelResponse": ConnectorLoginCancelResponse.model_json_schema(),
+        "ConnectorLoginCheckResponse": ConnectorLoginCheckResponse.model_json_schema(),
         "ConversationUsageProjection": ConversationUsageProjection.model_json_schema(),
         "EventEnvelope": EventEnvelope.model_json_schema(),
         "InteractionRequest": InteractionRequest.model_json_schema(),
@@ -219,6 +229,9 @@ def build_outputs() -> tuple[bytes, bytes, bytes, str]:
         "sources": {
             "ArtifactProjection": "ecorex.artifacts.models.ArtifactProjection",
             "BootstrapResponse": "ecorex.protocol.BootstrapResponse",
+            "ConnectorLoginBeginResponse": "ecorex.protocol.ConnectorLoginBeginResponse",
+            "ConnectorLoginCancelResponse": "ecorex.protocol.ConnectorLoginCancelResponse",
+            "ConnectorLoginCheckResponse": "ecorex.protocol.ConnectorLoginCheckResponse",
             "EventEnvelope": "ecorex.protocol.EventEnvelope",
             "InteractionRequest": "ecorex.protocol.InteractionRequest",
             "InteractionMutationResponse": "ecorex.protocol.InteractionMutationResponse",
@@ -287,7 +300,6 @@ def build_outputs() -> tuple[bytes, bytes, bytes, str]:
             # paying to duplicate field-name manifests in initial Web JS.
             if name not in PROJECTION_CONTRACT_NAMES
             and name not in {
-                "InteractionMutationResponse",
                 "InteractionRequest",
                 "RespondInteractionRequest",
             }

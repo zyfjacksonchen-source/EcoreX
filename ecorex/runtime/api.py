@@ -114,6 +114,9 @@ from ecorex.protocol import (
     ActivateUpdateRequest,
     ActivateUpdateResponse,
     CheckUpdateResponse,
+    ConnectorLoginBeginResponse,
+    ConnectorLoginCancelResponse,
+    ConnectorLoginCheckResponse,
     ConnectorDescriptor,
     ConversationUsageProjection,
     CreateThreadRequest,
@@ -3391,8 +3394,11 @@ def create_app(
 
     @app.post(
         "/api/v1/interactions/{interaction_id}/connector-login/begin",
+        response_model=ConnectorLoginBeginResponse,
     )
-    async def begin_connector_login_interaction(interaction_id: str):
+    async def begin_connector_login_interaction(
+        interaction_id: str,
+    ) -> ConnectorLoginBeginResponse:
         interaction = await asyncio.to_thread(
             kernel.interactions.get, interaction_id
         )
@@ -3599,20 +3605,36 @@ def create_app(
             interaction_id,
             ConnectorInteractionState.AWAITING_CALLBACK,
         )
-        return {
-            "interaction_id": interaction_id,
-            "connector_id": connector_id,
-            "state": ConnectorInteractionState.AWAITING_CALLBACK.value,
-            "authorization_url": challenge.authorization_url,
-            "verification_url": challenge.verification_url,
-            "user_code": challenge.user_code,
-            "expires_at": challenge.expires_at.isoformat(),
-        }
+        return ConnectorLoginBeginResponse(
+            interaction_id=interaction_id,
+            connector_id=connector_id,
+            state="awaiting_callback",
+            authorization_url=challenge.authorization_url,
+            verification_url=challenge.verification_url,
+            user_code=challenge.user_code,
+            expires_at=challenge.expires_at,
+        )
 
     @app.post(
         "/api/v1/interactions/{interaction_id}/connector-login/check",
+        response_model=ConnectorLoginCheckResponse,
+        responses={
+            202: {
+                "description": "Connector authorization is still pending",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/ConnectorLoginCheckResponse"
+                        }
+                    }
+                },
+            }
+        },
     )
-    async def check_connector_login_interaction(interaction_id: str):
+    async def check_connector_login_interaction(
+        interaction_id: str,
+        http_response: Response,
+    ) -> ConnectorLoginCheckResponse:
         interaction = await asyncio.to_thread(
             kernel.interactions.get, interaction_id
         )
@@ -3640,42 +3662,19 @@ def create_app(
                 None,
             )
             mutation = await asyncio.to_thread(
-                kernel.interactions.get,
+                kernel.get_interaction_mutation,
                 interaction_id,
             )
-            return {
-                "interaction_id": interaction_id,
-                "connector_id": connector_id,
-                "connected": True,
-                "state": "connected",
-                "authority_refresh_revision_id": (
+            return ConnectorLoginCheckResponse(
+                interaction_id=interaction_id,
+                connector_id=connector_id,
+                connected=True,
+                state="connected",
+                authority_refresh_revision_id=(
                     revision.revision_id if revision is not None else None
                 ),
-                "mutation": {
-                    "interaction": mutation.model_dump(mode="json"),
-                    "turn": (
-                        None
-                        if interaction.turn_id is None
-                        else (
-                            await asyncio.to_thread(
-                                kernel.get_turn, interaction.turn_id
-                            )
-                        ).model_dump(mode="json")
-                    ),
-                    "job": (
-                        None
-                        if interaction.job_id is None
-                        else (
-                            await asyncio.to_thread(
-                                kernel.jobs.get, interaction.job_id
-                            )
-                        ).model_dump(mode="json")
-                    ),
-                    "watermark": await asyncio.to_thread(
-                        kernel.events.watermark, interaction.thread_id
-                    ),
-                },
-            }
+                mutation=mutation,
+            )
         if interaction.status is not InteractionStatus.PENDING:
             raise HTTPException(status_code=409, detail="connector login is not pending")
         if not any(
@@ -3705,15 +3704,13 @@ def create_app(
                 interaction_id,
                 retry_state,
             )
-            return JSONResponse(
-                status_code=202,
-                content={
-                    "interaction_id": interaction_id,
-                    "connector_id": connector_id,
-                    "connected": False,
-                    "state": retry_state.value,
-                    "reason": binding.last_error_code or "connector_login_retry_required",
-                },
+            http_response.status_code = 202
+            return ConnectorLoginCheckResponse(
+                interaction_id=interaction_id,
+                connector_id=connector_id,
+                connected=False,
+                state=retry_state.value,
+                reason=binding.last_error_code or "connector_login_retry_required",
             )
         if binding is None or binding.flow_id is None:
             raise HTTPException(
@@ -3746,14 +3743,12 @@ def create_app(
                 interaction_id,
                 ConnectorInteractionState.AWAITING_CALLBACK,
             )
-            return JSONResponse(
-                status_code=202,
-                content={
-                    "interaction_id": interaction_id,
-                    "connector_id": connector_id,
-                    "connected": False,
-                    "state": ConnectorInteractionState.AWAITING_CALLBACK.value,
-                },
+            http_response.status_code = 202
+            return ConnectorLoginCheckResponse(
+                interaction_id=interaction_id,
+                connector_id=connector_id,
+                connected=False,
+                state="awaiting_callback",
             )
         binding, completed_instance_id = completion
         completed_instance = await asyncio.to_thread(
@@ -3786,19 +3781,17 @@ def create_app(
                 interaction_id,
                 retry_state,
             )
-            return JSONResponse(
-                status_code=202,
-                content={
-                    "interaction_id": interaction_id,
-                    "connector_id": connector_id,
-                    "connected": False,
-                    "state": retry_state.value,
-                    "reason": (
-                        "completed_instance_missing"
-                        if completed_instance is None
-                        else "completed_instance_unavailable"
-                    ),
-                },
+            http_response.status_code = 202
+            return ConnectorLoginCheckResponse(
+                interaction_id=interaction_id,
+                connector_id=connector_id,
+                connected=False,
+                state=retry_state.value,
+                reason=(
+                    "completed_instance_missing"
+                    if completed_instance is None
+                    else "completed_instance_unavailable"
+                ),
             )
         definition = connector_registry.definition(connector_id)
         available_actions = set(
@@ -3819,15 +3812,13 @@ def create_app(
                 interaction_id,
                 ConnectorInteractionState.REAUTHORIZATION_REQUIRED,
             )
-            return JSONResponse(
-                status_code=202,
-                content={
-                    "interaction_id": interaction_id,
-                    "connector_id": connector_id,
-                    "connected": False,
-                    "state": ConnectorInteractionState.REAUTHORIZATION_REQUIRED.value,
-                    "reason": "required_connector_scope_missing",
-                },
+            http_response.status_code = 202
+            return ConnectorLoginCheckResponse(
+                interaction_id=interaction_id,
+                connector_id=connector_id,
+                connected=False,
+                state="reauthorization_required",
+                reason="required_connector_scope_missing",
             )
         if interaction.turn_id is None:
             raise HTTPException(status_code=409, detail="connector login has no Turn")
@@ -3867,19 +3858,22 @@ def create_app(
         mutation, revision_id = await asyncio.to_thread(
             resolve_under_permission_lock
         )
-        return {
-            "interaction_id": interaction_id,
-            "connector_id": connector_id,
-            "connected": True,
-            "state": "connected",
-            "authority_refresh_revision_id": revision_id,
-            "mutation": mutation.model_dump(mode="json"),
-        }
+        return ConnectorLoginCheckResponse(
+            interaction_id=interaction_id,
+            connector_id=connector_id,
+            connected=True,
+            state="connected",
+            authority_refresh_revision_id=revision_id,
+            mutation=mutation,
+        )
 
     @app.post(
         "/api/v1/interactions/{interaction_id}/connector-login/cancel",
+        response_model=ConnectorLoginCancelResponse,
     )
-    async def cancel_connector_login_interaction(interaction_id: str):
+    async def cancel_connector_login_interaction(
+        interaction_id: str,
+    ) -> ConnectorLoginCancelResponse:
         interaction = await asyncio.to_thread(
             kernel.interactions.get,
             interaction_id,
@@ -3905,12 +3899,12 @@ def create_app(
             interaction_id,
             client_request_id=request_id,
         )
-        return {
-            "interaction_id": interaction_id,
-            "connector_id": interaction.contract.connector.connector_id,
-            "cancelled": True,
-            "mutation": mutation.model_dump(mode="json"),
-        }
+        return ConnectorLoginCancelResponse(
+            interaction_id=interaction_id,
+            connector_id=interaction.contract.connector.connector_id,
+            cancelled=True,
+            mutation=mutation,
+        )
 
     @app.post(
         "/api/v1/interactions/{interaction_id}/respond",

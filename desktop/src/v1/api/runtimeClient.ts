@@ -249,6 +249,19 @@ async function validateReplaceTurnBoundary(value: unknown): Promise<ReplaceTurnR
   return contract.validateReplaceTurnResponse(value);
 }
 
+async function validateInteractionBoundary<T>(
+  value: unknown,
+  kind: "mutation" | "begin" | "check" | "cancel",
+  expectedInteractionId: string,
+): Promise<T> {
+  const contract = await import("./runtimeProjectionContract.ts");
+  return contract.validateInteractionBoundary(
+    value,
+    kind,
+    expectedInteractionId,
+  ) as T;
+}
+
 function validateClientEventPage(value: unknown): ClientEventPage {
   if (
     !isRecord(value)
@@ -941,10 +954,13 @@ export class RuntimeClient {
     interactionId: string,
     operation: "begin" | "check" | "cancel",
   ): Promise<ConnectorLoginBeginResponse | ConnectorLoginCheckResponse | ConnectorLoginCancelResponse> {
-    return this.json(
+    return this.json<
+      ConnectorLoginBeginResponse | ConnectorLoginCheckResponse | ConnectorLoginCancelResponse
+    >(
       `/api/v1/interactions/${encodeURIComponent(interactionId)}/connector-login/${operation}`,
       { method: "POST", body: JSON.stringify({}) },
       true,
+      (value) => validateInteractionBoundary(value, operation, interactionId),
     );
   }
 
@@ -963,6 +979,7 @@ export class RuntimeClient {
         }),
       },
       true,
+      (value) => validateInteractionBoundary(value, "mutation", interactionId),
     );
   }
 

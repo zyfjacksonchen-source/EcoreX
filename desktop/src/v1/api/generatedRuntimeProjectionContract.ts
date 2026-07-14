@@ -94,9 +94,47 @@ export const GENERATED_RUNTIME_PROJECTION_CONTRACT = {
       "superseded"
     ]
   },
-  "schemaSha256": "70cf8d1acc469132f53bc0b9aa5f04406ddc9bc981da07ef60ab8d43a82a2ac6",
+  "schemaSha256": "310063327c32d3ae9101ef2565ce020c668cc900f77971c262c5398f8d12195d",
   "schemaVersion": 1,
   "wireFields": {
+    "ConnectorLoginBeginResponse": {
+      "ConnectorLoginBeginResponse": [
+        "interaction_id",
+        "connector_id",
+        "state",
+        "authorization_url",
+        "verification_url",
+        "user_code",
+        "expires_at"
+      ]
+    },
+    "ConnectorLoginCancelResponse": {
+      "ConnectorLoginCancelResponse": [
+        "interaction_id",
+        "connector_id",
+        "cancelled",
+        "mutation"
+      ]
+    },
+    "ConnectorLoginCheckResponse": {
+      "ConnectorLoginCheckResponse": [
+        "interaction_id",
+        "connector_id",
+        "connected",
+        "state",
+        "reason",
+        "authority_refresh_revision_id",
+        "mutation"
+      ]
+    },
+    "InteractionMutationResponse": {
+      "InteractionMutationResponse": [
+        "interaction",
+        "turn",
+        "job",
+        "watermark"
+      ]
+    },
     "InteractionProjection": {
       "InteractionProjection": [
         "interaction_id",

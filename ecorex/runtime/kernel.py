@@ -2173,6 +2173,54 @@ class RuntimeKernel:
         self.jobs.retire_execution_permit(job_id, lease_token)
         return projection
 
+    def get_interaction_mutation(
+        self,
+        interaction_id: str,
+    ) -> InteractionMutationResponse:
+        """Project one interaction and its related state from one DB snapshot.
+
+        Replay/read paths must never assemble this public boundary from
+        independent store calls: doing so can pair an Interaction with a Turn,
+        Job, or event watermark from different SQLite snapshots.  Constructing
+        the typed response here also guarantees that the internal DurableJob is
+        reduced to the secret-free JobProjection before it leaves Runtime.
+        """
+
+        with self.database.reader() as connection:
+            row = connection.execute(
+                "SELECT * FROM interactions WHERE interaction_id=?",
+                (interaction_id,),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(
+                    f"interaction {interaction_id!r} does not exist"
+                )
+            interaction = self.interactions._from_row(row)
+            turn = (
+                None
+                if interaction.turn_id is None
+                else self._turn_from_row(
+                    self._require_turn(connection, interaction.turn_id)
+                )
+            )
+            job = None
+            if interaction.job_id is not None:
+                job_row = connection.execute(
+                    "SELECT * FROM jobs WHERE job_id=?",
+                    (interaction.job_id,),
+                ).fetchone()
+                if job_row is not None:
+                    job = self.jobs._from_row(job_row)
+            return InteractionMutationResponse(
+                interaction=interaction,
+                turn=turn,
+                job=job,
+                watermark=self.events.watermark(
+                    interaction.thread_id,
+                    connection,
+                ),
+            )
+
     def respond_interaction(
         self,
         interaction_id: str,

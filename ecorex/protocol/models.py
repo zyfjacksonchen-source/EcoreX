@@ -1104,6 +1104,127 @@ class InteractionMutationResponse(ProtocolModel):
     job: JobProjection | None = None
     watermark: int = Field(ge=0)
 
+    @model_validator(mode="after")
+    def _validate_related_identity(self) -> "InteractionMutationResponse":
+        if self.turn is not None:
+            if self.turn.thread_id != self.interaction.thread_id:
+                raise ValueError("interaction mutation Turn belongs to another Thread")
+            if (
+                self.interaction.turn_id is not None
+                and self.turn.turn_id != self.interaction.turn_id
+            ):
+                raise ValueError("interaction mutation contains an unrelated Turn")
+        if self.job is not None:
+            if (
+                self.job.thread_id is not None
+                and self.job.thread_id != self.interaction.thread_id
+            ):
+                raise ValueError("interaction mutation Job belongs to another Thread")
+            if (
+                self.interaction.job_id is not None
+                and self.job.job_id != self.interaction.job_id
+            ):
+                raise ValueError("interaction mutation contains an unrelated Job")
+            if (
+                self.job.turn_id is not None
+                and self.turn is not None
+                and self.job.turn_id != self.turn.turn_id
+            ):
+                raise ValueError("interaction mutation Job belongs to another Turn")
+        return self
+
+
+def _validate_connector_mutation_identity(
+    mutation: InteractionMutationResponse,
+    *,
+    interaction_id: str,
+    connector_id: str,
+) -> None:
+    if mutation.interaction.interaction_id != interaction_id:
+        raise ValueError("connector mutation contains an unrelated Interaction")
+    connector = mutation.interaction.contract.connector
+    if connector is None or connector.connector_id != connector_id:
+        raise ValueError("connector mutation contains an unrelated Connector")
+
+
+class ConnectorLoginBeginResponse(FrozenProtocolModel):
+    """Public, secret-free connector authorization challenge."""
+
+    interaction_id: str = Field(min_length=1, max_length=256)
+    connector_id: str = Field(min_length=1, max_length=256)
+    state: Literal["awaiting_callback"] = "awaiting_callback"
+    authorization_url: str | None = Field(default=None, min_length=8, max_length=4096)
+    verification_url: str | None = Field(default=None, min_length=8, max_length=4096)
+    user_code: str | None = Field(default=None, min_length=1, max_length=128)
+    expires_at: datetime
+
+    _expires_at_utc = field_validator("expires_at")(_ensure_utc)
+
+    @model_validator(mode="after")
+    def _require_public_destination(self) -> "ConnectorLoginBeginResponse":
+        if self.authorization_url is None and self.verification_url is None:
+            raise ValueError("connector login challenge has no public destination")
+        return self
+
+
+class ConnectorLoginCheckResponse(FrozenProtocolModel):
+    """One exhaustive state projection for connector-login polling."""
+
+    interaction_id: str = Field(min_length=1, max_length=256)
+    connector_id: str = Field(min_length=1, max_length=256)
+    connected: bool
+    state: Literal[
+        "awaiting_callback",
+        "authorization_required",
+        "reauthorization_required",
+        "connected",
+    ]
+    reason: str | None = Field(default=None, min_length=1, max_length=128)
+    authority_refresh_revision_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=256,
+    )
+    mutation: InteractionMutationResponse | None = None
+
+    @model_validator(mode="after")
+    def _validate_state_payload(self) -> "ConnectorLoginCheckResponse":
+        if self.state == "connected":
+            if not self.connected or self.reason is not None or self.mutation is None:
+                raise ValueError("connected connector login payload is inconsistent")
+            _validate_connector_mutation_identity(
+                self.mutation,
+                interaction_id=self.interaction_id,
+                connector_id=self.connector_id,
+            )
+            return self
+        if self.connected or self.authority_refresh_revision_id is not None:
+            raise ValueError("pending connector login payload is inconsistent")
+        if self.mutation is not None:
+            raise ValueError("pending connector login cannot contain a mutation")
+        if self.state == "awaiting_callback":
+            if self.reason is not None:
+                raise ValueError("awaiting connector login cannot contain a reason")
+        elif self.reason is None:
+            raise ValueError("retryable connector login requires a reason")
+        return self
+
+
+class ConnectorLoginCancelResponse(FrozenProtocolModel):
+    interaction_id: str = Field(min_length=1, max_length=256)
+    connector_id: str = Field(min_length=1, max_length=256)
+    cancelled: Literal[True] = True
+    mutation: InteractionMutationResponse
+
+    @model_validator(mode="after")
+    def _validate_mutation_identity(self) -> "ConnectorLoginCancelResponse":
+        _validate_connector_mutation_identity(
+            self.mutation,
+            interaction_id=self.interaction_id,
+            connector_id=self.connector_id,
+        )
+        return self
+
 
 class InteractionListResponse(ProtocolModel):
     interactions: list[InteractionProjection]

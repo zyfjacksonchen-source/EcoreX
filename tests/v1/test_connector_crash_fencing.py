@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from ecorex.gateway import GatewayEvent
 from ecorex.connectors import (
@@ -32,6 +33,7 @@ from ecorex.connectors import (
     builtin_connector_registry,
 )
 from ecorex.protocol import (
+    ConnectorLoginCheckResponse,
     CreateThreadRequest,
     CreateTurnRequest,
     InteractionAction,
@@ -615,6 +617,41 @@ def test_completed_oauth_check_releases_permission_lock_and_is_replayable(
     assert replay.json()["authority_refresh_revision_id"] == checked.json()[
         "authority_refresh_revision_id"
     ]
+    replay_mutation = replay.json()["mutation"]
+    assert replay_mutation["interaction"]["interaction_id"] == (
+        interaction.interaction_id
+    )
+    assert replay_mutation["turn"]["turn_id"] == created.turn.turn_id
+    assert set(replay_mutation["job"]) == {
+        "job_id",
+        "kind",
+        "status",
+        "priority",
+        "attempt",
+        "max_attempts",
+        "thread_id",
+        "turn_id",
+        "available_at",
+        "deadline",
+        "reason_code",
+        "created_at",
+        "updated_at",
+    }
+    assert replay_mutation["job"]["job_id"] == leased.job_id
+    assert {
+        "payload",
+        "lease_owner",
+        "lease_token",
+        "lease_expires_at",
+        "heartbeat_at",
+        "checkpoint",
+        "idempotency_key",
+        "last_error",
+    }.isdisjoint(replay_mutation["job"])
+    cross_thread = replay.json()
+    cross_thread["mutation"]["job"]["thread_id"] = "thread-wrong"
+    with pytest.raises(ValidationError, match="another Thread"):
+        ConnectorLoginCheckResponse.model_validate(cross_thread)
 
 
 @pytest.mark.parametrize("boundary", ["flow_commit", "vault_put"])

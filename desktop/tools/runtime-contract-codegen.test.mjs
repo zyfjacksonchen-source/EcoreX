@@ -42,6 +42,9 @@ test("generated manifest pins the canonical full-schema digest", async () => {
   assert.deepEqual(Object.keys(schema.contracts).sort(), [
     "ArtifactProjection",
     "BootstrapResponse",
+    "ConnectorLoginBeginResponse",
+    "ConnectorLoginCancelResponse",
+    "ConnectorLoginCheckResponse",
     "ConversationUsageProjection",
     "CreateTurnRequest",
     "EventEnvelope",
@@ -94,6 +97,18 @@ test("generated manifest pins the canonical full-schema digest", async () => {
   assert.deepEqual(
     GENERATED_RUNTIME_PROJECTION_CONTRACT.wireFields.ThreadProjectionResponse.ThreadProjectionResponse,
     ["thread", "turns", "items", "jobs", "interactions", "watermark"],
+  );
+  assert.deepEqual(
+    GENERATED_RUNTIME_PROJECTION_CONTRACT.wireFields.ConnectorLoginCheckResponse.ConnectorLoginCheckResponse,
+    [
+      "interaction_id",
+      "connector_id",
+      "connected",
+      "state",
+      "reason",
+      "authority_refresh_revision_id",
+      "mutation",
+    ],
   );
   for (const contract of [
     "CreateTurnRequest",

@@ -1719,3 +1719,18 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Current-source supply chain | 0 | 23 locked/licensed Runtime packages, 282 npm packages and 466 production files pass; inventory `669aa0f4...e8394`. Ignored 21,857-byte report SHA-256 `f50da3a5...6857a`. npm audit reports zero vulnerabilities. |
 | Exact hosted source head | 0 | Run `29301500258` on source-bearing commit `6d4c3030717ce078a6d5a74b830ec9a169a32d2e` passed Ubuntu quality, Windows x64, macOS arm64/x64 and cross-runner byte stability. All five Jobs completed successfully. |
 | Publication | blocked | The 17 repository-governance/Runner/workflow prerequisites remain; no protected Candidate, publication or rollout was attempted. |
+
+## Connector-login lifecycle projection authority - 2026-07-15
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Root-cause reproduction | 1 | The first complete run exposed the prior completed-check replay leak: raw DurableJob fields failed the new response contract and the second check returned 500. The failed run is not counted as passing evidence. |
+| Single-snapshot Runtime projection | 0 | Interaction, optional Turn/Job and event watermark are read in one SQLite reader transaction; Job crosses the public boundary only as the thirteen-field JobProjection allowlist. A regression test rejects lease, token, heartbeat, checkpoint, payload, idempotency and raw-error leakage. |
+| FastAPI/OpenAPI authority | 0 | Connector begin/check/cancel declare exact Pydantic response models; check `200` and `202` both reference `ConnectorLoginCheckResponse`. State and nested Interaction/Connector/Thread/Turn/Job identities fail closed. |
+| Generated Web boundary | 0 | Schema digest `310063327...d12195d` includes all three connector lifecycle responses plus InteractionMutationResponse. One deferred validator covers connector lifecycle and ordinary HITL mutation responses without duplicating initial-client code. |
+| Focused Runtime | 0 | The exact failed replay test passes; 58 Runtime hardening, Connector integration/mount and progressive-discovery tests pass with one upstream warning. |
+| Complete Python v1 suite | 0 | Fresh post-fix run: 1,916 passed / 17 explicit environment-platform skips / 0 failed in 818.30 seconds; five warnings are unchanged third-party deprecations. |
+| WebUI | 0 | TypeScript passed; 164/164 Web contract tests passed; production build emitted 19 content-addressed assets / 18 chunks. Initial JS is 474.84 KiB (147.05 KiB gzip), deferred features 94.42 KiB (33.67 KiB gzip), strict projection chunk 15.40 KiB (4.04 KiB gzip). |
+| Static/source gates | 0 | Ruff, Python compilation, generated-contract freshness, design, legacy cutoff, public download, dependency locks, Runtime/Server schema authority, reproducibility, `git diff --check` and all 655 admitted source files pass. |
+| Current-source supply chain | 0 | 23 locked/licensed Runtime packages, 282 npm packages and 466 production files pass; inventory `33048f78...93dfc`; ignored 21,857-byte report SHA-256 `355cbb87...6f4d31`. npm audit reports zero vulnerabilities. |
+| Publication | blocked | This batch has no final-commit hosted result yet. The last live governance audit remains at 17 blockers; no protected Candidate, release, rollout or user update was attempted. |

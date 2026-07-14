@@ -744,6 +744,26 @@ def test_api_requires_bearer_exact_origin_csrf_and_resyncs_ahead_cursor(tmp_path
         ("/api/v1/threads/{thread_id}/fork", "post", "201"): "ThreadProjection",
         ("/api/v1/turns/{turn_id}/interrupt", "post", "200"): "TurnMutationResponse",
         ("/api/v1/threads/{thread_id}/projection", "get", "200"): "ThreadProjectionResponse",
+        (
+            "/api/v1/interactions/{interaction_id}/connector-login/begin",
+            "post",
+            "200",
+        ): "ConnectorLoginBeginResponse",
+        (
+            "/api/v1/interactions/{interaction_id}/connector-login/check",
+            "post",
+            "200",
+        ): "ConnectorLoginCheckResponse",
+        (
+            "/api/v1/interactions/{interaction_id}/connector-login/check",
+            "post",
+            "202",
+        ): "ConnectorLoginCheckResponse",
+        (
+            "/api/v1/interactions/{interaction_id}/connector-login/cancel",
+            "post",
+            "200",
+        ): "ConnectorLoginCancelResponse",
     }
     for (path, method, status), schema_name in response_contracts.items():
         schema = openapi["paths"][path][method]["responses"][status]["content"][

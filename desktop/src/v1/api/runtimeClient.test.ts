@@ -29,7 +29,11 @@ import {
   validateConversationUsageProjection,
   validateEventEnvelope,
 } from "./runtimeContract.ts";
-import { validateThreadProjectionResponse } from "./runtimeProjectionContract.ts";
+import {
+  validateConnectorLoginCheckResponse,
+  validateInteractionMutationResponse,
+  validateThreadProjectionResponse,
+} from "./runtimeProjectionContract.ts";
 import {
   connectorAuthorizationCompleted,
   connectorOverallHealth,
@@ -2026,6 +2030,44 @@ test("legacy credential quarantine exposes summaries and deletes by stable inten
 test("connector-login HITL begin, check, and cancel never use ordinary respond", async () => {
   const originalFetch = globalThis.fetch;
   const requests: Request[] = [];
+  const mutation = {
+    interaction: {
+      interaction_id: "interaction / one",
+      kind: "connector_login",
+      status: "resolved",
+      prompt: "连接飞书文档后继续",
+      contract: {
+        schema_version: 1,
+        title: "连接飞书文档",
+        fields: [],
+        actions: [{
+          action_id: "cancel",
+          label: "取消",
+          action_type: "cancel",
+          style: "secondary",
+          submits_form: false,
+        }],
+        connector: {
+          connector_id: "feishu/docs",
+          display_name: "飞书文档",
+          state: "awaiting_callback",
+          required_action_ids: [],
+        },
+      },
+      options: [],
+      response: { action_id: "cancel", values: {} },
+      response_client_request_id: "connector_cancel_stable",
+      thread_id: "thread-connector",
+      turn_id: null,
+      job_id: null,
+      expires_at: null,
+      created_at: bootstrap.server_time,
+      updated_at: bootstrap.server_time,
+    },
+    turn: null,
+    job: null,
+    watermark: 8,
+  };
   globalThis.fetch = async (input, init) => {
     const request = new Request(input, init);
     requests.push(request);
@@ -2046,13 +2088,16 @@ test("connector-login HITL begin, check, and cancel never use ordinary respond",
         connector_id: "feishu/docs",
         connected: false,
         state: "awaiting_callback",
+        reason: null,
+        authority_refresh_revision_id: null,
+        mutation: null,
       }, { status: 202 });
     }
     return Response.json({
       interaction_id: "interaction / one",
       connector_id: "feishu/docs",
       cancelled: true,
-      mutation: {},
+      mutation,
     });
   };
   try {
@@ -2086,4 +2131,87 @@ test("connector-login HITL begin, check, and cancel never use ordinary respond",
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("connector-login and HITL mutation responses fail closed on state or identity drift", () => {
+  const mutation = {
+    interaction: {
+      interaction_id: "interaction-contract",
+      kind: "connector_login",
+      status: "resolved",
+      prompt: "继续办公任务",
+      contract: {
+        schema_version: 1,
+        title: "连接飞书文档",
+        fields: [],
+        actions: [{
+          action_id: "check_status",
+          label: "检查状态",
+          action_type: "connector_check_status",
+          style: "primary",
+          submits_form: false,
+        }],
+        connector: {
+          connector_id: "feishu_docs",
+          display_name: "飞书文档",
+          state: "awaiting_callback",
+          required_action_ids: [],
+        },
+      },
+      options: [],
+      response: { action_id: "check_status", values: {} },
+      response_client_request_id: "connector_check_stable",
+      thread_id: "thread-contract",
+      turn_id: null,
+      job_id: null,
+      expires_at: null,
+      created_at: bootstrap.server_time,
+      updated_at: bootstrap.server_time,
+    },
+    turn: null,
+    job: null,
+    watermark: 9,
+  };
+  assert.equal(
+    validateInteractionMutationResponse(mutation, "interaction-contract").watermark,
+    9,
+  );
+  const connected = {
+    interaction_id: "interaction-contract",
+    connector_id: "feishu_docs",
+    connected: true,
+    state: "connected",
+    reason: null,
+    authority_refresh_revision_id: "revision-authority",
+    mutation,
+  };
+  assert.equal(
+    validateConnectorLoginCheckResponse(connected, "interaction-contract").connected,
+    true,
+  );
+  assert.throws(
+    () => validateConnectorLoginCheckResponse({
+      interaction_id: "interaction-contract",
+      connector_id: "feishu_docs",
+      connected: false,
+      state: "awaiting_callback",
+    }),
+    (error: unknown) => error instanceof RuntimeContractError
+      && error.contract === "ConnectorLoginCheckResponse",
+  );
+  assert.throws(
+    () => validateInteractionMutationResponse(mutation, "different-interaction"),
+    (error: unknown) => error instanceof RuntimeContractError
+      && error.contract === "InteractionMutationResponse"
+      && error.path === "interaction.interaction_id",
+  );
+  assert.throws(
+    () => validateConnectorLoginCheckResponse({
+      ...connected,
+      connector_id: "tencent_docs",
+    }),
+    (error: unknown) => error instanceof RuntimeContractError
+      && error.contract === "ConnectorLoginCheckResponse"
+      && error.path === "mutation.interaction.contract.connector.connector_id",
+  );
 });

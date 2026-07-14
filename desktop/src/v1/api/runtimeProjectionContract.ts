@@ -1,5 +1,9 @@
 import type {
+  ConnectorLoginBeginResponse,
+  ConnectorLoginCancelResponse,
+  ConnectorLoginCheckResponse,
   InteractionProjection,
+  InteractionMutationResponse,
   ItemProjection,
   JobProjection,
   ReplaceTurnResponse,
@@ -291,6 +295,204 @@ function interaction(value: unknown, path = "root"): asserts value is Interactio
   if (value.expires_at !== null) assertTimestamp(value.expires_at, contract, `${path}.expires_at`);
   assertTimestamp(value.created_at, contract, `${path}.created_at`);
   assertTimestamp(value.updated_at, contract, `${path}.updated_at`);
+}
+
+function interactionMutation(
+  value: unknown,
+  path: string,
+  contract: ContractName,
+): asserts value is InteractionMutationResponse {
+  assertRecord(value, contract, path);
+  assertWireFields(
+    value,
+    fields.InteractionMutationResponse.InteractionMutationResponse,
+    contract,
+    path,
+  );
+  interaction(value.interaction, `${path}.interaction`);
+  if (value.turn !== null) turn(value.turn, `${path}.turn`);
+  if (value.job !== null) job(value.job, `${path}.job`);
+  assertInteger(value.watermark, contract, `${path}.watermark`);
+
+  const interactionProjection = value.interaction as InteractionProjection;
+  const turnProjection = value.turn as TurnProjection | null;
+  const jobProjection = value.job as JobProjection | null;
+  if (turnProjection !== null) {
+    if (turnProjection.thread_id !== interactionProjection.thread_id) {
+      reject(contract, `${path}.turn.thread_id`, "the interaction thread_id");
+    }
+    if (
+      interactionProjection.turn_id !== null
+      && turnProjection.turn_id !== interactionProjection.turn_id
+    ) {
+      reject(contract, `${path}.turn.turn_id`, "the interaction turn_id");
+    }
+  }
+  if (
+    jobProjection?.thread_id !== null
+    && jobProjection?.thread_id !== undefined
+    && jobProjection.thread_id !== interactionProjection.thread_id
+  ) {
+    reject(contract, `${path}.job.thread_id`, "the interaction thread_id or null");
+  }
+  if (
+    jobProjection !== null
+    && interactionProjection.job_id !== null
+    && jobProjection.job_id !== interactionProjection.job_id
+  ) {
+    reject(contract, `${path}.job.job_id`, "the interaction job_id");
+  }
+  if (
+    jobProjection?.turn_id !== null
+    && jobProjection?.turn_id !== undefined
+    && turnProjection !== null
+    && jobProjection.turn_id !== turnProjection.turn_id
+  ) {
+    reject(contract, `${path}.job.turn_id`, "the mutation turn_id or null");
+  }
+}
+
+function assertConnectorMutationIdentity(
+  mutation: InteractionMutationResponse,
+  interactionId: string,
+  connectorId: string,
+  contract: ContractName,
+  path: string,
+): void {
+  if (mutation.interaction.interaction_id !== interactionId) {
+    reject(contract, `${path}.interaction.interaction_id`, "the response interaction_id");
+  }
+  const connector = mutation.interaction.contract.connector;
+  if (connector === null || connector.connector_id !== connectorId) {
+    reject(contract, `${path}.interaction.contract.connector.connector_id`, "the response connector_id");
+  }
+}
+
+export function validateInteractionMutationResponse(
+  value: unknown,
+  expectedInteractionId?: string,
+): InteractionMutationResponse {
+  const contract = "InteractionMutationResponse";
+  interactionMutation(value, "root", contract);
+  if (
+    expectedInteractionId !== undefined
+    && value.interaction.interaction_id !== expectedInteractionId
+  ) {
+    reject(contract, "interaction.interaction_id", "the requested interaction_id");
+  }
+  return value;
+}
+
+export function validateConnectorLoginBeginResponse(
+  value: unknown,
+  expectedInteractionId?: string,
+): ConnectorLoginBeginResponse {
+  const contract = "ConnectorLoginBeginResponse";
+  assertRecord(value, contract, "root");
+  assertWireFields(value, fields.ConnectorLoginBeginResponse.ConnectorLoginBeginResponse, contract, "root");
+  assertString(value.interaction_id, contract, "interaction_id");
+  assertString(value.connector_id, contract, "connector_id");
+  if (value.state !== "awaiting_callback") reject(contract, "state", 'literal "awaiting_callback"');
+  assertNullableString(value.authorization_url, contract, "authorization_url");
+  assertNullableString(value.verification_url, contract, "verification_url");
+  assertNullableString(value.user_code, contract, "user_code");
+  assertTimestamp(value.expires_at, contract, "expires_at");
+  if (value.authorization_url === null && value.verification_url === null) {
+    reject(contract, "authorization_url", "an authorization or verification URL");
+  }
+  if (expectedInteractionId !== undefined && value.interaction_id !== expectedInteractionId) {
+    reject(contract, "interaction_id", "the requested interaction_id");
+  }
+  return value as unknown as ConnectorLoginBeginResponse;
+}
+
+export function validateConnectorLoginCheckResponse(
+  value: unknown,
+  expectedInteractionId?: string,
+): ConnectorLoginCheckResponse {
+  const contract = "ConnectorLoginCheckResponse";
+  assertRecord(value, contract, "root");
+  assertWireFields(value, fields.ConnectorLoginCheckResponse.ConnectorLoginCheckResponse, contract, "root");
+  assertString(value.interaction_id, contract, "interaction_id");
+  assertString(value.connector_id, contract, "connector_id");
+  assertBoolean(value.connected, contract, "connected");
+  assertOneOf(
+    value.state,
+    ["awaiting_callback", "authorization_required", "reauthorization_required", "connected"] as const,
+    contract,
+    "state",
+  );
+  assertNullableString(value.reason, contract, "reason");
+  assertNullableString(value.authority_refresh_revision_id, contract, "authority_refresh_revision_id");
+  if (value.mutation !== null) interactionMutation(value.mutation, "mutation", contract);
+  if (expectedInteractionId !== undefined && value.interaction_id !== expectedInteractionId) {
+    reject(contract, "interaction_id", "the requested interaction_id");
+  }
+  if (value.state === "connected") {
+    if (value.connected !== true || value.reason !== null || value.mutation === null) {
+      reject(contract, "state", "a complete connected payload");
+    }
+    assertConnectorMutationIdentity(
+      value.mutation as InteractionMutationResponse,
+      value.interaction_id,
+      value.connector_id,
+      contract,
+      "mutation",
+    );
+  } else {
+    if (value.connected !== false || value.authority_refresh_revision_id !== null || value.mutation !== null) {
+      reject(contract, "state", "a non-connected payload without mutation authority");
+    }
+    if (value.state === "awaiting_callback" ? value.reason !== null : value.reason === null) {
+      reject(contract, "reason", value.state === "awaiting_callback" ? "null" : "a retry reason");
+    }
+  }
+  return value as unknown as ConnectorLoginCheckResponse;
+}
+
+export function validateConnectorLoginCancelResponse(
+  value: unknown,
+  expectedInteractionId?: string,
+): ConnectorLoginCancelResponse {
+  const contract = "ConnectorLoginCancelResponse";
+  assertRecord(value, contract, "root");
+  assertWireFields(value, fields.ConnectorLoginCancelResponse.ConnectorLoginCancelResponse, contract, "root");
+  assertString(value.interaction_id, contract, "interaction_id");
+  assertString(value.connector_id, contract, "connector_id");
+  if (value.cancelled !== true) reject(contract, "cancelled", "literal true");
+  interactionMutation(value.mutation, "mutation", contract);
+  if (expectedInteractionId !== undefined && value.interaction_id !== expectedInteractionId) {
+    reject(contract, "interaction_id", "the requested interaction_id");
+  }
+  assertConnectorMutationIdentity(
+    value.mutation,
+    value.interaction_id,
+    value.connector_id,
+    contract,
+    "mutation",
+  );
+  return value as unknown as ConnectorLoginCancelResponse;
+}
+
+export function validateInteractionBoundary(
+  value: unknown,
+  kind: "mutation" | "begin" | "check" | "cancel",
+  expectedInteractionId: string,
+):
+  | InteractionMutationResponse
+  | ConnectorLoginBeginResponse
+  | ConnectorLoginCheckResponse
+  | ConnectorLoginCancelResponse {
+  switch (kind) {
+    case "mutation":
+      return validateInteractionMutationResponse(value, expectedInteractionId);
+    case "begin":
+      return validateConnectorLoginBeginResponse(value, expectedInteractionId);
+    case "check":
+      return validateConnectorLoginCheckResponse(value, expectedInteractionId);
+    case "cancel":
+      return validateConnectorLoginCancelResponse(value, expectedInteractionId);
+  }
 }
 
 export function validateThreadProjection(value: unknown): ThreadProjection {

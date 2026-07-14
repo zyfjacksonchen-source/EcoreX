@@ -337,6 +337,9 @@ export type ConnectorLoginCheckResponse =
       connector_id: string;
       connected: false;
       state: "awaiting_callback";
+      reason: null;
+      authority_refresh_revision_id: null;
+      mutation: null;
     }
   | {
       interaction_id: string;
@@ -344,12 +347,15 @@ export type ConnectorLoginCheckResponse =
       connected: false;
       state: "authorization_required" | "reauthorization_required";
       reason: string;
+      authority_refresh_revision_id: null;
+      mutation: null;
     }
   | {
       interaction_id: string;
       connector_id: string;
       connected: true;
       state: "connected";
+      reason: null;
       authority_refresh_revision_id: string | null;
       mutation: InteractionMutationResponse;
     };

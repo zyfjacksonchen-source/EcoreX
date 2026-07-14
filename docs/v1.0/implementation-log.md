@@ -4901,3 +4901,58 @@ jobs produced their byte contracts; the final four-runner comparison accepted
 identical canonical bytes. This evidence update changes documentation only.
 No protected Candidate, repository-governance mutation, publication or user
 rollout was performed.
+
+## 2026-07-15 - Connector-login HITL becomes a typed, snapshot-consistent boundary
+
+The remaining connector-login lifecycle was still an exception to the
+backend-authoritative Runtime contract. Begin, check and cancel returned
+untyped dictionaries, their `202` polling shape was absent from OpenAPI, and
+the Web transport trusted compile-time casts. More importantly, the completed
+check replay assembled Interaction, Turn, internal DurableJob and event
+watermark through separate reads. Besides allowing a cross-snapshot response,
+that path serialized Runtime-only lease, checkpoint, idempotency, payload and
+raw-error fields into the public response.
+
+Begin/check/cancel now have exhaustive Pydantic response models. Connected,
+awaiting-callback and retry-required states are mutually constrained; both the
+`200` and `202` OpenAPI responses point to the same complete polling contract.
+Nested Interaction, Connector, Thread, Turn and Job identities are checked in
+Python before a response can leave Runtime. Completed replay now calls one
+kernel projection method that reads all related rows and the watermark inside
+one SQLite reader transaction. DurableJob is reduced by the existing
+secret-free JobProjection and its thirteen-field allowlist; no internal task
+field is serialized.
+
+The deterministic Python-to-JSON-Schema/TypeScript generator now includes the
+three lifecycle responses and InteractionMutationResponse under schema digest
+`310063327c32d3ae9101ef2565ce020c668cc900f77971c262c5398f8d12195d`.
+The Web Runtime client dynamically imports one shared lifecycle validator and
+rejects absent/extra fields, impossible state variants, requested-ID drift,
+Connector drift and nested Thread/Turn/Job contamination before reducer state.
+Keeping this work in the existing deferred projection chunk preserved the
+initial Web budget.
+
+The first complete run correctly found one pre-existing replay leak: the
+response model rejected the raw DurableJob and returned 500 on a second status
+check. The fix was made at the kernel projection boundary, not hidden by
+loosening the model. The exact failed test then passed, 58 focused
+Runtime/Connector/discovery tests passed, and a fresh complete run passed 1,916
+tests with 17 explicit environment/platform skips and zero failures in 818.30
+seconds. TypeScript, all 164 Web tests and the production build pass. The build
+contains 19 content-addressed assets / 18 chunks; initial JavaScript is 474.84
+KiB (147.05 KiB gzip), the deferred feature total is 94.42 KiB (33.67 KiB
+gzip), and the strict projection chunk is 15.40 KiB (4.04 KiB gzip).
+
+Ruff, Python compilation, generated-contract freshness, design, legacy,
+public-download, dependency-lock, Runtime/Server schema authority,
+reproducibility, diff and all 655 admitted source files pass. npm audit reports
+zero vulnerabilities. Supply-chain preflight covers 23 locked/licensed Runtime
+packages, 282 npm packages and 466 production files; its inventory SHA-256 is
+`33048f7804b73a07ff3082605d07f1b383016b0b6174517730242db4db393dfc`.
+The ignored 21,857-byte report is
+`.ci/connector-login-boundary-supply-chain.json`, SHA-256
+`355cbb87ca9bfc30cda141b9998c347fadbf67225b612a07f7fbee1ebc6f4d31`.
+
+This is current-source evidence only. It does not replace a green hosted run
+on the final commit, protected Candidate receipts, managed provider/CDP
+acceptance, repository governance, publication readback or user rollout.
