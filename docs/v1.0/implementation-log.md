@@ -4893,9 +4893,11 @@ The ignored 21,857-byte report is
 `.ci/projection-contract-supply-chain.json`, SHA-256
 `f50da3a5b4412c547c1c35f0c4dea6a956f6f5b3e4485140c3c77c660f56857a`.
 
-The previous committed head `ea7afec7c4365628aba8acc0d7b8a35c2bd38995`
-is independently green in hosted run `29298952742` across Ubuntu quality,
-Windows x64, macOS arm64/x64 and cross-runner byte stability. This new local
-contract batch still requires its own committed hosted matrix. No protected
-Candidate, repository-governance mutation, publication or user rollout was
-performed.
+The source-bearing commit `6d4c3030717ce078a6d5a74b830ec9a169a32d2e`
+is independently green in hosted run `29301500258`. Ubuntu quality executed
+the complete Runtime, npm audit, TypeScript, all Web tests, the production
+build and static product gates; Windows x64 and macOS arm64/x64 compatibility
+jobs produced their byte contracts; the final four-runner comparison accepted
+identical canonical bytes. This evidence update changes documentation only.
+No protected Candidate, repository-governance mutation, publication or user
+rollout was performed.
