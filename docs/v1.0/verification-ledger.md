@@ -1681,4 +1681,8 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Branch status authority | 0 | Repository governance now requires the actual expanded Job context `Windows x64 compatibility`; the stale `Windows compatibility` name cannot leave branch protection permanently unsatisfied. |
 | Current-source supply chain | 0 | 23 Runtime packages, 282 npm packages and 464 production files pass; inventory `45083146...4b8528`; ignored 21,857-byte report `a087fbc2...3887ad`. |
 | Live repository audit | 2 | 17 blockers: Actions 3, branch 1, Environments 6, isolated Runners 4 and inactive protected workflows 3. OAuth `workflow` scope and active v1 CI are now confirmed. Report 3,167 bytes, SHA-256 `d9eb1f47...38a2c8`. No mutation occurred. |
+| Fourth remote Windows native gate | 0 | Run `29296280821`, commit `afcb166b`: Ubuntu quality, both macOS architectures and all 150 hosted Windows platform-sensitive Runtime/native tests passed. |
+| Fourth remote Web gate | 1 | Windows failed only at generated TypeScript byte check: checkout used CRLF because `.ts/.tsx` were absent from `.gitattributes`; build and byte upload correctly stayed closed. |
+| TypeScript byte policy | 0 | `*.ts` and `*.tsx` now require LF in Git attributes and the reproducibility gate. Generated contract check, reproducibility, 8 focused tests and Web typecheck pass; no generated schema bytes changed. |
+| Current-source supply chain after EOL policy | 0 | 23 Runtime, 282 npm and 464 production files pass; inventory `cfb99101...d0e00`, ignored 21,857-byte report `9084448e...157a2`. |
 | Remote revalidation | pending | The exact dual-mode commit must pass Ubuntu, Windows x64, both macOS targets and cross-runner byte stability before release promotion. |

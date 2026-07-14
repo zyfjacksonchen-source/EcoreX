@@ -4782,3 +4782,22 @@ new `platform-windows` Runner appears explicitly. Evidence is
 `.ci/github-release-readiness-dual-mode.json`, 3,167 bytes, SHA-256
 `d9eb1f478307b94f418de7f855be36700fd140e294b8ab4693f10cd01338a2c8`.
 No governance mutation was performed.
+
+The fourth hosted run (`29296280821`, commit `afcb166b`) passed Ubuntu quality
+and both macOS architectures, and proved the new Windows boundary: all 150
+platform-sensitive Runtime/native tests passed on the hosted VS 2022 image. The
+Job then failed in Web `contracts:check`, before TypeScript
+compilation, because Git checkout converted the generated `.ts` contract to
+CRLF while the deterministic generator emits LF. JSON/JS/CSS and other release
+text already had explicit `.gitattributes` policy; TypeScript was the missing
+family. `*.ts` and `*.tsx` are now globally fixed to `text eol=lf`, and the
+reproducibility gate plus unit contract require both lines. The generated Runtime
+contract, byte gate, eight focused tests and full Web typecheck pass locally.
+No generated schema or UI behavior changed.
+
+Current-source supply-chain preflight remains green for 23 Runtime packages,
+282 npm packages and 464 production files, inventory SHA-256
+`cfb99101bfa3b182222790525a4597c5eb432ebf99d183e38ce08a4ded0d0e00`.
+The ignored 21,857-byte report is `.ci/typescript-eol-supply-chain.json`,
+SHA-256
+`9084448e1b414a3a734139493f48426053c84ca746e982f24800884ba2a157a2`.

@@ -31,6 +31,8 @@ def test_checked_in_byte_contract_is_canonical_and_platform_neutral() -> None:
     assert any(value["kind"] in {"public-entry", "web-entry"} for value in contract["files"])
     attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
     assert "*.html text eol=lf" in attributes.splitlines()
+    assert "*.ts text eol=lf" in attributes.splitlines()
+    assert "*.tsx text eol=lf" in attributes.splitlines()
 
 
 def test_byte_contract_contains_only_current_v1_shell_identity_inputs() -> None:

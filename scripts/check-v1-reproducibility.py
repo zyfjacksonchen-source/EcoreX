@@ -37,6 +37,8 @@ REQUIRED_ATTRIBUTES = (
     "*.mjs text eol=lf",
     "*.py text eol=lf",
     "*.toml text eol=lf",
+    "*.ts text eol=lf",
+    "*.tsx text eol=lf",
     "*.yaml text eol=lf",
     "*.yml text eol=lf",
 )

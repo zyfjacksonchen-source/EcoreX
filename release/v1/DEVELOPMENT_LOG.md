@@ -193,3 +193,9 @@ Starlette's upstream `python_multipart` pending-deprecation notice.
 - A fresh read-only repository audit has 17 blockers: Actions 3, branch 1,
   Environments 6, isolated Runners 4 and protected workflows 3. OAuth workflow
   scope and active v1 CI are confirmed; no governance mutation was made.
+- The fourth hosted Windows Job passed all 150 Runtime/native tests, then found a
+  separate checkout-byte gap: generated TypeScript was CRLF on Windows because
+  `.ts/.tsx` lacked an LF rule. Both extensions are now fixed to LF and enforced
+  by the reproducibility gate; generated contract check and typecheck pass.
+- Updated supply-chain preflight stays green for 23 Runtime, 282 npm and 464
+  production files; inventory `cfb99101...d0e00`, report `9084448e...157a2`.
