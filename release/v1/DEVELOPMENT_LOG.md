@@ -202,3 +202,29 @@ Starlette's upstream `python_multipart` pending-deprecation notice.
 - Hosted run `29296609455` passed Ubuntu quality, Windows x64, both macOS
   architectures and final cross-runner byte stability on exact commit
   `a70d65c3`. No protected Candidate, publication or rollout was triggered.
+
+## 2026-07-14 - recovered live provider diagnostic and final browser rerun
+
+- Hosted run `29296947260` revalidated the final Draft PR head
+  `a11dbd884054130ecec145c0a2625ec4eb2c4cca`: Ubuntu quality, Windows x64,
+  macOS arm64/x64 and cross-runner byte stability all passed.
+- A redaction-safe direct-upstream diagnostic returned HTTP 200 for the
+  `gpt-5.6-sol` catalog and one medium-reasoning completion under the fixed
+  272,000-token compaction threshold. No endpoint, credential, response text
+  or catalog contents were recorded.
+- Image 2 passed a single-flight admission, then a hard four-worker/no-retry
+  run completed 4/4 unique images with zero 5xx. A rectangle-mask retouch
+  produced a new revision with `0.991565` non-target similarity and passed
+  visual inspection.
+- The content-addressed Web build was exercised through the in-app browser at
+  1440x900. Model selection before the first message, independent image mode,
+  bottom-anchored active Composer, continuous reasoning replacement,
+  fit-first preview, structured retouch, settings, extension/connector
+  management, task-ID continuation and the loopback public-share renderer all
+  passed with zero browser console warnings or errors.
+- Durable redacted measurements are in
+  `docs/v1.0/evidence/live-provider-local-diagnostic-2026-07-14.json`.
+  This is diagnostic evidence only: it is not bound to an immutable Candidate,
+  managed Gateway/device session or protected acceptance Runner. The live
+  repository audit still has 17 blockers, so no publication or rollout was
+  attempted.

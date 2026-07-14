@@ -1687,3 +1687,20 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Current-source supply chain after EOL policy | 0 | 23 Runtime, 282 npm and 464 production files pass; inventory `cfb99101...d0e00`, ignored 21,857-byte report `9084448e...157a2`. |
 | Fifth remote matrix | 0 | Run `29296609455`, exact commit `a70d65c3`: Ubuntu quality, Windows x64, macOS arm64/x64 and Cross-runner byte stability all passed. Windows completed contracts, TypeScript, content-addressed Web build and byte upload. |
 | Evidence boundary | 0 | The green matrix is read-only CI evidence, not protected platform-stage, Candidate signing, live Model/Image/CDP acceptance, publication or rollout evidence. |
+
+## Live upstream recovery and final browser rerun - 2026-07-14
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Final Draft PR head | 0 | Hosted run `29296947260` on exact head `a11dbd884054130ecec145c0a2625ec4eb2c4cca` passed Ubuntu quality, Windows x64, macOS arm64/x64 and Cross-runner byte stability. |
+| GPT-5.6 SOL catalog | 0 | Real upstream catalog returned 200 in 971 ms and now contains `gpt-5.6-sol`. No catalog contents, endpoint or credential were recorded. |
+| GPT-5.6 SOL inference | 0 | One medium-reasoning Responses request returned 200 and a terminal completion in 2,839 ms under the 272,000-token policy. Response content was not recorded. |
+| Image 2 single-flight | 0 | One bounded low-cost request completed in 48,284 ms as a 1,962,951-byte PNG, SHA-256 `43458986...12217`; load was not increased until this admission passed. |
+| Image 2 bounded concurrency | 0 | Hard limit four, no automatic retry: 4/4 completed in 47,881 ms, four unique digests, zero 5xx. Individual durations were 22,818 / 47,866 / 43,384 / 45,918 ms. |
+| Real rectangle retouch | 0 | Image 2 returned a 1,945,772-byte new revision in 55,424 ms. Target change score `0.182087`; non-target similarity `0.991565`; visual inspection confirmed the localized edit. |
+| Current WebUI browser | 0 | 1440x900 in-app browser rerun passed first-message model selection, independent Image 2 mode, `0.000030517578125px` normal-Composer bottom delta, continuous reasoning replacement, fit-first preview and structured Retouch result. |
+| Settings and extensions | 0 | Output preference changed to Downloads; memory 2 → 0 with 24-hour undo; Full Access became persistently visible with revoke; unified Skill/MCP/tool catalog and formal Feishu/Tencent Docs entries were visible. |
+| Task continuation and share | 0 | `thr_target_ga` restored the exact independent projection. The real loopback Control Plane share renderer preserved `你的指令` then `EcoreX`, served a complete 1800x1100 image with `object-fit: contain`, zero overflow and no scripts. |
+| Browser diagnostics | 0 | Main and share/raw-image tabs emitted zero console warnings or errors. |
+| Tracked evidence | 0 | `evidence/live-provider-local-diagnostic-2026-07-14.json` records only policy identities, status, timing, byte counts, hashes and quality metrics; prompts, output text, provider origin and credentials are absent. |
+| Publication authority | blocked | These are direct-upstream and loopback diagnostics, not Candidate-bound protected live-acceptance receipts. Repository audit still has 17 blockers; no Candidate, publication or rollout was attempted. |

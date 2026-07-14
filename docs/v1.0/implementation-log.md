@@ -4809,3 +4809,42 @@ Windows crossed the previous generated-contract failure, then completed
 TypeScript, the content-addressed Web build and byte upload. This is read-only
 CI evidence; it does not claim protected platform-stage, signing, live provider
 acceptance, publication or user rollout.
+
+The final Draft PR head `a11dbd884054130ecec145c0a2625ec4eb2c4cca` was then
+revalidated by hosted run `29296947260`; Ubuntu quality, Windows x64, macOS
+arm64/x64 and cross-runner byte stability all completed successfully.
+
+## 2026-07-14 - Live upstream recovery and final WebUI browser rerun
+
+The previously unavailable administrator upstream recovered. A bounded,
+redaction-safe local diagnostic confirmed that its model catalog now contains
+`gpt-5.6-sol`; one medium-reasoning Responses request completed with HTTP 200
+under the frozen 272,000-token policy. A single Image 2 admission completed
+before load was increased. Four no-retry requests were then admitted with a
+hard worker limit of four: all four completed, all four content digests were
+unique and no 5xx response occurred.
+
+One real rectangle/mask edit changed the selected mug region while retaining
+`0.991565` mean non-target similarity. Visual inspection confirmed the intended
+localized colour edit. The source image, mask and result remain ignored local
+quality artifacts; the tracked evidence contains only byte counts, durations,
+digests and normalized quality metrics.
+
+The final content-addressed Web build was rerun through the in-app browser at
+1440x900. The browser confirmed model selection before the first message,
+independent Image 2 mode, bottom-anchored normal Composer, continuous reasoning
+replacement, fit-first full image preview, exact structured-retouch summary,
+output-location mutation, memory reset/undo, persistent Full Access with
+one-click revoke, unified extension management, formal Feishu/Tencent Docs
+entries and task-ID continuation. The real Control Plane share renderer was
+also exercised on loopback; it preserved user/Agent role order and served a
+complete 1800x1100 image. Main and share tabs emitted zero console warnings or
+errors.
+
+This closes the former direct-upstream availability diagnostic only. It does
+not create an official `live-model`, `live-image` or `cdp-acceptance` receipt:
+the probe used the existing local administrator policy rather than the
+protected device-flow session, and the WebUI used a loopback Runtime fixture.
+The immutable Candidate, managed Gateway, protected runner, repository
+governance and publication readback remain mandatory. Evidence:
+`evidence/live-provider-local-diagnostic-2026-07-14.json`.
