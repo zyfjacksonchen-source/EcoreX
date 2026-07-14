@@ -4953,6 +4953,17 @@ The ignored 21,857-byte report is
 `.ci/connector-login-boundary-supply-chain.json`, SHA-256
 `355cbb87ca9bfc30cda141b9998c347fadbf67225b612a07f7fbee1ebc6f4d31`.
 
-This is current-source evidence only. It does not replace a green hosted run
-on the final commit, protected Candidate receipts, managed provider/CDP
-acceptance, repository governance, publication readback or user rollout.
+The source and local-evidence commit
+`3b9d684a311828d913f3c29c626f6b68f4e6cd95` is independently green in hosted
+run `29357245885`. Ubuntu quality, Windows x64, macOS arm64, macOS x64 and the
+final cross-runner byte comparison all completed successfully. Draft PR #2 is
+still CLEAN and intentionally remains a Draft.
+
+A fresh read-only repository audit remains byte-for-byte identical to the
+previous receipt: 17 blockers, comprising Actions policy 3, main protection 1,
+six Environments, four isolated Runner roles and three protected workflows not
+active on main. The 3,167-byte ignored report is
+`.ci/github-release-readiness-connector-boundary.json`, SHA-256
+`d9eb1f478307b94f418de7f855be36700fd140e294b8ab4693f10cd01338a2c8`.
+No governance setting, protected Candidate, managed provider/CDP gate, release,
+rollout or user installation was changed.
