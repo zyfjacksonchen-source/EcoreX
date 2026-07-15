@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from ecorex.release.repository_readiness import (
 
 ROOT = Path(__file__).resolve().parents[2]
 HEAD = "a" * 40
+GOVERNANCE_CLI = ROOT / "scripts" / "manage-v1-github-release-repository.py"
 
 
 def _healthy_snapshot() -> dict[str, Any]:
@@ -235,6 +237,8 @@ def test_governance_apply_is_head_fenced_and_idempotent_put_only() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "GET" and request.url.path.endswith("/branches/main"):
             return _response(200, {"commit": {"sha": HEAD}})
+        if request.method == "GET" and "/environments/" in request.url.path:
+            return _response(404, {"message": "Not Found"})
         if request.method == "PUT":
             writes.append((request.url.path, json.loads(request.content)))
             if "/actions/permissions" in request.url.path:
@@ -292,6 +296,189 @@ def test_governance_apply_is_head_fenced_and_idempotent_put_only() -> None:
         "contexts": sorted(contract.status_checks),
         "strict": True,
     }
+
+
+def test_billing_plan_failure_is_typed_and_compensates_new_environment() -> None:
+    requests: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        if request.method == "GET" and request.url.path.endswith("/branches/main"):
+            return _response(200, {"commit": {"sha": HEAD}})
+        if request.method == "GET" and "/environments/" in request.url.path:
+            return _response(404, {"message": "Not Found"})
+        if request.method == "PUT" and "/environments/" in request.url.path:
+            return _response(
+                422,
+                {
+                    "message": (
+                        "Failed to create the environment protection rule. "
+                        "Please ensure the billing plan supports the required "
+                        "reviewers protection rule."
+                    ),
+                    "status": "422",
+                },
+            )
+        if request.method == "DELETE" and "/environments/" in request.url.path:
+            return _empty_response()
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    with httpx.Client(transport=httpx.MockTransport(handler), trust_env=False) as http:
+        client = GitHubRepositoryAdminClient(
+            owner="owner",
+            repository="repository",
+            credentials=EnvironmentGitHubAdminCredential(
+                {"TOKEN": "github-token"}, variable="TOKEN"
+            ),
+            client=http,
+        )
+        with pytest.raises(RepositoryReadinessError) as captured:
+            client.apply_governance(expected_head=HEAD, reviewer_id=123)
+
+    assert captured.value.code == "github_environment_reviewers_plan_unsupported"
+    assert captured.value.retryable is False
+    assert captured.value.compensated is True
+    assert requests == [
+        ("GET", "/repos/owner/repository/branches/main"),
+        ("GET", "/repos/owner/repository/environments/ecorex-release-stage"),
+        ("PUT", "/repos/owner/repository/environments/ecorex-release-stage"),
+        ("DELETE", "/repos/owner/repository/environments/ecorex-release-stage"),
+    ]
+
+
+def test_billing_plan_failure_never_deletes_an_existing_environment() -> None:
+    deletes = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal deletes
+        if request.method == "GET" and request.url.path.endswith("/branches/main"):
+            return _response(200, {"commit": {"sha": HEAD}})
+        if request.method == "GET" and "/environments/" in request.url.path:
+            return _response(200, {"name": "ecorex-release-stage"})
+        if request.method == "PUT" and "/environments/" in request.url.path:
+            return _response(
+                422,
+                {
+                    "message": (
+                        "Failed to create the environment protection rule. "
+                        "Please ensure the billing plan supports the required "
+                        "reviewers protection rule."
+                    )
+                },
+            )
+        if request.method == "DELETE":
+            deletes += 1
+            return _empty_response()
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    with httpx.Client(transport=httpx.MockTransport(handler), trust_env=False) as http:
+        client = GitHubRepositoryAdminClient(
+            owner="owner",
+            repository="repository",
+            credentials=EnvironmentGitHubAdminCredential(
+                {"TOKEN": "github-token"}, variable="TOKEN"
+            ),
+            client=http,
+        )
+        with pytest.raises(RepositoryReadinessError) as captured:
+            client.apply_governance(expected_head=HEAD, reviewer_id=123)
+
+    assert captured.value.code == "github_environment_reviewers_plan_unsupported"
+    assert captured.value.compensated is False
+    assert deletes == 0
+
+
+def test_failed_environment_compensation_is_explicit_and_retryable() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path.endswith("/branches/main"):
+            return _response(200, {"commit": {"sha": HEAD}})
+        if request.method == "GET" and "/environments/" in request.url.path:
+            return _response(404, {"message": "Not Found"})
+        if request.method == "PUT" and "/environments/" in request.url.path:
+            return _response(422, {"message": "validation failed"})
+        if request.method == "DELETE" and "/environments/" in request.url.path:
+            return _response(503, {"message": "unavailable"})
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    with httpx.Client(transport=httpx.MockTransport(handler), trust_env=False) as http:
+        client = GitHubRepositoryAdminClient(
+            owner="owner",
+            repository="repository",
+            credentials=EnvironmentGitHubAdminCredential(
+                {"TOKEN": "github-token"}, variable="TOKEN"
+            ),
+            client=http,
+        )
+        with pytest.raises(RepositoryReadinessError) as captured:
+            client.apply_governance(expected_head=HEAD, reviewer_id=123)
+
+    assert captured.value.code == "github_environment_partial_cleanup_failed"
+    assert captured.value.retryable is True
+    assert captured.value.compensated is False
+
+
+def test_governance_cli_records_compensation_without_remote_body(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = importlib.util.spec_from_file_location("repository_governance_cli", GOVERNANCE_CLI)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    class FakeClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def snapshot(self, _contract: object) -> dict[str, Any]:
+            return _healthy_snapshot()
+
+        def resolve_user_id(self, _login: str) -> int:
+            return 123
+
+        def apply_governance(self, **_kwargs: object) -> None:
+            raise RepositoryReadinessError(
+                "github_environment_reviewers_plan_unsupported",
+                compensated=True,
+            )
+
+    monkeypatch.setattr(module, "GitHubRepositoryAdminClient", FakeClient)
+    monkeypatch.setattr(
+        module,
+        "EnvironmentGitHubAdminCredential",
+        lambda **_kwargs: object(),
+    )
+    output = tmp_path / "governance.json"
+
+    exit_code = module.main(
+        [
+            "bootstrap",
+            "--repository",
+            "owner/repository",
+            "--confirm-repository",
+            "owner/repository",
+            "--expected-head",
+            HEAD,
+            "--reviewer-login",
+            "reviewer",
+            "--output",
+            str(output),
+        ]
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert exit_code == 1
+    assert report["status"] == "failed"
+    assert report["action"] == "none"
+    assert report["error"] == "github_environment_reviewers_plan_unsupported"
+    assert report["compensated"] is True
+    assert "billing" not in json.dumps(report).casefold()
 
 
 def test_snapshot_reads_environment_reviewers_without_secret_values() -> None:

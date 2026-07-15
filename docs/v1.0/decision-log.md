@@ -1981,3 +1981,26 @@
   changes local view state and never changes backend order or Thread facts.
 - Consequence: v0.3 discovery behavior remains familiar, long work cannot vanish
   behind collapse, and multiple projects do not unexpectedly expand together.
+
+## ADR-113 - Repository governance compensates non-atomic Environment creation
+
+- Status: accepted.
+- Root cause: GitHub may create an empty Environment and then return HTTP 422
+  while rejecting its required-reviewer protection because the private
+  repository plan does not support that rule. Treating the request as simply
+  failed leaves an unmanaged release surface behind; blindly deleting on any
+  error could instead destroy a pre-existing administrator-owned Environment.
+- Decision: governance reads each Environment before mutation, classifies the
+  known billing rejection as
+  `github_environment_reviewers_plan_unsupported`, and compensates only when
+  the Environment was absent before the attempted write. The operator receipt
+  records `compensated=true`. A pre-existing Environment is never deleted, and
+  compensation failure has the distinct retryable code
+  `github_environment_partial_cleanup_failed`.
+- Security boundary: required reviewers remain part of the release contract.
+  The tool does not silently create reviewer-free Environments, make a private
+  repository public or convert a billing limitation into a passing audit.
+- Consequence: failed governance application returns the repository to its
+  prior Environment inventory whenever safe, while a plan upgrade or another
+  explicit administrator decision remains necessary before protected release
+  work can begin.

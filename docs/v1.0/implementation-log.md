@@ -5293,3 +5293,46 @@ covers both themes and all locked viewports, zero axe violations, forced
 colours/reduced motion, compact copy feedback, v0.3 “查看更多”, Skills,
 administrator operations, reasoning persistence, image preview and structured
 Retouch. This replaces the earlier browser evidence for the corrected source.
+
+## 2026-07-16 - Main governance closure and Environment compensation
+
+PR #2 was squash-merged into `main` at exact source
+`c8fd385c5600664a2f9217c64773af5fed2fd21f`. Main run `29436909984`
+passed Ubuntu quality, Windows x64, macOS arm64/x64 and Cross-runner byte
+stability. Selected GitHub-owned Actions, read-only workflow permissions, the
+five strict required checks, administrator enforcement, required review,
+linear history and conversation resolution are now active. All four reviewed
+v1 workflows are enabled on main; the live audit consequently falls from 17
+to 10 blockers.
+
+Applying the protected Environment contract exposed a GitHub API transaction
+boundary: on this private user-owned repository plan, the Environment PUT
+creates an empty Environment and then returns HTTP 422 because required
+reviewers are unsupported. The initially orphaned `ecorex-release-stage` was
+verified and removed. No reviewer-free substitute was created, no repository
+visibility was changed and no Candidate or release job was dispatched.
+
+The governance client now checks whether each Environment existed before its
+write, boundedly classifies the GitHub rejection, and deletes only an
+Environment that was absent before the failed attempt. A pre-existing
+Environment is never deleted. The JSON receipt carries a non-sensitive stable
+error and explicit compensation fact; a cleanup failure remains visible as a
+separate retryable error. Thirteen focused governance tests and Ruff/Python
+compilation pass. A real bootstrap invocation against exact main reproduced
+`github_environment_reviewers_plan_unsupported`, returned `compensated=true`
+and left the repository with zero Environments, proving the compensation path
+against GitHub rather than only a mock transport. Fifty-seven adjacent
+Candidate, handoff, publisher, gate and evidence tests also pass with one
+explicit environment skip; the 675-file source, dependency-lock and both
+Runtime/server schema-authority gates remain green.
+
+Draft PR #3 run `29438953446` on exact source
+`f49f187d3a114aeb4312f62dfb0a5867221257bd` then passed Ubuntu quality,
+Windows x64, macOS arm64/x64 and Cross-runner byte stability; all five Jobs
+succeeded. This is source and governance-tool evidence only and does not
+substitute for a protected Candidate or live release receipt.
+
+The remaining ten blockers are the six named protected Environments and four
+distinct online role-labelled Runners. The v0.3 “查看更多” behavior remains an
+independent browser-tested v1 contract: eight collapsed rows per general or
+project scope, with current, pinned and running sessions always included.

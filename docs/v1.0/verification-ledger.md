@@ -1824,3 +1824,20 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Exact hosted correction | 0 | Run `29435356727` on exact source `f3142be9545c87ec461a9478f6c1771c14ea9266` passed Ubuntu quality, Windows x64, macOS arm64/x64 and Cross-runner byte stability; all five Jobs succeeded. |
 | Draft PR state | 0 | PR #2 remains Draft, CLEAN and MERGEABLE with the five exact-head checks successful. |
 | Publication | blocked | No protected Candidate, managed provider/CDP receipt, publication, rollout or installed-user update was attempted. |
+
+## Main merge, repository governance and compensation - 2026-07-16
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Reviewed merge | 0 | PR #2 was squash-merged; exact main is `c8fd385c5600664a2f9217c64773af5fed2fd21f`. |
+| Main hosted matrix | 0 | Run `29436909984` passed Ubuntu quality, Windows x64, macOS arm64/x64 and Cross-runner byte stability; all five Jobs succeeded. |
+| Actions/workflow governance | 0 | Actions are selected GitHub-owned only, workflow default permission is read, review approval is disabled and all four reviewed v1 workflows are active. |
+| Main protection | 0 | Five strict checks, required PR review, administrator enforcement, linear history, conversation resolution and force-push/deletion denial are active. |
+| Post-governance audit | 2 | Exactly 10 blockers remain: six protected Environments and four distinct online role-labelled Runners. The clean 2,669-byte report SHA-256 is `f7736921e2287080ef1425c356bd1accaa4705c41a1c490c9d5c5698d92404cf`. |
+| Environment plan boundary | 1 | GitHub rejects required reviewers for this private user-owned repository plan with HTTP 422. The API had partially created one empty Environment; it was deleted and the inventory returned to zero. No reviewer-free workaround or visibility change occurred. |
+| Focused governance hardening | 0 | 13 tests pass with one upstream warning; Ruff and Python compilation pass. New and pre-existing Environment failures, compensation failure and non-sensitive CLI receipts are covered. |
+| Adjacent release contracts | 0 | 57 Candidate, publication-handoff, publisher, gate and evidence tests pass with one explicit environment skip. The 675-file source, dependency-lock and Runtime/server schema-authority gates pass. |
+| Real compensation integration | 1 expected | Bootstrap against exact main reports `github_environment_reviewers_plan_unsupported`, `compensated=true`, action `none`, and leaves Environment count zero. |
+| Exact hosted hardening | 0 | Draft PR #3 run `29438953446` on `f49f187d3a114aeb4312f62dfb0a5867221257bd` passed Ubuntu quality, Windows x64, macOS arm64/x64 and Cross-runner byte stability; all five Jobs succeeded. |
+| v0.3 view-more retention | 0 | Existing 45/45 browser evidence continues to cover independent general/project 8 → all → 8 expansion and operational inclusion of an old running Thread. |
+| Publication | blocked | Protected Candidate, live provider/CDP acceptance, release publication, rollout and installed-user update were not attempted. |

@@ -18,10 +18,17 @@ from typing import Any, Mapping, Protocol, runtime_checkable
 class RepositoryReadinessError(RuntimeError):
     """Non-sensitive repository readiness or governance failure."""
 
-    def __init__(self, code: str, *, retryable: bool = False) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        retryable: bool = False,
+        compensated: bool = False,
+    ) -> None:
         super().__init__(code)
         self.code = code
         self.retryable = retryable
+        self.compensated = compensated
 
 
 @runtime_checkable

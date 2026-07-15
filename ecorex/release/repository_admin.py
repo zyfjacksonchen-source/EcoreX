@@ -22,6 +22,9 @@ _SAFE_PART = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 _SAFE_LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 _MAX_JSON_BYTES = 2 * 1024 * 1024
+_ENVIRONMENT_REVIEWERS_PLAN_MARKER = (
+    "billing plan supports the required reviewers protection rule"
+)
 
 
 class GitHubRepositoryAdminClient:
@@ -191,20 +194,45 @@ class GitHubRepositoryAdminClient:
             raise RepositoryReadinessError("default_branch_head_changed")
 
         for environment in expected.environments:
-            self._json_request(
-                "PUT",
-                f"{self.repository_path}/environments/{quote(environment.name, safe='')}",
-                accepted={200},
-                payload={
-                    "deployment_branch_policy": {
-                        "custom_branch_policies": False,
-                        "protected_branches": True,
-                    },
-                    "prevent_self_review": False,
-                    "reviewers": [{"id": reviewer_id, "type": "User"}],
-                    "wait_timer": 0,
-                },
+            environment_path = (
+                f"{self.repository_path}/environments/"
+                f"{quote(environment.name, safe='')}"
             )
+            prior_status = self._json_request(
+                "GET", environment_path, accepted={200, 404}
+            )[0]
+            try:
+                self._json_request(
+                    "PUT",
+                    environment_path,
+                    accepted={200},
+                    payload={
+                        "deployment_branch_policy": {
+                            "custom_branch_policies": False,
+                            "protected_branches": True,
+                        },
+                        "prevent_self_review": False,
+                        "reviewers": [{"id": reviewer_id, "type": "User"}],
+                        "wait_timer": 0,
+                    },
+                )
+            except RepositoryReadinessError as error:
+                if prior_status != 404:
+                    raise
+                try:
+                    self._json_request(
+                        "DELETE", environment_path, accepted={204, 404}
+                    )
+                except RepositoryReadinessError:
+                    raise RepositoryReadinessError(
+                        "github_environment_partial_cleanup_failed",
+                        retryable=True,
+                    ) from None
+                raise RepositoryReadinessError(
+                    error.code,
+                    retryable=error.retryable,
+                    compensated=True,
+                ) from None
 
         self._json_request(
             "PUT",
@@ -280,31 +308,28 @@ class GitHubRepositoryAdminClient:
                     self._oauth_scopes = frozenset(
                         scope.strip() for scope in scopes.split(",") if scope.strip()
                     )
-                if response.status_code not in accepted:
-                    raise RepositoryReadinessError(
-                        "github_repository_api_rejected",
-                        retryable=response.status_code in {408, 425, 429, 502, 503, 504},
-                    )
                 if response.headers.get("content-encoding", "identity").casefold() != "identity":
                     raise RepositoryReadinessError("github_repository_compressed_response")
+                body = _bounded_response_body(response)
+                if response.status_code not in accepted:
+                    value = _decode_json_response(response, body, required=False)
+                    raise RepositoryReadinessError(
+                        _rejection_code(
+                            method=method,
+                            path=path,
+                            status=response.status_code,
+                            value=value,
+                        ),
+                        retryable=response.status_code
+                        in {408, 425, 429, 502, 503, 504},
+                    )
                 if response.status_code == 204:
-                    if any(response.iter_bytes()):
+                    if body:
                         raise RepositoryReadinessError(
                             "github_repository_invalid_response"
                         )
                     return response.status_code, None
-                content_type = response.headers.get("content-type", "").split(";", 1)[0]
-                if content_type != "application/json":
-                    raise RepositoryReadinessError("github_repository_invalid_response")
-                body = bytearray()
-                for chunk in response.iter_bytes():
-                    body.extend(chunk)
-                    if len(body) > _MAX_JSON_BYTES:
-                        raise RepositoryReadinessError("github_repository_response_too_large")
-                try:
-                    value = json.loads(bytes(body).decode("utf-8"), object_pairs_hook=_unique_object)
-                except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
-                    raise RepositoryReadinessError("github_repository_invalid_response") from None
+                value = _decode_json_response(response, body, required=True)
                 return response.status_code, value
             finally:
                 response.close()
@@ -316,6 +341,55 @@ class GitHubRepositoryAdminClient:
             ) from None
         finally:
             token = ""
+
+
+def _bounded_response_body(response: httpx.Response) -> bytes:
+    body = bytearray()
+    for chunk in response.iter_bytes():
+        body.extend(chunk)
+        if len(body) > _MAX_JSON_BYTES:
+            raise RepositoryReadinessError("github_repository_response_too_large")
+    return bytes(body)
+
+
+def _decode_json_response(
+    response: httpx.Response,
+    body: bytes,
+    *,
+    required: bool,
+) -> Any:
+    content_type = response.headers.get("content-type", "").split(";", 1)[0]
+    if content_type != "application/json":
+        if required:
+            raise RepositoryReadinessError("github_repository_invalid_response")
+        return None
+    try:
+        return json.loads(body.decode("utf-8"), object_pairs_hook=_unique_object)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        if required:
+            raise RepositoryReadinessError(
+                "github_repository_invalid_response"
+            ) from None
+        return None
+
+
+def _rejection_code(
+    *,
+    method: str,
+    path: str,
+    status: int,
+    value: Any,
+) -> str:
+    message = value.get("message") if isinstance(value, Mapping) else None
+    if (
+        method == "PUT"
+        and status == 422
+        and "/environments/" in path
+        and isinstance(message, str)
+        and _ENVIRONMENT_REVIEWERS_PLAN_MARKER in message.casefold()
+    ):
+        return "github_environment_reviewers_plan_unsupported"
+    return "github_repository_api_rejected"
 
 
 def _branch_protection_payload(

@@ -137,6 +137,9 @@ def main(argv: list[str] | None = None) -> int:
     except (RepositoryReadinessError, ValueError, TypeError) as error:
         code = error.code if isinstance(error, RepositoryReadinessError) else str(error)
         report["error"] = code
+        report["compensated"] = bool(
+            isinstance(error, RepositoryReadinessError) and error.compensated
+        )
         report["status"] = "failed"
         _write_json(args.output, report)
         return 1

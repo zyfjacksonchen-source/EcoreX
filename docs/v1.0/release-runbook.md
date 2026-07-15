@@ -44,6 +44,16 @@ protected Environments. It does not invent Runner registrations, configuration
 values or credentials, so the follow-up audit remains blocked until those real
 inputs exist.
 
+GitHub private repositories whose billing plan does not support required
+Environment reviewers fail with
+`github_environment_reviewers_plan_unsupported`. Bootstrap checks whether each
+Environment existed before its write. If GitHub leaves a new empty Environment
+behind while rejecting the reviewer rule, EcoreX deletes only that newly
+attempted Environment and records `compensated=true`; it never deletes or
+rewrites a pre-existing Environment on failure. Upgrade the repository plan or
+move the repository only through an explicit administrator decision. Do not
+create reviewer-free release Environments as a workaround.
+
 ```powershell
 $head = git rev-parse origin/main
 $env:ECOREX_GITHUB_ADMIN_TOKEN = gh auth token
