@@ -1,8 +1,9 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { ChevronDown, FileText, Image, Plus, Send, ShieldCheck, Square, Workflow, X } from "lucide-react";
-import { useRef, useState } from "react";
+import * as Tooltip from "@radix-ui/react-tooltip";
+import { ChevronDown, FileText, Image, Plus, Send, ShieldCheck, Square, X } from "lucide-react";
+import { lazy, Suspense, useRef, useState } from "react";
 
-import type { SendDisposition, TaskMode } from "../state/useRuntimeSession.ts";
+import type { SendDisposition } from "../state/useRuntimeSession.ts";
 import type {
   ConnectorCatalogItem,
   ConnectorInstanceProjection,
@@ -16,6 +17,8 @@ import type {
 } from "../state/connectors.ts";
 import { ConnectorPopover } from "./ConnectorPopover.tsx";
 import { IconButton } from "./IconButton.tsx";
+
+const ComposerModelSelector = lazy(() => import("./ComposerModelSelector.tsx"));
 
 interface ComposerProps {
   connectors: ConnectorCatalogItem[];
@@ -39,7 +42,6 @@ interface ComposerProps {
   ) => Promise<boolean>;
   onClearConnectorError: () => void;
   onClearConnectorNotice: () => void;
-  mode: TaskMode;
   active: boolean;
   submitting: boolean;
   modelAvailable: boolean;
@@ -59,7 +61,6 @@ interface ComposerProps {
   permissionDescription: string;
   onChatModelChange: (modelId: string) => void;
   onImageModelChange: (modelId: string) => void;
-  onModeChange: (mode: TaskMode) => void;
   onSend: (
     input: string,
     disposition: SendDisposition,
@@ -88,7 +89,6 @@ export function Composer({
   onDisconnectConnector,
   onClearConnectorError,
   onClearConnectorNotice,
-  mode,
   active,
   submitting,
   modelAvailable,
@@ -103,7 +103,6 @@ export function Composer({
   permissionDescription,
   onChatModelChange,
   onImageModelChange,
-  onModeChange,
   onSend,
   onUploadAttachment,
   onInterrupt,
@@ -115,8 +114,6 @@ export function Composer({
   const [attachmentUploading, setAttachmentUploading] = useState(false);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const activeModels = mode === "image" ? imageModels : chatModels;
-  const activeModel = mode === "image" ? imageModel : chatModel;
   const remaining = quota?.remaining;
   const remainingLabel = typeof remaining === "number" ? remaining.toLocaleString("zh-CN") : "—";
   const formatTokens = (value: number | null | undefined) => {
@@ -144,7 +141,7 @@ export function Composer({
     }
   };
 
-  const addFiles = async (files: FileList | null) => {
+  const addFiles = async (files: FileList | readonly File[] | null) => {
     if (!files?.length || attachmentUploading) return;
     const candidates = [...files].slice(0, Math.max(0, 20 - attachments.length));
     if (!candidates.length) {
@@ -191,8 +188,8 @@ export function Composer({
           id="ecorex-composer"
           value={draft}
           rows={2}
-          placeholder={mode === "image" ? "描述要生成或修改的图片…" : "描述要完成的办公任务…"}
-          aria-describedby="ecorex-composer-note"
+          placeholder="给小芯发送消息，支持粘贴图片或文件"
+          aria-describedby={!modelAvailable ? "ecorex-composer-note" : undefined}
           onChange={(event) => {
             setDraft(event.target.value);
             setSendFailed(false);
@@ -202,6 +199,15 @@ export function Composer({
               event.preventDefault();
               void submit();
             }
+          }}
+          onPaste={(event) => {
+            const pastedFiles = [...event.clipboardData.items]
+              .filter((item) => item.kind === "file")
+              .map((item) => item.getAsFile())
+              .filter((file): file is File => file !== null);
+            if (!pastedFiles.length) return;
+            event.preventDefault();
+            void addFiles(pastedFiles);
           }}
         />
         <div className="ex-composer-toolbar">
@@ -225,24 +231,6 @@ export function Composer({
             >
               <Plus aria-hidden="true" />
             </button>
-            <div className="ex-mode-switch" role="group" aria-label="任务类型">
-              <button
-                type="button"
-                aria-pressed={mode === "office"}
-                onClick={() => onModeChange("office")}
-              >
-                <Workflow aria-hidden="true" />
-                办公
-              </button>
-              <button
-                type="button"
-                aria-pressed={mode === "image"}
-                onClick={() => onModeChange("image")}
-              >
-                <Image aria-hidden="true" />
-                图片
-              </button>
-            </div>
             <ConnectorPopover
               catalog={connectors}
               loadState={connectorLoadState}
@@ -257,23 +245,26 @@ export function Composer({
               onClearError={onClearConnectorError}
               onClearNotice={onClearConnectorNotice}
             />
-            <label className="ex-composer-model">
-              <span className="ex-visually-hidden">{mode === "image" ? "图片模型" : "对话模型"}</span>
-              <select
-                value={activeModel}
-                disabled={!activeModels.length}
-                aria-label={mode === "image" ? "图片模型" : "对话模型"}
-                onChange={(event) => {
-                  if (mode === "image") onImageModelChange(event.target.value);
-                  else onChatModelChange(event.target.value);
-                }}
-              >
-                {activeModels.map((model) => (
-                  <option value={model.model_id} key={model.model_id}>{model.display_name}</option>
-                ))}
-              </select>
-              <ChevronDown aria-hidden="true" />
-            </label>
+            <Suspense fallback={(
+                <button
+                  className="ex-composer-model-trigger"
+                  type="button"
+                  aria-label="选择模型"
+                  disabled
+                >
+                  <span>{chatModels.find((model) => model.model_id === chatModel)?.display_name || "选择模型"}</span>
+                  <ChevronDown aria-hidden="true" />
+                </button>
+            )}>
+              <ComposerModelSelector
+                chatModels={chatModels}
+                imageModels={imageModels}
+                chatModel={chatModel}
+                imageModel={imageModel}
+                onChatModelChange={onChatModelChange}
+                onImageModelChange={onImageModelChange}
+              />
+            </Suspense>
           </div>
           <div className="ex-send-tools" data-active={active ? "true" : "false"}>
             {active ? (
@@ -324,14 +315,29 @@ export function Composer({
         {attachmentError ? <p className="ex-composer-attachment-error" role="status">{attachmentError}</p> : null}
       </div>
       <div className="ex-composer-meta">
-        <span className="ex-permission-inline" title={permissionDescription}>
-          <ShieldCheck aria-hidden="true" />{permissionLabel}
-        </span>
-        <p className="ex-composer-note" id="ecorex-composer-note" role={!modelAvailable ? "status" : undefined}>
-          {modelAvailable
-            ? "需要权限或信息时会询问；长任务可排队，重启后继续。"
-            : sendUnavailableReason || "模型服务未连接；可查看历史和本地产物。"}
-        </p>
+        <Tooltip.Root delayDuration={900}>
+          <Tooltip.Trigger asChild>
+            <span
+              className="ex-permission-inline"
+              tabIndex={0}
+              aria-label={`${permissionLabel}。${permissionDescription}需要权限或信息时会询问；长任务可排队，重启后继续。`}
+            >
+              <ShieldCheck aria-hidden="true" />{permissionLabel}
+            </span>
+          </Tooltip.Trigger>
+          <Tooltip.Portal>
+            <Tooltip.Content className="ex-tooltip ex-permission-tooltip" side="top" sideOffset={8}>
+              <span>{permissionDescription}</span>
+              <span>需要权限或信息时会询问；长任务可排队，重启后继续。</span>
+              <Tooltip.Arrow className="ex-tooltip-arrow" />
+            </Tooltip.Content>
+          </Tooltip.Portal>
+        </Tooltip.Root>
+        {!modelAvailable ? (
+          <p className="ex-composer-note is-error" id="ecorex-composer-note" role="status">
+            {sendUnavailableReason || "模型服务未连接；可查看历史和本地产物。"}
+          </p>
+        ) : null}
         <div className="ex-usage-meter" role="group" aria-label="额度与上下文用量">
           <span title="今日已完成模型响应中由服务返回的 Token 用量">今日 <b>{formatTokens(usage?.today.total_tokens)}</b></span>
           <i aria-hidden="true" />

@@ -10,9 +10,11 @@ const MAX_INITIAL_GZIP_BYTES = 150 * 1024;
 const MAX_CHUNK_BYTES = 500 * 1024;
 const FEATURE_STEMS = [
   "ArtifactPreviewDialog",
+  "ComposerModelSelector",
   "DeviceLoginCard",
   "ExtensionManagerDialog",
   "InteractionStack",
+  "NewConversationProjectSelector",
   "OfficeMarkdown",
   "ReplayDialog",
   "RetouchWorkspace",

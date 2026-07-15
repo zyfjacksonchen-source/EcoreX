@@ -231,11 +231,10 @@ test("ordinary controls keep Codex density and reveal a light frame only while i
   expect(isTransparent(active.borderColor), `active border: ${active.borderColor}`).toBe(false);
   expect(isTransparent(active.backgroundColor), `active background: ${active.backgroundColor}`).toBe(false);
 
-  const modeGroup = guardedPage.getByRole("group", { name: "任务类型" });
-  await expect(modeGroup).toBeVisible();
-  const imageModeButton = modeGroup.getByRole("button", { name: "图片" });
-  await expect(imageModeButton).toHaveAttribute("aria-pressed", "false");
-  const contextualIdle = await readVisualState(imageModeButton);
+  await expect(guardedPage.getByRole("group", { name: "任务类型" })).toHaveCount(0);
+  const modelTrigger = guardedPage.getByRole("button", { name: "选择模型" });
+  await expect(modelTrigger).toBeVisible();
+  const contextualIdle = await readVisualState(modelTrigger);
   expect(contextualIdle).toMatchObject({
     borderStyle: "solid",
     borderWidth: "1px",
@@ -246,15 +245,23 @@ test("ordinary controls keep Codex density and reveal a light frame only while i
   expect(isTransparent(contextualIdle.borderColor), `context idle border: ${contextualIdle.borderColor}`).toBe(true);
   expect(isTransparent(contextualIdle.backgroundColor), `context idle background: ${contextualIdle.backgroundColor}`).toBe(true);
 
-  await imageModeButton.hover();
-  const contextualHover = await readVisualState(imageModeButton);
+  await modelTrigger.hover();
+  const contextualHover = await readVisualState(modelTrigger);
   expect(isTransparent(contextualHover.borderColor), `context hover border: ${contextualHover.borderColor}`).toBe(false);
   expect(isTransparent(contextualHover.backgroundColor), `context hover background: ${contextualHover.backgroundColor}`).toBe(false);
 
-  await imageModeButton.focus();
-  const contextualFocus = await readVisualState(imageModeButton);
+  await modelTrigger.focus();
+  const contextualFocus = await readVisualState(modelTrigger);
   expect(isTransparent(contextualFocus.borderColor), `context focus border: ${contextualFocus.borderColor}`).toBe(false);
   expect(isTransparent(contextualFocus.backgroundColor), `context focus background: ${contextualFocus.backgroundColor}`).toBe(false);
+
+  await modelTrigger.click();
+  const modelMenu = guardedPage.locator(".ex-model-menu");
+  await expect(modelMenu).toBeVisible();
+  await expect(modelMenu).toContainText("Agent 模型");
+  await expect(modelMenu).toContainText("图片模型");
+  await expect(modelMenu).toContainText("按意图自动调用");
+  expect(await modelMenu.getByRole("menuitemradio").count()).toBeGreaterThanOrEqual(2);
 });
 
 test("Composer renders server-reported quota, token usage, and context window", async ({ guardedPage }) => {
@@ -272,6 +279,11 @@ test("Composer is centered only while choosing a new conversation and otherwise 
   const workspace = guardedPage.locator(".ex-workspace");
   const normalComposer = guardedPage.locator(".ex-workspace-bottom .ex-composer-region");
   await expect(normalComposer).toBeVisible();
+  await expect(normalComposer.locator("textarea")).toHaveAttribute("placeholder", "给小芯发送消息，支持粘贴图片或文件");
+  expect(await normalComposer.evaluate((element) => getComputedStyle(element).borderTopStyle)).toBe("none");
+  await expect(guardedPage.locator(".ex-permission-tooltip")).toHaveCount(0);
+  await normalComposer.locator(".ex-permission-inline").focus();
+  await expect(guardedPage.locator(".ex-permission-tooltip")).toBeVisible();
   const [workspaceBox, normalComposerBox] = await Promise.all([workspace.boundingBox(), normalComposer.boundingBox()]);
   expect(workspaceBox).not.toBeNull();
   expect(normalComposerBox).not.toBeNull();
@@ -282,6 +294,8 @@ test("Composer is centered only while choosing a new conversation and otherwise 
   const newConversationComposer = chooser.locator(".ex-composer-region");
   await expect(chooser).toBeVisible();
   await expect(newConversationComposer).toBeVisible();
+  await expect(chooser.locator(".ex-new-conversation-options > button")).toHaveCount(2);
+  expect(await chooser.locator("h1").evaluate((element) => getComputedStyle(element).fontSize)).toBe("20px");
   await expect(guardedPage.locator(".ex-workspace-bottom")).toHaveCount(0);
   const [chooserBox, newComposerBox] = await Promise.all([chooser.boundingBox(), newConversationComposer.boundingBox()]);
   expect(chooserBox).not.toBeNull();

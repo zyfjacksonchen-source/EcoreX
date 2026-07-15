@@ -209,6 +209,14 @@
   padding-inline: var(--space-6);
 }
 
+.ex-new-conversation-start > h1 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--text-heading-size);
+  line-height: var(--text-heading-line);
+  font-weight: 600;
+}
+
 .ex-new-conversation-composer {
   width: 100%;
   margin: var(--space-8) auto 0;
@@ -220,8 +228,7 @@
   background: transparent;
 }
 
-.ex-new-conversation-options,
-.ex-new-project-options {
+.ex-new-conversation-options {
   width: 100%;
   display: grid;
   gap: var(--space-2);
@@ -251,6 +258,28 @@
   border-color: var(--color-rule-strong);
   color: var(--color-ink);
   background: var(--color-selected);
+}
+
+.ex-new-conversation-options .ex-new-project-trigger {
+  grid-template-columns: var(--icon-size-lg) minmax(0, 1fr) var(--icon-size-sm);
+}
+
+.ex-new-project-chevron {
+  align-self: center;
+  color: var(--color-ink-subtle);
+}
+
+.ex-project-menu {
+  width: min(320px, calc(100vw - var(--space-6)));
+  max-height: min(360px, calc(100dvh - var(--space-10)));
+  overflow-y: auto;
+}
+
+.ex-project-menu-item > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ex-new-conversation-options button > svg {
@@ -829,7 +858,6 @@
 
 .ex-composer-region {
   padding: var(--space-3) var(--space-4) var(--space-2);
-  border-top: 1px solid var(--color-rule);
   background: var(--color-surface);
 }
 
@@ -939,8 +967,7 @@
 
 .ex-composer-toolbar,
 .ex-composer-tools,
-.ex-send-tools,
-.ex-mode-switch {
+.ex-send-tools {
   display: flex;
   align-items: center;
 }
@@ -958,54 +985,89 @@
   gap: var(--space-2);
 }
 
-.ex-composer-model {
-  position: relative;
+.ex-composer-model-trigger {
   min-width: 0;
-  display: inline-flex;
-  align-items: center;
-}
-
-.ex-composer-model select {
-  max-width: 180px;
-  height: var(--target-desktop);
-  padding: 0 var(--space-6) 0 var(--space-2);
+  max-width: 220px;
+  min-height: var(--target-desktop);
+  padding: 0 var(--space-2);
   border: 1px solid transparent;
   border-radius: var(--radius-control);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
   color: var(--color-ink-muted);
   background: transparent;
-  appearance: none;
+  font-size: var(--text-ui-size);
+  line-height: var(--text-ui-line);
+  white-space: nowrap;
   cursor: pointer;
 }
 
-.ex-composer-model > svg {
-  position: absolute;
-  right: var(--space-2);
-  width: var(--icon-size-sm);
-  height: var(--icon-size-sm);
-  pointer-events: none;
+.ex-composer-model-trigger > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.ex-composer-model select:focus-visible,
-.ex-composer-model select:hover {
+.ex-composer-model-trigger > svg {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  flex: none;
+}
+
+.ex-composer-model-trigger:focus-visible,
+.ex-composer-model-trigger[data-state="open"] {
   border-color: var(--control-hover-border);
   color: var(--color-ink);
   background: var(--control-hover-surface);
 }
 
-.ex-mode-switch {
-  padding: var(--space-1);
-  border-radius: var(--radius-control);
-  background: var(--color-hover);
+.ex-composer-model-trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
-.ex-mode-switch button {
-  min-height: 28px;
-  padding-inline: var(--space-2);
+.ex-model-menu {
+  width: min(300px, calc(100vw - var(--space-6)));
+  max-height: min(420px, calc(100dvh - var(--space-10)));
+  overflow-y: auto;
 }
 
-.ex-mode-switch button[aria-pressed="true"] {
-  background: var(--color-surface);
-  color: var(--color-ink);
+.ex-model-menu-label {
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  color: var(--color-ink-muted);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
+.ex-model-menu-label small {
+  margin-inline-start: var(--space-1);
+  color: var(--color-ink-subtle);
+  font: inherit;
+}
+
+.ex-model-menu-item {
+  position: relative;
+  padding-inline-start: var(--space-8);
+}
+
+.ex-model-menu-item > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ex-model-menu-check {
+  position: absolute;
+  inset-inline-start: var(--space-3);
+  display: inline-grid;
+  place-items: center;
+}
+
+.ex-model-menu-check svg {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
 }
 
 .ex-composer-tool,
@@ -1026,17 +1088,24 @@
   min-height: 24px;
   margin: var(--space-1) auto 0;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: var(--space-3);
 }
 
 .ex-composer-note {
+  grid-column: 1 / -1;
+  grid-row: 2;
   margin: 0;
   color: var(--color-ink-subtle);
   text-align: center;
   font-size: var(--text-caption-size);
   line-height: var(--text-caption-line);
+}
+
+.ex-composer-note.is-error {
+  color: var(--color-danger);
+  text-align: start;
 }
 
 .ex-permission-inline,
@@ -1053,6 +1122,39 @@
   font-size: var(--text-caption-size);
   line-height: var(--text-caption-line);
   white-space: nowrap;
+}
+
+.ex-permission-inline {
+  border-radius: var(--radius-compact);
+  cursor: help;
+}
+
+.ex-permission-inline:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.ex-permission-tooltip > span {
+  display: block;
+}
+
+.ex-permission-tooltip > span + span {
+  margin-top: var(--space-1);
+  color: var(--color-ink-muted);
+}
+
+.ex-usage-meter {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+}
+
+@media (hover: hover) {
+  .ex-composer-model-trigger:not(:disabled):hover {
+    border-color: var(--control-hover-border);
+    color: var(--color-ink);
+    background: var(--control-hover-surface);
+  }
 }
 
 .ex-permission-inline svg,
@@ -2449,10 +2551,6 @@ button.ex-artifact-primary {
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
-  .ex-composer-note {
-    display: none;
-  }
-
   .ex-artifact {
     grid-template-columns: minmax(0, 1fr) var(--target-touch);
   }
@@ -2484,11 +2582,8 @@ button.ex-artifact-primary {
     gap: var(--space-1);
   }
 
-  .ex-composer-model {
+  .ex-composer-model-trigger {
     margin-left: auto;
-  }
-
-  .ex-composer-model select {
     max-width: 120px;
   }
 
@@ -2551,7 +2646,7 @@ button.ex-artifact-primary {
     max-width: 138px;
   }
 
-  .ex-composer-model select {
+  .ex-composer-model-trigger {
     max-width: 132px;
   }
 

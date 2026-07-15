@@ -216,16 +216,16 @@ const VIEWPORT_JS = `
         visible: navigationCandidates.some((element) => visible(element, view)),
       },
       model_selector: {
-        present: Boolean(find('[aria-label="对话模型"], [aria-label="图片模型"]')),
-        visible: visible(find('[aria-label="对话模型"], [aria-label="图片模型"]'), view),
+        present: Boolean(find('[aria-label="选择模型"]')),
+        visible: visible(find('[aria-label="选择模型"]'), view),
       },
       composer: {
         present: Boolean(find("#ecorex-composer")),
         visible: visible(find("#ecorex-composer"), view),
       },
-      task_type: {
-        present: Boolean(find('[aria-label="任务类型"]')),
-        visible: visible(find('[aria-label="任务类型"]'), view),
+      intent_routing: {
+        present: Boolean(find('[aria-label="选择模型"]')) && !find('[aria-label="任务类型"]'),
+        visible: visible(find('[aria-label="选择模型"]'), view),
       },
       artifact_shelf: {
         present: Boolean(find('[aria-label="任务产物"]')),
@@ -241,7 +241,7 @@ const VIEWPORT_JS = `
       controls.navigation.visible,
       controls.model_selector.visible,
       controls.composer.visible,
-      controls.task_type.visible,
+      controls.intent_routing.visible,
       frame.dataset.scenario !== "artifact" || controls.artifact_shelf.present,
     ];
     const report = {
@@ -340,7 +340,7 @@ const VIEWPORT_JS = `
         && report.key_controls.navigation.present
         && report.key_controls.model_selector.present
         && report.key_controls.composer.present
-        && report.key_controls.task_type.present
+        && report.key_controls.intent_routing.present
         && (frame.dataset.scenario !== "artifact" || report.key_controls.artifact_shelf.present);
       if (
         report
@@ -421,6 +421,7 @@ function turn(
     terminal_reason: ["completed", "failed", "cancelled", "interrupted", "superseded"].includes(status)
       ? status
       : null,
+    inherited: false,
     created_at: NOW,
     updated_at: NOW,
   };
@@ -434,6 +435,7 @@ function item(itemId, turnId, role, text, threadId = "thread-ga") {
     kind: "message",
     status: "completed",
     content: { role, text },
+    inherited: false,
     created_at: NOW,
     updated_at: NOW,
   };
@@ -454,6 +456,7 @@ function reasoningItem(itemId, turnId, atomId, text) {
       presentation: "visible",
       archived_reason: null,
     },
+    inherited: false,
     created_at: NOW,
     updated_at: NOW,
   };
@@ -1331,7 +1334,7 @@ async function handleApi(holder, req, res, url) {
       account_id: "account-ga",
       location_alias: state.outputLocation,
       revision: state.outputRevision,
-      output_policy_snapshot_id: `outpolicy_ga_${state.outputRevision}`,
+      output_policy_snapshot_id: `outpol_${state.outputRevision.toString(16).padStart(64, "0")}`,
       updated_at: new Date().toISOString(),
     });
   }
@@ -1349,7 +1352,7 @@ async function handleApi(holder, req, res, url) {
       account_id: "account-ga",
       location_alias: state.outputLocation,
       revision: state.outputRevision,
-      output_policy_snapshot_id: `outpolicy_ga_${state.outputRevision}`,
+      output_policy_snapshot_id: `outpol_${state.outputRevision.toString(16).padStart(64, "0")}`,
       updated_at: new Date().toISOString(),
     });
   }
@@ -1370,7 +1373,7 @@ async function handleApi(holder, req, res, url) {
       materialization_id: `materialization_${"e".repeat(24)}`,
       artifact_id: artifactId,
       revision_id: request.revision_id,
-      output_policy_snapshot_id: `outpolicy_ga_${state.outputRevision}`,
+      output_policy_snapshot_id: `outpol_${state.outputRevision.toString(16).padStart(64, "0")}`,
       location_alias: state.outputLocation,
       display_name: selected.display_name,
       sha256: selected.sha256,
@@ -1944,6 +1947,8 @@ async function handleApi(holder, req, res, url) {
           connected: false,
           state: "reauthorization_required",
           reason: "missing_required_scope",
+          authority_refresh_revision_id: null,
+          mutation: null,
         });
       }
       if (state.scenario === "connector-restart") {
@@ -1954,6 +1959,8 @@ async function handleApi(holder, req, res, url) {
           connected: false,
           state: "authorization_required",
           reason: "auth_completion_interrupted",
+          authority_refresh_revision_id: null,
+          mutation: null,
         });
       }
       if (state.connectorLoginCheckCount === 1) {
@@ -1963,6 +1970,9 @@ async function handleApi(holder, req, res, url) {
           connector_id: connector.connector_id,
           connected: false,
           state: "awaiting_callback",
+          reason: null,
+          authority_refresh_revision_id: null,
+          mutation: null,
         });
       }
       pending.status = "resolved";
@@ -1989,6 +1999,7 @@ async function handleApi(holder, req, res, url) {
         connector_id: connector.connector_id,
         connected: true,
         state: "connected",
+        reason: null,
         authority_refresh_revision_id: "revision-authority-ga",
         mutation,
       });
@@ -2298,6 +2309,7 @@ async function handleApi(holder, req, res, url) {
             change_summary: workspace.job.change_summary,
             inspection_regions: workspace.job.inspection_regions,
           },
+          inherited: false,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         };
@@ -2393,6 +2405,7 @@ async function handleApi(holder, req, res, url) {
           })),
           preview: { artifact_id: result.artifact_id, revision_id: result.revision_id, mime_type: result.mime_type },
         },
+        inherited: false,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
@@ -2545,7 +2558,7 @@ function gaViewportMatrix() {
       viewport: "iframe contentWindow.innerWidth/innerHeight exactly match the declared CSS viewport",
       horizontal_overflow: "document and body content width do not exceed the iframe viewport by more than one CSS pixel",
       clickable_labels: "visible button, link, summary and role=button text occupies one rendered line",
-      key_controls: ["navigation", "model_selector", "composer", "task_type", "artifact_shelf"],
+      key_controls: ["navigation", "model_selector", "composer", "intent_routing", "artifact_shelf"],
     },
   };
 }

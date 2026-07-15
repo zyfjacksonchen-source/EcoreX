@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scanned_at": "2026-07-10",
+  "scanned_at": "2026-07-15",
   "target": "EcoreX React WebUI",
   "framework": {
     "name": "React",
@@ -14,9 +14,11 @@
   },
   "palette": {
     "source": "desktop/src/styles/tokens.css",
-    "format": "mixed OKLCH and legacy literal values",
-    "anchor": "warm EcoreX orange",
-    "requires_normalization": true
+    "format": "semantic OKLCH tokens",
+    "anchor": "Codex neutral surfaces and blue interaction accent with EcoreX orange brand actions",
+    "dark_reference": "surface #111111, ink #fcfcfc, accent #0169cc, contrast 60",
+    "light_reference": "surface #ffffff, ink #1a1c1f, accent #339cff, contrast 45",
+    "requires_normalization": false
   },
   "motion": {
     "library": null,

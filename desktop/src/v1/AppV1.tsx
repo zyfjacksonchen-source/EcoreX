@@ -320,12 +320,9 @@ export function AppV1() {
   const connected = runtime.state.streamState === "open" || !runtime.state.thread;
   const authenticated = bootstrap?.login.authenticated === true;
   const modelServiceReady = authenticated && bootstrap?.model_service.state === "ready";
-  const activeModels = runtime.mode === "image" ? bootstrap?.models.image : bootstrap?.models.chat;
-  const modelAvailable = modelServiceReady && Boolean(activeModels?.length);
-  const modelUnavailable = modelServiceReady && !activeModels?.length
-    ? runtime.mode === "image"
-      ? "无可用图片模型，请联系管理员。"
-      : "无可用办公模型，请联系管理员。"
+  const modelAvailable = modelServiceReady && Boolean(bootstrap?.models.chat.length);
+  const modelUnavailable = modelServiceReady && !bootstrap?.models.chat.length
+    ? "无可用 Agent 模型，请联系管理员。"
     : modelUnavailableMessage(authenticated, bootstrap?.model_service.reason);
   const accessLabel = bootstrap?.permissions.full_access ? "完全访问" : "默认权限";
   const accessDescription = bootstrap?.permissions.full_access
@@ -483,7 +480,6 @@ export function AppV1() {
       onDisconnectConnector={runtime.disconnectConnector}
       onClearConnectorError={runtime.clearConnectorError}
       onClearConnectorNotice={runtime.clearConnectorNotice}
-      mode={runtime.mode}
       active={runtime.activeTurn !== null}
       submitting={runtime.submitting || Boolean(runtime.switchingThreadId)}
       modelAvailable={modelAvailable}
@@ -498,7 +494,6 @@ export function AppV1() {
       permissionDescription={accessDescription}
       onChatModelChange={runtime.setChatModel}
       onImageModelChange={runtime.setImageModel}
-      onModeChange={runtime.setMode}
       onSend={runtime.sendMessage}
       onUploadAttachment={runtime.uploadInputAttachment}
       onInterrupt={() => void runtime.interrupt()}

@@ -30,11 +30,11 @@ const bootstrap = {
 } as unknown as BootstrapResponse;
 
 test("bootstrap selects chat and image defaults before the first Turn", () => {
-  assert.equal(preferredModel(bootstrap, "office"), "ecorex-chat");
-  assert.equal(preferredModel(bootstrap, "image"), "gpt-image-2");
+  assert.equal(preferredModel(bootstrap.models.chat), "ecorex-chat");
+  assert.equal(preferredModel(bootstrap.models.image), "gpt-image-2");
 });
 
-test("image mode never replaces the Agent model and selector changes affect only new Turns", () => {
+test("automatic image routing never replaces the Agent model and selector changes affect only new Turns", () => {
   const active = {
     turn_id: "turn-one",
     thread_id: "thread-one",

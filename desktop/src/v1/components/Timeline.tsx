@@ -21,6 +21,7 @@ import { ArtifactShelf } from "./ArtifactShelf.tsx";
 
 const OfficeMarkdown = lazy(() => import("./OfficeMarkdown.tsx"));
 const TimelineActivity = lazy(() => import("./TimelineActivity.tsx"));
+const NewConversationProjectSelector = lazy(() => import("./NewConversationProjectSelector.tsx"));
 
 interface TimelineProps {
   items: ItemProjection[];
@@ -242,27 +243,29 @@ export function Timeline({
             <Workflow aria-hidden="true" />
             <span><strong>通用会话</strong><small>不绑定项目，适合临时问答、资料整理和轻量任务。</small></span>
           </button>
-          <div className="ex-new-project-options">
-            {projects.map((project) => (
+          <Suspense fallback={(
               <button
-                className={newConversationProject?.project_id === project.project_id ? "is-selected" : ""}
+                className={`ex-new-project-trigger${newConversationProject ? " is-selected" : ""}`}
                 type="button"
-                key={project.project_id}
-                aria-pressed={newConversationProject?.project_id === project.project_id}
-                title={project.project_path}
-                onClick={() => onSelectConversationProject(project)}
+                aria-label="选择项目会话"
+                aria-pressed={Boolean(newConversationProject)}
+                disabled
               >
                 <FolderOpen aria-hidden="true" />
-                <span><strong>{project.name}</strong><small>使用此项目文件夹开启独立项目会话。</small></span>
+                <span>
+                  <strong>{newConversationProject?.name || "项目会话"}</strong>
+                  <small>正在准备项目列表…</small>
+                </span>
               </button>
-            ))}
-            <button type="button" disabled={projectPickerBusy} onClick={() => void onPickProject().then((project) => {
-              if (project) onSelectConversationProject(project);
-            })}>
-              <FolderOpen className={projectPickerBusy ? "ex-spin" : ""} aria-hidden="true" />
-              <span><strong>{projectPickerBusy ? "正在选择" : "项目文件夹"}</strong><small>选择已有目录，作为本次会话的项目上下文。</small></span>
-            </button>
-          </div>
+          )}>
+            <NewConversationProjectSelector
+              projects={projects}
+              selectedProject={newConversationProject}
+              pickerBusy={projectPickerBusy}
+              onSelect={onSelectConversationProject}
+              onPick={onPickProject}
+            />
+          </Suspense>
         </div>
         <p className="ex-new-conversation-note">
           {newConversationProject

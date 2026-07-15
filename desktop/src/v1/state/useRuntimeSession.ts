@@ -17,6 +17,7 @@ import type {
   ItemProjection,
   LiveReplayResponse,
   MemorySnapshot,
+  ModelDescriptor,
   MockReplayResponse,
   OutputLocationAlias,
   OutputLocationOption,
@@ -68,7 +69,6 @@ type ClientOperationOutboxInstance = InstanceType<
   ClientOperationSupportModule["ClientOperationOutbox"]
 >;
 
-export type TaskMode = "office" | "image";
 export type SendDisposition = Exclude<ClientOperationDisposition, "create">;
 export type LoadState = "loading" | "ready" | "error";
 
@@ -101,10 +101,8 @@ interface PendingOutputPreferenceMutation {
 }
 
 export function preferredModel(
-  bootstrap: BootstrapResponse,
-  mode: TaskMode,
+  models: readonly ModelDescriptor[],
 ): string {
-  const models = mode === "image" ? bootstrap.models.image : bootstrap.models.chat;
   return models.find((model) => model.is_default)?.model_id ?? models[0]?.model_id ?? "";
 }
 
@@ -198,7 +196,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   const [systemHealthLoadState, setSystemHealthLoadState] = useState<LoadState>("loading");
   const [systemHealthError, setSystemHealthError] = useState<string | null>(null);
   const [conversationUsage, setConversationUsage] = useState<ConversationUsageProjection | null>(null);
-  const [mode, setMode] = useState<TaskMode>("office");
   const [chatModel, setChatModel] = useState("");
   const [imageModel, setImageModel] = useState("");
   const [threads, setThreads] = useState<ThreadProjection[]>([]);
@@ -297,8 +294,8 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     const action = { type: "bootstrap.received" as const, bootstrap };
     stateRef.current = runtimeReducer(stateRef.current, action);
     dispatch(action);
-    setChatModel((current) => current || preferredModel(bootstrap, "office"));
-    setImageModel((current) => current || preferredModel(bootstrap, "image"));
+    setChatModel((current) => current || preferredModel(bootstrap.models.chat));
+    setImageModel((current) => current || preferredModel(bootstrap.models.image));
   }, [client]);
 
   const loadBootstrap = useCallback(async (signal?: AbortSignal) => {
@@ -1579,8 +1576,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
       const activeThreadId = stateRef.current.thread?.thread_id;
       return activeThreadId ? refreshConversationUsage(activeThreadId) : Promise.resolve(false);
     },
-    mode,
-    setMode,
     chatModel,
     setChatModel,
     imageModel,

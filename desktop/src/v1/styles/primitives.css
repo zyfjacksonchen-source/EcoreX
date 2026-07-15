@@ -19,7 +19,8 @@
 .ex-sidebar-action,
 .ex-task-row,
 .ex-composer-tool,
-.ex-mode-switch button,
+.ex-composer-model-trigger,
+.ex-new-project-trigger,
 .ex-new-conversation-options button,
 .ex-composer-attachment button,
 .ex-disposition,
@@ -41,7 +42,8 @@
 .ex-sidebar-action,
 .ex-task-row,
 .ex-composer-tool,
-.ex-mode-switch button,
+.ex-composer-model-trigger,
+.ex-new-project-trigger,
 .ex-new-conversation-options button,
 .ex-composer-attachment button,
 .ex-disposition,
@@ -63,7 +65,8 @@
 .ex-sidebar-action svg,
 .ex-task-row svg,
 .ex-composer-tool svg,
-.ex-mode-switch svg,
+.ex-composer-model-trigger svg,
+.ex-new-project-trigger svg,
 .ex-disposition svg,
 .ex-send-button svg {
   width: var(--icon-size);
@@ -75,8 +78,8 @@
 .ex-button.is-primary,
 .ex-send-button {
   border-color: transparent;
-  color: var(--color-accent-ink);
-  background: var(--color-accent);
+  color: var(--color-brand-ink);
+  background: var(--color-brand);
   font-weight: 600;
 }
 
@@ -117,7 +120,8 @@
 .ex-sidebar-action:active,
 .ex-task-row:active,
 .ex-composer-tool:active,
-.ex-mode-switch button:active,
+.ex-composer-model-trigger:active,
+.ex-new-project-trigger:active,
 .ex-disposition:active,
 .ex-send-button:active,
 .ex-artifact-primary:active,
@@ -133,7 +137,8 @@
 .ex-sidebar-action:not(:disabled):active,
 .ex-task-row:not(.is-current):not(:disabled):active,
 .ex-composer-tool:not(:disabled):active,
-.ex-mode-switch button:not([aria-pressed="true"]):not(:disabled):active,
+.ex-composer-model-trigger:not(:disabled):active,
+.ex-new-project-trigger:not(.is-selected):not(:disabled):active,
 .ex-disposition:not(:disabled):active,
 .ex-artifact-primary:active,
 .ex-retouch-review-tabs button:not(.is-active):not(:disabled):active,
@@ -156,6 +161,8 @@
 .ex-task-row:disabled,
 .ex-send-button:disabled,
 .ex-composer-tool:disabled,
+.ex-composer-model-trigger:disabled,
+.ex-new-project-trigger:disabled,
 .ex-retouch-review-tabs button:disabled,
 .ex-retouch-region-list > button:disabled,
 .ex-artifact-sheet-action:disabled {
@@ -184,7 +191,8 @@
 .ex-sidebar-action:focus-visible,
 .ex-task-row:not(.is-current):focus-visible,
 .ex-composer-tool:focus-visible,
-.ex-mode-switch button:not([aria-pressed="true"]):focus-visible,
+.ex-composer-model-trigger:focus-visible,
+.ex-new-project-trigger:not(.is-selected):focus-visible,
 .ex-disposition:focus-visible,
 .ex-artifact-primary:focus-visible,
 .ex-retouch-review-tabs button:not(.is-active):focus-visible,
@@ -207,7 +215,8 @@
   .ex-sidebar-action:not(:disabled):hover,
   .ex-task-row:not(.is-current):not(:disabled):hover,
   .ex-composer-tool:not(:disabled):hover,
-  .ex-mode-switch button:not([aria-pressed="true"]):not(:disabled):hover,
+  .ex-composer-model-trigger:not(:disabled):hover,
+  .ex-new-project-trigger:not(.is-selected):not(:disabled):hover,
   .ex-disposition:not(:disabled):hover,
   .ex-retouch-review-tabs button:not(.is-active):not(:disabled):hover,
   .ex-retouch-region-list > button:not(.is-selected):not(:disabled):hover,
@@ -224,9 +233,9 @@
 
   .ex-button.is-primary:hover,
   .ex-send-button:hover:not(:disabled) {
-    border-color: var(--color-accent-strong);
-    background: var(--color-accent-strong);
-    color: var(--color-accent-ink);
+    border-color: var(--color-brand-strong);
+    background: var(--color-brand-strong);
+    color: var(--color-brand-ink);
   }
 
   .ex-button.is-danger:not(:disabled):hover {
@@ -364,7 +373,8 @@
   .ex-sidebar-action,
   .ex-task-row,
   .ex-composer-tool,
-  .ex-mode-switch button,
+  .ex-composer-model-trigger,
+  .ex-new-project-trigger,
   .ex-disposition,
   .ex-send-button,
   .ex-retouch-review-tabs button,

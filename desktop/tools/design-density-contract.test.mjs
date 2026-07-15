@@ -45,20 +45,20 @@ const CONTROL_BASE_CLASSES = [
   "ex-sidebar-action",
   "ex-task-row",
   "ex-composer-tool",
+  "ex-composer-model-trigger",
+  "ex-new-project-trigger",
   "ex-disposition",
   "ex-send-button",
   "ex-artifact-primary",
   "ex-artifact-sheet-action",
 ];
 const CONTEXT_CONTROL_OWNERS = [
-  "ex-mode-switch",
   "ex-composer-attachment",
   "ex-new-conversation-options",
   "ex-retouch-review-tabs",
   "ex-retouch-region-list",
 ];
 const CONTEXT_CONTROL_SELECTORS = [
-  ".ex-mode-switch button",
   ".ex-composer-attachment button",
   ".ex-new-conversation-options button",
   ".ex-retouch-review-tabs button",
@@ -174,7 +174,7 @@ test("ordinary controls are frameless until hover, focus, or active state", () =
 
   const primary = rule(primitives, ".ex-button.is-primary,\n.ex-send-button {");
   assert.match(primary, /border-color:\s*transparent;/);
-  assert.match(primary, /background:\s*var\(--color-accent\);/);
+  assert.match(primary, /background:\s*var\(--color-brand\);/);
   const newTaskHover = rule(primitives, ".ex-new-task:not(:disabled):hover,");
   assert.match(newTaskHover, /border-color:\s*var\(--control-hover-border\);/);
   assert.match(newTaskHover, /background:\s*var\(--control-hover-surface\);/);
@@ -186,7 +186,7 @@ test("ordinary controls are frameless until hover, focus, or active state", () =
   assert.match(selected, /background:\s*var\(--color-selected\);/);
 
   const primaryHover = rule(primitives, ".ex-button.is-primary:hover,");
-  assert.match(primaryHover, /border-color:\s*var\(--color-accent-strong\);/);
+  assert.match(primaryHover, /border-color:\s*var\(--color-brand-strong\);/);
   const dangerHover = rule(primitives, ".ex-button.is-danger:not(:disabled):hover {");
   assert.match(dangerHover, /border-color:\s*var\(--color-danger\);/);
 });
@@ -238,7 +238,7 @@ test("feature styles cannot quietly re-box ordinary buttons", () => {
     .map((className) => `\\.${className}\\b`)
     .join("|");
   const ordinary = new RegExp(
-    `(?:${directClassPattern}|\\.ex-mode-switch\\s+button\\b|\\.ex-retouch-region-list\\s*>\\s*button\\b|\\.ex-retouch-review-tabs\\s+button\\b)`,
+    `(?:${directClassPattern}|\\.ex-retouch-region-list\\s*>\\s*button\\b|\\.ex-retouch-review-tabs\\s+button\\b)`,
     "u",
   );
   const semanticOrState = /(?::(?:hover|focus-visible|active|disabled)|\.is-(?:primary|danger|current|active|selected)|\[(?:aria-pressed|data-state)|\.ex-(?:new-task|send-button)\b)/;

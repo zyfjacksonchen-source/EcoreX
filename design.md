@@ -19,16 +19,21 @@ Modern-minimal · quiet utilitarian office workbench.
 
 ## Theme
 
-Warm tinted neutrals with one EcoreX orange anchor. Accent occupies at most 5%
-of a viewport. Light and dark themes express hierarchy through tonal surfaces.
+Codex tonal DNA supplies the canvas, ink, blue interaction accent, contrast,
+and semantic colours. EcoreX orange remains the restrained brand/action note;
+the two colours never compete inside one control. Chromatic colour occupies at
+most 5% of a viewport.
 
-- Light: paper `oklch(0.975 0.008 72)`, surface `oklch(0.995 0.004 72)`,
-  ink `oklch(0.205 0.018 55)`, rule `oklch(0.875 0.014 68)`.
-- Dark: paper `oklch(0.155 0.016 55)`, surface `oklch(0.205 0.018 55)`,
-  ink `oklch(0.94 0.008 72)`, rule `oklch(0.35 0.024 58)`.
-- Accent: `oklch(0.72 0.17 55)` with accent ink
-  `oklch(0.205 0.018 55)`.
-- Focus: light `oklch(0.56 0.18 252)` · dark `oklch(0.76 0.13 250)`.
+- Light Codex base: surface `#ffffff` → `oklch(1 0 0)`, ink `#1a1c1f` →
+  `oklch(0.225591 0.006566 258.364)`, accent `#339cff` →
+  `oklch(0.682034 0.173444 251.11)`, contrast setting `45`.
+- Dark Codex base: surface `#111111` → `oklch(0.177638 0 0)`, ink `#fcfcfc` →
+  `oklch(0.991069 0 0)`, accent `#0169cc` →
+  `oklch(0.528649 0.173447 254.975)`, contrast setting `60`.
+- Blue owns focus, links, selection, toggles, and capability state. EcoreX
+  orange owns primary product actions such as Send and branded emphasis.
+- Semantic diff and Skill colours are exported from the supplied Codex theme;
+  components consume named tokens only.
 
 ## Typography
 
@@ -78,7 +83,7 @@ of a viewport. Light and dark themes express hierarchy through tonal surfaces.
 - Every button reserves a transparent 1px border at rest so layout never
   shifts; no button draws a persistent outline. Hover, keyboard focus, and
   active states may reveal one subtle semantic border.
-- Primary: warm accent fill, dark accent ink, control radius, specific verb;
+- Primary: EcoreX brand fill, matching brand ink, control radius, specific verb;
   its idle border remains transparent and its hover border follows the fill.
 - Secondary: transparent at rest, with a quiet tonal surface and rule only on
   hover/focus/active. Danger actions use red text without an idle box.
@@ -98,7 +103,8 @@ of a viewport. Light and dark themes express hierarchy through tonal surfaces.
 
 ## What pages MUST share
 
-- Warm brand anchor, system CJK type, Lucide stroke voice, four-point rhythm.
+- Codex tonal base, EcoreX brand anchor, system CJK type, Lucide stroke voice,
+  and four-point rhythm.
 - Shape, surface, elevation, z-index, motion, focus, and responsive contracts.
 - Backend projections are authoritative; UI components never infer business
   state from filenames, local storage, or optimistic routing guesses.
