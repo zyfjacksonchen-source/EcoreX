@@ -5023,3 +5023,21 @@ the ignored 21,857-byte report SHA-256 is
 `0a0dc45a87435a7b6fbfce47ec2b7768e53366643724ed24779acdcf62ea49dc`.
 Hosted execution and the live governance audit remain separate evidence and
 are not claimed by this local checkpoint.
+
+Source commit `fd05f42413b2563e34f15421e58991248f3bdee2` is now independently
+green in hosted run `29382330122`. Ubuntu quality, Windows x64, macOS arm64,
+macOS x64 and final cross-runner byte stability all completed successfully.
+The five check runs contain zero annotations, and the complete hosted log has
+no Node 20 forced-runtime or deprecated-Action warning. This proves the locked
+Node 24 Action closure executes on all current hosted platforms, including the
+v8 artifact download used by the final byte comparison.
+
+Draft PR #2 is CLEAN, MERGEABLE and remains intentionally Draft. The fresh
+read-only governance audit is byte-identical to the prior receipt: 17 blockers
+(Actions policy 3, main protection 1, Environments 6, isolated Runner roles 4
+and protected workflows inactive on main 3). The 3,167-byte ignored report
+SHA-256 remains
+`d9eb1f478307b94f418de7f855be36700fd140e294b8ab4693f10cd01338a2c8`.
+The deleted CowAgent workflows therefore remain active on the current main
+branch until a reviewed merge; no protected Candidate, publication or rollout
+was attempted.

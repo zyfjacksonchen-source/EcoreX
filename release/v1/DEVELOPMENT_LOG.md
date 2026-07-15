@@ -254,3 +254,10 @@ Starlette's upstream `python_multipart` pending-deprecation notice.
 - This is local pre-push evidence only. Hosted multi-platform execution,
   repository governance, protected Candidate, publication and rollout remain
   separate gates.
+- Hosted run `29382330122` independently passed Ubuntu quality, Windows x64,
+  macOS arm64/x64 and final cross-runner byte stability on exact source commit
+  `fd05f42413b2563e34f15421e58991248f3bdee2`. All five check runs have zero
+  annotations and the full logs contain no Node 20/deprecated-Action warning.
+- PR #2 is Draft, CLEAN and MERGEABLE. The read-only live audit remains the
+  same 17-blocker receipt (`d9eb1f47...38a2c8`); no protected Candidate,
+  governance mutation, publication or rollout was attempted.

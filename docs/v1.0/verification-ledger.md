@@ -1750,3 +1750,8 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Static and byte gates | 0 | Ruff/compile, design, legacy, public download, dependency, Runtime/Server schema, source/diff and reproducibility gates pass across 656 admitted files. Byte contract SHA-256 `a6cc2b6c...14a64b36`. |
 | Current-source supply chain | 0 | 23 locked/licensed Runtime packages, 282 npm packages and 467 production files pass; inventory `e488a5e9...0db67edb`; ignored report SHA-256 `0a0dc45a...2ea49dc`. |
 | External mutation | 0 | This checkpoint does not claim hosted execution, governance mutation, protected Candidate, publication or rollout. |
+| Exact hosted source head | 0 | Run `29382330122` on `fd05f42413b2563e34f15421e58991248f3bdee2` passed Ubuntu quality, Windows x64, macOS arm64/x64 and Cross-runner byte stability; all five Jobs succeeded. |
+| Hosted Action diagnostics | 0 | All five check runs contain zero annotations; complete hosted logs contain no Node 20 forced-runtime or deprecated-Action warning. checkout/setup/upload/download Node 24 revisions executed successfully. |
+| Draft PR state | 0 | PR #2 is Draft, CLEAN and MERGEABLE at exact source head `fd05f424...3bdee2`. |
+| Live repository audit | 2 | The 3,167-byte report is byte-identical at exactly 17 blockers: Actions 3, branch 1, Environments 6, isolated Runners 4 and protected workflows inactive on main 3. SHA-256 `d9eb1f47...38a2c8`; no governance mutation occurred. |
+| Publication | blocked | The two retired CowAgent workflows remain active on current main until reviewed merge. No protected Candidate, publication, rollout or user update was attempted. |
