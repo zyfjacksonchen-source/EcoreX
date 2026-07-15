@@ -858,7 +858,7 @@
 
 .ex-composer-region {
   padding: var(--space-3) var(--space-4) var(--space-2);
-  background: var(--color-surface);
+  background: var(--color-workspace-surface);
 }
 
 .ex-composer {
@@ -866,7 +866,7 @@
   margin: 0 auto;
   border: 1px solid var(--color-rule-strong);
   border-radius: var(--radius-card);
-  background: var(--color-raised);
+  background: var(--color-composer-surface);
   overflow: clip;
 }
 

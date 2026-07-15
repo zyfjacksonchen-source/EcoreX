@@ -13,6 +13,30 @@ body,
 html,
 body {
   overflow-x: clip;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+  width: var(--space-3);
+  height: var(--space-3);
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar-thumb {
+  border: var(--space-1) solid transparent;
+  border-radius: var(--radius-pill);
+  background: var(--scrollbar-thumb);
+  background-clip: padding-box;
+}
+
+@media (hover: hover) {
+  *::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+    background-clip: padding-box;
+  }
 }
 
 body {
@@ -46,7 +70,6 @@ textarea {
 .ex-workspace {
   min-width: 0;
   min-height: 0;
-  background: var(--color-surface);
 }
 
 .ex-sidebar {
@@ -55,6 +78,7 @@ textarea {
   border-radius: var(--radius-none);
   display: flex;
   flex-direction: column;
+  background: var(--color-canvas);
   overflow: clip;
 }
 
@@ -63,6 +87,7 @@ textarea {
   border-block-width: 0;
   border-right-width: 0;
   border-radius: var(--radius-panel);
+  background: var(--color-workspace-surface);
   overflow: clip;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
@@ -481,7 +506,7 @@ textarea {
   grid-template-columns: minmax(160px, 1fr) auto;
   align-items: center;
   gap: var(--space-3);
-  background: var(--color-surface);
+  background: var(--color-workspace-surface);
 }
 
 .ex-header-title,
@@ -613,6 +638,7 @@ textarea {
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
+  background: var(--color-workspace-surface);
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
 

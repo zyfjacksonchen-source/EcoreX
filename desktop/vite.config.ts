@@ -53,6 +53,12 @@ function productionChunk(
   context: { getModuleInfo: ModuleInfoReader },
 ): string | undefined {
   const normalized = id.replaceAll("\\", "/");
+  if (
+    normalized.endsWith("/src/v1/api/runtimeContract.ts")
+    || normalized.endsWith("/src/v1/api/generatedRuntimeContract.ts")
+  ) {
+    return "ecorex-contract-core";
+  }
   if (normalized.includes("/node_modules/")) {
     if (belongsOnlyToOfficeContent(id, context.getModuleInfo)) {
       return "office-content-runtime";

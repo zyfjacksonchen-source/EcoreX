@@ -48,6 +48,8 @@ const modes = {
 for (const [mode, source] of Object.entries(modes)) {
   test(`${mode} design tokens preserve body, caption, accent, and two-ring focus contrast`, () => {
     const surface = token(source, "color-surface");
+    const workspace = token(source, "color-workspace-surface");
+    const session = token(source, "color-session-emphasis");
     const raised = token(source, "color-raised");
     const ink = token(source, "color-ink");
     const muted = token(source, "color-ink-muted");
@@ -61,6 +63,9 @@ for (const [mode, source] of Object.entries(modes)) {
     const danger = token(source, "color-danger");
 
     assert.ok(contrast(ink, surface) >= 4.5, `${mode}: ink/surface`);
+    assert.ok(contrast(ink, workspace) >= 4.5, `${mode}: ink/workspace`);
+    assert.ok(contrast(subtle, workspace) >= 4.5, `${mode}: subtle/workspace`);
+    assert.ok(contrast(ink, session) >= 4.5, `${mode}: ink/session emphasis`);
     assert.ok(contrast(muted, surface) >= 4.5, `${mode}: muted/surface`);
     assert.ok(contrast(subtle, raised) >= 4.5, `${mode}: subtle/raised`);
     assert.ok(contrast(accentInk, accent) >= 4.5, `${mode}: accent ink/accent`);

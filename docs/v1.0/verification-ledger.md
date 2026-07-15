@@ -1774,3 +1774,21 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Hosted diagnostics | 0 | All five checks contain zero annotations; complete logs contain zero Node 20 forced-runtime or deprecated-Action warnings. |
 | Draft PR and live audit | 2 | PR #2 is Draft, CLEAN and MERGEABLE at the exact source head. Read-only governance audit remains byte-identical at 17 blockers; 3,167-byte receipt SHA-256 `d9eb1f47...38a2c8`, action `none`. |
 | Publication | blocked | Hosted CI is read-only source evidence. No protected Candidate, managed provider/CDP receipt, publication, rollout or user update was attempted. |
+
+## Artifact response authority and measured Workbench surfaces - 2026-07-15
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| FastAPI response authority | 0 | Eleven Artifact/Retouch JSON routes declare six strict response families; five binary routes explicitly publish no JSON response model. Internal families, extra fields and cross-identity/lifecycle drift fail closed. |
+| Stable failure boundary | 0 | An injected internal source-code projection returns the stable 500 API error without leaking Artifact ID, filename or family. |
+| Generated schema | 0 | Canonical schema contains 42 contracts at digest `5face1da...3f12b`; a dedicated generated Artifact manifest owns nested wire fields and Retouch enums. |
+| Web transport | 0 | Artifact request construction and validation load behind one delayed boundary. Missing/extra fields, count/digest/timestamp/geometry/mask/Job/workspace drift are rejected before React state. Optional brush width remains compatible with the backend default. |
+| Production dependency graph | 1 then 0 | The first build exposed a deferred-validator ↔ initial-client cycle. A shared contract-core and delayed Artifact operation boundary restore a one-way content-addressable graph without increasing the budget. |
+| Surface reference mapping | 0 | Measured light non-chat/chat/session/scrollbar are `#f7f7f7/#ffffff/#ebebeb/#e5e5e5`; dark are `#0f0f0f/#111111/#202020/#202020`. Light Composer equals chat; dark Composer equals current conversation and scrollbar. Components use semantic tokens only. |
+| Focused Runtime | 0 | Ruff passes; 149 Artifact/Retouch Python tests pass with one unchanged upstream Starlette warning. |
+| WebUI contracts | 0 | TypeScript passes; 176/176 Web contract tests pass, including generated freshness, strict Artifact boundaries, surface mapping, contrast, forced colours, density and progressive loading. |
+| Production Web build | 0 | 24 assets / 23 JavaScript chunks are content-addressed. Initial JS is 474.22 KiB raw / 147.29 KiB gzip under the unchanged 475/150 KiB limits; delayed Artifact operations are 18.36/4.68 KiB. |
+| Browser matrix | 0 | Chromium E2E passes 36/36 at 1440x900, 1024x768, 768x900, 390x844 and 320x568 in both themes with zero axe violations; interaction coverage includes Composer placement, sparse frames, task continuation, reasoning, HITL, share, fit-first preview and touch Artifact actions. |
+| Pixel evidence | 0 | Captured desktop corners are exactly dark/light non-chat `#0f0f0f/#f7f7f7`; workspace pixels are exactly `#111111/#ffffff`. |
+| Complete-suite evidence boundary | pending | The most recent complete 1,926-test Python and five-platform hosted run belongs to prior exact source `ee8a7f8c...ed19`; it is not claimed for this batch. |
+| Publication | blocked | The live audit remains exactly 17 blockers. No protected Candidate, managed provider/CDP acceptance receipt, publication, rollout or user update was attempted. |

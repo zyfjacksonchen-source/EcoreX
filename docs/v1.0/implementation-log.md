@@ -5119,3 +5119,63 @@ SHA-256 remains
 `d9eb1f478307b94f418de7f855be36700fd140e294b8ab4693f10cd01338a2c8`.
 The audit action is `none`; no governance mutation, protected Candidate,
 publication, rollout or user update occurred.
+
+## 2026-07-15 - Artifact responses become fail-closed and Workbench surfaces match the supplied swatches
+
+Artifact and precise-retouch routes still had one thin-front violation: domain
+services returned correct dataclasses, but eleven JSON endpoints serialized
+dictionaries without an ASGI response contract. React then trusted TypeScript
+assertions for feedback, external actions, workspace state and Retouch Jobs.
+An internal family, extra storage field, stale revision, malformed geometry or
+contradictory completed Job could therefore reach the browser before failing.
+
+Six strict public response families now own the boundary: Artifact projection
+and list, feedback, external action, Retouch Job and Retouch workspace. Nested
+lineage, rendition, quality evidence, request, edit surface, mask, reference,
+view state and inspection-region objects reject extra fields. Cross-field
+validators enforce public family/visibility, count and identity uniqueness,
+digest/timestamp ordering, normalized geometry and mask bounds, request/base
+revision, Job/result lifecycle and workspace/reference/result URL identity.
+Five binary endpoints explicitly publish `Response` and no JSON response
+model. A response-validation failure is normalized by the existing stable API
+error boundary and cannot disclose the internal Artifact identity or name.
+
+The canonical generated schema now contains 42 contracts at SHA-256
+`5face1daf57ea1c63fd9632143528802014d5ffd2880eb3d46b1f566bea3f12b`.
+Artifact field manifests are emitted to a dedicated generated module and are
+loaded only when an Artifact operation is used. The first production build
+correctly rejected a reverse dependency cycle between the deferred validator
+and the initial Runtime client. `runtimeContract` plus its generated manifest
+now form an explicit shared contract-core chunk. Artifact request construction
+and response validation moved together behind one delayed operation boundary,
+restoring a one-way graph and reducing initial JavaScript instead of raising
+the release budget. Brush width remains optional, matching the Python domain
+default; a regression test covers the previously mismatched no-width form.
+
+The supplied colour crops were measured rather than visually approximated.
+Semantic surface tokens now map light non-chat/chat/current/scrollbar to
+`#f7f7f7/#ffffff/#ebebeb/#e5e5e5` and dark to
+`#0f0f0f/#111111/#202020/#202020`. Light Composer uses the chat surface;
+dark Composer, current conversation and scrollbar use the same session
+emphasis surface. Sidebar, workspace, timeline, header and Composer consume
+those roles; no component gained a raw colour. Forced-colour and contrast
+contracts were extended, and the locked `design.md`/Hallmark preflight record
+the measured mapping.
+
+Current-source verification is focused and explicit: Ruff passes; 149
+Artifact/Retouch Python tests pass with one unchanged upstream warning;
+TypeScript and all 176 Web contract tests pass. The content-addressed build
+emits 24 assets / 23 JavaScript chunks and passes the unchanged 475 KiB limit
+at 474.22 KiB raw / 147.29 KiB gzip initial JavaScript; delayed Artifact
+operations are 18.36 KiB raw / 4.68 KiB gzip. Chromium E2E passes 36/36 across
+1440x900, 1024x768, 768x900, 390x844 and 320x568 in both themes with zero axe
+violations. The same run covers sparse control framing, normal/new Composer
+placement, task continuation, reasoning replacement, HITL, sharing, fit-first
+image preview and touch Artifact actions. Captured pixels confirm the requested
+desktop non-chat and chat swatches exactly.
+
+The earlier complete 1,926-test and five-platform hosted evidence remains
+bound to commit `ee8a7f8cc77830b66358af3acc9206f95cb5923b`; it is not relabelled as
+exact evidence for this batch. Repository governance still has 17 blockers.
+No protected Candidate, managed-provider acceptance, publication, rollout or
+user update was attempted.

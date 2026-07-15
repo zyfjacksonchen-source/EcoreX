@@ -53,6 +53,14 @@ from .models import (
 )
 from .actions import ArtifactActionExecutor
 from .service import ArtifactService
+from .wire import (
+    ArtifactExternalActionResponse,
+    ArtifactListResponse,
+    ArtifactProjectionResponse,
+    FeedbackProjectionResponse,
+    RetouchJobResponse,
+    RetouchWorkspaceResponse,
+)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -422,7 +430,11 @@ def create_artifact_router(
                 )
         return projection
 
-    @router.post("/artifacts/{artifact_id}/retouch-workspaces", status_code=201)
+    @router.post(
+        "/artifacts/{artifact_id}/retouch-workspaces",
+        status_code=201,
+        response_model=RetouchWorkspaceResponse,
+    )
     def open_retouch_workspace(
         artifact_id: str, body: RetouchWorkspaceOpenBody
     ) -> dict[str, Any]:
@@ -433,11 +445,17 @@ def create_artifact_router(
         )
         return workspace_response(workspace.workspace_id)
 
-    @router.get("/retouch-workspaces/{workspace_id}")
+    @router.get(
+        "/retouch-workspaces/{workspace_id}",
+        response_model=RetouchWorkspaceResponse,
+    )
     def get_retouch_workspace(workspace_id: str) -> dict[str, Any]:
         return workspace_response(workspace_id)
 
-    @router.patch("/retouch-workspaces/{workspace_id}")
+    @router.patch(
+        "/retouch-workspaces/{workspace_id}",
+        response_model=RetouchWorkspaceResponse,
+    )
     def update_retouch_workspace(
         workspace_id: str, body: RetouchWorkspaceUpdateBody
     ) -> dict[str, Any]:
@@ -453,7 +471,11 @@ def create_artifact_router(
         )
         return workspace_response(workspace.workspace_id)
 
-    @router.get("/retouch-workspaces/{workspace_id}/surface")
+    @router.get(
+        "/retouch-workspaces/{workspace_id}/surface",
+        response_model=None,
+        response_class=Response,
+    )
     def get_retouch_workspace_surface(workspace_id: str) -> Response:
         workspace = service.get_retouch_workspace(workspace_id, account_id=account_id)
         content = service.read_user_content(
@@ -472,7 +494,9 @@ def create_artifact_router(
         )
 
     @router.get(
-        "/retouch-workspaces/{workspace_id}/references/{reference_artifact_id}/preview"
+        "/retouch-workspaces/{workspace_id}/references/{reference_artifact_id}/preview",
+        response_model=None,
+        response_class=Response,
     )
     def get_retouch_reference_preview(
         workspace_id: str, reference_artifact_id: str
@@ -503,7 +527,11 @@ def create_artifact_router(
             ),
         )
 
-    @router.get("/retouch-workspaces/{workspace_id}/result")
+    @router.get(
+        "/retouch-workspaces/{workspace_id}/result",
+        response_model=None,
+        response_class=Response,
+    )
     def get_retouch_workspace_result(workspace_id: str) -> Response:
         workspace = service.get_retouch_workspace(workspace_id, account_id=account_id)
         if not workspace.submitted_job_id:
@@ -531,7 +559,10 @@ def create_artifact_router(
             ),
         )
 
-    @router.post("/retouch-workspaces/{workspace_id}/reopen")
+    @router.post(
+        "/retouch-workspaces/{workspace_id}/reopen",
+        response_model=RetouchWorkspaceResponse,
+    )
     def reopen_retouch_workspace(
         workspace_id: str, body: RetouchWorkspaceSubmitBody
     ) -> dict[str, Any]:
@@ -542,7 +573,7 @@ def create_artifact_router(
         )
         return workspace_response(workspace.workspace_id)
 
-    @router.get("/artifacts")
+    @router.get("/artifacts", response_model=ArtifactListResponse)
     def list_artifacts(
         thread_id: str | None = Query(default=None, min_length=1, max_length=256),
     ) -> dict[str, Any]:
@@ -552,11 +583,18 @@ def create_artifact_router(
         )
         return {"items": [item.to_dict() for item in items], "count": len(items)}
 
-    @router.get("/artifacts/{artifact_id}")
+    @router.get(
+        "/artifacts/{artifact_id}",
+        response_model=ArtifactProjectionResponse,
+    )
     def get_artifact(artifact_id: str) -> dict[str, Any]:
         return public_projection(artifact_id).to_dict()
 
-    @router.get("/artifacts/{artifact_id}/content")
+    @router.get(
+        "/artifacts/{artifact_id}/content",
+        response_model=None,
+        response_class=Response,
+    )
     def get_content(artifact_id: str) -> Response:
         projection = public_projection(artifact_id)
         if ArtifactAction.DOWNLOAD not in projection.actions:
@@ -576,7 +614,11 @@ def create_artifact_router(
             ),
         )
 
-    @router.get("/artifacts/{artifact_id}/preview")
+    @router.get(
+        "/artifacts/{artifact_id}/preview",
+        response_model=None,
+        response_class=Response,
+    )
     def get_preview(artifact_id: str) -> Response:
         projection = public_projection(artifact_id)
         if ArtifactAction.PREVIEW not in projection.actions:
@@ -611,7 +653,10 @@ def create_artifact_router(
             ),
         )
 
-    @router.post("/artifacts/{artifact_id}/actions/{action}")
+    @router.post(
+        "/artifacts/{artifact_id}/actions/{action}",
+        response_model=ArtifactExternalActionResponse,
+    )
     async def perform_external_action(
         artifact_id: str,
         action: Literal["open", "reveal"],
@@ -658,7 +703,10 @@ def create_artifact_router(
         receipt = await run_in_threadpool(external_actions.launch, prepared)
         return receipt.to_dict()
 
-    @router.post("/artifacts/{artifact_id}/feedback")
+    @router.post(
+        "/artifacts/{artifact_id}/feedback",
+        response_model=FeedbackProjectionResponse,
+    )
     async def record_feedback(artifact_id: str, body: FeedbackBody) -> dict[str, Any]:
         await run_in_threadpool(public_projection, artifact_id)
         event_holder: dict[str, ArtifactApiEvent] = {}
@@ -695,8 +743,12 @@ def create_artifact_router(
         await _publish_persisted(sink, event_holder["event"])
         return projection.to_dict()
 
-    @router.post("/artifacts/{artifact_id}/retouch", status_code=202)
-    async def request_retouch(artifact_id: str, body: RetouchBody) -> JSONResponse:
+    @router.post(
+        "/artifacts/{artifact_id}/retouch",
+        status_code=202,
+        response_model=RetouchJobResponse,
+    )
+    async def request_retouch(artifact_id: str, body: RetouchBody) -> dict[str, Any]:
         operation = (
             retouch_coordinator.request
             if retouch_coordinator is not None
@@ -736,12 +788,16 @@ def create_artifact_router(
             on_persisted=persist_retouch_event,
         )
         await _publish_persisted(sink, event_holder["event"])
-        return JSONResponse(status_code=202, content=job.to_dict())
+        return job.to_dict()
 
-    @router.post("/retouch-workspaces/{workspace_id}/submit", status_code=202)
+    @router.post(
+        "/retouch-workspaces/{workspace_id}/submit",
+        status_code=202,
+        response_model=RetouchWorkspaceResponse,
+    )
     async def submit_retouch_workspace(
         workspace_id: str, body: RetouchWorkspaceSubmitBody
-    ) -> JSONResponse:
+    ) -> dict[str, Any]:
         workspace = await run_in_threadpool(
             service.claim_retouch_workspace_submission,
             workspace_id,
@@ -868,12 +924,12 @@ def create_artifact_router(
                 service.get_artifact_scope(workspace.artifact_id),
             )
         await _publish_persisted(sink, event)
-        return JSONResponse(
-            status_code=202,
-            content=workspace_response(workspace.workspace_id),
-        )
+        return workspace_response(workspace.workspace_id)
 
-    @router.get("/retouch-jobs/{job_id}")
+    @router.get(
+        "/retouch-jobs/{job_id}",
+        response_model=RetouchJobResponse,
+    )
     def get_retouch_job(job_id: str) -> dict[str, Any]:
         job = service.get_retouch_job(job_id, account_id=account_id)
         # Recheck the target through the public projection boundary so a future

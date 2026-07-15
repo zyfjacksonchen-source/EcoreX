@@ -7,6 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { GENERATED_RUNTIME_CONTRACT } from "../src/v1/api/generatedRuntimeContract.ts";
+import { GENERATED_ARTIFACT_RUNTIME_CONTRACT } from "../src/v1/api/generatedArtifactRuntimeContract.ts";
 import { GENERATED_RUNTIME_PROJECTION_CONTRACT } from "../src/v1/api/generatedRuntimeProjectionContract.ts";
 import { GENERATED_SETTINGS_RUNTIME_CONTRACT } from "../src/v1/api/generatedSettingsRuntimeContract.ts";
 
@@ -20,6 +21,13 @@ const settingsManifestPath = path.join(
   "v1",
   "api",
   "generatedSettingsRuntimeContract.ts",
+);
+const artifactManifestPath = path.join(
+  desktopRoot,
+  "src",
+  "v1",
+  "api",
+  "generatedArtifactRuntimeContract.ts",
 );
 
 function canonical(value) {
@@ -45,12 +53,17 @@ test("generated manifest pins the canonical full-schema digest", async () => {
   const schema = JSON.parse(await readFile(schemaPath, "utf8"));
   const manifest = await readFile(manifestPath, "utf8");
   const settingsManifest = await readFile(settingsManifestPath, "utf8");
+  const artifactManifest = await readFile(artifactManifestPath, "utf8");
   const canonicalBytes = `${JSON.stringify(canonical(schema))}\n`;
   const digest = createHash("sha256").update(canonicalBytes).digest("hex");
   assert.match(manifest, new RegExp(`"schemaSha256": "${digest}"`));
   assert.match(settingsManifest, new RegExp(`"schemaSha256": "${digest}"`));
+  assert.match(artifactManifest, new RegExp(`"schemaSha256": "${digest}"`));
   assert.deepEqual(Object.keys(schema.contracts).sort(), [
+    "ArtifactExternalActionResponse",
+    "ArtifactListResponse",
     "ArtifactProjection",
+    "ArtifactProjectionResponse",
     "BootstrapResponse",
     "ConnectorLoginBeginResponse",
     "ConnectorLoginCancelResponse",
@@ -58,6 +71,7 @@ test("generated manifest pins the canonical full-schema digest", async () => {
     "ConversationUsageProjection",
     "CreateTurnRequest",
     "EventEnvelope",
+    "FeedbackProjectionResponse",
     "InputAttachmentProjection",
     "InteractionMutationResponse",
     "InteractionProjection",
@@ -76,6 +90,8 @@ test("generated manifest pins the canonical full-schema digest", async () => {
     "ReplaceTurnResponse",
     "RespondInteractionRequest",
     "RetouchBody",
+    "RetouchJobResponse",
+    "RetouchWorkspaceResponse",
     "RetouchWorkspaceSubmitBody",
     "SteerTurnRequest",
     "SystemHealthPublicResponse",
@@ -96,6 +112,7 @@ test("generated manifest pins the canonical full-schema digest", async () => {
   });
   assert.equal(GENERATED_RUNTIME_PROJECTION_CONTRACT.schemaSha256, digest);
   assert.equal(GENERATED_SETTINGS_RUNTIME_CONTRACT.schemaSha256, digest);
+  assert.equal(GENERATED_ARTIFACT_RUNTIME_CONTRACT.schemaSha256, digest);
   assert.deepEqual(
     GENERATED_RUNTIME_CONTRACT.artifact.families,
     schema.public_artifact_policy.families,
@@ -130,6 +147,45 @@ test("generated manifest pins the canonical full-schema digest", async () => {
   assert.deepEqual(
     GENERATED_SETTINGS_RUNTIME_CONTRACT.wireFields.SystemHealthTechnicalResponse.SystemHealthTechnicalResponse,
     ["sample_id", "overall", "summary", "components", "sampled_at", "metrics"],
+  );
+  assert.deepEqual(
+    GENERATED_ARTIFACT_RUNTIME_CONTRACT.wireFields.RetouchWorkspaceResponse.RetouchWorkspaceResponse,
+    [
+      "workspace_id",
+      "artifact_id",
+      "version",
+      "status",
+      "edit_surface",
+      "annotations",
+      "references",
+      "global_instruction",
+      "view_state",
+      "mask",
+      "submitted_job_id",
+      "job",
+      "result",
+      "result_surface",
+      "surface_url",
+      "result_url",
+      "created_at",
+      "updated_at",
+    ],
+  );
+  assert.deepEqual(
+    GENERATED_ARTIFACT_RUNTIME_CONTRACT.wireFields.RetouchJobResponse.RetouchRequestResponse,
+    [
+      "base_revision_id",
+      "selected_artifact_ids",
+      "agent_model_id",
+      "image_model_id",
+      "annotations",
+      "reference_artifact_ids",
+      "global_instruction",
+      "client_request_id",
+      "pinned_reference_revision_ids",
+      "edit_surface",
+      "mask",
+    ],
   );
   assert.deepEqual(
     GENERATED_RUNTIME_PROJECTION_CONTRACT.wireFields.ThreadProjectionResponse.ThreadProjectionResponse,

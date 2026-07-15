@@ -55,6 +55,14 @@ from ecorex.protocol import (  # noqa: E402
     TurnProjection,
 )
 from ecorex.artifacts.api import RetouchBody, RetouchWorkspaceSubmitBody  # noqa: E402
+from ecorex.artifacts.wire import (  # noqa: E402
+    ArtifactExternalActionResponse,
+    ArtifactListResponse,
+    ArtifactProjectionResponse,
+    FeedbackProjectionResponse,
+    RetouchJobResponse,
+    RetouchWorkspaceResponse,
+)
 from ecorex.memory.api import MemoryMutationResponse, MemorySnapshotResponse  # noqa: E402
 from ecorex.migration.api import MigrationQuarantineResponse  # noqa: E402
 from ecorex.observability.system_api import (  # noqa: E402
@@ -76,6 +84,7 @@ PROJECTION_TYPESCRIPT_OUTPUT = (
     OUTPUT_DIRECTORY / "generatedRuntimeProjectionContract.ts"
 )
 SETTINGS_TYPESCRIPT_OUTPUT = OUTPUT_DIRECTORY / "generatedSettingsRuntimeContract.ts"
+ARTIFACT_TYPESCRIPT_OUTPUT = OUTPUT_DIRECTORY / "generatedArtifactRuntimeContract.ts"
 
 SCHEMA_VERSION = 1
 PROJECTION_CONTRACT_NAMES = frozenset(
@@ -108,6 +117,16 @@ SETTINGS_CONTRACT_NAMES = frozenset(
         "SystemMetricHistoryResponse",
     }
 )
+ARTIFACT_CONTRACT_NAMES = frozenset(
+    {
+        "ArtifactExternalActionResponse",
+        "ArtifactListResponse",
+        "ArtifactProjectionResponse",
+        "FeedbackProjectionResponse",
+        "RetouchJobResponse",
+        "RetouchWorkspaceResponse",
+    }
+)
 NESTED_WIRE_CONTRACT_NAMES = frozenset(
     {
         "ArtifactProjection",
@@ -125,12 +144,16 @@ NESTED_WIRE_CONTRACT_NAMES = frozenset(
 def _contract_schemas() -> dict[str, dict[str, Any]]:
     return {
         "ArtifactProjection": TypeAdapter(ArtifactProjection).json_schema(),
+        "ArtifactExternalActionResponse": ArtifactExternalActionResponse.model_json_schema(),
+        "ArtifactListResponse": ArtifactListResponse.model_json_schema(),
+        "ArtifactProjectionResponse": ArtifactProjectionResponse.model_json_schema(),
         "BootstrapResponse": BootstrapResponse.model_json_schema(),
         "ConnectorLoginBeginResponse": ConnectorLoginBeginResponse.model_json_schema(),
         "ConnectorLoginCancelResponse": ConnectorLoginCancelResponse.model_json_schema(),
         "ConnectorLoginCheckResponse": ConnectorLoginCheckResponse.model_json_schema(),
         "ConversationUsageProjection": ConversationUsageProjection.model_json_schema(),
         "EventEnvelope": EventEnvelope.model_json_schema(),
+        "FeedbackProjectionResponse": FeedbackProjectionResponse.model_json_schema(),
         "InteractionRequest": InteractionRequest.model_json_schema(),
         "InteractionMutationResponse": InteractionMutationResponse.model_json_schema(),
         "InteractionProjection": InteractionProjection.model_json_schema(),
@@ -156,7 +179,9 @@ def _contract_schemas() -> dict[str, dict[str, Any]]:
         "ThreadListResponse": ThreadListResponse.model_json_schema(),
         "ThreadProjection": ThreadProjection.model_json_schema(),
         "RetouchBody": RetouchBody.model_json_schema(),
+        "RetouchJobResponse": RetouchJobResponse.model_json_schema(),
         "RetouchWorkspaceSubmitBody": RetouchWorkspaceSubmitBody.model_json_schema(),
+        "RetouchWorkspaceResponse": RetouchWorkspaceResponse.model_json_schema(),
         "SystemHealthPublicResponse": SystemHealthPublicResponse.model_json_schema(),
         "SystemHealthTechnicalResponse": SystemHealthTechnicalResponse.model_json_schema(),
         "SystemMetricHistoryResponse": SystemMetricHistoryResponse.model_json_schema(),
@@ -285,7 +310,7 @@ def _property_const(
     return candidate
 
 
-def build_outputs() -> tuple[bytes, bytes, bytes, bytes, str]:
+def build_outputs() -> tuple[bytes, bytes, bytes, bytes, bytes, str]:
     schemas = _contract_schemas()
     public_families = [family.value for family in PUBLIC_ARTIFACT_FAMILIES]
     public_visibilities = [
@@ -296,11 +321,15 @@ def build_outputs() -> tuple[bytes, bytes, bytes, bytes, str]:
         "schema_version": SCHEMA_VERSION,
         "sources": {
             "ArtifactProjection": "ecorex.artifacts.models.ArtifactProjection",
+            "ArtifactExternalActionResponse": "ecorex.artifacts.wire.ArtifactExternalActionResponse",
+            "ArtifactListResponse": "ecorex.artifacts.wire.ArtifactListResponse",
+            "ArtifactProjectionResponse": "ecorex.artifacts.wire.ArtifactProjectionResponse",
             "BootstrapResponse": "ecorex.protocol.BootstrapResponse",
             "ConnectorLoginBeginResponse": "ecorex.protocol.ConnectorLoginBeginResponse",
             "ConnectorLoginCancelResponse": "ecorex.protocol.ConnectorLoginCancelResponse",
             "ConnectorLoginCheckResponse": "ecorex.protocol.ConnectorLoginCheckResponse",
             "EventEnvelope": "ecorex.protocol.EventEnvelope",
+            "FeedbackProjectionResponse": "ecorex.artifacts.wire.FeedbackProjectionResponse",
             "InteractionRequest": "ecorex.protocol.InteractionRequest",
             "InteractionMutationResponse": "ecorex.protocol.InteractionMutationResponse",
             "InteractionProjection": "ecorex.protocol.InteractionProjection",
@@ -326,7 +355,9 @@ def build_outputs() -> tuple[bytes, bytes, bytes, bytes, str]:
             "ThreadListResponse": "ecorex.protocol.ThreadListResponse",
             "ThreadProjection": "ecorex.protocol.ThreadProjection",
             "RetouchBody": "ecorex.artifacts.api.RetouchBody",
+            "RetouchJobResponse": "ecorex.artifacts.wire.RetouchJobResponse",
             "RetouchWorkspaceSubmitBody": "ecorex.artifacts.api.RetouchWorkspaceSubmitBody",
+            "RetouchWorkspaceResponse": "ecorex.artifacts.wire.RetouchWorkspaceResponse",
             "SystemHealthPublicResponse": "ecorex.observability.system_api.SystemHealthPublicResponse",
             "SystemHealthTechnicalResponse": "ecorex.observability.system_api.SystemHealthTechnicalResponse",
             "SystemMetricHistoryResponse": "ecorex.observability.system_api.SystemMetricHistoryResponse",
@@ -407,6 +438,7 @@ def build_outputs() -> tuple[bytes, bytes, bytes, bytes, str]:
             # paying to duplicate field-name manifests in initial Web JS.
             if name not in PROJECTION_CONTRACT_NAMES
             and name not in SETTINGS_CONTRACT_NAMES
+            and name not in ARTIFACT_CONTRACT_NAMES
             and name
             not in {
                 "InteractionRequest",
@@ -594,11 +626,66 @@ def build_outputs() -> tuple[bytes, bytes, bytes, bytes, str]:
         "export type GeneratedInteractionStatus = "
         "typeof GENERATED_RUNTIME_PROJECTION_CONTRACT.runtime.interactionStatuses[number];\n"
     ).encode("utf-8")
+    artifact_schema = schemas["RetouchWorkspaceResponse"]
+    artifact_manifest = {
+        "schemaVersion": SCHEMA_VERSION,
+        "schemaSha256": digest,
+        "wireFields": {
+            name: _wire_object_fields(
+                schemas[name],
+                name,
+                include_definitions=True,
+            )
+            for name in sorted(ARTIFACT_CONTRACT_NAMES)
+        },
+        "values": {
+            "annotationKinds": _property_enum(
+                artifact_schema, "RetouchAnnotationResponse", "kind"
+            ),
+            "coordinateSpaceVersion": _property_const(
+                artifact_schema,
+                "RetouchEditSurfaceResponse",
+                "coordinate_space_version",
+            ),
+            "retouchJobStatuses": _enum_values(
+                artifact_schema, "RetouchJobStatus"
+            ),
+            "retouchViewTools": _property_enum(
+                artifact_schema, "RetouchViewStateResponse", "tool"
+            ),
+            "retouchWorkspaceStatuses": _enum_values(
+                artifact_schema, "RetouchWorkspaceStatus"
+            ),
+        },
+    }
+    rendered_artifact_manifest = json.dumps(
+        artifact_manifest,
+        ensure_ascii=False,
+        sort_keys=True,
+        indent=2,
+    )
+    artifact_typescript = (
+        "// Generated by tools/generate-runtime-contracts.py. DO NOT EDIT.\n"
+        "// Progressively loaded Artifact boundary; Python schemas remain authoritative.\n"
+        "export const GENERATED_ARTIFACT_RUNTIME_CONTRACT = "
+        f"{rendered_artifact_manifest} as const;\n"
+        "export type GeneratedArtifactContractName = "
+        "keyof typeof GENERATED_ARTIFACT_RUNTIME_CONTRACT.wireFields;\n"
+        "export type GeneratedRetouchAnnotationKind = "
+        "typeof GENERATED_ARTIFACT_RUNTIME_CONTRACT.values.annotationKinds[number];\n"
+        "export type GeneratedRetouchJobStatus = "
+        "typeof GENERATED_ARTIFACT_RUNTIME_CONTRACT.values.retouchJobStatuses[number];\n"
+        "export type GeneratedRetouchViewTool = "
+        "typeof GENERATED_ARTIFACT_RUNTIME_CONTRACT.values.retouchViewTools[number];\n"
+        "export type GeneratedRetouchWorkspaceStatus = "
+        "typeof GENERATED_ARTIFACT_RUNTIME_CONTRACT.values.retouchWorkspaceStatuses[number];\n"
+    ).encode("utf-8")
     return (
         schema_bytes,
         typescript,
         projection_typescript,
         settings_typescript,
+        artifact_typescript,
         digest,
     )
 
@@ -638,6 +725,7 @@ def main() -> int:
         typescript_bytes,
         projection_typescript_bytes,
         settings_typescript_bytes,
+        artifact_typescript_bytes,
         digest,
     ) = build_outputs()
     if args.check:
@@ -650,6 +738,9 @@ def main() -> int:
         valid = (
             _check_file(SETTINGS_TYPESCRIPT_OUTPUT, settings_typescript_bytes) and valid
         )
+        valid = (
+            _check_file(ARTIFACT_TYPESCRIPT_OUTPUT, artifact_typescript_bytes) and valid
+        )
         if not valid:
             return 1
     else:
@@ -658,6 +749,7 @@ def main() -> int:
         TYPESCRIPT_OUTPUT.write_bytes(typescript_bytes)
         PROJECTION_TYPESCRIPT_OUTPUT.write_bytes(projection_typescript_bytes)
         SETTINGS_TYPESCRIPT_OUTPUT.write_bytes(settings_typescript_bytes)
+        ARTIFACT_TYPESCRIPT_OUTPUT.write_bytes(artifact_typescript_bytes)
         print(f"generated Runtime Web contract {digest}")
     if args.print_digest:
         print(digest)

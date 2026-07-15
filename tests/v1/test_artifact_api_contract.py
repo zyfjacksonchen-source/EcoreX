@@ -381,3 +381,121 @@ def test_router_does_not_publish_internal_worker_or_declaration_routes(tmp_path)
         "/api/v1/artifacts/worker",
     ):
         assert client.get(forbidden).status_code == 404
+
+
+def test_artifact_json_routes_publish_strict_response_models_and_binary_routes_do_not_claim_json(
+    tmp_path,
+):
+    _, client = make_client(tmp_path)
+    openapi = client.app.openapi()
+    expected = {
+        ("/api/v1/artifacts", "get", "200"): "ArtifactListResponse",
+        (
+            "/api/v1/artifacts/{artifact_id}",
+            "get",
+            "200",
+        ): "ArtifactProjectionResponse",
+        (
+            "/api/v1/artifacts/{artifact_id}/actions/{action}",
+            "post",
+            "200",
+        ): "ArtifactExternalActionResponse",
+        (
+            "/api/v1/artifacts/{artifact_id}/feedback",
+            "post",
+            "200",
+        ): "FeedbackProjectionResponse",
+        (
+            "/api/v1/artifacts/{artifact_id}/retouch",
+            "post",
+            "202",
+        ): "RetouchJobResponse",
+        (
+            "/api/v1/artifacts/{artifact_id}/retouch-workspaces",
+            "post",
+            "201",
+        ): "RetouchWorkspaceResponse",
+        (
+            "/api/v1/retouch-workspaces/{workspace_id}",
+            "get",
+            "200",
+        ): "RetouchWorkspaceResponse",
+        (
+            "/api/v1/retouch-workspaces/{workspace_id}",
+            "patch",
+            "200",
+        ): "RetouchWorkspaceResponse",
+        (
+            "/api/v1/retouch-workspaces/{workspace_id}/submit",
+            "post",
+            "202",
+        ): "RetouchWorkspaceResponse",
+        (
+            "/api/v1/retouch-workspaces/{workspace_id}/reopen",
+            "post",
+            "200",
+        ): "RetouchWorkspaceResponse",
+        (
+            "/api/v1/retouch-jobs/{job_id}",
+            "get",
+            "200",
+        ): "RetouchJobResponse",
+    }
+    for (path, method, status), model_name in expected.items():
+        response = openapi["paths"][path][method]["responses"][status]
+        assert response["content"]["application/json"]["schema"] == {
+            "$ref": f"#/components/schemas/{model_name}"
+        }
+
+    fixed_models = {
+        "ArtifactExternalActionResponse",
+        "ArtifactLineageResponse",
+        "ArtifactListResponse",
+        "ArtifactProjectionResponse",
+        "FeedbackProjectionResponse",
+        "QualityCheckResponse",
+        "QualityEvidenceResponse",
+        "RenditionProjectionResponse",
+        "RetouchAnnotationResponse",
+        "RetouchEditSurfaceResponse",
+        "RetouchInspectionRegionResponse",
+        "RetouchJobResponse",
+        "RetouchMaskResponse",
+        "RetouchPixelRegionResponse",
+        "RetouchReferenceResponse",
+        "RetouchRequestResponse",
+        "RetouchViewStateResponse",
+        "RetouchWorkspaceResponse",
+    }
+    schemas = openapi["components"]["schemas"]
+    for model_name in fixed_models:
+        assert schemas[model_name]["additionalProperties"] is False
+
+    binary_routes = {
+        "/api/v1/artifacts/{artifact_id}/content",
+        "/api/v1/artifacts/{artifact_id}/preview",
+        "/api/v1/retouch-workspaces/{workspace_id}/surface",
+        "/api/v1/retouch-workspaces/{workspace_id}/references/{reference_artifact_id}/preview",
+        "/api/v1/retouch-workspaces/{workspace_id}/result",
+    }
+    for path in binary_routes:
+        response = openapi["paths"][path]["get"]["responses"]["200"]
+        assert "application/json" not in response.get("content", {})
+
+
+def test_response_model_fail_closes_an_internal_artifact_projection(tmp_path):
+    service, client = make_client(tmp_path)
+    internal = service.create_artifact(
+        b"print('secret')",
+        requested_name="worker.py",
+        mime_type="text/x-python",
+    )
+    service.get_user_artifact = lambda *_args, **_kwargs: internal
+
+    response = client.get("/api/v1/artifacts/artifact-requested-as-public")
+
+    assert_stable_error(response, 500, "ARTIFACT_INTERNAL_ERROR")
+    wire = json.dumps(response.json(), ensure_ascii=False)
+    assert internal.artifact_id not in wire
+    assert "worker.py" not in wire
+    assert "source_code" not in wire

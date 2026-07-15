@@ -16,8 +16,8 @@
     "source": "desktop/src/styles/tokens.css",
     "format": "semantic OKLCH tokens",
     "anchor": "Codex neutral surfaces and blue interaction accent with EcoreX orange brand actions",
-    "dark_reference": "surface #111111, ink #fcfcfc, accent #0169cc, contrast 60",
-    "light_reference": "surface #ffffff, ink #1a1c1f, accent #339cff, contrast 45",
+    "dark_reference": "non-chat #0f0f0f, chat #111111, composer/session/scrollbar #202020, ink #fcfcfc, accent #0169cc, contrast 60",
+    "light_reference": "non-chat #f7f7f7, chat/composer #ffffff, session #ebebeb, scrollbar #e5e5e5, ink #1a1c1f, accent #339cff, contrast 45",
     "requires_normalization": false
   },
   "motion": {

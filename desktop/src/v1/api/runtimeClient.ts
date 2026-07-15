@@ -49,13 +49,15 @@ import type {
   UpdateMutationResponse,
 } from "./contracts.ts";
 import {
-  validateArtifactProjection,
-  validateArtifactListResponse,
   validateBootstrapResponse,
   validateConversationUsageProjection,
   validateEventEnvelope,
   validateInputAttachmentProjection,
 } from "./runtimeContract.ts";
+import type {
+  ArtifactJsonTransport,
+  ArtifactOperationKind,
+} from "./artifactRuntimeOperations.ts";
 
 declare global {
   interface Window {
@@ -344,6 +346,17 @@ export class RuntimeClient {
       return contract.validateSettingsBoundary(validate, payload, validationContext) as T;
     }
     return validate ? await validate(payload) : payload as T;
+  }
+
+  private async artifactOperation<T>(
+    operation: ArtifactOperationKind,
+    input: Readonly<Record<string, unknown>>,
+  ): Promise<T> {
+    const module = await import("./artifactRuntimeOperations.ts");
+    const request: ArtifactJsonTransport = <R>(path: string, init: RequestInit, mutation: boolean, validate: (value: unknown) => R | Promise<R>) => (
+      this.json(path, init, mutation, validate)
+    );
+    return module.executeArtifactOperation(request, operation, input) as Promise<T>;
   }
 
   bootstrap(signal?: AbortSignal): Promise<BootstrapResponse> {
@@ -1026,42 +1039,19 @@ export class RuntimeClient {
   }
 
   listArtifacts(threadId?: string, signal?: AbortSignal): Promise<ArtifactListResponse> {
-    const query = new URLSearchParams();
-    if (threadId) query.set("thread_id", threadId);
-    const suffix = query.size ? `?${query}` : "";
-    return this.json(
-      `/api/v1/artifacts${suffix}`,
-      { signal },
-      false,
-      validateArtifactListResponse,
-    );
+    return this.artifactOperation("list", { threadId, signal });
   }
 
   artifact(artifactId: string, signal?: AbortSignal): Promise<ArtifactProjection> {
-    return this.json(
-      `/api/v1/artifacts/${encodeURIComponent(artifactId)}`,
-      { signal },
-      false,
-      validateArtifactProjection,
-    );
+    return this.artifactOperation("get", { artifactId, signal });
   }
 
   artifactFeedback(
     artifact: ArtifactProjection,
     signal: "thumbs_up" | "thumbs_down",
-  ): Promise<unknown> {
-    return this.json(
-      `/api/v1/artifacts/${encodeURIComponent(artifact.artifact_id)}/feedback`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          revision_id: artifact.revision_id,
-          signal,
-          client_request_id: createClientRequestId("artifact_feedback"),
-        }),
-      },
-      true,
-    );
+  ): Promise<NonNullable<ArtifactProjection["feedback"]>> {
+    const clientRequestId = createClientRequestId("artifact_feedback");
+    return this.artifactOperation("feedback", { artifact, signal, clientRequestId });
   }
 
   artifactExternalAction(
@@ -1069,14 +1059,7 @@ export class RuntimeClient {
     action: "open" | "reveal",
     clientRequestId = createClientRequestId(`artifact_${action}`),
   ): Promise<ArtifactExternalActionProjection> {
-    return this.json(
-      `/api/v1/artifacts/${encodeURIComponent(artifactId)}/actions/${action}`,
-      {
-        method: "POST",
-        body: JSON.stringify({ client_request_id: clientRequestId }),
-      },
-      true,
-    );
+    return this.artifactOperation("action", { artifactId, action, clientRequestId });
   }
 
   requestRetouch(
@@ -1085,50 +1068,28 @@ export class RuntimeClient {
     globalInstruction: string,
     models: TurnModelSelection,
   ): Promise<RetouchJobProjection> {
-    return this.json(
-      `/api/v1/artifacts/${encodeURIComponent(artifact.artifact_id)}/retouch`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          base_revision_id: artifact.revision_id,
-          selected_artifact_ids: [artifact.artifact_id],
-          agent_model_id: models.agentModelId,
-          image_model_id: models.imageModelId,
-          annotations,
-          reference_artifact_ids: [],
-          global_instruction: globalInstruction,
-          client_request_id: createClientRequestId("artifact_retouch"),
-        }),
-      },
-      true,
-    );
+    return this.artifactOperation("request_retouch", {
+      artifact,
+      annotations,
+      globalInstruction,
+      agentModelId: models.agentModelId,
+      imageModelId: models.imageModelId,
+      clientRequestId: createClientRequestId("artifact_retouch"),
+    });
   }
 
   openRetouchWorkspace(
     artifact: ArtifactProjection,
     clientRequestId = createClientRequestId("retouch_workspace_open"),
   ): Promise<RetouchWorkspaceProjection> {
-    return this.json(
-      `/api/v1/artifacts/${encodeURIComponent(artifact.artifact_id)}/retouch-workspaces`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          base_revision_id: artifact.revision_id,
-          client_request_id: clientRequestId,
-        }),
-      },
-      true,
-    );
+    return this.artifactOperation("open_workspace", { artifact, clientRequestId });
   }
 
   getRetouchWorkspace(
     workspaceId: string,
     signal?: AbortSignal,
   ): Promise<RetouchWorkspaceProjection> {
-    return this.json(
-      `/api/v1/retouch-workspaces/${encodeURIComponent(workspaceId)}`,
-      { signal },
-    );
+    return this.artifactOperation("workspace", { workspaceId, signal });
   }
 
   saveRetouchWorkspace(
@@ -1141,21 +1102,14 @@ export class RuntimeClient {
     },
     clientRequestId = createClientRequestId("retouch_workspace_save"),
   ): Promise<RetouchWorkspaceProjection> {
-    return this.json(
-      `/api/v1/retouch-workspaces/${encodeURIComponent(workspace.workspace_id)}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify({
-          expected_version: workspace.version,
-          annotations: input.annotations,
-          reference_artifact_ids: input.referenceArtifactIds,
-          global_instruction: input.globalInstruction,
-          view_state: input.viewState,
-          client_request_id: clientRequestId,
-        }),
-      },
-      true,
-    );
+    return this.artifactOperation("save_workspace", {
+      workspace,
+      annotations: input.annotations,
+      referenceArtifactIds: input.referenceArtifactIds,
+      globalInstruction: input.globalInstruction,
+      viewState: input.viewState,
+      clientRequestId,
+    });
   }
 
   submitRetouchWorkspace(
@@ -1163,36 +1117,19 @@ export class RuntimeClient {
     models: TurnModelSelection,
     clientRequestId = createClientRequestId("retouch_workspace_submit"),
   ): Promise<RetouchWorkspaceProjection> {
-    return this.json(
-      `/api/v1/retouch-workspaces/${encodeURIComponent(workspace.workspace_id)}/submit`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          expected_version: workspace.version,
-          agent_model_id: models.agentModelId,
-          image_model_id: models.imageModelId,
-          client_request_id: clientRequestId,
-        }),
-      },
-      true,
-    );
+    return this.artifactOperation("submit_workspace", {
+      workspace,
+      agentModelId: models.agentModelId,
+      imageModelId: models.imageModelId,
+      clientRequestId,
+    });
   }
 
   reopenRetouchWorkspace(
     workspace: RetouchWorkspaceProjection,
     clientRequestId = createClientRequestId("retouch_workspace_reopen"),
   ): Promise<RetouchWorkspaceProjection> {
-    return this.json(
-      `/api/v1/retouch-workspaces/${encodeURIComponent(workspace.workspace_id)}/reopen`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          expected_version: workspace.version,
-          client_request_id: clientRequestId,
-        }),
-      },
-      true,
-    );
+    return this.artifactOperation("reopen_workspace", { workspace, clientRequestId });
   }
 
   async retouchWorkspaceBlob(

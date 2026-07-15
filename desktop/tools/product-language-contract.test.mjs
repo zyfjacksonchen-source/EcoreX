@@ -86,11 +86,30 @@ test("workspace chrome keeps the share action right aligned and removes the Comp
 });
 
 test("Codex theme values and EcoreX brand actions are separate semantic tokens", () => {
+  assert.match(tokens, /--color-canvas:\s*oklch\(0\.976139 0 0\);/u);
+  assert.match(tokens, /--color-workspace-surface:\s*oklch\(1 0 0\);/u);
   assert.match(tokens, /--color-surface:\s*oklch\(1 0 0\);/u);
+  assert.match(tokens, /--color-composer-surface:\s*var\(--color-workspace-surface\);/u);
+  assert.match(tokens, /--color-session-emphasis:\s*oklch\(0\.94007 0 0\);/u);
+  assert.match(tokens, /--scrollbar-thumb:\s*oklch\(0\.921906 0 0\);/u);
   assert.match(tokens, /--color-ink:\s*oklch\(0\.225591 0\.006566 258\.364\);/u);
   assert.match(tokens, /--color-accent:\s*oklch\(0\.682034 0\.173444 251\.11\);/u);
+  assert.match(tokens, /--color-canvas:\s*oklch\(0\.168416 0 0\);/u);
+  assert.match(tokens, /--color-workspace-surface:\s*oklch\(0\.177638 0 0\);/u);
   assert.match(tokens, /--color-surface:\s*oklch\(0\.177638 0 0\);/u);
+  assert.match(tokens, /--color-session-emphasis:\s*oklch\(0\.243535 0 0\);/u);
+  assert.match(tokens, /--color-composer-surface:\s*var\(--color-session-emphasis\);/u);
+  assert.match(tokens, /--scrollbar-thumb:\s*var\(--color-session-emphasis\);/u);
   assert.match(tokens, /--color-ink:\s*oklch\(0\.991069 0 0\);/u);
   assert.match(tokens, /--color-accent:\s*oklch\(0\.528649 0\.173447 254\.975\);/u);
   assert.match(tokens, /--color-brand:\s*oklch\(/u);
+});
+
+test("Workbench surface roles map the references without component-level colors", () => {
+  assert.match(layout, /\.ex-sidebar\s*\{[\s\S]*?background:\s*var\(--color-canvas\);/u);
+  assert.match(layout, /\.ex-workspace\s*\{[\s\S]*?background:\s*var\(--color-workspace-surface\);/u);
+  assert.match(layout, /\.ex-timeline\s*\{[\s\S]*?background:\s*var\(--color-workspace-surface\);/u);
+  assert.match(features, /\.ex-composer-region\s*\{[\s\S]*?background:\s*var\(--color-workspace-surface\);/u);
+  assert.match(features, /\.ex-composer\s*\{[\s\S]*?background:\s*var\(--color-composer-surface\);/u);
+  assert.match(layout, /\*::-webkit-scrollbar-thumb\s*\{[\s\S]*?background:\s*var\(--scrollbar-thumb\);/u);
 });

@@ -834,7 +834,12 @@ test("artifact list, feedback, and blob use the authenticated Runtime contract",
     const request = new Request(input, init);
     requests.push(request);
     if (request.url.includes("/feedback")) {
-      return Response.json({ signal: "thumbs_up" });
+      return Response.json({
+        feedback_id: "feedback_1",
+        revision_id: artifact.revision_id,
+        signal: "thumbs_up",
+        recorded_at: bootstrap.server_time,
+      });
     }
     if (request.url.endsWith("/preview")) {
       return new Response(new Uint8Array([1, 2, 3]), {
@@ -984,7 +989,13 @@ test("retouch workspace transport sends only structured ids, geometry, and versi
     annotations: [],
     references: [],
     global_instruction: "",
-    view_state: {},
+    view_state: {
+      zoom: 1,
+      pan_x: 0,
+      pan_y: 0,
+      selected_annotation_id: null,
+      tool: "select",
+    },
     mask: null,
     submitted_job_id: null,
     job: null,
@@ -1056,7 +1067,7 @@ test("artifact open and reveal submit only backend identities, never a filesyste
       artifact_id: "art / one",
       revision_id: "rev_1",
       action,
-      client_request_id: "action-id",
+      client_request_id: (await request.clone().json()).client_request_id,
       status: "completed",
       requested_at: bootstrap.server_time,
       updated_at: bootstrap.server_time,

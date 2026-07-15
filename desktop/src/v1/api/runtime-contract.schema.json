@@ -1,5 +1,463 @@
 {
   "contracts": {
+    "ArtifactExternalActionResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "open",
+            "reveal"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "artifact_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "client_request_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Client Request Id",
+          "type": "string"
+        },
+        "failure_code": {
+          "title": "Failure Code",
+          "type": "null"
+        },
+        "requested_at": {
+          "format": "date-time",
+          "title": "Requested At",
+          "type": "string"
+        },
+        "revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "status": {
+          "const": "completed",
+          "title": "Status",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "revision_id",
+        "action",
+        "client_request_id",
+        "status",
+        "requested_at",
+        "updated_at",
+        "failure_code"
+      ],
+      "title": "ArtifactExternalActionResponse",
+      "type": "object"
+    },
+    "ArtifactListResponse": {
+      "$defs": {
+        "ArtifactAction": {
+          "enum": [
+            "preview",
+            "open",
+            "download",
+            "reveal",
+            "feedback",
+            "precise_retouch"
+          ],
+          "title": "ArtifactAction",
+          "type": "string"
+        },
+        "ArtifactFamily": {
+          "enum": [
+            "document",
+            "spreadsheet",
+            "presentation",
+            "pdf",
+            "image",
+            "audio",
+            "video",
+            "data_export",
+            "web_report",
+            "archive",
+            "cloud_link",
+            "source_code",
+            "script",
+            "diff",
+            "log",
+            "temporary",
+            "directory"
+          ],
+          "title": "ArtifactFamily",
+          "type": "string"
+        },
+        "ArtifactLineageResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "source_artifact_ids": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 256,
+              "title": "Source Artifact Ids",
+              "type": "array"
+            },
+            "supersedes_revision_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Supersedes Revision Id"
+            }
+          },
+          "title": "ArtifactLineageResponse",
+          "type": "object"
+        },
+        "ArtifactProjectionResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "actions": {
+              "items": {
+                "$ref": "#/$defs/ArtifactAction"
+              },
+              "maxItems": 32,
+              "title": "Actions",
+              "type": "array"
+            },
+            "artifact_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Artifact Id",
+              "type": "string"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "display_name": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Display Name",
+              "type": "string"
+            },
+            "family": {
+              "$ref": "#/$defs/ArtifactFamily"
+            },
+            "feedback": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/FeedbackProjectionResponse"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "lineage": {
+              "$ref": "#/$defs/ArtifactLineageResponse"
+            },
+            "mime_type": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Mime Type",
+              "type": "string"
+            },
+            "quality_evidence": {
+              "$ref": "#/$defs/QualityEvidenceResponse"
+            },
+            "renditions": {
+              "items": {
+                "$ref": "#/$defs/RenditionProjectionResponse"
+              },
+              "maxItems": 256,
+              "title": "Renditions",
+              "type": "array"
+            },
+            "revision_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "role": {
+              "$ref": "#/$defs/ArtifactRole"
+            },
+            "sha256": {
+              "title": "Sha256",
+              "type": "string"
+            },
+            "size_bytes": {
+              "minimum": 0,
+              "title": "Size Bytes",
+              "type": "integer"
+            },
+            "status": {
+              "$ref": "#/$defs/ArtifactStatus"
+            },
+            "visibility": {
+              "$ref": "#/$defs/ArtifactVisibility"
+            }
+          },
+          "required": [
+            "artifact_id",
+            "revision_id",
+            "family",
+            "role",
+            "visibility",
+            "status",
+            "display_name",
+            "mime_type",
+            "size_bytes",
+            "sha256",
+            "created_at",
+            "lineage",
+            "quality_evidence"
+          ],
+          "title": "ArtifactProjectionResponse",
+          "type": "object"
+        },
+        "ArtifactRole": {
+          "enum": [
+            "deliverable",
+            "rendition",
+            "source",
+            "intermediate",
+            "diagnostic"
+          ],
+          "title": "ArtifactRole",
+          "type": "string"
+        },
+        "ArtifactStatus": {
+          "enum": [
+            "pending",
+            "ready",
+            "failed",
+            "deleted"
+          ],
+          "title": "ArtifactStatus",
+          "type": "string"
+        },
+        "ArtifactVisibility": {
+          "enum": [
+            "primary",
+            "secondary",
+            "internal"
+          ],
+          "title": "ArtifactVisibility",
+          "type": "string"
+        },
+        "FeedbackProjectionResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "feedback_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Feedback Id",
+              "type": "string"
+            },
+            "recorded_at": {
+              "format": "date-time",
+              "title": "Recorded At",
+              "type": "string"
+            },
+            "revision_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "signal": {
+              "$ref": "#/$defs/FeedbackSignal"
+            }
+          },
+          "required": [
+            "feedback_id",
+            "revision_id",
+            "signal",
+            "recorded_at"
+          ],
+          "title": "FeedbackProjectionResponse",
+          "type": "object"
+        },
+        "FeedbackSignal": {
+          "enum": [
+            "thumbs_up",
+            "thumbs_down"
+          ],
+          "title": "FeedbackSignal",
+          "type": "string"
+        },
+        "QualityCheckResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Detail"
+            },
+            "name": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/$defs/QualityStatus"
+            }
+          },
+          "required": [
+            "name",
+            "status"
+          ],
+          "title": "QualityCheckResponse",
+          "type": "object"
+        },
+        "QualityEvidenceResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "checks": {
+              "items": {
+                "$ref": "#/$defs/QualityCheckResponse"
+              },
+              "maxItems": 256,
+              "title": "Checks",
+              "type": "array"
+            },
+            "score": {
+              "anyOf": [
+                {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Score"
+            },
+            "status": {
+              "$ref": "#/$defs/QualityStatus"
+            },
+            "summary": {
+              "anyOf": [
+                {
+                  "maxLength": 8000,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Summary"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "title": "QualityEvidenceResponse",
+          "type": "object"
+        },
+        "QualityStatus": {
+          "enum": [
+            "not_checked",
+            "passed",
+            "warning",
+            "failed"
+          ],
+          "title": "QualityStatus",
+          "type": "string"
+        },
+        "RenditionKind": {
+          "enum": [
+            "preview",
+            "thumbnail"
+          ],
+          "title": "RenditionKind",
+          "type": "string"
+        },
+        "RenditionProjectionResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "$ref": "#/$defs/RenditionKind"
+            },
+            "mime_type": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Mime Type",
+              "type": "string"
+            },
+            "sha256": {
+              "title": "Sha256",
+              "type": "string"
+            },
+            "size_bytes": {
+              "minimum": 0,
+              "title": "Size Bytes",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "mime_type",
+            "size_bytes",
+            "sha256"
+          ],
+          "title": "RenditionProjectionResponse",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Count",
+          "type": "integer"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/ArtifactProjectionResponse"
+          },
+          "maxItems": 10000,
+          "title": "Items",
+          "type": "array"
+        }
+      },
+      "required": [
+        "count"
+      ],
+      "title": "ArtifactListResponse",
+      "type": "object"
+    },
     "ArtifactProjection": {
       "$defs": {
         "ArtifactAction": {
@@ -334,6 +792,378 @@
         "created_at"
       ],
       "title": "ArtifactProjection",
+      "type": "object"
+    },
+    "ArtifactProjectionResponse": {
+      "$defs": {
+        "ArtifactAction": {
+          "enum": [
+            "preview",
+            "open",
+            "download",
+            "reveal",
+            "feedback",
+            "precise_retouch"
+          ],
+          "title": "ArtifactAction",
+          "type": "string"
+        },
+        "ArtifactFamily": {
+          "enum": [
+            "document",
+            "spreadsheet",
+            "presentation",
+            "pdf",
+            "image",
+            "audio",
+            "video",
+            "data_export",
+            "web_report",
+            "archive",
+            "cloud_link",
+            "source_code",
+            "script",
+            "diff",
+            "log",
+            "temporary",
+            "directory"
+          ],
+          "title": "ArtifactFamily",
+          "type": "string"
+        },
+        "ArtifactLineageResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "source_artifact_ids": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 256,
+              "title": "Source Artifact Ids",
+              "type": "array"
+            },
+            "supersedes_revision_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Supersedes Revision Id"
+            }
+          },
+          "title": "ArtifactLineageResponse",
+          "type": "object"
+        },
+        "ArtifactRole": {
+          "enum": [
+            "deliverable",
+            "rendition",
+            "source",
+            "intermediate",
+            "diagnostic"
+          ],
+          "title": "ArtifactRole",
+          "type": "string"
+        },
+        "ArtifactStatus": {
+          "enum": [
+            "pending",
+            "ready",
+            "failed",
+            "deleted"
+          ],
+          "title": "ArtifactStatus",
+          "type": "string"
+        },
+        "ArtifactVisibility": {
+          "enum": [
+            "primary",
+            "secondary",
+            "internal"
+          ],
+          "title": "ArtifactVisibility",
+          "type": "string"
+        },
+        "FeedbackProjectionResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "feedback_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Feedback Id",
+              "type": "string"
+            },
+            "recorded_at": {
+              "format": "date-time",
+              "title": "Recorded At",
+              "type": "string"
+            },
+            "revision_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "signal": {
+              "$ref": "#/$defs/FeedbackSignal"
+            }
+          },
+          "required": [
+            "feedback_id",
+            "revision_id",
+            "signal",
+            "recorded_at"
+          ],
+          "title": "FeedbackProjectionResponse",
+          "type": "object"
+        },
+        "FeedbackSignal": {
+          "enum": [
+            "thumbs_up",
+            "thumbs_down"
+          ],
+          "title": "FeedbackSignal",
+          "type": "string"
+        },
+        "QualityCheckResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Detail"
+            },
+            "name": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/$defs/QualityStatus"
+            }
+          },
+          "required": [
+            "name",
+            "status"
+          ],
+          "title": "QualityCheckResponse",
+          "type": "object"
+        },
+        "QualityEvidenceResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "checks": {
+              "items": {
+                "$ref": "#/$defs/QualityCheckResponse"
+              },
+              "maxItems": 256,
+              "title": "Checks",
+              "type": "array"
+            },
+            "score": {
+              "anyOf": [
+                {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Score"
+            },
+            "status": {
+              "$ref": "#/$defs/QualityStatus"
+            },
+            "summary": {
+              "anyOf": [
+                {
+                  "maxLength": 8000,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Summary"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "title": "QualityEvidenceResponse",
+          "type": "object"
+        },
+        "QualityStatus": {
+          "enum": [
+            "not_checked",
+            "passed",
+            "warning",
+            "failed"
+          ],
+          "title": "QualityStatus",
+          "type": "string"
+        },
+        "RenditionKind": {
+          "enum": [
+            "preview",
+            "thumbnail"
+          ],
+          "title": "RenditionKind",
+          "type": "string"
+        },
+        "RenditionProjectionResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "$ref": "#/$defs/RenditionKind"
+            },
+            "mime_type": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Mime Type",
+              "type": "string"
+            },
+            "sha256": {
+              "title": "Sha256",
+              "type": "string"
+            },
+            "size_bytes": {
+              "minimum": 0,
+              "title": "Size Bytes",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "mime_type",
+            "size_bytes",
+            "sha256"
+          ],
+          "title": "RenditionProjectionResponse",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "actions": {
+          "items": {
+            "$ref": "#/$defs/ArtifactAction"
+          },
+          "maxItems": 32,
+          "title": "Actions",
+          "type": "array"
+        },
+        "artifact_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "display_name": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Display Name",
+          "type": "string"
+        },
+        "family": {
+          "$ref": "#/$defs/ArtifactFamily"
+        },
+        "feedback": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FeedbackProjectionResponse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "lineage": {
+          "$ref": "#/$defs/ArtifactLineageResponse"
+        },
+        "mime_type": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Mime Type",
+          "type": "string"
+        },
+        "quality_evidence": {
+          "$ref": "#/$defs/QualityEvidenceResponse"
+        },
+        "renditions": {
+          "items": {
+            "$ref": "#/$defs/RenditionProjectionResponse"
+          },
+          "maxItems": 256,
+          "title": "Renditions",
+          "type": "array"
+        },
+        "revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/ArtifactRole"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/$defs/ArtifactStatus"
+        },
+        "visibility": {
+          "$ref": "#/$defs/ArtifactVisibility"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "revision_id",
+        "family",
+        "role",
+        "visibility",
+        "status",
+        "display_name",
+        "mime_type",
+        "size_bytes",
+        "sha256",
+        "created_at",
+        "lineage",
+        "quality_evidence"
+      ],
+      "title": "ArtifactProjectionResponse",
       "type": "object"
     },
     "BootstrapResponse": {
@@ -3410,6 +4240,49 @@
         "event_type"
       ],
       "title": "EventEnvelope",
+      "type": "object"
+    },
+    "FeedbackProjectionResponse": {
+      "$defs": {
+        "FeedbackSignal": {
+          "enum": [
+            "thumbs_up",
+            "thumbs_down"
+          ],
+          "title": "FeedbackSignal",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "feedback_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Feedback Id",
+          "type": "string"
+        },
+        "recorded_at": {
+          "format": "date-time",
+          "title": "Recorded At",
+          "type": "string"
+        },
+        "revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "signal": {
+          "$ref": "#/$defs/FeedbackSignal"
+        }
+      },
+      "required": [
+        "feedback_id",
+        "revision_id",
+        "signal",
+        "recorded_at"
+      ],
+      "title": "FeedbackProjectionResponse",
       "type": "object"
     },
     "InputAttachmentProjection": {
@@ -6521,6 +7394,1533 @@
       "title": "RetouchBody",
       "type": "object"
     },
+    "RetouchJobResponse": {
+      "$defs": {
+        "RetouchAnnotationResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "annotation_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Annotation Id"
+            },
+            "instruction": {
+              "maxLength": 4000,
+              "minLength": 1,
+              "title": "Instruction",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "rectangle",
+                "ellipse",
+                "point",
+                "polygon",
+                "polyline",
+                "brush"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "normalized_geometry": {
+              "additionalProperties": true,
+              "title": "Normalized Geometry",
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "normalized_geometry",
+            "instruction"
+          ],
+          "title": "RetouchAnnotationResponse",
+          "type": "object"
+        },
+        "RetouchEditSurfaceResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "base_revision_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Base Revision Id",
+              "type": "string"
+            },
+            "color_space": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Color Space",
+              "type": "string"
+            },
+            "coordinate_space_version": {
+              "const": "oriented-normalized-v1",
+              "title": "Coordinate Space Version",
+              "type": "string"
+            },
+            "height_px": {
+              "maximum": 100000,
+              "minimum": 1,
+              "title": "Height Px",
+              "type": "integer"
+            },
+            "mime_type": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Mime Type",
+              "type": "string"
+            },
+            "orientation": {
+              "maximum": 8,
+              "minimum": 1,
+              "title": "Orientation",
+              "type": "integer"
+            },
+            "raster_digest": {
+              "title": "Raster Digest",
+              "type": "string"
+            },
+            "width_px": {
+              "maximum": 100000,
+              "minimum": 1,
+              "title": "Width Px",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "base_revision_id",
+            "raster_digest",
+            "width_px",
+            "height_px",
+            "orientation",
+            "color_space",
+            "mime_type",
+            "coordinate_space_version"
+          ],
+          "title": "RetouchEditSurfaceResponse",
+          "type": "object"
+        },
+        "RetouchInspectionRegionResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "normalized_geometry": {
+              "additionalProperties": true,
+              "title": "Normalized Geometry",
+              "type": "object"
+            },
+            "summary": {
+              "maxLength": 4000,
+              "minLength": 1,
+              "title": "Summary",
+              "type": "string"
+            }
+          },
+          "required": [
+            "normalized_geometry",
+            "summary"
+          ],
+          "title": "RetouchInspectionRegionResponse",
+          "type": "object"
+        },
+        "RetouchJobStatus": {
+          "enum": [
+            "queued",
+            "running",
+            "completed",
+            "failed",
+            "cancelled"
+          ],
+          "title": "RetouchJobStatus",
+          "type": "string"
+        },
+        "RetouchMaskResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "coordinate_space_version": {
+              "const": "oriented-normalized-v1",
+              "title": "Coordinate Space Version",
+              "type": "string"
+            },
+            "covered_fraction": {
+              "maximum": 1,
+              "minimum": 0,
+              "title": "Covered Fraction",
+              "type": "number"
+            },
+            "height_px": {
+              "minimum": 1,
+              "title": "Height Px",
+              "type": "integer"
+            },
+            "pixel_regions": {
+              "items": {
+                "$ref": "#/$defs/RetouchPixelRegionResponse"
+              },
+              "maxItems": 100,
+              "title": "Pixel Regions",
+              "type": "array"
+            },
+            "schema_version": {
+              "const": 1,
+              "title": "Schema Version",
+              "type": "integer"
+            },
+            "sha256": {
+              "title": "Sha256",
+              "type": "string"
+            },
+            "size_bytes": {
+              "minimum": 1,
+              "title": "Size Bytes",
+              "type": "integer"
+            },
+            "width_px": {
+              "minimum": 1,
+              "title": "Width Px",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "schema_version",
+            "coordinate_space_version",
+            "width_px",
+            "height_px",
+            "sha256",
+            "size_bytes",
+            "covered_fraction"
+          ],
+          "title": "RetouchMaskResponse",
+          "type": "object"
+        },
+        "RetouchPixelRegionResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "height": {
+              "minimum": 1,
+              "title": "Height",
+              "type": "integer"
+            },
+            "width": {
+              "minimum": 1,
+              "title": "Width",
+              "type": "integer"
+            },
+            "x": {
+              "minimum": 0,
+              "title": "X",
+              "type": "integer"
+            },
+            "y": {
+              "minimum": 0,
+              "title": "Y",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "x",
+            "y",
+            "width",
+            "height"
+          ],
+          "title": "RetouchPixelRegionResponse",
+          "type": "object"
+        },
+        "RetouchRequestResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "agent_model_id": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Agent Model Id"
+            },
+            "annotations": {
+              "items": {
+                "$ref": "#/$defs/RetouchAnnotationResponse"
+              },
+              "maxItems": 100,
+              "title": "Annotations",
+              "type": "array"
+            },
+            "base_revision_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Base Revision Id",
+              "type": "string"
+            },
+            "client_request_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Client Request Id",
+              "type": "string"
+            },
+            "edit_surface": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RetouchEditSurfaceResponse"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "global_instruction": {
+              "default": "",
+              "maxLength": 8000,
+              "title": "Global Instruction",
+              "type": "string"
+            },
+            "image_model_id": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Image Model Id"
+            },
+            "mask": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RetouchMaskResponse"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "pinned_reference_revision_ids": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Pinned Reference Revision Ids",
+              "type": "object"
+            },
+            "reference_artifact_ids": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 10,
+              "title": "Reference Artifact Ids",
+              "type": "array"
+            },
+            "selected_artifact_ids": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 50,
+              "minItems": 1,
+              "title": "Selected Artifact Ids",
+              "type": "array"
+            }
+          },
+          "required": [
+            "base_revision_id",
+            "selected_artifact_ids",
+            "client_request_id"
+          ],
+          "title": "RetouchRequestResponse",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "base_revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Base Revision Id",
+          "type": "string"
+        },
+        "change_summary": {
+          "anyOf": [
+            {
+              "maxLength": 8000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Change Summary"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "failure_reason": {
+          "anyOf": [
+            {
+              "maxLength": 8000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure Reason"
+        },
+        "inspection_regions": {
+          "items": {
+            "$ref": "#/$defs/RetouchInspectionRegionResponse"
+          },
+          "maxItems": 100,
+          "title": "Inspection Regions",
+          "type": "array"
+        },
+        "job_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Job Id",
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/RetouchRequestResponse"
+        },
+        "result_revision_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Result Revision Id"
+        },
+        "status": {
+          "$ref": "#/$defs/RetouchJobStatus"
+        }
+      },
+      "required": [
+        "job_id",
+        "artifact_id",
+        "base_revision_id",
+        "request",
+        "status",
+        "created_at"
+      ],
+      "title": "RetouchJobResponse",
+      "type": "object"
+    },
+    "RetouchWorkspaceResponse": {
+      "$defs": {
+        "ArtifactAction": {
+          "enum": [
+            "preview",
+            "open",
+            "download",
+            "reveal",
+            "feedback",
+            "precise_retouch"
+          ],
+          "title": "ArtifactAction",
+          "type": "string"
+        },
+        "ArtifactFamily": {
+          "enum": [
+            "document",
+            "spreadsheet",
+            "presentation",
+            "pdf",
+            "image",
+            "audio",
+            "video",
+            "data_export",
+            "web_report",
+            "archive",
+            "cloud_link",
+            "source_code",
+            "script",
+            "diff",
+            "log",
+            "temporary",
+            "directory"
+          ],
+          "title": "ArtifactFamily",
+          "type": "string"
+        },
+        "ArtifactLineageResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "source_artifact_ids": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 256,
+              "title": "Source Artifact Ids",
+              "type": "array"
+            },
+            "supersedes_revision_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Supersedes Revision Id"
+            }
+          },
+          "title": "ArtifactLineageResponse",
+          "type": "object"
+        },
+        "ArtifactProjectionResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "actions": {
+              "items": {
+                "$ref": "#/$defs/ArtifactAction"
+              },
+              "maxItems": 32,
+              "title": "Actions",
+              "type": "array"
+            },
+            "artifact_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Artifact Id",
+              "type": "string"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "display_name": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Display Name",
+              "type": "string"
+            },
+            "family": {
+              "$ref": "#/$defs/ArtifactFamily"
+            },
+            "feedback": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/FeedbackProjectionResponse"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "lineage": {
+              "$ref": "#/$defs/ArtifactLineageResponse"
+            },
+            "mime_type": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Mime Type",
+              "type": "string"
+            },
+            "quality_evidence": {
+              "$ref": "#/$defs/QualityEvidenceResponse"
+            },
+            "renditions": {
+              "items": {
+                "$ref": "#/$defs/RenditionProjectionResponse"
+              },
+              "maxItems": 256,
+              "title": "Renditions",
+              "type": "array"
+            },
+            "revision_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "role": {
+              "$ref": "#/$defs/ArtifactRole"
+            },
+            "sha256": {
+              "title": "Sha256",
+              "type": "string"
+            },
+            "size_bytes": {
+              "minimum": 0,
+              "title": "Size Bytes",
+              "type": "integer"
+            },
+            "status": {
+              "$ref": "#/$defs/ArtifactStatus"
+            },
+            "visibility": {
+              "$ref": "#/$defs/ArtifactVisibility"
+            }
+          },
+          "required": [
+            "artifact_id",
+            "revision_id",
+            "family",
+            "role",
+            "visibility",
+            "status",
+            "display_name",
+            "mime_type",
+            "size_bytes",
+            "sha256",
+            "created_at",
+            "lineage",
+            "quality_evidence"
+          ],
+          "title": "ArtifactProjectionResponse",
+          "type": "object"
+        },
+        "ArtifactRole": {
+          "enum": [
+            "deliverable",
+            "rendition",
+            "source",
+            "intermediate",
+            "diagnostic"
+          ],
+          "title": "ArtifactRole",
+          "type": "string"
+        },
+        "ArtifactStatus": {
+          "enum": [
+            "pending",
+            "ready",
+            "failed",
+            "deleted"
+          ],
+          "title": "ArtifactStatus",
+          "type": "string"
+        },
+        "ArtifactVisibility": {
+          "enum": [
+            "primary",
+            "secondary",
+            "internal"
+          ],
+          "title": "ArtifactVisibility",
+          "type": "string"
+        },
+        "FeedbackProjectionResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "feedback_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Feedback Id",
+              "type": "string"
+            },
+            "recorded_at": {
+              "format": "date-time",
+              "title": "Recorded At",
+              "type": "string"
+            },
+            "revision_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "signal": {
+              "$ref": "#/$defs/FeedbackSignal"
+            }
+          },
+          "required": [
+            "feedback_id",
+            "revision_id",
+            "signal",
+            "recorded_at"
+          ],
+          "title": "FeedbackProjectionResponse",
+          "type": "object"
+        },
+        "FeedbackSignal": {
+          "enum": [
+            "thumbs_up",
+            "thumbs_down"
+          ],
+          "title": "FeedbackSignal",
+          "type": "string"
+        },
+        "QualityCheckResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Detail"
+            },
+            "name": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/$defs/QualityStatus"
+            }
+          },
+          "required": [
+            "name",
+            "status"
+          ],
+          "title": "QualityCheckResponse",
+          "type": "object"
+        },
+        "QualityEvidenceResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "checks": {
+              "items": {
+                "$ref": "#/$defs/QualityCheckResponse"
+              },
+              "maxItems": 256,
+              "title": "Checks",
+              "type": "array"
+            },
+            "score": {
+              "anyOf": [
+                {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Score"
+            },
+            "status": {
+              "$ref": "#/$defs/QualityStatus"
+            },
+            "summary": {
+              "anyOf": [
+                {
+                  "maxLength": 8000,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Summary"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "title": "QualityEvidenceResponse",
+          "type": "object"
+        },
+        "QualityStatus": {
+          "enum": [
+            "not_checked",
+            "passed",
+            "warning",
+            "failed"
+          ],
+          "title": "QualityStatus",
+          "type": "string"
+        },
+        "RenditionKind": {
+          "enum": [
+            "preview",
+            "thumbnail"
+          ],
+          "title": "RenditionKind",
+          "type": "string"
+        },
+        "RenditionProjectionResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "$ref": "#/$defs/RenditionKind"
+            },
+            "mime_type": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Mime Type",
+              "type": "string"
+            },
+            "sha256": {
+              "title": "Sha256",
+              "type": "string"
+            },
+            "size_bytes": {
+              "minimum": 0,
+              "title": "Size Bytes",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "mime_type",
+            "size_bytes",
+            "sha256"
+          ],
+          "title": "RenditionProjectionResponse",
+          "type": "object"
+        },
+        "RetouchAnnotationResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "annotation_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Annotation Id"
+            },
+            "instruction": {
+              "maxLength": 4000,
+              "minLength": 1,
+              "title": "Instruction",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "rectangle",
+                "ellipse",
+                "point",
+                "polygon",
+                "polyline",
+                "brush"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "normalized_geometry": {
+              "additionalProperties": true,
+              "title": "Normalized Geometry",
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "normalized_geometry",
+            "instruction"
+          ],
+          "title": "RetouchAnnotationResponse",
+          "type": "object"
+        },
+        "RetouchEditSurfaceResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "base_revision_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Base Revision Id",
+              "type": "string"
+            },
+            "color_space": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Color Space",
+              "type": "string"
+            },
+            "coordinate_space_version": {
+              "const": "oriented-normalized-v1",
+              "title": "Coordinate Space Version",
+              "type": "string"
+            },
+            "height_px": {
+              "maximum": 100000,
+              "minimum": 1,
+              "title": "Height Px",
+              "type": "integer"
+            },
+            "mime_type": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Mime Type",
+              "type": "string"
+            },
+            "orientation": {
+              "maximum": 8,
+              "minimum": 1,
+              "title": "Orientation",
+              "type": "integer"
+            },
+            "raster_digest": {
+              "title": "Raster Digest",
+              "type": "string"
+            },
+            "width_px": {
+              "maximum": 100000,
+              "minimum": 1,
+              "title": "Width Px",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "base_revision_id",
+            "raster_digest",
+            "width_px",
+            "height_px",
+            "orientation",
+            "color_space",
+            "mime_type",
+            "coordinate_space_version"
+          ],
+          "title": "RetouchEditSurfaceResponse",
+          "type": "object"
+        },
+        "RetouchInspectionRegionResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "normalized_geometry": {
+              "additionalProperties": true,
+              "title": "Normalized Geometry",
+              "type": "object"
+            },
+            "summary": {
+              "maxLength": 4000,
+              "minLength": 1,
+              "title": "Summary",
+              "type": "string"
+            }
+          },
+          "required": [
+            "normalized_geometry",
+            "summary"
+          ],
+          "title": "RetouchInspectionRegionResponse",
+          "type": "object"
+        },
+        "RetouchJobResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Artifact Id",
+              "type": "string"
+            },
+            "base_revision_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Base Revision Id",
+              "type": "string"
+            },
+            "change_summary": {
+              "anyOf": [
+                {
+                  "maxLength": 8000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Change Summary"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "failure_reason": {
+              "anyOf": [
+                {
+                  "maxLength": 8000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Failure Reason"
+            },
+            "inspection_regions": {
+              "items": {
+                "$ref": "#/$defs/RetouchInspectionRegionResponse"
+              },
+              "maxItems": 100,
+              "title": "Inspection Regions",
+              "type": "array"
+            },
+            "job_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Job Id",
+              "type": "string"
+            },
+            "request": {
+              "$ref": "#/$defs/RetouchRequestResponse"
+            },
+            "result_revision_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Result Revision Id"
+            },
+            "status": {
+              "$ref": "#/$defs/RetouchJobStatus"
+            }
+          },
+          "required": [
+            "job_id",
+            "artifact_id",
+            "base_revision_id",
+            "request",
+            "status",
+            "created_at"
+          ],
+          "title": "RetouchJobResponse",
+          "type": "object"
+        },
+        "RetouchJobStatus": {
+          "enum": [
+            "queued",
+            "running",
+            "completed",
+            "failed",
+            "cancelled"
+          ],
+          "title": "RetouchJobStatus",
+          "type": "string"
+        },
+        "RetouchMaskResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "coordinate_space_version": {
+              "const": "oriented-normalized-v1",
+              "title": "Coordinate Space Version",
+              "type": "string"
+            },
+            "covered_fraction": {
+              "maximum": 1,
+              "minimum": 0,
+              "title": "Covered Fraction",
+              "type": "number"
+            },
+            "height_px": {
+              "minimum": 1,
+              "title": "Height Px",
+              "type": "integer"
+            },
+            "pixel_regions": {
+              "items": {
+                "$ref": "#/$defs/RetouchPixelRegionResponse"
+              },
+              "maxItems": 100,
+              "title": "Pixel Regions",
+              "type": "array"
+            },
+            "schema_version": {
+              "const": 1,
+              "title": "Schema Version",
+              "type": "integer"
+            },
+            "sha256": {
+              "title": "Sha256",
+              "type": "string"
+            },
+            "size_bytes": {
+              "minimum": 1,
+              "title": "Size Bytes",
+              "type": "integer"
+            },
+            "width_px": {
+              "minimum": 1,
+              "title": "Width Px",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "schema_version",
+            "coordinate_space_version",
+            "width_px",
+            "height_px",
+            "sha256",
+            "size_bytes",
+            "covered_fraction"
+          ],
+          "title": "RetouchMaskResponse",
+          "type": "object"
+        },
+        "RetouchPixelRegionResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "height": {
+              "minimum": 1,
+              "title": "Height",
+              "type": "integer"
+            },
+            "width": {
+              "minimum": 1,
+              "title": "Width",
+              "type": "integer"
+            },
+            "x": {
+              "minimum": 0,
+              "title": "X",
+              "type": "integer"
+            },
+            "y": {
+              "minimum": 0,
+              "title": "Y",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "x",
+            "y",
+            "width",
+            "height"
+          ],
+          "title": "RetouchPixelRegionResponse",
+          "type": "object"
+        },
+        "RetouchReferenceResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Artifact Id",
+              "type": "string"
+            },
+            "display_name": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Display Name",
+              "type": "string"
+            },
+            "mime_type": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Mime Type",
+              "type": "string"
+            },
+            "preview_url": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Preview Url",
+              "type": "string"
+            },
+            "revision_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "sha256": {
+              "title": "Sha256",
+              "type": "string"
+            }
+          },
+          "required": [
+            "artifact_id",
+            "revision_id",
+            "display_name",
+            "mime_type",
+            "sha256",
+            "preview_url"
+          ],
+          "title": "RetouchReferenceResponse",
+          "type": "object"
+        },
+        "RetouchRequestResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "agent_model_id": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Agent Model Id"
+            },
+            "annotations": {
+              "items": {
+                "$ref": "#/$defs/RetouchAnnotationResponse"
+              },
+              "maxItems": 100,
+              "title": "Annotations",
+              "type": "array"
+            },
+            "base_revision_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Base Revision Id",
+              "type": "string"
+            },
+            "client_request_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Client Request Id",
+              "type": "string"
+            },
+            "edit_surface": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RetouchEditSurfaceResponse"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "global_instruction": {
+              "default": "",
+              "maxLength": 8000,
+              "title": "Global Instruction",
+              "type": "string"
+            },
+            "image_model_id": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Image Model Id"
+            },
+            "mask": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RetouchMaskResponse"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "pinned_reference_revision_ids": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Pinned Reference Revision Ids",
+              "type": "object"
+            },
+            "reference_artifact_ids": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 10,
+              "title": "Reference Artifact Ids",
+              "type": "array"
+            },
+            "selected_artifact_ids": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 50,
+              "minItems": 1,
+              "title": "Selected Artifact Ids",
+              "type": "array"
+            }
+          },
+          "required": [
+            "base_revision_id",
+            "selected_artifact_ids",
+            "client_request_id"
+          ],
+          "title": "RetouchRequestResponse",
+          "type": "object"
+        },
+        "RetouchViewStateResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "pan_x": {
+              "default": 0,
+              "maximum": 16,
+              "minimum": -16,
+              "title": "Pan X",
+              "type": "number"
+            },
+            "pan_y": {
+              "default": 0,
+              "maximum": 16,
+              "minimum": -16,
+              "title": "Pan Y",
+              "type": "number"
+            },
+            "selected_annotation_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Selected Annotation Id"
+            },
+            "tool": {
+              "default": "select",
+              "enum": [
+                "rectangle",
+                "ellipse",
+                "point",
+                "polygon",
+                "polyline",
+                "brush",
+                "select",
+                "pan"
+              ],
+              "title": "Tool",
+              "type": "string"
+            },
+            "zoom": {
+              "default": 1,
+              "exclusiveMinimum": 0,
+              "maximum": 64,
+              "title": "Zoom",
+              "type": "number"
+            }
+          },
+          "title": "RetouchViewStateResponse",
+          "type": "object"
+        },
+        "RetouchWorkspaceStatus": {
+          "enum": [
+            "editing",
+            "submitting",
+            "submitted"
+          ],
+          "title": "RetouchWorkspaceStatus",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "annotations": {
+          "items": {
+            "$ref": "#/$defs/RetouchAnnotationResponse"
+          },
+          "maxItems": 100,
+          "title": "Annotations",
+          "type": "array"
+        },
+        "artifact_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "edit_surface": {
+          "$ref": "#/$defs/RetouchEditSurfaceResponse"
+        },
+        "global_instruction": {
+          "default": "",
+          "maxLength": 8000,
+          "title": "Global Instruction",
+          "type": "string"
+        },
+        "job": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetouchJobResponse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "mask": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetouchMaskResponse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "references": {
+          "items": {
+            "$ref": "#/$defs/RetouchReferenceResponse"
+          },
+          "maxItems": 10,
+          "title": "References",
+          "type": "array"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactProjectionResponse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "result_surface": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetouchEditSurfaceResponse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "result_url": {
+          "anyOf": [
+            {
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Result Url"
+        },
+        "status": {
+          "$ref": "#/$defs/RetouchWorkspaceStatus"
+        },
+        "submitted_job_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Submitted Job Id"
+        },
+        "surface_url": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Surface Url",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "view_state": {
+          "$ref": "#/$defs/RetouchViewStateResponse"
+        },
+        "workspace_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "artifact_id",
+        "version",
+        "status",
+        "edit_surface",
+        "view_state",
+        "surface_url",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "RetouchWorkspaceResponse",
+      "type": "object"
+    },
     "RetouchWorkspaceSubmitBody": {
       "additionalProperties": false,
       "properties": {
@@ -8477,13 +10877,17 @@
   },
   "schema_version": 1,
   "sources": {
+    "ArtifactExternalActionResponse": "ecorex.artifacts.wire.ArtifactExternalActionResponse",
+    "ArtifactListResponse": "ecorex.artifacts.wire.ArtifactListResponse",
     "ArtifactProjection": "ecorex.artifacts.models.ArtifactProjection",
+    "ArtifactProjectionResponse": "ecorex.artifacts.wire.ArtifactProjectionResponse",
     "BootstrapResponse": "ecorex.protocol.BootstrapResponse",
     "ConnectorLoginBeginResponse": "ecorex.protocol.ConnectorLoginBeginResponse",
     "ConnectorLoginCancelResponse": "ecorex.protocol.ConnectorLoginCancelResponse",
     "ConnectorLoginCheckResponse": "ecorex.protocol.ConnectorLoginCheckResponse",
     "CreateTurnRequest": "ecorex.protocol.CreateTurnRequest",
     "EventEnvelope": "ecorex.protocol.EventEnvelope",
+    "FeedbackProjectionResponse": "ecorex.artifacts.wire.FeedbackProjectionResponse",
     "InputAttachmentProjection": "ecorex.protocol.InputAttachmentProjection",
     "InteractionMutationResponse": "ecorex.protocol.InteractionMutationResponse",
     "InteractionProjection": "ecorex.protocol.InteractionProjection",
@@ -8502,6 +10906,8 @@
     "ReplaceTurnResponse": "ecorex.protocol.ReplaceTurnResponse",
     "RespondInteractionRequest": "ecorex.protocol.RespondInteractionRequest",
     "RetouchBody": "ecorex.artifacts.api.RetouchBody",
+    "RetouchJobResponse": "ecorex.artifacts.wire.RetouchJobResponse",
+    "RetouchWorkspaceResponse": "ecorex.artifacts.wire.RetouchWorkspaceResponse",
     "RetouchWorkspaceSubmitBody": "ecorex.artifacts.api.RetouchWorkspaceSubmitBody",
     "SteerTurnRequest": "ecorex.protocol.SteerTurnRequest",
     "SystemHealthPublicResponse": "ecorex.observability.system_api.SystemHealthPublicResponse",

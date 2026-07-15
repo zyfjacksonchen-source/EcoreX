@@ -885,7 +885,7 @@ export type RetouchGeometry =
   | { kind: "brush"; normalized_geometry: { points: RetouchPoint[]; width?: number } };
 
 export type RetouchAnnotation = RetouchGeometry & {
-  annotation_id?: string;
+  annotation_id?: string | null;
   instruction: string;
 };
 
@@ -904,13 +904,15 @@ export interface RetouchJobProjection {
   request: {
     base_revision_id: string;
     selected_artifact_ids: string[];
+    agent_model_id: string | null;
+    image_model_id: string | null;
     annotations: RetouchAnnotation[];
     reference_artifact_ids: string[];
     global_instruction: string;
     client_request_id: string;
-    pinned_reference_revision_ids?: Record<string, string>;
-    edit_surface?: RetouchEditSurface;
-    mask?: RetouchMaskProjection;
+    pinned_reference_revision_ids: Record<string, string>;
+    edit_surface: RetouchEditSurface | null;
+    mask: RetouchMaskProjection | null;
   };
   created_at: string;
   result_revision_id: string | null;
@@ -967,7 +969,7 @@ export interface RetouchWorkspaceProjection {
   annotations: RetouchAnnotation[];
   references: RetouchReferenceProjection[];
   global_instruction: string;
-  view_state: Partial<RetouchViewState>;
+  view_state: RetouchViewState;
   mask: RetouchMaskProjection | null;
   submitted_job_id: string | null;
   job: RetouchJobProjection | null;

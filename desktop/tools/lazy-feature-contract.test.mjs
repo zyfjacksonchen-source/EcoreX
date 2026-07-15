@@ -24,6 +24,10 @@ const runtimeClient = await readFile(
   new URL("../src/v1/api/runtimeClient.ts", import.meta.url),
   "utf-8",
 );
+const artifactOperations = await readFile(
+  new URL("../src/v1/api/artifactRuntimeOperations.ts", import.meta.url),
+  "utf-8",
+);
 
 const FEATURES = [
   "ArtifactPreviewDialog",
@@ -83,12 +87,20 @@ test("Settings lazy boundary preserves system health contract", () => {
 
 test("secondary Runtime response contracts are progressively loaded before state admission", () => {
   assert.match(runtimeClient, /await import\("\.\/settingsRuntimeContract\.ts"\)/u);
+  assert.match(runtimeClient, /await import\("\.\/artifactRuntimeOperations\.ts"\)/u);
   assert.doesNotMatch(
     runtimeClient,
     /import\s*\{[^}]*validateSettingsBoundary[^}]*\}\s*from/u,
   );
+  assert.doesNotMatch(
+    runtimeClient,
+    /import\s*\{[^}]*validateArtifactBoundary[^}]*\}\s*from/u,
+  );
   assert.match(runtimeClient, /typeof validate === "number"/u);
   assert.match(runtimeClient, /contract\.validateSettingsBoundary\(validate, payload, validationContext\)/u);
+  assert.match(artifactOperations, /import \{ validateArtifactBoundary \} from "\.\/artifactRuntimeContract\.ts";/u);
+  assert.match(artifactOperations, /case "request_retouch":/u);
+  assert.match(artifactOperations, /case "submit_workspace":/u);
 });
 
 test("Settings exposes only aggregate legacy credential categories and confirmed deletion", () => {

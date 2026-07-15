@@ -22,7 +22,8 @@ Modern-minimal · quiet utilitarian office workbench.
 Codex tonal DNA supplies the canvas, ink, blue interaction accent, contrast,
 and semantic colours. EcoreX orange remains the restrained brand/action note;
 the two colours never compete inside one control. Chromatic colour occupies at
-most 5% of a viewport.
+most 5% of a viewport. Product surfaces use the measured reference swatches
+below through semantic tokens; components never carry their own raw colours.
 
 - Light Codex base: surface `#ffffff` → `oklch(1 0 0)`, ink `#1a1c1f` →
   `oklch(0.225591 0.006566 258.364)`, accent `#339cff` →
@@ -30,8 +31,14 @@ most 5% of a viewport.
 - Dark Codex base: surface `#111111` → `oklch(0.177638 0 0)`, ink `#fcfcfc` →
   `oklch(0.991069 0 0)`, accent `#0169cc` →
   `oklch(0.528649 0.173447 254.975)`, contrast setting `60`.
+- Light surface map: non-chat canvas `#f7f7f7`, chat/workspace and Composer
+  `#ffffff`, current conversation `#ebebeb`, scrollbar thumb `#e5e5e5`.
+- Dark surface map: non-chat canvas `#0f0f0f`, chat/workspace `#111111`, and
+  Composer/current conversation/scrollbar thumb share `#202020` exactly.
 - Blue owns focus, links, selection, toggles, and capability state. EcoreX
   orange owns primary product actions such as Send and branded emphasis.
+  Conversation selection is the neutral session-emphasis surface; blue remains
+  reserved for interactive focus and capability state.
 - Semantic diff and Skill colours are exported from the supplied Codex theme;
   components consume named tokens only.
 

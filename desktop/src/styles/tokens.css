@@ -81,11 +81,14 @@
   color-scheme: light;
 
   --theme-contrast: 45;
-  --color-canvas: oklch(0.975 0.003 258);
+  --color-canvas: oklch(0.976139 0 0);
+  --color-workspace-surface: oklch(1 0 0);
   --color-surface: oklch(1 0 0);
   --color-raised: oklch(0.965 0.004 258);
   --color-hover: oklch(0.94 0.006 258);
-  --color-selected: oklch(0.93 0.035 251);
+  --color-session-emphasis: oklch(0.94007 0 0);
+  --color-selected: var(--color-session-emphasis);
+  --color-composer-surface: var(--color-workspace-surface);
   --color-overlay-surface: oklch(1 0 0);
 
   --color-ink: oklch(0.225591 0.006566 258.364);
@@ -120,7 +123,7 @@
   --elevation-toast: 0 12px 32px oklch(0.22 0.01 258 / 0.16);
 
   --scrollbar-track: transparent;
-  --scrollbar-thumb: oklch(0.75 0.008 258);
+  --scrollbar-thumb: oklch(0.921906 0 0);
   --scrollbar-thumb-hover: oklch(0.62 0.01 258);
 
 }
@@ -129,11 +132,14 @@
   color-scheme: dark;
 
   --theme-contrast: 60;
-  --color-canvas: oklch(0.135 0 0);
+  --color-canvas: oklch(0.168416 0 0);
+  --color-workspace-surface: oklch(0.177638 0 0);
   --color-surface: oklch(0.177638 0 0);
   --color-raised: oklch(0.22 0.004 258);
   --color-hover: oklch(0.27 0.006 258);
-  --color-selected: oklch(0.3 0.06 255);
+  --color-session-emphasis: oklch(0.243535 0 0);
+  --color-selected: var(--color-session-emphasis);
+  --color-composer-surface: var(--color-session-emphasis);
   --color-overlay-surface: oklch(0.23 0.004 258);
 
   --color-ink: oklch(0.991069 0 0);
@@ -168,7 +174,7 @@
   --elevation-toast: 0 14px 36px oklch(0.06 0.004 258 / 0.5);
 
   --scrollbar-track: transparent;
-  --scrollbar-thumb: oklch(0.43 0.01 258);
+  --scrollbar-thumb: var(--color-session-emphasis);
   --scrollbar-thumb-hover: oklch(0.53 0.012 258);
 
 }
@@ -178,10 +184,13 @@
   :root[data-theme="light"],
   :root[data-theme="dark"] {
     --color-canvas: Canvas;
+    --color-workspace-surface: Canvas;
     --color-surface: Canvas;
     --color-raised: Canvas;
     --color-hover: Highlight;
+    --color-session-emphasis: Highlight;
     --color-selected: Highlight;
+    --color-composer-surface: Canvas;
     --color-overlay-surface: Canvas;
     --color-ink: CanvasText;
     --color-ink-muted: CanvasText;

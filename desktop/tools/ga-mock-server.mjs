@@ -502,8 +502,36 @@ function editSurface(source) {
 }
 
 function workspaceWire(workspace) {
+  const annotations = workspace.annotations.map((annotation) => ({
+    ...annotation,
+    annotation_id: annotation.annotation_id ?? null,
+  }));
+  const viewState = {
+    zoom: 1,
+    pan_x: 0,
+    pan_y: 0,
+    selected_annotation_id: null,
+    tool: "select",
+    ...workspace.view_state,
+  };
+  const job = workspace.job ? {
+    ...workspace.job,
+    request: {
+      pinned_reference_revision_ids: {},
+      edit_surface: null,
+      mask: null,
+      ...workspace.job.request,
+      annotations: workspace.job.request.annotations.map((annotation) => ({
+        ...annotation,
+        annotation_id: annotation.annotation_id ?? null,
+      })),
+    },
+  } : null;
   return {
     ...workspace,
+    annotations,
+    view_state: viewState,
+    job,
     surface_url: `/api/v1/retouch-workspaces/${workspace.workspace_id}/surface`,
     result_url: workspace.result
       ? `/api/v1/retouch-workspaces/${workspace.workspace_id}/result`
@@ -2265,10 +2293,15 @@ async function handleApi(holder, req, res, url) {
         request: {
           base_revision_id: baseRevision,
           selected_artifact_ids: [source.artifact_id],
+          agent_model_id: request.agent_model_id,
+          image_model_id: request.image_model_id,
           annotations: workspace.annotations,
           reference_artifact_ids: workspace.references.map((reference) => reference.artifact_id),
           global_instruction: workspace.global_instruction,
           client_request_id: request.client_request_id,
+          pinned_reference_revision_ids: Object.fromEntries(
+            workspace.references.map((reference) => [reference.artifact_id, reference.revision_id]),
+          ),
           edit_surface: workspace.edit_surface,
           mask: workspace.mask,
         },
@@ -2420,8 +2453,25 @@ async function handleApi(holder, req, res, url) {
       job_id: `job-retouch-${state.seq}`,
       artifact_id: source.artifact_id,
       base_revision_id: source.revision_id,
+      request: {
+        base_revision_id: source.revision_id,
+        selected_artifact_ids: [source.artifact_id],
+        agent_model_id: request.agent_model_id ?? null,
+        image_model_id: request.image_model_id ?? null,
+        annotations: (Array.isArray(request.annotations) ? request.annotations : []).map((annotation) => ({
+          ...annotation,
+          annotation_id: annotation.annotation_id ?? null,
+        })),
+        reference_artifact_ids: Array.isArray(request.reference_artifact_ids)
+          ? request.reference_artifact_ids
+          : [],
+        global_instruction: String(request.global_instruction ?? ""),
+        client_request_id: request.client_request_id,
+        pinned_reference_revision_ids: {},
+        edit_surface: null,
+        mask: null,
+      },
       status: "queued",
-      client_request_id: request.client_request_id,
       created_at: NOW,
       result_revision_id: null,
       change_summary: null,
