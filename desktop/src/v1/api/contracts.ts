@@ -12,6 +12,15 @@ import type {
   GeneratedRenditionKind,
 } from "./generatedRuntimeContract.ts";
 import type {
+  GeneratedMemoryResetStatus,
+  GeneratedMigrationCredentialKind,
+  GeneratedMigrationCredentialOrigin,
+  GeneratedMigrationQuarantineStatus,
+  GeneratedOutputLocationAlias,
+  GeneratedOutputMaterializationStatus,
+  GeneratedSystemHealthStatus,
+} from "./generatedSettingsRuntimeContract.ts";
+import type {
   GeneratedInteractionKind,
   GeneratedInteractionStatus,
   GeneratedItemKind,
@@ -586,7 +595,7 @@ export interface UpdateSnapshot {
 
 export interface MemoryResetProjection {
   reset_id: string;
-  status: "active" | "undone" | "purged";
+  status: GeneratedMemoryResetStatus;
   affected_records: number;
   affected_files: number;
   created_at: string;
@@ -611,20 +620,9 @@ export interface MemoryMutationResponse {
   reset: MemoryResetProjection;
 }
 
-export type MigrationCredentialKind =
-  | "api_key"
-  | "refresh_token"
-  | "access_token"
-  | "password"
-  | "cryptographic_key"
-  | "client_secret"
-  | "credential";
+export type MigrationCredentialKind = GeneratedMigrationCredentialKind;
 
-export type MigrationCredentialOrigin =
-  | "product_configuration"
-  | "mcp_configuration"
-  | "skill_configuration"
-  | "permission_configuration";
+export type MigrationCredentialOrigin = GeneratedMigrationCredentialOrigin;
 
 export interface MigrationQuarantineItem {
   kind: MigrationCredentialKind;
@@ -633,14 +631,14 @@ export interface MigrationQuarantineItem {
 }
 
 export interface MigrationQuarantineProjection {
-  status: "absent" | "available" | "deleted";
+  status: GeneratedMigrationQuarantineStatus;
   entry_count: number;
   can_delete: boolean;
   deleted_at: string | null;
   items: MigrationQuarantineItem[];
 }
 
-export type OutputLocationAlias = "documents" | "downloads" | "workspace";
+export type OutputLocationAlias = GeneratedOutputLocationAlias;
 
 export interface OutputLocationOption {
   alias: OutputLocationAlias;
@@ -668,13 +666,13 @@ export interface OutputMaterialization {
   display_name: string;
   sha256: string;
   size_bytes: number;
-  status: "preparing" | "published" | "completed";
+  status: GeneratedOutputMaterializationStatus;
   reused_existing: boolean;
   created_at: string;
   completed_at: string | null;
 }
 
-export type SystemHealthStatus = "healthy" | "degraded" | "attention" | "critical";
+export type SystemHealthStatus = GeneratedSystemHealthStatus;
 
 export interface SystemHealthComponent {
   component_id: string;

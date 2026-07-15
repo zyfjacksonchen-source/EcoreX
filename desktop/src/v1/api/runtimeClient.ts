@@ -309,7 +309,9 @@ export class RuntimeClient {
     path: string,
     init: RequestInit = {},
     mutation = false,
-    validate?: (value: unknown) => T | Promise<T>,
+    validate?: ((value: unknown) => T | Promise<T>)
+      | import("./settingsRuntimeContract.ts").SettingsBoundaryKind,
+    validationContext?: Readonly<{ artifact_id: string; revision_id: string }>,
   ): Promise<T> {
     const headers = this.headers(mutation, init.headers);
     if (
@@ -336,6 +338,10 @@ export class RuntimeClient {
         throw new EventCursorResetRequired(error.message);
       }
       throw new RuntimeApiError(error.message, response.status, error.code);
+    }
+    if (typeof validate === "number") {
+      const contract = await import("./settingsRuntimeContract.ts");
+      return contract.validateSettingsBoundary(validate, payload, validationContext) as T;
     }
     return validate ? await validate(payload) : payload as T;
   }
@@ -378,11 +384,21 @@ export class RuntimeClient {
   }
 
   memory(signal?: AbortSignal): Promise<MemorySnapshot> {
-    return this.json("/api/v1/memory", { signal });
+    return this.json(
+      "/api/v1/memory",
+      { signal },
+      false,
+      0, // memory snapshot
+    );
   }
 
   migrationQuarantine(signal?: AbortSignal): Promise<MigrationQuarantineProjection> {
-    return this.json("/api/v1/migration/quarantine", { signal });
+    return this.json(
+      "/api/v1/migration/quarantine",
+      { signal },
+      false,
+      2, // migration quarantine
+    );
   }
 
   deleteMigrationQuarantine(
@@ -395,15 +411,26 @@ export class RuntimeClient {
         body: JSON.stringify({ confirmed: true, client_request_id: clientRequestId }),
       },
       true,
+      2, // migration quarantine
     );
   }
 
   outputLocations(signal?: AbortSignal): Promise<OutputLocationCatalog> {
-    return this.json("/api/v1/output/locations", { signal });
+    return this.json(
+      "/api/v1/output/locations",
+      { signal },
+      false,
+      3, // output locations
+    );
   }
 
   outputPreference(signal?: AbortSignal): Promise<OutputPreference> {
-    return this.json("/api/v1/output/preference", { signal });
+    return this.json(
+      "/api/v1/output/preference",
+      { signal },
+      false,
+      4, // output preference
+    );
   }
 
   updateOutputPreference(
@@ -422,6 +449,7 @@ export class RuntimeClient {
         }),
       },
       true,
+      4, // output preference
     );
   }
 
@@ -439,6 +467,8 @@ export class RuntimeClient {
         }),
       },
       true,
+      5, // output materialization
+      artifact,
     );
   }
 
@@ -446,7 +476,12 @@ export class RuntimeClient {
     options: { technical?: boolean; signal?: AbortSignal } = {},
   ): Promise<SystemHealthSample> {
     const suffix = options.technical ? "?technical=true" : "";
-    return this.json(`/api/v1/system/health${suffix}`, { signal: options.signal });
+    return this.json(
+      `/api/v1/system/health${suffix}`,
+      { signal: options.signal },
+      false,
+      options.technical ? 7 : 6, // technical/public system health
+    );
   }
 
   systemMetrics(
@@ -454,7 +489,12 @@ export class RuntimeClient {
     signal?: AbortSignal,
   ): Promise<SystemMetricHistory> {
     const bounded = Math.max(1, Math.min(200, Math.trunc(limit)));
-    return this.json(`/api/v1/system/metrics?limit=${bounded}`, { signal });
+    return this.json(
+      `/api/v1/system/metrics?limit=${bounded}`,
+      { signal },
+      false,
+      8, // system metric history
+    );
   }
 
   resetLearnedMemory(
@@ -467,6 +507,7 @@ export class RuntimeClient {
         body: JSON.stringify({ confirmed: true, client_request_id: clientRequestId }),
       },
       true,
+      1, // memory mutation
     );
   }
 
@@ -481,6 +522,7 @@ export class RuntimeClient {
         body: JSON.stringify({ confirmed: true, client_request_id: clientRequestId }),
       },
       true,
+      1, // memory mutation
     );
   }
 

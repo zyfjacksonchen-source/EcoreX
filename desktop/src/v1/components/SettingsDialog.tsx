@@ -22,7 +22,6 @@ import {
   extensionCatalogSummary,
   type ExtensionLoadState,
 } from "../state/extensions.ts";
-import { validateMigrationQuarantineProjection } from "./migrationQuarantine.ts";
 import { userFacingError } from "../state/userLanguage.ts";
 
 interface SettingsDialogProps {
@@ -124,9 +123,7 @@ export function SettingsDialog({
   const refreshMigrationQuarantine = useCallback(async (signal?: AbortSignal) => {
     setMigrationQuarantineLoadState((current) => current === "ready" ? current : "loading");
     try {
-      const projection = validateMigrationQuarantineProjection(
-        await client.migrationQuarantine(signal),
-      );
+      const projection = await client.migrationQuarantine(signal);
       if (signal?.aborted) return false;
       setMigrationQuarantine(projection);
       setMigrationQuarantineLoadState("ready");
@@ -148,9 +145,7 @@ export function SettingsDialog({
     setMigrationQuarantineBusy(true);
     setMigrationQuarantineError(null);
     try {
-      const projection = validateMigrationQuarantineProjection(
-        await client.deleteMigrationQuarantine(clientRequestId),
-      );
+      const projection = await client.deleteMigrationQuarantine(clientRequestId);
       pendingMigrationQuarantineDelete.current = null;
       setMigrationQuarantine(projection);
       setMigrationQuarantineLoadState("ready");

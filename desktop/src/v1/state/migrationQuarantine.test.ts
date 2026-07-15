@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { validateMigrationQuarantineProjection } from "../components/migrationQuarantine.ts";
+import { validateMigrationQuarantineProjection } from "../api/settingsRuntimeContract.ts";
+import { RuntimeContractError } from "../api/runtimeContract.ts";
 
 
 test("legacy credential projection accepts aggregate categories only", () => {
@@ -14,6 +15,14 @@ test("legacy credential projection accepts aggregate categories only", () => {
   });
   assert.equal(projection.entry_count, 2);
   assert.deepEqual(Object.keys(projection.items[0]).sort(), ["count", "kind", "origin"]);
+
+  const deleted = validateMigrationQuarantineProjection({
+    ...projection,
+    status: "deleted",
+    can_delete: false,
+    deleted_at: "2026-07-15T08:00:00Z",
+  });
+  assert.equal(deleted.items.length, 1);
 });
 
 
@@ -41,6 +50,6 @@ test("legacy credential projection rejects paths, count drift, and guessed categ
       items: [{ kind: "provider_token", origin: "provider_x", count: 1 }],
     },
   ]) {
-    assert.throws(() => validateMigrationQuarantineProjection(value), TypeError);
+    assert.throws(() => validateMigrationQuarantineProjection(value), RuntimeContractError);
   }
 });

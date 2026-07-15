@@ -1904,3 +1904,31 @@
   contract, so unchanged source cannot silently execute a different workflow
   dependency closure. This does not replace branch protection, Environments,
   isolated privileged Runners or signed Candidate evidence.
+
+## ADR-109 - Secondary JSON projections are backend-authored, generated and progressively validated
+
+- Status: accepted.
+- Root cause: Memory, Output, migration quarantine and System observability
+  already had domain projections, but their HTTP routes returned loose
+  dictionaries while the Web client cast untrusted JSON. Some lifecycle checks
+  lived in `SettingsDialog`, so OpenAPI, transport and component state could
+  disagree. This violated the thin-frontend boundary and allowed missing,
+  additional or cross-identity fields to reach React before rejection.
+- Decision: all twelve JSON routes in those four domains declare one of nine
+  strict Pydantic response models. Extra fields, unsafe counts, naive
+  timestamps, invalid digests, duplicate categories, aggregate-count drift,
+  lifecycle contradictions, health worst-state drift and Artifact/Revision
+  identity drift fail before publication. Binary content and SSE remain
+  explicit non-JSON protocols rather than generic response exceptions.
+- Generated boundary: the canonical Runtime schema now contains 36 contracts.
+  A generated settings manifest carries the nine low-frequency response shapes
+  and enum unions. The Web transport validates each response before state
+  admission; components only render the accepted projection.
+- Loading boundary: settings validation is a separate dynamic chunk. It uses a
+  shared branded error identity without importing `RuntimeClient`, avoiding a
+  reverse dependency in the content-addressed graph. Image intent, initial
+  bootstrap and ordinary conversation startup do not pay this settings cost.
+- Consequence: a backend deployment and cached Web bundle can no longer drift
+  silently at these boundaries. Contract mismatch produces one short product
+  message and remains diagnosable internally, while the unchanged 475 KiB
+  initial-JavaScript budget continues to block accidental eager loading.

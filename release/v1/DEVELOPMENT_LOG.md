@@ -261,3 +261,23 @@ Starlette's upstream `python_multipart` pending-deprecation notice.
 - PR #2 is Draft, CLEAN and MERGEABLE. The read-only live audit remains the
   same 17-blocker receipt (`d9eb1f47...38a2c8`); no protected Candidate,
   governance mutation, publication or rollout was attempted.
+
+## 2026-07-15 - generated secondary Runtime response contracts
+
+- Replaced loose dictionary responses for Memory, Output, migration quarantine
+  and System with nine strict Pydantic models across twelve JSON routes.
+- Generated a separate settings Runtime contract from the 36-contract canonical
+  schema and validate every affected response before React state admission.
+- Kept low-frequency validation out of initial loading. Eager loading failed the
+  475 KiB gate and the first lazy attempt exposed a dependency cycle; the final
+  independent chunk is 11.73 KiB raw / 3.59 KiB gzip.
+- Replaced two load-sensitive timing sleeps with ready/start and second-call
+  Event synchronization. Each corrected boundary passed 10 consecutive runs;
+  production shutdown and maintenance deadlines were unchanged.
+- Final local evidence: 1,926 Python tests pass with 17 explicit skips;
+  TypeScript and 167 Web tests pass; production emits 20 assets / 19 chunks at
+  474.99 KiB raw initial JavaScript. All static/byte gates and 658 source files
+  pass. Supply-chain preflight covers 23 Runtime, 282 npm and 468 production
+  files with inventory `a7b2ff6f...31a8d5a`.
+- This is local evidence only. Exact-source hosted CI, repository governance,
+  protected Candidate, publication and rollout remain separate gates.

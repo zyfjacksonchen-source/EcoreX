@@ -1755,3 +1755,18 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Draft PR state | 0 | PR #2 is Draft, CLEAN and MERGEABLE at exact source head `fd05f424...3bdee2`. |
 | Live repository audit | 2 | The 3,167-byte report is byte-identical at exactly 17 blockers: Actions 3, branch 1, Environments 6, isolated Runners 4 and protected workflows inactive on main 3. SHA-256 `d9eb1f47...38a2c8`; no governance mutation occurred. |
 | Publication | blocked | The two retired CowAgent workflows remain active on current main until reviewed merge. No protected Candidate, publication, rollout or user update was attempted. |
+
+## Secondary settings and operations response authority - 2026-07-15
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Root response boundary | 0 | Memory 3, migration quarantine 2, Output 5 and System 2 JSON routes all declare one of nine strict Pydantic response models; OpenAPI references and `additionalProperties: false` are executable assertions. |
+| Generated schema | 0 | Canonical schema contains 36 contracts at digest `877c962e...654b0d50`; the dedicated generated settings manifest pins every nested field and enum without enlarging the bootstrap manifest. |
+| Web transport | 0 | Nine progressively loaded validators reject missing/additional fields, unsafe integers, malformed timestamps/digests, aggregate or lifecycle drift, health worst-state drift and materialization identity drift before state admission. |
+| Bundle root-cause checks | 1 then 0 | Eager validation failed the unchanged 475 KiB gate at 485.73 KiB; the first lazy graph exposed a reverse client dependency. The independent generated settings manifest and branded error removed both failures. |
+| Timing-test root causes | 1 then 0 | Cold startup was removed from the shutdown process-exit clock; ready/start handshake passed 10/10. Fixed 40 ms maintenance sleep became a second-call Event and passed 10/10. Combined connector/shutdown files pass 26/26 without relaxing production deadlines. |
+| Complete Python v1 suite | 0 | Current source: 1,926 passed / 17 explicit environment-platform skips / 0 failed. JUnit: 385,219 bytes, 1,943 cases, 1,680.264 seconds, SHA-256 `dc050061...e54f2db`. |
+| WebUI | 0 | npm audit reports zero vulnerabilities; TypeScript and 167/167 Web tests pass; production build emits 20 content-addressed assets / 19 chunks. Initial JS is 474.99 KiB raw / 147.12 KiB gzip; deferred settings validation is 11.73 KiB / 3.59 KiB gzip. |
+| Static and byte gates | 0 | Ruff/compile, generated freshness, design debt all-zero, legacy, public download, dependency locks, Runtime/Server schema, reproducibility, diff and 658-source-file admission pass. Byte contract is 7,380 bytes, SHA-256 `65eb5c81...1ff3ec5`. |
+| Current-source supply chain | 0 | 23 Runtime and 282 npm packages are license-accounted; 468 production files pass secret scanning, inventory `a7b2ff6f...31a8d5a`. Ignored report is 21,857 bytes, SHA-256 `a742ef60...3862282`. |
+| External mutation | 0 | This local checkpoint does not mutate governance, create a protected Candidate, call managed live acceptance, publish, roll out or update a user. Hosted exact-source evidence remains pending the source commit. |

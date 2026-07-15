@@ -7,10 +7,6 @@ import type {
   InputAttachmentProjection,
 } from "./contracts.ts";
 import { GENERATED_RUNTIME_CONTRACT } from "./generatedRuntimeContract.ts";
-import type { GeneratedRuntimeProjectionContractName } from "./generatedRuntimeProjectionContract.ts";
-
-type ContractName = keyof typeof GENERATED_RUNTIME_CONTRACT.wireFields;
-type AnyContractName = ContractName | GeneratedRuntimeProjectionContractName;
 
 const ARTIFACT_FIELDS = GENERATED_RUNTIME_CONTRACT.wireFields.ArtifactProjection;
 const BOOTSTRAP_FIELDS = GENERATED_RUNTIME_CONTRACT.wireFields.BootstrapResponse;
@@ -25,16 +21,12 @@ const RUNTIME_CONTRACT_ERROR_BRAND = Symbol.for("ecorex.runtime-contract-error.v
 
 export class RuntimeContractError extends Error {
   readonly [RUNTIME_CONTRACT_ERROR_BRAND] = true;
-  readonly contract: AnyContractName | "ArtifactListResponse";
+  readonly contract: string;
   readonly path: string;
   readonly expectation: string;
 
-  constructor(
-    contract: AnyContractName | "ArtifactListResponse",
-    path: string,
-    expectation: string,
-  ) {
-    super("运行服务返回的数据版本与当前页面不兼容，请刷新或更新 EcoreX。");
+  constructor(contract: string, path: string, expectation: string) {
+    super("运行服务与页面不兼容，请刷新或更新 EcoreX。");
     this.name = "RuntimeContractError";
     this.contract = contract;
     this.path = path;
@@ -74,7 +66,7 @@ function assertWireFields(
   const expected = new Set(expectedFields);
   for (const field of expectedFields) {
     if (!Object.hasOwn(value, field)) {
-      reject(contract, path === "root" ? field : `${path}.${field}`, "a backend-declared wire field");
+      reject(contract, path === "root" ? field : `${path}.${field}`, "a declared field");
     }
   }
   for (const field of Object.keys(value)) {
@@ -82,7 +74,7 @@ function assertWireFields(
       reject(
         contract,
         path === "root" ? field : `${path}.${field}`,
-        "no undeclared wire fields",
+        "no extra fields",
       );
     }
   }
@@ -121,7 +113,7 @@ function assertInteger(
   path: string,
   minimum = 0,
 ): asserts value is number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < minimum) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {
     reject(contract, path, `an integer >= ${minimum}`);
   }
 }

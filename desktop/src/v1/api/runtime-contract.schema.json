@@ -5335,6 +5335,554 @@
       "title": "JobProjection",
       "type": "object"
     },
+    "MemoryMutationResponse": {
+      "$defs": {
+        "MemoryResetProjectionResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "affected_files": {
+              "minimum": 0,
+              "title": "Affected Files",
+              "type": "integer"
+            },
+            "affected_records": {
+              "minimum": 0,
+              "title": "Affected Records",
+              "type": "integer"
+            },
+            "can_undo": {
+              "title": "Can Undo",
+              "type": "boolean"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "reset_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Reset Id",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "active",
+                "undone",
+                "purged"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "undo_until": {
+              "format": "date-time",
+              "title": "Undo Until",
+              "type": "string"
+            },
+            "updated_at": {
+              "format": "date-time",
+              "title": "Updated At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reset_id",
+            "status",
+            "affected_records",
+            "affected_files",
+            "created_at",
+            "undo_until",
+            "updated_at",
+            "can_undo"
+          ],
+          "title": "MemoryResetProjectionResponse",
+          "type": "object"
+        },
+        "MemorySnapshotResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "active_learned_records": {
+              "minimum": 0,
+              "title": "Active Learned Records",
+              "type": "integer"
+            },
+            "active_user_files": {
+              "minimum": 0,
+              "title": "Active User Files",
+              "type": "integer"
+            },
+            "factory_records": {
+              "minimum": 0,
+              "title": "Factory Records",
+              "type": "integer"
+            },
+            "latest_reset": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MemoryResetProjectionResponse"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "resettable_count": {
+              "minimum": 0,
+              "title": "Resettable Count",
+              "type": "integer"
+            },
+            "revision": {
+              "minimum": 0,
+              "title": "Revision",
+              "type": "integer"
+            },
+            "tombstoned_files": {
+              "minimum": 0,
+              "title": "Tombstoned Files",
+              "type": "integer"
+            },
+            "tombstoned_records": {
+              "minimum": 0,
+              "title": "Tombstoned Records",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "revision",
+            "active_learned_records",
+            "active_user_files",
+            "factory_records",
+            "tombstoned_records",
+            "tombstoned_files",
+            "resettable_count",
+            "latest_reset"
+          ],
+          "title": "MemorySnapshotResponse",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "memory": {
+          "$ref": "#/$defs/MemorySnapshotResponse"
+        },
+        "reset": {
+          "$ref": "#/$defs/MemoryResetProjectionResponse"
+        }
+      },
+      "required": [
+        "memory",
+        "reset"
+      ],
+      "title": "MemoryMutationResponse",
+      "type": "object"
+    },
+    "MemorySnapshotResponse": {
+      "$defs": {
+        "MemoryResetProjectionResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "affected_files": {
+              "minimum": 0,
+              "title": "Affected Files",
+              "type": "integer"
+            },
+            "affected_records": {
+              "minimum": 0,
+              "title": "Affected Records",
+              "type": "integer"
+            },
+            "can_undo": {
+              "title": "Can Undo",
+              "type": "boolean"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "reset_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Reset Id",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "active",
+                "undone",
+                "purged"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "undo_until": {
+              "format": "date-time",
+              "title": "Undo Until",
+              "type": "string"
+            },
+            "updated_at": {
+              "format": "date-time",
+              "title": "Updated At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reset_id",
+            "status",
+            "affected_records",
+            "affected_files",
+            "created_at",
+            "undo_until",
+            "updated_at",
+            "can_undo"
+          ],
+          "title": "MemoryResetProjectionResponse",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "active_learned_records": {
+          "minimum": 0,
+          "title": "Active Learned Records",
+          "type": "integer"
+        },
+        "active_user_files": {
+          "minimum": 0,
+          "title": "Active User Files",
+          "type": "integer"
+        },
+        "factory_records": {
+          "minimum": 0,
+          "title": "Factory Records",
+          "type": "integer"
+        },
+        "latest_reset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MemoryResetProjectionResponse"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resettable_count": {
+          "minimum": 0,
+          "title": "Resettable Count",
+          "type": "integer"
+        },
+        "revision": {
+          "minimum": 0,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "tombstoned_files": {
+          "minimum": 0,
+          "title": "Tombstoned Files",
+          "type": "integer"
+        },
+        "tombstoned_records": {
+          "minimum": 0,
+          "title": "Tombstoned Records",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "revision",
+        "active_learned_records",
+        "active_user_files",
+        "factory_records",
+        "tombstoned_records",
+        "tombstoned_files",
+        "resettable_count",
+        "latest_reset"
+      ],
+      "title": "MemorySnapshotResponse",
+      "type": "object"
+    },
+    "MigrationQuarantineResponse": {
+      "$defs": {
+        "MigrationQuarantineItemResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "count": {
+              "minimum": 1,
+              "title": "Count",
+              "type": "integer"
+            },
+            "kind": {
+              "enum": [
+                "api_key",
+                "refresh_token",
+                "access_token",
+                "password",
+                "cryptographic_key",
+                "client_secret",
+                "credential"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "origin": {
+              "enum": [
+                "product_configuration",
+                "mcp_configuration",
+                "skill_configuration",
+                "permission_configuration"
+              ],
+              "title": "Origin",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "origin",
+            "count"
+          ],
+          "title": "MigrationQuarantineItemResponse",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "can_delete": {
+          "title": "Can Delete",
+          "type": "boolean"
+        },
+        "deleted_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Deleted At"
+        },
+        "entry_count": {
+          "minimum": 0,
+          "title": "Entry Count",
+          "type": "integer"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/MigrationQuarantineItemResponse"
+          },
+          "maxItems": 64,
+          "title": "Items",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "absent",
+            "available",
+            "deleted"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "entry_count",
+        "can_delete",
+        "deleted_at",
+        "items"
+      ],
+      "title": "MigrationQuarantineResponse",
+      "type": "object"
+    },
+    "OutputLocationCatalogResponse": {
+      "$defs": {
+        "OutputLocationOptionResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "alias": {
+              "enum": [
+                "documents",
+                "downloads",
+                "workspace"
+              ],
+              "title": "Alias",
+              "type": "string"
+            },
+            "available": {
+              "title": "Available",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "alias",
+            "available"
+          ],
+          "title": "OutputLocationOptionResponse",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/OutputLocationOptionResponse"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Items",
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "title": "OutputLocationCatalogResponse",
+      "type": "object"
+    },
+    "OutputMaterializationResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "completed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Completed At"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "display_name": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Display Name",
+          "type": "string"
+        },
+        "location_alias": {
+          "enum": [
+            "documents",
+            "downloads",
+            "workspace"
+          ],
+          "title": "Location Alias",
+          "type": "string"
+        },
+        "materialization_id": {
+          "pattern": "^mat_[0-9a-f]{64}$",
+          "title": "Materialization Id",
+          "type": "string"
+        },
+        "output_policy_snapshot_id": {
+          "pattern": "^outpol_[0-9a-f]{64}$",
+          "title": "Output Policy Snapshot Id",
+          "type": "string"
+        },
+        "reused_existing": {
+          "title": "Reused Existing",
+          "type": "boolean"
+        },
+        "revision_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "preparing",
+            "published",
+            "completed"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "materialization_id",
+        "artifact_id",
+        "revision_id",
+        "output_policy_snapshot_id",
+        "location_alias",
+        "display_name",
+        "sha256",
+        "size_bytes",
+        "status",
+        "reused_existing",
+        "created_at",
+        "completed_at"
+      ],
+      "title": "OutputMaterializationResponse",
+      "type": "object"
+    },
+    "OutputPreferenceResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "account_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Account Id",
+          "type": "string"
+        },
+        "location_alias": {
+          "enum": [
+            "documents",
+            "downloads",
+            "workspace"
+          ],
+          "title": "Location Alias",
+          "type": "string"
+        },
+        "output_policy_snapshot_id": {
+          "pattern": "^outpol_[0-9a-f]{64}$",
+          "title": "Output Policy Snapshot Id",
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "account_id",
+        "location_alias",
+        "revision",
+        "output_policy_snapshot_id",
+        "updated_at"
+      ],
+      "title": "OutputPreferenceResponse",
+      "type": "object"
+    },
     "ProjectListResponse": {
       "$defs": {
         "ProjectProjection": {
@@ -6083,6 +6631,321 @@
         "input"
       ],
       "title": "SteerTurnRequest",
+      "type": "object"
+    },
+    "SystemHealthPublicResponse": {
+      "$defs": {
+        "SystemHealthComponentResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "component_id": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Component Id",
+              "type": "string"
+            },
+            "label": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            },
+            "message": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Message",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "healthy",
+                "degraded",
+                "attention",
+                "critical"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "component_id",
+            "label",
+            "status",
+            "message"
+          ],
+          "title": "SystemHealthComponentResponse",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "components": {
+          "items": {
+            "$ref": "#/$defs/SystemHealthComponentResponse"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Components",
+          "type": "array"
+        },
+        "overall": {
+          "enum": [
+            "healthy",
+            "degraded",
+            "attention",
+            "critical"
+          ],
+          "title": "Overall",
+          "type": "string"
+        },
+        "sample_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Sample Id",
+          "type": "string"
+        },
+        "sampled_at": {
+          "format": "date-time",
+          "title": "Sampled At",
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sample_id",
+        "overall",
+        "summary",
+        "components",
+        "sampled_at"
+      ],
+      "title": "SystemHealthPublicResponse",
+      "type": "object"
+    },
+    "SystemHealthTechnicalResponse": {
+      "$defs": {
+        "JsonValue": {},
+        "SystemHealthComponentResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "component_id": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Component Id",
+              "type": "string"
+            },
+            "label": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            },
+            "message": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Message",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "healthy",
+                "degraded",
+                "attention",
+                "critical"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "component_id",
+            "label",
+            "status",
+            "message"
+          ],
+          "title": "SystemHealthComponentResponse",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "components": {
+          "items": {
+            "$ref": "#/$defs/SystemHealthComponentResponse"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Components",
+          "type": "array"
+        },
+        "metrics": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Metrics",
+          "type": "object"
+        },
+        "overall": {
+          "enum": [
+            "healthy",
+            "degraded",
+            "attention",
+            "critical"
+          ],
+          "title": "Overall",
+          "type": "string"
+        },
+        "sample_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Sample Id",
+          "type": "string"
+        },
+        "sampled_at": {
+          "format": "date-time",
+          "title": "Sampled At",
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sample_id",
+        "overall",
+        "summary",
+        "components",
+        "sampled_at",
+        "metrics"
+      ],
+      "title": "SystemHealthTechnicalResponse",
+      "type": "object"
+    },
+    "SystemMetricHistoryResponse": {
+      "$defs": {
+        "JsonValue": {},
+        "SystemHealthComponentResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "component_id": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Component Id",
+              "type": "string"
+            },
+            "label": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            },
+            "message": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Message",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "healthy",
+                "degraded",
+                "attention",
+                "critical"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "component_id",
+            "label",
+            "status",
+            "message"
+          ],
+          "title": "SystemHealthComponentResponse",
+          "type": "object"
+        },
+        "SystemHealthTechnicalResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "components": {
+              "items": {
+                "$ref": "#/$defs/SystemHealthComponentResponse"
+              },
+              "maxItems": 16,
+              "minItems": 1,
+              "title": "Components",
+              "type": "array"
+            },
+            "metrics": {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "title": "Metrics",
+              "type": "object"
+            },
+            "overall": {
+              "enum": [
+                "healthy",
+                "degraded",
+                "attention",
+                "critical"
+              ],
+              "title": "Overall",
+              "type": "string"
+            },
+            "sample_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Sample Id",
+              "type": "string"
+            },
+            "sampled_at": {
+              "format": "date-time",
+              "title": "Sampled At",
+              "type": "string"
+            },
+            "summary": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Summary",
+              "type": "string"
+            }
+          },
+          "required": [
+            "sample_id",
+            "overall",
+            "summary",
+            "components",
+            "sampled_at",
+            "metrics"
+          ],
+          "title": "SystemHealthTechnicalResponse",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/SystemHealthTechnicalResponse"
+          },
+          "maxItems": 200,
+          "title": "Items",
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "title": "SystemMetricHistoryResponse",
       "type": "object"
     },
     "ThreadListResponse": {
@@ -7627,6 +8490,12 @@
     "InteractionRequest": "ecorex.protocol.InteractionRequest",
     "ItemProjection": "ecorex.protocol.ItemProjection",
     "JobProjection": "ecorex.protocol.JobProjection",
+    "MemoryMutationResponse": "ecorex.memory.api.MemoryMutationResponse",
+    "MemorySnapshotResponse": "ecorex.memory.api.MemorySnapshotResponse",
+    "MigrationQuarantineResponse": "ecorex.migration.api.MigrationQuarantineResponse",
+    "OutputLocationCatalogResponse": "ecorex.output.api.OutputLocationCatalogResponse",
+    "OutputMaterializationResponse": "ecorex.output.api.OutputMaterializationResponse",
+    "OutputPreferenceResponse": "ecorex.output.api.OutputPreferenceResponse",
     "ProjectListResponse": "ecorex.protocol.ProjectListResponse",
     "QueueTurnRequest": "ecorex.protocol.QueueTurnRequest",
     "ReplaceTurnRequest": "ecorex.protocol.ReplaceTurnRequest",
@@ -7635,6 +8504,9 @@
     "RetouchBody": "ecorex.artifacts.api.RetouchBody",
     "RetouchWorkspaceSubmitBody": "ecorex.artifacts.api.RetouchWorkspaceSubmitBody",
     "SteerTurnRequest": "ecorex.protocol.SteerTurnRequest",
+    "SystemHealthPublicResponse": "ecorex.observability.system_api.SystemHealthPublicResponse",
+    "SystemHealthTechnicalResponse": "ecorex.observability.system_api.SystemHealthTechnicalResponse",
+    "SystemMetricHistoryResponse": "ecorex.observability.system_api.SystemMetricHistoryResponse",
     "ThreadListResponse": "ecorex.protocol.ThreadListResponse",
     "ThreadProjection": "ecorex.protocol.ThreadProjection",
     "ThreadProjectionResponse": "ecorex.protocol.ThreadProjectionResponse",

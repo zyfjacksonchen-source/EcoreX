@@ -441,20 +441,25 @@ def test_uncertain_operation_resolution_and_maintenance_supervisor(tmp_path: Pat
 
     calls = 0
 
-    async def fake_maintenance() -> None:
-        nonlocal calls
-        calls += 1
-
-    composition.service.maintenance_once = fake_maintenance  # type: ignore[method-assign]
-
     async def run_supervisor() -> None:
+        repeated = asyncio.Event()
+
+        async def fake_maintenance() -> None:
+            nonlocal calls
+            calls += 1
+            if calls >= 2:
+                repeated.set()
+
+        composition.service.maintenance_once = fake_maintenance  # type: ignore[method-assign]
         supervisor = ConnectorMaintenanceSupervisor(
             composition.service,
             interval_seconds=0.01,
         )
         await supervisor.start()
-        await asyncio.sleep(0.04)
-        await supervisor.stop()
+        try:
+            await asyncio.wait_for(repeated.wait(), timeout=2)
+        finally:
+            await supervisor.stop()
 
     asyncio.run(run_supervisor())
     assert calls >= 2

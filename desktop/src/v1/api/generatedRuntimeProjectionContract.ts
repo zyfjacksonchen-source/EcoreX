@@ -94,7 +94,7 @@ export const GENERATED_RUNTIME_PROJECTION_CONTRACT = {
       "superseded"
     ]
   },
-  "schemaSha256": "310063327c32d3ae9101ef2565ce020c668cc900f77971c262c5398f8d12195d",
+  "schemaSha256": "877c962e459088e8ddc0f833a50f568cad6418fb0d9a14b904019028654b0d50",
   "schemaVersion": 1,
   "wireFields": {
     "ConnectorLoginBeginResponse": {

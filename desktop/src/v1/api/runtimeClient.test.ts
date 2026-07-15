@@ -1879,11 +1879,17 @@ test("system health keeps primary status separate from bounded technical history
     const request = new Request(input, init);
     requests.push(request);
     if (request.url.includes("/metrics")) {
-      return Response.json({ items: [{ ...sample, metrics: { runtime: { sse_connections: 0 } } }] });
+      return Response.json({ items: [{
+        ...sample,
+        metrics: { runtime: { sse_connections: 0 }, process: {}, storage: {}, services: {} },
+      }] });
     }
     return Response.json(
       request.url.includes("technical=true")
-        ? { ...sample, metrics: { runtime: { sse_connections: 0 } } }
+        ? {
+            ...sample,
+            metrics: { runtime: { sse_connections: 0 }, process: {}, storage: {}, services: {} },
+          }
         : sample,
     );
   };
@@ -1915,14 +1921,18 @@ test("output location and materialization send aliases and artifact identities o
     const request = new Request(input, init);
     requests.push(request);
     if (request.url.endsWith("/locations")) {
-      return Response.json({ items: [{ alias: "documents", available: true }] });
+      return Response.json({ items: [
+        { alias: "documents", available: true },
+        { alias: "downloads", available: true },
+        { alias: "workspace", available: true },
+      ] });
     }
     if (request.method === "GET") {
       return Response.json({
         account_id: "account-ga",
         location_alias: "documents",
         revision: 1,
-        output_policy_snapshot_id: "outpolicy_1",
+        output_policy_snapshot_id: `outpol_${"1".repeat(64)}`,
         updated_at: bootstrap.server_time,
       });
     }
@@ -1931,15 +1941,15 @@ test("output location and materialization send aliases and artifact identities o
         account_id: "account-ga",
         location_alias: "downloads",
         revision: 2,
-        output_policy_snapshot_id: "outpolicy_2",
+        output_policy_snapshot_id: `outpol_${"2".repeat(64)}`,
         updated_at: bootstrap.server_time,
       });
     }
     return Response.json({
-      materialization_id: "materialization_1",
+      materialization_id: `mat_${"3".repeat(64)}`,
       artifact_id: "artifact_1",
       revision_id: "revision_1",
-      output_policy_snapshot_id: "outpolicy_1",
+      output_policy_snapshot_id: `outpol_${"1".repeat(64)}`,
       location_alias: "documents",
       display_name: "报告.pdf",
       sha256: "a".repeat(64),
@@ -2022,6 +2032,141 @@ test("legacy credential quarantine exposes summaries and deletes by stable inten
     });
     assert.equal((await requests[1]!.clone().text()).includes("path"), false);
     assert.equal((await requests[1]!.clone().text()).includes("secret"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("settings transports reject malformed, extra, and cross-identity Runtime data", async () => {
+  const originalFetch = globalThis.fetch;
+  const publicHealth = {
+    sample_id: "syssample_1",
+    overall: "healthy",
+    summary: "EcoreX 运行正常",
+    components: [{
+      component_id: "runtime",
+      label: "运行响应",
+      status: "healthy",
+      message: "运行正常。",
+    }],
+    sampled_at: bootstrap.server_time,
+  };
+  const materialization = {
+    materialization_id: `mat_${"3".repeat(64)}`,
+    artifact_id: "artifact-other",
+    revision_id: "revision-expected",
+    output_policy_snapshot_id: `outpol_${"1".repeat(64)}`,
+    location_alias: "documents",
+    display_name: "报告.pdf",
+    sha256: "a".repeat(64),
+    size_bytes: 12,
+    status: "completed",
+    reused_existing: false,
+    created_at: bootstrap.server_time,
+    completed_at: bootstrap.server_time,
+  };
+  const payloads: unknown[] = [
+    {
+      revision: 0,
+      active_learned_records: 1,
+      active_user_files: 1,
+      factory_records: 0,
+      tombstoned_records: 0,
+      tombstoned_files: 0,
+      resettable_count: 99,
+      latest_reset: null,
+    },
+    {
+      status: "available",
+      entry_count: 1,
+      can_delete: true,
+      deleted_at: null,
+      items: [{ kind: "api_key", origin: "product_configuration", count: 1, path: "secret" }],
+    },
+    { items: [{ alias: "documents", available: true }] },
+    {
+      account_id: "account-ga",
+      location_alias: "documents",
+      revision: 1,
+      output_policy_snapshot_id: "mutable-policy",
+      updated_at: bootstrap.server_time,
+    },
+    materialization,
+    { ...publicHealth, metrics: {} },
+    { ...publicHealth, metrics: { runtime: {} } },
+    { items: [publicHealth] },
+  ];
+  globalThis.fetch = async () => Response.json(payloads.shift());
+  try {
+    const client = new RuntimeClient({
+      apiBase: "http://127.0.0.1:8765/api/v1",
+      bearerToken: "b".repeat(43),
+    });
+    for (const operation of [
+      () => client.memory(),
+      () => client.migrationQuarantine(),
+      () => client.outputLocations(),
+      () => client.outputPreference(),
+      () => client.materializeArtifact({
+        artifact_id: "artifact-expected",
+        revision_id: "revision-expected",
+      }),
+      () => client.systemHealth(),
+      () => client.systemHealth({ technical: true }),
+      () => client.systemMetrics(),
+    ]) {
+      await assert.rejects(operation(), RuntimeContractError);
+    }
+    assert.equal(payloads.length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("memory transport preserves the authoritative reset identity and derived count", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Request[] = [];
+  const reset = {
+    reset_id: "memreset_1",
+    status: "active" as const,
+    affected_records: 2,
+    affected_files: 1,
+    created_at: bootstrap.server_time,
+    undo_until: "2026-07-16T08:00:00Z",
+    updated_at: bootstrap.server_time,
+    can_undo: true,
+  };
+  const memory = {
+    revision: 2,
+    active_learned_records: 2,
+    active_user_files: 1,
+    factory_records: 1,
+    tombstoned_records: 0,
+    tombstoned_files: 0,
+    resettable_count: 3,
+    latest_reset: reset,
+  };
+  globalThis.fetch = async (input, init) => {
+    const request = new Request(input, init);
+    requests.push(request);
+    return Response.json(request.method === "GET" ? memory : { memory, reset });
+  };
+  try {
+    const client = new RuntimeClient({
+      apiBase: "http://127.0.0.1:8765/api/v1",
+      bearerToken: "b".repeat(43),
+      csrfToken: "csrf-memory",
+    });
+    assert.equal((await client.memory()).resettable_count, 3);
+    assert.equal(
+      (await client.resetLearnedMemory("reset-memory-stable")).reset.reset_id,
+      reset.reset_id,
+    );
+    assert.equal(requests[1]!.headers.get("x-ecorex-csrf"), "csrf-memory");
+    assert.deepEqual(await requests[1]!.clone().json(), {
+      confirmed: true,
+      client_request_id: "reset-memory-stable",
+    });
   } finally {
     globalThis.fetch = originalFetch;
   }

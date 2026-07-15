@@ -8,11 +8,19 @@ import { fileURLToPath } from "node:url";
 
 import { GENERATED_RUNTIME_CONTRACT } from "../src/v1/api/generatedRuntimeContract.ts";
 import { GENERATED_RUNTIME_PROJECTION_CONTRACT } from "../src/v1/api/generatedRuntimeProjectionContract.ts";
+import { GENERATED_SETTINGS_RUNTIME_CONTRACT } from "../src/v1/api/generatedSettingsRuntimeContract.ts";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const generator = path.join(desktopRoot, "tools", "generate-runtime-contracts.py");
 const schemaPath = path.join(desktopRoot, "src", "v1", "api", "runtime-contract.schema.json");
 const manifestPath = path.join(desktopRoot, "src", "v1", "api", "generatedRuntimeContract.ts");
+const settingsManifestPath = path.join(
+  desktopRoot,
+  "src",
+  "v1",
+  "api",
+  "generatedSettingsRuntimeContract.ts",
+);
 
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
@@ -36,9 +44,11 @@ test("generated Runtime contract is current with authoritative Python schemas", 
 test("generated manifest pins the canonical full-schema digest", async () => {
   const schema = JSON.parse(await readFile(schemaPath, "utf8"));
   const manifest = await readFile(manifestPath, "utf8");
+  const settingsManifest = await readFile(settingsManifestPath, "utf8");
   const canonicalBytes = `${JSON.stringify(canonical(schema))}\n`;
   const digest = createHash("sha256").update(canonicalBytes).digest("hex");
   assert.match(manifest, new RegExp(`"schemaSha256": "${digest}"`));
+  assert.match(settingsManifest, new RegExp(`"schemaSha256": "${digest}"`));
   assert.deepEqual(Object.keys(schema.contracts).sort(), [
     "ArtifactProjection",
     "BootstrapResponse",
@@ -54,6 +64,12 @@ test("generated manifest pins the canonical full-schema digest", async () => {
     "InteractionRequest",
     "ItemProjection",
     "JobProjection",
+    "MemoryMutationResponse",
+    "MemorySnapshotResponse",
+    "MigrationQuarantineResponse",
+    "OutputLocationCatalogResponse",
+    "OutputMaterializationResponse",
+    "OutputPreferenceResponse",
     "ProjectListResponse",
     "QueueTurnRequest",
     "ReplaceTurnRequest",
@@ -62,6 +78,9 @@ test("generated manifest pins the canonical full-schema digest", async () => {
     "RetouchBody",
     "RetouchWorkspaceSubmitBody",
     "SteerTurnRequest",
+    "SystemHealthPublicResponse",
+    "SystemHealthTechnicalResponse",
+    "SystemMetricHistoryResponse",
     "ThreadListResponse",
     "ThreadProjection",
     "ThreadProjectionResponse",
@@ -76,6 +95,7 @@ test("generated manifest pins the canonical full-schema digest", async () => {
     storageSchema: 1,
   });
   assert.equal(GENERATED_RUNTIME_PROJECTION_CONTRACT.schemaSha256, digest);
+  assert.equal(GENERATED_SETTINGS_RUNTIME_CONTRACT.schemaSha256, digest);
   assert.deepEqual(
     GENERATED_RUNTIME_CONTRACT.artifact.families,
     schema.public_artifact_policy.families,
@@ -93,6 +113,23 @@ test("generated manifest pins the canonical full-schema digest", async () => {
   assert.equal(
     GENERATED_RUNTIME_CONTRACT.wireFields.BootstrapResponse.BootstrapResponse.includes("models"),
     true,
+  );
+  assert.deepEqual(GENERATED_SETTINGS_RUNTIME_CONTRACT.values.outputLocationAliases, [
+    "documents",
+    "downloads",
+    "workspace",
+  ]);
+  assert.deepEqual(
+    GENERATED_SETTINGS_RUNTIME_CONTRACT.wireFields.MemoryMutationResponse.MemoryMutationResponse,
+    ["memory", "reset"],
+  );
+  assert.deepEqual(
+    GENERATED_SETTINGS_RUNTIME_CONTRACT.wireFields.MigrationQuarantineResponse.MigrationQuarantineItemResponse,
+    ["kind", "origin", "count"],
+  );
+  assert.deepEqual(
+    GENERATED_SETTINGS_RUNTIME_CONTRACT.wireFields.SystemHealthTechnicalResponse.SystemHealthTechnicalResponse,
+    ["sample_id", "overall", "summary", "components", "sampled_at", "metrics"],
   );
   assert.deepEqual(
     GENERATED_RUNTIME_PROJECTION_CONTRACT.wireFields.ThreadProjectionResponse.ThreadProjectionResponse,

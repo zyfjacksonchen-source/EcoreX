@@ -20,6 +20,10 @@ const settings = await readFile(
   "utf-8",
 );
 const vite = await readFile(new URL("../vite.config.ts", import.meta.url), "utf-8");
+const runtimeClient = await readFile(
+  new URL("../src/v1/api/runtimeClient.ts", import.meta.url),
+  "utf-8",
+);
 
 const FEATURES = [
   "ArtifactPreviewDialog",
@@ -75,6 +79,16 @@ test("Settings lazy boundary preserves system health contract", () => {
   assert.match(app, /systemHealth=\{runtime\.systemHealth\}/u);
   assert.match(app, /systemHealthLoadState=\{runtime\.systemHealthLoadState\}/u);
   assert.match(app, /onLoadSystemTechnicalHealth=\{runtime\.loadSystemTechnicalHealth\}/u);
+});
+
+test("secondary Runtime response contracts are progressively loaded before state admission", () => {
+  assert.match(runtimeClient, /await import\("\.\/settingsRuntimeContract\.ts"\)/u);
+  assert.doesNotMatch(
+    runtimeClient,
+    /import\s*\{[^}]*validateSettingsBoundary[^}]*\}\s*from/u,
+  );
+  assert.match(runtimeClient, /typeof validate === "number"/u);
+  assert.match(runtimeClient, /contract\.validateSettingsBoundary\(validate, payload, validationContext\)/u);
 });
 
 test("Settings exposes only aggregate legacy credential categories and confirmed deletion", () => {

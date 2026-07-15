@@ -55,12 +55,27 @@ from ecorex.protocol import (  # noqa: E402
     TurnProjection,
 )
 from ecorex.artifacts.api import RetouchBody, RetouchWorkspaceSubmitBody  # noqa: E402
+from ecorex.memory.api import MemoryMutationResponse, MemorySnapshotResponse  # noqa: E402
+from ecorex.migration.api import MigrationQuarantineResponse  # noqa: E402
+from ecorex.observability.system_api import (  # noqa: E402
+    SystemHealthPublicResponse,
+    SystemHealthTechnicalResponse,
+    SystemMetricHistoryResponse,
+)
+from ecorex.output.api import (  # noqa: E402
+    OutputLocationCatalogResponse,
+    OutputMaterializationResponse,
+    OutputPreferenceResponse,
+)
 
 
 OUTPUT_DIRECTORY = REPOSITORY_ROOT / "desktop" / "src" / "v1" / "api"
 SCHEMA_OUTPUT = OUTPUT_DIRECTORY / "runtime-contract.schema.json"
 TYPESCRIPT_OUTPUT = OUTPUT_DIRECTORY / "generatedRuntimeContract.ts"
-PROJECTION_TYPESCRIPT_OUTPUT = OUTPUT_DIRECTORY / "generatedRuntimeProjectionContract.ts"
+PROJECTION_TYPESCRIPT_OUTPUT = (
+    OUTPUT_DIRECTORY / "generatedRuntimeProjectionContract.ts"
+)
+SETTINGS_TYPESCRIPT_OUTPUT = OUTPUT_DIRECTORY / "generatedSettingsRuntimeContract.ts"
 
 SCHEMA_VERSION = 1
 PROJECTION_CONTRACT_NAMES = frozenset(
@@ -80,6 +95,31 @@ PROJECTION_CONTRACT_NAMES = frozenset(
         "TurnProjection",
     }
 )
+SETTINGS_CONTRACT_NAMES = frozenset(
+    {
+        "MemoryMutationResponse",
+        "MemorySnapshotResponse",
+        "MigrationQuarantineResponse",
+        "OutputLocationCatalogResponse",
+        "OutputMaterializationResponse",
+        "OutputPreferenceResponse",
+        "SystemHealthPublicResponse",
+        "SystemHealthTechnicalResponse",
+        "SystemMetricHistoryResponse",
+    }
+)
+NESTED_WIRE_CONTRACT_NAMES = frozenset(
+    {
+        "ArtifactProjection",
+        "MemoryMutationResponse",
+        "MemorySnapshotResponse",
+        "MigrationQuarantineResponse",
+        "OutputLocationCatalogResponse",
+        "SystemHealthPublicResponse",
+        "SystemHealthTechnicalResponse",
+        "SystemMetricHistoryResponse",
+    }
+)
 
 
 def _contract_schemas() -> dict[str, dict[str, Any]]:
@@ -97,6 +137,12 @@ def _contract_schemas() -> dict[str, dict[str, Any]]:
         "InputAttachmentProjection": InputAttachmentProjection.model_json_schema(),
         "ItemProjection": ItemProjection.model_json_schema(),
         "JobProjection": JobProjection.model_json_schema(),
+        "MemoryMutationResponse": MemoryMutationResponse.model_json_schema(),
+        "MemorySnapshotResponse": MemorySnapshotResponse.model_json_schema(),
+        "MigrationQuarantineResponse": MigrationQuarantineResponse.model_json_schema(),
+        "OutputLocationCatalogResponse": OutputLocationCatalogResponse.model_json_schema(),
+        "OutputMaterializationResponse": OutputMaterializationResponse.model_json_schema(),
+        "OutputPreferenceResponse": OutputPreferenceResponse.model_json_schema(),
         "ProjectListResponse": ProjectListResponse.model_json_schema(),
         "RespondInteractionRequest": RespondInteractionRequest.model_json_schema(),
         "ThreadProjectionResponse": ThreadProjectionResponse.model_json_schema(),
@@ -111,6 +157,9 @@ def _contract_schemas() -> dict[str, dict[str, Any]]:
         "ThreadProjection": ThreadProjection.model_json_schema(),
         "RetouchBody": RetouchBody.model_json_schema(),
         "RetouchWorkspaceSubmitBody": RetouchWorkspaceSubmitBody.model_json_schema(),
+        "SystemHealthPublicResponse": SystemHealthPublicResponse.model_json_schema(),
+        "SystemHealthTechnicalResponse": SystemHealthTechnicalResponse.model_json_schema(),
+        "SystemMetricHistoryResponse": SystemMetricHistoryResponse.model_json_schema(),
     }
 
 
@@ -171,7 +220,9 @@ def _wire_object_fields(
         raise RuntimeError(f"backend schema {root_name!r} has invalid definitions")
     for definition_name in sorted(definitions):
         definition = definitions[definition_name]
-        if isinstance(definition, dict) and isinstance(definition.get("properties"), dict):
+        if isinstance(definition, dict) and isinstance(
+            definition.get("properties"), dict
+        ):
             result[definition_name] = _all_wire_fields(
                 definition, f"{root_name}.{definition_name}"
             )
@@ -185,7 +236,9 @@ def _definition(schema: dict[str, Any], name: str) -> dict[str, Any]:
     return definition
 
 
-def _property(schema: dict[str, Any], definition_name: str | None, field: str) -> dict[str, Any]:
+def _property(
+    schema: dict[str, Any], definition_name: str | None, field: str
+) -> dict[str, Any]:
     owner = schema if definition_name is None else _definition(schema, definition_name)
     candidate = owner.get("properties", {}).get(field)
     if not isinstance(candidate, dict):
@@ -198,12 +251,25 @@ def _property_enum(
     schema: dict[str, Any], definition_name: str, field: str
 ) -> list[str]:
     candidate = _property(schema, definition_name, field).get("enum")
-    if not isinstance(candidate, list) or not candidate or not all(
-        isinstance(value, str) for value in candidate
+    if (
+        not isinstance(candidate, list)
+        or not candidate
+        or not all(isinstance(value, str) for value in candidate)
     ):
         raise RuntimeError(
             f"backend field {definition_name}.{field} is no longer a string enum"
         )
+    return candidate
+
+
+def _root_property_enum(schema: dict[str, Any], field: str) -> list[str]:
+    candidate = _property(schema, None, field).get("enum")
+    if (
+        not isinstance(candidate, list)
+        or not candidate
+        or not all(isinstance(value, str) for value in candidate)
+    ):
+        raise RuntimeError(f"backend root field {field!r} is no longer a string enum")
     return candidate
 
 
@@ -219,10 +285,12 @@ def _property_const(
     return candidate
 
 
-def build_outputs() -> tuple[bytes, bytes, bytes, str]:
+def build_outputs() -> tuple[bytes, bytes, bytes, bytes, str]:
     schemas = _contract_schemas()
     public_families = [family.value for family in PUBLIC_ARTIFACT_FAMILIES]
-    public_visibilities = [visibility.value for visibility in PUBLIC_ARTIFACT_VISIBILITIES]
+    public_visibilities = [
+        visibility.value for visibility in PUBLIC_ARTIFACT_VISIBILITIES
+    ]
     schema_document = {
         "document_type": "ecorex.web-runtime-contracts",
         "schema_version": SCHEMA_VERSION,
@@ -239,6 +307,12 @@ def build_outputs() -> tuple[bytes, bytes, bytes, str]:
             "InputAttachmentProjection": "ecorex.protocol.InputAttachmentProjection",
             "ItemProjection": "ecorex.protocol.ItemProjection",
             "JobProjection": "ecorex.protocol.JobProjection",
+            "MemoryMutationResponse": "ecorex.memory.api.MemoryMutationResponse",
+            "MemorySnapshotResponse": "ecorex.memory.api.MemorySnapshotResponse",
+            "MigrationQuarantineResponse": "ecorex.migration.api.MigrationQuarantineResponse",
+            "OutputLocationCatalogResponse": "ecorex.output.api.OutputLocationCatalogResponse",
+            "OutputMaterializationResponse": "ecorex.output.api.OutputMaterializationResponse",
+            "OutputPreferenceResponse": "ecorex.output.api.OutputPreferenceResponse",
             "ProjectListResponse": "ecorex.protocol.ProjectListResponse",
             "RespondInteractionRequest": "ecorex.protocol.RespondInteractionRequest",
             "ThreadProjectionResponse": "ecorex.protocol.ThreadProjectionResponse",
@@ -253,6 +327,9 @@ def build_outputs() -> tuple[bytes, bytes, bytes, str]:
             "ThreadProjection": "ecorex.protocol.ThreadProjection",
             "RetouchBody": "ecorex.artifacts.api.RetouchBody",
             "RetouchWorkspaceSubmitBody": "ecorex.artifacts.api.RetouchWorkspaceSubmitBody",
+            "SystemHealthPublicResponse": "ecorex.observability.system_api.SystemHealthPublicResponse",
+            "SystemHealthTechnicalResponse": "ecorex.observability.system_api.SystemHealthTechnicalResponse",
+            "SystemMetricHistoryResponse": "ecorex.observability.system_api.SystemMetricHistoryResponse",
         },
         "public_artifact_policy": {
             "families": public_families,
@@ -267,6 +344,37 @@ def build_outputs() -> tuple[bytes, bytes, bytes, str]:
     bootstrap_schema = schemas["BootstrapResponse"]
     event_schema = schemas["EventEnvelope"]
     runtime_schema = schemas["ThreadProjectionResponse"]
+    settings_values = {
+        "memoryResetStatuses": _property_enum(
+            schemas["MemoryMutationResponse"],
+            "MemoryResetProjectionResponse",
+            "status",
+        ),
+        "migrationCredentialKinds": _property_enum(
+            schemas["MigrationQuarantineResponse"],
+            "MigrationQuarantineItemResponse",
+            "kind",
+        ),
+        "migrationCredentialOrigins": _property_enum(
+            schemas["MigrationQuarantineResponse"],
+            "MigrationQuarantineItemResponse",
+            "origin",
+        ),
+        "migrationQuarantineStatuses": _root_property_enum(
+            schemas["MigrationQuarantineResponse"], "status"
+        ),
+        "outputLocationAliases": _property_enum(
+            schemas["OutputLocationCatalogResponse"],
+            "OutputLocationOptionResponse",
+            "alias",
+        ),
+        "outputMaterializationStatuses": _root_property_enum(
+            schemas["OutputMaterializationResponse"], "status"
+        ),
+        "systemHealthStatuses": _root_property_enum(
+            schemas["SystemHealthPublicResponse"], "overall"
+        ),
+    }
     manifest = {
         "schemaVersion": SCHEMA_VERSION,
         "schemaSha256": digest,
@@ -287,11 +395,10 @@ def build_outputs() -> tuple[bytes, bytes, bytes, str]:
             name: _wire_object_fields(
                 schema,
                 name,
-                # Artifact Item payloads are decoded outside a response-model
-                # boundary, so their complete nested shape is pinned here.
-                # Bootstrap/Event nested objects are validated field-by-field
-                # in the WebUI while their authoritative root stays exact.
-                include_definitions=name == "ArtifactProjection",
+                # Feature-boundary validators need every fixed nested shape.
+                # Large Bootstrap/Event objects remain field-validated without
+                # duplicating their complete definitions into initial Web JS.
+                include_definitions=name in NESTED_WIRE_CONTRACT_NAMES,
             )
             for name, schema in schemas.items()
             # Interaction payloads are already decoded from the authoritative
@@ -299,7 +406,9 @@ def build_outputs() -> tuple[bytes, bytes, bytes, str]:
             # complete JSON Schemas in the hash-pinned schema artifact without
             # paying to duplicate field-name manifests in initial Web JS.
             if name not in PROJECTION_CONTRACT_NAMES
-            and name not in {
+            and name not in SETTINGS_CONTRACT_NAMES
+            and name
+            not in {
                 "InteractionRequest",
                 "RespondInteractionRequest",
             }
@@ -333,9 +442,7 @@ def build_outputs() -> tuple[bytes, bytes, bytes, str]:
             "connectorHealth": _property_enum(
                 bootstrap_schema, "ConnectorDescriptor", "health"
             ),
-            "updateStates": _property_enum(
-                bootstrap_schema, "UpdateSnapshot", "state"
-            ),
+            "updateStates": _property_enum(bootstrap_schema, "UpdateSnapshot", "state"),
             "extensionKinds": _property_enum(
                 bootstrap_schema, "ExtensionProjection", "kind"
             ),
@@ -387,6 +494,45 @@ def build_outputs() -> tuple[bytes, bytes, bytes, str]:
         "export type GeneratedRenditionKind = "
         "typeof GENERATED_RUNTIME_CONTRACT.artifact.renditionKinds[number];\n"
     ).encode("utf-8")
+    settings_manifest = {
+        "schemaVersion": SCHEMA_VERSION,
+        "schemaSha256": digest,
+        "wireFields": {
+            name: _wire_object_fields(
+                schemas[name],
+                name,
+                include_definitions=name in NESTED_WIRE_CONTRACT_NAMES,
+            )
+            for name in sorted(SETTINGS_CONTRACT_NAMES)
+        },
+        "values": settings_values,
+    }
+    rendered_settings_manifest = json.dumps(
+        settings_manifest,
+        ensure_ascii=False,
+        sort_keys=True,
+        indent=2,
+    )
+    settings_typescript = (
+        "// Generated by tools/generate-runtime-contracts.py. DO NOT EDIT.\n"
+        "// Progressively loaded Settings boundary; Python schemas remain authoritative.\n"
+        "export const GENERATED_SETTINGS_RUNTIME_CONTRACT = "
+        f"{rendered_settings_manifest} as const;\n"
+        "export type GeneratedMemoryResetStatus = "
+        "typeof GENERATED_SETTINGS_RUNTIME_CONTRACT.values.memoryResetStatuses[number];\n"
+        "export type GeneratedMigrationCredentialKind = "
+        "typeof GENERATED_SETTINGS_RUNTIME_CONTRACT.values.migrationCredentialKinds[number];\n"
+        "export type GeneratedMigrationCredentialOrigin = "
+        "typeof GENERATED_SETTINGS_RUNTIME_CONTRACT.values.migrationCredentialOrigins[number];\n"
+        "export type GeneratedMigrationQuarantineStatus = "
+        "typeof GENERATED_SETTINGS_RUNTIME_CONTRACT.values.migrationQuarantineStatuses[number];\n"
+        "export type GeneratedOutputLocationAlias = "
+        "typeof GENERATED_SETTINGS_RUNTIME_CONTRACT.values.outputLocationAliases[number];\n"
+        "export type GeneratedOutputMaterializationStatus = "
+        "typeof GENERATED_SETTINGS_RUNTIME_CONTRACT.values.outputMaterializationStatuses[number];\n"
+        "export type GeneratedSystemHealthStatus = "
+        "typeof GENERATED_SETTINGS_RUNTIME_CONTRACT.values.systemHealthStatuses[number];\n"
+    ).encode("utf-8")
     projection_manifest = {
         "schemaVersion": SCHEMA_VERSION,
         "schemaSha256": digest,
@@ -405,9 +551,7 @@ def build_outputs() -> tuple[bytes, bytes, bytes, str]:
             "itemStatuses": _enum_values(runtime_schema, "ItemStatus"),
             "jobStatuses": _enum_values(runtime_schema, "JobStatus"),
             "interactionKinds": _enum_values(runtime_schema, "InteractionKind"),
-            "interactionStatuses": _enum_values(
-                runtime_schema, "InteractionStatus"
-            ),
+            "interactionStatuses": _enum_values(runtime_schema, "InteractionStatus"),
             "interactionFieldControls": _enum_values(
                 runtime_schema, "InteractionFieldControl"
             ),
@@ -450,7 +594,13 @@ def build_outputs() -> tuple[bytes, bytes, bytes, str]:
         "export type GeneratedInteractionStatus = "
         "typeof GENERATED_RUNTIME_PROJECTION_CONTRACT.runtime.interactionStatuses[number];\n"
     ).encode("utf-8")
-    return schema_bytes, typescript, projection_typescript, digest
+    return (
+        schema_bytes,
+        typescript,
+        projection_typescript,
+        settings_typescript,
+        digest,
+    )
 
 
 def _check_file(path: Path, expected: bytes) -> bool:
@@ -483,13 +633,22 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    schema_bytes, typescript_bytes, projection_typescript_bytes, digest = build_outputs()
+    (
+        schema_bytes,
+        typescript_bytes,
+        projection_typescript_bytes,
+        settings_typescript_bytes,
+        digest,
+    ) = build_outputs()
     if args.check:
         valid = _check_file(SCHEMA_OUTPUT, schema_bytes)
         valid = _check_file(TYPESCRIPT_OUTPUT, typescript_bytes) and valid
         valid = (
             _check_file(PROJECTION_TYPESCRIPT_OUTPUT, projection_typescript_bytes)
             and valid
+        )
+        valid = (
+            _check_file(SETTINGS_TYPESCRIPT_OUTPUT, settings_typescript_bytes) and valid
         )
         if not valid:
             return 1
@@ -498,6 +657,7 @@ def main() -> int:
         SCHEMA_OUTPUT.write_bytes(schema_bytes)
         TYPESCRIPT_OUTPUT.write_bytes(typescript_bytes)
         PROJECTION_TYPESCRIPT_OUTPUT.write_bytes(projection_typescript_bytes)
+        SETTINGS_TYPESCRIPT_OUTPUT.write_bytes(settings_typescript_bytes)
         print(f"generated Runtime Web contract {digest}")
     if args.print_digest:
         print(digest)

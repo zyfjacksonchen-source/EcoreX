@@ -5041,3 +5041,66 @@ SHA-256 remains
 The deleted CowAgent workflows therefore remain active on the current main
 branch until a reviewed merge; no protected Candidate, publication or rollout
 was attempted.
+
+## 2026-07-15 - secondary Runtime JSON boundaries become generated contracts
+
+Memory, Output, legacy migration quarantine and System observability exposed a
+second thin-frontend gap. Their domain services owned the facts, but twelve
+HTTP routes returned dictionaries and the Web client asserted response types.
+Migration validation had also leaked into `SettingsDialog`. This meant the
+server could emit an additional field, stale aggregate count, contradictory
+lifecycle or cross-Artifact materialization identity before React noticed.
+
+Nine strict Pydantic response models now cover all twelve routes. They reject
+extra fields and validate timestamp, count, digest, ID, lifecycle and aggregate
+invariants before the response leaves FastAPI. Migration deletion deliberately
+retains aggregate category facts for audit; the old component validator that
+incorrectly rejected those retained facts was removed. System technical
+metrics retain exactly `runtime`, `process`, `storage` and `services` roots and
+use bounded recursive JSON depth/cardinality/string/key/finite-number rules.
+Output locations expose only the three product aliases and never a host path.
+
+The generator now emits a 36-contract canonical schema plus a dedicated
+`generatedSettingsRuntimeContract.ts`; schema SHA-256 is
+`877c962e459088e8ddc0f833a50f568cad6418fb0d9a14b904019028654b0d50`.
+`RuntimeClient` dynamically loads one settings validator before admitting any
+of the nine response families to state. A locally branded contract error keeps
+the deferred module independent of the client while preserving the shared
+error identity. Component-level migration validation was deleted.
+
+The first eager implementation made the real release build fail at 485.73 KiB
+against the unchanged 475 KiB initial-JavaScript limit. The first lazy attempt
+then correctly failed the content-addressed dependency graph because settings
+validation imported the client in reverse. Splitting the generated settings
+manifest and error brand removed both root causes. The final build contains 20
+assets and 19 JavaScript chunks: entry 47.90 KiB raw / 14.40 KiB gzip, initial
+JavaScript 474.99 KiB / 147.12 KiB gzip, deferred features 93.28 KiB / 33.23
+KiB gzip, and settings validation 11.73 KiB / 3.59 KiB gzip.
+
+Two existing wall-clock tests then exposed host-load coupling during the final
+full runs. A connector shutdown child included cold import and SQLite bootstrap
+inside its four-second process-exit window; it passed 4/5 repeats despite the
+child shutdown itself remaining bounded. A ready/start handshake now begins
+the four-second guard only after setup and passed 10/10 repeats. A maintenance
+test slept 40 ms and guessed that two cycles had run; under load it observed
+one. It now waits for the actual second-call Event under a two-second failure
+deadline and passed 10/10 repeats. Product shutdown and maintenance intervals
+were not relaxed. The combined connector/shutdown files pass 26 tests.
+
+The final current-source suite passes 1,926 tests with 17 explicit environment
+or platform skips and zero failures. JUnit records 1,943 cases in 1,680.264
+seconds, is 385,219 bytes, and has SHA-256
+`dc050061ff70766a1ef0379cc12879d8d46372024534452891bcd3778e54f2db`.
+Ruff/compile, npm audit, TypeScript, 167 Web tests, generated-contract freshness,
+design, legacy, public-download, dependency-lock, Runtime/Server schema,
+reproducibility, diff and all 658 admitted source files pass.
+
+Supply-chain preflight accounts for 23 Runtime and 282 npm packages and scans
+468 production files. Its inventory is
+`a7b2ff6ff3d468344a20f657f421344630e49ac798d5aa8912c70276f31a8d5a`;
+the ignored 21,857-byte report SHA-256 is
+`a742ef60ce397ee547f74ba508e0f730725fb068cb44b6f28fd0ae27a3862282`.
+The 7,380-byte byte contract SHA-256 is
+`65eb5c816f13f473f70f3084ecc07e4c9bd1c3febda02429672735b081ff3ec5`.
+Hosted CI and live governance remain separate post-push gates; no Candidate,
+publication or rollout is claimed by this local checkpoint.

@@ -292,6 +292,11 @@ class AdapterCloser:
         assert not gate.snapshot().healthy
         order.append("adapter_closed")
 
+ready_path = Path(sys.argv[2])
+ready_path.write_text("ready", encoding="utf-8")
+if sys.stdin.readline().strip() != "start":
+    raise RuntimeError("parent did not release the shutdown probe")
+
 async def scenario():
     await supervisor.start()
     await asyncio.sleep(0)
@@ -328,26 +333,53 @@ print(json.dumps({
     ],
 }, sort_keys=True), flush=True)
 '''
-    try:
-        completed = subprocess.run(
-            [sys.executable, "-c", child_source, str(tmp_path / "child-runtime.db")],
-            cwd=Path(__file__).resolve().parents[2],
-            capture_output=True,
-            text=True,
-            timeout=4,
-            check=False,
+    ready_path = tmp_path / "child-ready"
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            child_source,
+            str(tmp_path / "child-runtime.db"),
+            str(ready_path),
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    startup_deadline = time.monotonic() + 30
+    while not ready_path.is_file() and process.poll() is None:
+        if time.monotonic() >= startup_deadline:
+            process.kill()
+            stdout, stderr = process.communicate()
+            pytest.fail(
+                "connector shutdown child did not become ready: "
+                f"stdout={stdout!r} stderr={stderr!r}"
+            )
+        time.sleep(0.01)
+    if not ready_path.is_file():
+        stdout, stderr = process.communicate()
+        pytest.fail(
+            "connector shutdown child exited before readiness: "
+            f"stdout={stdout!r} stderr={stderr!r}"
         )
+    try:
+        stdout, stderr = process.communicate(input="start\n", timeout=4)
     except subprocess.TimeoutExpired:
+        process.kill()
+        process.communicate()
         pytest.fail("connector shutdown child exceeded the process exit deadline")
 
-    assert completed.returncode == 0, completed.stderr
-    payload = json.loads(completed.stdout.strip().splitlines()[-1])
+    assert process.returncode == 0, stderr
+    payload = json.loads(stdout.strip().splitlines()[-1])
     assert payload["shutdown_elapsed"] < 0.8
     assert payload["process_elapsed"] < 0.8
-    # Cold-import and process-spawn time varies by host. The child-reported
-    # interval brackets asyncio.run (including default-executor shutdown) and
-    # is the functional hard-budget assertion. subprocess.run's timeout is the
-    # independent process-exit guard and does not conflate imports with it.
+    # Cold-import, schema initialization and process-spawn time varies by host.
+    # The ready handshake starts the independent process-exit guard only after
+    # those steps. The child interval brackets asyncio.run, including default
+    # executor shutdown, while the parent still catches a leaked non-daemon
+    # thread that would keep the process alive.
     assert payload["publisher_entered"] is True
     assert payload["order"] == [
         "producer_stopped",
