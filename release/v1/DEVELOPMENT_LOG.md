@@ -228,3 +228,29 @@ Starlette's upstream `python_multipart` pending-deprecation notice.
   managed Gateway/device session or protected acceptance Runner. The live
   repository audit still has 17 blockers, so no publication or rollout was
   attempted.
+
+## 2026-07-15 - reviewed Node 24 workflow dependency closure
+
+- Upgraded every v1 official Action to a verified Node 24 release and retained
+  full commit-SHA pins: checkout 7.0.0, setup-python 6.3.0, setup-node 7.0.0,
+  setup-go 6.4.0, upload-artifact 7.0.1 and download-artifact 8.0.1.
+- Added the canonical `requirements/locks/github-actions.json` authority and
+  bound its six identities plus minimum Actions Runner 2.327.1 into dependency,
+  source and cross-runner reproducibility gates.
+- The workflow gate now inventories all YAML workflows, allows only the four
+  v1 contracts, exact-matches Action SHA/release, and requires checkout
+  `persist-credentials: false` everywhere.
+- Removed both inherited CowAgent Docker publishers and made their paths
+  permanent legacy-cutoff violations.
+- The first full test exposed a duplicate outer process-wall threshold at the
+  exact 3.5-second boundary. Functional shutdown remained under its 0.8-second
+  budget and the child process remained under the independent 4-second timeout.
+  Removing the cold-import-coupled duplicate assertion preserved both actual
+  deadlines; the exact test then passed five consecutive runs.
+- Final local evidence: 1,922 Python tests pass with 17 explicit skips in
+  1,255.82 seconds; Web audit/typecheck/164 tests/build pass; all static gates
+  and 656 admitted files pass. Supply-chain preflight covers 23 Runtime, 282 npm
+  and 467 production files with inventory `e488a5e9...0db67edb`.
+- This is local pre-push evidence only. Hosted multi-platform execution,
+  repository governance, protected Candidate, publication and rollout remain
+  separate gates.

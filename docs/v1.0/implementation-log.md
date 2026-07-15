@@ -4967,3 +4967,59 @@ active on main. The 3,167-byte ignored report is
 `d9eb1f478307b94f418de7f855be36700fd140e294b8ab4693f10cd01338a2c8`.
 No governance setting, protected Candidate, managed provider/CDP gate, release,
 rollout or user installation was changed.
+
+## 2026-07-15 - GitHub Actions moves to one reviewed Node 24 supply-chain authority
+
+GitHub had begun forcing the old checkout/setup/upload/download revisions from
+their declared Node 20 runtime onto Node 24. The workflows still executed, but
+the warning exposed three structural gaps: the dependency gate accepted any
+40-character Action SHA instead of one reviewed revision; two inherited
+CowAgent Docker publishers remained discoverable even though their repository
+guard made them dead here; and two CI checkouts had not explicitly disabled
+credential persistence.
+
+All four v1 workflows now use verified official Node 24 revisions: checkout
+v7.0.0, setup-python v6.3.0, setup-node v7.0.0, setup-go v6.4.0,
+upload-artifact v7.0.1 and download-artifact v8.0.1. Full commit SHAs remain in
+workflow source. `requirements/locks/github-actions.json` is the declarative
+review authority for repository, release, commit, runtime, verification and
+release URL. Its SHA-256 is
+`4c6d80f57f3c6a178b611776eadb339cf80c45418ded644b2f7272f6144b5a97`.
+The lock fixes the minimum protected self-hosted Actions Runner at 2.327.1.
+
+The dependency gate now inventories every `.yml` and `.yaml` workflow, permits
+only the four v1 workflow contracts, requires an exact lock match for every
+`uses:` line, and requires `persist-credentials: false` after every checkout.
+The Action lock is also part of the cross-runner byte contract and source-tree
+admission. The two CowAgent Docker workflows were deleted and added to the
+permanent legacy cutoff so they cannot be restored as a side channel.
+
+The first complete local regression was informative rather than green: 1,921
+tests passed and one shutdown-isolation test measured the outer process wall at
+the duplicated strict `3.5 < 3.5` boundary. The actual child-reported shutdown
+and default-executor hard budgets remained below 0.8 seconds. The root cause was
+the test coupling variable Windows cold-import/process scheduling to the
+functional shutdown deadline while `subprocess.run(timeout=4)` already owned
+the independent process-exit deadline. The duplicate wall assertion was
+removed without changing either production timeout. The exact test then passed
+five consecutive runs, including loaded-host runs whose overall pytest time
+varied substantially.
+
+The final exact-source regression passes 1,922 tests with 17 explicit
+environment/platform skips and zero failures in 1,255.82 seconds. Its ignored
+JUnit is 384,624 bytes, SHA-256
+`2ab35f024961fa565a0552c934325c6ca5810c580ec86c735547c602a51bbd5c`.
+Ruff/compile, 49 focused release/dependency tests, YAML parsing, all static
+gates and 656 admitted source files pass. Web audit has zero vulnerabilities;
+TypeScript, all 164 Web tests and the 19-asset/18-chunk production build pass at
+474.84 KiB raw / 147.05 KiB gzip initial JavaScript.
+
+The final byte contract is 7,173 bytes, SHA-256
+`a6cc2b6cb49eb0ab671818fdad2d074783adcf2cd1a610fa16bf576914a64b36`.
+Supply-chain preflight covers 23 Runtime packages, 282 npm packages and 467
+production files with inventory
+`e488a5e95fd80a5594d89cd2cdfb967f5d0d74f82a3d51ca77dcc3710db67edb`;
+the ignored 21,857-byte report SHA-256 is
+`0a0dc45a87435a7b6fbfce47ec2b7768e53366643724ed24779acdcf62ea49dc`.
+Hosted execution and the live governance audit remain separate evidence and
+are not claimed by this local checkpoint.

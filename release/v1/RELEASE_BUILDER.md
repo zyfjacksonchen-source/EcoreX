@@ -106,6 +106,11 @@ publisher lock: portable Python has no cross-platform atomic
 Production key custody, HSM/KMS authentication, two-person approval, key
 rotation/revocation, public-key rollout, attested CI provenance, and mirror
 upload are outside this library and remain release-operations responsibilities.
+Repository workflows are independently constrained by the reviewed
+`requirements/locks/github-actions.json` authority. Its Node 24 Actions require
+GitHub Actions Runner 2.327.1 or newer on every protected self-hosted runner;
+an older runner is not release-capable and must fail admission before receiving
+any privileged role label.
 
 The production `desktop/dist` is emitted through the repository Web finalizer:
 asset names are content-addressed and HTML contains the required runtime marker

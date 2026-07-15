@@ -48,6 +48,7 @@ V1_SHELL_FILES = (
 )
 V1_DEPENDENCY_LOCK_FILES = (
     "pyproject.toml",
+    "requirements/locks/github-actions.json",
     "requirements/locks/bootstrap.in",
     "requirements/locks/bootstrap.lock",
     "requirements/locks/cloud.in",

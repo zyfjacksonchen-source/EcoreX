@@ -18,6 +18,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 
 RETIRED_FILES = (
+    ".github/workflows/deploy-image-arm.yml",
+    ".github/workflows/deploy-image.yml",
     ".github/workflows/ecorex-desktop-release.yml",
     ".github/workflows/ecorex-webui-macos-smoke.yml",
     "channel/web/web_channel.py",

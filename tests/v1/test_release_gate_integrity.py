@@ -587,3 +587,24 @@ def test_source_tree_checker_detects_relevant_untracked_file(tmp_path: Path) -> 
 
     with pytest.raises(ValueError, match="untracked"):
         checker.check(tmp_path)
+
+
+def test_source_tree_checker_includes_every_workflow_file(tmp_path: Path) -> None:
+    checker = _module("ecorex_v1_source_checker_workflow", "scripts/check-v1-source-tree.py")
+    subprocess.run(("git", "init", "-q"), cwd=tmp_path, check=True)
+    workflow = tmp_path / ".github" / "workflows" / "surprise.yaml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text("name: surprise\n", encoding="utf-8")
+
+    assert workflow in checker.source_files(tmp_path)
+    with pytest.raises(ValueError, match="untracked:.github/workflows/surprise.yaml"):
+        checker.check(tmp_path)
+
+
+def test_source_tree_checker_includes_github_actions_lock(tmp_path: Path) -> None:
+    checker = _module("ecorex_v1_source_checker_action_lock", "scripts/check-v1-source-tree.py")
+    action_lock = tmp_path / "requirements" / "locks" / "github-actions.json"
+    action_lock.parent.mkdir(parents=True)
+    action_lock.write_text("{}\n", encoding="utf-8")
+
+    assert action_lock in checker.source_files(tmp_path)

@@ -1876,3 +1876,31 @@
   its mutable image is a reproducible release compiler. Moving the release
   toolchain requires an explicit manifest review and deterministic rebuild
   evidence; a hosted alias cannot silently redefine a Candidate.
+
+## ADR-108 - Official GitHub Actions are a locked Node 24 dependency closure
+
+- Status: accepted.
+- Root cause: full-SHA pinning prevented tag movement but did not prove that a
+  workflow used the reviewed revision. The gate accepted any 40-character SHA,
+  legacy workflow files were outside the v1 inventory, and old official Action
+  majors produced Node 20 forced-upgrade warnings. A syntactically pinned
+  workflow could therefore drift from the reviewed supply-chain closure.
+- Decision: `requirements/locks/github-actions.json` is the only Action
+  authority. Every workflow is inventoried regardless of `.yml`/`.yaml`
+  spelling; every `uses:` reference must be an exact full-SHA/release match to
+  one verified `actions/*` Node 24 entry; every checkout disables persisted
+  credentials. The current closure is checkout, setup-python, setup-node,
+  setup-go, upload-artifact and download-artifact only.
+- Runner boundary: Node 24 Actions require GitHub Actions Runner 2.327.1 or
+  newer. A protected self-hosted stage, signing, live-acceptance or publication
+  host below that version is not release-capable and must not receive the role
+  label. Hosted runner execution remains independently proven by CI.
+- Inventory boundary: only the four product v1 workflows are admitted. The two
+  inherited CowAgent Docker publishing workflows are permanently retired and
+  the legacy cutoff rejects their reintroduction. A new workflow or third-party
+  Action requires an explicit reviewed contract change rather than being
+  accepted by SHA shape alone.
+- Consequence: Action identity participates in the platform-neutral byte
+  contract, so unchanged source cannot silently execute a different workflow
+  dependency closure. This does not replace branch protection, Environments,
+  isolated privileged Runners or signed Candidate evidence.

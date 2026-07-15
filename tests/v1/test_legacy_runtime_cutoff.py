@@ -70,6 +70,17 @@ def test_retired_webchannel_tree_has_no_file_residue() -> None:
     assert gate._source_files(ROOT / "channel" / "web") == ()
 
 
+def test_inherited_cowagent_publish_workflows_are_permanently_retired() -> None:
+    gate = _cutoff_module()
+    retired = {
+        ".github/workflows/deploy-image.yml",
+        ".github/workflows/deploy-image-arm.yml",
+    }
+
+    assert retired.issubset(set(gate.RETIRED_FILES))
+    assert all(not (ROOT / relative).exists() for relative in retired)
+
+
 def test_webchannel_module_is_no_longer_importable() -> None:
     result = subprocess.run(
         [

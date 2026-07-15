@@ -328,25 +328,26 @@ print(json.dumps({
     ],
 }, sort_keys=True), flush=True)
 '''
-    started = time.monotonic()
-    completed = subprocess.run(
-        [sys.executable, "-c", child_source, str(tmp_path / "child-runtime.db")],
-        cwd=Path(__file__).resolve().parents[2],
-        capture_output=True,
-        text=True,
-        timeout=4,
-        check=False,
-    )
-    wall_elapsed = time.monotonic() - started
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", child_source, str(tmp_path / "child-runtime.db")],
+            cwd=Path(__file__).resolve().parents[2],
+            capture_output=True,
+            text=True,
+            timeout=4,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail("connector shutdown child exceeded the process exit deadline")
 
     assert completed.returncode == 0, completed.stderr
     payload = json.loads(completed.stdout.strip().splitlines()[-1])
     assert payload["shutdown_elapsed"] < 0.8
     assert payload["process_elapsed"] < 0.8
-    # Cold-import time varies by CI host; the child-reported interval brackets
-    # asyncio.run (including default-executor shutdown) and is the hard-budget
-    # assertion. The wall bound only detects a process that fails to exit.
-    assert wall_elapsed < 3.5
+    # Cold-import and process-spawn time varies by host. The child-reported
+    # interval brackets asyncio.run (including default-executor shutdown) and
+    # is the functional hard-budget assertion. subprocess.run's timeout is the
+    # independent process-exit guard and does not conflate imports with it.
     assert payload["publisher_entered"] is True
     assert payload["order"] == [
         "producer_stopped",

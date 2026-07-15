@@ -1736,3 +1736,17 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Exact hosted source head | 0 | Run `29357245885` on `3b9d684a311828d913f3c29c626f6b68f4e6cd95` passed Ubuntu quality, Windows x64, macOS arm64/x64 and Cross-runner byte stability; all five Jobs succeeded. Draft PR #2 remains CLEAN and Draft. |
 | Live repository audit | 2 | Exactly 17 blockers remain: Actions 3, branch 1, Environments 6, isolated Runners 4 and inactive protected workflows 3. The 3,167-byte report is byte-identical to the prior audit, SHA-256 `d9eb1f47...38a2c8`; no governance mutation occurred. |
 | Publication | blocked | Hosted CI is read-only source evidence. No protected Candidate, managed provider/CDP acceptance receipt, release, rollout or user update was attempted. |
+
+## Reviewed Node 24 GitHub Actions closure - 2026-07-15
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Action provenance | 0 | Six official `actions/*` releases use verified Node 24 commit SHAs. Declarative lock SHA-256 `4c6d80f5...144b5a97`; protected self-hosted Runner minimum is 2.327.1. |
+| Workflow inventory | 0 | Exactly four v1 workflows remain. Every `.yml/.yaml`, `uses:` line and checkout credential setting is fail-closed; two inherited CowAgent Docker publishers are deleted and permanently retired. |
+| Focused mutation regression | 0 | 49 dependency/release/Candidate tests pass; unreviewed workflow inventory, Action drift, unverified lock entries and checkout credential persistence are rejected. Workflow YAML parses. |
+| Shutdown deadline diagnostic | 1 then 0 | First full run: 1,921 passed and one outer Windows wall-clock assertion hit the duplicated `3.5 < 3.5` boundary. Child functional shutdown budgets remained `<0.8s`; process exit remained bounded by `timeout=4`. After separating these authorities, the exact test passed 5/5 repeated runs. |
+| Complete Python v1 suite | 0 | Exact current source: 1,922 passed / 17 explicit environment skips / 0 failed in 1,255.82 seconds. JUnit SHA-256 `2ab35f02...a51bbd5c`; five warnings are upstream deprecations only. |
+| WebUI | 0 | npm audit reports zero vulnerabilities; TypeScript and 164/164 tests pass; production emits 19 content-addressed assets / 18 chunks with 474.84 KiB raw and 147.05 KiB gzip initial JS. |
+| Static and byte gates | 0 | Ruff/compile, design, legacy, public download, dependency, Runtime/Server schema, source/diff and reproducibility gates pass across 656 admitted files. Byte contract SHA-256 `a6cc2b6c...14a64b36`. |
+| Current-source supply chain | 0 | 23 locked/licensed Runtime packages, 282 npm packages and 467 production files pass; inventory `e488a5e9...0db67edb`; ignored report SHA-256 `0a0dc45a...2ea49dc`. |
+| External mutation | 0 | This checkpoint does not claim hosted execution, governance mutation, protected Candidate, publication or rollout. |

@@ -1,4 +1,4 @@
-# EcoreX Python dependency locks
+# EcoreX dependency locks
 
 These files are the repository-owned dependency authority for EcoreX v1
 Candidate and CI environments. Candidate jobs install a hash-locked profile,
@@ -32,3 +32,9 @@ floating direct Python dependencies, an incomplete npm lock, or a Candidate
 workflow that installs Python outside these locks. A resolver that cannot
 produce a truthful cross-platform lock must fail the Candidate; hashes must
 never be fabricated.
+
+`github-actions.json` is the separate reviewed authority for official GitHub
+Actions. Each workflow reference must match its full verified commit SHA and
+release comment. All locked Actions use Node 24, so every protected self-hosted
+runner must run GitHub Actions Runner 2.327.1 or newer before it is admitted to
+a Candidate, signing, live-acceptance or publication role.

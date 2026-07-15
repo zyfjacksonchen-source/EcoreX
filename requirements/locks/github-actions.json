@@ -1,0 +1,55 @@
+{
+  "actions": [
+    {
+      "commit_sha": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+      "release": "v7.0.0",
+      "release_url": "https://github.com/actions/checkout/releases/tag/v7.0.0",
+      "repository": "actions/checkout",
+      "runtime": "node24",
+      "verification": "verified"
+    },
+    {
+      "commit_sha": "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+      "release": "v8.0.1",
+      "release_url": "https://github.com/actions/download-artifact/releases/tag/v8.0.1",
+      "repository": "actions/download-artifact",
+      "runtime": "node24",
+      "verification": "verified"
+    },
+    {
+      "commit_sha": "4a3601121dd01d1626a1e23e37211e3254c1c06c",
+      "release": "v6.4.0",
+      "release_url": "https://github.com/actions/setup-go/releases/tag/v6.4.0",
+      "repository": "actions/setup-go",
+      "runtime": "node24",
+      "verification": "verified"
+    },
+    {
+      "commit_sha": "820762786026740c76f36085b0efc47a31fe5020",
+      "release": "v7.0.0",
+      "release_url": "https://github.com/actions/setup-node/releases/tag/v7.0.0",
+      "repository": "actions/setup-node",
+      "runtime": "node24",
+      "verification": "verified"
+    },
+    {
+      "commit_sha": "ece7cb06caefa5fff74198d8649806c4678c61a1",
+      "release": "v6.3.0",
+      "release_url": "https://github.com/actions/setup-python/releases/tag/v6.3.0",
+      "repository": "actions/setup-python",
+      "runtime": "node24",
+      "verification": "verified"
+    },
+    {
+      "commit_sha": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      "release": "v7.0.1",
+      "release_url": "https://github.com/actions/upload-artifact/releases/tag/v7.0.1",
+      "repository": "actions/upload-artifact",
+      "runtime": "node24",
+      "verification": "verified"
+    }
+  ],
+  "lock_type": "ecorex-github-actions-lock",
+  "minimum_runner_version": "2.327.1",
+  "schema_version": 1
+}

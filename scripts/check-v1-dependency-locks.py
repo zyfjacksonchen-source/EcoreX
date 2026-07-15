@@ -35,7 +35,25 @@ PLATFORM_PACK_DEPENDENCIES = {
     "reportlab": "4.4.9",
 }
 _HASH = re.compile(r"--hash=sha256:([0-9a-f]{64})(?:\s|$)")
-_ACTION_PIN = re.compile(r"^\s*uses:\s*[^\s@]+@([0-9a-f]{40})(?:\s+#.*)?$")
+_ACTION_PIN = re.compile(
+    r"^\s*uses:\s*([^\s@]+)@([0-9a-f]{40})\s+#\s+(\S+)\s*$"
+)
+ACTION_LOCK_RELATIVE = Path("requirements/locks/github-actions.json")
+_ACTION_LOCK_KEYS = {
+    "actions",
+    "lock_type",
+    "minimum_runner_version",
+    "schema_version",
+}
+_ACTION_ENTRY_KEYS = {
+    "commit_sha",
+    "release",
+    "release_url",
+    "repository",
+    "runtime",
+    "verification",
+}
+_MINIMUM_NODE24_RUNNER_VERSION = "2.327.1"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -229,11 +247,58 @@ def _validate_node(repo: Path) -> None:
             raise ValueError(f"npm_lock_entry_invalid:{name}")
 
 
-def _validate_workflows(repo: Path) -> None:
-    workflows = {
-        path.name: path.read_text(encoding="utf-8")
-        for path in sorted((repo / ".github" / "workflows").glob("ecorex-v1-*.yml"))
-    }
+def _load_action_lock(repo: Path) -> tuple[dict[str, tuple[str, str]], dict[str, object]]:
+    path = repo / ACTION_LOCK_RELATIVE
+    try:
+        payload = path.read_bytes()
+        value = json.loads(payload.decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        raise ValueError("github_actions_lock_invalid") from None
+    canonical = (
+        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8")
+        + b"\n"
+    )
+    if payload != canonical or not isinstance(value, dict) or set(value) != _ACTION_LOCK_KEYS:
+        raise ValueError("github_actions_lock_invalid")
+    if (
+        value.get("schema_version") != 1
+        or value.get("lock_type") != "ecorex-github-actions-lock"
+        or value.get("minimum_runner_version") != _MINIMUM_NODE24_RUNNER_VERSION
+    ):
+        raise ValueError("github_actions_lock_contract_invalid")
+    raw_actions = value.get("actions")
+    if not isinstance(raw_actions, list) or not raw_actions:
+        raise ValueError("github_actions_lock_actions_invalid")
+    approved: dict[str, tuple[str, str]] = {}
+    observed_order: list[str] = []
+    for raw in raw_actions:
+        if not isinstance(raw, dict) or set(raw) != _ACTION_ENTRY_KEYS:
+            raise ValueError("github_actions_lock_entry_invalid")
+        repository = raw.get("repository")
+        release = raw.get("release")
+        commit_sha = raw.get("commit_sha")
+        if (
+            not isinstance(repository, str)
+            or re.fullmatch(r"actions/[a-z0-9][a-z0-9-]*", repository) is None
+            or re.fullmatch(r"v[1-9][0-9]*\.[0-9]+\.[0-9]+", str(release)) is None
+            or re.fullmatch(r"[0-9a-f]{40}", str(commit_sha)) is None
+            or raw.get("runtime") != "node24"
+            or raw.get("verification") != "verified"
+            or raw.get("release_url")
+            != f"https://github.com/{repository}/releases/tag/{release}"
+        ):
+            raise ValueError(f"github_actions_lock_entry_invalid:{repository}")
+        if repository in approved:
+            raise ValueError(f"github_actions_lock_duplicate:{repository}")
+        approved[repository] = (str(commit_sha), str(release))
+        observed_order.append(repository)
+    if observed_order != sorted(observed_order):
+        raise ValueError("github_actions_lock_order_invalid")
+    return approved, value
+
+
+def _validate_workflows(repo: Path) -> dict[str, object]:
+    approved_actions, action_lock = _load_action_lock(repo)
     workflow_profiles = {
         "ecorex-v1-ci.yml": {
             "profiles": {"cloud": 1, "dev": 2},
@@ -263,6 +328,32 @@ def _validate_workflows(repo: Path) -> None:
             "node": False,
         },
     }
+    workflow_root = repo / ".github" / "workflows"
+    workflow_paths = tuple(
+        sorted(
+            (
+                *workflow_root.glob("*.yml"),
+                *workflow_root.glob("*.yaml"),
+            ),
+            key=lambda path: path.name,
+        )
+    )
+    observed_names = {path.name for path in workflow_paths}
+    expected_names = set(workflow_profiles)
+    if observed_names != expected_names:
+        unexpected = sorted(observed_names - expected_names)
+        missing = sorted(expected_names - observed_names)
+        detail = ",".join(
+            [
+                *(f"unexpected:{name}" for name in unexpected),
+                *(f"missing:{name}" for name in missing),
+            ]
+        )
+        raise ValueError(f"workflow_inventory_invalid:{detail}")
+    workflows = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in workflow_paths
+    }
     for name, contract in workflow_profiles.items():
         text = workflows.get(name)
         if text is None or "python -m pip install" in text or re.search(r"\bnpm install\b", text):
@@ -284,14 +375,32 @@ def _validate_workflows(repo: Path) -> None:
             if text.count(marker) != count:
                 raise ValueError(f"workflow_lock_profile_missing:{name}:{profile}")
     for name, text in workflows.items():
-        for line in text.splitlines():
-            if "uses:" in line and _ACTION_PIN.fullmatch(line) is None:
+        lines = text.splitlines()
+        for index, line in enumerate(lines):
+            if "uses:" not in line:
+                continue
+            match = _ACTION_PIN.fullmatch(line)
+            if match is None:
                 raise ValueError(f"workflow_action_not_sha_pinned:{name}")
+            action, commit_sha, release = match.groups()
+            approved = approved_actions.get(action)
+            if approved is None:
+                raise ValueError(f"workflow_action_not_approved:{name}:{action}")
+            if approved != (commit_sha, release):
+                raise ValueError(f"workflow_action_revision_unreviewed:{name}:{action}")
+            if action == "actions/checkout" and not any(
+                candidate.strip() == "persist-credentials: false"
+                for candidate in lines[index + 1 : index + 8]
+            ):
+                raise ValueError(
+                    f"workflow_checkout_persists_credentials:{name}:{index + 1}"
+                )
     go_mod = (repo / "platform-staging" / "bootstrap" / "go.mod").read_text(
         encoding="utf-8"
     )
     if go_mod != "module ecorex.local/bootstrap\n\ngo 1.26.0\n":
         raise ValueError("bootstrap_go_module_drift")
+    return action_lock
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -303,10 +412,13 @@ def main(argv: list[str] | None = None) -> int:
         _write_manifest()
     profiles = _validate_python(repo)
     _validate_node(repo)
-    _validate_workflows(repo)
+    action_lock = _validate_workflows(repo)
     result = {
         "status": "passed",
         "manifest_sha256": _sha256(LOCK_ROOT / "manifest.json"),
+        "github_actions_lock_sha256": _sha256(repo / ACTION_LOCK_RELATIVE),
+        "github_actions": len(action_lock["actions"]),
+        "minimum_actions_runner_version": action_lock["minimum_runner_version"],
         "profiles": {name: len(values) for name, values in sorted(profiles.items())},
         "npm_packages": len(json.loads((repo / "desktop" / "package-lock.json").read_text(encoding="utf-8"))["packages"]) - 1,
     }

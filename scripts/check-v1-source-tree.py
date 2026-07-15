@@ -31,6 +31,7 @@ _TEXT_SUFFIXES = frozenset(
         ".toml",
         ".ts",
         ".tsx",
+        ".yaml",
         ".yml",
     }
 )
@@ -57,7 +58,15 @@ def source_files(root: Path = ROOT) -> tuple[Path, ...]:
         for path in (root / "scripts").glob("*.py")
         if path.is_file() and "v1" in path.name.casefold()
     )
-    result.update((root / ".github" / "workflows").glob("ecorex-v1-*.yml"))
+    workflow_root = root / ".github" / "workflows"
+    result.update(
+        path
+        for path in workflow_root.glob("*")
+        if path.is_file() and path.suffix.casefold() in {".yml", ".yaml"}
+    )
+    action_lock = root / "requirements" / "locks" / "github-actions.json"
+    if action_lock.is_file():
+        result.add(action_lock)
     return tuple(sorted(result))
 
 

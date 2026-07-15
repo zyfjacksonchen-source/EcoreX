@@ -270,7 +270,12 @@ Candidate jobs install the `bootstrap` lock and exactly one hash-locked profile,
 require wheels, then install the checked-out EcoreX source with `--no-deps` and
 `--no-build-isolation`. The gate rejects floating `pyproject.toml` dependencies,
 missing hashes, VCS/path requirements, npm lock drift, non-`npm ci` workflow
-installs and unpinned GitHub Actions. Candidate Python is fixed to 3.11.9 and
+installs and unreviewed GitHub Actions. `requirements/locks/github-actions.json`
+is the sole Action authority: every workflow `uses:` line must match one exact
+verified official Node 24 release/commit and every checkout must set
+`persist-credentials: false`. Protected self-hosted Runners must run GitHub
+Actions Runner 2.327.1 or newer before receiving a stage, signing,
+live-acceptance or publication label. Candidate Python is fixed to 3.11.9 and
 the Web build uses the exact Node.js 22.23.1 LTS toolchain;
 the installer refuses a different patch-level interpreter because the platform
 stager packages that interpreter into the Core. The platform matrix is also the external
