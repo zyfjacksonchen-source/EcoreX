@@ -60,6 +60,43 @@ from .models import (
     RolloutActionRequest,
     RolloutProjection,
 )
+from .admin_management_router import create_admin_management_router
+from .management import (
+    AdminManagementConflict,
+    AdminManagementError,
+    AdminManagementNotFound,
+    AdminManagementRepository,
+    AdminModelSecretError,
+    HTTPSModelConnectionTester,
+    ModelConnectionTester,
+    ModelConnectionTestResult,
+    RejectingModelConnectionTester,
+)
+from .management_models import (
+    ActiveModelConfiguration,
+    AdjustUsageRequest,
+    AdminUserListProjection,
+    AdminUserProjection,
+    CreateAdminUserRequest,
+    CreateModelConfigurationRequest,
+    MANAGED_MODEL_SLOTS,
+    ModelConfigurationProjection,
+    ModelRevisionProjection,
+    ModelTestProjection,
+    StageModelConfigurationRequest,
+    TestAndActivateModelRequest,
+    UpdateAdminUserRequest,
+    UsageSummaryProjection,
+)
+from .management_schema import (
+    ADMIN_MANAGEMENT_MIGRATION_CHECKSUM,
+    ADMIN_MANAGEMENT_MIGRATION_NAME,
+    ADMIN_MANAGEMENT_SCHEMA_SHA256,
+    CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION,
+    AdminManagementSchemaError,
+    AdminManagementSchemaManager,
+    AdminManagementSchemaReceipt,
+)
 from .repository import (
     MAX_UPDATE_HINT_BATCH_SIZE,
     REQUIRED_RELEASE_GATES,

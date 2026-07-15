@@ -494,6 +494,18 @@ def test_builtin_catalog_availability_and_provider_revocation(tmp_path: Path) ->
     assert availability.installed_packs == {"image"}
     assert availability.connected_connectors == {"feishu"}
     service.assert_tool_invocable(snapshot.snapshot_id, "imagegen")
+    core = service.projection("ecorex.core.tools")
+    assert core.category == "system"
+    assert core.icon_key == "system"
+    core_disable = next(action for action in core.actions if action.action_id == "disable")
+    assert core_disable.enabled is False
+    assert core_disable.disabled_reason == "extension_required_by_product"
+    with pytest.raises(ExtensionActionUnavailable, match="extension_required_by_product"):
+        service.disable(
+            core.extension_id,
+            expected_revision=core.revision,
+            client_request_id="disable:core-tools:blocked",
+        )
     pack = service.projection("ecorex.pack.image")
     service.disable(
         pack.extension_id,
@@ -671,6 +683,8 @@ def test_runtime_bootstrap_turn_job_and_revocation_share_one_extension_snapshot(
         for item in bootstrap["extensions"]["items"]
         if item["extension_id"] == "ecorex.pack.image"
     )
+    assert image_pack["category"] == "image_media"
+    assert image_pack["icon_key"] == "image"
     disabled = client.post(
         "/api/v1/extensions/ecorex.pack.image/disable",
         headers=mutation,

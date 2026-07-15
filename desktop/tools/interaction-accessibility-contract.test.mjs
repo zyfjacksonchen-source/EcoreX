@@ -38,7 +38,7 @@ test("forced colors retain system contrast and explicit focus", () => {
   assert.match(forced, /--color-accent:\s*Highlight/u);
   assert.match(forced, /--color-accent-ink:\s*HighlightText/u);
   assert.match(forced, /--color-rule:\s*ButtonBorder/u);
-  assert.match(primitives, /@media \(forced-colors: active\)[\s\S]*:focus-visible[\s\S]*outline-color:\s*Highlight/u);
+  assert.match(primitives, /@media \(forced-colors: active\)[\s\S]*:focus-visible[\s\S]*outline:\s*2px solid Highlight/u);
   assert.match(primitives, /forced-color-adjust:\s*none/u);
 });
 

@@ -99,6 +99,16 @@ function assertNullableString(
   if (value !== null) assertString(value, contract, path);
 }
 
+function assertSha256(
+  value: unknown,
+  contract: RuntimeContractError["contract"],
+  path: string,
+): asserts value is string {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) {
+    reject(contract, path, "a lowercase SHA-256 digest");
+  }
+}
+
 function assertBoolean(
   value: unknown,
   contract: RuntimeContractError["contract"],
@@ -257,6 +267,9 @@ function assertBootstrap(value: unknown): asserts value is BootstrapResponse {
   if (value.login.session_revision !== null) {
     assertInteger(value.login.session_revision, contract, "login.session_revision", 1);
   }
+  if (value.login.session_lease_digest !== null) {
+    assertSha256(value.login.session_lease_digest, contract, "login.session_lease_digest");
+  }
 
   if (value.policy_lease !== null) {
     assertRecord(value.policy_lease, contract, "policy_lease");
@@ -362,7 +375,7 @@ function assertBootstrap(value: unknown): asserts value is BootstrapResponse {
   value.extensions.items.forEach((extension, index) => {
     const path = `extensions.items[${index}]`;
     assertRecord(extension, contract, path);
-    for (const field of ["extension_id", "display_name", "updated_at"] as const) {
+    for (const field of ["extension_id", "display_name", "icon_key", "updated_at"] as const) {
       assertString(extension[field], contract, `${path}.${field}`);
     }
     assertString(extension.description, contract, `${path}.description`, true);
@@ -382,6 +395,7 @@ function assertBootstrap(value: unknown): asserts value is BootstrapResponse {
     }
     for (const [field, allowed] of [
       ["kind", BOOTSTRAP_VALUES.extensionKinds],
+      ["category", BOOTSTRAP_VALUES.extensionCategories],
       ["source", BOOTSTRAP_VALUES.extensionSources],
       ["trust", BOOTSTRAP_VALUES.extensionTrust],
       ["status", BOOTSTRAP_VALUES.extensionStatuses],

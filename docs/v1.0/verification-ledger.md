@@ -1792,3 +1792,18 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Pixel evidence | 0 | Captured desktop corners are exactly dark/light non-chat `#0f0f0f/#f7f7f7`; workspace pixels are exactly `#111111/#ffffff`. |
 | Complete-suite evidence boundary | pending | The most recent complete 1,926-test Python and five-platform hosted run belongs to prior exact source `ee8a7f8c...ed19`; it is not claimed for this batch. |
 | Publication | blocked | The live audit remains exactly 17 blockers. No protected Candidate, managed provider/CDP acceptance receipt, publication, rollout or user update was attempted. |
+
+## Administrator operations, Skills and v0.3 view-more - 2026-07-15
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Focused backend | 0 | 94 passed, 2 explicit skips, 1 upstream Starlette warning across administrator management, dynamic image revisions, admin Web, extensions, managed model/session catalog, Output, Thread catalog, Settings and device authorization. |
+| Model secret boundary | 0 | AES-GCM revisions never return plaintext; failed tests cannot activate; successful test+default activation is transactional and idempotent. Chat drains old revisions; image Jobs remain bound to their admitted revision across retry/restart. |
+| Skills authority | 0 | Runtime supplies v0.3-compatible category/icon/action reason; core required entries reject disable in the service. React contains no source/trust/category inference and the legacy modal is removed. |
+| Web contracts | 0 | `npm run test:v1` passes 180/180, including generated schema freshness, backend category/action ownership, reload persistence, view-more fixture and progressive chunk boundaries. |
+| Production Web build | 0 | 24 chunks; initial JavaScript 459.76 KiB raw / 146.20 KiB gzip, deferred features 136.30 KiB. Explicit named/default lazy exports prevent the production React #306 white screen found during the first full browser pass. |
+| Browser matrix | 0 | Chromium passes 45/45. The 12-general/11-project fixture proves independent 8 → all → 8 history expansion and guarantees a running old Thread remains visible. Admin user/model/full rollout, Skills, logout, model icon, clipboard, forced colours and responsive paths also pass. |
+| Static/source gates | 0 | Ruff, Python compilation, generated contracts, TypeScript, diff check and 675 admitted source files pass. Roughly 590 unreachable legacy extension CSS lines were removed before the exact build/browser rerun. |
+| Current-source supply chain | 0 | 23 Runtime packages and 282 npm packages remain license-accounted; 483 production files pass secret scanning. Inventory `927cf173...15c125cd7`; ignored 21,857-byte report SHA-256 `e1239bd1...c9f18c95`. |
+| Operator record | 0 | `admin-management-runbook.md` documents roles, exact enablement/origin/secret variables, hot activation semantics, single-node boundary, rollback and failure handling; Control Plane, Gateway and Image runbooks link to it. |
+| Publication | blocked | This is uncommitted current-source evidence, not a protected Candidate. No administrator rollout, publication or installed-user update was attempted. |

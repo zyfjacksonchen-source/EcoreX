@@ -77,10 +77,12 @@ function assertGuardState(state: GuardState): void {
 }
 
 const test = base.extend<{ guardedPage: Page }>({
-  guardedPage: async ({ page }, use, testInfo) => {
+  guardedPage: async ({ page }, use) => {
     const state = await installFailClosedGuards(page);
     await use(page);
-    if (testInfo.status === testInfo.expectedStatus) assertGuardState(state);
+    // Network or runtime errors are always a gate failure, even when a later
+    // locator assertion also fails. Otherwise a blank app can mask its cause.
+    assertGuardState(state);
   },
 });
 
@@ -92,7 +94,7 @@ async function openArtifactScenario(page: Page, theme: "light" | "dark" = "light
 
 async function openThreadScenario(
   page: Page,
-  scenario: "thinking" | "retry" | "hitl" | "connector-login" | "connector-device" | "connector-reauth" | "connector-restart" | "artifact" | "replay" | "thread-switch",
+  scenario: "thinking" | "slow-reconnect" | "retry" | "hitl" | "connector-login" | "connector-device" | "connector-reauth" | "connector-restart" | "artifact" | "replay" | "thread-switch" | "many-threads",
   theme: "light" | "dark" = "light",
 ): Promise<void> {
   await page.goto(`/__ga/frame-app?scenario=${scenario}&theme=${theme}`, {
@@ -259,19 +261,61 @@ test("ordinary controls keep Codex density and reveal a light frame only while i
   const modelMenu = guardedPage.locator(".ex-model-menu");
   await expect(modelMenu).toBeVisible();
   await expect(modelMenu).toContainText("Agent 模型");
+  await expect(modelMenu).toContainText("DeepSeek V4 Pro");
+  await expect(modelMenu).toContainText("Gemini 3.1 Pro");
+  await expect(modelMenu).toContainText("豆包 Seed 2.0 Pro");
   await expect(modelMenu).toContainText("图片模型");
   await expect(modelMenu).toContainText("按意图自动调用");
   expect(await modelMenu.getByRole("menuitemradio").count()).toBeGreaterThanOrEqual(2);
+  await expect(modelMenu.locator(".ex-model-provider-icon")).toHaveCount(5);
 });
 
 test("Composer renders server-reported quota, token usage, and context window", async ({ guardedPage }) => {
   await openThreadScenario(guardedPage, "artifact");
-  const meter = guardedPage.locator(".ex-usage-meter");
-  await expect(meter).toContainText("今日 5.2k");
-  await expect(meter).toContainText("本周 22.6k");
-  await expect(meter).toContainText("上下文 42.2k / 272k");
-  await expect(meter).toContainText("额度 128次");
-  await expect(meter.locator("span")).toHaveCount(4);
+  const summary = guardedPage.locator(".ex-usage-summary");
+  await expect(summary).toBeVisible();
+  await expect(summary.locator(".ex-context-ring")).toBeVisible();
+  await summary.hover();
+  const tooltip = guardedPage.locator(".ex-usage-tooltip");
+  await expect(tooltip).toContainText("今日5.2k");
+  await expect(tooltip).toContainText("本周22.6k");
+  await expect(tooltip).toContainText("上下文42.2k / 272k");
+  await expect(tooltip).toContainText("额度128次");
+});
+
+test("model selection uses the managed provider route and keeps the vendor icon", async ({ guardedPage }) => {
+  await openThreadScenario(guardedPage, "artifact");
+  const trigger = guardedPage.getByRole("button", { name: "选择模型" });
+  await trigger.click();
+  await guardedPage.getByRole("menuitemradio", { name: "DeepSeek V4 Pro" }).click();
+  await expect(trigger).toContainText("DeepSeek V4 Pro");
+  await expect(trigger.locator(".ex-model-provider-icon.is-deepseek")).toBeVisible();
+
+  await guardedPage.locator(".ex-composer textarea").fill("整理今天的会议结论");
+  await guardedPage.getByRole("button", { name: "发送" }).click();
+  await expect(guardedPage.getByText("已完成资料整理；关键结论与待办已写入结果。", { exact: true })).toBeVisible();
+  const state = await guardedPage.evaluate(async () => fetch("/__ga/state").then((response) => response.json()));
+  expect(state.last_turn_model).toBe("ecorex-deepseek-v4-pro");
+});
+
+test("terminal replies expose durable elapsed time and truthful quick copy feedback", async ({ guardedPage }) => {
+  await openThreadScenario(guardedPage, "artifact");
+  const completion = guardedPage.locator(".ex-turn-completion").last();
+  await expect(completion).toContainText(/^耗时 /);
+  await completion.getByRole("button", { name: "复制本次回复" }).click();
+  await expect(completion.getByText("已复制", { exact: true })).toBeVisible();
+  await expect(completion.getByRole("button", { name: "回复已复制" })).toBeVisible();
+});
+
+test("conversation pinning persists through the backend catalog", async ({ guardedPage }) => {
+  await openThreadScenario(guardedPage, "artifact");
+  const task = guardedPage.getByRole("button", { name: "打开任务：季度资料整理" });
+  await guardedPage.getByRole("button", { name: "管理任务：季度资料整理" }).click();
+  await guardedPage.getByRole("menuitem", { name: "置顶会话" }).click();
+  await expect(task.locator(".ex-task-pin")).toBeVisible();
+
+  await guardedPage.reload({ waitUntil: "domcontentloaded" });
+  await expect(guardedPage.getByRole("button", { name: "打开任务：季度资料整理" }).locator(".ex-task-pin")).toBeVisible();
 });
 
 test("Composer is centered only while choosing a new conversation and otherwise stays at the workspace bottom", async ({ guardedPage }) => {
@@ -398,14 +442,15 @@ test("workspace title uses the v0.3 workbench geometry with a Codex-like inline 
     sidebarRightBorder: "1px",
     workspaceRadius: "16px",
   });
-  expect(geometry.columns.split(" ")[0]).toBe("280px");
+  expect(geometry.columns.split(" ")[0]).toBe("252px");
 });
 
 test("task ID continuation keeps the current task on 404 and restores a valid task from Enter", async ({ guardedPage }) => {
   await openThreadScenario(guardedPage, "thread-switch");
   await expect(guardedPage.getByText("当前任务原始内容", { exact: true })).toBeVisible();
 
-  await guardedPage.getByRole("button", { name: "按任务 ID 继续" }).click();
+  await guardedPage.getByRole("button", { name: "搜索会话" }).click();
+  await guardedPage.getByRole("dialog", { name: "搜索会话" }).getByRole("button", { name: /按任务 ID 继续/u }).click();
   const dialog = guardedPage.getByRole("dialog", { name: "继续已有任务" });
   const input = dialog.getByLabel("任务 ID");
   await input.fill("thr_missing_ga");
@@ -430,6 +475,50 @@ test("rapid task switching is last-wins even when the older projection arrives l
   await expect(guardedPage.getByText("较慢任务内容", { exact: true })).toBeHidden();
 });
 
+test("sidebar keeps v0.3 view-more behavior without hiding current or running sessions", async ({ guardedPage }) => {
+  await openThreadScenario(guardedPage, "many-threads");
+
+  const projectSessions = guardedPage.getByRole("group", { name: "季度报告 的会话" });
+  await expect(projectSessions.getByRole("button", { name: "打开任务：项目历史 10" })).toBeVisible();
+  await expect(projectSessions.getByRole("button", { name: /^打开任务：/ })).toHaveCount(8);
+  await projectSessions.getByRole("button", { name: "查看更多（3）" }).click();
+  await expect(projectSessions.getByRole("button", { name: /^打开任务：/ })).toHaveCount(11);
+  await projectSessions.getByRole("button", { name: "收起" }).click();
+  await expect(projectSessions.getByRole("button", { name: /^打开任务：/ })).toHaveCount(8);
+
+  const generalSessions = guardedPage.getByRole("region", { name: "会话" });
+  await expect(generalSessions.getByRole("button", { name: "打开任务：通用历史 11" })).toBeVisible();
+  await expect(generalSessions.getByRole("button", { name: /^打开任务：/ })).toHaveCount(8);
+  await generalSessions.getByRole("button", { name: "查看更多（4）" }).click();
+  await expect(generalSessions.getByRole("button", { name: /^打开任务：/ })).toHaveCount(12);
+  await generalSessions.getByRole("button", { name: "收起" }).click();
+  await expect(generalSessions.getByRole("button", { name: /^打开任务：/ })).toHaveCount(8);
+});
+
+test("skills workspace uses backend categories and keeps required skills locked", async ({ guardedPage }) => {
+  await openArtifactScenario(guardedPage);
+  await guardedPage.getByRole("button", { name: "技能", exact: true }).click();
+
+  const workspace = guardedPage.getByRole("region", { name: "技能" });
+  await expect(workspace.getByRole("tab", { name: /已安装 3/u })).toBeVisible();
+  const protectedSkills = workspace.locator("details.ex-protected-skills");
+  await expect(protectedSkills).not.toHaveAttribute("open", "");
+  await protectedSkills.locator("summary").click();
+  await expect(protectedSkills.getByRole("switch", { name: "停用EcoreX 办公工具" })).toBeDisabled();
+
+  const feishuSwitch = workspace.getByRole("switch", { name: "停用飞书 MCP" });
+  await feishuSwitch.click();
+  const confirm = guardedPage.getByRole("dialog", { name: "确认停用" });
+  await confirm.getByRole("button", { name: "确认停用" }).click();
+  await expect(workspace.getByRole("switch", { name: "启用飞书 MCP" })).toBeVisible();
+
+  await workspace.locator(".ex-skill-card-main").filter({ hasText: "旧版文档整理技能" }).click();
+  await expect(workspace.getByRole("heading", { name: "旧版文档整理技能" })).toBeVisible();
+  await workspace.getByRole("button", { name: "返回技能" }).click();
+  await workspace.getByRole("tab", { name: "技能市场" }).click();
+  await expect(workspace.getByRole("button", { name: /协作连接/u })).toContainText("1 个已安装");
+});
+
 test("mobile task drawer continues a task by ID and closes after recovery", async ({ browser }) => {
   await withGuardedContext(
     browser,
@@ -443,7 +532,8 @@ test("mobile task drawer continues a task by ID and closes after recovery", asyn
       await openThreadScenario(page, "thread-switch");
       await expect(page.getByText("当前任务原始内容", { exact: true })).toBeVisible();
       await page.getByRole("button", { name: "打开任务导航" }).click();
-      await page.getByRole("button", { name: "按任务 ID 继续" }).click();
+      await page.getByRole("button", { name: "搜索会话" }).click();
+      await page.getByRole("dialog", { name: "搜索会话" }).getByRole("button", { name: /按任务 ID 继续/u }).click();
       const dialog = page.getByRole("dialog", { name: "继续已有任务" });
       const input = dialog.getByLabel("任务 ID");
       await input.fill("thr_target_ga");
@@ -457,7 +547,8 @@ test("mobile task drawer continues a task by ID and closes after recovery", asyn
 
 test("settings persist output location, memory reset undo, and full-access revocation", async ({ guardedPage }) => {
   await openArtifactScenario(guardedPage);
-  await guardedPage.getByRole("button", { name: "设置" }).click();
+  await guardedPage.getByRole("button", { name: /验收账号，打开账号菜单/u }).click();
+  await guardedPage.getByRole("menuitem", { name: "设置" }).click();
   const dialog = guardedPage.getByRole("dialog", { name: "设置" });
   await expect(dialog).toBeVisible();
 
@@ -465,6 +556,8 @@ test("settings persist output location, memory reset undo, and full-access revoc
   await expect(outputLocation).toHaveValue("documents");
   await outputLocation.selectOption("downloads");
   await expect(outputLocation).toHaveValue("downloads");
+  await dialog.getByRole("button", { name: "选择文件夹" }).click();
+  await expect(outputLocation).toHaveValue("workspace");
 
   const memorySection = dialog.getByRole("heading", { name: "记忆", exact: true }).locator("..");
   await memorySection.getByRole("button", { name: "一键重置" }).click();
@@ -482,10 +575,28 @@ test("settings persist output location, memory reset undo, and full-access revoc
 
   const state = await guardedPage.evaluate(async () => fetch("/__ga/state").then((response) => response.json()));
   expect(state).toMatchObject({
-    output_location: "downloads",
+    output_location: "workspace",
     memory_resettable_count: 2,
     permission_profile: "default",
   });
+});
+
+test("account menu exposes the user name and performs a real lease-bound logout", async ({ guardedPage }) => {
+  await openArtifactScenario(guardedPage);
+  const account = guardedPage.getByRole("button", { name: /验收账号，打开账号菜单/u });
+  await expect(account).toContainText("验收账号");
+  await account.click();
+  await guardedPage.getByRole("menuitem", { name: "退出登录" }).click();
+
+  const dialog = guardedPage.getByRole("dialog", { name: "退出 EcoreX？" });
+  await expect(dialog).toContainText("会话和本地产物会保留");
+  await dialog.getByRole("button", { name: "退出登录" }).click();
+  await expect(guardedPage.getByRole("dialog", { name: "已安全退出" })).toBeVisible();
+  await guardedPage.getByRole("button", { name: "关闭" }).click();
+  await expect(guardedPage.getByRole("button", { name: /未登录，打开账号菜单/u })).toBeVisible();
+
+  const state = await guardedPage.evaluate(async () => fetch("/__ga/state").then((response) => response.json()));
+  expect(state).toMatchObject({ authenticated: false, session_logout_count: 1 });
 });
 
 test("task inspection keeps implementation details collapsed and explicitly starts a new work step", async ({ guardedPage }) => {
@@ -526,6 +637,47 @@ test("retry state stays actionable and can be interrupted without a stale thinki
   await expect(guardedPage.locator(".ex-thinking")).toContainText("等待重试");
   await guardedPage.getByRole("button", { name: "停止当前任务" }).click();
   await expect(guardedPage.locator(".ex-thinking")).toBeHidden();
+});
+
+test("slow event stream reconnects from the durable cursor without duplicate output", async ({ guardedPage }) => {
+  await openThreadScenario(guardedPage, "slow-reconnect");
+  await expect(guardedPage.locator(".ex-thinking")).toContainText("正在读取季度资料");
+  const completed = guardedPage.getByText(
+    "网络恢复后已从确认位置继续，季度资料清单完整生成且没有重复执行。",
+    { exact: true },
+  );
+  await expect(completed).toBeVisible({ timeout: 5_000 });
+  await expect(completed).toHaveCount(1);
+  await expect(guardedPage.locator(".ex-thinking")).toBeHidden();
+  const streamEvidence = await guardedPage.evaluate(async () => {
+    const response = await fetch("/__ga/state", { cache: "no-store" });
+    return response.json() as Promise<{
+      event_stream: { connections: number; after_seq: number[] };
+    }>;
+  });
+  expect(streamEvidence.event_stream.after_seq).toEqual([2, 3]);
+  expect(streamEvidence.event_stream.connections).toBe(2);
+});
+
+test("rapid precise-retouch submit flushes its draft once and renders result evidence", async ({ guardedPage }) => {
+  await openArtifactScenario(guardedPage);
+  const artifact = guardedPage.locator("button.ex-artifact-primary").filter({ hasText: ARTIFACT_NAME });
+  await artifact.hover();
+  await guardedPage.getByRole("button", { name: "精准修图" }).click();
+  const dialog = guardedPage.getByRole("dialog", { name: "精准修图" });
+  await expect(dialog).toBeVisible();
+  let submitRequests = 0;
+  guardedPage.on("request", (request) => {
+    if (request.method() === "POST" && /\/api\/v1\/retouch-workspaces\/[^/]+\/submit$/.test(new URL(request.url()).pathname)) {
+      submitRequests += 1;
+    }
+  });
+  await dialog.getByRole("textbox", { name: "整体修改说明" }).fill("保持构图不变，只优化主体边缘过渡。");
+  await dialog.getByRole("button", { name: "开始修图" }).click();
+  await expect(dialog.getByRole("status")).toContainText("新修订已完成", { timeout: 5_000 });
+  await expect(dialog.getByText("已按整体说明完成调整：保持构图不变，只优化主体边缘过渡。", { exact: true })).toBeVisible();
+  await expect(guardedPage.getByRole("button", { name: "查看修图结果：精准修图_20260710-1534_01.png" })).toBeVisible();
+  expect(submitRequests).toBe(1);
 });
 
 test("persisted HITL remains visible until the selected backend action resolves", async ({ guardedPage }) => {

@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Literal
+from types import MappingProxyType
+from typing import Literal, Mapping
 
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -82,10 +83,76 @@ ECOREX_CHAT_MODEL_POLICY = ManagedChatModelPolicy(
     compact_threshold_tokens=272_000,
 )
 
+ECOREX_DEEPSEEK_MODEL_POLICY = ManagedChatModelPolicy(
+    schema_version=1,
+    policy_id="ecorex-deepseek-v4-pro",
+    policy_version="1.0.0",
+    local_model_id="ecorex-deepseek-v4-pro",
+    upstream_model_id="deepseek-v4-pro",
+    display_name="DeepSeek V4 Pro",
+    aliases=("deepseek", "deepseek-v4-pro"),
+    reasoning_effort="medium",
+    context_management_type="compaction",
+    compact_threshold_tokens=900_000,
+)
 
-def require_managed_chat_mapping(mapping: dict[str, str]) -> None:
-    """Fail closed unless the stable local model maps to its signed policy."""
+ECOREX_GEMINI_MODEL_POLICY = ManagedChatModelPolicy(
+    schema_version=1,
+    policy_id="ecorex-gemini-3.1-pro-preview",
+    policy_version="1.0.0",
+    local_model_id="ecorex-gemini-3.1-pro",
+    upstream_model_id="gemini-3.1-pro-preview",
+    display_name="Gemini 3.1 Pro",
+    aliases=("gemini", "gemini-3.1-pro", "gemini-3.1-pro-preview"),
+    reasoning_effort="medium",
+    context_management_type="compaction",
+    compact_threshold_tokens=900_000,
+)
 
-    expected = ECOREX_CHAT_MODEL_POLICY
-    if mapping != {expected.local_model_id: expected.upstream_model_id}:
-        raise ValueError("ecorex-chat upstream model mapping violates managed policy")
+ECOREX_DOUBAO_MODEL_POLICY = ManagedChatModelPolicy(
+    schema_version=1,
+    policy_id="ecorex-doubao-seed-2.0-pro",
+    policy_version="1.0.0",
+    local_model_id="ecorex-doubao-seed-2.0-pro",
+    upstream_model_id="doubao-seed-2-0-pro-260215",
+    display_name="豆包 Seed 2.0 Pro",
+    aliases=("doubao", "doubao-seed-2.0-pro", "doubao-seed-2-0-pro-260215"),
+    reasoning_effort="medium",
+    context_management_type="compaction",
+    compact_threshold_tokens=224_000,
+)
+
+ECOREX_CHAT_MODEL_POLICIES = (
+    ECOREX_CHAT_MODEL_POLICY,
+    ECOREX_DEEPSEEK_MODEL_POLICY,
+    ECOREX_GEMINI_MODEL_POLICY,
+    ECOREX_DOUBAO_MODEL_POLICY,
+)
+
+MANAGED_CHAT_MODEL_POLICIES = MappingProxyType(
+    {policy.local_model_id: policy for policy in ECOREX_CHAT_MODEL_POLICIES}
+)
+
+
+def managed_chat_model_policy(local_model_id: str) -> ManagedChatModelPolicy:
+    try:
+        return MANAGED_CHAT_MODEL_POLICIES[local_model_id]
+    except KeyError:
+        raise ValueError("managed chat model policy is unavailable") from None
+
+
+def require_managed_chat_mapping(mapping: Mapping[str, str]) -> None:
+    """Fail closed unless every configured route matches a known policy.
+
+    A non-empty subset is allowed so the cloud can stage model rollout without
+    teaching the local Runtime any provider URL or credential.
+    """
+
+    configured = dict(mapping)
+    if not configured or any(
+        local_model_id not in MANAGED_CHAT_MODEL_POLICIES
+        or MANAGED_CHAT_MODEL_POLICIES[local_model_id].upstream_model_id
+        != upstream_model_id
+        for local_model_id, upstream_model_id in configured.items()
+    ):
+        raise ValueError("managed chat model mapping violates managed policy")

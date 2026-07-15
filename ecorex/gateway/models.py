@@ -10,7 +10,11 @@ import re
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ecorex.managed_model_policy import ECOREX_CHAT_MODEL_POLICY
+from ecorex.managed_model_policy import (
+    ECOREX_CHAT_MODEL_POLICY,
+    ManagedChatModelPolicy,
+    managed_chat_model_policy,
+)
 
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
@@ -236,8 +240,7 @@ class GatewayModelPolicy(GatewayModel):
         return self
 
 
-def ecorex_chat_gateway_policy() -> GatewayModelPolicy:
-    policy = ECOREX_CHAT_MODEL_POLICY
+def gateway_model_policy(policy: ManagedChatModelPolicy) -> GatewayModelPolicy:
     return GatewayModelPolicy(
         schema_version=policy.schema_version,
         policy_id=policy.policy_id,
@@ -250,6 +253,12 @@ def ecorex_chat_gateway_policy() -> GatewayModelPolicy:
             compact_threshold_tokens=policy.compact_threshold_tokens,
         ),
     )
+
+
+def ecorex_chat_gateway_policy(
+    local_model_id: str = ECOREX_CHAT_MODEL_POLICY.local_model_id,
+) -> GatewayModelPolicy:
+    return gateway_model_policy(managed_chat_model_policy(local_model_id))
 
 
 class ModelGatewayRequest(GatewayModel):

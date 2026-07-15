@@ -56,6 +56,15 @@ from .admin_web import (
     create_admin_resume_router,
     create_admin_web_router,
 )
+from .admin_management_router import create_admin_management_router
+from .management import (
+    AdminManagementConflict,
+    AdminManagementError,
+    AdminManagementNotFound,
+    AdminManagementRepository,
+    ModelConnectionTester,
+    RejectingModelConnectionTester,
+)
 from .models import (
     BootstrapFreshnessRunProjection,
     BootstrapFreshnessStatusProjection,
@@ -516,8 +525,15 @@ def create_control_plane_app(
     bootstrap_index_service: BootstrapIndexPublicationService | None = None,
     bootstrap_freshness_refresher: BootstrapFreshnessRefresher | None = None,
     rollback_signer: ReleaseSigner | None = None,
+    management_repository: AdminManagementRepository | None = None,
+    model_connection_tester: ModelConnectionTester | None = None,
 ) -> FastAPI:
     hub = UpdateSignalHub()
+    resolved_model_tester = (
+        model_connection_tester or RejectingModelConnectionTester()
+        if management_repository is not None
+        else None
+    )
     environment_consumer_id = os.environ.get("ECOREX_CONTROL_PLANE_INSTANCE_ID")
     if signal_consumer_id is not None:
         resolved_consumer_id = signal_consumer_id
@@ -554,6 +570,9 @@ def create_control_plane_app(
                 await bootstrap_freshness_refresher.close()
             if service_lifecycle is not None and lifecycle_started:
                 await service_lifecycle.shutdown()
+            closer = getattr(resolved_model_tester, "aclose", None)
+            if callable(closer):
+                await closer()
 
     app = FastAPI(
         title="EcoreX Control Plane",
@@ -576,6 +595,7 @@ def create_control_plane_app(
     app.state.bootstrap_index_service = bootstrap_index_service
     app.state.bootstrap_freshness_refresher = bootstrap_freshness_refresher
     app.state.rollback_signer = rollback_signer
+    app.state.management_repository = management_repository
 
     def principal(request: Request) -> ControlPrincipal:
         try:
@@ -601,6 +621,20 @@ def create_control_plane_app(
             )
         return current
 
+    def user_admin(current: ControlPrincipal = Depends(principal)) -> ControlPrincipal:
+        if not ({"platform_admin", "user_admin"} & current.roles):
+            raise HTTPException(
+                status_code=403, detail="user administrator role is required"
+            )
+        return current
+
+    def model_admin(current: ControlPrincipal = Depends(principal)) -> ControlPrincipal:
+        if not ({"platform_admin", "model_admin"} & current.roles):
+            raise HTTPException(
+                status_code=403, detail="model administrator role is required"
+            )
+        return current
+
     admin_resume_provider = AdminResumeAdapter(repository.admin_resume_facts)
     app.state.admin_resume_provider = admin_resume_provider
     app.include_router(create_admin_web_router())
@@ -610,6 +644,17 @@ def create_control_plane_app(
             authorization_dependency=admin,
         )
     )
+    if management_repository is not None:
+        assert resolved_model_tester is not None
+        app.state.model_connection_tester = resolved_model_tester
+        app.include_router(
+            create_admin_management_router(
+                management_repository,
+                model_tester=resolved_model_tester,
+                user_admin_dependency=user_admin,
+                model_admin_dependency=model_admin,
+            )
+        )
     if audit_repository is not None:
         app.state.audit_repository = audit_repository
         app.include_router(
@@ -679,8 +724,24 @@ def create_control_plane_app(
     async def not_found(_request: Request, _error: ControlPlaneNotFound):
         return JSONResponse(status_code=404, content={"detail": "resource not found"})
 
+    @app.exception_handler(AdminManagementNotFound)
+    async def management_not_found(
+        _request: Request, _error: AdminManagementNotFound
+    ):
+        return JSONResponse(status_code=404, content={"detail": "resource not found"})
+
     @app.exception_handler(RequestValidationError)
     async def request_validation(request: Request, error: RequestValidationError):
+        if request.url.path.startswith("/api/v1/admin/models"):
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "detail": {
+                        "code": "invalid_model_configuration",
+                        "message": "model configuration is invalid",
+                    }
+                },
+            )
         if request.url.path in {"/api/v1/shares", "/api/v1/audit/records"}:
             # Share validation inputs can contain full conversation text.  The
             # framework's default response echoes invalid values, so redact the
@@ -712,6 +773,32 @@ def create_control_plane_app(
                 "detail": {
                     "code": error.__class__.__name__.casefold(),
                     "message": str(error),
+                }
+            },
+        )
+
+    @app.exception_handler(AdminManagementConflict)
+    async def management_conflict(
+        _request: Request, error: AdminManagementConflict
+    ):
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": {
+                    "code": "admin_management_conflict",
+                    "message": str(error),
+                }
+            },
+        )
+
+    @app.exception_handler(AdminManagementError)
+    async def management_error(_request: Request, _error: AdminManagementError):
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": {
+                    "code": "admin_management_unavailable",
+                    "message": "administrator operation is unavailable",
                 }
             },
         )

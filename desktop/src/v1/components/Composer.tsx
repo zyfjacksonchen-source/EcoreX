@@ -15,10 +15,14 @@ import type {
   ConnectorCatalogLoadState,
   ConnectorOperationState,
 } from "../state/connectors.ts";
-import { ConnectorPopover } from "./ConnectorPopover.tsx";
 import { IconButton } from "./IconButton.tsx";
 
-const ComposerModelSelector = lazy(() => import("./ComposerModelSelector.tsx"));
+const loadConnectorPopover = () => import("./ConnectorPopover.tsx");
+const loadComposerModelSelector = () => import("./ComposerModelSelector.tsx");
+const ConnectorPopover = lazy(async () => ({
+  default: (await loadConnectorPopover()).ConnectorPopover,
+}));
+const ComposerModelSelector = lazy(loadComposerModelSelector);
 
 interface ComposerProps {
   connectors: ConnectorCatalogItem[];
@@ -61,6 +65,7 @@ interface ComposerProps {
   permissionDescription: string;
   onChatModelChange: (modelId: string) => void;
   onImageModelChange: (modelId: string) => void;
+  onOpenPermissionSettings: () => void;
   onSend: (
     input: string,
     disposition: SendDisposition,
@@ -103,6 +108,7 @@ export function Composer({
   permissionDescription,
   onChatModelChange,
   onImageModelChange,
+  onOpenPermissionSettings,
   onSend,
   onUploadAttachment,
   onInterrupt,
@@ -127,8 +133,12 @@ export function Composer({
     : usage.context.window_tokens
       ? `${formatTokens(usage.context.used_tokens)} / ${formatTokens(usage.context.window_tokens)}`
       : formatTokens(usage.context.used_tokens);
+  const contextPercent = usage?.context.used_tokens != null && usage.context.window_tokens
+    ? Math.max(0, Math.min(100, (usage.context.used_tokens / usage.context.window_tokens) * 100))
+    : 0;
   const quotaUnit = quota?.unit === "managed_requests" ? "次" : (quota?.unit || "");
   const sendLabel = submitting ? "发送中" : sendFailed ? "重试发送" : "发送";
+  const selectedChatModel = chatModels.find((model) => model.model_id === chatModel);
 
   const submit = async () => {
     if (!draft.trim() || !modelAvailable) return;
@@ -187,7 +197,7 @@ export function Composer({
         <textarea
           id="ecorex-composer"
           value={draft}
-          rows={2}
+          rows={1}
           placeholder="给小芯发送消息，支持粘贴图片或文件"
           aria-describedby={!modelAvailable ? "ecorex-composer-note" : undefined}
           onChange={(event) => {
@@ -231,20 +241,26 @@ export function Composer({
             >
               <Plus aria-hidden="true" />
             </button>
-            <ConnectorPopover
-              catalog={connectors}
-              loadState={connectorLoadState}
-              error={connectorError}
-              notice={connectorNotice}
-              operations={connectorOperations}
-              onRefresh={onRefreshConnectors}
-              onConnect={onConnectConnector}
-              onReconnect={onReconnectConnector}
-              onHealthCheck={onCheckConnector}
-              onDisconnect={onDisconnectConnector}
-              onClearError={onClearConnectorError}
-              onClearNotice={onClearConnectorNotice}
-            />
+            <Suspense fallback={(
+              <button className="ex-composer-tool" type="button" aria-label="正在准备连接器" disabled>
+                <span>连接器</span>
+              </button>
+            )}>
+              <ConnectorPopover
+                catalog={connectors}
+                loadState={connectorLoadState}
+                error={connectorError}
+                notice={connectorNotice}
+                operations={connectorOperations}
+                onRefresh={onRefreshConnectors}
+                onConnect={onConnectConnector}
+                onReconnect={onReconnectConnector}
+                onHealthCheck={onCheckConnector}
+                onDisconnect={onDisconnectConnector}
+                onClearError={onClearConnectorError}
+                onClearNotice={onClearConnectorNotice}
+              />
+            </Suspense>
             <Suspense fallback={(
                 <button
                   className="ex-composer-model-trigger"
@@ -252,7 +268,7 @@ export function Composer({
                   aria-label="选择模型"
                   disabled
                 >
-                  <span>{chatModels.find((model) => model.model_id === chatModel)?.display_name || "选择模型"}</span>
+                  <span className="ex-model-trigger-label">{selectedChatModel?.display_name || "选择模型"}</span>
                   <ChevronDown aria-hidden="true" />
                 </button>
             )}>
@@ -317,13 +333,13 @@ export function Composer({
       <div className="ex-composer-meta">
         <Tooltip.Root delayDuration={900}>
           <Tooltip.Trigger asChild>
-            <span
+            <button
+              type="button"
               className="ex-permission-inline"
-              tabIndex={0}
-              aria-label={`${permissionLabel}。${permissionDescription}需要权限或信息时会询问；长任务可排队，重启后继续。`}
+              onClick={onOpenPermissionSettings}
             >
               <ShieldCheck aria-hidden="true" />{permissionLabel}
-            </span>
+            </button>
           </Tooltip.Trigger>
           <Tooltip.Portal>
             <Tooltip.Content className="ex-tooltip ex-permission-tooltip" side="top" sideOffset={8}>
@@ -338,15 +354,33 @@ export function Composer({
             {sendUnavailableReason || "模型服务未连接；可查看历史和本地产物。"}
           </p>
         ) : null}
-        <div className="ex-usage-meter" role="group" aria-label="额度与上下文用量">
-          <span title="今日已完成模型响应中由服务返回的 Token 用量">今日 <b>{formatTokens(usage?.today.total_tokens)}</b></span>
-          <i aria-hidden="true" />
-          <span title="本周已完成模型响应中由服务返回的 Token 用量">本周 <b>{formatTokens(usage?.week.total_tokens)}</b></span>
-          <i aria-hidden="true" />
-          <span title={usage?.context.model_id ? `模型 ${usage.context.model_id} 最近一次服务端上下文用量` : "等待服务端返回上下文用量"}>上下文 <b>{contextLabel}</b></span>
-          <i aria-hidden="true" />
-          <span title={`托管服务剩余额度：${remainingLabel} ${quotaUnit}`}>额度 <b>{remainingLabel}{remainingLabel === "—" ? "" : quotaUnit}</b></span>
-        </div>
+        <Tooltip.Root delayDuration={500}>
+          <Tooltip.Trigger asChild>
+            <button className="ex-usage-summary" type="button" aria-label={`查看用量。上下文 ${contextLabel}`}>
+              <svg className="ex-context-ring" viewBox="0 0 20 20" aria-hidden="true">
+                <circle className="ex-context-ring-track" cx="10" cy="10" r="7" pathLength="100" />
+                <circle
+                  className="ex-context-ring-value"
+                  cx="10"
+                  cy="10"
+                  r="7"
+                  pathLength="100"
+                  strokeDasharray={`${contextPercent} 100`}
+                />
+              </svg>
+              <span className="ex-visually-hidden">额度与上下文用量</span>
+            </button>
+          </Tooltip.Trigger>
+          <Tooltip.Portal>
+            <Tooltip.Content className="ex-tooltip ex-usage-tooltip" side="top" sideOffset={8}>
+              <span><b>今日</b>{formatTokens(usage?.today.total_tokens)}</span>
+              <span><b>本周</b>{formatTokens(usage?.week.total_tokens)}</span>
+              <span><b>上下文</b>{contextLabel}</span>
+              <span><b>额度</b>{remainingLabel}{remainingLabel === "—" ? "" : quotaUnit}</span>
+              <Tooltip.Arrow className="ex-tooltip-arrow" />
+            </Tooltip.Content>
+          </Tooltip.Portal>
+        </Tooltip.Root>
       </div>
     </div>
   );

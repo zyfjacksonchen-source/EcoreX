@@ -1932,3 +1932,52 @@
   silently at these boundaries. Contract mismatch produces one short product
   message and remains diagnosable internally, while the unchanged 475 KiB
   initial-JavaScript budget continues to block accidental eager loading.
+
+## ADR-110 - Managed model changes are tested immutable revisions, not mutable process configuration
+
+- Status: accepted.
+- Root cause: a model name or API Key stored only in deployment variables
+  required backend edits/restarts and could change underneath an active stream
+  or a retrying image Job. Returning Key material to an administrator browser
+  would also turn the WebUI into a credential authority.
+- Decision: one transactional management repository owns encrypted model
+  revisions. Saving creates a draft; only a bounded real provider test may
+  atomically activate it. The browser receives a fingerprint, never plaintext.
+  Chat freezes the active revision per request. Image generation and edit
+  freeze `config_id + revision + upstream_model_id` in durable Job admission.
+- Network boundary: provider preset origins remain deployment-owned exact HTTPS
+  allowlists. The administrator may choose a preset but cannot submit a URL.
+  The built-in implementation is explicitly single-node/co-located on one
+  encrypted SQLite WAL authority; it must not be presented as remote HA config
+  distribution.
+- Consequence: new work sees a tested model/Key immediately without code,
+  rebuild or restart, while in-flight work remains deterministic. Reverting
+  means testing and activating a new revision from operator-held prior secret
+  material; historical Keys are never decrypted back into the UI.
+
+## ADR-111 - Skill classification and required status are backend projections
+
+- Status: accepted.
+- Root cause: frontend keyword matching classified Skills/MCP/Tools and guessed
+  whether core entries could be disabled. A renamed extension or stale bundle
+  could therefore expose the wrong category or an unsafe action.
+- Decision: Runtime taxonomy emits a bounded category and safe icon key; every
+  action and disabled reason comes from the service projection. Core-bundle
+  Skills and required core capabilities are rejected again in the mutation
+  service. React only filters and renders accepted fields.
+- Consequence: the Skills workspace can evolve independently without acquiring
+  policy authority. Unknown actions remain unavailable and protected entries
+  are folded for readability rather than hidden.
+
+## ADR-112 - Sidebar history collapse is local view state with operational inclusion
+
+- Status: accepted.
+- Root cause: a fixed first-N history slice can hide the active, pinned or
+  running Thread, while storing expand/collapse in the Thread model would mix a
+  per-browser presentation preference into durable conversation state.
+- Decision: general history and every project history independently collapse
+  to eight rows. The visible set is the union of current, pinned and running
+  Threads followed by ordered history up to the limit. “查看更多/收起” only
+  changes local view state and never changes backend order or Thread facts.
+- Consequence: v0.3 discovery behavior remains familiar, long work cannot vanish
+  behind collapse, and multiple projects do not unexpectedly expand together.

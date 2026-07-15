@@ -68,6 +68,12 @@ from .production_storage import (
     available_bytes,
 )
 from .models import ControlPrincipal
+from .management import AdminManagementRepository, HTTPSModelConnectionTester
+from .management_schema import (
+    ADMIN_MANAGEMENT_MIGRATION_CHECKSUM,
+    CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION,
+    AdminManagementSchemaManager,
+)
 from .repository import ControlPlaneRepository
 from .schema import (
     CONTROL_PLANE_SCHEMA_SHA256,
@@ -94,6 +100,7 @@ _SECRET_NAMES = {
     "share-keyring": "ECOREX_CP_SHARE_KEYRING_JSON",
     "audit-encryption-key": "ECOREX_CP_AUDIT_ENCRYPTION_KEY_B64",
     "audit-integrity-key": "ECOREX_CP_AUDIT_INTEGRITY_KEY_B64",
+    "model-config-encryption-key": "ECOREX_CP_MODEL_CONFIG_ENCRYPTION_KEY_B64",
 }
 
 
@@ -238,6 +245,8 @@ class ControlPlaneProductionConfig:
     publication_signer_adapter_sha256: str | None = None
     publication_signer_key_id: str | None = None
     publication_signer_timeout_seconds: int = 30
+    admin_management_enabled: bool = False
+    model_provider_origins: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         try:
@@ -415,6 +424,32 @@ class ControlPlaneProductionConfig:
             raise ProductionConfigurationError(
                 "publication freshness signer trust binding is invalid"
             )
+        origins = dict(self.model_provider_origins)
+        if self.admin_management_enabled:
+            allowed_presets = {
+                "responses",
+                "openai_compatible_chat",
+                "openai_compatible_image",
+            }
+            if not origins or any(
+                preset not in allowed_presets
+                or urlsplit(origin).scheme != "https"
+                or not urlsplit(origin).hostname
+                or urlsplit(origin).username is not None
+                or urlsplit(origin).password is not None
+                or bool(urlsplit(origin).query or urlsplit(origin).fragment)
+                or bool(urlsplit(origin).path.rstrip("/"))
+                or urlsplit(origin).port not in {None, 443}
+                for preset, origin in origins.items()
+            ):
+                raise ProductionConfigurationError(
+                    "managed model provider origins are invalid"
+                )
+        elif origins:
+            raise ProductionConfigurationError(
+                "managed model origins require administrator management"
+            )
+        object.__setattr__(self, "model_provider_origins", dict(origins))
 
     @classmethod
     def from_environment(
@@ -556,6 +591,31 @@ class ControlPlaneProductionConfig:
             raise ProductionConfigurationError(
                 "Control Plane instance identity is invalid"
             )
+        management_enabled = _boolean(
+            values, "ECOREX_CP_ADMIN_MANAGEMENT_ENABLED", default=False
+        )
+        origins: dict[str, str] = {}
+        raw_origins = values.get("ECOREX_CP_MODEL_PROVIDER_ORIGINS_JSON")
+        if raw_origins:
+            try:
+                parsed_origins = json.loads(raw_origins)
+            except json.JSONDecodeError:
+                raise ProductionConfigurationError(
+                    "managed model provider origins are invalid"
+                ) from None
+            if (
+                not isinstance(parsed_origins, dict)
+                or not parsed_origins
+                or len(parsed_origins) > 8
+                or any(
+                    not isinstance(key, str) or not isinstance(value, str)
+                    for key, value in parsed_origins.items()
+                )
+            ):
+                raise ProductionConfigurationError(
+                    "managed model provider origins are invalid"
+                )
+            origins = {str(key): str(value) for key, value in parsed_origins.items()}
         return cls(
             storage_backend=backend,
             replica_count=replicas,
@@ -736,6 +796,8 @@ class ControlPlaneProductionConfig:
                 maximum=120,
                 default=30,
             ),
+            admin_management_enabled=management_enabled,
+            model_provider_origins=origins,
         )
 
 
@@ -746,6 +808,7 @@ class ProductionSchemaReport:
     control_schema_version: int
     audit_schema_version: int
     share_schema_version: int
+    admin_management_schema_version: int
     backup: BackupReceipt
 
     def to_dict(self) -> dict[str, Any]:
@@ -755,6 +818,7 @@ class ProductionSchemaReport:
             "control_schema_version": self.control_schema_version,
             "audit_schema_version": self.audit_schema_version,
             "share_schema_version": self.share_schema_version,
+            "admin_management_schema_version": self.admin_management_schema_version,
             "backup": self.backup.to_dict(),
         }
 
@@ -842,6 +906,8 @@ class ControlPlaneProductionBundle:
     audit_repository: CloudAuditRepository
     authenticator: Ed25519JWTAuthenticator
     rollback_signer: ReleaseSigner | None
+    management_repository: AdminManagementRepository | None
+    model_connection_tester: HTTPSModelConnectionTester | None
     lifecycle: "SingleNodeControlPlaneLifecycle"
     config: ControlPlaneProductionConfig
 
@@ -859,6 +925,8 @@ class ControlPlaneProductionBundle:
             bootstrap_index_service=self.bootstrap_index_service,
             bootstrap_freshness_refresher=self.bootstrap_freshness_refresher,
             rollback_signer=self.rollback_signer,
+            management_repository=self.management_repository,
+            model_connection_tester=self.model_connection_tester,
         )
 
 
@@ -990,6 +1058,7 @@ class SingleNodeControlPlaneLifecycle(ControlPlaneServiceLifecycle):
             CloudShareSchemaManager(
                 self.config.database_path, keyring=self.keyring
             ).validate()
+            AdminManagementSchemaManager(self.config.database_path).validate()
         else:
             _validate_runtime_schema_receipts(self.config.database_path)
         if (
@@ -1137,6 +1206,9 @@ class SingleNodeSQLiteS3Provider:
                 share = CloudShareSchemaManager(
                     config.database_path, keyring=keyring
                 ).migrate()
+                management = AdminManagementSchemaManager(
+                    config.database_path
+                ).migrate()
                 volume.install_or_validate()
                 volume.validate_wal()
                 post_backup = backup.create(reason="post-migration")
@@ -1156,6 +1228,7 @@ class SingleNodeSQLiteS3Provider:
             control_schema_version=control.migration_version,
             audit_schema_version=audit.migration_version,
             share_schema_version=share.migration_version,
+            admin_management_schema_version=management.migration_version,
             backup=post_backup,
         )
 
@@ -1173,6 +1246,7 @@ class SingleNodeSQLiteS3Provider:
         share = CloudShareSchemaManager(
             config.database_path, keyring=keyring
         ).validate()
+        management = AdminManagementSchemaManager(config.database_path).validate()
         receipt = backup.latest(full_digest=True)
         _require_recent_backup(receipt, config.maximum_backup_age_seconds)
         audit_encryption = _secret_bytes(
@@ -1180,6 +1254,13 @@ class SingleNodeSQLiteS3Provider:
         )
         audit_integrity = _secret_bytes(
             secrets.read("audit-integrity-key"), minimum_length=32, maximum_length=64
+        )
+        management_key = (
+            _secret_bytes(
+                secrets.read("model-config-encryption-key"), exact_length=32
+            )
+            if config.admin_management_enabled
+            else None
         )
         release_keys = parse_ed25519_public_keyring(config.release_public_keys_json)
         publication_keys = parse_ed25519_public_keyring(
@@ -1226,6 +1307,10 @@ class SingleNodeSQLiteS3Provider:
                     aggregate_days=config.audit_aggregate_days,
                 ),
             )
+            if management_key is not None:
+                AdminManagementRepository(
+                    config.database_path, encryption_key=management_key
+                )
         finally:
             s3.close()
         return ProductionSchemaReport(
@@ -1234,6 +1319,7 @@ class SingleNodeSQLiteS3Provider:
             control_schema_version=control.migration_version,
             audit_schema_version=audit.migration_version,
             share_schema_version=share.migration_version,
+            admin_management_schema_version=management.migration_version,
             backup=receipt,
         )
 
@@ -1250,6 +1336,13 @@ class SingleNodeSQLiteS3Provider:
         audit_integrity = _secret_bytes(
             secrets.read("audit-integrity-key"), minimum_length=32, maximum_length=64
         )
+        management_key = (
+            _secret_bytes(
+                secrets.read("model-config-encryption-key"), exact_length=32
+            )
+            if config.admin_management_enabled
+            else None
+        )
         release_keys = parse_ed25519_public_keyring(config.release_public_keys_json)
         publication_keys = parse_ed25519_public_keyring(
             config.publication_public_keys_json
@@ -1260,11 +1353,13 @@ class SingleNodeSQLiteS3Provider:
         instance_lock.acquire()
         s3: _S3Dependency | None = None
         bootstrap_index_service: BootstrapIndexPublicationService | None = None
+        model_connection_tester: HTTPSModelConnectionTester | None = None
         try:
             volume.validate_wal()
             ControlPlaneSchemaManager(config.database_path).validate()
             CloudAuditSchemaManager(config.database_path).validate()
             CloudShareSchemaManager(config.database_path, keyring=keyring).validate()
+            AdminManagementSchemaManager(config.database_path).validate()
             backup.latest(full_digest=True)
             s3 = self._s3(config)
             object_store = S3ShareObjectStore(
@@ -1332,6 +1427,21 @@ class SingleNodeSQLiteS3Provider:
                     aggregate_days=config.audit_aggregate_days,
                 ),
             )
+            management_repository = (
+                AdminManagementRepository(
+                    config.database_path, encryption_key=management_key
+                )
+                if management_key is not None
+                else None
+            )
+            model_connection_tester = (
+                HTTPSModelConnectionTester(
+                    config.model_provider_origins,
+                    timeout_seconds=float(config.dependency_timeout_seconds),
+                )
+                if management_repository is not None
+                else None
+            )
             lifecycle = SingleNodeControlPlaneLifecycle(
                 config=config,
                 instance_lock=instance_lock,
@@ -1351,10 +1461,17 @@ class SingleNodeSQLiteS3Provider:
                 audit_repository=audit_repository,
                 authenticator=authenticator,
                 rollback_signer=online_authorization_signer,
+                management_repository=management_repository,
+                model_connection_tester=model_connection_tester,
                 lifecycle=lifecycle,
                 config=config,
             )
         except BaseException:
+            if model_connection_tester is not None:
+                try:
+                    asyncio.run(model_connection_tester.aclose())
+                except Exception:
+                    pass
             if bootstrap_index_service is not None:
                 bootstrap_index_service.close()
             if s3 is not None:
@@ -1504,6 +1621,17 @@ def _validate_runtime_schema_receipts(database_path: Path) -> None:
                 raise ProductionStorageError(
                     "production schema readiness receipt is incompatible"
                 )
+        management = connection.execute(
+            "SELECT version,migration_checksum FROM admin_ops_schema_migrations "
+            "ORDER BY version DESC LIMIT 1"
+        ).fetchone()
+        if management is None or tuple(management) != (
+            CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION,
+            ADMIN_MANAGEMENT_MIGRATION_CHECKSUM,
+        ):
+            raise ProductionStorageError(
+                "production admin management schema receipt is incompatible"
+            )
     except sqlite3.Error as error:
         raise ProductionStorageError(
             "production schema readiness receipt is unavailable"

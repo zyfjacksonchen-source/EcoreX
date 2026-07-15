@@ -225,6 +225,7 @@ def test_product_runtime_device_authorization_is_secure_and_requires_reload(
         "organization_id": None,
         "roles": [],
         "session_revision": None,
+        "session_lease_digest": None,
     }
     assert bootstrap["policy_lease"] is None
     assert bootstrap["login_service"] == {"state": "ready", "reason": None}
@@ -371,6 +372,7 @@ def test_product_runtime_device_authorization_is_secure_and_requires_reload(
             "organization_id": "product-device-organization",
             "roles": ["member"],
             "session_revision": 1,
+            "session_lease_digest": session.snapshot().lease_digest,
         }
         assert restarted_bootstrap.json()["policy_lease"]["lease_id"] == (
             "product-device-lease-1"

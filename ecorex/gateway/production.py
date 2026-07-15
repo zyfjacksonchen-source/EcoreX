@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
+import binascii
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 import ipaddress
@@ -25,6 +27,8 @@ from typing import Any, Protocol, runtime_checkable
 from fastapi import FastAPI
 
 from ecorex.managed_model_policy import require_managed_chat_mapping
+from ecorex.control_plane.management import AdminManagementRepository
+from ecorex.control_plane.management_schema import AdminManagementSchemaManager
 
 from .production_auth import (
     Ed25519GatewayJWTAuthenticator,
@@ -41,6 +45,7 @@ from .responses_provider import (
     ResponsesProviderConfigurationError,
     normalize_https_origin,
 )
+from .dynamic_provider import DynamicManagedResponsesProvider
 from .schema import (
     GatewaySchemaManager,
 )
@@ -54,6 +59,7 @@ from .server import (
 _SAFE_MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _SECRET_NAMES = {
     "provider-bearer-token": "ECOREX_GATEWAY_PROVIDER_BEARER_TOKEN",
+    "model-config-encryption-key": "ECOREX_GATEWAY_MODEL_CONFIG_ENCRYPTION_KEY_B64",
 }
 
 
@@ -148,6 +154,9 @@ class GatewayProductionConfig:
     allow_trusted_ingress_http: bool = False
     limit_concurrency: int = 512
     backlog: int = 1024
+    admin_management_enabled: bool = False
+    admin_management_database_path: Path | None = None
+    model_provider_origins: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         try:
@@ -218,6 +227,42 @@ class GatewayProductionConfig:
         ):
             raise GatewayProductionConfigurationError(
                 "gateway production configuration is invalid"
+            )
+        origins = dict(self.model_provider_origins)
+        if self.admin_management_enabled:
+            if (
+                not isinstance(self.admin_management_database_path, Path)
+                or not self.admin_management_database_path.is_absolute()
+                or not origins
+            ):
+                raise GatewayProductionConfigurationError(
+                    "gateway administrator model source is invalid"
+                )
+            try:
+                normalized_dynamic = {
+                    preset: normalize_https_origin(origin)
+                    for preset, origin in origins.items()
+                    if preset
+                    in {
+                        "responses",
+                        "openai_compatible_chat",
+                        "openai_compatible_image",
+                    }
+                }
+            except (ResponsesProviderConfigurationError, TypeError):
+                raise GatewayProductionConfigurationError(
+                    "gateway administrator model origins are invalid"
+                ) from None
+            if len(normalized_dynamic) != len(origins):
+                raise GatewayProductionConfigurationError(
+                    "gateway administrator model origins are invalid"
+                )
+            object.__setattr__(
+                self, "model_provider_origins", MappingProxyType(normalized_dynamic)
+            )
+        elif self.admin_management_database_path is not None or origins:
+            raise GatewayProductionConfigurationError(
+                "gateway administrator model source requires explicit enablement"
             )
         try:
             parse_ed25519_public_keyring(self.auth_public_keys_json)
@@ -297,6 +342,37 @@ class GatewayProductionConfig:
             maximum=870.0,
             default=240.0,
         )
+        management_enabled = _boolean(
+            values, "ECOREX_GATEWAY_ADMIN_MANAGEMENT_ENABLED", default=False
+        )
+        management_database = (
+            _absolute_path(values, "ECOREX_GATEWAY_ADMIN_MANAGEMENT_DATABASE_PATH")
+            if management_enabled
+            else None
+        )
+        dynamic_origins: dict[str, str] = {}
+        raw_dynamic_origins = values.get("ECOREX_GATEWAY_MODEL_PROVIDER_ORIGINS_JSON")
+        if raw_dynamic_origins:
+            try:
+                parsed_dynamic_origins = json.loads(raw_dynamic_origins)
+            except json.JSONDecodeError:
+                raise GatewayProductionConfigurationError(
+                    "gateway administrator model origins are invalid"
+                ) from None
+            if (
+                not isinstance(parsed_dynamic_origins, dict)
+                or not parsed_dynamic_origins
+                or any(
+                    not isinstance(key, str) or not isinstance(value, str)
+                    for key, value in parsed_dynamic_origins.items()
+                )
+            ):
+                raise GatewayProductionConfigurationError(
+                    "gateway administrator model origins are invalid"
+                )
+            dynamic_origins = {
+                str(key): str(value) for key, value in parsed_dynamic_origins.items()
+            }
         return cls(
             storage_backend=backend,
             replica_count=replicas,
@@ -398,6 +474,9 @@ class GatewayProductionConfig:
                 maximum=8192,
                 default=1024,
             ),
+            admin_management_enabled=management_enabled,
+            admin_management_database_path=management_database,
+            model_provider_origins=dynamic_origins,
         )
 
 
@@ -620,6 +699,11 @@ class SingleNodeSQLiteResponsesProvider:
         process_lock.acquire()
         try:
             receipt = GatewaySchemaManager(config.database_path).migrate()
+            if config.admin_management_enabled:
+                assert config.admin_management_database_path is not None
+                AdminManagementSchemaManager(
+                    config.admin_management_database_path
+                ).validate()
             validate_gateway_sqlite_health(config.database_path, full=True)
             return GatewayProductionReport(
                 action="migrate",
@@ -641,7 +725,7 @@ class SingleNodeSQLiteResponsesProvider:
             receipt = GatewaySchemaManager(config.database_path).validate()
             validate_gateway_sqlite_health(config.database_path, full=True)
             self._authenticator(config)
-            provider = self.responses_factory.create(config, secrets)
+            provider = self._provider(config, secrets)
             if not isinstance(provider, ProductionResponsesProvider):
                 raise GatewayProductionConfigurationError(
                     "gateway provider contract is unavailable"
@@ -674,7 +758,7 @@ class SingleNodeSQLiteResponsesProvider:
             validate_gateway_sqlite_health(config.database_path, full=True)
             store = SQLiteGatewayStore(config.database_path)
             authenticator = self._authenticator(config)
-            provider = self.responses_factory.create(config, secrets)
+            provider = self._provider(config, secrets)
             if not isinstance(provider, ProductionResponsesProvider):
                 raise GatewayProductionConfigurationError(
                     "gateway provider contract is unavailable"
@@ -715,6 +799,32 @@ class SingleNodeSQLiteResponsesProvider:
             service_model_ids=config.allowed_model_ids,
             max_token_lifetime_seconds=config.auth_max_token_lifetime_seconds,
             clock_skew_seconds=config.auth_clock_skew_seconds,
+        )
+
+    def _provider(
+        self,
+        config: GatewayProductionConfig,
+        secrets: GatewaySecretProvider,
+    ) -> ProductionResponsesProvider:
+        if not config.admin_management_enabled:
+            return self.responses_factory.create(config, secrets)
+        database_path = config.admin_management_database_path
+        assert database_path is not None
+        AdminManagementSchemaManager(database_path).validate()
+        repository = AdminManagementRepository(
+            database_path,
+            encryption_key=_secret_bytes(
+                secrets.read("model-config-encryption-key"), exact_length=32
+            ),
+        )
+        return DynamicManagedResponsesProvider(
+            repository,
+            origins=config.model_provider_origins,
+            connect_timeout_seconds=config.provider_connect_timeout_seconds,
+            read_timeout_seconds=config.provider_read_timeout_seconds,
+            total_timeout_seconds=config.provider_total_timeout_seconds,
+            max_concurrency=config.provider_max_concurrency,
+            max_connections=config.provider_max_connections,
         )
 
 
@@ -844,6 +954,20 @@ def _boolean(
     if raw == "false":
         return False
     raise GatewayProductionConfigurationError("gateway boolean setting is invalid")
+
+
+def _secret_bytes(value: str, *, exact_length: int) -> bytes:
+    try:
+        material = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        raise GatewayProductionConfigurationError(
+            "gateway secret encoding is invalid"
+        ) from None
+    if len(material) != exact_length:
+        raise GatewayProductionConfigurationError(
+            "gateway secret length is invalid"
+        )
+    return material
 
 
 def _json_object(value: str) -> dict[str, Any]:

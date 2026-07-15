@@ -111,6 +111,9 @@ def _request_dict(request: ImageSubmitRequest) -> dict[str, Any]:
         "priority": request.priority,
         "max_attempts": request.max_attempts,
         "deadline_seconds": request.deadline_seconds,
+        "model_config_id": request.model_config_id,
+        "model_config_revision": request.model_config_revision,
+        "provider_model_id": request.provider_model_id,
     }
 
 
@@ -130,6 +133,9 @@ def _request(value: Any) -> ImageSubmitRequest:
         max_attempts=raw["max_attempts"],
         deadline_seconds=raw["deadline_seconds"],
         metadata=raw.get("metadata", {}),
+        model_config_id=raw.get("model_config_id"),
+        model_config_revision=raw.get("model_config_revision"),
+        provider_model_id=raw.get("provider_model_id"),
     )
 
 

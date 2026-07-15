@@ -32,6 +32,15 @@ ecorex-image all
 | Provider 凭证 | SecretProvider 逻辑名 `managed-provider-bearer`；环境回退实现只读 `ECOREX_IMAGE_PROVIDER_BEARER_TOKEN` |
 | 资源 | `ECOREX_IMAGE_MAX_BYTES`、`ECOREX_IMAGE_WORKER_CONCURRENCY`、`ECOREX_IMAGE_WORKER_MEMORY_ENVELOPE_BYTES`、`ECOREX_IMAGE_API_BLOB_MEMORY_ENVELOPE_BYTES` |
 
+启用管理员热配置时，另设
+`ECOREX_IMAGE_ADMIN_MANAGEMENT_ENABLED=true`、指向 Control Plane 同一管理数据库
+的 `ECOREX_IMAGE_ADMIN_MANAGEMENT_DATABASE_PATH`、仅包含
+`openai_compatible_image` 的固定 HTTPS preset 映射
+`ECOREX_IMAGE_MODEL_PROVIDER_ORIGINS_JSON`，并由 SecretProvider 提供
+`ECOREX_IMAGE_MODEL_CONFIG_ENCRYPTION_KEY_B64`。每个任务在入队时冻结配置 revision，
+所以后续换 Key/模型不会改变正在重试或恢复的任务；详细流程见
+`admin-management-runbook.md`。
+
 任意 DSN、S3、Provider origin/allowlist、Provider 凭证、JWT 公钥环或模型白名单缺失时，进程 fail-closed。生产建议由 Vault sidecar 或 workload identity 实现 `ImageSecretProvider`；不要把凭证放到 CLI 参数、日志或发布清单。
 
 ## 3. 首次上线顺序

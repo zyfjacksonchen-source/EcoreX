@@ -129,6 +129,9 @@ class ImageSubmitRequest:
     max_attempts: int = 4
     deadline_seconds: int = 900
     metadata: Mapping[str, str | int | bool] = field(default_factory=dict)
+    model_config_id: str | None = None
+    model_config_revision: int | None = None
+    provider_model_id: str | None = None
 
     def __post_init__(self) -> None:
         try:
@@ -205,6 +208,22 @@ class ImageSubmitRequest:
                 raise ValueError("metadata value is invalid")
             safe_metadata[key] = value
         object.__setattr__(self, "metadata", MappingProxyType(safe_metadata))
+        frozen_config = (
+            self.model_config_id,
+            self.model_config_revision,
+            self.provider_model_id,
+        )
+        if any(value is not None for value in frozen_config):
+            if (
+                not isinstance(self.model_config_id, str)
+                or not _ID.fullmatch(self.model_config_id)
+                or isinstance(self.model_config_revision, bool)
+                or not isinstance(self.model_config_revision, int)
+                or self.model_config_revision <= 0
+                or not isinstance(self.provider_model_id, str)
+                or not _MODEL.fullmatch(self.provider_model_id)
+            ):
+                raise ValueError("image model configuration snapshot is invalid")
 
     @property
     def size_class(self) -> str:

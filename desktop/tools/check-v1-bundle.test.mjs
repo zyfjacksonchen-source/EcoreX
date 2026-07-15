@@ -9,8 +9,9 @@ import { BundleBudgetError, inspectV1Bundle } from "./check-v1-bundle.mjs";
 const FEATURES = [
   "ArtifactPreviewDialog",
   "ComposerModelSelector",
+  "ConnectorPopover",
   "DeviceLoginCard",
-  "ExtensionManagerDialog",
+  "SkillsWorkspace",
   "InteractionStack",
   "NewConversationProjectSelector",
   "OfficeMarkdown",

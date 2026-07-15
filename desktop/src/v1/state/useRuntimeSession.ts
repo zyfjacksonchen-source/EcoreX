@@ -180,6 +180,9 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const pendingUpdateActivation = useRef<PendingUpdateActivation | null>(null);
+  const [sessionBusy, setSessionBusy] = useState(false);
+  const sessionBusyRef = useRef(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
   const [memory, setMemory] = useState<MemorySnapshot | null>(null);
   const [memoryLoadState, setMemoryLoadState] = useState<LoadState>("loading");
   const [memoryBusy, setMemoryBusy] = useState(false);
@@ -210,6 +213,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   const [threadMutationKey, setThreadMutationKey] = useState<string | null>(null);
   const threadCatalogGeneration = useRef(0);
   const threadSwitchGeneration = useRef(0);
+  const eventStreamGeneration = useRef(0);
   const threadSwitchAbort = useRef<AbortController | null>(null);
   const threadSwitchInProgress = useRef(false);
   const selectedThreadId = useRef<string | null>(null);
@@ -383,7 +387,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
 
   const refreshThreads = useCallback(async (signal?: AbortSignal) => {
     const generation = ++threadCatalogGeneration.current;
-    setThreadCatalogState("loading");
+    setThreadCatalogState((current) => current === "ready" ? current : "loading");
     setThreadCatalogError(null);
     try {
       const items: ThreadProjection[] = [];
@@ -503,6 +507,19 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     void refreshThreads(controller.signal);
     return () => controller.abort();
   }, [bootstrapped, refreshThreads]);
+
+  useEffect(() => {
+    if (!bootstrapped || !threads.some((thread) => thread.active_turn_status !== null)) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(
+      () => void refreshThreads(controller.signal),
+      2_500,
+    );
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [bootstrapped, refreshThreads, threads]);
 
   useEffect(() => {
     if (!bootstrapped) return;
@@ -640,6 +657,12 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   useEffect(() => {
     if (!threadId) return;
     const controller = new AbortController();
+    const generation = ++eventStreamGeneration.current;
+    const ownsStream = () => (
+      !controller.signal.aborted
+      && eventStreamGeneration.current === generation
+      && selectedThreadId.current === threadId
+    );
     let retry = 0;
     let frameId: number | null = null;
     let fallbackTimer: number | null = null;
@@ -657,7 +680,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
       if (pendingEvents.length === 0) return;
       const events = pendingEvents;
       pendingEvents = [];
-      if (selectedThreadId.current !== threadId) return;
+      if (!ownsStream()) return;
       applyEventBatch(events);
       if (events.some((event) => event.event_type === "model.response_completed")) {
         void refreshConversationUsage(threadId);
@@ -672,6 +695,8 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
         || event.event_type === "thread.renamed"
         || event.event_type === "thread.archived"
         || event.event_type === "thread.restored"
+        || event.event_type === "turn.accepted"
+        || event.event_type === "turn.queued"
       ))) {
         void refreshThreads();
       }
@@ -686,7 +711,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     };
 
     const receiveEvent = (event: EventEnvelope) => {
-      if (selectedThreadId.current !== threadId) return;
+      if (!ownsStream()) return;
       pendingEvents.push(event);
       if (!isFrameBatchableEvent(event) || pendingEvents.length >= 128) {
         flushEvents();
@@ -696,7 +721,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     };
 
     const run = async () => {
-      while (!controller.signal.aborted) {
+      while (ownsStream()) {
         dispatch({ type: "stream.state", state: retry ? "retrying" : "connecting" });
         try {
           dispatch({ type: "stream.state", state: "open" });
@@ -707,17 +732,19 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
             controller.signal,
             () => void recoverPendingOperationsRef.current(),
           );
+          if (!ownsStream()) return;
           flushEvents();
           retry = Math.min(retry + 1, 6);
         } catch (error) {
-          if (controller.signal.aborted) return;
+          if (!ownsStream()) return;
           if (error instanceof EventCursorResetRequired) {
             try {
               await refreshProjection(threadId, controller.signal);
+              if (!ownsStream()) return;
               retry = 0;
               continue;
             } catch (refreshError) {
-              if (controller.signal.aborted) return;
+              if (!ownsStream()) return;
               setTransportError(errorMessage(refreshError));
             }
           } else {
@@ -725,6 +752,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
           }
           retry = Math.min(retry + 1, 6);
         }
+        if (!ownsStream()) return;
         dispatch({ type: "stream.state", state: "retrying" });
         await abortableDelay(Math.min(500 * 2 ** retry, 8_000), controller.signal).catch(
           () => undefined,
@@ -888,6 +916,35 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     refreshProjection,
     refreshThreads,
   ]);
+
+  const setThreadPinned = useCallback(async (
+    targetThreadId: string,
+    pinned: boolean,
+  ) => {
+    const operation = pinned ? "pin" : "unpin";
+    const key = `${operation}:${targetThreadId}`;
+    const clientRequestId = pendingThreadRequestId(key, operation);
+    setThreadMutationKey(key);
+    setThreadCatalogError(null);
+    try {
+      const projection = await client.setThreadPinned(
+        targetThreadId,
+        pinned,
+        clientRequestId,
+      );
+      pendingThreadMutations.current.delete(key);
+      if (selectedThreadId.current === targetThreadId) {
+        await refreshProjection(projection.thread_id);
+      }
+      await refreshThreads();
+      return true;
+    } catch (error) {
+      setThreadCatalogError(errorMessage(error));
+      return false;
+    } finally {
+      setThreadMutationKey((current) => current === key ? null : current);
+    }
+  }, [client, pendingThreadRequestId, refreshProjection, refreshThreads]);
 
   const listShares = useCallback((targetThreadId: string, signal?: AbortSignal) => (
     client.listShares(targetThreadId, signal)
@@ -1395,6 +1452,30 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     }
   }, [client, outputBusy, outputPreference, refreshOutput]);
 
+  const pickOutputLocation = useCallback(async () => {
+    if (outputBusy || !outputPreference) return false;
+    setOutputBusy(true);
+    setOutputError(null);
+    try {
+      const preference = await client.pickOutputLocation(
+        outputPreference.revision,
+        createClientRequestId("pick_output_location"),
+      );
+      pendingOutputPreference.current = null;
+      setOutputPreference(preference);
+      setOutputLoadState("ready");
+      return true;
+    } catch (error) {
+      if (error instanceof RuntimeApiError && error.status === 409) {
+        await refreshOutput();
+      }
+      setOutputError(errorMessage(error));
+      return false;
+    } finally {
+      setOutputBusy(false);
+    }
+  }, [client, outputBusy, outputPreference, refreshOutput]);
+
   const newTask = useCallback((project: ProjectProjection | null = null) => {
     ++threadSwitchGeneration.current;
     threadSwitchAbort.current?.abort();
@@ -1537,6 +1618,55 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     client.pollDeviceLogin(flowId, clientRequestId)
   ), [client]);
 
+  const logoutSession = useCallback(async () => {
+    if (sessionBusyRef.current) return null;
+    const bootstrap = stateRef.current.bootstrap;
+    const leaseDigest = bootstrap?.login.session_lease_digest;
+    if (!bootstrap?.login.authenticated || !leaseDigest) {
+      setSessionError("登录状态尚未准备好，请刷新页面后再退出。");
+      return null;
+    }
+    sessionBusyRef.current = true;
+    setSessionBusy(true);
+    setSessionError(null);
+    try {
+      const receipt = await client.logoutSession(leaseDigest);
+      const loggedOutBootstrap: BootstrapResponse = {
+        ...bootstrap,
+        login: {
+          authenticated: false,
+          account_id: null,
+          display_name: null,
+          organization_id: null,
+          roles: [],
+          session_revision: null,
+          session_lease_digest: null,
+        },
+        policy_lease: null,
+        model_service: {
+          state: "unavailable",
+          reason: "managed_session_unavailable",
+        },
+      };
+      stateRef.current = { ...stateRef.current, bootstrap: loggedOutBootstrap };
+      dispatch({ type: "bootstrap.received", bootstrap: loggedOutBootstrap });
+      if (receipt.restart_scheduled) {
+        window.setTimeout(() => window.location.reload(), 1_500);
+      }
+      return receipt;
+    } catch (error) {
+      if (error instanceof RuntimeApiError && error.code === "session_lease_changed") {
+        setSessionError("登录状态刚刚发生变化，请刷新页面后再退出。");
+      } else {
+        setSessionError(errorMessage(error));
+      }
+      return null;
+    } finally {
+      sessionBusyRef.current = false;
+      setSessionBusy(false);
+    }
+  }, [client]);
+
   return {
     client,
     state,
@@ -1551,6 +1681,10 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     updateBusy,
     updateError,
     clearUpdateError: () => setUpdateError(null),
+    sessionBusy,
+    sessionError,
+    clearSessionError: () => setSessionError(null),
+    logoutSession,
     memory,
     memoryLoadState,
     memoryBusy,
@@ -1565,6 +1699,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     clearOutputError: () => setOutputError(null),
     refreshOutput: () => void refreshOutput(),
     updateOutputLocation,
+    pickOutputLocation,
     systemHealth,
     systemHealthLoadState,
     systemHealthError,
@@ -1597,6 +1732,8 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     refreshThreads: () => void refreshThreads(),
     openThread,
     renameThread,
+    pinThread: (targetThreadId: string) => setThreadPinned(targetThreadId, true),
+    unpinThread: (targetThreadId: string) => setThreadPinned(targetThreadId, false),
     archiveThread: (targetThreadId: string) => setThreadArchived(targetThreadId, true),
     restoreThread: (targetThreadId: string) => setThreadArchived(targetThreadId, false),
     listShares,

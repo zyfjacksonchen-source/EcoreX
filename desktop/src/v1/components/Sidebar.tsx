@@ -3,16 +3,22 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   Archive,
   ArchiveRestore,
+  Blocks,
   ChevronDown,
   Copy,
   FolderOpen,
   LoaderCircle,
+  LogOut,
   MessageSquare,
   MoreHorizontal,
   Pencil,
+  Pin,
+  PinOff,
   Plus,
   RefreshCw,
+  Search,
   Settings2,
+  UserRound,
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -25,6 +31,7 @@ interface SidebarProps {
   open: boolean;
   modal: boolean;
   currentThreadId: string | null;
+  version: string;
   threads: ThreadProjection[];
   projects: ProjectProjection[];
   projectCatalogState: LoadState;
@@ -34,23 +41,36 @@ interface SidebarProps {
   catalogError: string | null;
   switchingThreadId: string | null;
   mutationKey: string | null;
+  authenticated: boolean;
+  accountDisplayName: string | null;
+  skillsActive: boolean;
+  sessionBusy: boolean;
+  sessionError: string | null;
   onClose: () => void;
   onNewTask: (project?: ProjectProjection | null) => void;
+  onOpenSkills: () => void;
   onPickProject: () => Promise<ProjectProjection | null>;
   onClearProjectError: () => void;
   onOpenThread: (threadId: string) => Promise<boolean>;
   onRenameThread: (threadId: string, title: string) => Promise<boolean>;
+  onPinThread: (threadId: string) => Promise<boolean>;
+  onUnpinThread: (threadId: string) => Promise<boolean>;
   onArchiveThread: (threadId: string) => Promise<boolean>;
   onRestoreThread: (threadId: string) => Promise<boolean>;
   onRefreshThreads: () => void;
   onClearCatalogError: () => void;
   onOpenSettings: () => void;
+  onClearSessionError: () => void;
+  onLogout: () => Promise<{ restart_scheduled: boolean } | null>;
 }
+
+const COLLAPSED_THREAD_LIMIT = 8;
 
 export function Sidebar({
   open,
   modal,
   currentThreadId,
+  version,
   threads = [],
   projects = [],
   projectCatalogState,
@@ -60,17 +80,27 @@ export function Sidebar({
   catalogError,
   switchingThreadId,
   mutationKey,
+  authenticated,
+  accountDisplayName,
+  skillsActive,
+  sessionBusy,
+  sessionError,
   onClose,
   onNewTask,
+  onOpenSkills,
   onPickProject,
   onClearProjectError,
   onOpenThread,
   onRenameThread,
+  onPinThread,
+  onUnpinThread,
   onArchiveThread,
   onRestoreThread,
   onRefreshThreads,
   onClearCatalogError,
   onOpenSettings,
+  onClearSessionError,
+  onLogout,
 }: SidebarProps) {
   const [renameTarget, setRenameTarget] = useState<ThreadProjection | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -80,27 +110,48 @@ export function Sidebar({
   const [continueError, setContinueError] = useState<string | null>(null);
   const [continuing, setContinuing] = useState(false);
   const [threadIdNotice, setThreadIdNotice] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [projectsCollapsed, setProjectsCollapsed] = useState(false);
   const [sessionsCollapsed, setSessionsCollapsed] = useState(false);
+  const [allGeneralSessionsVisible, setAllGeneralSessionsVisible] = useState(false);
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
+  const [logoutComplete, setLogoutComplete] = useState<string | null>(null);
   const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({});
+  const [expandedProjectSessions, setExpandedProjectSessions] = useState<Record<string, boolean>>({});
   const renameInputRef = useRef<HTMLInputElement>(null);
   const continueInputRef = useRef<HTMLInputElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
   const renaming = renameTarget ? mutationKey === `rename:${renameTarget.thread_id}` : false;
-  const activeThreads = threads.filter((thread) => thread.status === "active");
+  const activeThreads = threads
+    .filter((thread) => thread.status === "active")
+    .sort((left, right) => Number(right.pinned) - Number(left.pinned));
   const archivedThreads = threads.filter((thread) => thread.status === "archived");
   const normalizedSearch = searchQuery.trim().toLocaleLowerCase("zh-CN");
-  const visibleThreads = activeThreads.filter((thread) => (
+  const searchResults = activeThreads.filter((thread) => (
     !normalizedSearch
     || (thread.title || "未命名会话").toLocaleLowerCase("zh-CN").includes(normalizedSearch)
   ));
   const projectIdOf = (thread: ThreadProjection) => (
     typeof thread.metadata.project_id === "string" ? thread.metadata.project_id : null
   );
-  const generalThreads = visibleThreads.filter((thread) => !projectIdOf(thread));
+  const generalThreads = activeThreads.filter((thread) => !projectIdOf(thread));
+  const collapsedThreadSet = (items: ThreadProjection[], expanded: boolean) => {
+    if (expanded || items.length <= COLLAPSED_THREAD_LIMIT) return items;
+    const required = new Set(items.filter((thread) => (
+      thread.pinned
+      || thread.thread_id === currentThreadId
+      || thread.active_turn_status !== null
+    )).map((thread) => thread.thread_id));
+    for (const thread of items) {
+      if (required.size >= COLLAPSED_THREAD_LIMIT) break;
+      required.add(thread.thread_id);
+    }
+    return items.filter((thread) => required.has(thread.thread_id));
+  };
+  const visibleGeneralThreads = collapsedThreadSet(generalThreads, allGeneralSessionsVisible);
 
   useEffect(() => {
     if (!renameTarget) return;
@@ -206,6 +257,9 @@ export function Sidebar({
     const current = thread.thread_id === currentThreadId;
     const switching = switchingThreadId === thread.thread_id;
     const archiving = mutationKey === `archive:${thread.thread_id}`;
+    const pinning = mutationKey === `${thread.pinned ? "unpin" : "pin"}:${thread.thread_id}`;
+    const running = thread.active_turn_status !== null;
+    const waiting = thread.active_turn_status === "waiting_human";
     const label = thread.title || "未命名会话";
     return (
       <div className="ex-task-entry" key={thread.thread_id}>
@@ -215,20 +269,28 @@ export function Sidebar({
           title={label}
           aria-current={current ? "page" : undefined}
           aria-label={`打开任务：${label}`}
-          disabled={switching || archiving}
+          disabled={switching || archiving || pinning}
           onClick={() => void onOpenThread(thread.thread_id)}
         >
           {switching
             ? <LoaderCircle className="ex-spin" aria-hidden="true" />
-            : <MessageSquare aria-hidden="true" />}
+            : thread.pinned
+              ? <Pin className="ex-task-pin" aria-hidden="true" />
+              : <MessageSquare aria-hidden="true" />}
           <span>{label}</span>
+          {running ? (
+            <LoaderCircle
+              className={`ex-thread-running${waiting ? " is-waiting" : " ex-spin"}`}
+              aria-label={waiting ? "等待你确认" : "任务正在进行"}
+            />
+          ) : null}
         </button>
         <DropdownMenu.Root>
           <DropdownMenu.Trigger asChild>
             <IconButton
               className="ex-task-more"
               label={`管理任务：${label}`}
-              disabled={Boolean(switchingThreadId) || archiving}
+              disabled={Boolean(switchingThreadId) || archiving || pinning}
               tooltipSide="right"
             >
               <MoreHorizontal aria-hidden="true" />
@@ -241,6 +303,15 @@ export function Sidebar({
               </DropdownMenu.Item>
               <DropdownMenu.Item className="ex-menu-item" onSelect={() => setRenameTarget(thread)}>
                 <Pencil aria-hidden="true" />重命名
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                className="ex-menu-item"
+                onSelect={() => void (thread.pinned
+                  ? onUnpinThread(thread.thread_id)
+                  : onPinThread(thread.thread_id))}
+              >
+                {thread.pinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
+                {thread.pinned ? "取消置顶" : "置顶会话"}
               </DropdownMenu.Item>
               <DropdownMenu.Item className="ex-menu-item is-danger" onSelect={() => void onArchiveThread(thread.thread_id)}>
                 <Archive aria-hidden="true" />归档
@@ -262,8 +333,11 @@ export function Sidebar({
         aria-modal={modal || undefined}
       >
         <div className="ex-sidebar-brand">
-          <span className="ex-brand-mark" aria-hidden="true">E</span>
-          <span>EcoreX</span>
+          <span className="ex-brand-mark" aria-hidden="true">X</span>
+          <span className="ex-brand-copy"><strong>EcoreX</strong><small>v{version}</small></span>
+          <IconButton className="ex-sidebar-search" label="搜索会话" onClick={() => setSearchOpen(true)}>
+            <Search aria-hidden="true" />
+          </IconButton>
           <IconButton ref={closeButtonRef} className="ex-sidebar-close" label="关闭任务导航" onClick={onClose}>
             <X aria-hidden="true" />
           </IconButton>
@@ -273,18 +347,16 @@ export function Sidebar({
           <Plus aria-hidden="true" />
           <span>新对话</span>
         </button>
-        <div className="ex-session-search">
-          <input
-            value={searchQuery}
-            aria-label="搜索会话"
-            placeholder="搜索会话"
-            onChange={(event) => setSearchQuery(event.target.value)}
-          />
-          <IconButton label="按任务 ID 继续" onClick={() => setContinueOpen(true)}>
-            <MessageSquare aria-hidden="true" />
-          </IconButton>
-        </div>
-
+        <button
+          className={`ex-sidebar-action ex-sidebar-skill-link${skillsActive ? " is-current" : ""}`}
+          type="button"
+          aria-label="技能"
+          aria-current={skillsActive ? "page" : undefined}
+          onClick={onOpenSkills}
+        >
+          <Blocks aria-hidden="true" />
+          <span>技能</span>
+        </button>
         <nav className="ex-task-nav" aria-label="会话与项目">
           <section className="ex-sidebar-section" aria-label="项目">
             <div className="ex-nav-heading">
@@ -325,8 +397,10 @@ export function Sidebar({
               ) : (
                 <div className="ex-project-list">
                   {projects.map((project) => {
-                    const projectThreads = visibleThreads.filter((thread) => projectIdOf(thread) === project.project_id);
-                    const collapsed = Boolean(collapsedProjects[project.project_id]) && !normalizedSearch;
+                    const projectThreads = activeThreads.filter((thread) => projectIdOf(thread) === project.project_id);
+                    const allProjectSessionsVisible = Boolean(expandedProjectSessions[project.project_id]);
+                    const visibleProjectThreads = collapsedThreadSet(projectThreads, allProjectSessionsVisible);
+                    const collapsed = Boolean(collapsedProjects[project.project_id]);
                     return (
                       <div className="ex-project-group" key={project.project_id}>
                         <div className="ex-project-row">
@@ -353,7 +427,7 @@ export function Sidebar({
                         {!collapsed ? (
                           <div className="ex-project-session-list" role="group" aria-label={`${project.name} 的会话`}>
                             {projectThreads.length
-                              ? projectThreads.map(renderThreadEntry)
+                              ? visibleProjectThreads.map(renderThreadEntry)
                               : (
                                 <button
                                   className="ex-sidebar-action ex-project-session-empty"
@@ -364,6 +438,18 @@ export function Sidebar({
                                   <Plus aria-hidden="true" /><span>新建项目会话</span>
                                 </button>
                               )}
+                            {projectThreads.length > COLLAPSED_THREAD_LIMIT ? (
+                              <button
+                                className="ex-sidebar-action ex-show-more-sessions"
+                                type="button"
+                                onClick={() => setExpandedProjectSessions((current) => ({
+                                  ...current,
+                                  [project.project_id]: !allProjectSessionsVisible,
+                                }))}
+                              >
+                                {allProjectSessionsVisible ? "收起" : `查看更多（${projectThreads.length - visibleProjectThreads.length}）`}
+                              </button>
+                            ) : null}
                           </div>
                         ) : null}
                       </div>
@@ -412,7 +498,20 @@ export function Sidebar({
                 <p className="ex-task-loading" role="status"><LoaderCircle className="ex-spin" aria-hidden="true" /><span>正在加载会话…</span></p>
               ) : generalThreads.length === 0 ? (
                 <p className="ex-nav-empty">暂无会话</p>
-              ) : <div className="ex-task-list">{generalThreads.map(renderThreadEntry)}</div>
+              ) : (
+                <div className="ex-task-list">
+                  {visibleGeneralThreads.map(renderThreadEntry)}
+                  {generalThreads.length > COLLAPSED_THREAD_LIMIT ? (
+                    <button
+                      className="ex-sidebar-action ex-show-more-sessions"
+                      type="button"
+                      onClick={() => setAllGeneralSessionsVisible((value) => !value)}
+                    >
+                      {allGeneralSessionsVisible ? "收起" : `查看更多（${generalThreads.length - visibleGeneralThreads.length}）`}
+                    </button>
+                  ) : null}
+                </div>
+              )
             ) : null}
           </section>
           {archivedThreads.length ? (
@@ -452,18 +551,165 @@ export function Sidebar({
         </nav>
 
         <div className="ex-sidebar-footer">
-          <button
-            className="ex-sidebar-action"
-            type="button"
-            aria-label="设置"
-            data-ecorex-feature-trigger="settings"
-            onClick={onOpenSettings}
-          >
-            <Settings2 aria-hidden="true" />
-            <span>设置</span>
-          </button>
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger asChild>
+              <button
+                className="ex-sidebar-action ex-account-trigger"
+                type="button"
+                aria-label={`${authenticated ? accountDisplayName || "已登录账号" : "未登录"}，打开账号菜单`}
+              >
+                <UserRound aria-hidden="true" />
+                <span>{authenticated ? accountDisplayName || "已登录账号" : "未登录"}</span>
+                <ChevronDown className="ex-account-chevron" aria-hidden="true" />
+              </button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content
+                className="ex-menu ex-account-menu"
+                side="top"
+                align="start"
+                sideOffset={6}
+                collisionPadding={12}
+              >
+                <DropdownMenu.Item
+                  className="ex-menu-item"
+                  data-ecorex-feature-trigger="settings"
+                  onSelect={onOpenSettings}
+                >
+                  <Settings2 aria-hidden="true" />设置
+                </DropdownMenu.Item>
+                {authenticated ? (
+                  <DropdownMenu.Item
+                    className="ex-menu-item is-danger"
+                    disabled={sessionBusy}
+                    onSelect={() => {
+                      setLogoutComplete(null);
+                      onClearSessionError();
+                      setLogoutConfirmOpen(true);
+                    }}
+                  >
+                    {sessionBusy
+                      ? <LoaderCircle className="ex-spin" aria-hidden="true" />
+                      : <LogOut aria-hidden="true" />}
+                    退出登录
+                  </DropdownMenu.Item>
+                ) : null}
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
         </div>
       </aside>
+
+      <Dialog.Root
+        open={logoutConfirmOpen}
+        onOpenChange={(nextOpen) => {
+          setLogoutConfirmOpen(nextOpen);
+          if (!nextOpen) {
+            setLogoutComplete(null);
+            onClearSessionError();
+          }
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="ex-dialog-overlay" />
+          <Dialog.Content className="ex-dialog ex-confirm-dialog" aria-describedby="ex-logout-description">
+            <Dialog.Title>{logoutComplete ? "已安全退出" : "退出 EcoreX？"}</Dialog.Title>
+            <Dialog.Description id="ex-logout-description">
+              {logoutComplete || "会话和本地产物会保留；托管凭证会从安全存储中撤销。"}
+            </Dialog.Description>
+            {sessionError ? <p className="ex-inline-error" role="alert">{sessionError}</p> : null}
+            <div className="ex-dialog-actions">
+              {logoutComplete ? (
+                <Dialog.Close className="ex-button" type="button">关闭</Dialog.Close>
+              ) : (
+                <>
+                  <Dialog.Close className="ex-button" type="button" disabled={sessionBusy}>取消</Dialog.Close>
+                  <button
+                    className="ex-button is-danger"
+                    type="button"
+                    disabled={sessionBusy}
+                    aria-busy={sessionBusy}
+                    onClick={async () => {
+                      const receipt = await onLogout();
+                      if (!receipt) return;
+                      setLogoutComplete(receipt.restart_scheduled
+                        ? "凭证已撤销，正在重启服务并刷新页面。"
+                        : "凭证已撤销。运行服务重启后刷新页面即可重新登录。");
+                    }}
+                  >
+                    {sessionBusy ? <LoaderCircle className="ex-spin" aria-hidden="true" /> : <LogOut aria-hidden="true" />}
+                    {sessionBusy ? "正在退出" : "退出登录"}
+                  </button>
+                </>
+              )}
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root
+        open={searchOpen}
+        onOpenChange={(nextOpen) => {
+          setSearchOpen(nextOpen);
+          if (!nextOpen) setSearchQuery("");
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="ex-dialog-overlay" />
+          <Dialog.Content className="ex-dialog ex-search-dialog" aria-describedby="ex-search-description">
+            <Dialog.Title className="ex-visually-hidden">搜索会话</Dialog.Title>
+            <Dialog.Description className="ex-visually-hidden" id="ex-search-description">
+              按名称查找本机项目会话或通用会话。
+            </Dialog.Description>
+            <div className="ex-search-field">
+              <Search aria-hidden="true" />
+              <input
+                autoFocus
+                value={searchQuery}
+                aria-label="搜索会话"
+                placeholder="搜索会话"
+                onChange={(event) => setSearchQuery(event.target.value)}
+              />
+              <Dialog.Close asChild>
+                <IconButton label="关闭搜索"><X aria-hidden="true" /></IconButton>
+              </Dialog.Close>
+            </div>
+            <div className="ex-search-results" role="list" aria-label="会话搜索结果">
+              {searchResults.length ? searchResults.map((thread) => {
+                const projectId = projectIdOf(thread);
+                const project = projectId ? projects.find((item) => item.project_id === projectId) : null;
+                return (
+                  <button
+                    className="ex-search-result"
+                    type="button"
+                    role="listitem"
+                    key={thread.thread_id}
+                    onClick={() => {
+                      void onOpenThread(thread.thread_id).then((opened) => {
+                        if (opened) setSearchOpen(false);
+                      });
+                    }}
+                  >
+                    {thread.pinned ? <Pin aria-hidden="true" /> : <MessageSquare aria-hidden="true" />}
+                    <span><strong>{thread.title || "未命名会话"}</strong><small>{project?.name || "通用会话"}</small></span>
+                  </button>
+                );
+              }) : <p className="ex-search-empty">没有匹配的会话</p>}
+            </div>
+            <button
+              className="ex-search-continue"
+              type="button"
+              onClick={() => {
+                setSearchOpen(false);
+                setContinueOpen(true);
+              }}
+            >
+              <MessageSquare aria-hidden="true" />
+              <span><strong>按任务 ID 继续</strong><small>读取另一页面复制的 thr_ 任务 ID</small></span>
+            </button>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
 
       <Dialog.Root
         open={renameTarget !== null}

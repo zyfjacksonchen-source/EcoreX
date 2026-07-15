@@ -30,6 +30,7 @@ function bootstrap(revision: number, fullAccess: boolean, serverTime: string): B
       organization_id: "org-test",
       roles: ["member"],
       session_revision: 1,
+      session_lease_digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     },
     policy_lease: {
       lease_id: "lease_1",
@@ -88,6 +89,8 @@ function projection(status: TurnStatus = "queued"): ThreadProjectionResponse {
       thread_id: "thr_1",
       status: "active",
       title: null,
+      pinned: false,
+      active_turn_status: null,
       metadata: {},
       forked_from_thread_id: null,
       forked_from_turn_id: null,

@@ -136,6 +136,20 @@ class OutputRepository:
             raise OutputPolicyNotFound("the selected output policy is unavailable")
         return self.policy_from_row(row)
 
+    def latest_policy_for_alias(
+        self,
+        account_id: str,
+        alias: OutputLocationAlias,
+    ) -> StoredPolicy | None:
+        with self.reader() as connection:
+            row = connection.execute(
+                "SELECT * FROM output_policy_snapshots "
+                "WHERE account_id = ? AND location_alias = ? "
+                "ORDER BY preference_revision DESC LIMIT 1",
+                (account_id, alias.value),
+            ).fetchone()
+        return None if row is None else self.policy_from_row(row)
+
     def get_materialization(self, materialization_id: str) -> StoredMaterialization | None:
         with self.reader() as connection:
             row = connection.execute(

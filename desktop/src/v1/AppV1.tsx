@@ -32,7 +32,7 @@ import "./styles/plain-language.css";
 const loadArtifactPreviewDialog = () => import("./components/ArtifactPreviewDialog.tsx");
 const loadSidebar = () => import("./components/Sidebar.tsx");
 const loadDeviceLoginCard = () => import("./components/DeviceLoginCard.tsx");
-const loadExtensionManagerDialog = () => import("./components/ExtensionManagerDialog.tsx");
+const loadSkillsWorkspace = () => import("./components/SkillsWorkspace.tsx");
 const loadInteractionStack = () => import("./components/InteractionStack.tsx");
 const loadReplayDialog = () => import("./components/ReplayDialog.tsx");
 const loadRetouchWorkspace = () => import("./components/RetouchWorkspace.tsx");
@@ -48,8 +48,8 @@ const Sidebar = lazy(async () => ({
 const DeviceLoginCard = lazy(async () => ({
   default: (await loadDeviceLoginCard()).DeviceLoginCard,
 }));
-const ExtensionManagerDialog = lazy(async () => ({
-  default: (await loadExtensionManagerDialog()).ExtensionManagerDialog,
+const SkillsWorkspace = lazy(async () => ({
+  default: (await loadSkillsWorkspace()).SkillsWorkspace,
 }));
 const InteractionStack = lazy(async () => ({
   default: (await loadInteractionStack()).InteractionStack,
@@ -111,8 +111,7 @@ export function AppV1() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsReturnFocusRef = useRef<HTMLElement | null>(null);
-  const [extensionsOpen, setExtensionsOpen] = useState(false);
-  const extensionsReturnFocusRef = useRef<HTMLElement | null>(null);
+  const [skillsOpen, setSkillsOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const shareReturnFocusRef = useRef<HTMLElement | null>(null);
   const [replayOpen, setReplayOpen] = useState(false);
@@ -155,7 +154,6 @@ export function AppV1() {
     setArtifactNotice(null);
     previewReturnFocusRef.current = null;
     settingsReturnFocusRef.current = null;
-    extensionsReturnFocusRef.current = null;
     shareReturnFocusRef.current = null;
     replayReturnFocusRef.current = null;
     retouchReturnFocusRef.current = null;
@@ -213,17 +211,6 @@ export function AppV1() {
     setSettingsOpen(false);
     scheduleFeatureFocusRestore(
       settingsReturnFocusRef,
-      [
-        '[data-ecorex-feature-trigger="task-menu"]',
-        '[data-ecorex-feature-trigger="navigation"]',
-      ],
-    );
-  };
-
-  const closeExtensions = () => {
-    setExtensionsOpen(false);
-    scheduleFeatureFocusRestore(
-      extensionsReturnFocusRef,
       [
         '[data-ecorex-feature-trigger="task-menu"]',
         '[data-ecorex-feature-trigger="navigation"]',
@@ -494,6 +481,11 @@ export function AppV1() {
       permissionDescription={accessDescription}
       onChatModelChange={runtime.setChatModel}
       onImageModelChange={runtime.setImageModel}
+      onOpenPermissionSettings={() => {
+        captureFeatureTrigger(settingsReturnFocusRef);
+        warmFeature(loadSettingsDialog);
+        setSettingsOpen(true);
+      }}
       onSend={runtime.sendMessage}
       onUploadAttachment={runtime.uploadInputAttachment}
       onInterrupt={() => void runtime.interrupt()}
@@ -508,6 +500,7 @@ export function AppV1() {
           open={sidebarOpen}
           modal={sidebarOpen && mobileNavigation}
           currentThreadId={currentThreadId}
+          version={bootstrap?.update.current_version || "1.0.0"}
           threads={runtime.threads}
           projects={runtime.projects}
           projectCatalogState={runtime.projectCatalogState}
@@ -517,8 +510,14 @@ export function AppV1() {
           catalogError={runtime.threadCatalogError}
           switchingThreadId={runtime.switchingThreadId}
           mutationKey={runtime.threadMutationKey}
+          authenticated={Boolean(bootstrap?.login.authenticated)}
+          accountDisplayName={bootstrap?.login.display_name ?? null}
+          skillsActive={skillsOpen}
+          sessionBusy={runtime.sessionBusy}
+          sessionError={runtime.sessionError}
           onClose={() => setSidebarOpen(false)}
           onNewTask={(project) => {
+            setSkillsOpen(false);
             runtime.newTask(project ?? null);
             setSidebarOpen(false);
           }}
@@ -526,10 +525,20 @@ export function AppV1() {
           onClearProjectError={runtime.clearProjectCatalogError}
           onOpenThread={async (threadId) => {
             const opened = await runtime.openThread(threadId);
-            if (opened) setSidebarOpen(false);
+            if (opened) {
+              setSkillsOpen(false);
+              setSidebarOpen(false);
+            }
             return opened;
           }}
+          onOpenSkills={() => {
+            warmFeature(loadSkillsWorkspace);
+            setSkillsOpen(true);
+            setSidebarOpen(false);
+          }}
           onRenameThread={runtime.renameThread}
+          onPinThread={runtime.pinThread}
+          onUnpinThread={runtime.unpinThread}
           onArchiveThread={runtime.archiveThread}
           onRestoreThread={runtime.restoreThread}
           onRefreshThreads={runtime.refreshThreads}
@@ -540,6 +549,8 @@ export function AppV1() {
             setSettingsOpen(true);
             setSidebarOpen(false);
           }}
+          onClearSessionError={runtime.clearSessionError}
+          onLogout={runtime.logoutSession}
           />
         </Suspense>
         {sidebarOpen ? (
@@ -553,7 +564,23 @@ export function AppV1() {
           />
         ) : null}
 
-        <main className="ex-workspace" inert={sidebarOpen && mobileNavigation ? true : undefined}>
+        <main className={`ex-workspace${skillsOpen ? " is-skills" : ""}`} inert={sidebarOpen && mobileNavigation ? true : undefined}>
+          {skillsOpen ? (
+            <Suspense fallback={<section className="ex-skills-loading" role="status">正在打开技能…</section>}>
+              <SkillsWorkspace
+                snapshot={runtime.extensionSnapshot}
+                loadState={runtime.extensionCatalogState}
+                error={runtime.extensionError}
+                operations={runtime.extensionOperations}
+                installBusy={runtime.extensionInstallBusy}
+                onClearError={runtime.clearExtensionError}
+                onRefresh={runtime.refreshExtensions}
+                onAction={runtime.mutateExtension}
+                onInstallLocalSkill={runtime.installLocalSkill}
+              />
+            </Suspense>
+          ) : (
+          <>
           <header className="ex-workspace-header">
             <div className="ex-header-title">
               <IconButton
@@ -677,6 +704,8 @@ export function AppV1() {
           <section className="ex-timeline" aria-label="对话">
             <Timeline
               items={runtime.items}
+              turns={runtime.turns}
+              chatModels={bootstrap?.models.chat || []}
               activeTurn={runtime.activeTurn}
               isThinking={runtime.isThinking}
               visibleReasoning={runtime.visibleReasoning}
@@ -718,6 +747,8 @@ export function AppV1() {
               {composer}
             </div>
           ) : null}
+          </>
+          )}
         </main>
 
         <LazyFeatureBoundary
@@ -739,10 +770,9 @@ export function AppV1() {
             extensions={runtime.extensionSnapshot}
             extensionLoadState={runtime.extensionCatalogState}
             onManageExtensions={() => {
-              captureFeatureTrigger(extensionsReturnFocusRef);
-              warmFeature(loadExtensionManagerDialog);
+              warmFeature(loadSkillsWorkspace);
               setSettingsOpen(false);
-              setExtensionsOpen(true);
+              setSkillsOpen(true);
             }}
             memory={runtime.memory}
             memoryLoadState={runtime.memoryLoadState}
@@ -761,6 +791,7 @@ export function AppV1() {
             onClearOutputError={runtime.clearOutputError}
             onRefreshOutput={runtime.refreshOutput}
             onOutputLocationChange={runtime.updateOutputLocation}
+            onPickOutputLocation={runtime.pickOutputLocation}
             systemHealth={runtime.systemHealth}
             systemHealthLoadState={runtime.systemHealthLoadState}
             systemHealthError={runtime.systemHealthError}
@@ -772,28 +803,6 @@ export function AppV1() {
             onClearUpdateError={runtime.clearUpdateError}
             onCheckUpdate={runtime.checkUpdate}
             onActivateUpdate={runtime.activateUpdate}
-          />
-        </LazyFeatureBoundary>
-        <LazyFeatureBoundary
-          active={extensionsOpen}
-          label="扩展管理"
-          onClose={closeExtensions}
-        >
-          <ExtensionManagerDialog
-            open={extensionsOpen}
-            snapshot={runtime.extensionSnapshot}
-            loadState={runtime.extensionCatalogState}
-            error={runtime.extensionError}
-            operations={runtime.extensionOperations}
-            installBusy={runtime.extensionInstallBusy}
-            onOpenChange={(open) => {
-              if (open) setExtensionsOpen(true);
-              else closeExtensions();
-            }}
-            onClearError={runtime.clearExtensionError}
-            onRefresh={runtime.refreshExtensions}
-            onAction={runtime.mutateExtension}
-            onInstallLocalSkill={runtime.installLocalSkill}
           />
         </LazyFeatureBoundary>
         <LazyFeatureBoundary active={shareOpen} label="任务分享" onClose={closeShare}>

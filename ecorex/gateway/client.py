@@ -76,6 +76,9 @@ class ManagedModelGatewayClient:
         if not max_event_bytes <= max_response_bytes <= 64 * 1024 * 1024:
             raise ValueError("gateway response limit is invalid")
         self.endpoint = endpoint
+        self.catalog_endpoint = (
+            f"{parsed.scheme}://{parsed.hostname}/api/v1/models"
+        )
         self.credentials = credentials
         self.max_request_bytes = max_request_bytes
         self.max_event_bytes = max_event_bytes
@@ -243,3 +246,64 @@ class ManagedModelGatewayClient:
             raise GatewayUnavailable("managed gateway timed out") from error
         except httpx.TransportError as error:
             raise GatewayUnavailable("managed gateway transport failed") from error
+
+    async def catalog(self) -> dict[str, object]:
+        """Return the bounded cloud catalog without exposing provider secrets."""
+
+        try:
+            token = self.credentials.bearer_token()
+        except Exception:
+            raise GatewayAuthenticationError(
+                "managed gateway session is unavailable"
+            ) from None
+        if (
+            not isinstance(token, str)
+            or not 24 <= len(token) <= 4096
+            or any(not 33 <= ord(ch) <= 126 for ch in token)
+        ):
+            raise GatewayAuthenticationError("managed gateway session token is invalid")
+        try:
+            response = await self.client.get(
+                self.catalog_endpoint,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/json",
+                    "Accept-Encoding": "identity",
+                },
+                follow_redirects=False,
+            )
+        except httpx.TimeoutException as error:
+            raise GatewayUnavailable("managed gateway timed out") from error
+        except httpx.TransportError as error:
+            raise GatewayUnavailable("managed gateway transport failed") from error
+        try:
+            if response.status_code in {401, 403}:
+                raise GatewayAuthenticationError(
+                    "managed gateway authentication was rejected"
+                )
+            if response.status_code != 200:
+                raise GatewayUnavailable("managed gateway catalog is unavailable")
+            if len(response.content) > 256 * 1024:
+                raise GatewayProtocolError("managed gateway catalog is oversized")
+            value = response.json()
+            if (
+                not isinstance(value, dict)
+                or value.get("schema_version") != 1
+                or not isinstance(value.get("models"), list)
+                or len(value["models"]) > 256
+                or any(not isinstance(item, str) for item in value["models"])
+                or (
+                    "catalog" in value
+                    and (
+                        not isinstance(value["catalog"], list)
+                        or len(value["catalog"]) > 256
+                        or any(not isinstance(item, dict) for item in value["catalog"])
+                    )
+                )
+            ):
+                raise GatewayProtocolError("managed gateway catalog is invalid")
+            return value
+        except (ValueError, json.JSONDecodeError) as error:
+            raise GatewayProtocolError("managed gateway catalog is invalid") from error
+        finally:
+            await response.aclose()

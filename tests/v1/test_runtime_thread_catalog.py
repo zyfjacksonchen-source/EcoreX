@@ -175,3 +175,40 @@ def test_thread_mutations_require_csrf_and_title_validation(tmp_path) -> None:
         json={"title": "   ", "client_request_id": "rename-invalid"},
     )
     assert invalid.status_code == 422
+
+
+def test_thread_pin_and_active_turn_status_are_backend_authoritative(tmp_path) -> None:
+    http, _app = client(tmp_path)
+    thread_id = create_task(http, 9)
+
+    catalog_item = next(
+        item
+        for item in http.get("/api/v1/threads", headers=headers()).json()["items"]
+        if item["thread_id"] == thread_id
+    )
+    assert catalog_item["active_turn_status"] in {
+        "accepted", "queued", "preparing", "model_requested", "streaming",
+        "tool_pending", "waiting_human", "tool_running", "retry_wait", "finalizing",
+    }
+
+    pinned = http.put(
+        f"/api/v1/threads/{thread_id}/pin",
+        headers=headers(mutate=True),
+        json={"pinned": True, "client_request_id": "pin-thread-9"},
+    )
+    assert pinned.status_code == 200
+    assert pinned.json()["pinned"] is True
+    assert pinned.json()["metadata"]["pinned"] is True
+
+    unpinned = http.put(
+        f"/api/v1/threads/{thread_id}/pin",
+        headers=headers(mutate=True),
+        json={"pinned": False, "client_request_id": "unpin-thread-9"},
+    )
+    replayed_old_pin = http.put(
+        f"/api/v1/threads/{thread_id}/pin",
+        headers=headers(mutate=True),
+        json={"pinned": True, "client_request_id": "pin-thread-9"},
+    )
+    assert unpinned.json()["pinned"] is False
+    assert replayed_old_pin.json()["pinned"] is False

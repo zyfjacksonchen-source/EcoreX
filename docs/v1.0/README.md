@@ -15,6 +15,8 @@ release artifacts.
   remaining release condition.
 - `release-runbook.md` is the administrator's no-secret publication, promotion
   and incident procedure.
+- `admin-management-runbook.md` records the user/quota/model/release workspace,
+  hot model revision contract and the single-node secret/origin boundary.
 - `responsive-ga-harness.md` documents the fixed-viewport, same-origin browser
   matrix used for responsive and accessibility release evidence.
 - `image-intent-routing.md` records the effect-based, non-exclusive ImageGen

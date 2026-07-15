@@ -11,25 +11,36 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
+import binascii
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 import ipaddress
 import json
 import os
+from pathlib import Path
 import re
 import sys
+from types import MappingProxyType
 from typing import Any, Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from ecorex.control_plane.management import AdminManagementRepository
+from ecorex.control_plane.management_schema import AdminManagementSchemaManager
+
 from .api import create_image_orchestration_router
 from .managed_provider import (
     ManagedHTTPSImageProvider,
     ManagedImageProviderConfigurationError,
     normalize_https_origin,
+)
+from .dynamic_provider import (
+    AdminImageModelConfigurationResolver,
+    DynamicManagedImageProvider,
 )
 from .models import ImageLimits
 from .postgres_schema import PostgresImageSchemaManager, PostgresImageSchemaReceipt
@@ -40,6 +51,8 @@ from .production_auth import (
 )
 from .s3_cas import BotoS3ObjectTransport, S3ImageContentStore
 from .service import ImageOrchestrationService
+from .service import ImageModelConfigurationResolver
+from .provider import ImageProvider
 from .worker import ImageJobWorker, ImageWorkerSupervisor
 
 
@@ -49,6 +62,7 @@ _PREFIX = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$")
 _MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$")
 _SECRET_NAMES = {
     "managed-provider-bearer": "ECOREX_IMAGE_PROVIDER_BEARER_TOKEN",
+    "model-config-encryption-key": "ECOREX_IMAGE_MODEL_CONFIG_ENCRYPTION_KEY_B64",
 }
 
 
@@ -102,6 +116,13 @@ class ImageProductionS3Client(Protocol):
 
 class ImageS3ClientFactory(Protocol):
     def create(self, config: "ImageProductionConfig") -> ImageProductionS3Client: ...
+
+
+@runtime_checkable
+class ProductionImageProvider(ImageProvider, Protocol):
+    async def health(self) -> None: ...
+
+    async def aclose(self) -> None: ...
 
 
 class Boto3ImageS3ClientFactory:
@@ -256,6 +277,9 @@ class ImageProductionConfig:
     idle_poll_seconds: float = 0.25
     limit_concurrency: int = 512
     backlog: int = 1024
+    admin_management_enabled: bool = False
+    admin_management_database_path: Path | None = None
+    model_provider_origins: Mapping[str, str] = field(default_factory=dict)
     limits: ImageLimits = ImageLimits()
 
     def __post_init__(self) -> None:
@@ -333,6 +357,39 @@ class ImageProductionConfig:
         ):
             raise ImageProductionConfigurationError("image production configuration is invalid")
         parse_ed25519_public_keyring(self.auth_public_keys_json)
+        dynamic_origins = dict(self.model_provider_origins)
+        if self.admin_management_enabled:
+            if (
+                not isinstance(self.admin_management_database_path, Path)
+                or not self.admin_management_database_path.is_absolute()
+                or not dynamic_origins
+            ):
+                raise ImageProductionConfigurationError(
+                    "image administrator model source is invalid"
+                )
+            try:
+                normalized_dynamic = {
+                    preset: normalize_https_origin(origin)
+                    for preset, origin in dynamic_origins.items()
+                    if preset == "openai_compatible_image"
+                }
+            except (ManagedImageProviderConfigurationError, TypeError):
+                raise ImageProductionConfigurationError(
+                    "image administrator model origins are invalid"
+                ) from None
+            if len(normalized_dynamic) != len(dynamic_origins):
+                raise ImageProductionConfigurationError(
+                    "image administrator model origins are invalid"
+                )
+            object.__setattr__(
+                self,
+                "model_provider_origins",
+                MappingProxyType(normalized_dynamic),
+            )
+        elif self.admin_management_database_path is not None or dynamic_origins:
+            raise ImageProductionConfigurationError(
+                "image administrator model source requires explicit enablement"
+            )
 
     @classmethod
     def from_environment(
@@ -382,6 +439,38 @@ class ImageProductionConfig:
             max_operation_running=_integer(values, "ECOREX_IMAGE_MAX_OPERATION_RUNNING", minimum=1, maximum=100_000, default=96),
         )
         endpoint = values.get("ECOREX_IMAGE_S3_ENDPOINT_URL") or None
+        management_enabled = _boolean(
+            values, "ECOREX_IMAGE_ADMIN_MANAGEMENT_ENABLED", default=False
+        )
+        management_database = (
+            _absolute_path(values, "ECOREX_IMAGE_ADMIN_MANAGEMENT_DATABASE_PATH")
+            if management_enabled
+            else None
+        )
+        dynamic_origins: dict[str, str] = {}
+        raw_dynamic_origins = values.get("ECOREX_IMAGE_MODEL_PROVIDER_ORIGINS_JSON")
+        if raw_dynamic_origins:
+            try:
+                parsed_dynamic_origins = json.loads(raw_dynamic_origins)
+            except json.JSONDecodeError:
+                raise ImageProductionConfigurationError(
+                    "image administrator model origins are invalid"
+                ) from None
+            if (
+                not isinstance(parsed_dynamic_origins, dict)
+                or not parsed_dynamic_origins
+                or any(
+                    not isinstance(key, str) or not isinstance(value, str)
+                    for key, value in parsed_dynamic_origins.items()
+                )
+            ):
+                raise ImageProductionConfigurationError(
+                    "image administrator model origins are invalid"
+                )
+            dynamic_origins = {
+                str(key): str(value)
+                for key, value in parsed_dynamic_origins.items()
+            }
         return cls(
             storage_backend=backend,
             postgres_dsn=dsn,
@@ -423,6 +512,9 @@ class ImageProductionConfig:
             idle_poll_seconds=_float(values, "ECOREX_IMAGE_IDLE_POLL_SECONDS", minimum=0.01, maximum=60.0, default=0.25),
             limit_concurrency=_integer(values, "ECOREX_IMAGE_HTTP_CONCURRENCY", minimum=16, maximum=4096, default=512),
             backlog=_integer(values, "ECOREX_IMAGE_HTTP_BACKLOG", minimum=16, maximum=8192, default=1024),
+            admin_management_enabled=management_enabled,
+            admin_management_database_path=management_database,
+            model_provider_origins=dynamic_origins,
             limits=limits,
         )
 
@@ -566,7 +658,7 @@ class ImageProductionBundle:
     config: ImageProductionConfig
     store: PostgresImageJobStore
     content_store: S3ImageContentStore
-    provider: ManagedHTTPSImageProvider
+    provider: ProductionImageProvider
     service: ImageOrchestrationService
     authenticator: Ed25519ImageJWTAuthenticator
     lifecycle: "ImageProductionLifecycle"
@@ -583,7 +675,7 @@ class ImageProductionLifecycle:
         config: ImageProductionConfig,
         store: PostgresImageJobStore,
         s3: _S3Dependency,
-        provider: ManagedHTTPSImageProvider,
+        provider: ProductionImageProvider,
         supervisor: ImageWorkerSupervisor | None,
     ) -> None:
         self.config = config
@@ -791,7 +883,7 @@ class PostgresS3ManagedImageProvider:
     ) -> ImageProductionReport:
         self._static_dependencies(config, secrets)
         receipt = PostgresImageSchemaManager(config.postgres_dsn).migrate()
-        s3, provider = self._external_dependencies(config, secrets)
+        s3, provider, _resolver = self._external_dependencies(config, secrets)
         try:
             s3.validate_controls(write_probe=True)
             asyncio.run(_probe_and_close_provider(provider))
@@ -806,7 +898,7 @@ class PostgresS3ManagedImageProvider:
     ) -> ImageProductionReport:
         self._static_dependencies(config, secrets)
         receipt = PostgresImageSchemaManager(config.postgres_dsn).validate()
-        s3, provider = self._external_dependencies(config, secrets)
+        s3, provider, _resolver = self._external_dependencies(config, secrets)
         try:
             s3.validate_controls(write_probe=True)
             asyncio.run(_probe_and_close_provider(provider))
@@ -824,7 +916,7 @@ class PostgresS3ManagedImageProvider:
         if mode not in {"serve", "worker", "all"}:
             raise ImageProductionConfigurationError("image process mode is invalid")
         authenticator = self._static_dependencies(config, secrets)
-        s3, provider = self._external_dependencies(config, secrets)
+        s3, provider, model_resolver = self._external_dependencies(config, secrets)
         store: PostgresImageJobStore | None = None
         try:
             store = PostgresImageJobStore(
@@ -876,6 +968,7 @@ class PostgresS3ManagedImageProvider:
                 allowed_models=config.model_allowlist,
                 wake_workers=(supervisor.notify if supervisor is not None else None),
                 max_output_count=1,
+                model_configuration_resolver=model_resolver,
             )
             lifecycle = ImageProductionLifecycle(
                 config=config,
@@ -908,13 +1001,14 @@ class PostgresS3ManagedImageProvider:
         config: ImageProductionConfig,
         secrets: ImageSecretProvider,
     ) -> Ed25519ImageJWTAuthenticator:
-        token = secrets.read("managed-provider-bearer")
-        if (
-            not isinstance(token, str)
-            or not 24 <= len(token) <= 8192
-            or any(character.isspace() or ord(character) < 33 for character in token)
-        ):
-            raise ImageProductionConfigurationError("managed image credential is unavailable")
+        if not config.admin_management_enabled:
+            token = secrets.read("managed-provider-bearer")
+            if (
+                not isinstance(token, str)
+                or not 24 <= len(token) <= 8192
+                or any(character.isspace() or ord(character) < 33 for character in token)
+            ):
+                raise ImageProductionConfigurationError("managed image credential is unavailable")
         return Ed25519ImageJWTAuthenticator(
             public_keys=parse_ed25519_public_keyring(config.auth_public_keys_json),
             issuer=config.auth_issuer,
@@ -926,23 +1020,53 @@ class PostgresS3ManagedImageProvider:
         self,
         config: ImageProductionConfig,
         secrets: ImageSecretProvider,
-    ) -> tuple[_S3Dependency, ManagedHTTPSImageProvider]:
+    ) -> tuple[
+        _S3Dependency,
+        ProductionImageProvider,
+        ImageModelConfigurationResolver | None,
+    ]:
         s3: _S3Dependency | None = None
         try:
             s3 = _S3Dependency(self.s3_factory.create(config), config)
-            provider = ManagedHTTPSImageProvider(
-                provider_id=config.provider_id,
-                origin=config.provider_origin,
-                allowed_origins=config.provider_allowed_origins,
-                allowed_models=config.model_allowlist,
-                bearer_token=lambda: secrets.read("managed-provider-bearer"),
-                timeout_seconds=config.provider_timeout_seconds,
-                connect_timeout_seconds=config.provider_connect_timeout_seconds,
-                max_image_bytes=config.max_image_bytes,
-                max_connections=config.provider_max_connections,
-                max_concurrency=config.provider_max_concurrency,
-            )
-            return s3, provider
+            if config.admin_management_enabled:
+                database_path = config.admin_management_database_path
+                assert database_path is not None
+                AdminManagementSchemaManager(database_path).validate()
+                repository = AdminManagementRepository(
+                    database_path,
+                    encryption_key=_secret_bytes(
+                        secrets.read("model-config-encryption-key"),
+                        exact_length=32,
+                    ),
+                )
+                provider: ProductionImageProvider = DynamicManagedImageProvider(
+                    repository,
+                    provider_id=config.provider_id,
+                    origins=config.model_provider_origins,
+                    timeout_seconds=config.provider_timeout_seconds,
+                    connect_timeout_seconds=config.provider_connect_timeout_seconds,
+                    max_image_bytes=config.max_image_bytes,
+                    max_connections=config.provider_max_connections,
+                    max_concurrency=config.provider_max_concurrency,
+                )
+                resolver: ImageModelConfigurationResolver | None = (
+                    AdminImageModelConfigurationResolver(repository)
+                )
+            else:
+                provider = ManagedHTTPSImageProvider(
+                    provider_id=config.provider_id,
+                    origin=config.provider_origin,
+                    allowed_origins=config.provider_allowed_origins,
+                    allowed_models=config.model_allowlist,
+                    bearer_token=lambda: secrets.read("managed-provider-bearer"),
+                    timeout_seconds=config.provider_timeout_seconds,
+                    connect_timeout_seconds=config.provider_connect_timeout_seconds,
+                    max_image_bytes=config.max_image_bytes,
+                    max_connections=config.provider_max_connections,
+                    max_concurrency=config.provider_max_concurrency,
+                )
+                resolver = None
+            return s3, provider, resolver
         except BaseException:
             if s3 is not None:
                 try:
@@ -952,7 +1076,7 @@ class PostgresS3ManagedImageProvider:
             raise
 
 
-async def _probe_and_close_provider(provider: ManagedHTTPSImageProvider) -> None:
+async def _probe_and_close_provider(provider: ProductionImageProvider) -> None:
     try:
         await provider.health()
     finally:
@@ -992,6 +1116,30 @@ def _run_server(bundle: ImageProductionBundle) -> None:
         server.run()
     finally:
         asyncio.run(bundle.lifecycle.force_close())
+
+
+def _absolute_path(environment: Mapping[str, str], name: str) -> Path:
+    raw = _required(environment, name, maximum=8192)
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        raise ImageProductionConfigurationError(
+            "image path setting must be absolute"
+        )
+    return path.resolve()
+
+
+def _secret_bytes(value: str, *, exact_length: int) -> bytes:
+    try:
+        material = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        raise ImageProductionConfigurationError(
+            "image secret encoding is invalid"
+        ) from None
+    if len(material) != exact_length:
+        raise ImageProductionConfigurationError(
+            "image secret length is invalid"
+        )
+    return material
 
 
 def _required(

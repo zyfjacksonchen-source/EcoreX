@@ -92,6 +92,24 @@ class SafeOutputFilesystem:
     def is_configured(self, alias: OutputLocationAlias) -> bool:
         return alias in self._roots
 
+    def configured_root_path(self, alias: OutputLocationAlias) -> Path:
+        root = self._roots.get(alias)
+        if root is None:
+            raise OutputLocationUnavailable("the selected output location is unavailable")
+        return root
+
+    def replace_configured_root(
+        self,
+        alias: OutputLocationAlias,
+        raw_root: str | Path,
+    ) -> Path:
+        """Atomically publish a user-selected root after full safety checks."""
+
+        root = self._prepare_configured_root(raw_root)
+        self._inspect_root(root)
+        self._roots[alias] = root
+        return root
+
     def inspect_configured_root(
         self, alias: OutputLocationAlias
     ) -> tuple[Path, int, int, str]:

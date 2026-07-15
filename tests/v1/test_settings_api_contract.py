@@ -194,6 +194,7 @@ def test_openapi_pins_every_settings_json_route_to_an_authoritative_model(
         ("/api/v1/output/locations", "get"): "OutputLocationCatalogResponse",
         ("/api/v1/output/preference", "get"): "OutputPreferenceResponse",
         ("/api/v1/output/preference", "put"): "OutputPreferenceResponse",
+        ("/api/v1/output/locations/pick", "post"): "OutputPreferenceResponse",
         (
             "/api/v1/output/artifacts/{artifact_id}/materialize",
             "post",

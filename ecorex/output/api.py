@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
+from collections.abc import Callable
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
@@ -100,6 +102,11 @@ class OutputPreferenceRequest(_StrictModel):
     client_request_id: str = Field(min_length=1, max_length=256)
 
 
+class PickOutputLocationRequest(_StrictModel):
+    expected_revision: int = Field(ge=1)
+    client_request_id: str = Field(min_length=1, max_length=256)
+
+
 class MaterializeArtifactRequest(_StrictModel):
     revision_id: str = Field(min_length=1, max_length=256)
     client_request_id: str = Field(min_length=1, max_length=256)
@@ -125,7 +132,11 @@ def _http_error(error: OutputError) -> HTTPException:
     return HTTPException(status, detail={"code": error.code, "message": message})
 
 
-def create_output_router(service: OutputService) -> APIRouter:
+def create_output_router(
+    service: OutputService,
+    *,
+    folder_picker: Callable[[], str | Path] | None = None,
+) -> APIRouter:
     router = APIRouter(prefix="/api/v1/output", tags=["output"])
 
     @router.get("/locations", response_model=OutputLocationCatalogResponse)
@@ -153,6 +164,30 @@ def create_output_router(service: OutputService) -> APIRouter:
                     client_request_id=request.client_request_id,
                 ).to_dict()
             )
+        except OutputError as error:
+            raise _http_error(error) from None
+
+    @router.post("/locations/pick", response_model=OutputPreferenceResponse)
+    def pick_location(request: PickOutputLocationRequest) -> OutputPreferenceResponse:
+        if folder_picker is None:
+            raise HTTPException(
+                503,
+                detail={"code": "output_folder_picker_unavailable", "message": "当前无法选择文件夹。"},
+            )
+        try:
+            selected = folder_picker()
+            return OutputPreferenceResponse.model_validate(
+                service.select_workspace_location(
+                    selected,
+                    expected_revision=request.expected_revision,
+                    client_request_id=request.client_request_id,
+                ).to_dict()
+            )
+        except RuntimeError:
+            raise HTTPException(
+                409,
+                detail={"code": "output_folder_picker_cancelled", "message": "未选择文件夹。"},
+            ) from None
         except OutputError as error:
             raise _http_error(error) from None
 

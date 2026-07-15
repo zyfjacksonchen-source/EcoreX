@@ -5179,3 +5179,72 @@ bound to commit `ee8a7f8cc77830b66358af3acc9206f95cb5923b`; it is not relabelled
 exact evidence for this batch. Repository governance still has 17 blockers.
 No protected Candidate, managed-provider acceptance, publication, rollout or
 user update was attempted.
+
+## 2026-07-15 - Administrator operations, backend-owned Skills and v0.3 session discovery are productized
+
+The administrator requirement was previously split between release controls,
+static deployment variables and UI-only model names. Changing a provider Key
+or upstream model therefore required editing service configuration and a
+restart, while user/quota operations had no single transaction and audit
+authority. A new management schema and repository now own user revisions,
+immutable usage adjustments, encrypted model revisions, idempotency results and
+an integrity-chained audit trail. The administrator Web workspace is limited to
+four sections: users, usage, models and releases. Its user filters, create/edit,
+quota correction, model draft, bounded real test-and-activate, targeted rollout
+and full rollout actions all call authenticated backend contracts.
+
+Model credentials are AES-GCM encrypted with a deployment SecretProvider key;
+the browser receives only a short fingerprint. Chat, image generation and
+image edit have independent managed slots. A passed test activates one frozen
+revision transactionally. Gateway requests acquire the current active chat
+revision at request start, retain it for the complete stream and retire the old
+client only after its active references drain. Image admission persists the
+configuration ID, revision and upstream model into the Job, so retry/recovery
+continues on the same tested revision across a later administrator change or
+process restart. No new request requires a Python edit, Web rebuild or service
+restart. The single-node shared-database and fixed-origin boundary, rotation,
+rollback and failure procedure are now durable in
+`admin-management-runbook.md` and linked from all three production runbooks.
+
+The extensions surface had the same ownership problem: React inferred skill
+category and whether an item was protected. The Runtime projection now owns a
+v0.3-compatible taxonomy and safe icon key, while the service rechecks every
+enable/disable action. Core-bundle skills and required core capabilities cannot
+be disabled; optional signed skills remain controllable. The old extension
+modal was replaced by a deferred Skills workspace with market/installed views,
+backend categories, detail pages, local signed-ZIP installation and a collapsed
+required-skills group. The Sidebar account footer now uses the authenticated
+user name and a real lease-bound logout; model menus reuse provider icons.
+
+The final v0.3 Sidebar discovery contract is also retained. General sessions
+and each project's sessions independently show eight rows until “查看更多” is
+opened. Current, pinned and running sessions are unioned into the collapsed
+projection first and therefore can never disappear merely because their
+history position is old. Expansion is view-only and cannot reorder or mutate
+backend Threads. The dedicated 12-general/11-project browser scenario verifies
+8 → all → 8 for both scopes and keeps a running old session visible.
+
+During full browser verification two production-only defects were exposed and
+fixed at their roots: named/default lazy exports could render a React #306
+white screen, and several accessibility/session mocks hid genuine product
+contracts. Lazy export ownership is now explicit; the browser guard always
+reports console/page errors; clipboard permission, reload persistence, forced
+colour focus, disabled-button semantics and compact Sidebar density are tested
+as their real browser contracts. The deleted extension dialog had also left
+roughly 590 lines of unreachable CSS; that entire selector block is removed
+instead of carried as a compatibility skin. The release build remains below budget at
+459.76 KiB raw / 146.20 KiB gzip initial JavaScript, with 24 chunks and
+136.30 KiB of deferred features.
+
+Exact focused evidence for this source is 94 Python tests passed, two explicit
+environment skips and one upstream warning; all 180 Web contract tests pass.
+The content-addressed Chromium suite passes 45/45, including administrator
+users/models/full rollout, Skills, logout, task continuation, v0.3 “查看更多”,
+reasoning persistence, image/retouch, share, accessibility and responsive
+paths. Ruff, Python compilation, the 675-file source admission gate and the
+483-production-file supply-chain/secret scan pass. The supply-chain inventory
+is `927cf1735d3271a1325973504e17bd4edf81b5373e89624f7db989a15c125cd7`;
+its ignored 21,857-byte report has SHA-256
+`e1239bd1c5fc910f87d04a2ec84107b5303fb14687bc666798c5048dc9f18c95`.
+No protected Candidate, publication, rollout or installed-user update was
+attempted.

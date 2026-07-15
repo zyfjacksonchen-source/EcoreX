@@ -20,6 +20,8 @@ const extension: ExtensionProjection = {
   display_name: "办公工具",
   description: "Runtime 托管的办公工具集合。",
   kind: "tool_provider",
+  category: "office",
+  icon_key: "document",
   active_revision_id: "rev_2",
   active_version: "1.2.0",
   active_digest: "a".repeat(64),
@@ -102,6 +104,12 @@ test("disabled actions never gain a frontend-inferred reason", () => {
     disabled_reason: "ignored",
     requires_confirmation: false,
   }), null);
+  assert.equal(extensionActionDisabledReason({
+    action_id: "disable",
+    enabled: false,
+    disabled_reason: "extension_required_by_product",
+    requires_confirmation: true,
+  }), "EcoreX 运行必需，无法关闭。");
 });
 
 test("search and filters only select exact backend projection fields", () => {

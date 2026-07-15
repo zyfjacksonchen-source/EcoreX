@@ -791,6 +791,8 @@ class ThreadProjection(FrozenProtocolModel):
     thread_id: str
     status: ThreadStatus
     title: str | None = None
+    pinned: bool = False
+    active_turn_status: TurnStatus | None = None
     metadata: JsonObject = Field(default_factory=dict)
     forked_from_thread_id: str | None = None
     forked_from_turn_id: str | None = None
@@ -1319,6 +1321,11 @@ class ThreadStatusRequest(ProtocolModel):
     client_request_id: str = Field(min_length=1, max_length=256)
 
 
+class ThreadPinRequest(ProtocolModel):
+    pinned: bool
+    client_request_id: str = Field(min_length=1, max_length=256)
+
+
 class EventListResponse(ProtocolModel):
     events: list[EventEnvelope]
     after_seq: int = Field(ge=0)
@@ -1440,6 +1447,10 @@ class LoginSnapshot(FrozenProtocolModel):
     organization_id: str | None = None
     roles: list[str] = Field(default_factory=list)
     session_revision: int | None = Field(default=None, ge=1, strict=True)
+    session_lease_digest: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
 
 
 class PolicyLeaseSnapshot(FrozenProtocolModel):
@@ -1743,6 +1754,17 @@ class ExtensionProjection(FrozenProtocolModel):
     kind: Literal[
         "skill", "mcp_server", "tool_provider", "connector_provider", "capability_pack"
     ]
+    category: Literal[
+        "system",
+        "office",
+        "image_media",
+        "collaboration",
+        "data",
+        "development",
+        "automation",
+        "general",
+    ]
+    icon_key: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
     active_revision_id: str | None = Field(
         default=None, pattern=r"^extrev_[0-9a-f]{64}$"
     )

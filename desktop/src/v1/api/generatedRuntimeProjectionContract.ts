@@ -94,7 +94,7 @@ export const GENERATED_RUNTIME_PROJECTION_CONTRACT = {
       "superseded"
     ]
   },
-  "schemaSha256": "5face1daf57ea1c63fd9632143528802014d5ffd2880eb3d46b1f566bea3f12b",
+  "schemaSha256": "e2614b327b5b9513ccb28ce37a7c264db37b76c58505f93c4939854b77a281d1",
   "schemaVersion": 1,
   "wireFields": {
     "ConnectorLoginBeginResponse": {
@@ -202,6 +202,8 @@ export const GENERATED_RUNTIME_PROJECTION_CONTRACT = {
         "thread_id",
         "status",
         "title",
+        "pinned",
+        "active_turn_status",
         "metadata",
         "forked_from_thread_id",
         "forked_from_turn_id",
@@ -298,6 +300,8 @@ export const GENERATED_RUNTIME_PROJECTION_CONTRACT = {
         "thread_id",
         "status",
         "title",
+        "pinned",
+        "active_turn_status",
         "metadata",
         "forked_from_thread_id",
         "forked_from_turn_id",

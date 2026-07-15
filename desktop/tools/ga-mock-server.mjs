@@ -22,7 +22,7 @@ const MIME = {
   ".svg": "image/svg+xml; charset=utf-8",
 };
 
-const SCENARIOS = new Set(["empty", "unauthenticated", "thinking", "retry", "hitl", "connector-login", "connector-device", "connector-reauth", "connector-restart", "artifact", "replay", "thread-switch"]);
+const SCENARIOS = new Set(["empty", "unauthenticated", "thinking", "slow-reconnect", "retry", "hitl", "connector-login", "connector-device", "connector-reauth", "connector-restart", "artifact", "replay", "thread-switch", "many-threads"]);
 const TERMINAL_TURN_STATUSES = new Set(["completed", "failed", "cancelled", "interrupted", "superseded"]);
 const GA_THEMES = new Set(["light", "dark"]);
 const GA_VIEWPORTS = Object.freeze({
@@ -392,6 +392,8 @@ function thread(threadId = "thread-ga", title = "季度资料整理") {
     thread_id: threadId,
     status: "active",
     title,
+    pinned: false,
+    active_turn_status: null,
     metadata: {},
     forked_from_thread_id: null,
     forked_from_turn_id: null,
@@ -642,6 +644,8 @@ function mockExtensions() {
       display_name: "EcoreX 办公工具",
       description: "由核心包提供的文档、表格与演示文稿办公能力。",
       kind: "tool_provider",
+      category: "office",
+      icon_key: "document",
       active_revision_id: "extrev-office-tools-1",
       active_version: "1.0.0",
       active_digest: "1".repeat(64),
@@ -663,6 +667,8 @@ function mockExtensions() {
       display_name: "飞书 MCP",
       description: "通过受管适配器发现并调用飞书文档能力。",
       kind: "mcp_server",
+      category: "collaboration",
+      icon_key: "feishu",
       active_revision_id: "extrev-feishu-2",
       active_version: "1.2.0",
       active_digest: "2".repeat(64),
@@ -684,6 +690,8 @@ function mockExtensions() {
       display_name: "旧版文档整理技能",
       description: "从 v0.3.0 迁移的本地声明式技能；不会获得进程执行边界。",
       kind: "skill",
+      category: "office",
+      icon_key: "document",
       active_revision_id: "extrev-legacy-skill-1",
       active_version: "0.3.0",
       active_digest: "3".repeat(64),
@@ -720,8 +728,10 @@ function extensionActions(extension) {
     extension.status === "disabled" || extension.status === "staged"
       ? { action_id: "enable", enabled: true, disabled_reason: null, requires_confirmation: true }
       : unavailable("enable", "扩展已经启用。", true),
-    extension.status === "enabled"
-      ? { action_id: "disable", enabled: true, disabled_reason: null, requires_confirmation: true }
+    extension.status === "enabled" && extension.source === "core_bundle"
+      ? unavailable("disable", "extension_required_by_product", true)
+      : extension.status === "enabled"
+        ? { action_id: "disable", enabled: true, disabled_reason: null, requires_confirmation: true }
       : unavailable("disable", "只有已启用扩展可以停用。", true),
     extension.status === "enabled"
       ? { action_id: "health_check", enabled: true, disabled_reason: null, requires_confirmation: false }
@@ -738,6 +748,8 @@ function extensionProjection(extension) {
     display_name: extension.display_name,
     description: extension.description,
     kind: extension.kind,
+    category: extension.category,
+    icon_key: extension.icon_key,
     active_revision_id: extension.active_revision_id,
     active_version: extension.active_version,
     active_digest: extension.active_digest,
@@ -792,6 +804,8 @@ function scenarioState(name) {
     seq: 0,
     events: [],
     clients: new Set(),
+    streamConnectionCount: 0,
+    streamAfterSeq: [],
     timers: new Set(),
     terminalScheduled: false,
     deviceFlow: null,
@@ -808,6 +822,7 @@ function scenarioState(name) {
     connectorLoginCheckCount: 0,
     connectorLoginCancelCount: 0,
     interactionRespondCount: 0,
+    sessionLogoutCount: 0,
   };
   if (name === "empty" || name === "unauthenticated") return base;
 
@@ -854,6 +869,52 @@ function scenarioState(name) {
     return base;
   }
 
+  if (name === "many-threads") {
+    const addThread = (threadId, title, projectId = null, running = false) => {
+      const selectedThread = thread(threadId, title);
+      if (projectId) selectedThread.metadata = { project_id: projectId };
+      const selectedTurn = turn(
+        `turn-${threadId}`,
+        running ? "model_requested" : "completed",
+        `${title}的内容`,
+        "ecorex-chat",
+        "gpt-image-2",
+        threadId,
+      );
+      const selectedProjection = {
+        thread: selectedThread,
+        turns: [selectedTurn],
+        items: [item(`item-user-${threadId}`, selectedTurn.turn_id, "user", `${title}的内容`, threadId)],
+        jobs: [],
+        interactions: [],
+        watermark: 1,
+      };
+      base.threads.push(selectedThread);
+      base.projections.set(threadId, selectedProjection);
+      return selectedProjection;
+    };
+    for (let index = 1; index <= 12; index += 1) {
+      const projection = addThread(
+        `thr_general_${index}`,
+        `通用历史 ${String(index).padStart(2, "0")}`,
+        null,
+        index === 11,
+      );
+      if (index === 1) base.projection = projection;
+    }
+    for (let index = 1; index <= 11; index += 1) {
+      addThread(
+        `thr_project_${index}`,
+        `项目历史 ${String(index).padStart(2, "0")}`,
+        "project-ga-office",
+        index === 10,
+      );
+    }
+    base.projects[0].thread_count = 11;
+    base.seq = 1;
+    return base;
+  }
+
   const activeThread = thread();
   let activeTurn = turn("turn-ga", "completed", "整理季度资料");
   const items = [item("item-user-ga", "turn-ga", "user", "整理季度资料")];
@@ -865,6 +926,15 @@ function scenarioState(name) {
       activeTurn.turn_id,
       "reasoning-atom-ga-1",
       "正在核对季度资料。",
+    ));
+  }
+  if (name === "slow-reconnect") {
+    activeTurn = turn("turn-ga", "model_requested", "整理季度资料");
+    items.push(reasoningItem(
+      "reasoning-slow-ga-1",
+      activeTurn.turn_id,
+      "reasoning-atom-slow-ga-1",
+      "正在读取季度资料，网络较慢时会从已确认的位置继续。",
     ));
   }
   if (name === "retry") activeTurn = turn("turn-ga", "retry_wait", "整理季度资料");
@@ -911,6 +981,7 @@ function bootstrap(state) {
       organization_id: authenticated ? "org-ga" : null,
       roles: authenticated ? ["member"] : [],
       session_revision: authenticated ? 1 : null,
+      session_lease_digest: authenticated ? "a".repeat(64) : null,
     },
     policy_lease: authenticated ? {
       lease_id: "lease-ga",
@@ -937,6 +1008,51 @@ function bootstrap(state) {
             type: "compaction",
             compact_threshold_tokens: 272_000,
           },
+        },
+      }, {
+        model_id: "ecorex-deepseek-v4-pro",
+        display_name: "DeepSeek V4 Pro",
+        capabilities: ["chat", "tools", "reasoning"],
+        aliases: ["deepseek", "deepseek-v4-pro"],
+        is_default: false,
+        model_policy: {
+          schema_version: 1,
+          policy_id: "ecorex-deepseek-v4-pro",
+          policy_version: "1.0.0",
+          local_model_id: "ecorex-deepseek-v4-pro",
+          upstream_model_id: "deepseek-v4-pro",
+          reasoning_effort: "medium",
+          context_management: { type: "compaction", compact_threshold_tokens: 900_000 },
+        },
+      }, {
+        model_id: "ecorex-gemini-3.1-pro",
+        display_name: "Gemini 3.1 Pro",
+        capabilities: ["chat", "tools", "reasoning", "vision"],
+        aliases: ["gemini", "gemini-3.1-pro", "gemini-3.1-pro-preview"],
+        is_default: false,
+        model_policy: {
+          schema_version: 1,
+          policy_id: "ecorex-gemini-3.1-pro-preview",
+          policy_version: "1.0.0",
+          local_model_id: "ecorex-gemini-3.1-pro",
+          upstream_model_id: "gemini-3.1-pro-preview",
+          reasoning_effort: "medium",
+          context_management: { type: "compaction", compact_threshold_tokens: 900_000 },
+        },
+      }, {
+        model_id: "ecorex-doubao-seed-2.0-pro",
+        display_name: "豆包 Seed 2.0 Pro",
+        capabilities: ["chat", "tools", "reasoning", "vision"],
+        aliases: ["doubao", "doubao-seed-2.0-pro", "doubao-seed-2-0-pro-260215"],
+        is_default: false,
+        model_policy: {
+          schema_version: 1,
+          policy_id: "ecorex-doubao-seed-2.0-pro",
+          policy_version: "1.0.0",
+          local_model_id: "ecorex-doubao-seed-2.0-pro",
+          upstream_model_id: "doubao-seed-2-0-pro-260215",
+          reasoning_effort: "medium",
+          context_management: { type: "compaction", compact_threshold_tokens: 224_000 },
         },
       }] : [],
       image: authenticated ? [{
@@ -1125,8 +1241,12 @@ function envelope(state, eventType, {
 function emit(state, event) {
   state.events.push(event);
   if (state.events.length > 2_048) state.events.splice(0, state.events.length - 2_048);
-  const block = `id: ${event.seq}\nevent: ${event.event_type}\ndata: ${JSON.stringify(event)}\n\n`;
+  const block = eventBlock(event);
   for (const client of state.clients) client.write(block);
+}
+
+function eventBlock(event) {
+  return `id: ${event.seq}\nevent: ${event.event_type}\ndata: ${JSON.stringify(event)}\n\n`;
 }
 
 function schedule(state, callback, delay = 300) {
@@ -1187,6 +1307,83 @@ function scheduleThinkingTerminal(state) {
     });
     emit(state, terminal);
     const reasoning = state.projection.items.find((candidate) => candidate.item_id === "reasoning-ga-2");
+    if (!reasoning || reasoning.kind !== "reasoning") return;
+    reasoning.status = "completed";
+    reasoning.content.revision += 1;
+    reasoning.content.presentation = "collapsed";
+    reasoning.content.archived_reason = "completed";
+    emit(state, envelope(state, "reasoning.archived", {
+      turnId: active.turn_id,
+      itemId: reasoning.item_id,
+      payload: {
+        revision: reasoning.content.revision,
+        presentation: "collapsed",
+        reason: "completed",
+        terminal_status: "completed",
+        terminal_event_id: terminal.event_id,
+      },
+    }));
+  }, 1_200);
+}
+
+function scheduleSlowReconnectTerminal(state) {
+  if (state.scenario !== "slow-reconnect" || state.terminalScheduled || !state.projection) return;
+  state.terminalScheduled = true;
+  schedule(state, () => {
+    const active = state.projection.turns.find((candidate) => candidate.turn_id === "turn-ga");
+    const previous = state.projection.items.find((candidate) => candidate.item_id === "reasoning-slow-ga-1");
+    if (!active || active.status !== "model_requested" || !previous || previous.kind !== "reasoning") return;
+    previous.status = "completed";
+    previous.content.presentation = "archived";
+    previous.content.archived_reason = "replaced_by_next_atom";
+    const next = reasoningItem(
+      "reasoning-slow-ga-2",
+      active.turn_id,
+      "reasoning-atom-slow-ga-2",
+      "已确认资料读取进度，正在整理结果。",
+    );
+    state.projection.items.push(next);
+    emit(state, envelope(state, "reasoning.replaced", {
+      turnId: active.turn_id,
+      itemId: next.item_id,
+      payload: {
+        atom_id: next.content.atom_id,
+        delta: next.content.text,
+        revision: next.content.revision,
+        presentation: "visible",
+        previous_item_id: previous.item_id,
+        previous_revision: previous.content.revision,
+        previous_presentation: "archived",
+      },
+    }));
+    schedule(state, () => {
+      for (const client of state.clients) client.end();
+      state.clients.clear();
+    }, 75);
+  }, 700);
+  schedule(state, () => {
+    const active = state.projection.turns.find((candidate) => candidate.turn_id === "turn-ga");
+    if (!active || active.status !== "model_requested") return;
+    const assistant = item(
+      "item-assistant-slow-ga",
+      active.turn_id,
+      "assistant",
+      "网络恢复后已从确认位置继续，季度资料清单完整生成且没有重复执行。",
+    );
+    state.projection.items.push(assistant);
+    emit(state, envelope(state, "item.created", {
+      turnId: active.turn_id,
+      itemId: assistant.item_id,
+      payload: { kind: "message", status: "completed", content: assistant.content },
+    }));
+    active.status = "completed";
+    active.terminal_reason = "completed";
+    const terminal = envelope(state, "turn.status_changed", {
+      turnId: active.turn_id,
+      payload: { from: "model_requested", to: "completed", reason: "completed" },
+    });
+    emit(state, terminal);
+    const reasoning = state.projection.items.find((candidate) => candidate.item_id === "reasoning-slow-ga-2");
     if (!reasoning || reasoning.kind !== "reasoning") return;
     reasoning.status = "completed";
     reasoning.content.revision += 1;
@@ -1271,6 +1468,18 @@ function projectionResponse(state, threadId) {
   );
 }
 
+function threadCatalogItem(state, source) {
+  const projection = projectionResponse(state, source.thread_id);
+  const active = projection?.turns
+    .filter((candidate) => !TERMINAL_TURN_STATUSES.has(candidate.status))
+    .at(-1);
+  return {
+    ...source,
+    pinned: source.pinned === true || source.metadata?.pinned === true,
+    active_turn_status: active?.status ?? null,
+  };
+}
+
 function conversationUsage(state, threadId) {
   const projection = projectionResponse(state, threadId);
   if (!projection) return null;
@@ -1282,7 +1491,12 @@ function conversationUsage(state, threadId) {
     week: { input_tokens: 18_840, output_tokens: 3_760, total_tokens: 22_600 },
     context: {
       used_tokens: 42_180,
-      window_tokens: modelId === "ecorex-chat" ? 272_000 : null,
+      window_tokens: ({
+        "ecorex-chat": 272_000,
+        "ecorex-deepseek-v4-pro": 900_000,
+        "ecorex-gemini-3.1-pro": 900_000,
+        "ecorex-doubao-seed-2.0-pro": 224_000,
+      })[modelId] ?? null,
       model_id: modelId,
       measured_at: NOW,
     },
@@ -1311,11 +1525,18 @@ async function handleApi(holder, req, res, url) {
       permission_profile: state.permissionProfile,
       output_location: state.outputLocation,
       memory_resettable_count: state.memoryResettableCount,
+      authenticated: state.authenticated,
+      session_logout_count: state.sessionLogoutCount,
+      last_turn_model: state.projection?.turns.at(-1)?.agent_model_id ?? null,
       connector_login: {
         begin: state.connectorLoginBeginCount,
         check: state.connectorLoginCheckCount,
         cancel: state.connectorLoginCancelCount,
         ordinary_respond: state.interactionRespondCount,
+      },
+      event_stream: {
+        connections: state.streamConnectionCount,
+        after_seq: [...state.streamAfterSeq],
       },
     });
   }
@@ -1384,6 +1605,21 @@ async function handleApi(holder, req, res, url) {
       updated_at: new Date().toISOString(),
     });
   }
+  if (path === "/api/v1/output/locations/pick" && req.method === "POST") {
+    const request = await body(req);
+    if (request.expected_revision !== state.outputRevision) {
+      return apiError(res, 409, "output_revision_conflict", "Output preference changed");
+    }
+    state.outputLocation = "workspace";
+    state.outputRevision += 1;
+    return json(res, 200, {
+      account_id: "account-ga",
+      location_alias: state.outputLocation,
+      revision: state.outputRevision,
+      output_policy_snapshot_id: `outpol_${state.outputRevision.toString(16).padStart(64, "0")}`,
+      updated_at: new Date().toISOString(),
+    });
+  }
   const materializeMatch = path.match(/^\/api\/v1\/output\/artifacts\/([^/]+)\/materialize$/);
   if (materializeMatch && req.method === "POST") {
     const request = await body(req);
@@ -1440,6 +1676,29 @@ async function handleApi(holder, req, res, url) {
     state.memoryResettableCount = 2;
     state.memoryReset = { ...state.memoryReset, status: "undone", updated_at: new Date().toISOString(), can_undo: false };
     return json(res, 200, { memory: memorySnapshot(state), reset: state.memoryReset });
+  }
+  if (path === "/api/v1/session/logout" && req.method === "POST") {
+    const request = await body(req);
+    if (!state.authenticated) {
+      return apiError(res, 409, "session_lease_changed", "Session lease changed");
+    }
+    if (
+      request.lease_digest !== "a".repeat(64)
+      || request.confirmed !== true
+      || typeof request.client_request_id !== "string"
+      || request.client_request_id.length < 8
+      || Object.keys(request).sort().join(",") !== "client_request_id,confirmed,lease_digest"
+    ) {
+      return apiError(res, 422, "invalid_session_logout", "Session logout request is invalid");
+    }
+    state.authenticated = false;
+    state.sessionLogoutCount += 1;
+    return json(res, 200, {
+      authenticated: false,
+      generation: 2,
+      restart_required: true,
+      restart_scheduled: false,
+    });
   }
   if (path === "/api/v1/session/device" && req.method === "POST") {
     if (state.authenticated) return apiError(res, 409, "session_already_authenticated", "Log out before switching managed accounts");
@@ -1581,7 +1840,10 @@ async function handleApi(holder, req, res, url) {
   }
 
   if (path === "/api/v1/threads" && req.method === "GET") {
-    return json(res, 200, { items: state.threads, next_cursor: null });
+    return json(res, 200, {
+      items: state.threads.map((source) => threadCatalogItem(state, source)),
+      next_cursor: null,
+    });
   }
   if (path === "/api/v1/projects" && req.method === "GET") {
     return json(res, 200, { projects: state.projects });
@@ -1611,6 +1873,19 @@ async function handleApi(holder, req, res, url) {
   if (usageMatch && req.method === "GET") {
     const usage = conversationUsage(state, decodeURIComponent(usageMatch[1]));
     return usage ? json(res, 200, usage) : apiError(res, 404, "thread_not_found", "Thread not found");
+  }
+
+  const pinThreadMatch = path.match(/^\/api\/v1\/threads\/([^/]+)\/pin$/);
+  if (pinThreadMatch && req.method === "PUT") {
+    const threadId = decodeURIComponent(pinThreadMatch[1]);
+    const request = await body(req);
+    const selected = state.threads.find((candidate) => candidate.thread_id === threadId);
+    if (!selected) return apiError(res, 404, "thread_not_found", "Thread not found");
+    selected.pinned = request.pinned === true;
+    selected.metadata = { ...selected.metadata, pinned: selected.pinned };
+    const projection = projectionResponse(state, threadId);
+    if (projection) projection.thread = selected;
+    return json(res, 200, threadCatalogItem(state, selected));
   }
 
   const projectionMatch = path.match(/^\/api\/v1\/threads\/([^/]+)\/projection$/);
@@ -1703,6 +1978,10 @@ async function handleApi(holder, req, res, url) {
   if (streamMatch && req.method === "GET") {
     const threadId = decodeURIComponent(streamMatch[1]);
     if (!projectionResponse(state, threadId)) return apiError(res, 404, "thread_not_found", "Thread not found");
+    const afterSeq = Number.parseInt(url.searchParams.get("after_seq") ?? req.headers["last-event-id"] ?? "0", 10);
+    if (!Number.isSafeInteger(afterSeq) || afterSeq < 0 || afterSeq > state.seq) {
+      return apiError(res, 409, "event_cursor_reset_required", "Event cursor is outside the retained stream window");
+    }
     res.writeHead(200, {
       "Cache-Control": "no-store",
       "Content-Type": "text/event-stream; charset=utf-8",
@@ -1710,9 +1989,16 @@ async function handleApi(holder, req, res, url) {
       "X-Accel-Buffering": "no",
     });
     res.write(`: ga-stream\n\nevent: watermark\ndata: {"watermark":${state.seq}}\n\n`);
+    state.streamConnectionCount += 1;
+    state.streamAfterSeq.push(afterSeq);
+    if (state.streamAfterSeq.length > 16) state.streamAfterSeq.splice(0, state.streamAfterSeq.length - 16);
+    for (const event of state.events) {
+      if (event.thread_id === threadId && event.seq > afterSeq) res.write(eventBlock(event));
+    }
     state.clients.add(res);
     req.on("close", () => state.clients.delete(res));
     scheduleThinkingTerminal(state);
+    scheduleSlowReconnectTerminal(state);
     return true;
   }
 
@@ -2664,7 +2950,7 @@ function viewportHtml({ viewportId, viewport, theme, scenario }) {
 </html>`;
 }
 
-function serveGaFrameApp(holder, distDir, res, url) {
+function serveGaFrameApp(holder, distDir, req, res, url) {
   const { theme, scenario } = gaFrameOptions(url);
   const indexFile = resolve(distDir, "index.html");
   if (!existsSync(indexFile) || !statSync(indexFile).isFile()) {
@@ -2675,7 +2961,8 @@ function serveGaFrameApp(holder, distDir, res, url) {
   if (!source.includes(marker)) {
     return apiError(res, 503, "ga_frame_marker_missing", "The built WebUI has no GA bootstrap insertion marker");
   }
-  resetScenario(holder, scenario);
+  const hasSession = /(?:^|;\s*)ecorex_ga_session=1(?:;|$)/u.test(String(req.headers.cookie || ""));
+  if (!hasSession || holder.state.scenario !== scenario) resetScenario(holder, scenario);
   const html = source
     .replace(
       marker,
@@ -2684,6 +2971,7 @@ function serveGaFrameApp(holder, distDir, res, url) {
     .replace(/(["'])\.\/assets\//g, "$1/assets/");
   return sendGaText(res, "text/html; charset=utf-8", html, {
     "Content-Security-Policy": FRAME_APP_CSP,
+    "Set-Cookie": "ecorex_ga_session=1; Path=/; SameSite=Strict",
     "X-Frame-Options": "SAMEORIGIN",
   });
 }
@@ -2721,7 +3009,7 @@ function handleGaViewportHarness(holder, distDir, req, res, url) {
         "X-Frame-Options": "DENY",
       });
     }
-    if (path === "/__ga/frame-app") return serveGaFrameApp(holder, distDir, res, url);
+    if (path === "/__ga/frame-app") return serveGaFrameApp(holder, distDir, req, res, url);
     if (path === "/__ga/frame-bootstrap.js") {
       assertGaQuery(url, ["theme"]);
       const theme = url.searchParams.get("theme") || "light";

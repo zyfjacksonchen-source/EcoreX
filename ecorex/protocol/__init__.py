@@ -90,6 +90,7 @@ from .models import (
     RespondInteractionRequest,
     SteerTurnRequest,
     ThreadProjection,
+    ThreadPinRequest,
     ThreadListResponse,
     ThreadProjectionResponse,
     ThreadStatus,

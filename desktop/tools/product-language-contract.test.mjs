@@ -10,7 +10,7 @@ const interaction = source("../src/v1/components/InteractionStack.tsx");
 const app = source("../src/v1/AppV1.tsx");
 const replay = source("../src/v1/components/ReplayDialog.tsx");
 const retouch = source("../src/v1/components/RetouchWorkspace.tsx");
-const extensionManager = source("../src/v1/components/ExtensionManagerDialog.tsx");
+const extensionManager = source("../src/v1/components/SkillsWorkspace.tsx");
 const settings = source("../src/v1/components/SettingsDialog.tsx");
 const extensionSession = source("../src/v1/state/useExtensionSession.ts");
 const extensionLabels = source("../src/v1/state/extensions.ts");
@@ -55,7 +55,8 @@ test("default product copy hides implementation vocabulary and folds diagnostics
     );
   }
   assert.match(replay, /<TechnicalDetails/);
-  assert.match(extensionManager, /<TechnicalDetails/);
+  assert.match(extensionManager, /selected\.exports/);
+  assert.match(extensionManager, /selected\.dependencies/);
   assert.match(extensionLabels, /mcp_server: "扩展服务"/);
 });
 

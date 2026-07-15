@@ -22,7 +22,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from ecorex.managed_model_policy import (
-    ECOREX_CHAT_MODEL_POLICY,
+    managed_chat_model_policy,
     require_managed_chat_mapping,
 )
 
@@ -123,6 +123,7 @@ class ManagedHTTPSResponsesProvider:
         allowed_origins: frozenset[str],
         model_mapping: Mapping[str, str],
         model_policies: Mapping[str, GatewayModelPolicy] | None = None,
+        allow_dynamic_mapping: bool = False,
         bearer_token: Callable[[], str],
         connect_timeout_seconds: float = 5.0,
         read_timeout_seconds: float = 30.0,
@@ -143,19 +144,23 @@ class ManagedHTTPSResponsesProvider:
         if normalized_origin not in normalized_allowlist:
             raise ResponsesProviderConfigurationError("provider origin is not allowlisted")
         mapping = dict(model_mapping)
-        try:
-            require_managed_chat_mapping(mapping)
-        except ValueError:
+        if not allow_dynamic_mapping:
+            try:
+                require_managed_chat_mapping(mapping)
+            except ValueError:
+                raise ResponsesProviderConfigurationError(
+                    "provider model mapping violates managed model policy"
+                ) from None
+        elif model_policies is None:
             raise ResponsesProviderConfigurationError(
-                "provider model mapping violates managed model policy"
-            ) from None
+                "dynamic provider mapping requires an authoritative policy"
+            )
         policies = dict(
             model_policies
             if model_policies is not None
             else {
-                ECOREX_CHAT_MODEL_POLICY.local_model_id: (
-                    ecorex_chat_gateway_policy()
-                )
+                local_model_id: ecorex_chat_gateway_policy(local_model_id)
+                for local_model_id in mapping
             }
         )
         if (

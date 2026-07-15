@@ -1,4 +1,15 @@
-import { BookmarkCheck, Wrench } from "lucide-react";
+import {
+  BookmarkCheck,
+  ChevronDown,
+  FileSearch,
+  Globe2,
+  Image,
+  Images,
+  Link2,
+  Puzzle,
+  TerminalSquare,
+  Wrench,
+} from "lucide-react";
 
 import type { ItemProjection, PublicToolActivity } from "../api/contracts.ts";
 
@@ -25,12 +36,48 @@ export default function TimelineActivity({ item }: { item: ItemProjection }) {
       : typeof activity.argument_summary === "string"
       ? activity.argument_summary
       : displayLabel;
+    const icon = (() => {
+      switch (activity.tool_id) {
+        case "vision": return <Images aria-hidden="true" />;
+        case "imagegen": return <Image aria-hidden="true" />;
+        case "shell": return <TerminalSquare aria-hidden="true" />;
+        case "cdp": return <Globe2 aria-hidden="true" />;
+        case "fetch": return <Link2 aria-hidden="true" />;
+        case "read":
+        case "artifact_read": return <FileSearch aria-hidden="true" />;
+        case "skill_search":
+        case "skill_read":
+        case "tool_search":
+        case "tool_describe": return <Puzzle aria-hidden="true" />;
+        default: return <Wrench aria-hidden="true" />;
+      }
+    })();
+    const effects = Array.isArray(activity.effects)
+      ? activity.effects.map((effect) => ({
+          read: "读取",
+          write: "写入",
+          network: "联网",
+          execute: "执行",
+          ui_automation: "浏览器操作",
+          generate_media: "生成媒体",
+        }[effect] ?? effect)).join(" · ")
+      : "";
     return (
-      <div className="ex-activity-row" role="status" title={summary}>
-        <Wrench aria-hidden="true" />
-        <span>{displayLabel}</span>
-        <small>{statusLabel(item.status)}</small>
-      </div>
+      <details className="ex-activity" data-status={item.status}>
+        <summary className="ex-activity-row">
+          {icon}
+          <span>{summary}</span>
+          <small>{statusLabel(item.status)}</small>
+          <ChevronDown className="ex-activity-chevron" aria-hidden="true" />
+        </summary>
+        <div className="ex-activity-detail">
+          <span><b>步骤</b>{displayLabel}</span>
+          {effects ? <span><b>范围</b>{effects}</span> : null}
+          {activity.artifact_refs?.length ? (
+            <span><b>产物</b>关联 {activity.artifact_refs.length} 个文件或图片</span>
+          ) : null}
+        </div>
+      </details>
     );
   }
   return (

@@ -16,7 +16,10 @@ from .models import (
     ToolSpec,
 )
 from .models_catalog import ManagedModelCatalog, ManagedModelSpec, ModelModality
-from ecorex.managed_model_policy import ECOREX_CHAT_MODEL_POLICY
+from ecorex.managed_model_policy import (
+    ECOREX_CHAT_MODEL_POLICIES,
+    ECOREX_CHAT_MODEL_POLICY,
+)
 from .registry import CapabilityRegistry
 
 
@@ -739,14 +742,29 @@ def builtin_model_catalog() -> ManagedModelCatalog:
     chat_policy = ECOREX_CHAT_MODEL_POLICY
     return ManagedModelCatalog(
         (
-            ManagedModelSpec(
-                model_id=chat_policy.local_model_id,
-                display_name=chat_policy.display_name,
-                modalities=frozenset({ModelModality.CHAT, ModelModality.VISION}),
-                aliases=chat_policy.aliases,
-                capabilities=frozenset({"chat", "tools", "vision", "reasoning"}),
-                default_for=frozenset({ModelModality.CHAT, ModelModality.VISION}),
-                model_policy=chat_policy,
+            *(
+                ManagedModelSpec(
+                    model_id=policy.local_model_id,
+                    display_name=policy.display_name,
+                    modalities=frozenset(
+                        {ModelModality.CHAT, ModelModality.VISION}
+                        if policy.local_model_id != "ecorex-deepseek-v4-pro"
+                        else {ModelModality.CHAT}
+                    ),
+                    aliases=policy.aliases,
+                    capabilities=frozenset(
+                        {"chat", "tools", "reasoning", "vision"}
+                        if policy.local_model_id != "ecorex-deepseek-v4-pro"
+                        else {"chat", "tools", "reasoning"}
+                    ),
+                    default_for=(
+                        frozenset({ModelModality.CHAT, ModelModality.VISION})
+                        if policy is chat_policy
+                        else frozenset()
+                    ),
+                    model_policy=policy,
+                )
+                for policy in ECOREX_CHAT_MODEL_POLICIES
             ),
             ManagedModelSpec(
                 model_id="gpt-image-2",

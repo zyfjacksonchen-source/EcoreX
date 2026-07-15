@@ -52,6 +52,7 @@ interface SettingsDialogProps {
   onClearOutputError: () => void;
   onRefreshOutput: () => void;
   onOutputLocationChange: (location: OutputLocationAlias) => Promise<boolean>;
+  onPickOutputLocation: () => Promise<boolean>;
   systemHealth: SystemHealthSample | null;
   systemHealthLoadState: "loading" | "ready" | "error";
   systemHealthError: string | null;
@@ -93,6 +94,7 @@ export function SettingsDialog({
   onClearOutputError,
   onRefreshOutput,
   onOutputLocationChange,
+  onPickOutputLocation,
   systemHealth,
   systemHealthLoadState,
   systemHealthError,
@@ -264,30 +266,40 @@ export function SettingsDialog({
                 </p>
               </div>
               {outputPreference ? (
-                <select
-                  className="ex-settings-select"
-                  aria-label="默认产物保存位置"
-                  value={outputPreference.location_alias}
-                  disabled={outputBusy}
-                  onChange={(event) => {
-                    void onOutputLocationChange(event.target.value as OutputLocationAlias);
-                  }}
-                >
-                  {outputLocations.map((location) => (
-                    <option
-                      key={location.alias}
-                      value={location.alias}
-                      disabled={!location.available}
-                    >
-                      {location.alias === "documents"
-                        ? "文档"
-                        : location.alias === "downloads"
-                          ? "下载"
-                          : "当前工作区"}
-                      {!location.available ? "（不可用）" : ""}
-                    </option>
-                  ))}
-                </select>
+                <div className="ex-output-location-controls">
+                  <select
+                    className="ex-settings-select"
+                    aria-label="默认产物保存位置"
+                    value={outputPreference.location_alias}
+                    disabled={outputBusy}
+                    onChange={(event) => {
+                      void onOutputLocationChange(event.target.value as OutputLocationAlias);
+                    }}
+                  >
+                    {outputLocations.map((location) => (
+                      <option
+                        key={location.alias}
+                        value={location.alias}
+                        disabled={!location.available}
+                      >
+                        {location.alias === "documents"
+                          ? "文档"
+                          : location.alias === "downloads"
+                            ? "下载"
+                            : "自定义文件夹"}
+                        {!location.available ? "（未选择）" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    className="ex-button ex-button-subtle"
+                    type="button"
+                    disabled={outputBusy}
+                    onClick={() => void onPickOutputLocation()}
+                  >
+                    {outputBusy ? "正在选择" : "选择文件夹"}
+                  </button>
+                </div>
               ) : (
                 <button
                   className="ex-button ex-permission-change"

@@ -2,7 +2,7 @@
 :root {
   color-scheme: light dark;
 
-  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
   --font-code: ui-monospace, "SFMono-Regular", "SF Mono", "Cascadia Mono", "Segoe UI Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   --font-display: var(--font-ui);
   --font-body: var(--font-ui);
@@ -67,12 +67,14 @@
   --target-desktop: 32px;
   --target-touch: 44px;
   --workspace-inset: 10px;
+  --layout-sidebar-width: 252px;
   --artifact-action-rail-width: 132px;
   --focus-primary-ring: 0 0 0 2px var(--color-brand-ink);
   --control-idle-border: transparent;
   --control-idle-surface: transparent;
   --control-hover-border: var(--color-rule);
   --control-hover-surface: var(--color-raised);
+  --color-model-icon-surface: oklch(1 0 0);
 
 }
 
@@ -192,6 +194,7 @@
     --color-selected: Highlight;
     --color-composer-surface: Canvas;
     --color-overlay-surface: Canvas;
+    --color-model-icon-surface: Canvas;
     --color-ink: CanvasText;
     --color-ink-muted: CanvasText;
     --color-ink-subtle: CanvasText;

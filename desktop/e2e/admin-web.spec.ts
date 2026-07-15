@@ -56,11 +56,63 @@ const resume = (missing: string[] = []) => ({
   captured_at: "2026-07-14T08:00:00Z",
 });
 
+const adminUser = (body: Record<string, unknown>) => ({
+  account_id: body.account_id,
+  display_name: body.display_name,
+  email: body.email,
+  organization_id: body.organization_id,
+  status: "active",
+  token_limit: body.token_limit,
+  tokens_used: 0,
+  image_limit: body.image_limit,
+  images_used: 0,
+  revision: 1,
+  created_at: "2026-07-14T08:00:00Z",
+  updated_at: "2026-07-14T08:00:00Z",
+});
+
+const modelRevision = (body: Record<string, unknown>, status = "draft") => ({
+  config_id: "model-config-e2e",
+  revision: 1,
+  local_model_id: body.local_model_id,
+  modality: body.modality,
+  display_name: body.display_name,
+  upstream_model_id: body.upstream_model_id,
+  provider_preset: body.provider_preset,
+  is_default: body.is_default,
+  enabled: body.enabled,
+  status,
+  key_configured: true,
+  key_fingerprint: "0123456789abcdef",
+  test_id: status === "active" ? "model-test-e2e" : null,
+  test_status: status === "active" ? "passed" : "not_tested",
+  test_error_code: null,
+  tested_at: status === "active" ? "2026-07-14T08:01:00Z" : null,
+  created_at: "2026-07-14T08:00:00Z",
+  updated_at: "2026-07-14T08:01:00Z",
+});
+
 async function installAdminApi(
   page: Page,
   options: { missing?: string[]; onPublish?: (body: unknown) => void } = {},
-): Promise<{ browserErrors: string[]; externalRequests: string[] }> {
-  const guard = { browserErrors: [] as string[], externalRequests: [] as string[] };
+): Promise<{
+  browserErrors: string[];
+  externalRequests: string[];
+  userCreateBody: unknown;
+  modelCreateBody: unknown;
+  modelTestBody: unknown;
+  rolloutBody: unknown;
+}> {
+  const guard = {
+    browserErrors: [] as string[],
+    externalRequests: [] as string[],
+    userCreateBody: null as unknown,
+    modelCreateBody: null as unknown,
+    modelTestBody: null as unknown,
+    rolloutBody: null as unknown,
+  };
+  let storedUser: ReturnType<typeof adminUser> | null = null;
+  let storedModel: { config_id: string; active: ReturnType<typeof modelRevision> | null; draft: ReturnType<typeof modelRevision> | null } | null = null;
   page.on("pageerror", (error) => guard.browserErrors.push(error.message));
   page.on("console", (message) => {
     if (message.type() === "error") guard.browserErrors.push(message.text());
@@ -83,6 +135,87 @@ async function installAdminApi(
     }
     if (path === "/api/v1/admin/resume" && request.method() === "GET") {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(resume(options.missing)) });
+      return;
+    }
+    if (path === "/api/v1/admin/users" && request.method() === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ items: storedUser ? [storedUser] : [], total: storedUser ? 1 : 0, offset: 0, limit: 200 }),
+      });
+      return;
+    }
+    if (path === "/api/v1/admin/users" && request.method() === "POST") {
+      guard.userCreateBody = request.postDataJSON();
+      storedUser = adminUser(guard.userCreateBody as Record<string, unknown>);
+      await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(storedUser) });
+      return;
+    }
+    if (path === "/api/v1/admin/usage/summary" && request.method() === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          users_total: storedUser ? 1 : 0,
+          users_active: storedUser ? 1 : 0,
+          token_limit: storedUser?.token_limit || 0,
+          tokens_used: 0,
+          image_limit: storedUser?.image_limit || 0,
+          images_used: 0,
+          captured_at: "2026-07-14T08:00:00Z",
+        }),
+      });
+      return;
+    }
+    if (path === "/api/v1/admin/models" && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(storedModel ? [storedModel] : []) });
+      return;
+    }
+    if (path === "/api/v1/admin/models" && request.method() === "POST") {
+      guard.modelCreateBody = request.postDataJSON();
+      const revision = modelRevision(guard.modelCreateBody as Record<string, unknown>);
+      storedModel = { config_id: revision.config_id, active: null, draft: revision };
+      await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(storedModel) });
+      return;
+    }
+    if (path === "/api/v1/admin/models/model-config-e2e/test-and-activate" && request.method() === "POST") {
+      guard.modelTestBody = request.postDataJSON();
+      if (!storedModel?.draft) throw new Error("model test was called without a draft");
+      const active = { ...storedModel.draft, status: "active", test_id: "model-test-e2e", test_status: "passed", tested_at: "2026-07-14T08:01:00Z" };
+      storedModel = { config_id: storedModel.config_id, active, draft: null };
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          test_id: "model-test-e2e",
+          config_id: "model-config-e2e",
+          revision: 1,
+          status: "passed",
+          error_code: null,
+          active_revision: 1,
+          completed_at: "2026-07-14T08:01:00Z",
+        }),
+      });
+      return;
+    }
+    if (path === "/api/v1/admin/rollouts" && request.method() === "POST") {
+      guard.rolloutBody = request.postDataJSON();
+      const body = guard.rolloutBody as Record<string, unknown>;
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          rollout_id: "rollout-full-e2e",
+          release_id: body.release_id,
+          channel: "stable",
+          status: "pending",
+          percentage: body.percentage,
+          target_organization_ids: body.target_organization_ids,
+          target_account_ids: body.target_account_ids,
+          minimum_compatible_version: body.minimum_compatible_version,
+          created_at: "2026-07-14T08:02:00Z",
+        }),
+      });
       return;
     }
     if (path === `/api/v1/admin/releases/${RELEASE_ID}/publish` && request.method() === "POST") {
@@ -126,6 +259,73 @@ test("administrator gates are a signed read-only projection and publication stay
   await page.reload({ waitUntil: "domcontentloaded" });
   await expect(page.locator("#admin-token")).toHaveValue("");
   await expect(page.locator("#session-label")).toHaveText("未连接");
+  expect(guard.externalRequests).toEqual([]);
+  expect(guard.browserErrors).toEqual([]);
+});
+
+test("administrator manages users, hot-tests a model, and creates an explicit full rollout", async ({ page }) => {
+  const guard = await installAdminApi(page);
+  await page.goto(`${ADMIN_ORIGIN}/admin/`, { waitUntil: "domcontentloaded" });
+  await connect(page);
+
+  await page.getByRole("button", { name: "创建用户" }).click();
+  await page.locator("#user-account-id").fill("account-e2e");
+  await page.locator("#user-display-name").fill("验收用户");
+  await page.locator("#user-email").fill("user@example.com");
+  await page.locator("#user-organization").fill("org-e2e");
+  await page.locator("#user-token-limit").fill("200000");
+  await page.locator("#user-image-limit").fill("100");
+  await page.getByRole("button", { name: "保存用户" }).click();
+  await expect(page.locator("#user-table-body")).toContainText("验收用户");
+  expect(guard.userCreateBody).toMatchObject({
+    account_id: "account-e2e",
+    token_limit: 200000,
+    image_limit: 100,
+    client_request_id: expect.stringMatching(/^admin_[0-9a-f]{32}$/u),
+  });
+
+  const modelSecret = "sk-e2e-model-secret-123456";
+  await page.getByRole("button", { name: "添加模型" }).click();
+  await page.locator("#model-local-id").selectOption("ecorex-chat");
+  await page.locator("#model-display-name").fill("GPT-5.6 SOL · 中等推理");
+  await page.locator("#model-upstream-id").fill("gpt-5.6-sol");
+  await page.locator("#model-api-key").fill(modelSecret);
+  await page.getByRole("button", { name: "保存草稿" }).click();
+  await expect(page.locator("#model-table-body")).toContainText("GPT-5.6 SOL");
+  await expect(page.locator("#model-api-key")).toHaveValue("");
+  await expect(page.locator("body")).not.toContainText(modelSecret);
+  expect(guard.modelCreateBody).toMatchObject({
+    local_model_id: "ecorex-chat",
+    modality: "chat",
+    upstream_model_id: "gpt-5.6-sol",
+    api_key: modelSecret,
+  });
+
+  await page.getByRole("button", { name: "测试并启用" }).click();
+  await expect(page.getByRole("dialog", { name: /\u6d4b试并启用/u })).toBeVisible();
+  await page.locator("#confirm-submit-button").click();
+  await expect(page.locator("#model-table-body")).toContainText("已生效");
+  expect(guard.modelTestBody).toMatchObject({
+    revision: 1,
+    client_request_id: expect.stringMatching(/^admin_[0-9a-f]{32}$/u),
+  });
+
+  await page.getByRole("button", { name: "发布候选" }).click();
+  await page.locator("#confirm-submit-button").click();
+  await expect(page.locator("#candidate-status")).toHaveText("published");
+  await page.locator("#rollout-mode").selectOption("full");
+  await expect(page.locator("#rollout-percentage")).toHaveValue("100");
+  await expect(page.locator("#target-accounts")).toBeDisabled();
+  await page.getByRole("button", { name: "创建全量推送" }).click();
+  await expect(page.getByRole("dialog", { name: "确认全量推送" })).toBeVisible();
+  await page.locator("#confirm-submit-button").click();
+  await expect(page.locator("#rollout-status")).toHaveText("pending");
+  expect(guard.rolloutBody).toMatchObject({
+    percentage: 100,
+    target_organization_ids: [],
+    target_account_ids: [],
+    client_request_id: expect.stringMatching(/^admin_[0-9a-f]{32}$/u),
+  });
   expect(guard.externalRequests).toEqual([]);
   expect(guard.browserErrors).toEqual([]);
 });

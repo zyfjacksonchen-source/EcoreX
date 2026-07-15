@@ -4,26 +4,25 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="referrer" content="no-referrer">
-    <title>EcoreX 发布控制台</title>
+    <title>EcoreX 管理员</title>
     <link rel="stylesheet" href="__ADMIN_CSS_URL__" integrity="__ADMIN_CSS_SRI__" crossorigin="anonymous">
     <script src="__ADMIN_JS_URL__" integrity="__ADMIN_JS_SRI__" crossorigin="anonymous" defer></script>
   </head>
   <body>
     <div class="admin-shell">
-      <aside class="admin-rail" aria-label="发布控制台导航">
+      <aside class="admin-rail" aria-label="EcoreX 管理员导航">
         <div class="brand-row">
           <span class="brand-mark" aria-hidden="true">E</span>
           <div>
             <strong>EcoreX</strong>
-            <span>发布控制台</span>
+            <span>管理员</span>
           </div>
         </div>
         <nav class="section-nav">
-          <a href="#candidate">候选与门禁</a>
-          <a href="#rollout">灰度发布</a>
-          <a href="#rollback">紧急回滚</a>
-          <a href="#channels">通道止损</a>
-          <a href="#distribution">客户端分布</a>
+          <a href="#users">用户</a>
+          <a href="#usage">用量</a>
+          <a href="#models">模型</a>
+          <a href="#candidate">发布</a>
         </nav>
         <div class="session-state">
           <span>管理员会话</span>
@@ -35,8 +34,8 @@
       <main class="workspace" id="main-content">
         <header class="workspace-header">
           <div class="workspace-title">
-            <h1>发布与灰度</h1>
-            <p>验证候选，控制激活范围，并在异常时停止通道。</p>
+            <h1>EcoreX 管理员</h1>
+            <p>管理用户与用量、测试并启用托管模型，以及推送新版本。</p>
           </div>
           <form class="auth-form" id="auth-form" novalidate>
             <label for="admin-token">管理员令牌</label>
@@ -56,7 +55,7 @@
               <button class="button" id="refresh-state-button" type="button" disabled>刷新服务端状态</button>
               <button class="button" id="clear-token-button" type="button" disabled>清除令牌</button>
             </div>
-            <span class="field-help" id="token-help">不会写入 URL、Cookie 或浏览器存储；重新连接后从服务端恢复候选、灰度、止损与客户端分布。</span>
+            <span class="field-help" id="token-help">令牌只保留在当前页面内存，不会写入 URL、Cookie 或浏览器存储。</span>
           </form>
         </header>
 
@@ -66,6 +65,62 @@
         </div>
 
         <div class="workspace-content">
+          <section class="work-section" id="users" aria-labelledby="users-title">
+            <header class="section-heading">
+              <div>
+                <h2 id="users-title">用户</h2>
+                <p>筛选、创建和编辑账号，修改当前额度或停用访问。</p>
+              </div>
+              <button class="button primary" id="create-user-button" data-session-control type="button" disabled>创建用户</button>
+            </header>
+            <form class="filter-form" id="user-filter-form" novalidate>
+              <label for="user-query"><span>搜索</span><input id="user-query" type="search" maxlength="128" placeholder="姓名、邮箱或账号 ID"></label>
+              <label for="user-status-filter"><span>状态</span><select id="user-status-filter"><option value="">全部</option><option value="active">正常</option><option value="suspended">已停用</option></select></label>
+              <label for="user-organization-filter"><span>组织 ID</span><input id="user-organization-filter" type="text" maxlength="128" placeholder="全部组织"></label>
+              <button class="button" id="filter-users-button" data-session-control type="submit" disabled>筛选</button>
+            </form>
+            <p class="field-help" id="user-list-summary">连接控制面后读取用户。</p>
+            <div class="table-scroll" tabindex="0" aria-label="用户列表">
+              <table>
+                <thead><tr><th scope="col">用户</th><th scope="col">组织</th><th scope="col">Token</th><th scope="col">图片</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead>
+                <tbody id="user-table-body"><tr><td colspan="6">尚未加载</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="work-section" id="usage" aria-labelledby="usage-title">
+            <header class="section-heading">
+              <div>
+                <h2 id="usage-title">用量</h2>
+                <p>查看 Token 和生图额度的实际消耗；手工校正会留下不可变更的审计记录。</p>
+              </div>
+              <button class="button" id="refresh-usage-button" data-session-control type="button" disabled>刷新用量</button>
+            </header>
+            <div class="metric-grid" aria-live="polite">
+              <div class="metric"><span>活跃用户</span><strong id="usage-users">—</strong></div>
+              <div class="metric"><span>Token 用量</span><strong id="usage-tokens">—</strong></div>
+              <div class="metric"><span>图片用量</span><strong id="usage-images">—</strong></div>
+              <div class="metric"><span>更新时间</span><strong id="usage-captured-at">—</strong></div>
+            </div>
+          </section>
+
+          <section class="work-section" id="models" aria-labelledby="models-title">
+            <header class="section-heading">
+              <div>
+                <h2 id="models-title">托管模型</h2>
+                <p>分别配置主模型、生图模型和精修模型。新 Key 只有测试通过后才会原子生效。</p>
+              </div>
+              <button class="button primary" id="create-model-button" data-session-control type="button" disabled>添加模型</button>
+            </header>
+            <p class="field-help" id="model-list-summary">密钥不会返回页面；列表仅显示短指纹与测试状态。</p>
+            <div class="table-scroll" tabindex="0" aria-label="托管模型列表">
+              <table>
+                <thead><tr><th scope="col">用途</th><th scope="col">页面名称</th><th scope="col">服务端模型</th><th scope="col">Key</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead>
+                <tbody id="model-table-body"><tr><td colspan="6">尚未加载</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+
           <section class="work-section" id="candidate" aria-labelledby="candidate-title">
             <header class="section-heading">
               <div>
@@ -123,6 +178,10 @@
             </header>
 
             <form class="rollout-form" id="rollout-form" novalidate>
+              <label for="rollout-mode">
+                <span>推送范围</span>
+                <select id="rollout-mode"><option value="targeted">灰度用户</option><option value="full">全量用户</option></select>
+              </label>
               <label for="rollout-release-id">
                 <span>Release ID</span>
                 <input id="rollout-release-id" type="text" readonly required>
@@ -278,6 +337,55 @@
       </div>
     </dialog>
 
-    <noscript>发布控制台需要启用 JavaScript 才能调用同源管理员 API。</noscript>
+    <dialog class="editor-dialog" id="user-dialog" aria-labelledby="user-dialog-title">
+      <form id="user-form" novalidate>
+        <div class="dialog-heading"><h2 id="user-dialog-title">创建用户</h2><p id="user-dialog-description">配置账号身份、状态与额度。</p></div>
+        <div class="editor-grid">
+          <label for="user-account-id"><span>账号 ID</span><input id="user-account-id" type="text" maxlength="128" required></label>
+          <label for="user-display-name"><span>用户姓名</span><input id="user-display-name" type="text" maxlength="128" required></label>
+          <label for="user-email"><span>邮箱</span><input id="user-email" type="email" maxlength="254"></label>
+          <label for="user-organization"><span>组织 ID</span><input id="user-organization" type="text" maxlength="128"></label>
+          <label for="user-status"><span>状态</span><select id="user-status"><option value="active">正常</option><option value="suspended">已停用</option></select></label>
+          <label for="user-token-limit"><span>Token 额度</span><input id="user-token-limit" type="number" min="0" max="1000000000000" required></label>
+          <label for="user-image-limit"><span>图片额度</span><input id="user-image-limit" type="number" min="0" max="1000000000" required></label>
+        </div>
+        <div class="dialog-actions"><button class="button" id="user-cancel-button" type="button">取消</button><button class="button primary" id="user-save-button" type="submit">保存用户</button></div>
+      </form>
+    </dialog>
+
+    <dialog class="editor-dialog" id="usage-dialog" aria-labelledby="usage-dialog-title">
+      <form id="usage-form" novalidate>
+        <div class="dialog-heading"><h2 id="usage-dialog-title">校正用量</h2><p id="usage-dialog-description">正数表示增加已用量，负数表示退回。</p></div>
+        <input id="usage-account-id" type="hidden">
+        <input id="usage-user-revision" type="hidden">
+        <div class="editor-grid">
+          <label for="usage-token-delta"><span>Token 变化</span><input id="usage-token-delta" type="number" value="0" required></label>
+          <label for="usage-image-delta"><span>图片变化</span><input id="usage-image-delta" type="number" value="0" required></label>
+          <label class="span-all" for="usage-reason"><span>原因</span><input id="usage-reason" type="text" maxlength="256" placeholder="例如：订单退费" required></label>
+        </div>
+        <div class="dialog-actions"><button class="button" id="usage-cancel-button" type="button">取消</button><button class="button primary" id="usage-save-button" type="submit">记录校正</button></div>
+      </form>
+    </dialog>
+
+    <dialog class="editor-dialog" id="model-dialog" aria-labelledby="model-dialog-title">
+      <form id="model-form" novalidate>
+        <div class="dialog-heading"><h2 id="model-dialog-title">添加模型</h2><p>保存为草稿后，在列表中点击“测试并启用”。</p></div>
+        <input id="model-config-id" type="hidden">
+        <input id="model-active-revision" type="hidden">
+        <div class="editor-grid">
+          <label for="model-modality"><span>用途</span><select id="model-modality"><option value="chat">主模型</option><option value="image_generation">生图模型</option><option value="image_edit">精修模型</option></select></label>
+          <label for="model-local-id"><span>EcoreX 模型位</span><select id="model-local-id"><option value="ecorex-chat">GPT 主模型</option><option value="ecorex-deepseek-v4-pro">DeepSeek</option><option value="ecorex-gemini-3.1-pro">Gemini</option><option value="ecorex-doubao-seed-2.0-pro">豆包</option><option value="gpt-image-2">生图模型</option><option value="gpt-image-2-edit">精修模型</option></select></label>
+          <label for="model-display-name"><span>页面显示名称</span><input id="model-display-name" type="text" maxlength="128" required></label>
+          <label for="model-upstream-id"><span>服务端模型名</span><input id="model-upstream-id" type="text" maxlength="128" required></label>
+          <label for="model-provider"><span>接口类型</span><select id="model-provider"><option value="responses">Responses API</option><option value="openai_compatible_chat">OpenAI 兼容对话</option><option value="openai_compatible_image">OpenAI 兼容图片</option></select></label>
+          <label for="model-api-key"><span>API Key</span><input id="model-api-key" type="password" autocomplete="new-password" minlength="8" maxlength="4096" placeholder="编辑时留空表示保留原 Key"></label>
+          <label class="check-row" for="model-default"><input id="model-default" type="checkbox" checked><span>设为该用途默认模型</span></label>
+          <label class="check-row" for="model-enabled"><input id="model-enabled" type="checkbox" checked><span>启用</span></label>
+        </div>
+        <div class="dialog-actions"><button class="button" id="model-cancel-button" type="button">取消</button><button class="button primary" id="model-save-button" type="submit">保存草稿</button></div>
+      </form>
+    </dialog>
+
+    <noscript>EcoreX 管理员需要启用 JavaScript 才能调用同源管理 API。</noscript>
   </body>
 </html>

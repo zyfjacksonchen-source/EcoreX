@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass, replace
+from typing import Protocol
 
 from .models import (
     ImageInputReceipt,
@@ -28,6 +30,7 @@ class ImageOrchestrationService:
         wake_workers: Callable[[], None] | None = None,
         allowed_models: frozenset[str] | None = None,
         max_output_count: int = 8,
+        model_configuration_resolver: "ImageModelConfigurationResolver | None" = None,
     ) -> None:
         if not isinstance(store, ImageJobStore):
             raise TypeError("store does not implement ImageJobStore")
@@ -47,6 +50,7 @@ class ImageOrchestrationService:
         ):
             raise ValueError("image output count policy is invalid")
         self._max_output_count = max_output_count
+        self._model_configuration_resolver = model_configuration_resolver
 
     def submit(
         self,
@@ -77,6 +81,17 @@ class ImageOrchestrationService:
             # provider result.  Callers can submit independently idempotent
             # jobs, which also gives each output its own retry/cancel fence.
             raise ValueError("image output count exceeds deployment policy")
+        if self._model_configuration_resolver is not None:
+            snapshot = self._model_configuration_resolver.resolve(
+                model_id=request.model_id,
+                operation=request.operation.value,
+            )
+            request = replace(
+                request,
+                model_config_id=snapshot.config_id,
+                model_config_revision=snapshot.revision,
+                provider_model_id=snapshot.provider_model_id,
+            )
         # A digest is not authority. Every retouch input must first be bound to
         # this authenticated account through the private input CAS endpoint.
         for sha256 in request.input_sha256:
@@ -123,4 +138,21 @@ class ImageOrchestrationService:
         return self.store.metrics(account_id=account_id)
 
 
-__all__ = ["ImageOrchestrationService"]
+@dataclass(frozen=True, slots=True)
+class ImageModelConfigurationSnapshot:
+    config_id: str
+    revision: int
+    provider_model_id: str
+
+
+class ImageModelConfigurationResolver(Protocol):
+    def resolve(
+        self, *, model_id: str, operation: str
+    ) -> ImageModelConfigurationSnapshot: ...
+
+
+__all__ = [
+    "ImageModelConfigurationResolver",
+    "ImageModelConfigurationSnapshot",
+    "ImageOrchestrationService",
+]

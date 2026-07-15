@@ -61,7 +61,20 @@ export function extensionAction(
 
 export function extensionActionDisabledReason(action: ExtensionActionProjection): string | null {
   if (action.enabled) return null;
-  return action.disabled_reason?.trim() || "当前版本没有提供这项操作不可用的原因。";
+  const reason = action.disabled_reason?.trim();
+  if (!reason) return "当前版本没有提供这项操作不可用的原因。";
+  return ({
+    extension_required_by_product: "EcoreX 运行必需，无法关闭。",
+    extension_already_enabled: "当前已经启用。",
+    extension_already_disabled: "当前已经停用。",
+    revision_not_installed: "尚未安装可启用的版本。",
+    legacy_revalidation_required: "旧版技能需要重新验证后才能启用。",
+    extension_quarantined: "该技能已被隔离，请先处理安全或完整性问题。",
+    controlled_restart_required: "需要重启运行服务后才能启用。",
+    extension_circuit_open: "该技能当前处于熔断状态。",
+    extension_not_enabled: "只有已启用技能可以执行此操作。",
+    health_probe_unavailable: "当前技能没有提供健康检查。",
+  } satisfies Record<string, string>)[reason] ?? reason;
 }
 
 export function extensionKindLabel(kind: ExtensionKind): string {

@@ -12,6 +12,10 @@ from ecorex.capabilities import (
     builtin_model_catalog,
 )
 from ecorex.protocol import CreateTurnRequest
+from ecorex.managed_model_policy import (
+    ECOREX_CHAT_MODEL_POLICIES,
+    require_managed_chat_mapping,
+)
 
 
 def _catalog() -> ManagedModelCatalog:
@@ -83,6 +87,42 @@ def test_builtin_chat_catalog_publishes_versioned_gpt_56_sol_policy() -> None:
     assert catalog.to_dict()["modalities"]["chat"][0]["model_policy"] == (
         model.model_policy.to_dict()
     )
+
+
+def test_builtin_chat_catalog_restores_all_managed_v03_provider_choices() -> None:
+    catalog = builtin_model_catalog()
+    models = {model.model_id: model for model in catalog.for_modality(ModelModality.CHAT)}
+
+    assert set(models) == {
+        "ecorex-chat",
+        "ecorex-deepseek-v4-pro",
+        "ecorex-gemini-3.1-pro",
+        "ecorex-doubao-seed-2.0-pro",
+    }
+    assert catalog.resolve("deepseek-v4-pro", modality=ModelModality.CHAT).canonical_model_id == (
+        "ecorex-deepseek-v4-pro"
+    )
+    assert catalog.resolve("gemini", modality=ModelModality.CHAT).canonical_model_id == (
+        "ecorex-gemini-3.1-pro"
+    )
+    assert catalog.resolve("doubao", modality=ModelModality.CHAT).canonical_model_id == (
+        "ecorex-doubao-seed-2.0-pro"
+    )
+    assert models["ecorex-gemini-3.1-pro"].model_policy.compact_threshold_tokens == 900_000
+    assert models["ecorex-doubao-seed-2.0-pro"].model_policy.compact_threshold_tokens == 224_000
+
+
+def test_gateway_mapping_accepts_only_exact_managed_policy_subsets() -> None:
+    full_mapping = {
+        policy.local_model_id: policy.upstream_model_id
+        for policy in ECOREX_CHAT_MODEL_POLICIES
+    }
+    require_managed_chat_mapping(full_mapping)
+    require_managed_chat_mapping({"ecorex-chat": "gpt-5.6-sol"})
+    with pytest.raises(ValueError, match="violates managed policy"):
+        require_managed_chat_mapping({"ecorex-deepseek-v4-pro": "deepseek-chat"})
+    with pytest.raises(ValueError, match="violates managed policy"):
+        require_managed_chat_mapping({"unknown-model": "unknown-model"})
 
 
 def test_catalog_is_available_before_a_thread_exists_and_separates_modalities() -> None:

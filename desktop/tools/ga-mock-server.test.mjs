@@ -124,6 +124,8 @@ test("GA harness exposes managed bootstrap, strict CSRF, state reset, and unique
   const extensions = await fetch(`${harness.url}/api/v1/extensions`).then((response) => response.json());
   const feishu = extensions.items.find((item) => item.extension_id === "ecorex.feishu-mcp");
   assert.equal(feishu.health, "degraded");
+  assert.equal(feishu.category, "collaboration");
+  assert.equal(feishu.icon_key, "feishu");
   assert.equal("rollback_version" in feishu, false);
   assert.equal("command" in feishu, false);
   assert.equal("path" in feishu, false);
@@ -175,6 +177,32 @@ test("GA harness exposes managed bootstrap, strict CSRF, state reset, and unique
   const second = await createShare("share-request-2");
   assert.notEqual(first.share_id, second.share_id);
   assert.notEqual(first.public_url, second.public_url);
+});
+
+test("GA frame reload preserves one browser session while a fresh session resets state", async (context) => {
+  const harness = await createGaMockServer({ scenario: "artifact" });
+  context.after(() => harness.close());
+  const frameUrl = `${harness.url}/__ga/frame-app?scenario=artifact&theme=light`;
+  const firstFrame = await fetch(frameUrl);
+  const sessionCookie = firstFrame.headers.get("set-cookie")?.split(";", 1)[0] || "";
+  assert.equal(sessionCookie, "ecorex_ga_session=1");
+
+  const pinned = await fetch(`${harness.url}/api/v1/threads/thread-ga/pin`, {
+    method: "PUT",
+    headers: MUTATION_HEADERS,
+    body: JSON.stringify({ pinned: true, client_request_id: "pin-ga-reload" }),
+  });
+  assert.equal(pinned.status, 200);
+
+  const reloaded = await fetch(frameUrl, { headers: { Cookie: sessionCookie } });
+  assert.equal(reloaded.status, 200);
+  const retained = await fetch(`${harness.url}/api/v1/threads`).then((response) => response.json());
+  assert.equal(retained.items[0].pinned, true);
+
+  const freshSession = await fetch(frameUrl);
+  assert.equal(freshSession.status, 200);
+  const reset = await fetch(`${harness.url}/api/v1/threads`).then((response) => response.json());
+  assert.equal(reset.items[0].pinned, false);
 });
 
 test("GA task-switch scenario serves independent projections and preserves missing-task 404", async (context) => {

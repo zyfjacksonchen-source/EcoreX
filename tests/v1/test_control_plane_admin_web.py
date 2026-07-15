@@ -204,6 +204,11 @@ def test_admin_dom_and_script_contract_are_csp_safe_and_ephemeral() -> None:
     assert "签名门禁包的只读投影" in html
     assert "activate" in html and "pause" in html and "halt" in html
     assert "stable" in html and "canary" in html
+    assert all(label in html for label in (">用户<", ">用量<", ">模型<", ">发布<"))
+    assert 'id="user-table-body"' in html
+    assert 'id="model-table-body"' in html
+    assert 'id="rollout-mode"' in html and 'value="full"' in html
+    assert "测试并启用" in html
     assert "__ADMIN_CSS_SRI__" in html and "__ADMIN_JS_SRI__" in html
 
     forbidden_script = (
@@ -242,8 +247,16 @@ def test_admin_dom_and_script_contract_are_csp_safe_and_ephemeral() -> None:
         '/channels/${safeSegment(channel)}/${suffix}',
         'apiRequest("/resume")',
         'apiRequest("/distribution"',
+        'apiRequest("/users"',
+        'apiRequest("/usage/summary"',
+        'apiRequest("/models"',
+        '/test-and-activate',
+        '/usage-adjustments',
     ):
         assert contract in script
+    assert 'elements.modelApiKey.value = ""' in script
+    assert "full ? 100" in script
+    assert "full ? []" in script
     assert '/gates/${gate}' not in script
     assert "/gate-bundle" not in script
     assert ".gate-action" not in script

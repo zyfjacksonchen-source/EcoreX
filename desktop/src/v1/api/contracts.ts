@@ -107,6 +107,8 @@ export interface ThreadProjection {
   thread_id: string;
   status: ThreadStatus;
   title: string | null;
+  pinned: boolean;
+  active_turn_status: TurnStatus | null;
   metadata: JsonObject;
   forked_from_thread_id: string | null;
   forked_from_turn_id: string | null;
@@ -539,6 +541,16 @@ export interface ExtensionProjection {
   display_name: string;
   description: string;
   kind: ExtensionKind;
+  category:
+    | "system"
+    | "office"
+    | "image_media"
+    | "collaboration"
+    | "data"
+    | "development"
+    | "automation"
+    | "general";
+  icon_key: string;
   active_revision_id: string | null;
   active_version: string | null;
   active_digest: string | null;
@@ -705,6 +717,7 @@ export interface BootstrapResponse {
     organization_id: string | null;
     roles: string[];
     session_revision: number | null;
+    session_lease_digest: string | null;
   };
   policy_lease: {
     lease_id: string;
@@ -773,6 +786,13 @@ export interface DeviceLoginProjection {
   restart_scheduled: boolean;
   session_generation: number | null;
   error_code: string | null;
+}
+
+export interface LogoutSessionResponse {
+  authenticated: false;
+  generation: number;
+  restart_required: true;
+  restart_scheduled: boolean;
 }
 
 export interface PermissionMutationResponse {

@@ -4,7 +4,7 @@
   const API_BASE = "/api/v1/admin";
   const MAX_MANIFEST_BYTES = 16 * 1024 * 1024;
   const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
-  const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
+  const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,255}$/;
 
   let adminToken = "";
   let manifest = null;
@@ -12,6 +12,10 @@
   let candidate = null;
   let rollout = null;
   let rollback = null;
+  let users = [];
+  let models = [];
+  let editingUser = null;
+  let editingModel = null;
   let sessionConnected = false;
   let busy = false;
   let fileReadGeneration = 0;
@@ -46,6 +50,58 @@
     message: byId("global-message"),
     messageText: byId("global-message-text"),
     dismissMessage: byId("dismiss-message-button"),
+    userFilterForm: byId("user-filter-form"),
+    userQuery: byId("user-query"),
+    userStatusFilter: byId("user-status-filter"),
+    userOrganizationFilter: byId("user-organization-filter"),
+    filterUsersButton: byId("filter-users-button"),
+    createUserButton: byId("create-user-button"),
+    userListSummary: byId("user-list-summary"),
+    userTableBody: byId("user-table-body"),
+    userDialog: byId("user-dialog"),
+    userForm: byId("user-form"),
+    userDialogTitle: byId("user-dialog-title"),
+    userAccountId: byId("user-account-id"),
+    userDisplayName: byId("user-display-name"),
+    userEmail: byId("user-email"),
+    userOrganization: byId("user-organization"),
+    userStatus: byId("user-status"),
+    userTokenLimit: byId("user-token-limit"),
+    userImageLimit: byId("user-image-limit"),
+    userCancelButton: byId("user-cancel-button"),
+    userSaveButton: byId("user-save-button"),
+    usageUsers: byId("usage-users"),
+    usageTokens: byId("usage-tokens"),
+    usageImages: byId("usage-images"),
+    usageCapturedAt: byId("usage-captured-at"),
+    refreshUsageButton: byId("refresh-usage-button"),
+    usageDialog: byId("usage-dialog"),
+    usageForm: byId("usage-form"),
+    usageAccountId: byId("usage-account-id"),
+    usageUserRevision: byId("usage-user-revision"),
+    usageTokenDelta: byId("usage-token-delta"),
+    usageImageDelta: byId("usage-image-delta"),
+    usageReason: byId("usage-reason"),
+    usageCancelButton: byId("usage-cancel-button"),
+    usageSaveButton: byId("usage-save-button"),
+    createModelButton: byId("create-model-button"),
+    modelListSummary: byId("model-list-summary"),
+    modelTableBody: byId("model-table-body"),
+    modelDialog: byId("model-dialog"),
+    modelForm: byId("model-form"),
+    modelDialogTitle: byId("model-dialog-title"),
+    modelConfigId: byId("model-config-id"),
+    modelActiveRevision: byId("model-active-revision"),
+    modelModality: byId("model-modality"),
+    modelLocalId: byId("model-local-id"),
+    modelDisplayName: byId("model-display-name"),
+    modelUpstreamId: byId("model-upstream-id"),
+    modelProvider: byId("model-provider"),
+    modelApiKey: byId("model-api-key"),
+    modelDefault: byId("model-default"),
+    modelEnabled: byId("model-enabled"),
+    modelCancelButton: byId("model-cancel-button"),
+    modelSaveButton: byId("model-save-button"),
     manifestForm: byId("manifest-form"),
     manifestFile: byId("manifest-file"),
     manifestHelp: byId("manifest-help"),
@@ -61,6 +117,7 @@
     gateTableBody: byId("gate-table-body"),
     publishButton: byId("publish-button"),
     rolloutForm: byId("rollout-form"),
+    rolloutMode: byId("rollout-mode"),
     rolloutReleaseId: byId("rollout-release-id"),
     rolloutPercentage: byId("rollout-percentage"),
     minimumVersion: byId("minimum-version"),
@@ -130,6 +187,149 @@
       throw new Error(`Control Plane 返回了无效列表：${field}`);
     }
     return value.map((entry, index) => requiredString(entry, `${field}[${index}]`));
+  };
+
+  const boundedInteger = (value, field, minimum = 0, maximum = Number.MAX_SAFE_INTEGER) => {
+    const number = Number(value);
+    if (!Number.isSafeInteger(number) || number < minimum || number > maximum) {
+      throw new Error(`Control Plane 返回了无效数值：${field}`);
+    }
+    return number;
+  };
+
+  const normalizeUser = (value) => {
+    if (!isRecord(value)) throw new Error("Control Plane 返回的用户合同无效。");
+    const status = requiredString(value.status, "status");
+    if (!new Set(["active", "suspended"]).has(status)) {
+      throw new Error("Control Plane 返回了未知用户状态。");
+    }
+    return {
+      account_id: requiredString(value.account_id, "account_id"),
+      display_name: requiredString(value.display_name, "display_name"),
+      email: optionalString(value.email, "email"),
+      organization_id: optionalString(value.organization_id, "organization_id"),
+      status,
+      token_limit: boundedInteger(value.token_limit, "token_limit", 0, 10 ** 12),
+      tokens_used: boundedInteger(value.tokens_used, "tokens_used", 0, 10 ** 12),
+      image_limit: boundedInteger(value.image_limit, "image_limit", 0, 10 ** 9),
+      images_used: boundedInteger(value.images_used, "images_used", 0, 10 ** 9),
+      revision: boundedInteger(value.revision, "revision", 1),
+      created_at: requiredString(value.created_at, "created_at"),
+      updated_at: requiredString(value.updated_at, "updated_at"),
+    };
+  };
+
+  const normalizeUserList = (value) => {
+    if (!isRecord(value) || !Array.isArray(value.items) || value.items.length > 200) {
+      throw new Error("Control Plane 返回的用户列表无效。");
+    }
+    const items = value.items.map(normalizeUser);
+    if (new Set(items.map((item) => item.account_id)).size !== items.length) {
+      throw new Error("Control Plane 返回了重复用户。");
+    }
+    return {
+      items,
+      total: boundedInteger(value.total, "total", items.length),
+      offset: boundedInteger(value.offset, "offset"),
+      limit: boundedInteger(value.limit, "limit", 1, 200),
+    };
+  };
+
+  const normalizeUsageSummary = (value) => {
+    if (!isRecord(value)) throw new Error("Control Plane 返回的用量合同无效。");
+    return {
+      users_total: boundedInteger(value.users_total, "users_total"),
+      users_active: boundedInteger(value.users_active, "users_active"),
+      token_limit: boundedInteger(value.token_limit, "token_limit", 0, 10 ** 15),
+      tokens_used: boundedInteger(value.tokens_used, "tokens_used", 0, 10 ** 15),
+      image_limit: boundedInteger(value.image_limit, "image_limit", 0, 10 ** 12),
+      images_used: boundedInteger(value.images_used, "images_used", 0, 10 ** 12),
+      captured_at: requiredString(value.captured_at, "captured_at"),
+    };
+  };
+
+  const normalizeModelRevision = (value) => {
+    if (!isRecord(value) || Object.hasOwn(value, "api_key")) {
+      throw new Error("Control Plane 返回的模型修订无效。");
+    }
+    const modality = requiredString(value.modality, "modality");
+    const provider = requiredString(value.provider_preset, "provider_preset");
+    const status = requiredString(value.status, "status");
+    const testStatus = requiredString(value.test_status, "test_status");
+    if (!new Set(["chat", "image_generation", "image_edit"]).has(modality)
+      || !new Set(["responses", "openai_compatible_chat", "openai_compatible_image"]).has(provider)
+      || !new Set(["draft", "testing", "active", "rejected", "superseded"]).has(status)
+      || !new Set(["not_tested", "running", "passed", "failed"]).has(testStatus)) {
+      throw new Error("Control Plane 返回了未知模型状态。");
+    }
+    if (typeof value.is_default !== "boolean" || typeof value.enabled !== "boolean"
+      || typeof value.key_configured !== "boolean") {
+      throw new Error("Control Plane 返回了无效模型开关。");
+    }
+    return {
+      config_id: requiredString(value.config_id, "config_id"),
+      revision: boundedInteger(value.revision, "revision", 1),
+      local_model_id: requiredString(value.local_model_id, "local_model_id"),
+      modality,
+      display_name: requiredString(value.display_name, "display_name"),
+      upstream_model_id: requiredString(value.upstream_model_id, "upstream_model_id"),
+      provider_preset: provider,
+      is_default: value.is_default,
+      enabled: value.enabled,
+      status,
+      key_configured: value.key_configured,
+      key_fingerprint: optionalString(value.key_fingerprint, "key_fingerprint"),
+      test_id: optionalString(value.test_id, "test_id"),
+      test_status: testStatus,
+      test_error_code: optionalString(value.test_error_code, "test_error_code"),
+      tested_at: optionalString(value.tested_at, "tested_at"),
+      created_at: requiredString(value.created_at, "created_at"),
+      updated_at: requiredString(value.updated_at, "updated_at"),
+    };
+  };
+
+  const normalizeModelConfiguration = (value) => {
+    if (!isRecord(value)) throw new Error("Control Plane 返回的模型配置无效。");
+    const configId = requiredString(value.config_id, "config_id");
+    const active = value.active === null ? null : normalizeModelRevision(value.active);
+    const draft = value.draft === null ? null : normalizeModelRevision(value.draft);
+    if (active === null && draft === null) {
+      throw new Error("Control Plane 返回了空模型配置。");
+    }
+    if ((active && active.config_id !== configId) || (draft && draft.config_id !== configId)) {
+      throw new Error("Control Plane 返回了错配的模型修订。");
+    }
+    return { config_id: configId, active, draft };
+  };
+
+  const normalizeModelList = (value) => {
+    if (!Array.isArray(value) || value.length > 100) {
+      throw new Error("Control Plane 返回的模型列表无效。");
+    }
+    const items = value.map(normalizeModelConfiguration);
+    if (new Set(items.map((item) => item.config_id)).size !== items.length) {
+      throw new Error("Control Plane 返回了重复模型配置。");
+    }
+    return items;
+  };
+
+  const normalizeModelTest = (value) => {
+    if (!isRecord(value)) throw new Error("Control Plane 返回的模型测试合同无效。");
+    const status = requiredString(value.status, "status");
+    if (!new Set(["running", "passed", "failed", "superseded"]).has(status)) {
+      throw new Error("Control Plane 返回了未知测试状态。");
+    }
+    return {
+      test_id: requiredString(value.test_id, "test_id"),
+      config_id: requiredString(value.config_id, "config_id"),
+      revision: boundedInteger(value.revision, "revision", 1),
+      status,
+      error_code: optionalString(value.error_code, "error_code"),
+      active_revision: value.active_revision === null
+        ? null
+        : boundedInteger(value.active_revision, "active_revision", 1),
+      completed_at: optionalString(value.completed_at, "completed_at"),
+    };
   };
 
   const normalizeCandidate = (value) => {
@@ -318,13 +518,26 @@
       throw new Error("管理台拒绝了无效 API 路径。");
     }
     const method = options.method || "GET";
+    const queryEntries = options.query === undefined
+      ? []
+      : Object.entries(options.query).filter(([, value]) => value !== null && value !== undefined && value !== "");
+    if (queryEntries.length > 16 || queryEntries.some(([key, value]) => (
+      !/^[a-z][a-z0-9_]{0,63}$/u.test(key)
+      || typeof value !== "string"
+      || value.length > 256
+    ))) {
+      throw new Error("管理台拒绝了无效筛选参数。");
+    }
+    const query = queryEntries.length === 0
+      ? ""
+      : "?" + queryEntries.map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join("&");
     const encoded = options.body === undefined ? null : JSON.stringify(options.body);
     if (encoded !== null && encoded.length > MAX_MANIFEST_BYTES + 1024 * 1024) {
       throw new Error("请求内容超过管理台限制。");
     }
     let response;
     try {
-      response = await fetch(`${API_BASE}${path}`, {
+      response = await fetch(`${API_BASE}${path}${query}`, {
         method,
         credentials: "same-origin",
         cache: "no-store",
@@ -435,6 +648,33 @@
     elements.distributionTableBody.replaceChildren(row);
   };
 
+  const placeholderRow = (columns, text) => {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = columns;
+    cell.textContent = text;
+    row.append(cell);
+    return row;
+  };
+
+  const clearManagement = () => {
+    users = [];
+    models = [];
+    editingUser = null;
+    editingModel = null;
+    elements.userListSummary.textContent = "连接控制面后读取用户。";
+    elements.userTableBody.replaceChildren(placeholderRow(6, "尚未加载"));
+    elements.modelListSummary.textContent = "密钥不会返回页面；列表仅显示短指纹与测试状态。";
+    elements.modelTableBody.replaceChildren(placeholderRow(6, "尚未加载"));
+    elements.usageUsers.textContent = "—";
+    elements.usageTokens.textContent = "—";
+    elements.usageImages.textContent = "—";
+    elements.usageCapturedAt.textContent = "—";
+    for (const dialog of [elements.userDialog, elements.usageDialog, elements.modelDialog]) {
+      if (dialog.open) dialog.close("session-cleared");
+    }
+  };
+
   const clearSession = ({ clearWorkflow = true } = {}) => {
     adminToken = "";
     sessionConnected = false;
@@ -448,6 +688,7 @@
       elements.manifestHelp.textContent = "仅接受不超过 16 MiB 的 JSON；文件只在本地解析后提交给 Control Plane。";
       clearProjection();
       clearDistribution();
+      clearManagement();
       byId("canary-kill-state").textContent = "尚未返回";
       byId("stable-kill-state").textContent = "尚未返回";
       channelStates.set("canary", "unknown");
@@ -477,6 +718,9 @@
       || candidate.status !== "published"
       || busy;
     elements.createRollbackButton.disabled = !connected || busy;
+    for (const button of document.querySelectorAll("[data-session-control]")) {
+      button.disabled = !connected || busy || button.dataset.controlLock === "true";
+    }
     for (const button of document.querySelectorAll("[data-rollout-action], [data-rollback-action], [data-kill-action]")) {
       button.disabled = !connected
         || busy
@@ -627,6 +871,256 @@
     elements.distributionTableBody.replaceChildren(...rows);
   };
 
+  const formatCount = (value) => new Intl.NumberFormat("zh-CN", {
+    notation: value >= 1_000_000 ? "compact" : "standard",
+    maximumFractionDigits: 1,
+  }).format(value);
+
+  const usageText = (used, limit) => `${formatCount(used)} / ${formatCount(limit)}`;
+
+  const appendTextCell = (row, text, className = "") => {
+    const cell = document.createElement("td");
+    cell.textContent = text;
+    if (className) cell.className = className;
+    row.append(cell);
+    return cell;
+  };
+
+  const openUserDialog = (user = null) => {
+    editingUser = user;
+    elements.userDialogTitle.textContent = user ? `编辑 ${user.display_name}` : "创建用户";
+    elements.userAccountId.value = user?.account_id || "";
+    elements.userAccountId.disabled = Boolean(user);
+    elements.userDisplayName.value = user?.display_name || "";
+    elements.userEmail.value = user?.email || "";
+    elements.userOrganization.value = user?.organization_id || "";
+    elements.userStatus.value = user?.status || "active";
+    elements.userStatus.disabled = !user;
+    elements.userTokenLimit.value = String(user?.token_limit ?? 0);
+    elements.userImageLimit.value = String(user?.image_limit ?? 0);
+    elements.userDialog.showModal();
+    elements.userDisplayName.focus();
+  };
+
+  const openUsageDialog = (user) => {
+    elements.usageAccountId.value = user.account_id;
+    elements.usageUserRevision.value = String(user.revision);
+    elements.usageTokenDelta.value = "0";
+    elements.usageImageDelta.value = "0";
+    elements.usageReason.value = "";
+    elements.usageDialogTitle.textContent = `校正 ${user.display_name} 的用量`;
+    elements.usageDialog.showModal();
+    elements.usageTokenDelta.focus();
+  };
+
+  const renderUsers = (projection) => {
+    users = projection.items;
+    elements.userListSummary.textContent = `显示 ${projection.items.length} 位，共 ${projection.total} 位用户。`;
+    const rows = projection.items.map((user) => {
+      const row = document.createElement("tr");
+      const identity = document.createElement("td");
+      const name = document.createElement("strong");
+      name.textContent = user.display_name;
+      const detail = document.createElement("small");
+      detail.textContent = user.email || user.account_id;
+      identity.append(name, detail);
+      row.append(identity);
+      appendTextCell(row, user.organization_id || "—");
+      appendTextCell(row, usageText(user.tokens_used, user.token_limit), "number-cell");
+      appendTextCell(row, usageText(user.images_used, user.image_limit), "number-cell");
+      const statusCell = document.createElement("td");
+      const status = document.createElement("span");
+      status.className = "status-badge";
+      status.dataset.state = user.status;
+      status.textContent = user.status === "active" ? "正常" : "已停用";
+      statusCell.append(status);
+      row.append(statusCell);
+      const actions = document.createElement("td");
+      actions.className = "table-actions compact-actions";
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.className = "button compact";
+      edit.textContent = "编辑";
+      edit.dataset.sessionControl = "";
+      edit.addEventListener("click", () => openUserDialog(user));
+      const adjust = document.createElement("button");
+      adjust.type = "button";
+      adjust.className = "button compact";
+      adjust.textContent = "校正用量";
+      adjust.dataset.sessionControl = "";
+      adjust.addEventListener("click", () => openUsageDialog(user));
+      actions.append(edit, adjust);
+      row.append(actions);
+      return row;
+    });
+    elements.userTableBody.replaceChildren(
+      ...(rows.length ? rows : [placeholderRow(6, "没有符合条件的用户。")]),
+    );
+  };
+
+  const renderUsageSummary = (projection) => {
+    elements.usageUsers.textContent = `${formatCount(projection.users_active)} / ${formatCount(projection.users_total)}`;
+    elements.usageTokens.textContent = usageText(projection.tokens_used, projection.token_limit);
+    elements.usageImages.textContent = usageText(projection.images_used, projection.image_limit);
+    elements.usageCapturedAt.textContent = new Intl.DateTimeFormat("zh-CN", {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(new Date(projection.captured_at));
+  };
+
+  const modalityLabel = (modality) => ({
+    chat: "主模型",
+    image_generation: "生图模型",
+    image_edit: "精修模型",
+  })[modality] || "未知模型";
+
+  const modelTestErrorLabel = (code) => ({
+    provider_key_rejected: "Key 未通过服务商验证",
+    provider_model_unavailable: "服务端未找到该模型名称",
+    provider_test_unconfigured: "该接口类型尚未由平台允许",
+    provider_test_timeout: "测试超时，请检查服务商状态",
+    provider_test_unavailable: "暂时无法连接模型服务",
+    provider_test_protocol: "模型服务返回了不兼容的格式",
+    provider_test_rejected: "模型服务拒绝了测试请求",
+    provider_test_cancelled: "测试已取消",
+  })[code] || "模型测试未通过";
+
+  const openModelDialog = (configuration = null) => {
+    editingModel = configuration;
+    const revision = configuration ? (configuration.draft || configuration.active) : null;
+    elements.modelDialogTitle.textContent = configuration ? `编辑 ${revision.display_name}` : "添加模型";
+    elements.modelConfigId.value = configuration?.config_id || "";
+    elements.modelActiveRevision.value = configuration?.active ? String(configuration.active.revision) : "";
+    elements.modelModality.value = revision?.modality || "chat";
+    elements.modelLocalId.value = revision?.local_model_id || "";
+    elements.modelModality.disabled = Boolean(configuration);
+    elements.modelLocalId.disabled = Boolean(configuration);
+    elements.modelDisplayName.value = revision?.display_name || "";
+    elements.modelUpstreamId.value = revision?.upstream_model_id || "";
+    elements.modelProvider.value = revision?.provider_preset || "responses";
+    elements.modelDefault.checked = revision?.is_default ?? true;
+    elements.modelEnabled.checked = revision?.enabled ?? true;
+    elements.modelApiKey.value = "";
+    elements.modelApiKey.required = !configuration;
+    syncModelProvider();
+    elements.modelDialog.showModal();
+    elements.modelDisplayName.focus();
+  };
+
+  const renderModels = (items) => {
+    models = items;
+    elements.modelListSummary.textContent = `已配置 ${items.length} 个模型位。Key 只显示指纹，保存后不可读回。`;
+    const rows = items.map((configuration) => {
+      const revision = configuration.draft || configuration.active;
+      const row = document.createElement("tr");
+      appendTextCell(row, modalityLabel(revision.modality));
+      const display = document.createElement("td");
+      const name = document.createElement("strong");
+      name.textContent = revision.display_name;
+      const local = document.createElement("small");
+      local.textContent = revision.local_model_id;
+      display.append(name, local);
+      row.append(display);
+      appendTextCell(row, revision.upstream_model_id, "mono-cell");
+      appendTextCell(row, revision.key_fingerprint ? `…${revision.key_fingerprint}` : "未配置", "mono-cell");
+      const stateCell = document.createElement("td");
+      const state = document.createElement("span");
+      state.className = "status-badge";
+      state.dataset.state = configuration.draft ? revision.test_status : revision.status;
+      state.textContent = configuration.draft
+        ? ({ not_tested: "待测试", running: "测试中", passed: "已通过", failed: "测试失败" })[revision.test_status]
+        : "已生效";
+      stateCell.append(state);
+      if (revision.test_error_code) {
+        const error = document.createElement("small");
+        error.textContent = modelTestErrorLabel(revision.test_error_code);
+        error.title = revision.test_error_code;
+        stateCell.append(error);
+      }
+      row.append(stateCell);
+      const actions = document.createElement("td");
+      actions.className = "table-actions compact-actions";
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.className = "button compact";
+      edit.textContent = "编辑";
+      edit.dataset.sessionControl = "";
+      edit.addEventListener("click", () => openModelDialog(configuration));
+      actions.append(edit);
+      if (configuration.draft) {
+        const activate = document.createElement("button");
+        activate.type = "button";
+        activate.className = "button compact primary";
+        activate.textContent = revision.test_status === "running" ? "测试中" : "测试并启用";
+        activate.dataset.sessionControl = "";
+        activate.dataset.controlLock = revision.test_status === "running" ? "true" : "false";
+        activate.addEventListener("click", () => {
+          askConfirmation({
+            title: `测试并启用 ${revision.display_name}？`,
+            description: "只有 Key 与模型名称都验证通过时，新修订才会原子替换当前配置；失败不影响线上模型。",
+            confirmLabel: "开始测试",
+            operation: () => withBusy(activate, "测试中", async () => {
+              const payload = await apiRequest(`/models/${safeSegment(configuration.config_id)}/test-and-activate`, {
+                method: "POST",
+                body: {
+                  revision: revision.revision,
+                  client_request_id: requestId(`model-test:${configuration.config_id}:${revision.revision}`),
+                },
+              });
+              const result = normalizeModelTest(payload);
+              if (result.status !== "passed") {
+                throw new Error(result.error_code
+                  ? modelTestErrorLabel(result.error_code)
+                  : "模型测试未通过，现有配置未变更。");
+              }
+              requestIds.delete(`model-test:${configuration.config_id}:${revision.revision}`);
+              await refreshModels();
+              showMessage("info", `${revision.display_name} 已测试通过并对新请求生效。`);
+            }),
+          });
+        });
+        actions.append(activate);
+      }
+      row.append(actions);
+      return row;
+    });
+    elements.modelTableBody.replaceChildren(
+      ...(rows.length ? rows : [placeholderRow(6, "尚未配置托管模型。")]),
+    );
+  };
+
+  const refreshUsers = async () => {
+    const payload = await apiRequest("/users", {
+      query: {
+        query: elements.userQuery.value.trim(),
+        status: elements.userStatusFilter.value,
+        organization_id: elements.userOrganizationFilter.value.trim(),
+        offset: "0",
+        limit: "200",
+      },
+    });
+    renderUsers(normalizeUserList(payload));
+  };
+
+  const refreshUsage = async () => {
+    renderUsageSummary(normalizeUsageSummary(await apiRequest("/usage/summary")));
+  };
+
+  async function refreshModels() {
+    renderModels(normalizeModelList(await apiRequest("/models")));
+  }
+
+  const refreshManagementData = async () => {
+    const [userPayload, usagePayload, modelPayload] = await Promise.all([
+      apiRequest("/users", { query: { offset: "0", limit: "200" } }),
+      apiRequest("/usage/summary"),
+      apiRequest("/models"),
+    ]);
+    renderUsers(normalizeUserList(userPayload));
+    renderUsageSummary(normalizeUsageSummary(usagePayload));
+    renderModels(normalizeModelList(modelPayload));
+  };
+
   const renderResume = (projection) => {
     if (projection.latest_candidate_id === null) {
       clearCandidateProjection();
@@ -663,6 +1157,7 @@
         const projection = normalizeResume(payload);
         sessionConnected = true;
         renderResume(projection);
+        await refreshManagementData();
       } catch (error) {
         sessionConnected = false;
         elements.sessionLabel.textContent = "未连接 · 状态恢复失败";
@@ -718,6 +1213,192 @@
   });
 
   elements.dismissMessage.addEventListener("click", clearMessage);
+
+  elements.createUserButton.addEventListener("click", () => openUserDialog());
+
+  elements.userFilterForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void withBusy(elements.filterUsersButton, "筛选中", refreshUsers);
+  });
+
+  elements.userCancelButton.addEventListener("click", () => elements.userDialog.close("cancel"));
+
+  elements.userForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (busy) return;
+    const accountId = elements.userAccountId.value.trim();
+    const displayName = elements.userDisplayName.value.trim();
+    const email = elements.userEmail.value.trim() || null;
+    const organizationId = elements.userOrganization.value.trim() || null;
+    const tokenLimit = Number(elements.userTokenLimit.value);
+    const imageLimit = Number(elements.userImageLimit.value);
+    if (!SAFE_SEGMENT.test(accountId) || !displayName
+      || !Number.isSafeInteger(tokenLimit) || tokenLimit < 0 || tokenLimit > 10 ** 12
+      || !Number.isSafeInteger(imageLimit) || imageLimit < 0 || imageLimit > 10 ** 9) {
+      showMessage("error", "用户资料不完整，或额度不在允许范围内。");
+      return;
+    }
+    const source = editingUser;
+    const key = source
+      ? `user-update:${accountId}:${source.revision}`
+      : `user-create:${accountId}`;
+    void withBusy(elements.userSaveButton, "保存中", async () => {
+      const base = {
+        display_name: displayName,
+        email,
+        organization_id: organizationId,
+        token_limit: tokenLimit,
+        image_limit: imageLimit,
+        client_request_id: requestId(key),
+      };
+      const payload = source
+        ? await apiRequest(`/users/${safeSegment(accountId)}`, {
+            method: "PUT",
+            body: {
+              ...base,
+              status: elements.userStatus.value,
+              expected_revision: source.revision,
+            },
+          })
+        : await apiRequest("/users", {
+            method: "POST",
+            body: { ...base, account_id: accountId },
+          });
+      const saved = normalizeUser(payload);
+      requestIds.delete(key);
+      elements.userDialog.close("saved");
+      editingUser = null;
+      await Promise.all([refreshUsers(), refreshUsage()]);
+      showMessage("info", `${saved.display_name} 已保存。`);
+    });
+  });
+
+  elements.usageCancelButton.addEventListener("click", () => elements.usageDialog.close("cancel"));
+
+  elements.usageForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (busy) return;
+    const accountId = elements.usageAccountId.value;
+    const revision = Number(elements.usageUserRevision.value);
+    const tokenDelta = Number(elements.usageTokenDelta.value);
+    const imageDelta = Number(elements.usageImageDelta.value);
+    const reason = elements.usageReason.value.trim();
+    if (!SAFE_SEGMENT.test(accountId) || !Number.isSafeInteger(revision) || revision < 1
+      || !Number.isSafeInteger(tokenDelta) || Math.abs(tokenDelta) > 10 ** 12
+      || !Number.isSafeInteger(imageDelta) || Math.abs(imageDelta) > 10 ** 9
+      || (tokenDelta === 0 && imageDelta === 0) || !reason) {
+      showMessage("error", "请输入非零用量变化和可审计的原因。");
+      return;
+    }
+    const key = `usage:${accountId}:${revision}:${tokenDelta}:${imageDelta}`;
+    void withBusy(elements.usageSaveButton, "记录中", async () => {
+      const saved = normalizeUser(await apiRequest(`/users/${safeSegment(accountId)}/usage-adjustments`, {
+        method: "POST",
+        body: {
+          token_delta: tokenDelta,
+          image_delta: imageDelta,
+          reason,
+          expected_revision: revision,
+          client_request_id: requestId(key),
+        },
+      }));
+      requestIds.delete(key);
+      elements.usageDialog.close("saved");
+      await Promise.all([refreshUsers(), refreshUsage()]);
+      showMessage("info", `${saved.display_name} 的用量校正已记录。`);
+    });
+  });
+
+  elements.refreshUsageButton.addEventListener("click", () => {
+    void withBusy(elements.refreshUsageButton, "刷新中", refreshUsage);
+  });
+
+  elements.createModelButton.addEventListener("click", () => openModelDialog());
+  elements.modelCancelButton.addEventListener("click", () => elements.modelDialog.close("cancel"));
+
+  const modelSlotModalities = {
+    "ecorex-chat": "chat",
+    "ecorex-deepseek-v4-pro": "chat",
+    "ecorex-gemini-3.1-pro": "chat",
+    "ecorex-doubao-seed-2.0-pro": "chat",
+    "gpt-image-2": "image_generation",
+    "gpt-image-2-edit": "image_edit",
+  };
+  const syncModelProvider = () => {
+    const modality = elements.modelModality.value;
+    for (const option of elements.modelLocalId.options) {
+      option.disabled = modelSlotModalities[option.value] !== modality;
+    }
+    if (modelSlotModalities[elements.modelLocalId.value] !== modality) {
+      const first = Array.from(elements.modelLocalId.options).find((option) => !option.disabled);
+      if (first) elements.modelLocalId.value = first.value;
+    }
+    const isImage = modality !== "chat";
+    if (isImage) elements.modelProvider.value = "openai_compatible_image";
+    else if (elements.modelProvider.value === "openai_compatible_image") elements.modelProvider.value = "responses";
+    for (const option of elements.modelProvider.options) {
+      option.disabled = isImage
+        ? option.value !== "openai_compatible_image"
+        : option.value === "openai_compatible_image";
+    }
+  };
+  elements.modelModality.addEventListener("change", syncModelProvider);
+
+  elements.modelForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (busy) return;
+    const source = editingModel;
+    const localModelId = elements.modelLocalId.value.trim();
+    const displayName = elements.modelDisplayName.value.trim();
+    const upstreamModelId = elements.modelUpstreamId.value.trim();
+    const apiKey = elements.modelApiKey.value;
+    if (!SAFE_SEGMENT.test(localModelId) || !displayName || !upstreamModelId
+      || (!source && apiKey.length < 8)) {
+      showMessage("error", "请完整填写模型 ID、页面名称、服务端模型名和 Key。");
+      return;
+    }
+    const expectedActive = source?.active?.revision ?? null;
+    const key = source
+      ? `model-stage:${source.config_id}:${expectedActive ?? "none"}`
+      : `model-create:${localModelId}`;
+    void withBusy(elements.modelSaveButton, "加密保存中", async () => {
+      try {
+        const common = {
+          display_name: displayName,
+          upstream_model_id: upstreamModelId,
+          provider_preset: elements.modelProvider.value,
+          is_default: elements.modelDefault.checked,
+          enabled: elements.modelEnabled.checked,
+          api_key: apiKey || null,
+          client_request_id: requestId(key),
+        };
+        const payload = source
+          ? await apiRequest(`/models/${safeSegment(source.config_id)}/draft`, {
+              method: "PUT",
+              body: { ...common, expected_active_revision: expectedActive },
+            })
+          : await apiRequest("/models", {
+              method: "POST",
+              body: {
+                ...common,
+                api_key: apiKey,
+                local_model_id: localModelId,
+                modality: elements.modelModality.value,
+              },
+            });
+        const saved = normalizeModelConfiguration(payload);
+        requestIds.delete(key);
+        elements.modelDialog.close("saved");
+        editingModel = null;
+        renderModels(models.some((item) => item.config_id === saved.config_id)
+          ? models.map((item) => item.config_id === saved.config_id ? saved : item)
+          : [...models, saved]);
+        showMessage("info", "模型草稿已加密保存。请点击“测试并启用”，通过后才会影响新请求。");
+      } finally {
+        elements.modelApiKey.value = "";
+      }
+    });
+  });
 
   elements.manifestFile.addEventListener("change", async () => {
     const generation = ++fileReadGeneration;
@@ -800,18 +1481,35 @@
     });
   });
 
+  const syncRolloutMode = () => {
+    const full = elements.rolloutMode.value === "full";
+    elements.rolloutPercentage.disabled = full;
+    elements.targetOrganizations.disabled = full;
+    elements.targetAccounts.disabled = full;
+    if (full) {
+      elements.rolloutPercentage.value = "100";
+      elements.targetOrganizations.value = "";
+      elements.targetAccounts.value = "";
+    } else if (elements.rolloutPercentage.value === "100") {
+      elements.rolloutPercentage.value = "1";
+    }
+    elements.createRolloutButton.textContent = full ? "创建全量推送" : "创建灰度";
+  };
+  elements.rolloutMode.addEventListener("change", syncRolloutMode);
+
   elements.rolloutForm.addEventListener("submit", (event) => {
     event.preventDefault();
     if (!candidate) return;
     try {
-      const percentage = Number(elements.rolloutPercentage.value);
+      const full = elements.rolloutMode.value === "full";
+      const percentage = full ? 100 : Number(elements.rolloutPercentage.value);
       if (!Number.isInteger(percentage) || percentage < 1 || percentage > 100) {
         elements.rolloutPercentage.setAttribute("aria-invalid", "true");
         throw new Error("灰度比例必须是 1–100 的整数。");
       }
       elements.rolloutPercentage.removeAttribute("aria-invalid");
-      const organizations = parseTargetList(elements.targetOrganizations.value, "组织 ID");
-      const accounts = parseTargetList(elements.targetAccounts.value, "账号 ID");
+      const organizations = full ? [] : parseTargetList(elements.targetOrganizations.value, "组织 ID");
+      const accounts = full ? [] : parseTargetList(elements.targetAccounts.value, "账号 ID");
       const minimum = elements.minimumVersion.value.trim() || null;
       const body = {
         release_id: candidate.release_id,
@@ -821,9 +1519,11 @@
         minimum_compatible_version: minimum,
       };
       askConfirmation({
-        title: "确认创建灰度",
-        description: `灰度比例 ${percentage}%，目标组织 ${organizations.length} 个、账号 ${accounts.length} 个。创建后不会自动激活。`,
-        confirmLabel: "创建灰度",
+        title: full ? "确认全量推送" : "确认创建灰度",
+        description: full
+          ? "将向全部符合兼容要求的用户推送该版本。创建后仍需显式激活。"
+          : `灰度比例 ${percentage}%，目标组织 ${organizations.length} 个、账号 ${accounts.length} 个。创建后不会自动激活。`,
+        confirmLabel: full ? "创建全量推送" : "创建灰度",
         operation: () => withBusy(elements.createRolloutButton, "正在创建", async () => {
           const fingerprint = JSON.stringify(body);
           const payload = await apiRequest("/rollouts", {
@@ -1001,5 +1701,8 @@
 
   clearProjection();
   clearDistribution();
+  clearManagement();
+  syncModelProvider();
+  syncRolloutMode();
   syncControls();
 })();

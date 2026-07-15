@@ -77,6 +77,7 @@ const bootstrap: BootstrapResponse = {
     organization_id: "org-test",
     roles: ["member"],
     session_revision: 1,
+    session_lease_digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   },
   policy_lease: {
     lease_id: "lease_1",
@@ -281,6 +282,8 @@ test("bootstrap rejects an unknown extension enum before it reaches feature stat
     display_name: "Office Example",
     description: "",
     kind: "skill",
+    category: "office",
+    icon_key: "document",
     active_revision_id: null,
     active_version: null,
     active_digest: null,
@@ -373,6 +376,8 @@ test("bootstrap bearer is sent and returned CSRF protects later mutations", asyn
       thread_id: "thr_1",
       status: "active",
       title: null,
+      pinned: false,
+      active_turn_status: null,
       metadata: {},
       forked_from_thread_id: null,
       forked_from_turn_id: null,
@@ -445,6 +450,43 @@ test("managed device login exposes only public challenge fields and protects beg
   }
 });
 
+test("managed logout carries the current lease digest, CSRF, and one stable intent id", async () => {
+  const requests: Request[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const request = new Request(input, init);
+    requests.push(request);
+    return Response.json({
+      authenticated: false,
+      generation: 2,
+      restart_required: true,
+      restart_scheduled: true,
+    });
+  };
+  try {
+    const client = new RuntimeClient({
+      apiBase: "http://127.0.0.1:8765",
+      bearerToken: "b".repeat(43),
+    });
+    client.acceptBootstrap(bootstrap);
+    const receipt = await client.logoutSession(
+      bootstrap.login.session_lease_digest!,
+      "session-logout-stable-id",
+    );
+
+    assert.equal(receipt.restart_scheduled, true);
+    assert.equal(requests[0].url, "http://127.0.0.1:8765/api/v1/session/logout");
+    assert.equal(requests[0].headers.get("x-ecorex-csrf"), bootstrap.csrf_token);
+    assert.deepEqual(JSON.parse(await requests[0].text()), {
+      lease_digest: bootstrap.login.session_lease_digest,
+      client_request_id: "session-logout-stable-id",
+      confirmed: true,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("permission changes carry CSRF, optimistic revision, and a stable idempotency ID", async () => {
   const requests: Request[] = [];
   const originalFetch = globalThis.fetch;
@@ -494,6 +536,8 @@ test("extension catalog and actions use backend projections, revision fencing, a
     display_name: "办公工具",
     description: "办公工具集合",
     kind: "tool_provider" as const,
+    category: "office" as const,
+    icon_key: "document",
     active_revision_id: "rev_1",
     active_version: "1.0.0",
     active_digest: "a".repeat(64),
@@ -1330,6 +1374,8 @@ test("new-thread first message is a recoverable two-phase operation after lost r
         thread_id: "thread-two-phase",
         status: "active",
         title: null,
+        pinned: false,
+        active_turn_status: null,
         metadata: {},
         forked_from_thread_id: null,
         forked_from_turn_id: null,
@@ -1478,6 +1524,8 @@ test("thread projections reject stale nested wire shapes before reducer state", 
       thread_id: "thread-contract",
       status: "active",
       title: null,
+      pinned: false,
+      active_turn_status: null,
       metadata: {},
       forked_from_thread_id: null,
       forked_from_turn_id: null,
@@ -1669,6 +1717,8 @@ test("thread catalog mutations preserve backend order and authenticated idempote
     thread_id: "thr / one",
     status: "active",
     title: "月度经营复盘",
+    pinned: false,
+    active_turn_status: null,
     metadata: {},
     forked_from_thread_id: null,
     forked_from_turn_id: null,
@@ -1793,6 +1843,8 @@ test("Replay transport keeps Mock read-only and sends an explicitly confirmed st
     thread_id: "thread / replay",
     status: "active",
     title: "诊断任务",
+    pinned: false,
+    active_turn_status: null,
     metadata: {},
     forked_from_thread_id: null,
     forked_from_turn_id: null,

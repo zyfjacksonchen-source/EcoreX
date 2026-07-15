@@ -141,8 +141,15 @@ class OutputService:
         self.clock = clock
         self.fault_hook = fault_hook or (lambda _phase, _identity: None)
         self.default_alias = OutputLocationAlias(default_alias)
+        effective_roots = dict(configured_roots)
+        saved_workspace = self.repository.latest_policy_for_alias(
+            self.account_id,
+            OutputLocationAlias.WORKSPACE,
+        )
+        if saved_workspace is not None:
+            effective_roots[OutputLocationAlias.WORKSPACE] = saved_workspace.root_path
         self.filesystem = SafeOutputFilesystem(
-            configured_roots,
+            effective_roots,
             prepare_roots=prepare_output_roots,
         )
         if not self.filesystem.is_configured(self.default_alias):
@@ -279,6 +286,7 @@ class OutputService:
                 "operation": "set_preference",
                 "location_alias": alias.value,
                 "expected_revision": expected_revision,
+                "root_fingerprint": inspected_root[3],
             }
         )
         when = _time(self.clock())
@@ -588,6 +596,32 @@ class OutputService:
         if row is None:
             raise OutputPolicyNotFound("the recorded output preference is unavailable")
         return self.repository.preference_from_row(row)
+
+    def select_workspace_location(
+        self,
+        root: str | Path,
+        *,
+        expected_revision: int,
+        client_request_id: str,
+        account_id: str | None = None,
+    ) -> OutputPreferenceProjection:
+        """Bind a native-folder-picker result without exposing its path to WebUI."""
+
+        previous = self.filesystem.configured_root_path(OutputLocationAlias.WORKSPACE)
+        self.filesystem.replace_configured_root(OutputLocationAlias.WORKSPACE, root)
+        try:
+            return self.set_preference(
+                OutputLocationAlias.WORKSPACE,
+                expected_revision=expected_revision,
+                client_request_id=client_request_id,
+                account_id=account_id,
+            )
+        except BaseException:
+            self.filesystem.replace_configured_root(
+                OutputLocationAlias.WORKSPACE,
+                previous,
+            )
+            raise
 
     @staticmethod
     def _validate_idempotency(row: sqlite3.Row, operation: str, request_digest: str) -> None:

@@ -1,10 +1,11 @@
-import { lazy, memo, Suspense, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { CircleDashed, FileText, FolderOpen, Image, Workflow, WandSparkles } from "lucide-react";
+import { Fragment, lazy, memo, Suspense, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Check, CircleDashed, Copy, FileText, FolderOpen, Image, Workflow, WandSparkles } from "lucide-react";
 
 import type {
   ArtifactProjection,
   ItemProjection,
   InputAttachmentProjection,
+  ModelDescriptor,
   ProjectProjection,
   TurnProjection,
 } from "../api/contracts.ts";
@@ -25,6 +26,8 @@ const NewConversationProjectSelector = lazy(() => import("./NewConversationProje
 
 interface TimelineProps {
   items: ItemProjection[];
+  turns: TurnProjection[];
+  chatModels: ModelDescriptor[];
   activeTurn: TurnProjection | null;
   isThinking: boolean;
   visibleReasoning: ItemProjection | null;
@@ -92,6 +95,81 @@ function phaseLabel(status: TurnProjection["status"] | undefined): string {
   }
 }
 
+const TERMINAL_TURN_STATUSES = new Set<TurnProjection["status"]>([
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+  "superseded",
+]);
+
+export function formatTurnDuration(turn: Pick<TurnProjection, "created_at" | "updated_at">): string {
+  const startedAt = Date.parse(turn.created_at);
+  const endedAt = Date.parse(turn.updated_at);
+  const elapsedSeconds = Math.max(0, Math.round((endedAt - startedAt) / 1_000));
+  if (!Number.isFinite(elapsedSeconds)) return "耗时未知";
+  if (elapsedSeconds < 60) return `耗时 ${elapsedSeconds} 秒`;
+  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+  const remainingSeconds = elapsedSeconds % 60;
+  if (elapsedMinutes < 60) {
+    return remainingSeconds
+      ? `耗时 ${elapsedMinutes} 分 ${remainingSeconds} 秒`
+      : `耗时 ${elapsedMinutes} 分`;
+  }
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  const remainingMinutes = elapsedMinutes % 60;
+  return remainingMinutes
+    ? `耗时 ${elapsedHours} 小时 ${remainingMinutes} 分`
+    : `耗时 ${elapsedHours} 小时`;
+}
+
+const TurnCompletionRow = memo(function TurnCompletionRow({
+  turn,
+  copyText,
+}: {
+  turn: TurnProjection;
+  copyText: string;
+}) {
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
+  const resetTimer = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (resetTimer.current !== null) window.clearTimeout(resetTimer.current);
+  }, []);
+
+  const copyReply = async () => {
+    if (!copyText.trim() || copyState === "copied") return;
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
+      await navigator.clipboard.writeText(copyText);
+      setCopyState("copied");
+    } catch {
+      setCopyState("error");
+    }
+    if (resetTimer.current !== null) window.clearTimeout(resetTimer.current);
+    resetTimer.current = window.setTimeout(() => setCopyState("idle"), 2_000);
+  };
+
+  return (
+    <div className="ex-turn-completion" data-turn-status={turn.status}>
+      <span>{formatTurnDuration(turn)}</span>
+      {copyText.trim() ? (
+        <button
+          className="ex-icon-button ex-turn-copy"
+          type="button"
+          aria-label={copyState === "copied" ? "回复已复制" : "复制本次回复"}
+          title={copyState === "copied" ? "已复制" : "复制回复"}
+          onClick={() => void copyReply()}
+        >
+          {copyState === "copied" ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+        </button>
+      ) : null}
+      <span className="ex-turn-copy-notice" aria-live="polite">
+        {copyState === "copied" ? "已复制" : copyState === "error" ? "复制失败" : ""}
+      </span>
+    </div>
+  );
+});
+
 const MessageRow = memo(function MessageRow({ item }: { item: ItemProjection }) {
   const user = role(item) === "user";
   const text = messageText(item);
@@ -127,6 +205,8 @@ const MessageRow = memo(function MessageRow({ item }: { item: ItemProjection }) 
 
 export function Timeline({
   items,
+  turns,
+  chatModels,
   activeTurn,
   isThinking,
   visibleReasoning,
@@ -153,6 +233,46 @@ export function Timeline({
     )),
     [items],
   );
+  const modelSwitches = useMemo(() => {
+    const labels = new Map(chatModels.map((model) => [model.model_id, model.display_name]));
+    const firstItemByTurn = new Map<string, string>();
+    for (const item of timelineEntries) {
+      if (!firstItemByTurn.has(item.turn_id)) firstItemByTurn.set(item.turn_id, item.item_id);
+    }
+    const switches = new Map<string, string>();
+    let previousModel: string | null = null;
+    for (const turn of [...turns].sort((left, right) => left.created_at.localeCompare(right.created_at))) {
+      const currentModel = turn.agent_model_id;
+      const firstItemId = firstItemByTurn.get(turn.turn_id);
+      if (previousModel && currentModel && currentModel !== previousModel && firstItemId) {
+        switches.set(firstItemId, labels.get(currentModel) || currentModel);
+      }
+      if (currentModel) previousModel = currentModel;
+    }
+    return switches;
+  }, [chatModels, timelineEntries, turns]);
+  const turnCompletions = useMemo(() => {
+    const terminalTurns = new Map(
+      turns
+        .filter((turn) => TERMINAL_TURN_STATUSES.has(turn.status))
+        .map((turn) => [turn.turn_id, turn]),
+    );
+    const lastItemByTurn = new Map<string, string>();
+    const lastReplyByTurn = new Map<string, string>();
+    for (const item of timelineEntries) {
+      if (!terminalTurns.has(item.turn_id)) continue;
+      lastItemByTurn.set(item.turn_id, item.item_id);
+      if (item.kind === "message" && role(item) === "assistant" && messageText(item)) {
+        lastReplyByTurn.set(item.turn_id, messageText(item));
+      }
+    }
+    const result = new Map<string, { turn: TurnProjection; copyText: string }>();
+    for (const [turnId, itemId] of lastItemByTurn) {
+      const turn = terminalTurns.get(turnId);
+      if (turn) result.set(itemId, { turn, copyText: lastReplyByTurn.get(turnId) ?? "" });
+    }
+    return result;
+  }, [timelineEntries, turns]);
   const [historyEndAnchorId, setHistoryEndAnchorId] = useState<string | null>(null);
   const messageWindow = useMemo(
     () => selectTimelineWindow(timelineEntries, historyEndAnchorId),
@@ -233,7 +353,7 @@ export function Timeline({
       <div className="ex-empty-state ex-new-conversation-start">
         <h1>和 EcoreX 一起开始工作</h1>
         <p>{newConversationProject ? `${newConversationProject.name} 项目会话` : "选择一个开始方式"}</p>
-        <div className="ex-new-conversation-options" aria-label="新会话入口">
+        <div className="ex-new-conversation-options" role="group" aria-label="新会话入口">
           <button
             className={!newConversationProject ? "is-selected" : ""}
             type="button"
@@ -306,18 +426,28 @@ export function Timeline({
           正在查看历史消息；当前任务的最新进度和产物仍在末尾。
         </p>
       ) : null}
-      {messageWindow.items.map((item) => (
-        item.kind === "message"
-          ? <MessageRow item={item} key={item.item_id} />
-          : (
-            <Suspense
-              fallback={<div className="ex-activity-row" role="status">正在更新工作步骤…</div>}
-              key={item.item_id}
-            >
-              <TimelineActivity item={item} />
-            </Suspense>
-          )
-      ))}
+      {messageWindow.items.map((item) => {
+        const completion = turnCompletions.get(item.item_id);
+        return (
+        <Fragment key={item.item_id}>
+          {modelSwitches.has(item.item_id) ? (
+            <div className="ex-model-switch-divider" role="separator">
+              <span>已切换至 {modelSwitches.get(item.item_id)}</span>
+            </div>
+          ) : null}
+          {item.kind === "message"
+            ? <MessageRow item={item} />
+            : (
+              <Suspense fallback={<div className="ex-activity-row" role="status">正在更新工作步骤…</div>}>
+                <TimelineActivity item={item} />
+              </Suspense>
+            )}
+          {completion ? (
+            <TurnCompletionRow turn={completion.turn} copyText={completion.copyText} />
+          ) : null}
+        </Fragment>
+        );
+      })}
       {!messageWindow.atLatest ? (
         <div className="ex-timeline-history-nav is-after" role="group" aria-label="历史消息翻页">
           <button

@@ -56,6 +56,7 @@ from .models import (
     version_satisfies,
 )
 from .repository import ExtensionStateRecord, SQLiteExtensionRepository
+from .taxonomy import extension_category, extension_icon_key
 
 
 _CLIENT_REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$")
@@ -85,6 +86,8 @@ class ExtensionProjection:
     display_name: str
     description: str
     kind: str
+    category: str
+    icon_key: str
     active_revision_id: str | None
     active_version: str | None
     active_digest: str | None
@@ -105,6 +108,8 @@ class ExtensionProjection:
             "display_name": self.display_name,
             "description": self.description,
             "kind": self.kind,
+            "category": self.category,
+            "icon_key": self.icon_key,
             "active_revision_id": self.active_revision_id,
             "active_version": self.active_version,
             "active_digest": self.active_digest,
@@ -764,6 +769,14 @@ class ExtensionService:
             self._assert_expected(expected_revision, state.revision)
             if not state.enabled:
                 raise ExtensionActionUnavailable("extension is already disabled")
+            if state.active_revision_id is None:
+                raise ExtensionActionUnavailable("extension has no active revision")
+            active_manifest = self.repository.manifest(
+                state.active_revision_id,
+                connection=connection,
+            )
+            if self._user_disable_disabled_reason(active_manifest) is not None:
+                raise ExtensionActionUnavailable("extension_required_by_product")
             now = utc_now_iso()
             connection.execute(
                 "UPDATE extension_states SET enabled = 0, revision = revision + 1, updated_at = ? "
@@ -1302,11 +1315,20 @@ class ExtensionService:
             status = ExtensionStatus.DISABLED
         else:
             status = ExtensionStatus.STAGED
+        category = extension_category(
+            extension_id=extension_id,
+            display_name=manifest.display_name,
+            description=manifest.description,
+            export_ids=(item.export_id for item in manifest.exports),
+            core_bundle=manifest.source is ExtensionSource.CORE_BUNDLE,
+        )
         return ExtensionProjection(
             extension_id=extension_id,
             display_name=manifest.display_name,
             description=manifest.description,
             kind=manifest.kind.value,
+            category=category,
+            icon_key=extension_icon_key(extension_id=extension_id, category=category),
             active_revision_id=state.active_revision_id,
             active_version=active_manifest.version if active_manifest else None,
             active_digest=active_manifest.artifact_sha256 if active_manifest else None,
@@ -1335,7 +1357,11 @@ class ExtensionService:
             if state.enabled and state.staged_revision_id is None
             else self._enable_disabled_reason(state, manifest, target)
         )
-        disable_reason = None if state.enabled else "extension_already_disabled"
+        disable_reason = (
+            self._user_disable_disabled_reason(manifest)
+            if state.enabled
+            else "extension_already_disabled"
+        )
         health_reason = None
         if not state.enabled or state.active_revision_id is None:
             health_reason = "extension_not_enabled"
@@ -1350,6 +1376,17 @@ class ExtensionService:
             ExtensionActionProjection("health_check", health_reason is None, health_reason, False),
             ExtensionActionProjection("rollback", rollback_reason is None, rollback_reason, True),
         )
+
+    @staticmethod
+    def _user_disable_disabled_reason(manifest: ExtensionManifest) -> str | None:
+        if manifest.source is not ExtensionSource.CORE_BUNDLE:
+            return None
+        if (
+            manifest.kind is ExtensionKind.SKILL
+            or manifest.extension_id in {"ecorex.core.tools", "ecorex.core.connectors"}
+        ):
+            return "extension_required_by_product"
+        return None
 
     def _enable_disabled_reason(
         self,

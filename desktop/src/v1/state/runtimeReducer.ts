@@ -167,6 +167,8 @@ function reduceKnownEvent(state: RuntimeViewState, event: EventEnvelope): Runtim
           thread_id: event.thread_id,
           status: "active",
           title: stringValue(event.payload.title),
+          pinned: objectValue(event.payload.metadata).pinned === true,
+          active_turn_status: null,
           metadata: objectValue(event.payload.metadata),
           forked_from_thread_id: null,
           forked_from_turn_id: null,
@@ -187,6 +189,21 @@ function reduceKnownEvent(state: RuntimeViewState, event: EventEnvelope): Runtim
         ? {
             ...state,
             thread: { ...state.thread, status: "active", updated_at: event.created_at },
+          }
+        : state;
+    case "thread.pin_changed":
+      return state.thread
+        ? {
+            ...state,
+            thread: {
+              ...state.thread,
+              pinned: event.payload.pinned === true,
+              metadata: {
+                ...state.thread.metadata,
+                pinned: event.payload.pinned === true,
+              },
+              updated_at: event.created_at,
+            },
           }
         : state;
     case "thread.renamed":

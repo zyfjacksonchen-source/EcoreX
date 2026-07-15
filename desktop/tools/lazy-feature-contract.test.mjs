@@ -28,15 +28,19 @@ const artifactOperations = await readFile(
   new URL("../src/v1/api/artifactRuntimeOperations.ts", import.meta.url),
   "utf-8",
 );
+const composer = await readFile(
+  new URL("../src/v1/components/Composer.tsx", import.meta.url),
+  "utf-8",
+);
 
 const FEATURES = [
   "ArtifactPreviewDialog",
-  "ExtensionManagerDialog",
   "ReplayDialog",
   "RetouchWorkspace",
   "SettingsDialog",
   "ShareDialog",
 ];
+const WORKSPACE_FEATURES = ["SkillsWorkspace"];
 const INLINE_FEATURES = ["DeviceLoginCard", "InteractionStack"];
 
 test("low-frequency features are dynamic imports behind persistent Suspense boundaries", () => {
@@ -51,6 +55,17 @@ test("low-frequency features are dynamic imports behind persistent Suspense boun
   assert.match(boundary, /class FeatureErrorBoundary/u);
 });
 
+test("secondary workspaces are deferred without being presented as modal dialogs", () => {
+  for (const feature of WORKSPACE_FEATURES) {
+    assert.doesNotMatch(app, new RegExp(`import\\s*\\{[^}]*${feature}[^}]*\\}\\s*from`, "u"));
+    assert.match(app, new RegExp(`import\\("\\./components/${feature}\\.tsx"\\)`, "u"));
+    assert.match(app, new RegExp(`default:\\s*\\(await load${feature}\\(\\)\\)\\.${feature}`, "u"));
+  }
+  assert.match(app, /<SkillsWorkspace/u);
+  assert.match(app, /<Suspense fallback=/u);
+  assert.doesNotMatch(app, /<ExtensionManagerDialog/u);
+});
+
 test("login and HITL code stay deferred but keep an inline accessible fallback", () => {
   for (const feature of INLINE_FEATURES) {
     assert.doesNotMatch(app, new RegExp(`import\\s*\\{[^}]*${feature}[^}]*\\}\\s*from`, "u"));
@@ -60,6 +75,15 @@ test("login and HITL code stay deferred but keep an inline accessible fallback",
   assert.match(app, /<Suspense fallback=/u);
   assert.match(app, /aria-live="polite"/u);
   assert.match(app, /aria-busy="true"/u);
+});
+
+test("connector management is deferred with a visible composer fallback", () => {
+  assert.doesNotMatch(composer, /import\s*\{\s*ConnectorPopover\s*\}\s*from/u);
+  assert.match(composer, /loadConnectorPopover = \(\) => import\("\.\/ConnectorPopover\.tsx"\)/u);
+  assert.match(composer, /default:\s*\(await loadConnectorPopover\(\)\)\.ConnectorPopover/u);
+  assert.match(composer, /ComposerModelSelector = lazy\(loadComposerModelSelector\)/u);
+  assert.match(composer, /aria-label="正在准备连接器"/u);
+  assert.match(composer, /<Suspense fallback=/u);
 });
 
 test("lazy loading and error surfaces use the shared modal accessibility primitive", () => {
@@ -121,15 +145,12 @@ test("lazy dialogs restore focus only after the browser accepts the candidate", 
   assert.match(app, /data-ecorex-feature-trigger="navigation"/u);
 });
 
-test("Settings and Extensions have a visible task-menu fallback instead of hidden Sidebar focus", () => {
+test("Settings has a visible task-menu fallback instead of hidden Sidebar focus", () => {
   assert.match(sidebar, /data-ecorex-feature-trigger="settings"/u);
-  const settingsClose = app.slice(app.indexOf("const closeSettings"), app.indexOf("const closeExtensions"));
-  const extensionsClose = app.slice(app.indexOf("const closeExtensions"), app.indexOf("const closeShare"));
-  for (const closeContract of [settingsClose, extensionsClose]) {
-    assert.match(closeContract, /data-ecorex-feature-trigger="task-menu"/u);
-    assert.match(closeContract, /data-ecorex-feature-trigger="navigation"/u);
-    assert.doesNotMatch(closeContract, /data-ecorex-feature-trigger="settings"/u);
-  }
+  const settingsClose = app.slice(app.indexOf("const closeSettings"), app.indexOf("const closeShare"));
+  assert.match(settingsClose, /data-ecorex-feature-trigger="task-menu"/u);
+  assert.match(settingsClose, /data-ecorex-feature-trigger="navigation"/u);
+  assert.doesNotMatch(settingsClose, /data-ecorex-feature-trigger="settings"/u);
 });
 
 test("artifact preview owns Radix close autofocus and delegates deterministic restoration", () => {

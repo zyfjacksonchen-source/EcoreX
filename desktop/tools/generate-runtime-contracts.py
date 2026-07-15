@@ -478,6 +478,9 @@ def build_outputs() -> tuple[bytes, bytes, bytes, bytes, bytes, str]:
             "extensionKinds": _property_enum(
                 bootstrap_schema, "ExtensionProjection", "kind"
             ),
+            "extensionCategories": _property_enum(
+                bootstrap_schema, "ExtensionProjection", "category"
+            ),
             "extensionSources": _property_enum(
                 bootstrap_schema, "ExtensionProjection", "source"
             ),

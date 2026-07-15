@@ -22,6 +22,8 @@ function projection(): ThreadProjectionResponse {
       thread_id: "thread-replay",
       status: "active",
       title: "月度复盘",
+      pinned: false,
+      active_turn_status: null,
       metadata: {},
       forked_from_thread_id: null,
       forked_from_turn_id: null,

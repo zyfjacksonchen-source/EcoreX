@@ -138,6 +138,7 @@ from ecorex.protocol import (
     LogoutSessionRequest,
     LogoutSessionResponse,
     ModelCatalog,
+    ModelDescriptor,
     ModelServiceSnapshot,
     MockReplayResponse,
     PermissionMutationResponse,
@@ -154,6 +155,7 @@ from ecorex.protocol import (
     RespondInteractionRequest,
     SteerTurnRequest,
     ThreadListResponse,
+    ThreadPinRequest,
     ThreadProjection,
     ThreadProjectionResponse,
     ThreadStatus,
@@ -407,6 +409,65 @@ def _empty_model_catalog(snapshot: ManagedSessionSnapshot | None) -> ModelCatalo
     return ModelCatalog(snapshot_id=snapshot_id)
 
 
+def _overlay_cloud_model_catalog(
+    base: ModelCatalog,
+    gateway_catalog: Mapping[str, object],
+) -> ModelCatalog:
+    """Apply secret-free tested cloud names/defaults to the Web projection."""
+
+    raw_catalog = gateway_catalog.get("catalog")
+    raw_models = gateway_catalog.get("models")
+    if not isinstance(raw_catalog, list) or not isinstance(raw_models, list):
+        return base
+    allowed = {value for value in raw_models if isinstance(value, str)}
+    metadata = {
+        str(item["local_model_id"]): item
+        for item in raw_catalog
+        if isinstance(item, Mapping)
+        and isinstance(item.get("local_model_id"), str)
+        and item.get("local_model_id") in allowed
+    }
+
+    def project(
+        descriptors: list[ModelDescriptor], *, modalities: frozenset[str]
+    ) -> list[ModelDescriptor]:
+        projected: list[ModelDescriptor] = []
+        for descriptor in descriptors:
+            item = metadata.get(descriptor.model_id)
+            if item is None or item.get("modality") not in modalities:
+                continue
+            updates: dict[str, object] = {
+                "display_name": str(item.get("display_name") or descriptor.display_name),
+                "is_default": bool(item.get("is_default")),
+            }
+            upstream = item.get("upstream_model_id")
+            if descriptor.model_policy is not None and isinstance(upstream, str):
+                updates["model_policy"] = descriptor.model_policy.model_copy(
+                    update={"upstream_model_id": upstream}
+                )
+            projected.append(descriptor.model_copy(update=updates))
+        return projected
+
+    digest = hashlib.sha256(
+        json.dumps(
+            {"models": sorted(allowed), "catalog": raw_catalog},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return ModelCatalog(
+        snapshot_id="models_cloud_" + digest,
+        chat=project(base.chat, modalities=frozenset({"chat"})),
+        image=project(
+            base.image, modalities=frozenset({"image_generation"})
+        ),
+        vision=project(base.vision, modalities=frozenset({"chat"})),
+        audio=project(base.audio, modalities=frozenset({"audio"})),
+        embedding=project(base.embedding, modalities=frozenset({"embedding"})),
+    )
+
+
 class RuntimeUpdateController(Protocol):
     def snapshot(self) -> UpdateSnapshot:
         ...
@@ -522,6 +583,9 @@ def _bootstrap(
             roles=(list(managed_session.roles) if managed_session else []),
             session_revision=(
                 managed_session.revision if managed_session else None
+            ),
+            session_lease_digest=(
+                managed_session.lease_digest if managed_session else None
             ),
         )
         if managed_session is None:
@@ -1763,7 +1827,12 @@ def create_app(
     app.state.output_service = output_service
     output_service_lifecycle = _AsyncResourceCloser(output_service)
     app.state.output_service_lifecycle = output_service_lifecycle
-    app.include_router(create_output_router(output_service))
+    app.include_router(
+        create_output_router(
+            output_service,
+            folder_picker=settings.project_folder_picker,
+        )
+    )
     artifact_action_executor = ArtifactActionExecutor(
         artifact_service,
         launcher=settings.artifact_action_launcher,
@@ -2632,7 +2701,7 @@ def create_app(
         )
 
     @app.get("/api/v1/bootstrap", response_model=BootstrapResponse)
-    def bootstrap() -> BootstrapResponse:
+    async def bootstrap() -> BootstrapResponse:
         current_update = (
             update_service.snapshot()
             if update_service is not None
@@ -2677,6 +2746,19 @@ def create_app(
                     if filtered is not None
                     else _empty_model_catalog(session_snapshot)
                 )
+                if isinstance(settings.model_gateway, ManagedModelGatewayClient):
+                    try:
+                        cloud_catalog = await asyncio.wait_for(
+                            settings.model_gateway.catalog(), timeout=3.0
+                        )
+                        current_models = _overlay_cloud_model_catalog(
+                            current_models, cloud_catalog
+                        )
+                    except Exception:
+                        # A transient catalog refresh cannot corrupt the signed
+                        # local lease. Streaming still resolves the active cloud
+                        # revision per request and fails closed when unavailable.
+                        pass
                 if settings.model_gateway is None:
                     current_model_service = ModelServiceSnapshot(
                         state="unavailable", reason="managed_gateway_not_configured"
@@ -3146,6 +3228,19 @@ def create_app(
     ) -> ThreadProjection:
         return kernel.restore_thread(
             thread_id, client_request_id=request.client_request_id
+        )
+
+    @app.put(
+        "/api/v1/threads/{thread_id}/pin",
+        response_model=ThreadProjection,
+    )
+    def set_thread_pinned(
+        thread_id: str, request: ThreadPinRequest
+    ) -> ThreadProjection:
+        return kernel.set_thread_pinned(
+            thread_id,
+            request.pinned,
+            client_request_id=request.client_request_id,
         )
 
     @app.post(

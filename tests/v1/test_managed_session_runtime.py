@@ -398,6 +398,7 @@ def test_bootstrap_uses_signed_identity_policy_quota_and_model_allowlist(tmp_pat
             "organization_id": "organization-runtime-1",
             "roles": ["member", "workspace_admin"],
             "session_revision": 1,
+            "session_lease_digest": service.snapshot().lease_digest,
         }
         assert body["policy_lease"]["lease_id"] == lease.claims.lease_id
         assert body["policy_lease"]["issued_at"] == lease.claims.issued_at.isoformat().replace(

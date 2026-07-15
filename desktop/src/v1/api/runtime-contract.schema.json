@@ -1460,6 +1460,20 @@
               "default": null,
               "title": "Active Version"
             },
+            "category": {
+              "enum": [
+                "system",
+                "office",
+                "image_media",
+                "collaboration",
+                "data",
+                "development",
+                "automation",
+                "general"
+              ],
+              "title": "Category",
+              "type": "string"
+            },
             "dependencies": {
               "items": {
                 "$ref": "#/$defs/ExtensionDependencyProjection"
@@ -1500,6 +1514,11 @@
                 "circuit_open"
               ],
               "title": "Health",
+              "type": "string"
+            },
+            "icon_key": {
+              "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+              "title": "Icon Key",
               "type": "string"
             },
             "kind": {
@@ -1573,6 +1592,8 @@
             "display_name",
             "description",
             "kind",
+            "category",
+            "icon_key",
             "source",
             "trust",
             "status",
@@ -1632,6 +1653,19 @@
               },
               "title": "Roles",
               "type": "array"
+            },
+            "session_lease_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Session Lease Digest"
             },
             "session_revision": {
               "anyOf": [
@@ -9353,6 +9387,17 @@
         "ThreadProjection": {
           "additionalProperties": false,
           "properties": {
+            "active_turn_status": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TurnStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "created_at": {
               "format": "date-time",
               "title": "Created At",
@@ -9399,6 +9444,11 @@
               "title": "Metadata",
               "type": "object"
             },
+            "pinned": {
+              "default": false,
+              "title": "Pinned",
+              "type": "boolean"
+            },
             "status": {
               "$ref": "#/$defs/ThreadStatus"
             },
@@ -9440,6 +9490,27 @@
           ],
           "title": "ThreadStatus",
           "type": "string"
+        },
+        "TurnStatus": {
+          "enum": [
+            "accepted",
+            "queued",
+            "preparing",
+            "model_requested",
+            "streaming",
+            "tool_pending",
+            "waiting_human",
+            "tool_running",
+            "retry_wait",
+            "finalizing",
+            "completed",
+            "failed",
+            "cancelled",
+            "interrupted",
+            "superseded"
+          ],
+          "title": "TurnStatus",
+          "type": "string"
         }
       },
       "additionalProperties": false,
@@ -9479,10 +9550,42 @@
           ],
           "title": "ThreadStatus",
           "type": "string"
+        },
+        "TurnStatus": {
+          "enum": [
+            "accepted",
+            "queued",
+            "preparing",
+            "model_requested",
+            "streaming",
+            "tool_pending",
+            "waiting_human",
+            "tool_running",
+            "retry_wait",
+            "finalizing",
+            "completed",
+            "failed",
+            "cancelled",
+            "interrupted",
+            "superseded"
+          ],
+          "title": "TurnStatus",
+          "type": "string"
         }
       },
       "additionalProperties": false,
       "properties": {
+        "active_turn_status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TurnStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "created_at": {
           "format": "date-time",
           "title": "Created At",
@@ -9528,6 +9631,11 @@
           "additionalProperties": true,
           "title": "Metadata",
           "type": "object"
+        },
+        "pinned": {
+          "default": false,
+          "title": "Pinned",
+          "type": "boolean"
         },
         "status": {
           "$ref": "#/$defs/ThreadStatus"
@@ -10224,6 +10332,17 @@
         "ThreadProjection": {
           "additionalProperties": false,
           "properties": {
+            "active_turn_status": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TurnStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "created_at": {
               "format": "date-time",
               "title": "Created At",
@@ -10269,6 +10388,11 @@
               "additionalProperties": true,
               "title": "Metadata",
               "type": "object"
+            },
+            "pinned": {
+              "default": false,
+              "title": "Pinned",
+              "type": "boolean"
             },
             "status": {
               "$ref": "#/$defs/ThreadStatus"

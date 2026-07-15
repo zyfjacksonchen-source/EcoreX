@@ -72,6 +72,16 @@ export const GENERATED_RUNTIME_CONTRACT = {
       "health_check",
       "rollback"
     ],
+    "extensionCategories": [
+      "system",
+      "office",
+      "image_media",
+      "collaboration",
+      "data",
+      "development",
+      "automation",
+      "general"
+    ],
     "extensionExportKinds": [
       "tool",
       "skill",
@@ -143,7 +153,7 @@ export const GENERATED_RUNTIME_CONTRACT = {
       "failed"
     ]
   },
-  "schemaSha256": "5face1daf57ea1c63fd9632143528802014d5ffd2880eb3d46b1f566bea3f12b",
+  "schemaSha256": "e2614b327b5b9513ccb28ce37a7c264db37b76c58505f93c4939854b77a281d1",
   "schemaVersion": 1,
   "versions": {
     "api": "v1",

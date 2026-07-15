@@ -39,6 +39,14 @@ v1 内置存储实现只支持：
 | `ECOREX_GATEWAY_AUTH_PUBLIC_KEYS_JSON` | `key_id -> canonical base64 Ed25519 public key` |
 | `ECOREX_GATEWAY_PROVIDER_BEARER_TOKEN` | 默认 SecretProvider 的部署适配；此密钥读取路径在模型升级中保持不变，不得写入配置文件 |
 
+启用管理员热配置时，另设
+`ECOREX_GATEWAY_ADMIN_MANAGEMENT_ENABLED=true`、指向 Control Plane 同一管理
+数据库的 `ECOREX_GATEWAY_ADMIN_MANAGEMENT_DATABASE_PATH`、固定 HTTPS preset
+映射 `ECOREX_GATEWAY_MODEL_PROVIDER_ORIGINS_JSON`，并由 SecretProvider 提供
+`ECOREX_GATEWAY_MODEL_CONFIG_ENCRYPTION_KEY_B64`。此模式下新请求按已测试的活动
+revision 即时换模型/Key，已开始的流继续使用冻结 revision；详细上线和回退顺序见
+`admin-management-runbook.md`。
+
 超时变量分为 connect、read 和 total deadline。`gateway_lease_seconds` 必须至少比 Provider total deadline 长 30 秒，保证服务自己在租约内完成终态事实。HTTP 客户端强制关闭 redirect、环境代理和响应压缩；Provider URL 不能来自请求或模型输出。
 
 ## 4. 令牌、账户和模型隔离

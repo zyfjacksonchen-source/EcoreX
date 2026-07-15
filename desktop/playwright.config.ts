@@ -23,6 +23,7 @@ export default defineConfig({
     baseURL,
     locale: "zh-CN",
     timezoneId: "Asia/Shanghai",
+    permissions: ["clipboard-read", "clipboard-write"],
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "retain-on-failure",

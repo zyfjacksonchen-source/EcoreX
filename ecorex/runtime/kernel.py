@@ -112,11 +112,21 @@ class RuntimeKernel:
 
     @staticmethod
     def _thread_from_row(row: sqlite3.Row) -> ThreadProjection:
+        metadata = json_loads(row["metadata_json"], {})
+        active_turn_status = (
+            row["active_turn_status"]
+            if "active_turn_status" in row.keys()
+            else None
+        )
         return ThreadProjection(
             thread_id=row["thread_id"],
             status=ThreadStatus(row["status"]),
             title=row["title"],
-            metadata=json_loads(row["metadata_json"], {}),
+            pinned=metadata.get("pinned") is True,
+            active_turn_status=(
+                TurnStatus(active_turn_status) if active_turn_status else None
+            ),
+            metadata=metadata,
             forked_from_thread_id=row["forked_from_thread_id"],
             forked_from_turn_id=row["forked_from_turn_id"],
             forked_from_seq=row["forked_from_seq"],
@@ -287,7 +297,22 @@ class RuntimeKernel:
 
     def get_thread(self, thread_id: str) -> ThreadProjection:
         with self.database.reader() as connection:
-            row = self._require_thread(connection, thread_id)
+            row = connection.execute(
+                """
+                SELECT threads.*,
+                    (SELECT turns.status FROM turns
+                     WHERE turns.thread_id = threads.thread_id
+                       AND turns.status NOT IN (
+                         'completed','failed','cancelled','interrupted','superseded'
+                       )
+                     ORDER BY turns.created_at DESC, turns.turn_id DESC LIMIT 1
+                    ) AS active_turn_status
+                FROM threads WHERE threads.thread_id = ?
+                """,
+                (thread_id,),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"thread {thread_id!r} does not exist")
             return self._thread_from_row(row)
 
     def list_threads(
@@ -306,18 +331,29 @@ class RuntimeKernel:
             conditions: list[str] = []
             parameters: list[Any] = []
             if status is not None:
-                conditions.append("status = ?")
+                conditions.append("threads.status = ?")
                 parameters.append(status.value)
             if before_updated_at is not None and before_thread_id is not None:
                 encoded_time = _store_time(before_updated_at)
                 conditions.append(
-                    "(updated_at < ? OR (updated_at = ? AND thread_id < ?))"
+                    "(threads.updated_at < ? OR "
+                    "(threads.updated_at = ? AND threads.thread_id < ?))"
                 )
                 parameters.extend((encoded_time, encoded_time, before_thread_id))
-            query = "SELECT * FROM threads"
+            query = """
+                SELECT threads.*,
+                    (SELECT turns.status FROM turns
+                     WHERE turns.thread_id = threads.thread_id
+                       AND turns.status NOT IN (
+                         'completed','failed','cancelled','interrupted','superseded'
+                       )
+                     ORDER BY turns.created_at DESC, turns.turn_id DESC LIMIT 1
+                    ) AS active_turn_status
+                FROM threads
+            """
             if conditions:
                 query += " WHERE " + " AND ".join(conditions)
-            query += " ORDER BY updated_at DESC, thread_id DESC LIMIT ?"
+            query += " ORDER BY threads.updated_at DESC, threads.thread_id DESC LIMIT ?"
             parameters.append(limit + 1)
             rows = connection.execute(query, parameters).fetchall()
         return [self._thread_from_row(row) for row in rows[:limit]], len(rows) > limit
@@ -373,6 +409,44 @@ class RuntimeKernel:
         return self._set_thread_status(
             thread_id, ThreadStatus.ACTIVE, client_request_id=client_request_id
         )
+
+    def set_thread_pinned(
+        self,
+        thread_id: str,
+        pinned: bool,
+        *,
+        client_request_id: str,
+    ) -> ThreadProjection:
+        if not isinstance(pinned, bool):
+            raise ValueError("thread pinned state must be boolean")
+        with self.jobs.control_transaction(
+            scope="thread_pin",
+            subject=client_request_id,
+        ) as connection:
+            row = self._require_thread(connection, thread_id)
+            metadata = json_loads(row["metadata_json"], {})
+            if (metadata.get("pinned") is True) == pinned:
+                return self._thread_from_row(row)
+            event = self.events.append_in_transaction(
+                connection,
+                thread_id=thread_id,
+                event_type="thread.pin_changed",
+                payload={"pinned": pinned},
+                correlation_id=client_request_id,
+                idempotency_key=f"thread:pin:{client_request_id}",
+            )
+            latest = connection.execute(
+                "SELECT MAX(seq) AS seq FROM events WHERE thread_id=? "
+                "AND event_type='thread.pin_changed'",
+                (thread_id,),
+            ).fetchone()["seq"]
+            if event.seq == latest:
+                metadata["pinned"] = pinned
+                connection.execute(
+                    "UPDATE threads SET metadata_json=?, updated_at=? WHERE thread_id=?",
+                    (json_dumps(metadata), _store_time(event.created_at), thread_id),
+                )
+            return self._thread_from_row(self._require_thread(connection, thread_id))
 
     def _set_thread_status(
         self,

@@ -129,6 +129,57 @@ def test_competing_preference_writers_only_advance_one_revision(tmp_path: Path) 
     assert output.get_preference().revision == 2
 
 
+def test_user_selected_workspace_root_is_private_and_restored_on_restart(
+    tmp_path: Path,
+) -> None:
+    artifacts, output, database = _service(tmp_path)
+    initial = output.get_preference()
+    selected = tmp_path / "user-selected-office-output"
+
+    preference = output.select_workspace_location(
+        selected,
+        expected_revision=initial.revision,
+        client_request_id="pick-private-output-root",
+    )
+
+    assert preference.location_alias is OutputLocationAlias.WORKSPACE
+    assert preference.revision == initial.revision + 1
+    assert str(tmp_path) not in repr(preference.to_dict())
+    output.close()
+
+    restarted = OutputService(
+        artifact_service=artifacts,
+        database_path=database,
+        runtime_database_path=database,
+        configured_roots=_roots(tmp_path),
+    )
+    assert restarted.get_preference() == preference
+    assert (
+        restarted.filesystem.configured_root_path(OutputLocationAlias.WORKSPACE)
+        == selected.resolve()
+    )
+
+
+def test_failed_workspace_selection_restores_the_previous_root(tmp_path: Path) -> None:
+    _artifacts, output, _database = _service(tmp_path)
+    initial = output.get_preference()
+    output.set_preference(
+        "downloads",
+        expected_revision=initial.revision,
+        client_request_id="advance-output-revision",
+    )
+    previous = output.filesystem.configured_root_path(OutputLocationAlias.WORKSPACE)
+
+    with pytest.raises(OutputRevisionConflict):
+        output.select_workspace_location(
+            tmp_path / "must-not-remain-selected",
+            expected_revision=initial.revision,
+            client_request_id="stale-folder-selection",
+        )
+
+    assert output.filesystem.configured_root_path(OutputLocationAlias.WORKSPACE) == previous
+
+
 def test_turn_accepted_config_freezes_policy_across_later_preference_change(
     tmp_path: Path,
 ) -> None:
@@ -472,6 +523,31 @@ def test_http_contract_accepts_aliases_only_and_never_returns_host_paths(
     assert response.status_code == 200
     assert str(tmp_path) not in response.text
     assert response.json()["status"] == "completed"
+
+
+def test_native_folder_picker_binds_workspace_without_returning_its_path(
+    tmp_path: Path,
+) -> None:
+    _artifacts, output, _database = _service(tmp_path)
+    selected = tmp_path / "private-picker-result"
+    app = FastAPI()
+    app.include_router(create_output_router(output, folder_picker=lambda: selected))
+    client = TestClient(app)
+    initial = client.get("/api/v1/output/preference").json()
+
+    response = client.post(
+        "/api/v1/output/locations/pick",
+        json={
+            "expected_revision": initial["revision"],
+            "client_request_id": "native-picker-private-path",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["location_alias"] == "workspace"
+    assert str(tmp_path) not in response.text
+    assert "path" not in response.text.lower()
+    assert output.filesystem.configured_root_path(OutputLocationAlias.WORKSPACE) == selected.resolve()
 
 
 def test_router_uses_service_bound_managed_account_not_local_user(

@@ -20,6 +20,14 @@
 .ex-task-row,
 .ex-composer-tool,
 .ex-composer-model-trigger,
+.ex-permission-inline,
+.ex-usage-summary,
+.ex-search-result,
+.ex-search-continue,
+.ex-skill-card-main,
+.ex-skills-back,
+.ex-skills-tabs button,
+.ex-skill-category-grid button,
 .ex-new-project-trigger,
 .ex-new-conversation-options button,
 .ex-composer-attachment button,
@@ -43,6 +51,8 @@
 .ex-task-row,
 .ex-composer-tool,
 .ex-composer-model-trigger,
+.ex-skill-card-main,
+.ex-skills-back,
 .ex-new-project-trigger,
 .ex-new-conversation-options button,
 .ex-composer-attachment button,
@@ -181,8 +191,7 @@
 .ex-artifact-sheet :focus-visible,
 .ex-popover :focus-visible,
 .ex-menu :focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 2px;
+  outline: 0;
 }
 
 .ex-button:not(.is-primary):not(.is-danger):focus-visible,
@@ -197,15 +206,15 @@
 .ex-artifact-primary:focus-visible,
 .ex-retouch-review-tabs button:not(.is-active):focus-visible,
 .ex-retouch-region-list > button:not(.is-selected):focus-visible,
-.ex-artifact-sheet-action:focus-visible {
+  .ex-artifact-sheet-action:focus-visible {
   border-color: var(--control-hover-border);
   background: var(--control-hover-surface);
+  box-shadow: 0 0 0 1px var(--color-brand-strong);
 }
 
 .ex-button.is-primary:focus-visible,
 .ex-send-button:focus-visible {
-  box-shadow: var(--focus-primary-ring);
-  outline-offset: 3px;
+  box-shadow: 0 0 0 1px var(--color-brand-strong);
 }
 
 @media (hover: hover) {
@@ -337,7 +346,8 @@
   .ex-artifact-sheet :focus-visible,
   .ex-popover :focus-visible,
   .ex-menu :focus-visible {
-    outline-color: Highlight;
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
   }
 
   .ex-button.is-primary,

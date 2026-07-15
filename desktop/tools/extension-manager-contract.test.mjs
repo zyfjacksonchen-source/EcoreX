@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const component = readFileSync(
-  new URL("../src/v1/components/ExtensionManagerDialog.tsx", import.meta.url),
+  new URL("../src/v1/components/SkillsWorkspace.tsx", import.meta.url),
   "utf8",
 );
 const settings = readFileSync(
@@ -22,30 +22,30 @@ const css = readFileSync(
   new URL("../src/v1/styles/features.css", import.meta.url),
   "utf8",
 );
-const extensionCssStart = css.indexOf(".ex-extension-dialog");
-const extensionCssEnd = css.indexOf("@container workspace", extensionCssStart);
+const extensionCssStart = css.indexOf(".ex-workspace.is-skills");
+const extensionCssEnd = css.indexOf(".ex-update-banner", extensionCssStart);
 const extensionCss = css.slice(extensionCssStart, extensionCssEnd);
 
-test("extension manager renders only backend-projected actions and reasons", () => {
-  assert.match(component, /extension\.actions\.map/);
-  assert.match(component, /action\.enabled/);
+test("skill workspace renders only backend-projected actions and reasons", () => {
+  assert.match(component, /extension\.actions\.find/);
+  assert.match(component, /action\?\.enabled/);
   assert.match(state, /action\.disabled_reason/);
   assert.match(component, /requires_confirmation/);
   assert.match(component, /!catalogReady/);
-  assert.match(component, /!action\.enabled/);
-  assert.match(component, /registryOperationBusy/);
+  assert.match(component, /!action\?\.enabled/);
+  assert.match(component, /registryBusy/);
   assert.match(component, /loadState === "ready"/);
-  assert.match(component, /上次已验证目录已过期/);
   assert.match(component, /aria-busy/);
   assert.match(component, /role="alert"/);
-  assert.match(component, /extension\.dependencies/);
-  assert.match(component, /extension\.exports/);
-  assert.match(component, /filterExtensions/);
+  assert.match(component, /selected\.dependencies/);
+  assert.match(component, /selected\.exports/);
+  assert.match(component, /CATEGORY_ORDER/);
+  assert.match(component, /protectedExtension/);
   assert.match(component, /extensionPermissionEffectLabel/);
   assert.match(settings, /管理扩展/);
 });
 
-test("extension manager does not expose execution internals or local installation", () => {
+test("skill workspace does not expose execution internals", () => {
   for (const forbidden of [
     "active_digest",
     "active_revision_id",
@@ -87,5 +87,5 @@ test("extension feature CSS stays inside the locked EcoreX token system", () => 
   }
   assert.doesNotMatch(extensionCss, /transition:\s*all\b/i);
   assert.doesNotMatch(extensionCss, /z-index:\s*\d+/i);
-  assert.match(extensionCss, /@media \(min-width: 640px\)/);
+  assert.match(extensionCss, /@media \(max-width: 639px\)/);
 });

@@ -287,15 +287,20 @@ dialog:focus-visible {
 .auth-form,
 .manifest-form,
 .rollout-form,
+.filter-form,
 .file-field,
-.rollout-form label {
+.rollout-form label,
+.filter-form label,
+.editor-grid label {
   display: grid;
   gap: var(--space-1);
 }
 
 .auth-form > label,
 .file-field > span,
-.rollout-form label > span {
+.rollout-form label > span,
+.filter-form label > span,
+.editor-grid label > span {
   color: var(--color-ink-muted);
   font-size: var(--text-caption-size);
   line-height: var(--text-caption-line);
@@ -321,7 +326,7 @@ dialog:focus-visible {
 }
 
 .button {
-  border: 1px solid var(--color-rule-strong);
+  border: 1px solid transparent;
   padding-inline: var(--space-3);
   color: var(--color-ink);
   background: var(--color-surface);
@@ -336,7 +341,7 @@ dialog:focus-visible {
 }
 
 .button.danger {
-  border-color: var(--color-danger);
+  border-color: transparent;
   color: var(--color-danger);
   background: var(--color-surface);
 }
@@ -381,6 +386,10 @@ dialog:focus-visible {
   .text-button:hover:not(:disabled) {
     color: var(--color-ink);
     background: var(--color-hover);
+  }
+
+  .button:not(.primary):hover:not(:disabled) {
+    border-color: var(--color-rule-strong);
   }
 
   .button.primary:hover:not(:disabled) {
@@ -477,6 +486,48 @@ textarea:active:not(:disabled) {
 
 .workspace-content {
   padding: 0 var(--space-4) max(var(--space-16), env(safe-area-inset-bottom));
+}
+
+.filter-form {
+  margin-top: var(--space-5);
+  grid-template-columns: minmax(12rem, 1fr);
+  gap: var(--space-2);
+  align-items: end;
+}
+
+.metric-grid {
+  margin-top: var(--space-5);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.metric {
+  min-width: 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-card);
+  background: var(--color-raised);
+}
+
+.metric span,
+.metric strong {
+  display: block;
+}
+
+.metric span {
+  color: var(--color-ink-subtle);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
+.metric strong {
+  margin-top: var(--space-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-body-size);
+  line-height: var(--text-body-line);
+  font-weight: 600;
 }
 
 .work-section {
@@ -638,6 +689,36 @@ tbody tr:last-child td {
   border-bottom: 0;
 }
 
+tbody td > strong,
+tbody td > small {
+  display: block;
+}
+
+tbody td > small {
+  margin-top: var(--space-1);
+  color: var(--color-ink-subtle);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
+.number-cell,
+.mono-cell {
+  font-family: var(--font-mono);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
+.compact-actions {
+  min-width: 12rem;
+}
+
+.button.compact {
+  min-height: 2rem;
+  padding-inline: var(--space-2);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
 .rollout-form {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -667,6 +748,42 @@ tbody tr:last-child td {
   box-shadow: var(--elevation-dialog);
 }
 
+.editor-dialog {
+  width: min(42rem, calc(100% - var(--space-6)));
+  max-height: calc(100dvh - var(--space-6));
+  margin: auto;
+  overflow: auto;
+  border: 1px solid var(--color-rule-strong);
+  border-radius: var(--radius-dialog);
+  padding: var(--space-5);
+  color: var(--color-ink);
+  background: var(--color-overlay-surface);
+  box-shadow: var(--elevation-dialog);
+}
+
+.editor-dialog::backdrop {
+  background: var(--color-overlay);
+}
+
+.editor-grid {
+  margin-top: var(--space-5);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+}
+
+.check-row {
+  min-height: 2.75rem;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+
+.check-row input {
+  width: 1rem;
+  min-height: 1rem;
+  margin: 0;
+}
+
 .confirm-dialog::backdrop {
   background: var(--color-overlay);
 }
@@ -691,6 +808,18 @@ noscript {
   .rollout-form {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-3);
+  }
+
+  .filter-form {
+    grid-template-columns: minmax(12rem, 1.5fr) minmax(8rem, 0.7fr) minmax(10rem, 1fr) auto;
+  }
+
+  .editor-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .editor-grid .span-all {
+    grid-column: 1 / -1;
   }
 
   .rollout-form > :nth-last-child(-n + 3) {
@@ -770,6 +899,10 @@ noscript {
 
   .rollout-form > :nth-last-child(-n + 3) {
     grid-column: auto;
+  }
+
+  .metric-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 

@@ -2,6 +2,7 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Check, ChevronDown } from "lucide-react";
 
 import type { ModelDescriptor } from "../api/contracts.ts";
+import { ModelProviderIcon } from "./ModelProviderIcon.tsx";
 
 interface ComposerModelSelectorProps {
   chatModels: ModelDescriptor[];
@@ -30,7 +31,8 @@ export default function ComposerModelSelector({
           aria-label="选择模型"
           disabled={!chatModels.length && !imageModels.length}
         >
-          <span>{selectedChatModel?.display_name || "选择模型"}</span>
+          {selectedChatModel ? <ModelProviderIcon model={selectedChatModel} /> : null}
+          <span className="ex-model-trigger-label">{selectedChatModel?.display_name || "选择模型"}</span>
           <ChevronDown aria-hidden="true" />
         </button>
       </DropdownMenu.Trigger>
@@ -47,6 +49,7 @@ export default function ComposerModelSelector({
                 <DropdownMenu.ItemIndicator className="ex-model-menu-check">
                   <Check aria-hidden="true" />
                 </DropdownMenu.ItemIndicator>
+                <ModelProviderIcon model={model} />
                 <span>{model.display_name}</span>
               </DropdownMenu.RadioItem>
             ))}
@@ -66,6 +69,7 @@ export default function ComposerModelSelector({
                   <DropdownMenu.ItemIndicator className="ex-model-menu-check">
                     <Check aria-hidden="true" />
                   </DropdownMenu.ItemIndicator>
+                  <ModelProviderIcon model={model} />
                   <span>{model.display_name}</span>
                 </DropdownMenu.RadioItem>
               ))}

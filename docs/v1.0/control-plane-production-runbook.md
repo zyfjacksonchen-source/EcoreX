@@ -104,6 +104,7 @@ interface):
 | `ECOREX_CP_SHARE_KEYRING_JSON` | active/legacy key IDs plus canonical base64 32-byte HMAC keys |
 | `ECOREX_CP_AUDIT_ENCRYPTION_KEY_B64` | canonical base64 32-byte AES-256 key |
 | `ECOREX_CP_AUDIT_INTEGRITY_KEY_B64` | canonical base64 32–64-byte HMAC key |
+| `ECOREX_CP_MODEL_CONFIG_ENCRYPTION_KEY_B64` | canonical base64 32-byte AES-256 key; required when administrator model management is enabled |
 
 Optional bounded settings include bind host/port, backup interval/retention,
 minimum free bytes, audit retention, S3 HTTPS endpoint/addressing style/pool
@@ -111,6 +112,14 @@ size, token lifetime/skew, readiness cache, graceful shutdown, concurrency,
 backlog and update-signal polling/retention. See
 `ControlPlaneProductionConfig.from_environment` for exact names and ranges.
 An S3 endpoint, when supplied, must use HTTPS and contain no credentials.
+
+To enable the product administrator workspace, set
+`ECOREX_CP_ADMIN_MANAGEMENT_ENABLED=true` and provide the fixed HTTPS preset
+map in `ECOREX_CP_MODEL_PROVIDER_ORIGINS_JSON`. The page can then manage users,
+usage and tested model revisions without exposing API keys. Gateway and Image
+processes must consume the same encrypted management authority as described in
+`admin-management-runbook.md`; this is a single-node/co-located contract, not
+network-shared SQLite or HA configuration distribution.
 
 ## First deployment and schema operations
 

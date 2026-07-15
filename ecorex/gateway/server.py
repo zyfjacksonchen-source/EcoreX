@@ -809,9 +809,35 @@ def create_managed_gateway_app(
             )
 
     @app.get("/api/v1/models")
-    def models(current: GatewayPrincipal = Depends(principal)) -> dict[str, object]:
+    async def models(current: GatewayPrincipal = Depends(principal)) -> dict[str, object]:
         visible = sorted(allowed_model_ids & current.allowed_model_ids)
-        return {"schema_version": 1, "models": visible}
+        catalog_provider = getattr(provider, "public_catalog", None)
+        catalog: list[dict[str, object]] = []
+        if callable(catalog_provider):
+            try:
+                projected = await catalog_provider()
+                catalog = [
+                    item
+                    for item in projected
+                    if isinstance(item, dict)
+                    and item.get("local_model_id") in visible
+                    and "api_key" not in item
+                ]
+                active_ids = {
+                    str(item["local_model_id"])
+                    for item in catalog
+                    if isinstance(item.get("local_model_id"), str)
+                }
+                visible = [model_id for model_id in visible if model_id in active_ids]
+            except Exception:
+                # Model streaming remains fail-closed per request.  Catalog
+                # refresh is informative and must never expose provider errors.
+                catalog = []
+                visible = []
+        response: dict[str, object] = {"schema_version": 1, "models": visible}
+        if callable(catalog_provider):
+            response["catalog"] = catalog
+        return response
 
     @app.post("/v1/responses", response_model=None, include_in_schema=False)
     @app.post("/api/v1/model/stream", response_model=None)

@@ -11,8 +11,9 @@ const MAX_CHUNK_BYTES = 500 * 1024;
 const FEATURE_STEMS = [
   "ArtifactPreviewDialog",
   "ComposerModelSelector",
+  "ConnectorPopover",
   "DeviceLoginCard",
-  "ExtensionManagerDialog",
+  "SkillsWorkspace",
   "InteractionStack",
   "NewConversationProjectSelector",
   "OfficeMarkdown",

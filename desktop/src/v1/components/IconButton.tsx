@@ -21,6 +21,8 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
       type={props.type ?? "button"}
       className={`ex-icon-button ${className}`.trim()}
       aria-label={label}
+      aria-hidden={props.disabled ? true : undefined}
+      tabIndex={props.disabled ? -1 : props.tabIndex}
     >
       {children}
     </button>
@@ -29,7 +31,13 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
     <Tooltip.Root delayDuration={850}>
       <Tooltip.Trigger asChild>
         {props.disabled ? (
-          <span className="ex-disabled-tooltip-trigger" tabIndex={0} aria-label={label}>
+          <span
+            className="ex-disabled-tooltip-trigger"
+            tabIndex={0}
+            role="button"
+            aria-disabled="true"
+            aria-label={label}
+          >
             {button}
           </span>
         ) : button}

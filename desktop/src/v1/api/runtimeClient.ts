@@ -22,6 +22,7 @@ import type {
   InteractionResponse,
   JsonObject,
   LiveReplayResponse,
+  LogoutSessionResponse,
   MemoryMutationResponse,
   MemorySnapshot,
   MigrationQuarantineProjection,
@@ -224,6 +225,24 @@ function parseError(payload: unknown, fallback: string): { message: string; code
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function validateLogoutSessionResponse(value: unknown): LogoutSessionResponse {
+  if (
+    !isRecord(value)
+    || value.authenticated !== false
+    || !Number.isSafeInteger(value.generation)
+    || Number(value.generation) < 1
+    || value.restart_required !== true
+    || typeof value.restart_scheduled !== "boolean"
+  ) {
+    throw new RuntimeApiError(
+      "Runtime returned an invalid logout receipt.",
+      502,
+      "logout_receipt_invalid",
+    );
+  }
+  return value as unknown as LogoutSessionResponse;
 }
 
 async function validateThreadProjectionBoundary(value: unknown): Promise<ThreadProjection> {
@@ -466,6 +485,24 @@ export class RuntimeClient {
     );
   }
 
+  pickOutputLocation(
+    expectedRevision: number,
+    clientRequestId = createClientRequestId("pick_output_location"),
+  ): Promise<OutputPreference> {
+    return this.json(
+      "/api/v1/output/locations/pick",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          expected_revision: expectedRevision,
+          client_request_id: clientRequestId,
+        }),
+      },
+      true,
+      4, // output preference
+    );
+  }
+
   materializeArtifact(
     artifact: Pick<ArtifactProjection, "artifact_id" | "revision_id">,
     clientRequestId = createClientRequestId("materialize_artifact"),
@@ -570,6 +607,25 @@ export class RuntimeClient {
         body: JSON.stringify({ client_request_id: clientRequestId }),
       },
       true,
+    );
+  }
+
+  logoutSession(
+    leaseDigest: string,
+    clientRequestId = createClientRequestId("session_logout"),
+  ): Promise<LogoutSessionResponse> {
+    return this.json(
+      "/api/v1/session/logout",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          lease_digest: leaseDigest,
+          client_request_id: clientRequestId,
+          confirmed: true,
+        }),
+      },
+      true,
+      validateLogoutSessionResponse,
     );
   }
 
@@ -808,6 +864,22 @@ export class RuntimeClient {
       {
         method: "POST",
         body: JSON.stringify({ client_request_id: clientRequestId }),
+      },
+      true,
+      validateThreadProjectionBoundary,
+    );
+  }
+
+  setThreadPinned(
+    threadId: string,
+    pinned: boolean,
+    clientRequestId = createClientRequestId(pinned ? "pin_thread" : "unpin_thread"),
+  ): Promise<ThreadProjection> {
+    return this.json(
+      `/api/v1/threads/${encodeURIComponent(threadId)}/pin`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ pinned, client_request_id: clientRequestId }),
       },
       true,
       validateThreadProjectionBoundary,

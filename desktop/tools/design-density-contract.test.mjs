@@ -46,6 +46,12 @@ const CONTROL_BASE_CLASSES = [
   "ex-task-row",
   "ex-composer-tool",
   "ex-composer-model-trigger",
+  "ex-permission-inline",
+  "ex-usage-summary",
+  "ex-search-result",
+  "ex-search-continue",
+  "ex-skill-card-main",
+  "ex-skills-back",
   "ex-new-project-trigger",
   "ex-disposition",
   "ex-send-button",
@@ -57,16 +63,23 @@ const CONTEXT_CONTROL_OWNERS = [
   "ex-new-conversation-options",
   "ex-retouch-review-tabs",
   "ex-retouch-region-list",
+  "ex-skills-tabs",
+  "ex-skill-category-grid",
 ];
 const CONTEXT_CONTROL_SELECTORS = [
   ".ex-composer-attachment button",
   ".ex-new-conversation-options button",
   ".ex-retouch-review-tabs button",
   ".ex-retouch-region-list > button",
+  ".ex-skills-tabs button",
+  ".ex-skill-category-grid button",
 ];
 const STRUCTURAL_BUTTON_EXCEPTIONS = [
   "ex-sidebar-scrim",
   "ex-retouch-result-media",
+  // A semantic switch is a persistent state indicator, not an ordinary
+  // command button. Shape Lock explicitly permits toggle tracks to be pills.
+  "ex-skill-switch",
 ];
 
 function classAttributeSource(attributes, sourceFile) {
@@ -117,7 +130,7 @@ function jsxControlInventory() {
 test("Codex-density typography is owned by the system UI and code tokens", () => {
   assert.match(
     tokens,
-    /--font-ui:\s*-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;/,
+    /--font-ui:\s*-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;/,
   );
   assert.match(tokens, /--font-code:\s*ui-monospace,/);
   assert.match(tokens, /--font-display:\s*var\(--font-ui\);/);
