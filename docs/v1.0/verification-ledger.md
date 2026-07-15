@@ -1807,3 +1807,19 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Current-source supply chain | 0 | 23 Runtime packages and 282 npm packages remain license-accounted; 483 production files pass secret scanning. Inventory `927cf173...15c125cd7`; ignored 21,857-byte report SHA-256 `e1239bd1...c9f18c95`. |
 | Operator record | 0 | `admin-management-runbook.md` documents roles, exact enablement/origin/secret variables, hot activation semantics, single-node boundary, rollback and failure handling; Control Plane, Gateway and Image runbooks link to it. |
 | Publication | blocked | This is uncommitted current-source evidence, not a protected Candidate. No administrator rollout, publication or installed-user update was attempted. |
+
+## Hosted administrator-batch gate correction - 2026-07-16
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| First exact hosted run | 1 | Run `29430838857` at `efc9e21c30eb712d4c3cdbc6cb3b40f0cad9cbd5`: Windows x64 and macOS arm64/x64 passed; Ubuntu completed 1,925 tests and failed only the design-system and server-schema-authority gates. Cross-runner byte comparison correctly stayed closed. |
+| Design root cause | 0 | Two undeclared compact-size aliases were replaced by existing locked tokens. Ten literal one-pixel focus shadows now use semantic subtle focus-ring tokens with forced-colour mappings; no arbitrary shadow, colour or radius exception was added. |
+| Schema root cause | 0 | `management_schema.py` is explicitly the ninth migration authority. Business repositories remain DDL-free and the exact-small-allowlist regression was updated; no schema bytes or migration checksum changed. |
+| Focused correction | 0 | Direct design and server authority gates pass; 13 management, dynamic-image and gate tests pass with one unchanged upstream warning. |
+| Complete Python v1 suite | 0 | Fresh Windows run: 1,942 passed / 17 explicit environment-platform skips / 0 failed in 1,538.16 seconds. Five warnings are unchanged Starlette/websockets deprecations. |
+| WebUI | 0 | TypeScript and 180/180 Web contract tests pass. The content-addressed build emits 24 chunks; initial JavaScript is 459.76 KiB raw / 146.20 KiB gzip and deferred features are 136.30 KiB. |
+| Browser matrix | 0 | Fresh corrected-source Chromium run passes 45/45 in 2.6 minutes across both themes and all locked viewports, with zero axe violations. Focus rings, compact completion copy, v0.3 “查看更多”, reasoning, image/Retouch, Skills and administrator operations remain functional. |
+| Static/source gates | 0 | Ruff, Python compilation, design debt all-zero, nine-authority server schema, 675-file source admission and `git diff --check` pass. |
+| Current-source supply chain | 0 | npm audit reports zero vulnerabilities. 23 Runtime packages and 282 npm packages are license-accounted; 483 production files pass secret scanning. Inventory `9320f611...77ae19`; ignored 21,857-byte report SHA-256 `39696bfd...deed1e`. |
+| Hosted correction status | pending | The corrected commit and its complete Ubuntu/Windows/macOS/byte-stability matrix have not yet completed; prior platform successes are not relabelled as corrected-source evidence. |
+| Publication | blocked | No protected Candidate, managed provider/CDP receipt, publication, rollout or installed-user update was attempted. |

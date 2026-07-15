@@ -70,6 +70,8 @@
   --layout-sidebar-width: 252px;
   --artifact-action-rail-width: 132px;
   --focus-primary-ring: 0 0 0 2px var(--color-brand-ink);
+  --focus-subtle-ring: 0 0 0 1px var(--color-brand-strong);
+  --focus-subtle-inset-ring: inset 0 0 0 1px var(--color-brand-strong);
   --control-idle-border: transparent;
   --control-idle-surface: transparent;
   --control-hover-border: var(--color-rule);
@@ -225,6 +227,8 @@
     --scrollbar-thumb: CanvasText;
     --scrollbar-thumb-hover: Highlight;
     --focus-primary-ring: 0 0 0 2px HighlightText;
+    --focus-subtle-ring: 0 0 0 1px Highlight;
+    --focus-subtle-inset-ring: inset 0 0 0 1px Highlight;
   }
 }
 

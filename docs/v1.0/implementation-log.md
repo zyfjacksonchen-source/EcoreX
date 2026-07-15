@@ -5248,3 +5248,44 @@ its ignored 21,857-byte report has SHA-256
 `e1239bd1c5fc910f87d04a2ec84107b5303fb14687bc666798c5048dc9f18c95`.
 No protected Candidate, publication, rollout or installed-user update was
 attempted.
+
+## 2026-07-16 - Hosted quality-gate drift is closed without weakening either contract
+
+The first hosted run for the administrator/Skills/session-discovery checkpoint
+correctly failed Ubuntu while Windows and both macOS architectures passed. The
+failure was deterministic rather than a Runtime race: the new compact Turn
+copy affordance referenced two CSS names that had never been declared, ten
+focus states still carried literal one-pixel shadows, and the new explicit
+administrator schema manager had not been added to the server migration
+authority allowlist. The design and schema gates therefore caught integration
+debt that focused feature tests could not see.
+
+The correction reuses the existing desktop target and small-icon tokens,
+introduces semantic subtle focus-ring and inset-ring tokens (including forced
+colour mappings), and routes every affected focus state through them. The
+administrator schema remains in its dedicated immutable migration manager; it
+is now the ninth exact server schema authority, while every business
+repository remains forbidden from issuing DDL. Neither gate was relaxed and no
+runtime behavior or database shape was changed.
+
+The exact corrected source passes the two gates directly and 13 affected
+schema/management/image tests. A fresh Windows full Runtime run completes
+1,942 passed / 17 explicit platform-environment skips / 0 failed in 1,538.16
+seconds; the earlier 15-minute aggregate timeout was reproduced as an
+insufficient outer budget, not a hung child. TypeScript, all 180 Web contract
+tests and the content-addressed build pass; the build remains 24 chunks,
+459.76 KiB raw / 146.20 KiB gzip initial JavaScript and 136.30 KiB deferred
+features. Ruff/compile, the 675-file source gate, npm audit and `git diff
+--check` pass. The supply-chain preflight covers 23 Runtime packages, 282 npm
+packages and 483 production files; inventory SHA-256 is
+`9320f611ff9881daa01cf4dc4902197361c4f4d058e742457a3cf7c6ff77ae19`
+and the ignored 21,857-byte report SHA-256 is
+`39696bfdd07b68128d6928cfc82b7c9e56c3a98eac8e11d2679b7c1e7cdeed1e`.
+The corrected hosted matrix is still pending and no Candidate, publication or
+rollout is claimed.
+
+A fresh post-correction Chromium run also passes 45/45 in 2.6 minutes. It
+covers both themes and all locked viewports, zero axe violations, forced
+colours/reduced motion, compact copy feedback, v0.3 “查看更多”, Skills,
+administrator operations, reasoning persistence, image preview and structured
+Retouch. This replaces the earlier browser evidence for the corrected source.

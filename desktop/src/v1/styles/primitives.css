@@ -209,12 +209,12 @@
   .ex-artifact-sheet-action:focus-visible {
   border-color: var(--control-hover-border);
   background: var(--control-hover-surface);
-  box-shadow: 0 0 0 1px var(--color-brand-strong);
+  box-shadow: var(--focus-subtle-ring);
 }
 
 .ex-button.is-primary:focus-visible,
 .ex-send-button:focus-visible {
-  box-shadow: 0 0 0 1px var(--color-brand-strong);
+  box-shadow: var(--focus-subtle-ring);
 }
 
 @media (hover: hover) {

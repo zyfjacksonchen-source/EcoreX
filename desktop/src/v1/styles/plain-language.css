@@ -19,7 +19,7 @@
 .ex-technical-details summary:focus-visible {
   border-radius: var(--radius-compact);
   outline: 0;
-  box-shadow: inset 0 0 0 1px var(--color-brand-strong);
+  box-shadow: var(--focus-subtle-inset-ring);
 }
 
 .ex-technical-details dl {

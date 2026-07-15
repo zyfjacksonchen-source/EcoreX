@@ -30,7 +30,7 @@ def test_server_schema_authority_gate_passes() -> None:
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert json.loads(completed.stdout) == {
-        "authority_count": 8,
+        "authority_count": 9,
         "server_root_count": 3,
         "status": "passed",
         "violations": [],
@@ -61,6 +61,7 @@ def test_gate_has_an_exact_small_deployment_authority_allowlist() -> None:
         {
             "ecorex/control_plane/audit_schema.py",
             "ecorex/control_plane/bootstrap_index_schema.py",
+            "ecorex/control_plane/management_schema.py",
             "ecorex/control_plane/schema.py",
             "ecorex/control_plane/share_media_migration.py",
             "ecorex/control_plane/share_schema.py",
