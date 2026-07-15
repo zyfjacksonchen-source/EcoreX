@@ -1,0 +1,66 @@
+{
+  "status": "PASS",
+  "generatedAt": "2026-06-27T09:52:05Z",
+  "scenario": "real-tool-invocation-smoke",
+  "checks": [
+    {
+      "label": "bash executes real command",
+      "status": "PASS",
+      "requestedTool": "shell",
+      "executedTool": "bash",
+      "toolExecutionStatus": "success",
+      "firstSchemaContains": true,
+      "schemaToolCount": 1,
+      "eventCount": 17,
+      "finalHash": "cac900c99d9a",
+      "resultSummary": {}
+    },
+    {
+      "label": "ocr text url returns browser handoff",
+      "status": "PASS",
+      "requestedTool": "ocr",
+      "executedTool": "ocr",
+      "toolExecutionStatus": "success",
+      "firstSchemaContains": true,
+      "schemaToolCount": 1,
+      "eventCount": 17,
+      "finalHash": "22cd6fcd3503",
+      "resultSummary": {
+        "status": "success",
+        "urlCount": 1
+      }
+    },
+    {
+      "label": "optional abilities list callable",
+      "status": "PASS",
+      "requestedTool": "optional_abilities",
+      "executedTool": "optional_abilities",
+      "toolExecutionStatus": "success",
+      "firstSchemaContains": true,
+      "schemaToolCount": 1,
+      "eventCount": 17,
+      "finalHash": "23c395f2d9e2",
+      "resultSummary": {
+        "status": "success"
+      }
+    },
+    {
+      "label": "feishu_cli status callable",
+      "status": "PASS",
+      "requestedTool": "feishu_cli",
+      "executedTool": "feishu_cli",
+      "toolExecutionStatus": "success",
+      "firstSchemaContains": true,
+      "schemaToolCount": 1,
+      "eventCount": 17,
+      "finalHash": "266ca8de3da0",
+      "resultSummary": {
+        "status": "success",
+        "available": true,
+        "authState": "ready"
+      }
+    }
+  ],
+  "failed": [],
+  "redacted": true
+}

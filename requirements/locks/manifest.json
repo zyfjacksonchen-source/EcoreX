@@ -1,0 +1,49 @@
+{
+  "generator": {
+    "hashes": true,
+    "index": "https://pypi.org/simple",
+    "name": "uv",
+    "universal": true,
+    "version": "0.11.7"
+  },
+  "lock_type": "ecorex-python-hash-lock-set",
+  "profiles": [
+    {
+      "input": "bootstrap.in",
+      "input_sha256": "16cf702d81609d7c49bb23f58682155b2997df711cd4d407c856beac456e1bf3",
+      "lock": "bootstrap.lock",
+      "lock_sha256": "af93e119e494a537031a9b968ae61a49cb08be6cd11eb5d61ec74ed1237b5259",
+      "profile": "bootstrap"
+    },
+    {
+      "input": "cloud.in",
+      "input_sha256": "34a96fd5d0ff896e946a463abeec3ff83770eae8589b55ecef2218f7b14e7211",
+      "lock": "cloud.lock",
+      "lock_sha256": "e1eeebd47585ee01d04a6b108569c743c81257cf62df2c65402424715841fd6c",
+      "profile": "cloud"
+    },
+    {
+      "input": "dev.in",
+      "input_sha256": "21b479cd441f6fb4aed2d9e8412ef1886415171a5060e9b6a8667926eb8ed990",
+      "lock": "dev.lock",
+      "lock_sha256": "513552eae4b8d4935d8d8cb484fd9c6a4ff2063ed866661193351d37a6050903",
+      "profile": "dev"
+    },
+    {
+      "input": "platform-stage.in",
+      "input_sha256": "de56f4d53a9c37b4970d648c05f67657133c0ab22514b4cc192575581808ec20",
+      "lock": "platform-stage.lock",
+      "lock_sha256": "54e53072f26ce3e0b57a2e65d6d116fdf923b6a023682931f34c1bf265ce9718",
+      "profile": "platform-stage"
+    },
+    {
+      "input": "runtime.in",
+      "input_sha256": "4ae8b28099cd6fefd08a56d814883a2fbc14b8eb24ae711ce21a22b4c569438e",
+      "lock": "runtime.lock",
+      "lock_sha256": "fcfccc9e2ac83fa2fbc18765bbbb07f6b8155f4da823c08b1a702169452615da",
+      "profile": "runtime"
+    }
+  ],
+  "python": "3.11.9",
+  "schema_version": 1
+}

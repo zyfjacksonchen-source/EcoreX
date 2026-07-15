@@ -1,0 +1,56 @@
+{
+  "schemaVersion": "v0.2.7.1-versioned-hotfix-publish-v1",
+  "generatedAt": "2026-07-03T06:00:14Z",
+  "status": "PASS",
+  "scope": "versioned-hotfix-download-page-and-update-check",
+  "fullRealReleaseValidationRan": false,
+  "reason": "Old 0.2.7 clients compare update availability by version, so this hotfix is published as 0.2.7.1 while update-check also learns artifact fingerprint comparison for future same-version hotfixes.",
+  "localValidation": {
+    "pythonCompile": "PASS",
+    "frontendTypecheck": "PASS",
+    "frontendBuild": "PASS",
+    "focusedUpdateCheckPytest": "PASS",
+    "focusedReleaseContractPytest": "PASS"
+  },
+  "releaseArtifacts": {
+    "publicZip": {
+      "fileName": "EcoreX_0.2.7.1-public-release.zip",
+      "size": 2847718,
+      "sha256": "6539C52C05F9E6CD4C6163333C088497E80187F73098E2961609F026B0560C8E"
+    },
+    "webuiWindowsX64": {
+      "fileName": "EcoreX_0.2.7.1-webui-windows-x64.zip",
+      "size": 550743209,
+      "sha256": "24F8D93BDBFDCC1078C89DEC463AC6A9466242CB75BE7F40ED2C5E931BBF18C3"
+    },
+    "webuiMacosUniversal": {
+      "fileName": "EcoreX_0.2.7.1-webui-macos-universal.zip",
+      "size": 652198043,
+      "sha256": "8388E3F763F0D2ED1157B7ECAE98084E362B85717B4F698B2D105883B8C63D71"
+    },
+    "webLinuxService": {
+      "fileName": "EcoreX_0.2.7.1-web-linux-service.tar.gz",
+      "size": 4092129,
+      "sha256": "CED411E18E4DF36B2DD51B04500226A94453BD7506146A83E77BEA10FC333509"
+    }
+  },
+  "serverPublish": {
+    "productionDeployArtifact": "docs/v0.2.7.1/artifacts/production-deploy-online.json",
+    "webServiceVersion": "0.2.7.1",
+    "publicManifestVersion": "0.2.7.1",
+    "currentPathPromoted": true,
+    "currentValidation": "pass",
+    "downloadManifestReachable": true,
+    "artifactShaSizeMatched": true
+  },
+  "updateCheck": {
+    "old027ClientsSeeUpdateByVersion": true,
+    "newLogicIncludesUpdateReason": true,
+    "futureSameVersionArtifactDetection": true
+  },
+  "privacy": {
+    "rawHostPersisted": false,
+    "rawCredentialsPersisted": false,
+    "rawUrlPersisted": false
+  }
+}

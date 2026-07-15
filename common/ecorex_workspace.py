@@ -10,7 +10,7 @@ import time
 import uuid
 from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from common.log import logger
 
@@ -207,11 +207,202 @@ def load_ui_state(workspace: str) -> Dict[str, Any]:
     state.setdefault("schemaVersion", UI_STATE_SCHEMA_VERSION)
     state.setdefault("projects", [])
     state.setdefault("sessionProjects", {})
+    state.setdefault("sessionProjectBindings", {})
     state.setdefault("sessionTitles", {})
     state.setdefault("pinnedSessions", {})
+    state.setdefault("pinnedSessionTimes", {})
     state.setdefault("pinnedProjects", {})
     state.setdefault("updatedAt", 0)
     return state
+
+
+def _project_key(project: Dict[str, Any]) -> str:
+    path_value = str(project.get("path") or "").strip()
+    if path_value:
+        try:
+            return "path:" + os.path.normcase(os.path.realpath(os.path.expanduser(path_value))).replace("\\", "/")
+        except Exception:
+            return "path:" + path_value.replace("\\", "/").rstrip("/")
+    return "id:" + str(project.get("id") or "").strip()
+
+
+def _project_updated_at(project: Dict[str, Any]) -> str:
+    return str(project.get("updatedAt") or project.get("updated_at") or "")
+
+
+def _project_keys(source: Any) -> List[str]:
+    keys: List[str] = []
+    seen: set[str] = set()
+    if not isinstance(source, list):
+        return keys
+    for item in source:
+        if not isinstance(item, dict):
+            continue
+        key = _project_key(item)
+        if not key or key == "id:" or key in seen:
+            continue
+        keys.append(key)
+        seen.add(key)
+    return keys
+
+
+def _merge_projects(current: Any, incoming: Any, replace: bool = False) -> List[Dict[str, Any]]:
+    merged: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+    for source in (current, incoming):
+        if not isinstance(source, list):
+            continue
+        for item in source:
+            if not isinstance(item, dict):
+                continue
+            key = _project_key(item)
+            if not key or key == "id:":
+                continue
+            existing = merged.get(key)
+            if existing is None:
+                merged[key] = dict(item)
+                order.append(key)
+                continue
+            existing_time = _project_updated_at(existing)
+            incoming_time = _project_updated_at(item)
+            merged_item = {**existing, **item} if incoming_time >= existing_time else {**item, **existing}
+            if key.startswith("path:") and existing.get("id") and item.get("id") and existing.get("id") != item.get("id"):
+                # Keep the established id for the path so sessionProjects do not drift
+                # when another client reports the same folder with a different hash.
+                merged_item["id"] = existing.get("id")
+            merged[key] = merged_item
+    if replace and isinstance(incoming, list):
+        replace_order = _project_keys(incoming)
+        return [merged[key] for key in replace_order if key in merged]
+    return [merged[key] for key in order if key in merged]
+
+
+def _project_id_aliases(*sources: Any) -> Dict[str, str]:
+    canonical_by_key: Dict[str, str] = {}
+    aliases: Dict[str, str] = {}
+    for source in sources:
+        if not isinstance(source, list):
+            continue
+        for item in source:
+            if not isinstance(item, dict):
+                continue
+            key = _project_key(item)
+            project_id = str(item.get("id") or "").strip()
+            if not key or key == "id:" or not project_id:
+                continue
+            canonical_by_key.setdefault(key, project_id)
+    for source in sources:
+        if not isinstance(source, list):
+            continue
+        for item in source:
+            if not isinstance(item, dict):
+                continue
+            key = _project_key(item)
+            project_id = str(item.get("id") or "").strip()
+            canonical_id = canonical_by_key.get(key)
+            if project_id and canonical_id:
+                aliases[project_id] = canonical_id
+    return aliases
+
+
+def _project_ids(projects: Any) -> set[str]:
+    ids: set[str] = set()
+    if not isinstance(projects, list):
+        return ids
+    for item in projects:
+        if isinstance(item, dict) and item.get("id"):
+            ids.add(str(item.get("id")))
+    return ids
+
+
+def _normalize_session_project_mapping(
+    mapping: Any,
+    aliases: Dict[str, str],
+    valid_project_ids: set[str],
+    project_ids_known: bool = False,
+) -> Dict[str, str]:
+    if not isinstance(mapping, dict):
+        return {}
+    normalized: Dict[str, str] = {}
+    for session_id, project_id in mapping.items():
+        session_key = str(session_id or "").strip()
+        project_key = str(project_id or "").strip()
+        if not session_key or not project_key:
+            continue
+        canonical_id = aliases.get(project_key, project_key)
+        if project_ids_known and canonical_id not in valid_project_ids:
+            continue
+        normalized[session_key] = canonical_id
+    return normalized
+
+
+def _normalize_session_project_bindings(
+    bindings: Any,
+    aliases: Dict[str, str],
+    valid_project_ids: set[str],
+    project_ids_known: bool = False,
+) -> Dict[str, Dict[str, Any]]:
+    if not isinstance(bindings, dict):
+        return {}
+    normalized: Dict[str, Dict[str, Any]] = {}
+    for session_id, raw_binding in bindings.items():
+        session_key = str(session_id or "").strip()
+        if not session_key or not isinstance(raw_binding, dict):
+            continue
+        project_key = str(
+            raw_binding.get("projectId")
+            or raw_binding.get("project_id")
+            or ""
+        ).strip()
+        if not project_key:
+            continue
+        canonical_id = aliases.get(project_key, project_key)
+        if project_ids_known and canonical_id not in valid_project_ids:
+            continue
+        project_path = str(raw_binding.get("projectPath") or raw_binding.get("project_path") or "").strip()
+        memory_path = str(raw_binding.get("memoryPath") or raw_binding.get("memory_path") or "").strip()
+        dreams_path = str(raw_binding.get("dreamsPath") or raw_binding.get("dreams_path") or "").strip()
+        normalized[session_key] = {
+            "projectId": canonical_id,
+            "projectName": str(raw_binding.get("projectName") or raw_binding.get("project_name") or canonical_id).strip(),
+            "projectPath": project_path,
+            "memoryPath": memory_path,
+            "dreamsPath": dreams_path,
+            "createdAt": str(raw_binding.get("createdAt") or raw_binding.get("created_at") or "").strip(),
+            "lastUsedAt": str(raw_binding.get("lastUsedAt") or raw_binding.get("last_used_at") or "").strip(),
+            "source": str(raw_binding.get("source") or "runtime").strip(),
+        }
+    return normalized
+
+
+def _normalize_project_keyed_mapping(
+    mapping: Any,
+    aliases: Dict[str, str],
+    valid_project_ids: set[str],
+    project_ids_known: bool = False,
+) -> Dict[str, Any]:
+    if not isinstance(mapping, dict):
+        return {}
+    normalized: Dict[str, Any] = {}
+    for project_id, value in mapping.items():
+        project_key = str(project_id or "").strip()
+        if not project_key:
+            continue
+        canonical_id = aliases.get(project_key, project_key)
+        if project_ids_known and canonical_id not in valid_project_ids:
+            continue
+        normalized[canonical_id] = value
+    return normalized
+
+
+def _merge_mapping(current: Any, incoming: Any, prefer_incoming: bool = False) -> Dict[str, Any]:
+    current_map = current if isinstance(current, dict) else {}
+    incoming_map = incoming if isinstance(incoming, dict) else {}
+    if not incoming_map and current_map:
+        return dict(current_map)
+    if prefer_incoming:
+        return {**current_map, **incoming_map}
+    return {**incoming_map, **current_map}
 
 
 def save_ui_state(workspace: str, incoming: Dict[str, Any]) -> Dict[str, Any]:
@@ -221,9 +412,11 @@ def save_ui_state(workspace: str, incoming: Dict[str, Any]) -> Dict[str, Any]:
         "lastActiveSessionId",
         "projects",
         "sessionProjects",
+        "sessionProjectBindings",
         "sessionTitles",
         "sessionUiState",
         "pinnedSessions",
+        "pinnedSessionTimes",
         "pinnedProjects",
         "capabilityEnabled",
         "enabledCapabilityPacks",
@@ -232,6 +425,104 @@ def save_ui_state(workspace: str, incoming: Dict[str, Any]) -> Dict[str, Any]:
         "savedAt",
     }
     current = load_ui_state(workspace)
+    incoming = dict(incoming)
+    replace_project_state = bool(
+        incoming.get("replaceProjectState")
+        or incoming.get("replace_project_state")
+        or incoming.get("projectStateMode") == "replace"
+    )
+    allow_empty_project_state = bool(
+        incoming.get("allowEmptyProjectState")
+        or incoming.get("allow_empty_project_state")
+    )
+    raw_incoming_projects = incoming.get("projects")
+    if (
+        replace_project_state
+        and "projects" in incoming
+        and isinstance(raw_incoming_projects, list)
+        and len(raw_incoming_projects) == 0
+        and current.get("projects")
+        and not allow_empty_project_state
+    ):
+        logger.warning(
+            "[EcoreXWorkspace] ignoring empty replace project state without explicit allow flag"
+        )
+        replace_project_state = False
+    if "projects" in incoming:
+        incoming_projects = incoming.get("projects")
+        current_projects = current.get("projects")
+        if isinstance(incoming_projects, list):
+            if replace_project_state:
+                incoming["projects"] = _merge_projects(current_projects, incoming_projects, replace=True)
+            elif incoming_projects or not current_projects:
+                incoming["projects"] = _merge_projects(current_projects, incoming_projects)
+            else:
+                incoming.pop("projects", None)
+    effective_projects = incoming.get("projects") if "projects" in incoming else current.get("projects")
+    id_aliases = _project_id_aliases(current.get("projects"), raw_incoming_projects, effective_projects)
+    valid_project_ids = _project_ids(effective_projects)
+    project_ids_known = isinstance(effective_projects, list)
+    if "sessionProjects" in incoming:
+        normalized_current = _normalize_session_project_mapping(current.get("sessionProjects"), id_aliases, valid_project_ids, project_ids_known)
+        normalized_incoming = _normalize_session_project_mapping(incoming.get("sessionProjects"), id_aliases, valid_project_ids, project_ids_known)
+        if replace_project_state:
+            incoming["sessionProjects"] = normalized_incoming
+        else:
+            incoming["sessionProjects"] = _merge_mapping(normalized_current, normalized_incoming, prefer_incoming=True)
+    elif id_aliases and current.get("sessionProjects"):
+        normalized_current = _normalize_session_project_mapping(current.get("sessionProjects"), id_aliases, valid_project_ids, project_ids_known)
+        if normalized_current != current.get("sessionProjects"):
+            incoming["sessionProjects"] = normalized_current
+    if "sessionProjectBindings" in incoming:
+        normalized_current_bindings = _normalize_session_project_bindings(current.get("sessionProjectBindings"), id_aliases, valid_project_ids, project_ids_known)
+        normalized_incoming_bindings = _normalize_session_project_bindings(incoming.get("sessionProjectBindings"), id_aliases, valid_project_ids, project_ids_known)
+        if replace_project_state:
+            incoming["sessionProjectBindings"] = normalized_incoming_bindings
+        else:
+            incoming["sessionProjectBindings"] = _merge_mapping(normalized_current_bindings, normalized_incoming_bindings, prefer_incoming=True)
+    elif id_aliases and current.get("sessionProjectBindings"):
+        normalized_current_bindings = _normalize_session_project_bindings(current.get("sessionProjectBindings"), id_aliases, valid_project_ids, project_ids_known)
+        if normalized_current_bindings != current.get("sessionProjectBindings"):
+            incoming["sessionProjectBindings"] = normalized_current_bindings
+    if "pinnedProjects" in incoming:
+        normalized_current_pins = _normalize_project_keyed_mapping(current.get("pinnedProjects"), id_aliases, valid_project_ids, project_ids_known)
+        normalized_incoming_pins = _normalize_project_keyed_mapping(incoming.get("pinnedProjects"), id_aliases, valid_project_ids, project_ids_known)
+        if replace_project_state:
+            incoming["pinnedProjects"] = normalized_incoming_pins
+        else:
+            incoming["pinnedProjects"] = _merge_mapping(normalized_current_pins, normalized_incoming_pins, prefer_incoming=True)
+    elif id_aliases and current.get("pinnedProjects"):
+        normalized_current_pins = _normalize_project_keyed_mapping(current.get("pinnedProjects"), id_aliases, valid_project_ids, project_ids_known)
+        if normalized_current_pins != current.get("pinnedProjects"):
+            incoming["pinnedProjects"] = normalized_current_pins
+    for key in ("sessionTitles", "pinnedSessions", "pinnedSessionTimes"):
+        if key in incoming:
+            if replace_project_state:
+                merged_map = incoming.get(key) if isinstance(incoming.get(key), dict) else {}
+                incoming[key] = merged_map
+                continue
+            else:
+                merged_map = _merge_mapping(current.get(key), incoming.get(key), prefer_incoming=True)
+            if merged_map or not current.get(key):
+                incoming[key] = merged_map
+            else:
+                incoming.pop(key, None)
+    if "activeProjectId" in incoming:
+        active_project_id = str(incoming.get("activeProjectId") or "").strip()
+        if active_project_id:
+            active_project_id = id_aliases.get(active_project_id, active_project_id)
+            incoming["activeProjectId"] = active_project_id if not project_ids_known or active_project_id in valid_project_ids else None
+        elif replace_project_state:
+            incoming["activeProjectId"] = None
+        elif current.get("activeProjectId"):
+            incoming.pop("activeProjectId", None)
+    elif replace_project_state and current.get("activeProjectId") and project_ids_known:
+        active_project_id = id_aliases.get(str(current.get("activeProjectId")), str(current.get("activeProjectId")))
+        if active_project_id not in valid_project_ids:
+            incoming["activeProjectId"] = None
+    for key in ("activeSessionId", "lastActiveSessionId"):
+        if key in incoming and incoming.get(key) in ("", None) and current.get(key):
+            incoming.pop(key, None)
     next_state = {
         **current,
         **{key: incoming[key] for key in allowed if key in incoming},

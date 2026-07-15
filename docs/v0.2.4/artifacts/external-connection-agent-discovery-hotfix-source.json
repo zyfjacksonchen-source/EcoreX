@@ -1,0 +1,96 @@
+{
+  "schemaVersion": "r24-18-external-connection-agent-discovery-v1",
+  "status": "PASS",
+  "version": "0.2.4",
+  "scope": "WebUI only",
+  "requirements": {
+    "feishuCliAuth": "Do not hardcode a fixed Feishu CLI setup path in WebUI; run structured tool diagnostics and let the agent/tool choose the official lark-cli flow.",
+    "externalConnections": "All external connections expose an agent-discovery contract; WebUI displays and forwards declared actions but does not own vendor setup flow logic.",
+    "tongxinCli": "Tongxin/Xin Assistant can be auto-configured from trusted local script or configured remote account login followed by SHA256-verified bootstrap; disclosed data remains read-only and permission-visible only; bad local script copies that pass schema but fail the data layer are rejected.",
+    "antiRegression": "Tests and prompt rules block fallback to default domain=base, raw auth-login default-domain routing, Feishu-only Web action checks, legacy CLI-auth labeling, and config_init as the catalog default."
+  },
+  "sourceChanges": [
+    "agent/tools/feishu_cli/feishu_cli.py",
+    "agent/tools/tongxin_cli/tongxin_cli.py",
+    "channel/channel_catalog.py",
+    "channel/web/web_channel.py",
+    "channel/web/static/js/console.js",
+    "common/ecorex_tool_permissions.py",
+    "agent/tools/optional_abilities/optional_abilities.py",
+    "agent/tools/agent_capability/agent_capability.py",
+    "agent/protocol/agent_stream.py",
+    "agent/prompt/builder.py",
+    "config-template.json"
+  ],
+  "tests": {
+    "pyCompile": "PASS",
+    "jsCheck": "PASS",
+    "tongxinPytest": "17 passed",
+    "focusedPytest": "59 passed, 3 warnings",
+    "webBackendPytest": "399 passed, 3 warnings, 26 subtests passed",
+    "rendererTypecheck": "PASS",
+    "rendererBuild": "PASS with existing Vite chunk-size warning",
+    "releaseArtifactContracts": "PASS",
+    "installPackagingContracts": "PASS",
+    "releaseArtifactValidation": "PASS",
+    "builtTextSearch": "PASS: new Agent setup copy present in Web console source and legacy CLI setup labels absent from source/dist surfaces",
+    "privacyScan": "PASS findingCount=0",
+    "nashReview": "PASS after target-dir bootstrap health blocker fix",
+    "pytestEnv": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1",
+    "externalPluginNote": "Default pytest plugin autoload failed before collection because the host has incompatible pydantic/langsmith packages; isolated pytest passed."
+  },
+  "releaseArtifacts": {
+    "webuiWindowsX64": {
+      "sha256": "5A0DC6E0A59C70CB3823DE2A256EA44F334E056D37BD6A2510AA49878E9ADF61",
+      "size": 113931610
+    },
+    "webuiMacosUniversal": {
+      "sha256": "00BF5C1E67FF7855F6CCA59D87073B77869CD83064893D1CBD8F18183A2EFBAD",
+      "size": 263206273
+    },
+    "webLinuxService": {
+      "sha256": "0EC37896C78879A9B390C68AC5036BA651473EF268D72CBD65B386082B04989A",
+      "size": 3834803
+    },
+    "publicRelease": {
+      "sha256": "0038903FEA2437989C120FF6AD32EFD5D99C4E6126C89F93BCFD72317EC6ADC9",
+      "size": 380156993
+    }
+  },
+  "deployment": {
+    "status": "PASS",
+    "onlineVersion": "0.2.4",
+    "serviceActive": true,
+    "serviceEnabled": true,
+    "versionEndpointStatus": 200,
+    "tmpStagingCleanup": {
+      "removedCount": 5,
+      "beforeUsedPct": "100%",
+      "afterUsedPct": "66%"
+    }
+  },
+  "privacy": {
+    "rawTongxinPasswordPersisted": false,
+    "rawTongxinTokenPersisted": false,
+    "rawTongxinUsernamePersisted": false,
+    "feishuDeviceCodePublic": false,
+    "feishuAppSensitiveValuePublic": false
+  },
+  "antiRegressionSearches": [
+    "domain=base default auth flow",
+    "agentAuthorizationAction config_init",
+    "name == feishu agent auth action special-case",
+    "CLI 授权 legacy label"
+  ],
+  "notes": [
+    "Feishu status nextAction now points to feishu_cli agent_auth, not auth_login domain=base.",
+    "Raw lark auth login without explicit scope/domain is autorouted to feishu_cli agent_auth; explicit official scope/domain flags are preserved without inventing defaults.",
+    "Web External Connections call feishu_cli agent_auth without passing saved app fields, so the visible CLI URL path is not bypassed by static app-field setup.",
+    "Web-facing Feishu setup copy now says Agent setup instead of implying Web owns a fixed CLI setup flow.",
+    "Tongxin default capability install now proxies to auto_configure when no explicit local script path is supplied.",
+    "Explicit remote URL/inline ticket bootstrap remains outside default read-only permission; config-driven auth/bootstrap is allowed.",
+    "Tongxin configure/auto_configure/bootstrap/run now use a schema plus read-only project-list data-layer health probe; scripts that fail with models.DATABASE are reported as dependency_failed and are not persisted.",
+    "Tongxin bootstrap probes the candidate script in the final target directory, restores the previous script on health failure, and only persists a path after the final target-dir probe passes.",
+    "Nash cross-review returned PASS after the target-dir bootstrap health blocker was fixed."
+  ]
+}

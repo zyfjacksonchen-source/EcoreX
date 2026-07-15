@@ -1,0 +1,58 @@
+{
+  "status": "PASS",
+  "targetUrl": "https://mvdcm.ecoremedia.net/ecorex-agent/app/",
+  "checks": {
+    "initial": {
+      "hasTencentSession": true,
+      "hasRetouchSession": true,
+      "composerButtons": [
+        "添加本地文件",
+        "AI\ngpt-5.5 当前模型：gpt-5.5",
+        "发送，Enter 也可以发送",
+        "默认权限 本机访问权限：默认权限"
+      ],
+      "composerHasTencentDocs": false,
+      "composerHasLocalFile": true,
+      "composerLayout": {
+        "zonePaddingBottom": 12,
+        "composerHeight": 91,
+        "textareaInside": true,
+        "modelInside": true,
+        "sendInside": true,
+        "modelSendAligned": true
+      }
+    },
+    "external": {
+      "hasTencentCard": true,
+      "hasAgentFlow": true,
+      "logoBackground": "url(\"https://mvdcm.ecoremedia.net/ecorex-agent/app/assets/logos/tencent-docs.png\")"
+    },
+    "graphDefault": {
+      "hasDedicatedGrid": true,
+      "hasSelectionClass": false,
+      "hasDedicatedCanvas": true,
+      "hasDetailPanel": false,
+      "hasRelatedCards": false,
+      "hasChineseCategories": true
+    },
+    "graph": {
+      "hasSelectionClass": true,
+      "hasDetailPanel": true,
+      "hasSummary": true,
+      "hasRelatedCards": false
+    },
+    "memory": {
+      "hasMemorySection": true,
+      "hasGraphInsideMemory": false,
+      "text": "记忆\n原项目记忆入口\n项目记忆\n选择项目后自动创建 .ecorex/project-memory.md\n打开\n梦境蒸馏\n通用会话保留原项目记忆入口\n已开启\nproject-memory.md\n2026-07-05 15:35\ndream-distillation.md\n2026-07-05 15:35\nproject-memory.md\n2026-07-05 15:35\ndream-distillation.md\n2026-07-05 15:35"
+    },
+    "retouch": {
+      "hasEditor": true,
+      "hasToolbar": true,
+      "hasStylePanel": true,
+      "pathCount": 2,
+      "lineCount": 0,
+      "labelText": "不要挡住标题"
+    }
+  }
+}

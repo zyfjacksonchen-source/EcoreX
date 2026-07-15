@@ -1,0 +1,9 @@
+{
+  "artifact": "release-artifacts\\EcoreX_0.2.3-webui-windows-x64.zip",
+  "scriptHits": [
+    "runtime/scripts/prepare-ecorex-webui-local-release.ps1",
+    "scripts/install-ecorex-webui-win.ps1"
+  ],
+  "blockingLarkInstallScripts": [],
+  "status": "PASS"
+}

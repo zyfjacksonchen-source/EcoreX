@@ -23,6 +23,38 @@ from typing import Any, Dict, List, Optional
 from common.log import logger
 
 
+class ConversationSessionOwnerConflict(ValueError):
+    """Raised when a session write attempts to change canonical ownership."""
+
+    code = "SESSION_OWNER_CONFLICT"
+
+    def __init__(self, reason: str = "session_owner_conflict"):
+        self.reason = reason
+        super().__init__("session owner conflict")
+
+
+def _normalize_include_session_ids(values: Any, *, limit: int = 200) -> List[str]:
+    if values is None:
+        return []
+    if isinstance(values, str):
+        raw_values = re.split(r"[\s,]+", values)
+    elif isinstance(values, (list, tuple, set)):
+        raw_values = list(values)
+    else:
+        raw_values = [values]
+    normalized: List[str] = []
+    seen = set()
+    for value in raw_values:
+        session_id = str(value or "").strip()
+        if not session_id or session_id in seen:
+            continue
+        seen.add(session_id)
+        normalized.append(session_id)
+        if len(normalized) >= limit:
+            break
+    return normalized
+
+
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
@@ -34,6 +66,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     title             TEXT    NOT NULL DEFAULT '',
     title_locked      INTEGER NOT NULL DEFAULT 0,
     context_start_seq INTEGER NOT NULL DEFAULT 0,
+    project_id        TEXT    NOT NULL DEFAULT '',
+    project_name      TEXT    NOT NULL DEFAULT '',
+    project_path      TEXT    NOT NULL DEFAULT '',
+    project_memory_path TEXT  NOT NULL DEFAULT '',
+    project_dreams_path TEXT  NOT NULL DEFAULT '',
+    metadata_json     TEXT    NOT NULL DEFAULT '',
     created_at        INTEGER NOT NULL,
     last_active       INTEGER NOT NULL,
     msg_count         INTEGER NOT NULL DEFAULT 0
@@ -54,7 +92,10 @@ CREATE INDEX IF NOT EXISTS idx_messages_session
     ON messages (session_id, seq);
 
 CREATE INDEX IF NOT EXISTS idx_sessions_last_active
-    ON sessions (last_active);
+    ON sessions (last_active DESC);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_channel_last_active
+    ON sessions (channel_type, last_active DESC);
 """
 
 # Migration: add channel_type column to existing databases that predate it.
@@ -74,6 +115,15 @@ _MIGRATION_ADD_CONTEXT_START_SEQ = """
 ALTER TABLE sessions ADD COLUMN context_start_seq INTEGER NOT NULL DEFAULT 0;
 """
 
+_SESSION_PROJECT_MIGRATIONS = {
+    "project_id": "ALTER TABLE sessions ADD COLUMN project_id TEXT NOT NULL DEFAULT '';",
+    "project_name": "ALTER TABLE sessions ADD COLUMN project_name TEXT NOT NULL DEFAULT '';",
+    "project_path": "ALTER TABLE sessions ADD COLUMN project_path TEXT NOT NULL DEFAULT '';",
+    "project_memory_path": "ALTER TABLE sessions ADD COLUMN project_memory_path TEXT NOT NULL DEFAULT '';",
+    "project_dreams_path": "ALTER TABLE sessions ADD COLUMN project_dreams_path TEXT NOT NULL DEFAULT '';",
+    "metadata_json": "ALTER TABLE sessions ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '';",
+}
+
 # Generic JSON sidecar for per-message attachments (TTS audio URL, future use).
 # Always optional — readers must tolerate missing column / empty / invalid JSON.
 _MIGRATION_ADD_MSG_EXTRAS = """
@@ -81,6 +131,10 @@ ALTER TABLE messages ADD COLUMN extras TEXT NOT NULL DEFAULT '';
 """
 
 DEFAULT_MAX_AGE_DAYS: int = 30
+HISTORY_CONTEXT_MAX_REFS_PER_MESSAGE = 4
+HISTORY_CONTEXT_MAX_TOTAL_REFS = 40
+HISTORY_CONTEXT_MAX_PATH_CHARS = 512
+HISTORY_CONTEXT_MAX_TITLE_CHARS = 160
 
 
 def _is_visible_user_message(content: Any) -> bool:
@@ -208,6 +262,228 @@ def _extract_tool_results(content: Any) -> Dict[str, dict]:
     return results
 
 
+def _display_text_key(value: str) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _normalize_project_context(value: Any) -> Dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    project_id = str(value.get("projectId") or value.get("project_id") or "").strip()
+    project_path = str(value.get("projectPath") or value.get("project_path") or "").strip()
+    if not project_id and not project_path:
+        return {}
+    project_name = str(value.get("projectName") or value.get("project_name") or project_id or "").strip()
+    return {
+        "project_id": project_id[:256],
+        "project_name": project_name[:512],
+        "project_path": project_path[:4096],
+        "project_memory_path": str(value.get("memoryPath") or value.get("memory_path") or "").strip()[:4096],
+        "project_dreams_path": str(value.get("dreamsPath") or value.get("dreams_path") or "").strip()[:4096],
+    }
+
+
+def _session_project_payload(row: sqlite3.Row | tuple | None, offset: int = 0) -> Dict[str, Any]:
+    if not row:
+        return {}
+    values = row[offset: offset + 5]
+    project_id, project_name, project_path, memory_path, dreams_path = [str(item or "") for item in values]
+    if not (project_id or project_path):
+        return {}
+    return {
+        "projectId": project_id,
+        "projectName": project_name or project_id,
+        "projectPath": project_path,
+        "memoryPath": memory_path,
+        "dreamsPath": dreams_path,
+    }
+
+
+def _canonical_project_owner(project: Dict[str, str]) -> tuple[str, str]:
+    project_id = str(project.get("project_id") or project.get("projectId") or "").strip()
+    project_path = str(project.get("project_path") or project.get("projectPath") or "").strip()
+    if project_id:
+        return ("id", project_id)
+    if project_path:
+        return ("path", str(Path(project_path).expanduser()))
+    return ("general", "")
+
+
+def _session_row_project(row: sqlite3.Row | tuple | None, offset: int = 0) -> Dict[str, str]:
+    if not row:
+        return {}
+    values = row[offset: offset + 5]
+    project_id, project_name, project_path, memory_path, dreams_path = [str(item or "") for item in values]
+    if not (project_id or project_path):
+        return {}
+    return {
+        "project_id": project_id,
+        "project_name": project_name,
+        "project_path": project_path,
+        "project_memory_path": memory_path,
+        "project_dreams_path": dreams_path,
+    }
+
+
+def _project_owners_match(left: Dict[str, str], right: Dict[str, str]) -> bool:
+    return _canonical_project_owner(left) == _canonical_project_owner(right)
+
+
+def _new_history_context_state() -> Dict[str, Any]:
+    return {"seen": set(), "count": 0, "omitted": 0}
+
+
+def _history_ref_key(label: str, value: str) -> str:
+    normalized = str(value or "").strip().replace("\\", "/").lower()
+    return f"{label}:{normalized}"
+
+
+def _history_ref_allowed(state: Optional[Dict[str, Any]], key: str) -> bool:
+    if state is None:
+        return True
+    seen = state.setdefault("seen", set())
+    if not isinstance(seen, set):
+        seen = set()
+        state["seen"] = seen
+    if key in seen:
+        state["omitted"] = int(state.get("omitted") or 0) + 1
+        return False
+    if int(state.get("count") or 0) >= HISTORY_CONTEXT_MAX_TOTAL_REFS:
+        state["omitted"] = int(state.get("omitted") or 0) + 1
+        return False
+    seen.add(key)
+    state["count"] = int(state.get("count") or 0) + 1
+    return True
+
+
+def _history_context_summary(state: Optional[Dict[str, Any]]) -> str:
+    if not state:
+        return ""
+    omitted = int(state.get("omitted") or 0)
+    if omitted <= 0:
+        return ""
+    return f"[历史文件引用摘要: 已省略 {omitted} 个重复或超出预算的本地文件/产物引用]"
+
+
+def _attachment_history_context(extras: Dict[str, Any], state: Optional[Dict[str, Any]] = None) -> str:
+    raw = extras.get("attachments") if isinstance(extras, dict) else None
+    if not isinstance(raw, list):
+        return ""
+    refs: List[str] = []
+    included = 0
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        if included >= HISTORY_CONTEXT_MAX_REFS_PER_MESSAGE:
+            if state is not None:
+                state["omitted"] = int(state.get("omitted") or 0) + 1
+            continue
+        file_path = str(item.get("file_path") or item.get("path") or "").strip()
+        if not file_path:
+            continue
+        file_type = str(item.get("file_type") or item.get("type") or "file").strip().lower()
+        if file_type == "image":
+            label = "历史图片"
+        elif file_type == "video":
+            label = "历史视频"
+        elif file_type == "audio":
+            label = "历史音频"
+        elif file_type == "directory":
+            label = "历史目录"
+        else:
+            label = "历史文件"
+        if not _history_ref_allowed(state, _history_ref_key(label, file_path)):
+            continue
+        refs.append(f"[{label}: {file_path[:HISTORY_CONTEXT_MAX_PATH_CHARS]}]")
+        included += 1
+    if not refs:
+        return ""
+    return "\n".join(refs)
+
+
+def _artifact_history_context(extras: Dict[str, Any], state: Optional[Dict[str, Any]] = None) -> str:
+    raw = extras.get("artifacts") if isinstance(extras, dict) else None
+    if not isinstance(raw, list):
+        return ""
+    refs: List[str] = []
+    included = 0
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        if included >= HISTORY_CONTEXT_MAX_REFS_PER_MESSAGE:
+            if state is not None:
+                state["omitted"] = int(state.get("omitted") or 0) + 1
+            continue
+        ref_path = str(
+            item.get("path")
+            or item.get("file_path")
+            or item.get("relativePath")
+            or item.get("relative_path")
+            or item.get("url")
+            or ""
+        ).strip()
+        if not ref_path:
+            continue
+        artifact_type = str(
+            item.get("type")
+            or item.get("file_type")
+            or item.get("mime_type")
+            or "file"
+        ).strip().lower()
+        title = str(item.get("title") or item.get("file_name") or item.get("fileName") or "").strip()
+        if artifact_type.startswith("image"):
+            label = "历史图片产物"
+        elif artifact_type.startswith("video"):
+            label = "历史视频产物"
+        elif artifact_type.startswith("audio"):
+            label = "历史音频产物"
+        elif artifact_type in ("directory", "folder"):
+            label = "历史目录产物"
+        else:
+            label = "历史文件产物"
+        if not _history_ref_allowed(state, _history_ref_key(label, ref_path)):
+            continue
+        detail = ref_path[:HISTORY_CONTEXT_MAX_PATH_CHARS]
+        if title:
+            detail = f"{title[:HISTORY_CONTEXT_MAX_TITLE_CHARS]} | {detail}"
+        refs.append(f"[{label}: {detail}]")
+        included += 1
+    if not refs:
+        return ""
+    return "\n".join(refs)
+
+
+def _content_with_history_context(content: Any, history_context: str) -> Any:
+    if not history_context:
+        return content
+    if isinstance(content, str):
+        return f"{content.rstrip()}\n{history_context}".strip()
+    if isinstance(content, list):
+        copied = [dict(block) if isinstance(block, dict) else block for block in content]
+        for block in reversed(copied):
+            if isinstance(block, dict) and block.get("type") == "text":
+                block["text"] = f"{str(block.get('text') or '').rstrip()}\n{history_context}".strip()
+                return copied
+        return [{"type": "text", "text": history_context}, *copied]
+    return content
+
+
+def _content_with_attachment_history_context(
+    content: Any,
+    extras: Dict[str, Any],
+    state: Optional[Dict[str, Any]] = None,
+) -> Any:
+    return _content_with_history_context(content, _attachment_history_context(extras, state))
+
+
+def _content_with_artifact_history_context(
+    content: Any,
+    extras: Dict[str, Any],
+    state: Optional[Dict[str, Any]] = None,
+) -> Any:
+    return _content_with_history_context(content, _artifact_history_context(extras, state))
+
+
 def _group_into_display_turns(
     rows: List[tuple],
     include_thinking: bool = True,
@@ -239,7 +515,12 @@ def _group_into_display_turns(
     cur_rest: List[tuple] = []
     started = False
 
-    for role, raw_content, created_at, raw_extras in rows:
+    for row in rows:
+        if len(row) >= 5:
+            seq, role, raw_content, created_at, raw_extras = row[:5]
+        else:
+            seq = None
+            role, raw_content, created_at, raw_extras = row[:4]
         try:
             content = json.loads(raw_content)
         except Exception:
@@ -254,11 +535,11 @@ def _group_into_display_turns(
         if role == "user" and _is_visible_user_message(content):
             if started:
                 groups.append((cur_user, cur_rest))
-            cur_user = (content, created_at, extras)
+            cur_user = (seq, content, created_at, extras)
             cur_rest = []
             started = True
         else:
-            cur_rest.append((role, content, created_at, extras))
+            cur_rest.append((seq, role, content, created_at, extras))
 
     if started:
         groups.append((cur_user, cur_rest))
@@ -271,16 +552,27 @@ def _group_into_display_turns(
     for user_row, rest in groups:
         # User turn
         if user_row:
-            content, created_at, _u_extras = user_row
+            user_seq, content, created_at, _u_extras = user_row
+            user_extras = _u_extras if isinstance(_u_extras, dict) else {}
             text = _extract_display_text(content)
             # Hide internal injection markers (scheduler / self-evolution) so the
             # user never sees a synthetic "[SCHEDULED] self-evolution" bubble;
             # the assistant reply that follows is still rendered.
             if text and not _is_internal_user_marker(text):
                 user_turn = {"role": "user", "content": text, "created_at": created_at}
-                if isinstance(_u_extras, dict) and _u_extras:
-                    user_turn["extras"] = _u_extras
+                if user_seq is not None:
+                    user_turn["user_seq"] = int(user_seq)
+                request_id = str(user_extras.get("request_id") or "").strip()
+                if request_id:
+                    user_turn["request_id"] = request_id
+                turn_id = str(user_extras.get("turn_id") or request_id or "").strip()
+                if turn_id:
+                    user_turn["turn_id"] = turn_id
+                if user_extras:
+                    user_turn["extras"] = user_extras
                 turns.append(user_turn)
+        else:
+            user_extras = {}
 
         # Build an ordered list of steps preserving the original sequence:
         #   thinking → content → tool_call → content → ...
@@ -288,9 +580,10 @@ def _group_into_display_turns(
         tool_results: Dict[str, str] = {}
         final_text = ""
         final_ts: Optional[int] = None
+        final_seq: Optional[int] = None
         merged_extras: Dict[str, Any] = {}
 
-        for role, content, created_at, extras in rest:
+        for seq, role, content, created_at, extras in rest:
             if role == "assistant" and isinstance(extras, dict):
                 merged_extras.update(extras)
             if role == "user":
@@ -313,6 +606,7 @@ def _group_into_display_turns(
                             if txt:
                                 steps.append({"type": "content", "content": txt})
                                 final_text = txt
+                                final_seq = int(seq) if seq is not None else final_seq
                         elif btype == "tool_use":
                             steps.append({
                                 "type": "tool",
@@ -323,6 +617,7 @@ def _group_into_display_turns(
                 elif isinstance(content, str) and content.strip():
                     steps.append({"type": "content", "content": content.strip()})
                     final_text = content.strip()
+                    final_seq = int(seq) if seq is not None else final_seq
                 final_ts = created_at
 
         # Attach tool results to tool steps
@@ -342,17 +637,65 @@ def _group_into_display_turns(
         # both the final content and the mirrored content step so the rendered
         # bubble shows clean text while the stored message keeps the markers.
         final_text = _clean_display_text(final_text)
+        final_text_key = _display_text_key(final_text)
+        seen_content_keys = set()
+        filtered_steps: List[Dict[str, Any]] = []
         for step in steps:
             if step.get("type") == "content":
-                step["content"] = _clean_display_text(step.get("content", ""))
+                cleaned = _clean_display_text(step.get("content", ""))
+                step["content"] = cleaned
+                key = _display_text_key(cleaned)
+                # The last visible assistant text is rendered as the main
+                # answer. Keep intermediate different content steps, but do
+                # not also render the final answer inside the process area.
+                if final_text_key and key == final_text_key:
+                    continue
+                if key and key in seen_content_keys:
+                    continue
+                if key:
+                    seen_content_keys.add(key)
+            filtered_steps.append(step)
+        steps = filtered_steps
 
         if steps or final_text:
             turn = {
                 "role": "assistant",
                 "content": final_text,
                 "steps": steps,
-                "created_at": final_ts or (user_row[1] if user_row else 0),
+                "created_at": final_ts or (user_row[2] if user_row else 0),
             }
+            user_seq = None
+            if user_row and user_row[0] is not None:
+                user_seq = int(user_row[0])
+            if isinstance(merged_extras, dict):
+                user_seq = merged_extras.get("user_seq", user_seq)
+            bot_seq = None
+            if isinstance(merged_extras, dict):
+                bot_seq = merged_extras.get("bot_seq")
+            if bot_seq is None and final_seq is not None:
+                bot_seq = final_seq
+            if user_seq is not None:
+                turn["user_seq"] = int(user_seq)
+            if bot_seq is not None:
+                turn["bot_seq"] = int(bot_seq)
+            request_id = str(
+                (merged_extras or {}).get("request_id")
+                or (user_extras or {}).get("request_id")
+                or ""
+            ).strip()
+            if request_id:
+                turn["request_id"] = request_id
+            turn_id = str(
+                (merged_extras or {}).get("turn_id")
+                or (user_extras or {}).get("turn_id")
+                or ""
+            ).strip()
+            if not turn_id and request_id:
+                turn_id = request_id
+            if not turn_id and user_seq is not None and bot_seq is not None:
+                turn_id = f"{user_seq}:{bot_seq}"
+            if turn_id:
+                turn["turn_id"] = turn_id
             if is_evolution:
                 turn["kind"] = "evolution"
             if merged_extras:
@@ -408,20 +751,39 @@ class ConversationStore:
             try:
                 # Respect context_start_seq: only load messages at or after the boundary
                 ctx_row = conn.execute(
-                    "SELECT context_start_seq FROM sessions WHERE session_id = ?",
+                    """
+                    SELECT context_start_seq, project_id, project_name, project_path,
+                           project_memory_path, project_dreams_path
+                    FROM sessions WHERE session_id = ?
+                    """,
                     (session_id,),
                 ).fetchone()
                 ctx_start = ctx_row[0] if ctx_row else 0
+                project_payload = _session_project_payload(ctx_row, 1)
 
-                rows = conn.execute(
-                    """
-                    SELECT seq, role, content
-                    FROM messages
-                    WHERE session_id = ? AND seq >= ?
-                    ORDER BY seq DESC
-                    """,
-                    (session_id, ctx_start),
-                ).fetchall()
+                try:
+                    rows = conn.execute(
+                        """
+                        SELECT seq, role, content, extras
+                        FROM messages
+                        WHERE session_id = ? AND seq >= ?
+                        ORDER BY seq DESC
+                        """,
+                        (session_id, ctx_start),
+                    ).fetchall()
+                except sqlite3.OperationalError:
+                    rows = [
+                        (seq, role, content, "")
+                        for seq, role, content in conn.execute(
+                            """
+                            SELECT seq, role, content
+                            FROM messages
+                            WHERE session_id = ? AND seq >= ?
+                            ORDER BY seq DESC
+                            """,
+                            (session_id, ctx_start),
+                        ).fetchall()
+                    ]
             finally:
                 conn.close()
 
@@ -429,7 +791,7 @@ class ConversationStore:
             return []
 
         visible_turn_seqs: List[int] = []
-        for seq, role, raw_content in rows:
+        for seq, role, raw_content, _raw_extras in rows:
             if role != "user":
                 continue
             try:
@@ -445,17 +807,31 @@ class ConversationStore:
             cutoff_seq = visible_turn_seqs[max_turns - 1]
 
         result = []
-        for seq, role, raw_content in reversed(rows):
+        history_context_state = _new_history_context_state()
+        for seq, role, raw_content, raw_extras in reversed(rows):
             if cutoff_seq is not None and seq < cutoff_seq:
                 continue
             try:
                 content = json.loads(raw_content)
             except Exception:
                 content = raw_content
+            try:
+                extras = json.loads(raw_extras) if raw_extras else {}
+                if not isinstance(extras, dict):
+                    extras = {}
+            except Exception:
+                extras = {}
+            if role == "user":
+                content = _content_with_attachment_history_context(content, extras, history_context_state)
             # Strip thinking blocks — they are stored for UI display only
             if role == "assistant" and isinstance(content, list):
                 content = [b for b in content if b.get("type") != "thinking"]
+            if role == "assistant":
+                content = _content_with_artifact_history_context(content, extras, history_context_state)
             result.append({"role": role, "content": content})
+        summary = _history_context_summary(history_context_state)
+        if summary and result:
+            result[-1]["content"] = _content_with_history_context(result[-1].get("content"), summary)
         return result
 
     def append_messages(
@@ -463,6 +839,7 @@ class ConversationStore:
         session_id: str,
         messages: List[Dict[str, Any]],
         channel_type: str = "",
+        project_context: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         Append new messages to a session's history.
@@ -480,10 +857,22 @@ class ConversationStore:
             return
 
         now = int(time.time())
+        normalized_project = _normalize_project_context(project_context)
         with self._lock:
             conn = self._connect()
             try:
                 with conn:
+                    existing = conn.execute(
+                        """
+                        SELECT msg_count, project_id, project_name, project_path,
+                               project_memory_path, project_dreams_path
+                        FROM sessions
+                        WHERE session_id = ?
+                        """,
+                        (session_id,),
+                    ).fetchone()
+                    self._raise_on_owner_conflict(existing, normalized_project)
+
                     # INSERT OR IGNORE creates the row on first visit;
                     # the UPDATE always refreshes last_active.
                     # Avoids ON CONFLICT...DO UPDATE (requires SQLite >= 3.24).
@@ -499,6 +888,26 @@ class ConversationStore:
                         "UPDATE sessions SET last_active = ? WHERE session_id = ?",
                         (now, session_id),
                     )
+                    if normalized_project:
+                        conn.execute(
+                            """
+                            UPDATE sessions
+                            SET project_id = ?,
+                                project_name = ?,
+                                project_path = ?,
+                                project_memory_path = ?,
+                                project_dreams_path = ?
+                            WHERE session_id = ?
+                            """,
+                            (
+                                normalized_project.get("project_id", ""),
+                                normalized_project.get("project_name", ""),
+                                normalized_project.get("project_path", ""),
+                                normalized_project.get("project_memory_path", ""),
+                                normalized_project.get("project_dreams_path", ""),
+                                session_id,
+                            ),
+                        )
 
                     # Determine starting seq for the new batch.
                     row = conn.execute(
@@ -608,15 +1017,32 @@ class ConversationStore:
         with self._lock:
             conn = self._connect()
             try:
-                # Latest assistant message (cheap: single row by seq DESC).
-                row = conn.execute(
-                    "SELECT seq FROM messages "
+                # Latest assistant text message. Tool-use-only assistant rows
+                # should not be used as the final visible bot turn for retry or
+                # recovery UI.
+                rows = conn.execute(
+                    "SELECT seq, content FROM messages "
                     "WHERE session_id = ? AND role = 'assistant' "
-                    "ORDER BY seq DESC LIMIT 1",
+                    "ORDER BY seq DESC LIMIT 20",
                     (session_id,),
-                ).fetchone()
-                if row:
-                    result["bot_seq"] = int(row[0])
+                ).fetchall()
+                for seq, content_raw in rows:
+                    try:
+                        content = json.loads(content_raw)
+                    except Exception:
+                        result["bot_seq"] = int(seq)
+                        break
+                    if isinstance(content, str) and content.strip():
+                        result["bot_seq"] = int(seq)
+                        break
+                    if isinstance(content, list) and any(
+                        isinstance(block, dict)
+                        and block.get("type") == "text"
+                        and str(block.get("text") or "").strip()
+                        for block in content
+                    ):
+                        result["bot_seq"] = int(seq)
+                        break
 
                 # Latest visible user message: scan recent user rows and
                 # skip pure tool_result entries.
@@ -1108,38 +1534,89 @@ class ConversationStore:
             }
         """
         page = max(1, page)
+        page_size = max(1, min(int(page_size or 20), 200))
+        # The UI asks for display rows, but history is naturally grouped by a
+        # visible user turn plus its assistant/tool output. Fetch by user-turn
+        # boundaries so opening a long session does not read the whole table.
+        page_user_turns = max(1, (page_size + 1) // 2)
+        user_offset = (page - 1) * page_user_turns
         with self._lock:
             conn = self._connect()
             try:
                 ctx_row = conn.execute(
-                    "SELECT context_start_seq FROM sessions WHERE session_id = ?",
+                    """
+                    SELECT context_start_seq, project_id, project_name, project_path,
+                           project_memory_path, project_dreams_path
+                    FROM sessions
+                    WHERE session_id = ?
+                    """,
                     (session_id,),
                 ).fetchone()
                 ctx_start = ctx_row[0] if ctx_row else 0
+                project_payload = _session_project_payload(ctx_row, offset=1)
+
+                visible_user_seqs_desc: List[int] = []
+                for seq, raw_content in conn.execute(
+                    """
+                    SELECT seq, content
+                    FROM messages
+                    WHERE session_id = ? AND role = 'user'
+                    ORDER BY seq DESC
+                    """,
+                    (session_id,),
+                ):
+                    try:
+                        content = json.loads(raw_content)
+                    except Exception:
+                        content = raw_content
+                    if _is_visible_user_message(content):
+                        visible_user_seqs_desc.append(int(seq))
+
+                selected_user_seqs = visible_user_seqs_desc[user_offset: user_offset + page_user_turns]
+                has_more = user_offset + page_user_turns < len(visible_user_seqs_desc)
+                if not selected_user_seqs:
+                    return {
+                        "messages": [],
+                        "context_start_seq": ctx_start,
+                        "project_context": project_payload,
+                        "total": len(visible_user_seqs_desc) * 2,
+                        "page": page,
+                        "page_size": page_size,
+                        "has_more": False,
+                    }
+
+                lower_seq = min(selected_user_seqs)
+                upper_newer_seq = visible_user_seqs_desc[user_offset - 1] if user_offset > 0 else None
+                if upper_newer_seq is None:
+                    where_sql = "session_id = ? AND seq >= ?"
+                    params = (session_id, lower_seq)
+                else:
+                    where_sql = "session_id = ? AND seq >= ? AND seq < ?"
+                    params = (session_id, lower_seq, upper_newer_seq)
 
                 # extras column is added by migration; tolerate older DBs that
                 # might miss it by falling back to a NULL literal.
                 try:
                     rows = conn.execute(
-                        """
+                        f"""
                         SELECT seq, role, content, created_at, extras
                         FROM messages
-                        WHERE session_id = ?
+                        WHERE {where_sql}
                         ORDER BY seq ASC
                         """,
-                        (session_id,),
+                        params,
                     ).fetchall()
                 except sqlite3.OperationalError:
                     rows = [
                         (seq, role, content, created_at, "")
                         for (seq, role, content, created_at) in conn.execute(
-                            """
+                            f"""
                             SELECT seq, role, content, created_at
                             FROM messages
-                            WHERE session_id = ?
+                            WHERE {where_sql}
                             ORDER BY seq ASC
                             """,
-                            (session_id,),
+                            params,
                         ).fetchall()
                     ]
             finally:
@@ -1153,12 +1630,9 @@ class ConversationStore:
         except Exception:
             include_thinking = False
 
-        # Strip seq for display grouping, but record max seq per visible user group
-        plain_rows = [
-            (role, content, created_at, extras_raw)
-            for _seq, role, content, created_at, extras_raw in rows
-        ]
-        visible = _group_into_display_turns(plain_rows, include_thinking=include_thinking)
+        # Keep raw seqs through display grouping so assistant turns can expose
+        # stable request/turn identity for SSE/history reconciliation.
+        visible = _group_into_display_turns(rows, include_thinking=include_thinking)
 
         # Build a mapping: find the seq of each visible user message to annotate context boundary.
         # Walk through rows to find visible user message seqs in order.
@@ -1181,22 +1655,63 @@ class ConversationStore:
             if turn["role"] == "user" and user_turn_idx < len(visible_user_seqs):
                 current_visible_user_seq = visible_user_seqs[user_turn_idx]
                 turn["_seq"] = current_visible_user_seq
+                turn.setdefault("user_seq", int(current_visible_user_seq))
                 user_turn_idx += 1
             elif turn["role"] == "assistant" and current_visible_user_seq is not None:
                 turn["_seq"] = current_visible_user_seq
+                turn.setdefault("user_seq", int(current_visible_user_seq))
 
-        total = len(visible)
-        offset = (page - 1) * page_size
-        page_items = list(reversed(visible))[offset: offset + page_size]
-        page_items = list(reversed(page_items))
+        total = len(visible_user_seqs_desc) * 2
+        page_items = visible[-page_size:]
 
         return {
             "messages": page_items,
             "context_start_seq": ctx_start,
+            "project_context": project_payload,
             "total": total,
             "page": page,
             "page_size": page_size,
-            "has_more": offset + page_size < total,
+            "has_more": has_more,
+        }
+
+    def validate_session_owner(
+        self,
+        session_id: str,
+        *,
+        channel_type: str = "",
+        project_context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Validate a pending session write without mutating persistent state."""
+        normalized_project = _normalize_project_context(project_context)
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    """
+                    SELECT msg_count, project_id, project_name, project_path,
+                           project_memory_path, project_dreams_path
+                    FROM sessions
+                    WHERE session_id = ?
+                    """,
+                    (session_id,),
+                ).fetchone()
+                self._raise_on_owner_conflict(row, normalized_project)
+            finally:
+                conn.close()
+        row_project = _session_project_payload(row, 1) if row else {}
+        pending_project = _session_project_payload((
+            normalized_project.get("project_id", ""),
+            normalized_project.get("project_name", ""),
+            normalized_project.get("project_path", ""),
+            normalized_project.get("project_memory_path", ""),
+            normalized_project.get("project_dreams_path", ""),
+        ), 0) if normalized_project else {}
+        project_payload = row_project or pending_project
+        return {
+            "status": "ok",
+            "channel_type": channel_type,
+            "scope": "project" if project_payload else "general",
+            "project": project_payload or None,
         }
 
     def list_sessions(
@@ -1204,6 +1719,7 @@ class ConversationStore:
         channel_type: Optional[str] = None,
         page: int = 1,
         page_size: int = 50,
+        include_session_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         List sessions ordered by last_active DESC, with optional channel_type filter.
@@ -1218,6 +1734,12 @@ class ConversationStore:
             }
         """
         page = max(1, page)
+        page_size = max(1, min(int(page_size or 50), 500))
+        include_ids = _normalize_include_session_ids(include_session_ids)
+        select_columns = """
+                        SELECT session_id, title, created_at, last_active, msg_count, title_locked,
+                               project_id, project_name, project_path, project_memory_path, project_dreams_path
+        """
         with self._lock:
             conn = self._connect()
             try:
@@ -1227,8 +1749,8 @@ class ConversationStore:
                         (channel_type,),
                     ).fetchone()[0]
                     rows = conn.execute(
-                        """
-                        SELECT session_id, title, created_at, last_active, msg_count, title_locked
+                        f"""
+                        {select_columns}
                         FROM sessions
                         WHERE channel_type = ?
                         ORDER BY last_active DESC
@@ -1241,34 +1763,72 @@ class ConversationStore:
                         "SELECT COUNT(*) FROM sessions",
                     ).fetchone()[0]
                     rows = conn.execute(
-                        """
-                        SELECT session_id, title, created_at, last_active, msg_count, title_locked
+                        f"""
+                        {select_columns}
                         FROM sessions
                         ORDER BY last_active DESC
                         LIMIT ? OFFSET ?
                         """,
                         (page_size, (page - 1) * page_size),
                     ).fetchall()
+                row_session_ids = {str(row[0] or "") for row in rows}
+                missing_include_ids = [session_id for session_id in include_ids if session_id not in row_session_ids]
+                included_rows = []
+                if missing_include_ids:
+                    placeholders = ",".join("?" for _ in missing_include_ids)
+                    if channel_type:
+                        included_rows = conn.execute(
+                            f"""
+                            {select_columns}
+                            FROM sessions
+                            WHERE channel_type = ? AND session_id IN ({placeholders})
+                            ORDER BY last_active DESC
+                            """,
+                            (channel_type, *missing_include_ids),
+                        ).fetchall()
+                    else:
+                        included_rows = conn.execute(
+                            f"""
+                            {select_columns}
+                            FROM sessions
+                            WHERE session_id IN ({placeholders})
+                            ORDER BY last_active DESC
+                            """,
+                            tuple(missing_include_ids),
+                        ).fetchall()
+                    rows = list(rows) + list(included_rows)
             finally:
                 conn.close()
 
-        sessions = [
-            {
+        sessions = []
+        for r in rows:
+            project_payload = _session_project_payload(r, 6)
+            scope = "project" if project_payload else "general"
+            sessions.append({
                 "session_id": r[0],
                 "title": r[1],
                 "created_at": r[2],
                 "last_active": r[3],
+                "lastActivityAt": r[3],
                 "msg_count": r[4],
                 "title_locked": bool(r[5]),
                 "titleLocked": bool(r[5]),
-            }
-            for r in rows
-        ]
+                "scope": scope,
+                "project": project_payload or None,
+                "sourceRevision": "conversation-store-v1",
+                "provenance": ["conversation_store"],
+                **project_payload,
+            })
         return {
             "sessions": sessions,
             "total": total,
             "page": page,
             "page_size": page_size,
+            "included_session_ids": [
+                str(row[0] or "")
+                for row in rows
+                if str(row[0] or "") in include_ids
+            ],
             "has_more": (page - 1) * page_size + page_size < total,
         }
 
@@ -1350,6 +1910,22 @@ class ConversationStore:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _raise_on_owner_conflict(
+        self,
+        existing_row: sqlite3.Row | tuple | None,
+        normalized_project: Dict[str, str],
+    ) -> None:
+        if not existing_row or not normalized_project:
+            return
+        msg_count = int(existing_row[0] or 0)
+        existing_project = _session_row_project(existing_row, 1)
+        if existing_project:
+            if not _project_owners_match(existing_project, normalized_project):
+                raise ConversationSessionOwnerConflict("project_owner_mismatch")
+            return
+        if msg_count > 0:
+            raise ConversationSessionOwnerConflict("general_to_project_owner_change")
+
     def _init_db(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = self._connect()
@@ -1394,6 +1970,15 @@ class ConversationStore:
                 logger.info("[ConversationStore] Migrated: added context_start_seq column")
             except Exception as e:
                 logger.warning(f"[ConversationStore] Migration (context_start_seq) failed: {e}")
+        for column, ddl in _SESSION_PROJECT_MIGRATIONS.items():
+            if column in cols:
+                continue
+            try:
+                conn.execute(ddl)
+                conn.commit()
+                logger.info(f"[ConversationStore] Migrated: added sessions.{column} column")
+            except Exception as e:
+                logger.warning(f"[ConversationStore] Migration ({column}) failed: {e}")
 
         msg_cols = {
             row[1]

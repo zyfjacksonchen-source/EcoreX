@@ -1,75 +1,48 @@
-# EcoreX Desktop
+# EcoreX WebUI
 
-EcoreX Desktop is the Electron + React shell for the compatible agent runtime.
+This historically named directory contains only the v1 React WebUI. It is a
+thin, same-origin browser client of the local Python Runtime; it is not an
+Electron/native desktop application and does not own agent execution, policy,
+tools, artifacts, or update state.
 
-Current scope:
-
-- Electron main process with a minimal Python sidecar lifecycle manager.
-- Whitelisted IPC API bridge from the renderer to the local sidecar.
-- React workbench using the Codex-style layout: left session/project sidebar, right chat workspace.
-- Orange brand tokens with Light / Dark / System theme switching.
-- Settings Center entry for Models, Channels, Skills, MCP, Permissions, Files, and Diagnostics.
-- Click-to-open file preview drawer.
-- Human-in-the-loop confirmation card pattern.
-- Runtime snapshot loading for sessions, tools, skills, models, and version.
-- Minimal chat send/stream loop via `/message` and `/stream`.
-
-The agent core remains in the Python project root. The desktop shell starts `python app.py` from the repository root unless `ECOREX_SKIP_SIDECAR=1` is set.
-
-## Commands
+## Development
 
 ```powershell
 npm install
 npm run typecheck
-npm run build
-npm start
-```
-
-Packaging:
-
-```powershell
-npm run package:dir
-npm run package:win
-npm run package:mac
-```
-
-Windows signing uses the external signing toolchain provided on this workstation. The desktop client must not delete, modify, or manage certificates.
-
-```powershell
-npm run sign:win
-```
-
-The signing script defaults to:
-
-- SimplySign shortcut: `C:\Users\user\Desktop\SimplySign Desktop.lnk`
-- Signing tools: `C:\脚本签名工具`
-- signtool: `C:\脚本签名工具\signtool.exe`
-
-macOS packaging is configured to output DMG directly with `npm run package:mac`.
-
-For UI-only desktop development:
-
-```powershell
-$env:ECOREX_SKIP_SIDECAR='1'
+npm run test:v1
 npm run dev
 ```
 
-Useful environment variables:
+The development server listens on `127.0.0.1`.
 
-- `ECOREX_SKIP_SIDECAR=1`: skip Python sidecar startup.
-- `ECOREX_PYTHON=C:\path\to\python.exe`: choose the Python runtime.
-- `ECOREX_WEB_PORT=9899`: choose the local EcoreX runtime web port.
-- `ECOREX_REPO_ROOT=C:\path\to\runtime`: override the compatible runtime repository root used by the sidecar.
+For deterministic Replay UI acceptance without external side effects, build the
+WebUI and run `npm run ga:serve -- --scenario=replay`. The GA Runtime exposes a
+read-only verified Mock Replay snapshot and an explicitly confirmed,
+idempotent Live Replay path; it never calls a model, tool, or connector.
 
-## Verification
+## Production build
 
-Current verified checks:
+```powershell
+npm run build
+```
 
-- `npm run typecheck`
-- `npm run build`
-- `npm audit --audit-level=critical`
-- `python -m py_compile channel\web\web_channel.py`
-- Static check: no color literals outside `desktop/src/styles/tokens.css`
-- `powershell -ExecutionPolicy Bypass -File scripts\smoke-renderer-visual.ps1`
+The build is deliberately two-stage:
 
-The renderer visual smoke uses Edge headless with a temporary mocked desktop bridge. It verifies the built auth screen, light workbench, and dark workbench screenshots without starting the sidecar.
+1. Vite writes files carrying an explicit `.unhashed-<rollup-hash>` staging
+   marker.
+2. `tools/rehash-dist.mjs` resolves the asset dependency graph, rejects cycles,
+   missing/orphan files, inline script/style and legacy overlay references,
+   rewrites every asset reference, and atomically activates a content-addressed
+   `dist`.
+
+Every production asset name contains the first 16 hexadecimal characters of
+the SHA-256 of its final bytes. `index.html` remains non-immutable, contains
+exactly one `<!--__ECOREX_RUNTIME_CONFIG__-->` marker in `<head>`, and refers
+only to the final content-addressed files. Re-running the post-build stage is
+idempotent.
+
+The Python release builder scans the exact `index.html` plus `assets/`
+allowlist again, creates and signs `web-manifest.json`, and the product server
+verifies the release manifest, Web manifest, file sizes, and SHA-256 digests
+before serving any byte.

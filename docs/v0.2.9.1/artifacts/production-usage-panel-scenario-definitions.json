@@ -1,0 +1,132 @@
+{
+  "scope": "production-usage-panel-scenario-definitions",
+  "status": "PASS",
+  "version": "0.2.9.1",
+  "releaseDir": "/srv/ecorex-agent-usage-panel/releases/20260706053336-v0.2.9.1-scenario-definitions",
+  "files": {
+    "index.html": {
+      "size": 9327,
+      "sha256": "A07B139DECB43DA2E49DDC9E2E2D58181F09D21962DE4FEF260F1BA1CC755D63"
+    },
+    "styles.css": {
+      "size": 20278,
+      "sha256": "50A8A5F1CBAB0F37FB56860DAF8437B784967D1EC8A673F1F7348DD76AB05CBC"
+    },
+    "app.js": {
+      "size": 94743,
+      "sha256": "87203D8E5FA7E16EC1CA567F7F9809B44BADC67DD591E385D9C56C2810ED895D"
+    },
+    "data.js": {
+      "size": 492,
+      "sha256": "E035668C51D0DA8A13D3AA24E5ECCF58F3DC301D3175A1C973E65D139B42FF7A"
+    },
+    "usage_panel_api.py": {
+      "size": 30252,
+      "sha256": "5C96B98EF19CB1FBEB01F2EB959075983D74759B08D28E109BFCB6ECDB96F15C"
+    }
+  },
+  "probe": {
+    "healthVersion": "0.2.9.1",
+    "publicStatus": 401,
+    "currentTarget": "/srv/ecorex-agent-usage-panel/releases/20260706053336-v0.2.9.1-scenario-definitions",
+    "markers": {
+      "scenarioDefinitions": true,
+      "scenarioDetails": true,
+      "noOldTaskTooltip": true,
+      "noScenarioNativeTitle": true,
+      "indexDefinitionsUpdated": true,
+      "detailStyle": true,
+      "cssStillValid": true
+    },
+    "hashes": {
+      "index.html": "A07B139DECB43DA2E49DDC9E2E2D58181F09D21962DE4FEF260F1BA1CC755D63",
+      "styles.css": "50A8A5F1CBAB0F37FB56860DAF8437B784967D1EC8A673F1F7348DD76AB05CBC",
+      "app.js": "87203D8E5FA7E16EC1CA567F7F9809B44BADC67DD591E385D9C56C2810ED895D",
+      "data.js": "E035668C51D0DA8A13D3AA24E5ECCF58F3DC301D3175A1C973E65D139B42FF7A",
+      "usage_panel_api.py": "5C96B98EF19CB1FBEB01F2EB959075983D74759B08D28E109BFCB6ECDB96F15C"
+    }
+  },
+  "commands": [
+    {
+      "name": "prepare_usage_panel_release",
+      "argvHash": "D5379381BE60A041A26CBAFA7C3F97E03B3E5804AFC2696CDBC44B0625A3838F",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stderrExcerptRedacted": ""
+    },
+    {
+      "name": "upload_index.html",
+      "argvHash": "CA6F417238B401BF4CD250162C1F7C403B8124BC4DFE5F8DA74C212252E9B965",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stderrExcerptRedacted": ""
+    },
+    {
+      "name": "upload_styles.css",
+      "argvHash": "A754AEF5911D4DAE164B5B80CFB38E9AE6815811C58DC856862AF62E0310D497",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stderrExcerptRedacted": ""
+    },
+    {
+      "name": "upload_app.js",
+      "argvHash": "EB47B164DC196B5EA38554BD9A515CB653411856ACE9F0F15A38DFFF0D74CFB1",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stderrExcerptRedacted": ""
+    },
+    {
+      "name": "upload_data.js",
+      "argvHash": "AF6B217CF23DDDE0BC89A8E7A9FE5AEC85D1A051B8ABB58749673AA2BC45E5A2",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stderrExcerptRedacted": ""
+    },
+    {
+      "name": "upload_usage_panel_api.py",
+      "argvHash": "9F6107D43B62E406A0F6B4F9CACD6D7DBF96C6BEDA851547A8DFB5BCA8D98EFB",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stderrExcerptRedacted": ""
+    },
+    {
+      "name": "promote_usage_panel_static",
+      "argvHash": "F7970C1D4EFD2C4A0AD0E1EADEF4EE347B6CABACEBF7AD0BB16C62CD319F96A5",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stderrExcerptRedacted": ""
+    },
+    {
+      "name": "restart_usage_panel_api",
+      "argvHash": "669BF3280AE3203FBD1B5AE5937570A5F0A4E56C3C9B7D2BE790E02BB9543394",
+      "exitCode": 0,
+      "stdoutHash": "0E78B5521A351E898D0ADC354B9D4DFCDE569ECAB40529F8609424DCA362B6A3",
+      "stderrHash": "331A2D472055BD82902304CD8920C8CD83BFB6C9F8DA783695F4072FB99F24FA",
+      "stdoutExcerptRedacted": "{\"ok\":true,\"version\":\"[IP]\",\"service\":\"ecorex-usage-panel-api\"}",
+      "stderrExcerptRedacted": "curl: (7) Failed to connect to [IP] port 18105 after 0 ms: Couldn't connect to server\n"
+    },
+    {
+      "name": "postdeploy_usage_panel_probe",
+      "argvHash": "F97CC7E75C06F64119D1D786948894B21B709DEDF36B7B4A9F9A471B9625EC19",
+      "exitCode": 0,
+      "stdoutHash": "2962AA26BC033267A886B60CDA71D53F7C2EE655A4303CA07DAB062E94D51148",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "{\"healthVersion\": \"[IP]\", \"publicStatus\": 401, \"currentTarget\": \"/srv/ecorex-agent-usage-panel/releases/20260706053336-v0.2.9.1-scenario-definitions\", \"markers\": {\"scenarioDefinitions\": true, \"scenarioDetails\": true, \"noOldTaskTooltip\": true, \"noScenarioNativeTitle\": true, \"indexDefinitionsUpdated\": true, \"detailStyle\": true, \"cssStillValid\": true}, \"hashes\": {\"index.html\": \"A07B139DECB43DA2E49DDC9E2E2D58181F09D21962DE4FEF260F1BA1CC755D63\", \"styles.css\": \"50A8A5F1CBAB0F37FB56860DAF8437B784967D1EC8A673F1F7348DD76AB05CBC\", \"app.js\": \"87203D8E5FA7E16EC1CA567F7F9809B44BADC67DD591E385D9C56C2810ED895D\", \"data.js\": \"E035668C51D0DA8A13D3AA24E5ECCF58F3DC301D3175A1C973E65D139B42FF7A\", \"usage_panel_api.py\": \"5C96B98EF19CB1FBEB01F2EB959075983D74759B08D28E109BFCB6ECDB96F15C\"}}\n",
+      "stderrExcerptRedacted": ""
+    }
+  ]
+}

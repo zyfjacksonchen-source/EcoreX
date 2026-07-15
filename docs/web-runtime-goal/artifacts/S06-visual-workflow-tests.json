@@ -1,0 +1,59 @@
+{
+  "schemaVersion": "web-runtime-goal-artifact-v1",
+  "slice": "S6",
+  "title": "Image/OCR/Imagegen workflow closure",
+  "date": "2026-07-01",
+  "changedFiles": [
+    "agent/runtime_capabilities.py",
+    "tests/test_web_runtime_goal.py"
+  ],
+  "visualWorkflowContract": {
+    "endpoint": "/api/capabilities",
+    "field": "visualWorkflow",
+    "schemaVersion": "visual-workflow-v1",
+    "imageInput": {
+      "supported": true,
+      "autoDetect": true,
+      "acceptedMimePrefixes": ["image/"],
+      "attachmentTypes": ["image"]
+    },
+    "actions": {
+      "ocrMissing": "repair_fast_ocr",
+      "modelCredentialsMissing": "configure_model_provider",
+      "imagegenModel": "gpt-image-2-pro",
+      "imagegenCredentialState": "needs_provider_credentials",
+      "visionFallbackFlag": "overall.visionFallbackAvailable"
+    }
+  },
+  "tests": [
+    {
+      "command": "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_web_runtime_goal.py -q -k s6",
+      "status": "passed",
+      "summary": "5 passed, 36 deselected, 2 warnings"
+    },
+    {
+      "command": "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_web_runtime_goal.py -q",
+      "status": "passed",
+      "summary": "41 passed, 3 warnings"
+    },
+    {
+      "command": "python -m py_compile agent/runtime_capabilities.py channel/web/web_channel.py tests/test_web_runtime_goal.py",
+      "status": "passed",
+      "summary": "syntax compile passed"
+    },
+    {
+      "command": "python -m json.tool docs/web-runtime-goal/artifacts/S06-visual-workflow-tests.json > $null",
+      "status": "passed",
+      "summary": "artifact JSON valid"
+    }
+  ],
+  "notes": [
+    "S6 is a Web-only status/action-plan closure. It does not call external model APIs or install OCR dependencies during status rendering.",
+    "Fast OCR missing dependencies map to repair_fast_ocr instead of a generic prompt-driven repair.",
+    "Vision/imagegen provider credential absence maps to configure_model_provider, so missing keys are not reported as missing runtime tools.",
+    "Image generation remains pinned to gpt-image-2-pro in the visual workflow contract.",
+    "Configured provider detection exposes provider IDs only; serialized visualWorkflow does not include raw provider keys.",
+    "OCR-missing with configured vision credentials reports overall.state=degraded and overall.visionFallbackAvailable=true.",
+    "Web /api/capabilities and /api/extensions construct RuntimeCapabilityRegistry with probe_installer_status=false so status GETs do not create state directories or run install-capability.py --action status."
+  ]
+}

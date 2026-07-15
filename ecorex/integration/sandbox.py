@@ -1,0 +1,686 @@
+"""Trusted OS sandbox boundary for process capability packs.
+
+The signed ``sandbox`` capability pack is application code, not a security
+boundary.  It therefore runs *inside* an independently probed OS sandbox for
+the default workspace-write profile.  Platforms without a verified backend
+remain unavailable instead of receiving a decorative profile string.
+
+Windows support intentionally requires the product-owned AppContainer helper
+to be supplied with its signed-release SHA-256.  This Python package does not
+pretend that ``CREATE_NEW_PROCESS_GROUP`` or a Job Object restricts filesystem
+or network access.  macOS can use the operating-system ``sandbox-exec`` policy
+engine after a behavioral probe.  Neither backend is reported ready until it
+proves the complete contract.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import signal
+import stat
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from typing import Any, Mapping, Protocol
+
+from .windows_path_identity import windows_invariant_path_key
+
+
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+SANDBOX_LAUNCH_PROTOCOL = "ecorex-sandbox-launch-v1"
+WINDOWS_PROCESS_MEMORY_LIMIT_BYTES = 512 * 1024 * 1024
+WINDOWS_JOB_MEMORY_LIMIT_BYTES = 768 * 1024 * 1024
+WINDOWS_CPU_RATE_HARD_CAP = 8000
+
+
+@dataclass(frozen=True, slots=True)
+class SandboxProbe:
+    backend_id: str
+    platform: str
+    ready: bool
+    reason: str
+    filesystem_read_scoped: bool = False
+    filesystem_write_scoped: bool = False
+    network_denied: bool = False
+    process_tree_contained: bool = False
+
+    @property
+    def complete(self) -> bool:
+        return self.ready and all(
+            (
+                self.filesystem_read_scoped,
+                self.filesystem_write_scoped,
+                self.network_denied,
+                self.process_tree_contained,
+            )
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "backend_id": self.backend_id,
+            "platform": self.platform,
+            "ready": self.complete,
+            "reason": self.reason,
+            "filesystem_read_scoped": self.filesystem_read_scoped,
+            "filesystem_write_scoped": self.filesystem_write_scoped,
+            "network_denied": self.network_denied,
+            "process_tree_contained": self.process_tree_contained,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SandboxLaunchPlan:
+    argv: tuple[str, ...]
+    backend_id: str
+
+    def __post_init__(self) -> None:
+        if not self.argv or any(not isinstance(item, str) or not item for item in self.argv):
+            raise ValueError("sandbox launch argv is invalid")
+        if not self.backend_id:
+            raise ValueError("sandbox backend identity is required")
+
+
+class SandboxBackend(Protocol):
+    """Core-owned launcher contract; capability-pack code cannot implement it."""
+
+    def probe(
+        self,
+        *,
+        workspace_roots: tuple[Path, ...],
+        python_executable: Path,
+        artifact_path: Path,
+    ) -> SandboxProbe: ...
+
+    def launch_plan(
+        self,
+        *,
+        workspace_roots: tuple[Path, ...],
+        python_executable: Path,
+        artifact_path: Path,
+        timeout_seconds: float,
+        output_limit_bytes: int,
+        profile: str,
+    ) -> SandboxLaunchPlan: ...
+
+
+class UnavailableSandboxBackend:
+    def __init__(self, reason: str, *, platform: str | None = None) -> None:
+        self.reason = _safe_reason(reason)
+        self.platform = str(platform or sys.platform)
+
+    def probe(self, **_kwargs: Any) -> SandboxProbe:
+        return SandboxProbe(
+            backend_id="unavailable",
+            platform=self.platform,
+            ready=False,
+            reason=self.reason,
+        )
+
+    def launch_plan(self, **_kwargs: Any) -> SandboxLaunchPlan:
+        raise RuntimeError(self.reason)
+
+
+def probe_windows_appcontainer_helper(
+    helper_path: Path | str,
+    *,
+    expected_sha256: str,
+    workspace_roots: tuple[Path, ...],
+) -> SandboxProbe:
+    """Behaviorally attest a staged helper before slot security is provisioned.
+
+    This probe proves the native AppContainer and Job Object implementation.
+    It deliberately cannot produce a launch plan; runtime execution still
+    requires the installed-slot security receipt enforced by
+    :class:`WindowsAppContainerSandboxBackend`.
+    """
+
+    digest = str(expected_sha256).lower()
+    if not _SHA256.fullmatch(digest):
+        raise ValueError("sandbox helper digest is invalid")
+    helper = _trusted_regular_file(Path(helper_path))
+    if _sha256_file(helper) != digest:
+        raise ValueError("sandbox helper digest does not match signed identity")
+    command: tuple[str, ...] = (
+        str(helper),
+        "probe",
+        "--protocol",
+        SANDBOX_LAUNCH_PROTOCOL,
+        "--workspace-digest",
+        _roots_digest(workspace_roots),
+    )
+    for root in workspace_roots:
+        command += ("--workspace", str(root))
+    try:
+        completed = _run_bounded_probe(command, timeout_seconds=10)
+        if completed is None:
+            raise ValueError("bounded probe failed")
+        value = json.loads(completed.stdout.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        value = None
+        completed = None
+    required = {
+        "protocol": SANDBOX_LAUNCH_PROTOCOL,
+        "backend": "windows-appcontainer",
+        "cpu_rate_hard_cap": WINDOWS_CPU_RATE_HARD_CAP,
+        "filesystem_read_scoped": True,
+        "filesystem_write_scoped": True,
+        "job_memory_limit_bytes": WINDOWS_JOB_MEMORY_LIMIT_BYTES,
+        "network_denied": True,
+        "process_memory_limit_bytes": WINDOWS_PROCESS_MEMORY_LIMIT_BYTES,
+        "process_tree_contained": True,
+        "workspace_roots_sha256": _roots_digest(workspace_roots),
+    }
+    ready = bool(
+        completed is not None
+        and completed.returncode == 0
+        and isinstance(value, Mapping)
+        and set(value) == set(required)
+        and all(value.get(key) == expected for key, expected in required.items())
+        and completed.stdout
+        == json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+    return SandboxProbe(
+        backend_id="windows-appcontainer",
+        platform="windows",
+        ready=ready,
+        reason="ready" if ready else "windows_appcontainer_probe_failed",
+        filesystem_read_scoped=ready,
+        filesystem_write_scoped=ready,
+        network_denied=ready,
+        process_tree_contained=ready,
+    )
+
+
+class WindowsAppContainerSandboxBackend:
+    """Adapter for the product-owned AppContainer launcher.
+
+    The helper is part of the immutable Runtime slot.  Callers must pass the
+    digest from that signed slot manifest; neither PATH nor environment lookup
+    is accepted.  The helper probe must attest all four enforcement features.
+    """
+
+    def __init__(
+        self,
+        helper_path: Path | str,
+        *,
+        expected_sha256: str,
+        security_receipt: Mapping[str, Any] | None = None,
+    ) -> None:
+        digest = str(expected_sha256).lower()
+        if not _SHA256.fullmatch(digest):
+            raise ValueError("sandbox helper digest is invalid")
+        self.helper_path = _trusted_regular_file(Path(helper_path))
+        if _sha256_file(self.helper_path) != digest:
+            raise ValueError("sandbox helper digest does not match signed identity")
+        self.expected_sha256 = digest
+        self.payload_root = self.helper_path.parent.parent
+        self.slot_root = self.payload_root.parent
+        self.install_root = self.slot_root.parent.parent
+        self.read_roots = (self.payload_root,)
+        receipt = dict(security_receipt or {})
+        self.security_receipt = receipt
+        self._security_identity_ready = bool(
+            self.helper_path.name == "ecorex-sandbox-host.exe"
+            and self.helper_path.parent == self.payload_root / "bin"
+            and self.payload_root.name == "payload"
+            and self.slot_root.parent.name == "slots"
+            and self.install_root.is_dir()
+            and all(root.is_dir() for root in self.read_roots)
+            and receipt.get("schema_version") == 1
+            and receipt.get("contract")
+            == "windows-appcontainer-stable-provision-v2"
+            and receipt.get("helper_sha256") == digest
+            and isinstance(receipt.get("slot_digest"), str)
+            and _SHA256.fullmatch(str(receipt.get("slot_digest"))) is not None
+            and isinstance(receipt.get("root_security_sha256"), str)
+            and _SHA256.fullmatch(str(receipt.get("root_security_sha256"))) is not None
+        )
+        self._last_probe: SandboxProbe | None = None
+
+    def probe(
+        self,
+        *,
+        workspace_roots: tuple[Path, ...],
+        python_executable: Path,
+        artifact_path: Path,
+    ) -> SandboxProbe:
+        del python_executable, artifact_path
+        if (
+            not self._security_identity_ready
+            or self.security_receipt.get("workspace_roots_sha256")
+            != _roots_digest(workspace_roots)
+            or self.security_receipt.get("permission_domain_sha256")
+            != _permission_domain_digest(workspace_roots)
+        ):
+            self._last_probe = SandboxProbe(
+                backend_id="windows-appcontainer",
+                platform="windows",
+                ready=False,
+                reason="windows_appcontainer_security_receipt_invalid",
+            )
+            return self._last_probe
+        self._last_probe = probe_windows_appcontainer_helper(
+            self.helper_path,
+            expected_sha256=self.expected_sha256,
+            workspace_roots=workspace_roots,
+        )
+        return self._last_probe
+
+    def launch_plan(
+        self,
+        *,
+        workspace_roots: tuple[Path, ...],
+        python_executable: Path,
+        artifact_path: Path,
+        timeout_seconds: float,
+        output_limit_bytes: int,
+        profile: str,
+    ) -> SandboxLaunchPlan:
+        if self._last_probe is None or not self._last_probe.complete:
+            raise RuntimeError("windows_appcontainer_not_probed")
+        current_helper = _trusted_regular_file(self.helper_path)
+        if (
+            current_helper != self.helper_path
+            or _sha256_file(current_helper) != self.expected_sha256
+        ):
+            raise RuntimeError("windows_appcontainer_helper_identity_changed")
+        if profile not in {"workspace-write", "danger-full-access"}:
+            raise RuntimeError("windows_sandbox_profile_invalid")
+        argv = [
+            str(self.helper_path),
+            "run",
+            "--protocol",
+            SANDBOX_LAUNCH_PROTOCOL,
+            "--profile",
+            profile,
+            "--network",
+            "deny" if profile == "workspace-write" else "allow",
+            "--timeout-ms",
+            str(max(1, int(timeout_seconds * 1000) - 500)),
+            "--output-limit",
+            str(output_limit_bytes),
+            "--process-memory-limit",
+            str(WINDOWS_PROCESS_MEMORY_LIMIT_BYTES),
+            "--job-memory-limit",
+            str(WINDOWS_JOB_MEMORY_LIMIT_BYTES),
+            "--cpu-rate",
+            str(WINDOWS_CPU_RATE_HARD_CAP),
+            "--workspace-digest",
+            _roots_digest(workspace_roots),
+            "--artifact-sha256",
+            _sha256_file(artifact_path),
+            "--slot-digest",
+            str(self.security_receipt["slot_digest"]),
+            "--security-digest",
+            str(self.security_receipt["root_security_sha256"]),
+            "--install-root",
+            str(self.install_root),
+            "--slot-root",
+            str(self.slot_root),
+        ]
+        for root in self.read_roots:
+            argv.extend(("--read-root", str(root)))
+        for root in workspace_roots:
+            argv.extend(("--workspace", str(root)))
+        argv.extend(("--", str(python_executable), "-I", str(artifact_path)))
+        return SandboxLaunchPlan(tuple(argv), "windows-appcontainer")
+
+
+class MacOSSandboxExecBackend:
+    """Seatbelt launcher with a behavioral, fail-closed probe."""
+
+    def __init__(self, executable: Path | str = "/usr/bin/sandbox-exec") -> None:
+        self.executable = Path(executable)
+        self._last_probe: SandboxProbe | None = None
+
+    def probe(
+        self,
+        *,
+        workspace_roots: tuple[Path, ...],
+        python_executable: Path,
+        artifact_path: Path,
+    ) -> SandboxProbe:
+        if sys.platform != "darwin":
+            return SandboxProbe(
+                backend_id="macos-seatbelt",
+                platform=sys.platform,
+                ready=False,
+                reason="macos_sandbox_backend_wrong_platform",
+            )
+        try:
+            executable = _trusted_system_file(self.executable)
+        except ValueError:
+            return SandboxProbe(
+                backend_id="macos-seatbelt",
+                platform="macos",
+                ready=False,
+                reason="macos_sandbox_exec_untrusted",
+            )
+        root = workspace_roots[0]
+        try:
+            outside: Path | None = None
+            with tempfile.TemporaryDirectory(prefix=".ecorex-sandbox-probe-", dir=root) as raw:
+                probe_root = Path(raw).resolve(strict=True)
+                outside = Path(tempfile.gettempdir()).resolve() / (
+                    "ecorex-sandbox-outside-" + os.urandom(8).hex()
+                )
+                outside.write_text("secret", encoding="utf-8")
+                script = (
+                    "import json,pathlib,socket,subprocess,sys;"
+                    "inside=pathlib.Path(sys.argv[1]);outside=pathlib.Path(sys.argv[2]);"
+                    "r={};"
+                    "\ntry: outside.read_text(); r['outside_read']=True\nexcept Exception: r['outside_read']=False"
+                    "\ntry: outside.write_text('x'); r['outside_write']=True\nexcept Exception: r['outside_write']=False"
+                    "\ntry: socket.create_connection(('127.0.0.1',9),timeout=.2); r['network']=True\nexcept Exception: r['network']=False"
+                    "\ntry: inside.joinpath('ok').write_text('ok'); r['inside_write']=True\nexcept Exception: r['inside_write']=False"
+                    "\nchild=subprocess.run([sys.executable,'-c',\"import pathlib,sys;pathlib.Path(sys.argv[1]).write_text('child')\",str(outside)],capture_output=True);"
+                    "r['child_escape']=outside.exists() and outside.read_text(errors='ignore')=='child';"
+                    "print(json.dumps(r,sort_keys=True,separators=(',',':')))"
+                )
+                policy = self._policy(
+                    workspace_roots=workspace_roots,
+                    python_executable=python_executable,
+                    artifact_path=artifact_path,
+                )
+                completed = _run_bounded_probe(
+                    (
+                        str(executable),
+                        "-p",
+                        policy,
+                        str(python_executable),
+                        "-I",
+                        "-c",
+                        script,
+                        str(probe_root),
+                        str(outside),
+                    ),
+                    timeout_seconds=10,
+                )
+                if completed is None:
+                    raise ValueError("bounded probe failed")
+                value = json.loads(completed.stdout.decode("utf-8"))
+        except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
+            value = {}
+            completed = None
+        finally:
+            try:
+                if outside is not None:
+                    outside.unlink(missing_ok=True)
+            except OSError:
+                pass
+        ready = bool(
+            completed is not None
+            and completed.returncode == 0
+            and value
+            == {
+                "child_escape": False,
+                "inside_write": True,
+                "network": False,
+                "outside_read": False,
+                "outside_write": False,
+            }
+        )
+        self._last_probe = SandboxProbe(
+            backend_id="macos-seatbelt",
+            platform="macos",
+            ready=ready,
+            reason="ready" if ready else "macos_seatbelt_probe_failed",
+            filesystem_read_scoped=ready,
+            filesystem_write_scoped=ready,
+            network_denied=ready,
+            process_tree_contained=ready,
+        )
+        return self._last_probe
+
+    def launch_plan(
+        self,
+        *,
+        workspace_roots: tuple[Path, ...],
+        python_executable: Path,
+        artifact_path: Path,
+        timeout_seconds: float,
+        output_limit_bytes: int,
+        profile: str,
+    ) -> SandboxLaunchPlan:
+        del timeout_seconds, output_limit_bytes
+        if profile != "workspace-write":
+            raise RuntimeError("macos_seatbelt_profile_invalid")
+        if self._last_probe is None or not self._last_probe.complete:
+            raise RuntimeError("macos_seatbelt_not_probed")
+        policy = self._policy(
+            workspace_roots=workspace_roots,
+            python_executable=python_executable,
+            artifact_path=artifact_path,
+        )
+        return SandboxLaunchPlan(
+            (
+                str(self.executable),
+                "-p",
+                policy,
+                str(python_executable),
+                "-I",
+                str(artifact_path),
+            ),
+            "macos-seatbelt",
+        )
+
+    @staticmethod
+    def _policy(
+        *,
+        workspace_roots: tuple[Path, ...],
+        python_executable: Path,
+        artifact_path: Path,
+    ) -> str:
+        read_rules = [
+            '(subpath "/System")',
+            '(subpath "/usr/lib")',
+            '(subpath "/Library/Apple")',
+            f'(literal "{_seatbelt_escape(str(python_executable))}")',
+            f'(subpath "{_seatbelt_escape(str(python_executable.parent.parent))}")',
+            f'(literal "{_seatbelt_escape(str(artifact_path))}")',
+        ]
+        workspace_rules = [
+            f'(subpath "{_seatbelt_escape(str(root))}")' for root in workspace_roots
+        ]
+        return " ".join(
+            (
+                "(version 1)",
+                "(deny default)",
+                "(allow process*)",
+                "(allow sysctl-read)",
+                "(allow mach-lookup)",
+                "(allow file-read-metadata)",
+                "(allow file-read* " + " ".join((*read_rules, *workspace_rules)) + ")",
+                "(allow file-write* " + " ".join(workspace_rules) + ")",
+                "(deny network*)",
+            )
+        )
+
+
+def default_workspace_sandbox_backend() -> SandboxBackend:
+    if sys.platform == "darwin":
+        return MacOSSandboxExecBackend()
+    if os.name == "nt":
+        return UnavailableSandboxBackend(
+            "windows_appcontainer_helper_not_configured", platform="windows"
+        )
+    return UnavailableSandboxBackend(
+        "verified_workspace_sandbox_unavailable", platform=sys.platform
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _BoundedProcessResult:
+    returncode: int
+    stdout: bytes
+    stderr: bytes
+
+
+def _run_bounded_probe(
+    command: tuple[str, ...],
+    *,
+    timeout_seconds: float,
+    stdout_limit: int = 16 * 1024,
+    stderr_limit: int = 16 * 1024,
+) -> _BoundedProcessResult | None:
+    """Run one probe without allowing a hostile helper to buffer unbounded output."""
+
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    try:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            shell=False,
+            creationflags=creationflags,
+            start_new_session=os.name != "nt",
+        )
+    except OSError:
+        return None
+    assert process.stdout is not None and process.stderr is not None
+    overflow = threading.Event()
+    transport_failed = threading.Event()
+    output: dict[str, bytes] = {}
+
+    def read(name: str, stream: Any, limit: int) -> None:
+        chunks: list[bytes] = []
+        total = 0
+        try:
+            while True:
+                chunk = stream.read(min(16 * 1024, limit + 1))
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > limit:
+                    overflow.set()
+                    break
+                chunks.append(chunk)
+        except OSError:
+            transport_failed.set()
+        finally:
+            output[name] = b"".join(chunks)
+            stream.close()
+
+    stdout_reader = threading.Thread(
+        target=read, args=("stdout", process.stdout, stdout_limit), daemon=True
+    )
+    stderr_reader = threading.Thread(
+        target=read, args=("stderr", process.stderr, stderr_limit), daemon=True
+    )
+    stdout_reader.start()
+    stderr_reader.start()
+    deadline = time.monotonic() + timeout_seconds
+    try:
+        while process.poll() is None:
+            if overflow.is_set() or transport_failed.is_set() or time.monotonic() >= deadline:
+                _terminate_probe_process(process)
+                break
+            time.sleep(0.01)
+        try:
+            returncode = process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            _terminate_probe_process(process)
+            returncode = process.wait(timeout=2)
+    except (OSError, subprocess.SubprocessError):
+        _terminate_probe_process(process)
+        return None
+    stdout_reader.join(timeout=2)
+    stderr_reader.join(timeout=2)
+    if (
+        stdout_reader.is_alive()
+        or stderr_reader.is_alive()
+        or overflow.is_set()
+        or transport_failed.is_set()
+        or time.monotonic() >= deadline and returncode != 0
+    ):
+        return None
+    return _BoundedProcessResult(
+        returncode=returncode,
+        stdout=output.get("stdout", b""),
+        stderr=output.get("stderr", b""),
+    )
+
+
+def _terminate_probe_process(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            process.kill()
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+    except (OSError, ProcessLookupError):
+        pass
+
+
+def _roots_digest(roots: tuple[Path, ...]) -> str:
+    value = "\0".join(str(root) for root in roots).encode("utf-8")
+    return hashlib.sha256(value).hexdigest()
+
+
+def _permission_domain_digest(roots: tuple[Path, ...]) -> str:
+    """Return the order-insensitive AppContainer permission-domain identity."""
+
+    values = sorted({windows_invariant_path_key(root) for root in roots})
+    return hashlib.sha256("\0".join(values).encode("utf-8")).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _trusted_regular_file(path: Path) -> Path:
+    try:
+        before = path.lstat()
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("sandbox helper is unavailable") from exc
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or stat.S_ISLNK(before.st_mode)
+        or bool(getattr(before, "st_file_attributes", 0) & reparse)
+    ):
+        raise ValueError("sandbox helper is not a trusted regular file")
+    return resolved
+
+
+def _trusted_system_file(path: Path) -> Path:
+    resolved = _trusted_regular_file(path)
+    info = resolved.stat()
+    if info.st_uid != 0 or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise ValueError("sandbox executable is not root-owned and immutable")
+    return resolved
+
+
+def _safe_reason(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9_.:-]+", "_", str(value).casefold()).strip("_")
+    return normalized[:128] or "sandbox_unavailable"
+
+
+def _seatbelt_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+__all__ = [
+    "MacOSSandboxExecBackend",
+    "SANDBOX_LAUNCH_PROTOCOL",
+    "SandboxBackend",
+    "SandboxLaunchPlan",
+    "SandboxProbe",
+    "UnavailableSandboxBackend",
+    "WindowsAppContainerSandboxBackend",
+    "default_workspace_sandbox_backend",
+]

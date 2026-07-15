@@ -1,0 +1,288 @@
+{
+  "status": "PASS",
+  "iterations": 7,
+  "cases": [
+    {
+      "label": "large-png-gradient",
+      "iterations": 7,
+      "medianMs": 111.983,
+      "p95Ms": 154.857,
+      "minMs": 103.426,
+      "maxMs": 245.065,
+      "result": {
+        "status": "pass",
+        "checks": {
+          "decode-valid": "pass",
+          "artifact-integrity": "pass",
+          "non-blank": "pass",
+          "seam-check": "pass",
+          "overlay-ghosting-check": "pass",
+          "text-glyph-check": "pass",
+          "watermark-check": "pass",
+          "subject-structure-check": "skipped",
+          "anomaly-check": "pass",
+          "reference-fidelity": "skipped",
+          "visual-inspection": "pass"
+        },
+        "summary": {
+          "status": "pass",
+          "sampleWidth": 256,
+          "sampleHeight": 256,
+          "edgeDensityPct": 1,
+          "overlayGhostingRisk": false,
+          "anomalyRisk": false
+        }
+      }
+    },
+    {
+      "label": "large-jpeg-gradient",
+      "iterations": 7,
+      "medianMs": 82.968,
+      "p95Ms": 88.923,
+      "minMs": 80.683,
+      "maxMs": 104.598,
+      "result": {
+        "status": "pass",
+        "checks": {
+          "decode-valid": "pass",
+          "artifact-integrity": "pass",
+          "non-blank": "pass",
+          "seam-check": "pass",
+          "overlay-ghosting-check": "pass",
+          "text-glyph-check": "pass",
+          "watermark-check": "pass",
+          "subject-structure-check": "skipped",
+          "anomaly-check": "pass",
+          "reference-fidelity": "skipped",
+          "visual-inspection": "pass"
+        },
+        "summary": {
+          "status": "pass",
+          "sampleWidth": 256,
+          "sampleHeight": 256,
+          "edgeDensityPct": 5,
+          "overlayGhostingRisk": false,
+          "anomalyRisk": false
+        }
+      }
+    },
+    {
+      "label": "large-alpha-overlay",
+      "iterations": 7,
+      "medianMs": 100.772,
+      "p95Ms": 113.405,
+      "minMs": 95.324,
+      "maxMs": 128.169,
+      "result": {
+        "status": "warn",
+        "checks": {
+          "decode-valid": "pass",
+          "artifact-integrity": "pass",
+          "non-blank": "pass",
+          "seam-check": "pass",
+          "overlay-ghosting-check": "warn",
+          "text-glyph-check": "pass",
+          "watermark-check": "warn",
+          "subject-structure-check": "skipped",
+          "anomaly-check": "pass",
+          "reference-fidelity": "skipped",
+          "visual-inspection": "warn"
+        },
+        "summary": {
+          "status": "warn",
+          "sampleWidth": 256,
+          "sampleHeight": 199,
+          "edgeDensityPct": 12,
+          "overlayGhostingRisk": true,
+          "anomalyRisk": false
+        }
+      }
+    },
+    {
+      "label": "noise-anomaly",
+      "iterations": 7,
+      "medianMs": 90.611,
+      "p95Ms": 98.534,
+      "minMs": 81.972,
+      "maxMs": 101.581,
+      "result": {
+        "status": "fail",
+        "checks": {
+          "decode-valid": "pass",
+          "artifact-integrity": "pass",
+          "non-blank": "fail",
+          "seam-check": "pass",
+          "overlay-ghosting-check": "pass",
+          "text-glyph-check": "pass",
+          "watermark-check": "pass",
+          "subject-structure-check": "skipped",
+          "anomaly-check": "pass",
+          "reference-fidelity": "skipped",
+          "visual-inspection": "warn"
+        },
+        "summary": {
+          "status": "fail",
+          "sampleWidth": 256,
+          "sampleHeight": 256,
+          "edgeDensityPct": 0,
+          "overlayGhostingRisk": false,
+          "anomalyRisk": false
+        }
+      }
+    },
+    {
+      "label": "large-seam",
+      "iterations": 7,
+      "medianMs": 109.34,
+      "p95Ms": 132.642,
+      "minMs": 98.715,
+      "maxMs": 156.398,
+      "result": {
+        "status": "fail",
+        "checks": {
+          "decode-valid": "pass",
+          "artifact-integrity": "pass",
+          "non-blank": "pass",
+          "seam-check": "fail",
+          "overlay-ghosting-check": "pass",
+          "text-glyph-check": "pass",
+          "watermark-check": "pass",
+          "subject-structure-check": "skipped",
+          "anomaly-check": "pass",
+          "reference-fidelity": "skipped",
+          "visual-inspection": "warn"
+        },
+        "summary": {
+          "status": "fail",
+          "sampleWidth": 256,
+          "sampleHeight": 256,
+          "edgeDensityPct": 0,
+          "overlayGhostingRisk": false,
+          "anomalyRisk": false
+        }
+      }
+    },
+    {
+      "label": "large-dense-text",
+      "iterations": 7,
+      "medianMs": 112.645,
+      "p95Ms": 119.672,
+      "minMs": 93.27,
+      "maxMs": 128.193,
+      "result": {
+        "status": "warn",
+        "checks": {
+          "decode-valid": "pass",
+          "artifact-integrity": "pass",
+          "non-blank": "pass",
+          "seam-check": "pass",
+          "overlay-ghosting-check": "pass",
+          "text-glyph-check": "warn",
+          "watermark-check": "warn",
+          "subject-structure-check": "skipped",
+          "anomaly-check": "pass",
+          "reference-fidelity": "skipped",
+          "visual-inspection": "warn"
+        },
+        "summary": {
+          "status": "warn",
+          "sampleWidth": 256,
+          "sampleHeight": 170,
+          "edgeDensityPct": 20,
+          "overlayGhostingRisk": false,
+          "anomalyRisk": false
+        }
+      }
+    },
+    {
+      "label": "large-anomaly",
+      "iterations": 7,
+      "medianMs": 154.342,
+      "p95Ms": 157.288,
+      "minMs": 141.711,
+      "maxMs": 157.949,
+      "result": {
+        "status": "warn",
+        "checks": {
+          "decode-valid": "pass",
+          "artifact-integrity": "pass",
+          "non-blank": "pass",
+          "seam-check": "pass",
+          "overlay-ghosting-check": "warn",
+          "text-glyph-check": "pass",
+          "watermark-check": "pass",
+          "subject-structure-check": "skipped",
+          "anomaly-check": "warn",
+          "reference-fidelity": "skipped",
+          "visual-inspection": "warn"
+        },
+        "summary": {
+          "status": "warn",
+          "sampleWidth": 256,
+          "sampleHeight": 256,
+          "edgeDensityPct": 52,
+          "overlayGhostingRisk": true,
+          "anomalyRisk": true
+        }
+      }
+    }
+  ],
+  "redacted": true,
+  "qualityExpectations": {
+    "ok": true,
+    "findings": []
+  },
+  "baselineComparison": {
+    "available": true,
+    "compatible": true,
+    "performanceAcceptable": true,
+    "averageMedianDeltaPct": -31.78,
+    "improvedCaseCount": 4,
+    "comparedCaseCount": 4,
+    "maxRegressionPct": 0.0,
+    "thresholds": {
+      "minImprovedCases": 2,
+      "minAverageImprovementPct": 5.0,
+      "maxSingleRegressionPct": 25.0
+    },
+    "skippedNewCases": [
+      "large-seam",
+      "large-dense-text",
+      "large-anomaly"
+    ],
+    "deltas": [
+      {
+        "label": "large-png-gradient",
+        "baselineMedianMs": 140.694,
+        "optimizedMedianMs": 111.983,
+        "medianDeltaPct": -20.41,
+        "sameStatus": true,
+        "sameChecks": true
+      },
+      {
+        "label": "large-jpeg-gradient",
+        "baselineMedianMs": 151.67,
+        "optimizedMedianMs": 82.968,
+        "medianDeltaPct": -45.3,
+        "sameStatus": true,
+        "sameChecks": true
+      },
+      {
+        "label": "large-alpha-overlay",
+        "baselineMedianMs": 147.844,
+        "optimizedMedianMs": 100.772,
+        "medianDeltaPct": -31.84,
+        "sameStatus": true,
+        "sameChecks": true
+      },
+      {
+        "label": "noise-anomaly",
+        "baselineMedianMs": 128.68,
+        "optimizedMedianMs": 90.611,
+        "medianDeltaPct": -29.58,
+        "sameStatus": true,
+        "sameChecks": true
+      }
+    ]
+  }
+}

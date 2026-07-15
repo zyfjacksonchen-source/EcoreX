@@ -1,0 +1,44 @@
+{
+  "status": "PASS",
+  "generatedAt": "2026-06-27T10:04:25Z",
+  "checks": [
+    {
+      "label": "windows first-run installer records optional lark_oapi notice",
+      "status": "PASS"
+    },
+    {
+      "label": "windows first-run installer does not synchronously pip install lark_oapi",
+      "status": "PASS"
+    },
+    {
+      "label": "mac local installer requirements are pruned during packaging",
+      "status": "PASS"
+    },
+    {
+      "label": "mac wheelhouse download uses pruned local requirements",
+      "status": "PASS"
+    },
+    {
+      "label": "local WebUI packaging overlays current root config ABI",
+      "status": "PASS"
+    },
+    {
+      "label": "web service release overlays current root config ABI",
+      "status": "PASS"
+    },
+    {
+      "label": "source core requirements still declare lark-oapi",
+      "status": "PASS"
+    },
+    {
+      "label": "source core requirements still declare rapidocr",
+      "status": "PASS"
+    },
+    {
+      "label": "fast-ocr capability remains declared for on-demand install/detection",
+      "status": "PASS"
+    }
+  ],
+  "failed": [],
+  "redacted": true
+}

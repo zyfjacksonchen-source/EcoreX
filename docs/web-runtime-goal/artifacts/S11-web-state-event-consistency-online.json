@@ -1,0 +1,161 @@
+{
+  "schemaVersion": "ecorex.web-state-event-consistency-smoke.v1",
+  "generatedAt": "2026-07-01T18:39:24+0800",
+  "baseUrl": "https://mvdcm.ecoremedia.net/ecorex-agent",
+  "secretsRedacted": true,
+  "summary": {
+    "ok": false,
+    "checks": {
+      "frontendAssets": true,
+      "versionEndpoint": true,
+      "authenticatedApis": false,
+      "modelState": true,
+      "mutation": false,
+      "messageSmoke": true
+    },
+    "endpointFailures": [
+      "/api/models:auth_required",
+      "/api/capabilities:auth_required",
+      "/api/tools:auth_required",
+      "/api/skills:auth_required",
+      "/api/extensions:auth_required",
+      "/api/active-requests:auth_required"
+    ]
+  },
+  "frontend": {
+    "status": "ok",
+    "app": {
+      "status": "ok",
+      "httpStatus": 200,
+      "latencyMs": 53
+    },
+    "assetCount": 2,
+    "assets": [
+      {
+        "path": "./assets/index-CckHqYMW.js",
+        "status": "ok",
+        "httpStatus": 200,
+        "latencyMs": 289
+      },
+      {
+        "path": "./assets/index-DM3tROB7.css",
+        "status": "ok",
+        "httpStatus": 200,
+        "latencyMs": 75
+      }
+    ],
+    "markerReport": {
+      "status": "ok",
+      "markers": {
+        "model_policy_refresh_before_message": true,
+        "model_ready_gate_before_message": true,
+        "model_switch_divider": true,
+        "provider_logo_renderer": true,
+        "provider_logo_url": true,
+        "request_identity_key": true,
+        "phase1_sse_event_sync": true,
+        "phase2_user_message_sync": true,
+        "tool_started_event": true,
+        "run_completed_event": true
+      },
+      "missing": []
+    }
+  },
+  "auth": {
+    "status": "skipped",
+    "reason": "web_password is empty"
+  },
+  "endpoints": [
+    {
+      "path": "/api/version",
+      "status": "ok",
+      "httpStatus": 200,
+      "latencyMs": 46,
+      "jsonStatus": null,
+      "summaryKeys": [
+        "desktopRuntimeVerified",
+        "releaseNotes",
+        "version"
+      ],
+      "payload": null
+    },
+    {
+      "path": "/api/models",
+      "status": "auth_required",
+      "httpStatus": 401,
+      "latencyMs": 15,
+      "jsonStatus": "error",
+      "summaryKeys": [
+        "message",
+        "status"
+      ],
+      "payload": null
+    },
+    {
+      "path": "/api/capabilities",
+      "status": "auth_required",
+      "httpStatus": 401,
+      "latencyMs": 19,
+      "jsonStatus": "error",
+      "summaryKeys": [
+        "message",
+        "status"
+      ],
+      "payload": null
+    },
+    {
+      "path": "/api/tools",
+      "status": "auth_required",
+      "httpStatus": 401,
+      "latencyMs": 13,
+      "jsonStatus": "error",
+      "summaryKeys": [
+        "message",
+        "status"
+      ],
+      "payload": null
+    },
+    {
+      "path": "/api/skills",
+      "status": "auth_required",
+      "httpStatus": 401,
+      "latencyMs": 12,
+      "jsonStatus": "error",
+      "summaryKeys": [
+        "message",
+        "status"
+      ],
+      "payload": null
+    },
+    {
+      "path": "/api/extensions",
+      "status": "auth_required",
+      "httpStatus": 401,
+      "latencyMs": 13,
+      "jsonStatus": "error",
+      "summaryKeys": [
+        "message",
+        "status"
+      ],
+      "payload": null
+    },
+    {
+      "path": "/api/active-requests",
+      "status": "auth_required",
+      "httpStatus": 401,
+      "latencyMs": 11,
+      "jsonStatus": "error",
+      "summaryKeys": [
+        "message",
+        "status"
+      ],
+      "payload": null
+    }
+  ],
+  "modelState": null,
+  "mutation": {
+    "status": "failed",
+    "reason": "/api/models was not readable before mutation"
+  },
+  "messageSmoke": null
+}

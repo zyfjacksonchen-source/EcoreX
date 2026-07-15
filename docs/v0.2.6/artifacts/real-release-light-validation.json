@@ -1,0 +1,951 @@
+{
+  "status": "PASS",
+  "schemaVersion": "real-release-light-validation-v1",
+  "version": "0.2.6",
+  "scope": "real-release-light-validation",
+  "generatedAt": "2026-07-01T16:06:15.587286+00:00",
+  "durationSeconds": 0.78,
+  "checkCount": 89,
+  "passCount": 89,
+  "failCount": 0,
+  "checks": [
+    {
+      "index": 1,
+      "group": "files",
+      "name": "scripts\\smoke-v026-production-agent-product-acceptance.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "scripts/smoke-v026-production-agent-product-acceptance.py"
+      }
+    },
+    {
+      "index": 2,
+      "group": "files",
+      "name": "scripts\\真实发布校验.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "scripts/真实发布校验.py"
+      }
+    },
+    {
+      "index": 3,
+      "group": "files",
+      "name": "scripts\\real-release-multi-agent-strategy.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "scripts/real-release-multi-agent-strategy.py"
+      }
+    },
+    {
+      "index": 4,
+      "group": "files",
+      "name": "scripts\\真实发布多Agent分工策略.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "scripts/真实发布多Agent分工策略.py"
+      }
+    },
+    {
+      "index": 5,
+      "group": "files",
+      "name": "docs\\v0.2.6\\real-release-multi-agent-strategy.md exists",
+      "status": "PASS",
+      "detail": {
+        "path": "docs/v0.2.6/real-release-multi-agent-strategy.md"
+      }
+    },
+    {
+      "index": 6,
+      "group": "files",
+      "name": "scripts\\real-release-rerun-strategy.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "scripts/real-release-rerun-strategy.py"
+      }
+    },
+    {
+      "index": 7,
+      "group": "files",
+      "name": "scripts\\真实发布失败复验策略.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "scripts/真实发布失败复验策略.py"
+      }
+    },
+    {
+      "index": 8,
+      "group": "files",
+      "name": "docs\\v0.2.6\\real-release-rerun-strategy.md exists",
+      "status": "PASS",
+      "detail": {
+        "path": "docs/v0.2.6/real-release-rerun-strategy.md"
+      }
+    },
+    {
+      "index": 9,
+      "group": "files",
+      "name": "scripts\\smoke-v026-production-200-user-behavior.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "scripts/smoke-v026-production-200-user-behavior.py"
+      }
+    },
+    {
+      "index": 10,
+      "group": "files",
+      "name": "scripts\\smoke-v026-production-30-image-ocr-vision-toolchain.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "scripts/smoke-v026-production-30-image-ocr-vision-toolchain.py"
+      }
+    },
+    {
+      "index": 11,
+      "group": "files",
+      "name": "tests\\test_v026_agent_product_acceptance.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "tests/test_v026_agent_product_acceptance.py"
+      }
+    },
+    {
+      "index": 12,
+      "group": "files",
+      "name": "channel\\web\\routes.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "channel/web/routes.py"
+      }
+    },
+    {
+      "index": 13,
+      "group": "files",
+      "name": "channel\\web\\web_channel.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "channel/web/web_channel.py"
+      }
+    },
+    {
+      "index": 14,
+      "group": "files",
+      "name": "channel\\web\\sessions.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "channel/web/sessions.py"
+      }
+    },
+    {
+      "index": 15,
+      "group": "files",
+      "name": "channel\\web\\sse.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "channel/web/sse.py"
+      }
+    },
+    {
+      "index": 16,
+      "group": "files",
+      "name": "channel\\web\\image_jobs.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "channel/web/image_jobs.py"
+      }
+    },
+    {
+      "index": 17,
+      "group": "files",
+      "name": "agent\\tools\\imagegen\\imagegen.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "agent/tools/imagegen/imagegen.py"
+      }
+    },
+    {
+      "index": 18,
+      "group": "files",
+      "name": "agent\\tools\\ocr\\ocr.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "agent/tools/ocr/ocr.py"
+      }
+    },
+    {
+      "index": 19,
+      "group": "files",
+      "name": "agent\\tools\\vision\\vision.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "agent/tools/vision/vision.py"
+      }
+    },
+    {
+      "index": 20,
+      "group": "files",
+      "name": "agent\\tools\\ecorex_cli\\ecorex_cli.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "agent/tools/ecorex_cli/ecorex_cli.py"
+      }
+    },
+    {
+      "index": 21,
+      "group": "files",
+      "name": "agent\\tools\\mcp\\mcp_tool.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "agent/tools/mcp/mcp_tool.py"
+      }
+    },
+    {
+      "index": 22,
+      "group": "files",
+      "name": "agent\\skills\\service.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "agent/skills/service.py"
+      }
+    },
+    {
+      "index": 23,
+      "group": "files",
+      "name": "agent\\skills\\manager.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "agent/skills/manager.py"
+      }
+    },
+    {
+      "index": 24,
+      "group": "compile",
+      "name": "scripts\\smoke-v026-production-agent-product-acceptance.py compiles",
+      "status": "PASS",
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "index": 25,
+      "group": "compile",
+      "name": "scripts\\真实发布校验.py compiles",
+      "status": "PASS",
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "index": 26,
+      "group": "compile",
+      "name": "scripts\\真实发布轻量校验.py compiles",
+      "status": "PASS",
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "index": 27,
+      "group": "compile",
+      "name": "scripts\\real-release-multi-agent-strategy.py compiles",
+      "status": "PASS",
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "index": 28,
+      "group": "compile",
+      "name": "scripts\\真实发布多Agent分工策略.py compiles",
+      "status": "PASS",
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "index": 29,
+      "group": "compile",
+      "name": "scripts\\real-release-rerun-strategy.py compiles",
+      "status": "PASS",
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "index": 30,
+      "group": "compile",
+      "name": "scripts\\真实发布失败复验策略.py compiles",
+      "status": "PASS",
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "index": 31,
+      "group": "compile",
+      "name": "tests\\test_v026_agent_product_acceptance.py compiles",
+      "status": "PASS",
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "index": 32,
+      "group": "compile",
+      "name": "remote injected real release validation script compiles",
+      "status": "PASS",
+      "detail": {
+        "remoteScriptHash": "7EC742947FA27956",
+        "chars": 73049
+      }
+    },
+    {
+      "index": 33,
+      "group": "compile",
+      "name": "remote focused rerun script compiles",
+      "status": "PASS",
+      "detail": {
+        "remoteScriptHash": "BAC22FEE2DEF4737",
+        "chars": 73120
+      }
+    },
+    {
+      "index": 34,
+      "group": "matrix",
+      "name": "declared new case count is 218",
+      "status": "PASS",
+      "detail": {
+        "newCaseCount": 218,
+        "targetTotalChecks": 450,
+        "minimumEnabledChecks": 300,
+        "p0Count": 180,
+        "p2Count": 38
+      }
+    },
+    {
+      "index": 35,
+      "group": "matrix",
+      "name": "target total check count is 450",
+      "status": "PASS",
+      "detail": {
+        "newCaseCount": 218,
+        "targetTotalChecks": 450,
+        "minimumEnabledChecks": 300,
+        "p0Count": 180,
+        "p2Count": 38
+      }
+    },
+    {
+      "index": 36,
+      "group": "matrix",
+      "name": "minimum enabled check count is 300",
+      "status": "PASS",
+      "detail": {
+        "newCaseCount": 218,
+        "targetTotalChecks": 450,
+        "minimumEnabledChecks": 300,
+        "p0Count": 180,
+        "p2Count": 38
+      }
+    },
+    {
+      "index": 37,
+      "group": "matrix",
+      "name": "P0 hard gates are present",
+      "status": "PASS",
+      "detail": {
+        "newCaseCount": 218,
+        "targetTotalChecks": 450,
+        "minimumEnabledChecks": 300,
+        "p0Count": 180,
+        "p2Count": 38
+      }
+    },
+    {
+      "index": 38,
+      "group": "matrix",
+      "name": "P2 removable cases are present",
+      "status": "PASS",
+      "detail": {
+        "newCaseCount": 218,
+        "targetTotalChecks": 450,
+        "minimumEnabledChecks": 300,
+        "p0Count": 180,
+        "p2Count": 38
+      }
+    },
+    {
+      "index": 39,
+      "group": "matrix",
+      "name": "P0 cases are not removable",
+      "status": "PASS",
+      "detail": {
+        "newCaseCount": 218,
+        "targetTotalChecks": 450,
+        "minimumEnabledChecks": 300,
+        "p0Count": 180,
+        "p2Count": 38
+      }
+    },
+    {
+      "index": 40,
+      "group": "matrix",
+      "name": "P2 cases are removable",
+      "status": "PASS",
+      "detail": {
+        "newCaseCount": 218,
+        "targetTotalChecks": 450,
+        "minimumEnabledChecks": 300,
+        "p0Count": 180,
+        "p2Count": 38
+      }
+    },
+    {
+      "index": 41,
+      "group": "routes",
+      "name": "route /auth/login is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 42,
+      "group": "routes",
+      "name": "route /auth/check is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 43,
+      "group": "routes",
+      "name": "route /message is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 44,
+      "group": "routes",
+      "name": "route /stream is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 45,
+      "group": "routes",
+      "name": "route /cancel is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 46,
+      "group": "routes",
+      "name": "route /api/active-requests is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 47,
+      "group": "routes",
+      "name": "route /api/runtime-projection is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 48,
+      "group": "routes",
+      "name": "route /api/image-jobs is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 49,
+      "group": "routes",
+      "name": "route /api/tool-permissions is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 50,
+      "group": "routes",
+      "name": "route /api/models is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 51,
+      "group": "routes",
+      "name": "route /api/tools is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 52,
+      "group": "routes",
+      "name": "route /api/skills is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 53,
+      "group": "routes",
+      "name": "route /api/sessions is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 54,
+      "group": "routes",
+      "name": "route /api/history is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 55,
+      "group": "routes",
+      "name": "route /api/diagnostics/bundle is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 56,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: Do not use stored memories or prior conversation context.",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 57,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: direct tool probes bypass conversational memory",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 58,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: gpt-image-2-pro",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 59,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: images.generations",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 60,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: images.edits",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 61,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: SkillService",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 62,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: EcoreXCli",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 63,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: list_mcp_status",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 64,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: PRESSURE_USERS_DEFAULT = 20",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 65,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: TARGET_TOTAL_CHECKS = 450",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 66,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: --focus-groups",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 67,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: production-agent-product-focused-rerun",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 68,
+      "group": "development-standard",
+      "name": "development standard records: 真实发布校验",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 69,
+      "group": "development-standard",
+      "name": "development standard records: 真实发布轻量校验",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 70,
+      "group": "development-standard",
+      "name": "development standard records: 真实发布多Agent分工策略",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 71,
+      "group": "development-standard",
+      "name": "development standard records: 并发多 Agent 分工策略",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 72,
+      "group": "development-standard",
+      "name": "development standard records: 真实发布失败复验策略",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 73,
+      "group": "development-standard",
+      "name": "development standard records: focused rerun",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 74,
+      "group": "development-standard",
+      "name": "development standard records: 部署后、推广前",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 75,
+      "group": "development-standard",
+      "name": "development standard records: 主动询问用户是否运行真实发布校验",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 76,
+      "group": "development-standard",
+      "name": "development standard records: 最终发布结论仍必须由单次完整",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 77,
+      "group": "multi-agent-strategy",
+      "name": "multi-agent strategy builds",
+      "status": "PASS",
+      "detail": {
+        "status": "PASS",
+        "feasibility": "FEASIBLE_WITH_FINAL_SERIAL_GATE",
+        "laneCount": 9,
+        "waveCount": 5,
+        "finalGateCaseCount": 450,
+        "validation": {
+          "status": "PASS",
+          "failures": [],
+          "coveredGroupsBySplit": [
+            "auth-first-use",
+            "concurrency-pressure",
+            "context-session",
+            "fresh-env",
+            "multi-model-image-route",
+            "runtime-api",
+            "security-observability",
+            "stream-state-machine",
+            "tool-skill",
+            "ui-ux"
+          ],
+          "coveredGroupsByFinalGate": [
+            "auth-first-use",
+            "concurrency-pressure",
+            "context-session",
+            "fresh-env",
+            "multi-model-image-route",
+            "runtime-api",
+            "security-observability",
+            "stream-state-machine",
+            "tool-skill",
+            "ui-ux"
+          ]
+        }
+      }
+    },
+    {
+      "index": 78,
+      "group": "multi-agent-strategy",
+      "name": "strategy declares final full gate lane",
+      "status": "PASS",
+      "detail": {
+        "status": "PASS",
+        "feasibility": "FEASIBLE_WITH_FINAL_SERIAL_GATE",
+        "laneCount": 9,
+        "waveCount": 5,
+        "finalGateCaseCount": 450,
+        "validation": {
+          "status": "PASS",
+          "failures": [],
+          "coveredGroupsBySplit": [
+            "auth-first-use",
+            "concurrency-pressure",
+            "context-session",
+            "fresh-env",
+            "multi-model-image-route",
+            "runtime-api",
+            "security-observability",
+            "stream-state-machine",
+            "tool-skill",
+            "ui-ux"
+          ],
+          "coveredGroupsByFinalGate": [
+            "auth-first-use",
+            "concurrency-pressure",
+            "context-session",
+            "fresh-env",
+            "multi-model-image-route",
+            "runtime-api",
+            "security-observability",
+            "stream-state-machine",
+            "tool-skill",
+            "ui-ux"
+          ]
+        }
+      }
+    },
+    {
+      "index": 79,
+      "group": "multi-agent-strategy",
+      "name": "strategy declares serial pressure lane",
+      "status": "PASS",
+      "detail": {
+        "status": "PASS",
+        "feasibility": "FEASIBLE_WITH_FINAL_SERIAL_GATE",
+        "laneCount": 9,
+        "waveCount": 5,
+        "finalGateCaseCount": 450,
+        "validation": {
+          "status": "PASS",
+          "failures": [],
+          "coveredGroupsBySplit": [
+            "auth-first-use",
+            "concurrency-pressure",
+            "context-session",
+            "fresh-env",
+            "multi-model-image-route",
+            "runtime-api",
+            "security-observability",
+            "stream-state-machine",
+            "tool-skill",
+            "ui-ux"
+          ],
+          "coveredGroupsByFinalGate": [
+            "auth-first-use",
+            "concurrency-pressure",
+            "context-session",
+            "fresh-env",
+            "multi-model-image-route",
+            "runtime-api",
+            "security-observability",
+            "stream-state-machine",
+            "tool-skill",
+            "ui-ux"
+          ]
+        }
+      }
+    },
+    {
+      "index": 80,
+      "group": "multi-agent-strategy",
+      "name": "strategy uses final serial gate feasibility",
+      "status": "PASS",
+      "detail": {
+        "status": "PASS",
+        "feasibility": "FEASIBLE_WITH_FINAL_SERIAL_GATE",
+        "laneCount": 9,
+        "waveCount": 5,
+        "finalGateCaseCount": 450,
+        "validation": {
+          "status": "PASS",
+          "failures": [],
+          "coveredGroupsBySplit": [
+            "auth-first-use",
+            "concurrency-pressure",
+            "context-session",
+            "fresh-env",
+            "multi-model-image-route",
+            "runtime-api",
+            "security-observability",
+            "stream-state-machine",
+            "tool-skill",
+            "ui-ux"
+          ],
+          "coveredGroupsByFinalGate": [
+            "auth-first-use",
+            "concurrency-pressure",
+            "context-session",
+            "fresh-env",
+            "multi-model-image-route",
+            "runtime-api",
+            "security-observability",
+            "stream-state-machine",
+            "tool-skill",
+            "ui-ux"
+          ]
+        }
+      }
+    },
+    {
+      "index": 81,
+      "group": "rerun-strategy",
+      "name": "failed-report rerun strategy builds",
+      "status": "PASS",
+      "detail": {
+        "status": "PASS",
+        "action": "FOCUSED_RERUN_THEN_FINAL_GATE",
+        "failureGroups": [
+          "stream-state-machine",
+          "context-session"
+        ],
+        "selectedGroups": [
+          "fresh-env",
+          "auth-first-use",
+          "stream-state-machine",
+          "context-session"
+        ],
+        "mustRunFullGateBeforePromotion": true
+      }
+    },
+    {
+      "index": 82,
+      "group": "rerun-strategy",
+      "name": "rerun strategy expands required dependencies",
+      "status": "PASS",
+      "detail": {
+        "status": "PASS",
+        "action": "FOCUSED_RERUN_THEN_FINAL_GATE",
+        "failureGroups": [
+          "stream-state-machine",
+          "context-session"
+        ],
+        "selectedGroups": [
+          "fresh-env",
+          "auth-first-use",
+          "stream-state-machine",
+          "context-session"
+        ],
+        "mustRunFullGateBeforePromotion": true
+      }
+    },
+    {
+      "index": 83,
+      "group": "rerun-strategy",
+      "name": "rerun strategy emits focus-groups command",
+      "status": "PASS",
+      "detail": {
+        "status": "PASS",
+        "action": "FOCUSED_RERUN_THEN_FINAL_GATE",
+        "failureGroups": [
+          "stream-state-machine",
+          "context-session"
+        ],
+        "selectedGroups": [
+          "fresh-env",
+          "auth-first-use",
+          "stream-state-machine",
+          "context-session"
+        ],
+        "mustRunFullGateBeforePromotion": true
+      }
+    },
+    {
+      "index": 84,
+      "group": "rerun-strategy",
+      "name": "rerun strategy requires final full gate before promotion",
+      "status": "PASS",
+      "detail": {
+        "status": "PASS",
+        "action": "FOCUSED_RERUN_THEN_FINAL_GATE",
+        "failureGroups": [
+          "stream-state-machine",
+          "context-session"
+        ],
+        "selectedGroups": [
+          "fresh-env",
+          "auth-first-use",
+          "stream-state-machine",
+          "context-session"
+        ],
+        "mustRunFullGateBeforePromotion": true
+      }
+    },
+    {
+      "index": 85,
+      "group": "commands",
+      "name": "Chinese heavy command delegates to heavy implementation",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 86,
+      "group": "commands",
+      "name": "Chinese light command delegates to light implementation",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 87,
+      "group": "commands",
+      "name": "Chinese multi-agent strategy command delegates to strategy implementation",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 88,
+      "group": "commands",
+      "name": "Chinese failed-rerun strategy command delegates to rerun implementation",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 89,
+      "group": "commands",
+      "name": "light script has no Paramiko dependency",
+      "status": "PASS",
+      "detail": {}
+    }
+  ],
+  "failurePreview": [],
+  "redaction": {
+    "rawPasswordPersisted": false,
+    "rawSecretPersisted": false,
+    "rawUrlPersisted": false,
+    "rawUserPathPersisted": false
+  },
+  "commands": {
+    "light": "python scripts/真实发布轻量校验.py",
+    "strategy": "python scripts/真实发布多Agent分工策略.py",
+    "rerun": "python scripts/真实发布失败复验策略.py",
+    "heavy": "python scripts/真实发布校验.py"
+  }
+}

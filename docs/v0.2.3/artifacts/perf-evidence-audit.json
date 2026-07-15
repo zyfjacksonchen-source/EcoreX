@@ -1,0 +1,65 @@
+{
+  "version": "0.2.3",
+  "slice": "R23-16P-09",
+  "scenario": "performance-evidence-audit",
+  "status": "pass",
+  "redacted": true,
+  "metrics": {
+    "matrixScenarioCount": 8,
+    "scenarioPairCount": 7,
+    "selfAuditScenarioCount": 1,
+    "requiredScenarioMissingCount": 0,
+    "matrixConfigIssueCount": 0,
+    "mainArtifactCount": 7,
+    "scanArtifactCount": 7,
+    "scannedArtifactCount": 14,
+    "missingMainArtifactCount": 0,
+    "missingScanArtifactCount": 0,
+    "scanNotCleanCount": 0,
+    "findingBucketCount": 0,
+    "findingTotalCount": 0
+  },
+  "matrixConfigIssues": [],
+  "requiredScenarioMissing": [],
+  "artifacts": [
+    {
+      "scenarioHash": "hmac:42a74b5c60784294",
+      "mainHash": "hmac:8d0281bec236994b",
+      "scanHash": "hmac:df6e5397ee123a46"
+    },
+    {
+      "scenarioHash": "hmac:2147492d4be25edf",
+      "mainHash": "hmac:657d853c05baf35e",
+      "scanHash": "hmac:4d22f143fcb72e76"
+    },
+    {
+      "scenarioHash": "hmac:ada3287ae508cc5b",
+      "mainHash": "hmac:a526447fbb32a533",
+      "scanHash": "hmac:926c16f38dd17215"
+    },
+    {
+      "scenarioHash": "hmac:775fb632fcdd77b1",
+      "mainHash": "hmac:b01d847adfa99267",
+      "scanHash": "hmac:b299ded6511134c6"
+    },
+    {
+      "scenarioHash": "hmac:b9e9dd6dbd12f6cf",
+      "mainHash": "hmac:c5487fb43288da78",
+      "scanHash": "hmac:c941457ca247c484"
+    },
+    {
+      "scenarioHash": "hmac:b7369250a9e1a28d",
+      "mainHash": "hmac:2734ceba6022dde4",
+      "scanHash": "hmac:6fd2e807d27eee1a"
+    },
+    {
+      "scenarioHash": "hmac:b3a88b0845564607",
+      "mainHash": "hmac:83f96441aa1755aa",
+      "scanHash": "hmac:2bcb4503f6720968"
+    }
+  ],
+  "missingMainArtifacts": [],
+  "missingScanArtifacts": [],
+  "scanNotClean": [],
+  "findingBuckets": []
+}

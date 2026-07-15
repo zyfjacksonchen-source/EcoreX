@@ -1,0 +1,9 @@
+[
+  {
+    "date": "2026-07-15",
+    "macrostructure": "Workbench",
+    "theme": "design.md",
+    "enrichment": "Codex light/dark theme references with EcoreX brand action color",
+    "brief": "EcoreX v1 React WebUI GA audit, v0.3.0 interaction restoration, unified intent routing, Artifact/Retouch interaction, accessibility, and design-system hardening"
+  }
+]

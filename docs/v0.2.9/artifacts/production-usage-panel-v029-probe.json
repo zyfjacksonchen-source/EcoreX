@@ -1,0 +1,65 @@
+{
+  "commands": [
+    {
+      "argvHash": "062ED4C89611FC098AAFD736B7A1BAB5563649E1A398C2B61ED91AB0D695BA4D",
+      "exitCode": 0,
+      "name": "probe_usage_panel_v029",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "{\"files\": {\"adminCssHash\": \"7AC9FF9E7EB68ED4317EBF79C036D658386A675BCB0C102953D7B2D810E9F217\", \"adminCssLength\": 15014, \"adminJsHash\": \"3F02FCD562BC666C7E460CDCA7C624260F70BD7CB77AAF3E35697F5726E9ED2B\", \"adminJsLength\": 34365, \"indexHash\": \"4F8FBCE1400D96B81C7CB089B4DF5DB0A93B5A0221551F65724FED7806CAC595\", \"indexLength\": 11847}, \"http\": {\"authMode\": \"basic\", \"cssStatus\": 401, \"jsStatus\": 401, \"pageStatus\": 401, \"releaseStateApiStatus\": 401, \"runtimeAuditApiBodyHash\": \"90EADF20A6DCC3AA83EFCA7B949FCD84258C8B97556DAABB72AE404B3E01D0D3\", \"runtimeAuditApiBodyPrefix\": \"<html>\\r\\n<head><title>401 Authorization Required</title></head>\\r\\n<body>\\r\\n<center><h1>401 Authorization Required</h1></center>\\r\\n<hr><center>nginx/1.30.2</center>\\r\", \"runtimeAuditApiStatus\": 401}, \"markers\": {\"adminApiUsageAliases\": true, \"cssAuditRows\": true, \"cssContainsAuditRows\": false, \"indexNavAudit\": true, \"indexUsagePanelApiRouteExpected\": true, \"jsApiBaseRelative\": true, \"jsContainsEffectiveArtifacts\": false, \"jsEffectiveArtifacts\": true, \"nginxUsagePanelApi\": true, \"nginxUsagePanelStatic\": true, \"pageContainsAuditPanel\": false, \"pageContainsEffectiveArtifacts\": false}, \"nginxSnippet\": \"    location = /ecorex-agent/usage-panel {\\n        return 301 /ecorex-agent/usage-panel/;\\n    }\\n    location ^~ /ecorex-agent/usage-panel/api/ {\\n    location ^~ /ecorex-agent/usage-panel/api/ {\\n        auth_basic \\\"EcoreX Usage Panel\\\";\\n        auth_basic \\\"EcoreX Usage Panel\\\";\\n        auth_basic_user_file /etc/nginx/ecorex-usage-panel.htpasswd;\\n        auth_basic_user_file /etc/nginx/ecorex-usage-panel.htpasswd;\\n        proxy_pass [URL]        proxy_pass [URL]        proxy_http_version 1.1;\\n        proxy_http_version 1.1;\\n        proxy_set_header Host $host;\\n        proxy_set_header Host $host;\\n        proxy_set_header X-Forwarded-Proto $scheme;\\n        proxy_set_header X-Forwarded-Proto $scheme;\\n        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\\n        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\\n        add_header Cache-Control \\\"no-store\\\" always;\\n        add_header Cache-Control \\\"no-store\\\" always;\\n    }\\n    }\\n\\n\\n\\n\\n\\n\\n    location ^~ /ecorex-agent/usage-panel/ {\\n    location ^~ /ecorex-agent/usage-panel/ {\\n        auth_basic \\\"EcoreX Usage Panel\\\";\\n        auth_basic \\\"EcoreX Usage Panel\\\";\\n        auth_basic_user_file /etc/nginx/ecorex-usage-panel.htpasswd;\\n        auth_basic_user_file /etc/nginx/ecorex-usage-panel.htpasswd;\\n        alias /srv/ecorex-agent-usage-panel/current/;\\n        alias /srv/ecorex-agent-usage-panel/current/;\\n        index index.html;\\n\", \"nginxSnippetHash\": \"432CA5ACCCC6760B056D8130FFD3FB0C6791E81CC3DBD242E52D552B5CA52CFD\", \"rawSecretPersisted\": false}\n",
+      "stdoutHash": "62AC59166A3DBF0F55AE790ADE23D0FBC84CA9E61F2C3487AD5C750042A46317"
+    }
+  ],
+  "generatedAt": "2026-07-05T00:28:55.522583+00:00",
+  "probe": {
+    "files": {
+      "adminCssHash": "7AC9FF9E7EB68ED4317EBF79C036D658386A675BCB0C102953D7B2D810E9F217",
+      "adminCssLength": 15014,
+      "adminJsHash": "3F02FCD562BC666C7E460CDCA7C624260F70BD7CB77AAF3E35697F5726E9ED2B",
+      "adminJsLength": 34365,
+      "indexHash": "4F8FBCE1400D96B81C7CB089B4DF5DB0A93B5A0221551F65724FED7806CAC595",
+      "indexLength": 11847
+    },
+    "http": {
+      "authMode": "basic",
+      "cssStatus": 401,
+      "jsStatus": 401,
+      "pageStatus": 401,
+      "releaseStateApiStatus": 401,
+      "runtimeAuditApiBodyHash": "90EADF20A6DCC3AA83EFCA7B949FCD84258C8B97556DAABB72AE404B3E01D0D3",
+      "runtimeAuditApiBodyPrefix": "<html>\r\n<head><title>401 Authorization Required</title></head>\r\n<body>\r\n<center><h1>401 Authorization Required</h1></center>\r\n<hr><center>nginx/1.30.2</center>\r",
+      "runtimeAuditApiStatus": 401
+    },
+    "markers": {
+      "adminApiUsageAliases": true,
+      "cssAuditRows": true,
+      "cssContainsAuditRows": false,
+      "indexNavAudit": true,
+      "indexUsagePanelApiRouteExpected": true,
+      "jsApiBaseRelative": true,
+      "jsContainsEffectiveArtifacts": false,
+      "jsEffectiveArtifacts": true,
+      "nginxUsagePanelApi": true,
+      "nginxUsagePanelStatic": true,
+      "pageContainsAuditPanel": false,
+      "pageContainsEffectiveArtifacts": false
+    },
+    "nginxSnippet": "    location = /ecorex-agent/usage-panel {\n        return 301 /ecorex-agent/usage-panel/;\n    }\n    location ^~ /ecorex-agent/usage-panel/api/ {\n    location ^~ /ecorex-agent/usage-panel/api/ {\n        auth_basic \"EcoreX Usage Panel\";\n        auth_basic \"EcoreX Usage Panel\";\n        auth_basic_user_file /etc/nginx/ecorex-usage-panel.htpasswd;\n        auth_basic_user_file /etc/nginx/ecorex-usage-panel.htpasswd;\n        proxy_pass http://127.0.0.1:18105/api/;\n        proxy_pass http://127.0.0.1:18105/api/;\n        proxy_http_version 1.1;\n        proxy_http_version 1.1;\n        proxy_set_header Host $host;\n        proxy_set_header Host $host;\n        proxy_set_header X-Forwarded-Proto $scheme;\n        proxy_set_header X-Forwarded-Proto $scheme;\n        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n        add_header Cache-Control \"no-store\" always;\n        add_header Cache-Control \"no-store\" always;\n    }\n    }\n\n\n\n\n\n\n    location ^~ /ecorex-agent/usage-panel/ {\n    location ^~ /ecorex-agent/usage-panel/ {\n        auth_basic \"EcoreX Usage Panel\";\n        auth_basic \"EcoreX Usage Panel\";\n        auth_basic_user_file /etc/nginx/ecorex-usage-panel.htpasswd;\n        auth_basic_user_file /etc/nginx/ecorex-usage-panel.htpasswd;\n        alias /srv/ecorex-agent-usage-panel/current/;\n        alias /srv/ecorex-agent-usage-panel/current/;\n        index index.html;\n",
+    "nginxSnippetHash": "432CA5ACCCC6760B056D8130FFD3FB0C6791E81CC3DBD242E52D552B5CA52CFD",
+    "rawSecretPersisted": false
+  },
+  "redaction": {
+    "rawOutputPersisted": false,
+    "rawSecretPersisted": false,
+    "rawTargetPersisted": false
+  },
+  "scope": "production-usage-panel-v029-probe",
+  "status": "PASS",
+  "target": {
+    "domainHash": "A753D877497CBE35",
+    "rawTargetPersisted": false,
+    "sshHostHash": "CDF1CF905198CA97",
+    "sshUserHash": "4813494D137E1631"
+  },
+  "version": "0.2.9"
+}

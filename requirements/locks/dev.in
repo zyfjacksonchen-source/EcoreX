@@ -1,0 +1,16 @@
+-r runtime.in
+
+# Source-quality and contract gates. Exact pins mirror the dev extra.
+jsonschema==4.26.0
+pytest==9.1.1
+ruff==0.15.21
+
+# Reviewed transitive development baseline.
+attrs==26.1.0
+iniconfig==2.3.0
+jsonschema-specifications==2025.9.1
+packaging==26.1
+pluggy==1.6.0
+pygments==2.20.0
+referencing==0.37.0
+rpds-py==0.30.0

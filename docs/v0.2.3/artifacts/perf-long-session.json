@@ -1,0 +1,28 @@
+{
+  "version": "0.2.3",
+  "slice": "R23-16P-01",
+  "scenario": "long-session-projection",
+  "generatedAt": "2026-06-26T23:05:43.692929+00:00",
+  "metrics": {
+    "requestCount": 200,
+    "eventCount": 800,
+    "projectedRequestCount": 200,
+    "projectedEventCount": 0,
+    "includeEvents": false,
+    "warmupSessionProjectionMs": 475.988,
+    "sessionProjectionP95Ms": 24.904,
+    "sessionProjectionMeanMs": 10.603,
+    "requestProjectionP95Ms": 2.069,
+    "requestProjectionMeanMs": 1.931,
+    "listEventsCalls": 0,
+    "eventsForRequestsCalls": 0,
+    "eventsForRequestCalls": 0,
+    "latestEventIdForRequestCalls": 5
+  },
+  "redaction": {
+    "containsRawPrompts": false,
+    "containsRawMessageBodies": false,
+    "containsFullPaths": false,
+    "containsSecretShapedValues": false
+  }
+}

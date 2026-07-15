@@ -100,7 +100,10 @@ class AgentInitializer:
         # Get cost control parameters
         from config import conf
         max_steps = conf().get("agent_max_steps", 20)
-        max_context_tokens = conf().get("agent_max_context_tokens", 258000)
+        max_context_tokens = (
+            conf().get("model_auto_compact_token_limit")
+            or conf().get("agent_max_context_tokens", 258000)
+        )
         
         # Create agent
         agent = self.agent_bridge.create_agent(
@@ -508,6 +511,9 @@ class AgentInitializer:
         """Load all tools"""
         tool_manager = ToolManager()
         tool_manager.load_tools()
+        ensure_mcp = getattr(tool_manager, "ensure_mcp_configured_loaded", None)
+        if callable(ensure_mcp):
+            ensure_mcp(wait_seconds=2.0, poll_interval_seconds=0.2)
         
         tools = []
         file_config = {
@@ -545,7 +551,7 @@ class AgentInitializer:
                     # config.json's `tools.<name>` section) instead of replacing
                     # it, otherwise per-tool user configs (e.g. browser.cdp_endpoint)
                     # would be silently dropped.
-                    if tool_name in ['read', 'write', 'edit', 'bash', 'grep', 'find', 'ls', 'web_fetch', 'send', 'browser', 'ecorex_cli', 'feishu_cli', 'host_diagnostics']:
+                    if tool_name in ['read', 'write', 'edit', 'bash', 'grep', 'find', 'ls', 'web_fetch', 'send', 'browser', 'ocr', 'ecorex_cli', 'feishu_cli', 'tongxin_cli', 'host_diagnostics', 'office_documents', 'office_pdf', 'office_presentations', 'office_spreadsheets']:
                         merged_config = dict(getattr(tool, 'config', None) or {})
                         merged_config.update(file_config)
                         apply_config = getattr(tool, "apply_config", None)

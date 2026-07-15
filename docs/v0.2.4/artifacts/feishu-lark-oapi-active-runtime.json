@@ -1,0 +1,18 @@
+{
+  "status": "PASS",
+  "generatedAt": "2026-06-27T10:40:48Z",
+  "scope": "feishu-lark-oapi-runtime",
+  "dependency": "lark_oapi",
+  "package": "lark-oapi>=1.5.5",
+  "probe": {
+    "sdkPresent": true,
+    "sdkVersion": "1.6.9",
+    "registerAppAvailable": true,
+    "pythonVersion": "3.11.9",
+    "status": "success",
+    "returnCode": 0,
+    "pythonExecutableKind": "installed_webui_runtime",
+    "stderrPresent": false
+  },
+  "redacted": true
+}

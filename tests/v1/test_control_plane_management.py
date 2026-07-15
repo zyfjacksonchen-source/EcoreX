@@ -1,0 +1,299 @@
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+import sqlite3
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+import httpx
+import pytest
+
+from ecorex.control_plane.admin_management_router import (
+    create_admin_management_router,
+)
+from ecorex.control_plane.management import (
+    AdminManagementConflict,
+    AdminManagementRepository,
+    HTTPSModelConnectionTester,
+    ModelConnectionTestResult,
+)
+from ecorex.control_plane.management_models import (
+    AdjustUsageRequest,
+    CreateAdminUserRequest,
+    CreateModelConfigurationRequest,
+    StageModelConfigurationRequest,
+    UpdateAdminUserRequest,
+)
+from ecorex.control_plane.management_schema import AdminManagementSchemaManager
+from ecorex.control_plane.models import ControlPrincipal
+
+
+KEY = b"m" * 32
+ACTOR = ControlPrincipal(
+    subject="administrator",
+    client_id="admin-web",
+    account_id="admin",
+    roles=frozenset({"platform_admin", "release_admin"}),
+)
+
+
+def _repository(tmp_path: Path) -> AdminManagementRepository:
+    path = tmp_path / "control-plane.db"
+    AdminManagementSchemaManager(path).migrate()
+    return AdminManagementRepository(path, encryption_key=KEY)
+
+
+def _user_request(request_id: str = "request-user-create") -> CreateAdminUserRequest:
+    return CreateAdminUserRequest(
+        account_id="account-1",
+        display_name="测试用户",
+        email="user@example.com",
+        organization_id="org-1",
+        token_limit=200_000,
+        image_limit=100,
+        client_request_id=request_id,
+    )
+
+
+def _model_request(request_id: str = "request-model-create") -> CreateModelConfigurationRequest:
+    return CreateModelConfigurationRequest(
+        local_model_id="ecorex-chat",
+        modality="chat",
+        display_name="GPT-5.6 SOL · 中等推理",
+        upstream_model_id="gpt-5.6-sol",
+        provider_preset="responses",
+        is_default=True,
+        enabled=True,
+        api_key="sk-production-secret-123456",
+        client_request_id=request_id,
+    )
+
+
+def test_user_management_is_filterable_revisioned_and_idempotent(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    created = repository.create_user(_user_request(), actor=ACTOR)
+    replayed = repository.create_user(_user_request(), actor=ACTOR)
+    assert replayed == created
+
+    listing = repository.list_users(query="测试", status="active", organization_id="org-1")
+    assert listing.total == 1
+    assert listing.items[0].tokens_used == 0
+
+    adjusted = repository.adjust_usage(
+        created.account_id,
+        AdjustUsageRequest(
+            token_delta=12_000,
+            image_delta=2,
+            reason="账单回填",
+            expected_revision=created.revision,
+            client_request_id="request-usage-adjust",
+        ),
+        actor=ACTOR,
+    )
+    assert adjusted.tokens_used == 12_000
+    assert adjusted.images_used == 2
+    assert adjusted.revision == 2
+
+    with pytest.raises(AdminManagementConflict, match="revision"):
+        repository.update_user(
+            created.account_id,
+            UpdateAdminUserRequest(
+                display_name="已过期编辑",
+                email="user@example.com",
+                organization_id="org-1",
+                status="active",
+                token_limit=300_000,
+                image_limit=200,
+                expected_revision=1,
+                client_request_id="request-user-stale",
+            ),
+            actor=ACTOR,
+        )
+
+    summary = repository.usage_summary()
+    assert summary.users_total == 1
+    assert summary.users_active == 1
+    assert summary.tokens_used == 12_000
+    repository.verify_integrity()
+
+
+def test_model_key_is_encrypted_and_only_tested_revision_activates(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    created = repository.create_model_configuration(_model_request(), actor=ACTOR)
+    assert created.active is None
+    assert created.draft is not None
+    assert created.draft.key_configured
+    assert created.draft.key_fingerprint == "76e3d17e4398ecfd"
+
+    raw = (tmp_path / "control-plane.db").read_bytes()
+    assert b"sk-production-secret-123456" not in raw
+
+    lease = repository.begin_model_test(
+        created.config_id,
+        1,
+        actor=ACTOR,
+        client_request_id="request-test-activate",
+    )
+    activated = repository.finish_model_test(
+        lease, ModelConnectionTestResult(passed=True), actor=ACTOR
+    )
+    assert activated.status == "passed"
+    active = repository.active_model(modality="chat")
+    assert active.revision == 1
+    assert active.api_key == "sk-production-secret-123456"
+
+    staged = repository.stage_model_configuration(
+        created.config_id,
+        StageModelConfigurationRequest(
+            display_name="GPT-5.6 SOL 新名称",
+            upstream_model_id="gpt-5.6-sol-new",
+            provider_preset="responses",
+            is_default=True,
+            enabled=True,
+            api_key="sk-replacement-secret-123456",
+            expected_active_revision=1,
+            client_request_id="request-model-stage-2",
+        ),
+        actor=ACTOR,
+    )
+    assert staged.draft and staged.draft.revision == 2
+    lease2 = repository.begin_model_test(
+        created.config_id,
+        2,
+        actor=ACTOR,
+        client_request_id="request-test-reject",
+    )
+    failed = repository.finish_model_test(
+        lease2,
+        ModelConnectionTestResult(passed=False, error_code="provider_key_rejected"),
+        actor=ACTOR,
+    )
+    assert failed.status == "failed"
+    assert repository.active_model(modality="chat").revision == 1
+
+
+def test_edit_during_model_probe_supersedes_old_result(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    created = repository.create_model_configuration(_model_request(), actor=ACTOR)
+    lease = repository.begin_model_test(
+        created.config_id,
+        1,
+        actor=ACTOR,
+        client_request_id="request-running-test",
+    )
+    repository.stage_model_configuration(
+        created.config_id,
+        StageModelConfigurationRequest(
+            display_name="替代草稿",
+            upstream_model_id="gpt-5.6-sol-next",
+            provider_preset="responses",
+            is_default=True,
+            enabled=True,
+            api_key=None,
+            expected_active_revision=None,
+            client_request_id="request-replace-running",
+        ),
+        actor=ACTOR,
+    )
+    result = repository.finish_model_test(
+        lease, ModelConnectionTestResult(passed=True), actor=ACTOR
+    )
+    assert result.status == "superseded"
+    assert repository.list_model_configurations()[0].active is None
+
+
+def test_connection_test_uses_server_origin_and_checks_exact_model() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/json"},
+            json={"data": [{"id": "gpt-5.6-sol"}]},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    tester = HTTPSModelConnectionTester(
+        {"responses": "https://models.ecorex.example"}, client=client
+    )
+    configuration = _repository_for_active_configuration()
+    result = asyncio.run(tester.test(configuration))
+    asyncio.run(client.aclose())
+
+    assert result.passed
+    assert requests[0].url == "https://models.ecorex.example/v1/models"
+    assert requests[0].headers["authorization"] == "Bearer sk-test-value"
+
+
+def _repository_for_active_configuration():
+    from ecorex.control_plane.management_models import ActiveModelConfiguration
+
+    return ActiveModelConfiguration(
+        config_id="model-test",
+        revision=1,
+        local_model_id="ecorex-chat",
+        modality="chat",
+        display_name="GPT",
+        upstream_model_id="gpt-5.6-sol",
+        provider_preset="responses",
+        is_default=True,
+        api_key="sk-test-value",
+    )
+
+
+def test_admin_management_router_applies_roles_and_activates_after_test(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path)
+
+    class PassingTester:
+        async def test(self, configuration):
+            assert configuration.api_key.startswith("sk-")
+            return ModelConnectionTestResult(passed=True)
+
+    def current() -> ControlPrincipal:
+        return ACTOR
+
+    app = FastAPI()
+    app.include_router(
+        create_admin_management_router(
+            repository,
+            model_tester=PassingTester(),
+            user_admin_dependency=current,
+            model_admin_dependency=current,
+        )
+    )
+    client = TestClient(app)
+    created_user = client.post(
+        "/api/v1/admin/users", json=_user_request().model_dump(mode="json")
+    )
+    assert created_user.status_code == 201
+    model_payload = _model_request().model_dump(mode="json", exclude={"api_key"})
+    model_payload["api_key"] = "sk-production-secret-123456"
+    created_model = client.post("/api/v1/admin/models", json=model_payload)
+    assert created_model.status_code == 201
+    body = created_model.json()
+    assert "api_key" not in created_model.text
+    activated = client.post(
+        f"/api/v1/admin/models/{body['config_id']}/test-and-activate",
+        json={"revision": 1, "client_request_id": "request-router-test"},
+    )
+    assert activated.status_code == 200
+    assert activated.json()["status"] == "passed"
+    assert repository.active_model(modality="chat").revision == 1
+
+
+def test_management_schema_rejects_drift(tmp_path: Path) -> None:
+    path = tmp_path / "control-plane.db"
+    manager = AdminManagementSchemaManager(path)
+    manager.migrate()
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute("ALTER TABLE admin_ops_users ADD COLUMN unsafe TEXT")
+        connection.commit()
+    finally:
+        connection.close()
+    with pytest.raises(Exception, match="schema drifted"):
+        manager.validate()

@@ -321,7 +321,10 @@ class GoogleGeminiBot(Bot):
                         break
             
             if system_prompt:
-                payload["system_instruction"] = {
+                # Gemini REST JSON expects camelCase. The snake_case SDK field
+                # makes some REST gateways report a oneof `_system_instruction`
+                # conflict even though only one system prompt was provided.
+                payload["systemInstruction"] = {
                     "parts": [{"text": system_prompt}]
                 }
             
@@ -598,13 +601,79 @@ class GoogleGeminiBot(Bot):
             function_declarations.append({
                 "name": name,
                 "description": description,
-                "parameters": parameters
+                "parameters": self._sanitize_gemini_schema(parameters)
             })
         
         # All functionDeclarations must be in a single tools object (per Gemini REST API spec)
         return [{
             "functionDeclarations": function_declarations
         }] if function_declarations else []
+
+    @classmethod
+    def _sanitize_gemini_schema(cls, schema):
+        """Coerce JSON Schema into the stricter Gemini REST function schema."""
+        if not isinstance(schema, dict):
+            return {"type": "object", "properties": {}}
+
+        allowed = {
+            "type",
+            "format",
+            "description",
+            "nullable",
+            "enum",
+            "items",
+            "properties",
+            "required",
+            "minItems",
+            "maxItems",
+            "minimum",
+            "maximum",
+        }
+        result = {}
+        for key, value in schema.items():
+            if key in {"$schema", "$defs", "definitions", "additionalProperties", "default", "examples", "title"}:
+                continue
+            if key in {"anyOf", "oneOf", "allOf"}:
+                if "type" not in schema and isinstance(value, list):
+                    first = next((item for item in value if isinstance(item, dict) and item.get("type") != "null"), None)
+                    if first:
+                        merged = cls._sanitize_gemini_schema(first)
+                        for merged_key, merged_value in merged.items():
+                            result.setdefault(merged_key, merged_value)
+                continue
+            if key not in allowed:
+                continue
+            if key == "properties" and isinstance(value, dict):
+                result[key] = {
+                    str(prop_name): cls._sanitize_gemini_schema(prop_schema)
+                    for prop_name, prop_schema in value.items()
+                    if isinstance(prop_schema, dict)
+                }
+            elif key == "items":
+                result[key] = cls._sanitize_gemini_schema(value)
+            elif key == "type" and isinstance(value, list):
+                non_null = [item for item in value if item != "null"]
+                if len(non_null) != len(value):
+                    result["nullable"] = True
+                result[key] = non_null[0] if non_null else "string"
+            else:
+                result[key] = value
+
+        schema_type = str(result.get("type") or "").lower()
+        if not schema_type:
+            if "properties" in result:
+                result["type"] = "object"
+                schema_type = "object"
+            elif "enum" in result:
+                result["type"] = "string"
+                schema_type = "string"
+        if schema_type == "array" and "items" not in result:
+            result["items"] = {"type": "object"}
+        if schema_type == "object":
+            result.setdefault("properties", {})
+        if not result:
+            return {"type": "object", "properties": {}}
+        return result
     
     def _handle_gemini_rest_sync_response(self, response, model_name):
         """Handle Gemini REST API sync response and convert to OpenAI format"""

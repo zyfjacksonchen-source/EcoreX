@@ -1,0 +1,508 @@
+{
+  "status": "PASS",
+  "generatedAt": "2026-06-28T03:01:51.542054+00:00",
+  "requiredMarkers": {
+    "runtime_policy": [
+      "IMAGE_FINALIZATION_POLICY_VERSION",
+      "build_image_finalization_decision",
+      "aggregate_image_finalization_decisions"
+    ],
+    "service_retry": [
+      "_quality_retry_limit",
+      "_finalize_safe_artifacts",
+      "reference_images = _authorized_quality_reference_images(task)",
+      "reference_images=reference_images"
+    ],
+    "web_retry": [
+      "quality_retry_max",
+      "_image_job_quality_retry_max",
+      "_quality_retry_attempt",
+      "Quality retry: regenerate"
+    ],
+    "projection_retry_gate_summary": [
+      "\"retryGate\"",
+      "_safe_projection_quality_gate(text)",
+      "maxRetries"
+    ],
+    "renderer_retry_display": [
+      "retry_count",
+      "max_retries",
+      "retry_gate"
+    ],
+    "reference_review": [
+      "reference-fidelity",
+      "reference_status=",
+      "references_compared"
+    ],
+    "telemetry_hardening": [
+      "_telemetry_token_has_sensitive_material",
+      "\"http://\", \"https://\", \"file://\", \"data:\"",
+      "\"/\" in lowered or \"\\\\\" in lowered or \":\" in lowered",
+      "_is_safe_ascii_telemetry_token"
+    ]
+  },
+  "archives": [
+    {
+      "label": "EcoreX_0.2.3-webui-windows-x64.zip",
+      "type": "zip",
+      "entries": [
+        {
+          "name": "runtime/agent/protocol/image_job_service.py",
+          "size": 49316,
+          "sha256": "CDEC2B5D3CCF35E880FE17643F82AB2B8EAADDC0A545C9174FCED84A15497582"
+        },
+        {
+          "name": "runtime/agent/protocol/runtime_projection.py",
+          "size": 118154,
+          "sha256": "A3658CEE3D20C28C7962D8DB51481164AAC1159B4799BEEF1BCD4EA0671BAF55"
+        },
+        {
+          "name": "runtime/channel/web/web_channel.py",
+          "size": 614770,
+          "sha256": "7C0BF7C05704604BBB8968D0A7EDCC19EAA6D844B7E7EAF1A4B067A546A12AB8"
+        },
+        {
+          "name": "runtime/channel/web/static/app/assets/index-CYmjxf9c.js",
+          "size": 566507,
+          "sha256": "4449BA56F7335D295FF1EF0FA7A74DD15BD07D7C3CC70B97CE6586F85EDC816E"
+        },
+        {
+          "name": "runtime/common/image_quality_runtime.py",
+          "size": 37243,
+          "sha256": "E108218A2416F9BA44DC39511A831ECD7ED572A0C0B516112587C20388117F53"
+        }
+      ],
+      "nested": [
+        {
+          "label": "runtime/python/python311.zip",
+          "type": "zip",
+          "entries": [],
+          "nested": [],
+          "markers": {
+            "runtime_policy": false,
+            "service_retry": false,
+            "web_retry": false,
+            "projection_retry_gate_summary": false,
+            "renderer_retry_display": false,
+            "reference_review": false,
+            "telemetry_hardening": false
+          }
+        },
+        {
+          "label": "runtime/python/Lib/site-packages/dateutil/zoneinfo/dateutil-zoneinfo.tar.gz",
+          "type": "tar",
+          "entries": [],
+          "markers": {
+            "runtime_policy": false,
+            "service_retry": false,
+            "web_retry": false,
+            "projection_retry_gate_summary": false,
+            "renderer_retry_display": false,
+            "reference_review": false,
+            "telemetry_hardening": false
+          }
+        }
+      ],
+      "markers": {
+        "runtime_policy": true,
+        "service_retry": true,
+        "web_retry": true,
+        "projection_retry_gate_summary": true,
+        "renderer_retry_display": true,
+        "reference_review": true,
+        "telemetry_hardening": true
+      },
+      "archive": "release-artifacts/EcoreX_0.2.3-webui-windows-x64.zip",
+      "size": 102849403,
+      "sha256": "47585CDFB05A17C578D99BCFC2F00FDF107FB6DB749D65D36FCA824A0F596B2A"
+    },
+    {
+      "label": "EcoreX_0.2.3-webui-macos-universal.zip",
+      "type": "zip",
+      "entries": [
+        {
+          "name": "Install EcoreX WebUI.app/Contents/Resources/package/runtime/agent/protocol/image_job_service.py",
+          "size": 49316,
+          "sha256": "CDEC2B5D3CCF35E880FE17643F82AB2B8EAADDC0A545C9174FCED84A15497582"
+        },
+        {
+          "name": "Install EcoreX WebUI.app/Contents/Resources/package/runtime/agent/protocol/runtime_projection.py",
+          "size": 118154,
+          "sha256": "A3658CEE3D20C28C7962D8DB51481164AAC1159B4799BEEF1BCD4EA0671BAF55"
+        },
+        {
+          "name": "Install EcoreX WebUI.app/Contents/Resources/package/runtime/channel/web/web_channel.py",
+          "size": 614770,
+          "sha256": "7C0BF7C05704604BBB8968D0A7EDCC19EAA6D844B7E7EAF1A4B067A546A12AB8"
+        },
+        {
+          "name": "Install EcoreX WebUI.app/Contents/Resources/package/runtime/channel/web/static/app/assets/index-CYmjxf9c.js",
+          "size": 566507,
+          "sha256": "4449BA56F7335D295FF1EF0FA7A74DD15BD07D7C3CC70B97CE6586F85EDC816E"
+        },
+        {
+          "name": "Install EcoreX WebUI.app/Contents/Resources/package/runtime/common/image_quality_runtime.py",
+          "size": 37243,
+          "sha256": "E108218A2416F9BA44DC39511A831ECD7ED572A0C0B516112587C20388117F53"
+        }
+      ],
+      "nested": [
+        {
+          "label": "Install EcoreX WebUI.app/Contents/Resources/package/python/cpython-3.11.15+20260602-aarch64-apple-darwin-install_only_stripped.tar.gz",
+          "type": "tar",
+          "entries": [],
+          "markers": {
+            "runtime_policy": false,
+            "service_retry": false,
+            "web_retry": false,
+            "projection_retry_gate_summary": false,
+            "renderer_retry_display": false,
+            "reference_review": false,
+            "telemetry_hardening": false
+          }
+        },
+        {
+          "label": "Install EcoreX WebUI.app/Contents/Resources/package/python/cpython-3.11.15+20260602-x86_64-apple-darwin-install_only_stripped.tar.gz",
+          "type": "tar",
+          "entries": [],
+          "markers": {
+            "runtime_policy": false,
+            "service_retry": false,
+            "web_retry": false,
+            "projection_retry_gate_summary": false,
+            "renderer_retry_display": false,
+            "reference_review": false,
+            "telemetry_hardening": false
+          }
+        }
+      ],
+      "markers": {
+        "runtime_policy": true,
+        "service_retry": true,
+        "web_retry": true,
+        "projection_retry_gate_summary": true,
+        "renderer_retry_display": true,
+        "reference_review": true,
+        "telemetry_hardening": true
+      },
+      "archive": "release-artifacts/EcoreX_0.2.3-webui-macos-universal.zip",
+      "size": 263150064,
+      "sha256": "43DFA23B2A9A5922F070D8B1394B73A19F29DBA9AE19B631F28C1434DF4E3755"
+    },
+    {
+      "label": "EcoreX_0.2.3-web-linux-service.tar.gz",
+      "type": "tar",
+      "entries": [
+        {
+          "name": "ecorex-web-linux-service-0.2.3/web-build/legacy-webui/static/app/assets/index-CYmjxf9c.js",
+          "size": 566507,
+          "sha256": "4449BA56F7335D295FF1EF0FA7A74DD15BD07D7C3CC70B97CE6586F85EDC816E"
+        },
+        {
+          "name": "ecorex-web-linux-service-0.2.3/runtime/common/image_quality_runtime.py",
+          "size": 37243,
+          "sha256": "E108218A2416F9BA44DC39511A831ECD7ED572A0C0B516112587C20388117F53"
+        },
+        {
+          "name": "ecorex-web-linux-service-0.2.3/runtime/channel/web/web_channel.py",
+          "size": 614770,
+          "sha256": "7C0BF7C05704604BBB8968D0A7EDCC19EAA6D844B7E7EAF1A4B067A546A12AB8"
+        },
+        {
+          "name": "ecorex-web-linux-service-0.2.3/runtime/channel/web/static/app/assets/index-CYmjxf9c.js",
+          "size": 566507,
+          "sha256": "4449BA56F7335D295FF1EF0FA7A74DD15BD07D7C3CC70B97CE6586F85EDC816E"
+        },
+        {
+          "name": "ecorex-web-linux-service-0.2.3/runtime/agent/protocol/image_job_service.py",
+          "size": 49316,
+          "sha256": "CDEC2B5D3CCF35E880FE17643F82AB2B8EAADDC0A545C9174FCED84A15497582"
+        },
+        {
+          "name": "ecorex-web-linux-service-0.2.3/runtime/agent/protocol/runtime_projection.py",
+          "size": 118154,
+          "sha256": "A3658CEE3D20C28C7962D8DB51481164AAC1159B4799BEEF1BCD4EA0671BAF55"
+        }
+      ],
+      "markers": {
+        "runtime_policy": true,
+        "service_retry": true,
+        "web_retry": true,
+        "projection_retry_gate_summary": true,
+        "renderer_retry_display": true,
+        "reference_review": true,
+        "telemetry_hardening": true
+      },
+      "archive": "release-artifacts/EcoreX_0.2.3-web-linux-service.tar.gz",
+      "size": 3803544,
+      "sha256": "D5C5FC8D9D330BF85103D6108185CFEB2D61848894F63DF76201A788C8C95823"
+    },
+    {
+      "label": "EcoreX_0.2.3-public-release.zip",
+      "type": "zip",
+      "entries": [],
+      "nested": [
+        {
+          "label": "site/downloads/EcoreX_0.2.3-web-linux-service.tar.gz",
+          "type": "tar",
+          "entries": [
+            {
+              "name": "ecorex-web-linux-service-0.2.3/web-build/legacy-webui/static/app/assets/index-CYmjxf9c.js",
+              "size": 566507,
+              "sha256": "4449BA56F7335D295FF1EF0FA7A74DD15BD07D7C3CC70B97CE6586F85EDC816E"
+            },
+            {
+              "name": "ecorex-web-linux-service-0.2.3/runtime/common/image_quality_runtime.py",
+              "size": 37243,
+              "sha256": "E108218A2416F9BA44DC39511A831ECD7ED572A0C0B516112587C20388117F53"
+            },
+            {
+              "name": "ecorex-web-linux-service-0.2.3/runtime/channel/web/web_channel.py",
+              "size": 614770,
+              "sha256": "7C0BF7C05704604BBB8968D0A7EDCC19EAA6D844B7E7EAF1A4B067A546A12AB8"
+            },
+            {
+              "name": "ecorex-web-linux-service-0.2.3/runtime/channel/web/static/app/assets/index-CYmjxf9c.js",
+              "size": 566507,
+              "sha256": "4449BA56F7335D295FF1EF0FA7A74DD15BD07D7C3CC70B97CE6586F85EDC816E"
+            },
+            {
+              "name": "ecorex-web-linux-service-0.2.3/runtime/agent/protocol/image_job_service.py",
+              "size": 49316,
+              "sha256": "CDEC2B5D3CCF35E880FE17643F82AB2B8EAADDC0A545C9174FCED84A15497582"
+            },
+            {
+              "name": "ecorex-web-linux-service-0.2.3/runtime/agent/protocol/runtime_projection.py",
+              "size": 118154,
+              "sha256": "A3658CEE3D20C28C7962D8DB51481164AAC1159B4799BEEF1BCD4EA0671BAF55"
+            }
+          ],
+          "markers": {
+            "runtime_policy": true,
+            "service_retry": true,
+            "web_retry": true,
+            "projection_retry_gate_summary": true,
+            "renderer_retry_display": true,
+            "reference_review": true,
+            "telemetry_hardening": true
+          }
+        },
+        {
+          "label": "site/downloads/EcoreX_0.2.3-webui-macos-universal.zip",
+          "type": "zip",
+          "entries": [
+            {
+              "name": "Install EcoreX WebUI.app/Contents/Resources/package/runtime/agent/protocol/image_job_service.py",
+              "size": 49316,
+              "sha256": "CDEC2B5D3CCF35E880FE17643F82AB2B8EAADDC0A545C9174FCED84A15497582"
+            },
+            {
+              "name": "Install EcoreX WebUI.app/Contents/Resources/package/runtime/agent/protocol/runtime_projection.py",
+              "size": 118154,
+              "sha256": "A3658CEE3D20C28C7962D8DB51481164AAC1159B4799BEEF1BCD4EA0671BAF55"
+            },
+            {
+              "name": "Install EcoreX WebUI.app/Contents/Resources/package/runtime/channel/web/web_channel.py",
+              "size": 614770,
+              "sha256": "7C0BF7C05704604BBB8968D0A7EDCC19EAA6D844B7E7EAF1A4B067A546A12AB8"
+            },
+            {
+              "name": "Install EcoreX WebUI.app/Contents/Resources/package/runtime/channel/web/static/app/assets/index-CYmjxf9c.js",
+              "size": 566507,
+              "sha256": "4449BA56F7335D295FF1EF0FA7A74DD15BD07D7C3CC70B97CE6586F85EDC816E"
+            },
+            {
+              "name": "Install EcoreX WebUI.app/Contents/Resources/package/runtime/common/image_quality_runtime.py",
+              "size": 37243,
+              "sha256": "E108218A2416F9BA44DC39511A831ECD7ED572A0C0B516112587C20388117F53"
+            }
+          ],
+          "nested": [
+            {
+              "label": "Install EcoreX WebUI.app/Contents/Resources/package/python/cpython-3.11.15+20260602-aarch64-apple-darwin-install_only_stripped.tar.gz",
+              "type": "tar",
+              "entries": [],
+              "markers": {
+                "runtime_policy": false,
+                "service_retry": false,
+                "web_retry": false,
+                "projection_retry_gate_summary": false,
+                "renderer_retry_display": false,
+                "reference_review": false,
+                "telemetry_hardening": false
+              }
+            },
+            {
+              "label": "Install EcoreX WebUI.app/Contents/Resources/package/python/cpython-3.11.15+20260602-x86_64-apple-darwin-install_only_stripped.tar.gz",
+              "type": "tar",
+              "entries": [],
+              "markers": {
+                "runtime_policy": false,
+                "service_retry": false,
+                "web_retry": false,
+                "projection_retry_gate_summary": false,
+                "renderer_retry_display": false,
+                "reference_review": false,
+                "telemetry_hardening": false
+              }
+            }
+          ],
+          "markers": {
+            "runtime_policy": true,
+            "service_retry": true,
+            "web_retry": true,
+            "projection_retry_gate_summary": true,
+            "renderer_retry_display": true,
+            "reference_review": true,
+            "telemetry_hardening": true
+          }
+        },
+        {
+          "label": "site/downloads/EcoreX_0.2.3-webui-windows-x64.zip",
+          "type": "zip",
+          "entries": [
+            {
+              "name": "runtime/agent/protocol/image_job_service.py",
+              "size": 49316,
+              "sha256": "CDEC2B5D3CCF35E880FE17643F82AB2B8EAADDC0A545C9174FCED84A15497582"
+            },
+            {
+              "name": "runtime/agent/protocol/runtime_projection.py",
+              "size": 118154,
+              "sha256": "A3658CEE3D20C28C7962D8DB51481164AAC1159B4799BEEF1BCD4EA0671BAF55"
+            },
+            {
+              "name": "runtime/channel/web/web_channel.py",
+              "size": 614770,
+              "sha256": "7C0BF7C05704604BBB8968D0A7EDCC19EAA6D844B7E7EAF1A4B067A546A12AB8"
+            },
+            {
+              "name": "runtime/channel/web/static/app/assets/index-CYmjxf9c.js",
+              "size": 566507,
+              "sha256": "4449BA56F7335D295FF1EF0FA7A74DD15BD07D7C3CC70B97CE6586F85EDC816E"
+            },
+            {
+              "name": "runtime/common/image_quality_runtime.py",
+              "size": 37243,
+              "sha256": "E108218A2416F9BA44DC39511A831ECD7ED572A0C0B516112587C20388117F53"
+            }
+          ],
+          "nested": [
+            {
+              "label": "runtime/python/python311.zip",
+              "type": "zip",
+              "entries": [],
+              "nested": [],
+              "markers": {
+                "runtime_policy": false,
+                "service_retry": false,
+                "web_retry": false,
+                "projection_retry_gate_summary": false,
+                "renderer_retry_display": false,
+                "reference_review": false,
+                "telemetry_hardening": false
+              }
+            },
+            {
+              "label": "runtime/python/Lib/site-packages/dateutil/zoneinfo/dateutil-zoneinfo.tar.gz",
+              "type": "tar",
+              "entries": [],
+              "markers": {
+                "runtime_policy": false,
+                "service_retry": false,
+                "web_retry": false,
+                "projection_retry_gate_summary": false,
+                "renderer_retry_display": false,
+                "reference_review": false,
+                "telemetry_hardening": false
+              }
+            }
+          ],
+          "markers": {
+            "runtime_policy": true,
+            "service_retry": true,
+            "web_retry": true,
+            "projection_retry_gate_summary": true,
+            "renderer_retry_display": true,
+            "reference_review": true,
+            "telemetry_hardening": true
+          }
+        }
+      ],
+      "markers": {
+        "runtime_policy": true,
+        "service_retry": true,
+        "web_retry": true,
+        "projection_retry_gate_summary": true,
+        "renderer_retry_display": true,
+        "reference_review": true,
+        "telemetry_hardening": true
+      },
+      "archive": "release-artifacts/EcoreX_0.2.3-public-release.zip",
+      "size": 371568072,
+      "sha256": "90FB197D134C2D54228996E3123B1377ED1525011A7BAE0A97CC6C79E7E920EF"
+    }
+  ],
+  "files": [
+    {
+      "path": "common/image_quality_runtime.py",
+      "size": 37243,
+      "sha256": "E108218A2416F9BA44DC39511A831ECD7ED572A0C0B516112587C20388117F53"
+    },
+    {
+      "path": "desktop/runtime/ecorex-runtime/common/image_quality_runtime.py",
+      "size": 37243,
+      "sha256": "E108218A2416F9BA44DC39511A831ECD7ED572A0C0B516112587C20388117F53"
+    },
+    {
+      "path": "agent/protocol/image_job_service.py",
+      "size": 49316,
+      "sha256": "CDEC2B5D3CCF35E880FE17643F82AB2B8EAADDC0A545C9174FCED84A15497582"
+    },
+    {
+      "path": "desktop/runtime/ecorex-runtime/agent/protocol/image_job_service.py",
+      "size": 49316,
+      "sha256": "CDEC2B5D3CCF35E880FE17643F82AB2B8EAADDC0A545C9174FCED84A15497582"
+    },
+    {
+      "path": "agent/tools/imagegen/imagegen.py",
+      "size": 18593,
+      "sha256": "43ECAF58CBACF85E1ECDE830317906CCDE459C94A46C67671188927A4821F9FF"
+    },
+    {
+      "path": "desktop/runtime/ecorex-runtime/agent/tools/imagegen/imagegen.py",
+      "size": 18593,
+      "sha256": "43ECAF58CBACF85E1ECDE830317906CCDE459C94A46C67671188927A4821F9FF"
+    },
+    {
+      "path": "agent/protocol/runtime_projection.py",
+      "size": 118154,
+      "sha256": "A3658CEE3D20C28C7962D8DB51481164AAC1159B4799BEEF1BCD4EA0671BAF55"
+    },
+    {
+      "path": "desktop/runtime/ecorex-runtime/agent/protocol/runtime_projection.py",
+      "size": 118154,
+      "sha256": "A3658CEE3D20C28C7962D8DB51481164AAC1159B4799BEEF1BCD4EA0671BAF55"
+    },
+    {
+      "path": "channel/web/web_channel.py",
+      "size": 608530,
+      "sha256": "9845F980DEF0DD7FFE4809FD9A52967745E9C8C77BBC397947EB13322566E0E2"
+    },
+    {
+      "path": "desktop/runtime/ecorex-runtime/channel/web/web_channel.py",
+      "size": 608530,
+      "sha256": "9845F980DEF0DD7FFE4809FD9A52967745E9C8C77BBC397947EB13322566E0E2"
+    },
+    {
+      "path": "desktop/src/App.tsx",
+      "size": 438844,
+      "sha256": "3B8EE2F934FD96296C8324E154275438DACAAA6056ED9A10DD3A86F05AAA5AF4"
+    },
+    {
+      "path": "desktop/src/components/MessageContent.tsx",
+      "size": 89423,
+      "sha256": "162138D01E29BB28D7FBA424695FFBD38DB64D8DAFADCDCB18A631FB5748CE53"
+    }
+  ]
+}

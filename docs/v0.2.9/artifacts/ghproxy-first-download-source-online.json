@@ -1,0 +1,53 @@
+{
+  "status": "PASS",
+  "scope": "v029-ghproxy-first-download-source",
+  "generatedAt": "2026-07-06T00:10:50.7178782Z",
+  "manifestVersion": "0.2.9",
+  "mirrors": [
+    {
+      "id": "asset-mirror-v0.2.9",
+      "kind": "asset-base",
+      "baseUrl": "https://ghproxy.net/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.9",
+      "pathMode": "fileName"
+    },
+    {
+      "id": "ecorex-download-cache-v0.2.9",
+      "kind": "asset-cache",
+      "baseUrl": "https://mvdcm.ecoremedia.net/ecorex-agent/downloads",
+      "pathMode": "fileName"
+    },
+    {
+      "id": "github-release-v0.2.9",
+      "kind": "github-release",
+      "baseUrl": "https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.9",
+      "pathMode": "fileName"
+    }
+  ],
+  "onlineUpdateFirstSource": "https://ghproxy.net/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.9/EcoreX_0.2.9-webui-windows-x64.zip",
+  "onlineUpdateFirstSourceIsGhproxy": true,
+  "windowsArtifact": {
+    "fileName": "EcoreX_0.2.9-webui-windows-x64.zip",
+    "size": 550836551,
+    "sha256": "39E5DA8C1A4477AE09D14261125F88A2BC861BD1E561AF58DFB805EE51D4AA06"
+  },
+  "rangeProbes": [
+    {
+      "url": "https://ghproxy.net/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.9/EcoreX_0.2.9-webui-windows-x64.zip",
+      "status": 206,
+      "contentRange": "bytes 0-0/550836551",
+      "acceptRanges": "bytes"
+    },
+    {
+      "url": "https://ghproxy.net/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.9/EcoreX_0.2.9-webui-macos-universal.zip",
+      "status": 206,
+      "contentRange": "bytes 0-0/652294908",
+      "acceptRanges": "bytes"
+    },
+    {
+      "url": "https://ghproxy.net/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.9/EcoreX_0.2.9-web-linux-service.tar.gz",
+      "status": 206,
+      "contentRange": "bytes 0-0/4214588",
+      "acceptRanges": "bytes"
+    }
+  ]
+}

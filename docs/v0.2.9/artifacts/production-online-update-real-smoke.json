@@ -1,0 +1,149 @@
+{
+  "status": "PASS",
+  "scope": "production-online-update-real-smoke",
+  "version": "0.2.9",
+  "generatedAt": "2026-07-05T09:23:43.1256667Z",
+  "baseUrl": "https://mvdcm.ecoremedia.net/ecorex-agent",
+  "smokeRoot": "C:\\EcoreX-Agent生产版\\tmp\\online-update-smoke-final-20260705164337",
+  "smokeRootHash": "203E16FE3CDAFBDF9DD4C44AB199C0B923EE0777BEDF8123E32CAE29254B3BC3",
+  "manifest": {
+    "statusCode": 200,
+    "version": "0.2.9",
+    "downloadMode": "mirror-first-origin-fallback",
+    "firstMirrorBaseUrl": "https://ghproxy.net/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.9"
+  },
+  "artifact": {
+    "id": "webui-windows-x64",
+    "fileName": "EcoreX_0.2.9-webui-windows-x64.zip",
+    "href": "downloads/EcoreX_0.2.9-webui-windows-x64.zip",
+    "status": "ready",
+    "size": 550826610,
+    "sha256": "0E7870C5A784F958EF7EFB2770ADFF05A7467C55C2C50D0690444AAAFA8147C1"
+  },
+  "steps": {
+    "installScriptDownloaded": {
+      "ok": true,
+      "size": 20150,
+      "sha256": "4A8557745DB0B399CED33AA46466621CE3C9431BDC5146098BDEE54CE54985CC"
+    }
+  },
+  "install": {
+    "exitCode": 0,
+    "firstDownloadSourceIsGhproxy": true,
+    "stdoutHash": "07AF874E8C5E8B59F49AFA0F39DDA79965AD753663D571E19FCB3FB5A43BF17F",
+    "stderrHash": "B412F49442FA3BBE8B52363CB367CB39358D03D8D153ED6DEF6B028149600DDC",
+    "stdoutTail": "Fetching EcoreX manifest: https://mvdcm.ecoremedia.net/ecorex-agent/manifest.json\nEcoreX WebUI installer script: 0.2.9\nEcoreX WebUI manifest version: 0.2.9\nTrying download source: https://ghproxy.net/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.9/EcoreX_0.2.9-webui-windows-x64.zip\nUsing curl.exe accelerated download with resume support.\nVerifying SHA256...\nDownload verified: C:\\EcoreX-Agent������\\tmp\\online-update-smoke-final-20260705164337\\LocalAppData\\EcoreX WebUI\\downloads\\EcoreX_0.2.9-webui-windows-x64.zip\nExtracting package...\nPackage extracted.\nStarting EcoreX WebUI local installer...\nEcoreX WebUI package installer: 0.2.9\nCopying EcoreX WebUI runtime to C:\\EcoreX-Agent������\\tmp\\online-update-smoke-final-20260705164337\\LocalAppData\\EcoreX WebUI\\runtime-0.2.9-67c0115d...\nStarting EcoreX WebUI local service: http://127.0.0.1:9910/app/\nWaiting for EcoreX WebUI to become ready...\nDesktop shortcut updated: C:\\EcoreX-Agent������\\tmp\\online-update-smoke-final-20260705164337\\UserProfile\\Desktop\\EcoreX WebUI.url\nEcoreX WebUI is ready: http://127.0.0.1:9910/app/\nBackground update installed. Existing browser tabs should soft-refresh after they observe the new runtime version.\nEcoreX WebUI install command finished. If the browser did not open, double-click the desktop EcoreX WebUI.url shortcut or rerun this command.\n",
+    "stderrTail": "############################      94.6%\n####################################################################      94.7%\n####################################################################      94.8%\n####################################################################      94.9%\n####################################################################      95.0%\n####################################################################      95.1%\n####################################################################      95.1%\n####################################################################      95.2%\n#####################################################################     95.9%\n#####################################################################     96.0%\n#####################################################################     96.8%\n#####################################################################     96.8%\n#####################################################################     97.1%\n######################################################################    97.8%\n######################################################################    98.1%\n#######################################################################   98.8%\n#######################################################################   99.0%\n#######################################################################   99.0%\n#######################################################################   99.3%\n#######################################################################   99.4%\n#######################################################################   99.4%\n#######################################################################   99.5%\n######################################################################## 100.0%\n"
+  },
+  "downloadedPackage": {
+    "exists": true,
+    "size": 550826610,
+    "sha256": "0E7870C5A784F958EF7EFB2770ADFF05A7467C55C2C50D0690444AAAFA8147C1",
+    "sizeMatchesManifest": true,
+    "sha256MatchesManifest": true
+  },
+  "runtime": {
+    "webuiUrl": "http://127.0.0.1:9910/app/",
+    "runtimeDirHash": "A364C62D6757D5E6A720FBF2879AB826F49DF9BFDA1BEC5AD46D80FC8548E3E6",
+    "apiVersionStatus": 200,
+    "apiVersion": "0.2.9",
+    "updateState": {
+      "product": "EcoreX WebUI",
+      "version": "0.2.9",
+      "mode": "background",
+      "status": "installed",
+      "reason": "",
+      "url": "http://127.0.0.1:9910/app/",
+      "browserAction": "defer-to-existing-tab-soft-refresh",
+      "activationPolicy": "prompt-soft-refresh-existing-tab",
+      "autoLaunchBrowser": "never-in-background",
+      "healthCheck": {
+        "endpoint": "/api/version",
+        "status": "pass",
+        "passed": true
+      },
+      "generatedAt": "2026-07-05T08:46:44.5533667Z"
+    },
+    "bundleHasFollowupMarkers": true,
+    "cssHasComposerCompact": true,
+    "cssHasKnowledgeDedicated": true,
+    "logoStatus": 200,
+    "logoBytes": 1584,
+    "retouchEditorAvailable": true,
+    "tencentDocsUiAvailable": true,
+    "uiFollowupsVerifiedByServerCdpArtifact": "docs/v0.2.9/artifacts/webui-followups-server-cdp-smoke.json"
+  },
+  "checks": {
+    "installerExitCode": true,
+    "manifestVersion": true,
+    "firstDownloadSourceIsGhproxy": true,
+    "downloadedPackage": true,
+    "runtimeReady": true,
+    "updateStateInstalled": true,
+    "tencentLogoAvailable": true,
+    "bundleHasFollowupMarkers": true,
+    "cssHasComposerCompact": true,
+    "cssHasKnowledgeDedicated": true,
+    "retouchEditorAvailable": true,
+    "tencentDocsUiAvailable": true
+  },
+  "cleanup": {
+    "stoppedProcessCount": 11,
+    "stoppedProcesses": [
+      {
+        "processId": 23448,
+        "name": "python.exe"
+      },
+      {
+        "processId": 12580,
+        "name": "msedge.exe"
+      },
+      {
+        "processId": 19200,
+        "name": "msedge.exe"
+      },
+      {
+        "processId": 3992,
+        "name": "msedge.exe"
+      },
+      {
+        "processId": 28516,
+        "name": "msedge.exe"
+      },
+      {
+        "processId": 29892,
+        "name": "msedge.exe",
+        "error": "ProcessCommandException"
+      },
+      {
+        "processId": 12636,
+        "name": "msedge.exe",
+        "error": "ProcessCommandException"
+      },
+      {
+        "processId": 25716,
+        "name": "msedge.exe",
+        "error": "ProcessCommandException"
+      },
+      {
+        "processId": 20740,
+        "name": "msedge.exe",
+        "error": "ProcessCommandException"
+      },
+      {
+        "processId": 20156,
+        "name": "msedge.exe",
+        "error": "ProcessCommandException"
+      },
+      {
+        "processId": 14232,
+        "name": "msedge.exe",
+        "error": "ProcessCommandException"
+      }
+    ],
+    "tempKept": false,
+    "tempRemoved": true,
+    "tempRemoveError": null,
+    "performedAt": "2026-07-05T09:25:54.4493526Z"
+  }
+}

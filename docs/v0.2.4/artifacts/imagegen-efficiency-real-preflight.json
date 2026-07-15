@@ -1,0 +1,21 @@
+{
+  "status": "BLOCKED",
+  "redacted": true,
+  "mode": "real-provider-preflight",
+  "provider": "openai",
+  "ready": false,
+  "realProviderReady": {
+    "openai": false,
+    "linkai": false,
+    "gemini": false,
+    "seedream": false,
+    "qwen": false,
+    "minimax": false
+  },
+  "timingSemantics": {
+    "providerLatencyMs": "whole in-process provider runner latency, including provider API call, response decode, and local image save",
+    "providerRunnerOverheadMs": "fake-provider mode only: provider latency minus configured synthetic provider delay per attempt",
+    "ecorexControllableOverheadMs": "fake-provider mode only: final usable-image time minus configured synthetic provider delay per attempt"
+  },
+  "blockedReason": "No configured EcoreX image provider credentials for the selected provider; real same-prompt EcoreX-vs-Codex benchmark not run."
+}

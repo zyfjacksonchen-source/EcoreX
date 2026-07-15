@@ -1,0 +1,212 @@
+{
+  "status": "PASS",
+  "scope": "target-environment-web-linux-service",
+  "version": "0.2.2",
+  "generatedAt": "2026-06-26T06:28:35.888747+00:00",
+  "productionEnvironment": true,
+  "requiresNetwork": true,
+  "requiresSystemd": true,
+  "requiresRoot": true,
+  "pointerMethod": "target-current-symlink",
+  "localPackage": {
+    "path": "C:/CowAgent/release-artifacts/EcoreX_0.2.2-web-linux-service.tar.gz",
+    "size": 3679009,
+    "sha256": "3BEA1EF91C61E9E42235AE7695DDAEBEF25B4A6C5B13B6726240539CC937CCF7",
+    "artifactId": "EcoreX_0.2.2-web-linux-service.tar.gz"
+  },
+  "artifact": {
+    "path": "release-artifacts/EcoreX_0.2.2-web-linux-service.tar.gz",
+    "artifactId": "web-linux-service",
+    "version": "0.2.2",
+    "size": 3679009,
+    "sha256": "3BEA1EF91C61E9E42235AE7695DDAEBEF25B4A6C5B13B6726240539CC937CCF7",
+    "sha256File": {
+      "filename": "EcoreX_0.2.2-web-linux-service.tar.gz",
+      "matches": true,
+      "path": "release-artifacts/EcoreX_0.2.2-web-linux-service.tar.gz.sha256",
+      "sha256": "3BEA1EF91C61E9E42235AE7695DDAEBEF25B4A6C5B13B6726240539CC937CCF7"
+    },
+    "releaseJson": {
+      "artifactFile": "EcoreX_0.2.2-web-linux-service.tar.gz",
+      "artifactId": "web-linux-service",
+      "includesDesktopArtifacts": false,
+      "product": "EcoreX",
+      "serviceName": "ecorex-web",
+      "version": "0.2.2",
+      "webBuild": "desktop-renderer-build"
+    }
+  },
+  "target": {
+    "sshHostHash": "CDF1CF905198CA97",
+    "sshPortHash": "785F3EC7EB32F30B",
+    "sshUserHash": "4813494D137E1631",
+    "serviceNameHash": "CB29C9447CAA9159",
+    "installRootHash": "0D12DC58F52F740D",
+    "workspaceRootHash": "57044B7F29A2B73F",
+    "remoteBaseUrl": {
+      "hostHash": "A753D877497CBE35",
+      "schemeHash": "3E1943522517E813"
+    },
+    "rawTargetPersisted": false,
+    "pointerMethod": "target-current-symlink"
+  },
+  "packageChecks": {
+    "checksumsJsonFilesVerified": 490,
+    "releaseJsonCovered": true,
+    "requiredPaths": [
+      "README.txt",
+      "runtime/app.py",
+      "runtime/requirements.txt",
+      "runtime/channel/web/chat.html",
+      "runtime/channel/web/static/app/index.html",
+      "scripts/install-ecorex-web.sh",
+      "scripts/check-ecorex-web-release.sh",
+      "service/caddy/ecorex-agent.routes.caddy",
+      "service/nginx/ecorex-agent.conf.example",
+      "service/systemd/ecorex-web.service.example",
+      "release.json",
+      "checksums.json",
+      "SHA256SUMS.txt"
+    ],
+    "sha256SumsFilesVerified": 490
+  },
+  "preState": {
+    "adminPublicManifestVersion": "0.2.2",
+    "currentLinkTarget": "/opt/ecorex-web/releases/20260626002903-v0.2.1",
+    "currentVersion": "0.2.1",
+    "installationManifestVersion": "",
+    "releaseArtifactId": "web-linux-service",
+    "releaseJsonSha256": "9162825F828811261F412E857AC54E2EA7EABBE1FF57139223C9859967509284",
+    "releaseSha256": "",
+    "serviceActive": true,
+    "serviceEnabled": true,
+    "webLocalStatus": 200
+  },
+  "deploy": {
+    "verified": true,
+    "currentVersionAfterDeploy": "0.2.2",
+    "targetCheckCommandPassed": true,
+    "serviceActiveAfterDeploy": true,
+    "serviceEnabledAfterDeploy": true,
+    "state": {
+      "adminPublicManifestVersion": "0.2.2",
+      "currentLinkTarget": "/opt/ecorex-web/releases/20260626062823-v0.2.2",
+      "currentVersion": "0.2.2",
+      "installationManifestVersion": "",
+      "releaseArtifactId": "web-linux-service",
+      "releaseJsonSha256": "BAFD1C312029FA3D846FB93E1D3038149B19116B5F26CD358B6D82FE7933664D",
+      "releaseSha256": "",
+      "serviceActive": true,
+      "serviceEnabled": true,
+      "webLocalStatus": 200
+    }
+  },
+  "rollback": {
+    "verified": true,
+    "currentVersionAfterRollback": "0.2.1",
+    "serviceActiveAfterRollback": true,
+    "serviceEnabledAfterRollback": true,
+    "state": {
+      "adminPublicManifestVersion": "0.2.2",
+      "currentLinkTarget": "/opt/ecorex-web/releases/20260626002903-v0.2.1",
+      "currentVersion": "0.2.1",
+      "installationManifestVersion": "",
+      "releaseArtifactId": "web-linux-service",
+      "releaseJsonSha256": "9162825F828811261F412E857AC54E2EA7EABBE1FF57139223C9859967509284",
+      "releaseSha256": "",
+      "serviceActive": true,
+      "serviceEnabled": true,
+      "webLocalStatus": 200
+    },
+    "candidateRetainedForAudit": true,
+    "pointerMethod": "target-current-symlink"
+  },
+  "commands": [
+    {
+      "name": "prepare_remote_dir",
+      "argvHash": "AB69EB3B3A17D154D0F8A95D6E37863AB6E06AD59EDA0C4877A45465C0AED90E",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "name": "upload_package",
+      "argvHash": "69F169E00F50BD7329B45639182A1A10C0415A833599A1A3C208FCA56845ADBD",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "name": "upload_installer",
+      "argvHash": "C11BA9C229C64E72CC19C2CF5E788434898768B129F4C5FD06F0C4A9F6689D12",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "name": "upload_checker",
+      "argvHash": "AB4BF4D329B96894C5C1E2425232E6DD0E0D90F29CA6773E0C6BF307ED1738BD",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "name": "chmod_release_scripts",
+      "argvHash": "66980AFBD66E8F20D32ECFEBD9B3B56F1AF156D7341E19D853C58CF7481DABF8",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "name": "capture_pre_state",
+      "argvHash": "BC6FC2CC91CC94F2DBAAEE6FD5C92631821383D0072248DE7B8AA025EA609C58",
+      "exitCode": 0,
+      "stdoutHash": "2A03E502FFD7BE358E718AE9929A81BDF7D07DEDADB9AE9861792D3D8588F486",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "name": "install_v022",
+      "argvHash": "694503A59BCD6D8119859C3D0934B81455F249446EB75FC0E040F38E096908FF",
+      "exitCode": 0,
+      "stdoutHash": "A97651218EE3A03F62165FD8AB9E28CD92D115C06FBB7DD271E4EB5B8E79D9CC",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "name": "check_deploy",
+      "argvHash": "2D5A29D14580553F98B540DE5D516B95145D54417E30FEED987A4BC6CFA14DC1",
+      "exitCode": 0,
+      "stdoutHash": "E5F1F7A54D0EC32A373BF39DF56F737746EA9F9EAE928BE8B094DE96C9D42196",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "name": "capture_deploy_state",
+      "argvHash": "10A7F62ECE3343BC807FD81FAA747190D85C51A22A7ED4C70B594F744E1DD0F6",
+      "exitCode": 0,
+      "stdoutHash": "4E9759A094FEE350D5BDCD51C0BB9585A5DDBE0A44921D48FF1063E7CF81E226",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "name": "rollback_to_previous",
+      "argvHash": "B7CFBC767AEC8FDC644BD92DA720B3BCC82DCBD87E0595B4C013044D6E9F7E91",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "name": "capture_rollback_state",
+      "argvHash": "8DF5024191B14A658B9B7635336DF2A93F4EA11EB605271C492CD3FE809C0977",
+      "exitCode": 0,
+      "stdoutHash": "2A03E502FFD7BE358E718AE9929A81BDF7D07DEDADB9AE9861792D3D8588F486",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    }
+  ],
+  "redaction": {
+    "rawTargetPersisted": false,
+    "rawPasswordPersisted": false,
+    "rawCommandsPersisted": false,
+    "rawStdoutPersisted": false,
+    "rawStderrPersisted": false,
+    "rawSecretsPersisted": false,
+    "rawOutputPersisted": false
+  }
+}

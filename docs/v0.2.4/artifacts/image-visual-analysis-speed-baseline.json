@@ -1,0 +1,134 @@
+{
+  "status": "BASELINE",
+  "cases": [
+    {
+      "label": "large-png-gradient",
+      "iterations": 7,
+      "medianMs": 140.694,
+      "p95Ms": 154.744,
+      "minMs": 130.337,
+      "maxMs": 156.329,
+      "result": {
+        "status": "pass",
+        "checks": {
+          "decode-valid": "pass",
+          "artifact-integrity": "pass",
+          "non-blank": "pass",
+          "seam-check": "pass",
+          "overlay-ghosting-check": "pass",
+          "text-glyph-check": "pass",
+          "watermark-check": "pass",
+          "subject-structure-check": "skipped",
+          "anomaly-check": "pass",
+          "reference-fidelity": "skipped",
+          "visual-inspection": "pass"
+        },
+        "summary": {
+          "status": "pass",
+          "sampleWidth": 256,
+          "sampleHeight": 256,
+          "edgeDensityPct": 1,
+          "overlayGhostingRisk": false,
+          "anomalyRisk": false
+        }
+      }
+    },
+    {
+      "label": "large-jpeg-gradient",
+      "iterations": 7,
+      "medianMs": 151.67,
+      "p95Ms": 158.151,
+      "minMs": 138.69,
+      "maxMs": 161.84,
+      "result": {
+        "status": "pass",
+        "checks": {
+          "decode-valid": "pass",
+          "artifact-integrity": "pass",
+          "non-blank": "pass",
+          "seam-check": "pass",
+          "overlay-ghosting-check": "pass",
+          "text-glyph-check": "pass",
+          "watermark-check": "pass",
+          "subject-structure-check": "skipped",
+          "anomaly-check": "pass",
+          "reference-fidelity": "skipped",
+          "visual-inspection": "pass"
+        },
+        "summary": {
+          "status": "pass",
+          "sampleWidth": 256,
+          "sampleHeight": 256,
+          "edgeDensityPct": 1,
+          "overlayGhostingRisk": false,
+          "anomalyRisk": false
+        }
+      }
+    },
+    {
+      "label": "large-alpha-overlay",
+      "iterations": 7,
+      "medianMs": 147.844,
+      "p95Ms": 158.646,
+      "minMs": 104.78,
+      "maxMs": 159.844,
+      "result": {
+        "status": "warn",
+        "checks": {
+          "decode-valid": "pass",
+          "artifact-integrity": "pass",
+          "non-blank": "pass",
+          "seam-check": "pass",
+          "overlay-ghosting-check": "warn",
+          "text-glyph-check": "pass",
+          "watermark-check": "warn",
+          "subject-structure-check": "skipped",
+          "anomaly-check": "pass",
+          "reference-fidelity": "skipped",
+          "visual-inspection": "warn"
+        },
+        "summary": {
+          "status": "warn",
+          "sampleWidth": 256,
+          "sampleHeight": 199,
+          "edgeDensityPct": 12,
+          "overlayGhostingRisk": true,
+          "anomalyRisk": false
+        }
+      }
+    },
+    {
+      "label": "noise-anomaly",
+      "iterations": 7,
+      "medianMs": 128.68,
+      "p95Ms": 150.895,
+      "minMs": 112.098,
+      "maxMs": 155.308,
+      "result": {
+        "status": "fail",
+        "checks": {
+          "decode-valid": "pass",
+          "artifact-integrity": "pass",
+          "non-blank": "fail",
+          "seam-check": "pass",
+          "overlay-ghosting-check": "pass",
+          "text-glyph-check": "pass",
+          "watermark-check": "pass",
+          "subject-structure-check": "skipped",
+          "anomaly-check": "pass",
+          "reference-fidelity": "skipped",
+          "visual-inspection": "warn"
+        },
+        "summary": {
+          "status": "fail",
+          "sampleWidth": 256,
+          "sampleHeight": 256,
+          "edgeDensityPct": 0,
+          "overlayGhostingRisk": false,
+          "anomalyRisk": false
+        }
+      }
+    }
+  ],
+  "redacted": true
+}

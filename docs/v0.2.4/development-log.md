@@ -1,0 +1,1122 @@
+# EcoreX v0.2.4 Development Log
+
+## R24-00
+
+- Started the v0.2.4 native skill upgrade long goal on 2026-06-27.
+- Created the v0.2.4 anti-drift trace set: goal, baseline scan, development log, review log, acceptance checklist, and artifact directory.
+- Updated `docs/ecorex/goal-ledger.md` so the active goal points at v0.2.4 instead of stale v0.1.15 text.
+- Initial scan confirmed v0.2.3 source metadata but no local `v0.2.3` tag output; the current branch name remains `codex/ecorex-v0.2.0`.
+- Initial scan confirmed v0.2.3 has complete review/evidence guardrails under `docs/v0.2.3/`; v0.2.4 will inherit those release, privacy, performance, and session identity constraints.
+- Minimal R24-00 structure fix selected: align `agent/skills/loader.py` precedence documentation with the actual builtin -> extra -> custom loading order.
+- User clarified the v0.2.4 implementation scope remains WebUI dual-end only. Shared WebUI renderer/runtime source can change, but native desktop installer/DMG/NSIS/signing/notarization work is out of scope.
+- User initially flagged concurrent v0.2.3 wrap-up thread `019f029a-d132-7b63-9c7b-d1a33b4cef16`; the first readback showed it was still active around ImageGen permission hardening and release-gate follow-through.
+- Follow-up after the user reported the other thread ended: readback showed the v0.2.3 thread is idle, so the hard overlap brake is released. Continue with normal dirty-worktree caution.
+
+## R24-01
+
+- Implemented EcoreX-native skill facade metadata while preserving the existing public skill IDs:
+  - `office-presentations` -> official `Presentations`
+  - `office-spreadsheets` -> official `Spreadsheets`
+  - `office-documents` -> official `documents`
+  - `office-pdf` -> official `pdf`
+  - `image-generation` -> official `imagegen`
+- Added additive metadata projection in `agent/skills/service.py`:
+  - `compatibility_id`
+  - `adopts_official_skill`
+  - `ecorex_native_facade`
+  - `quality_gates`
+- Added optional prompt XML exposure in `agent/skills/formatter.py` for the same facade fields. Existing skills without the new frontmatter keep their old prompt/API shape.
+- Updated the five root `skills/*/SKILL.md` files and synchronized the five staged runtime copies under `desktop/runtime/ecorex-runtime/skills/*/SKILL.md`.
+- The Office docs now cover the requested official-skill upgrade surfaces:
+  - PPT: story flow, `@oai/artifact-tool`, chart/layout checks, render/contact-sheet QA.
+  - Excel: typed values, formulas, charts, dashboard render checks, export verification.
+  - Word: design presets, table geometry, DOCX render checks, comments/redlines.
+  - PDF: Poppler/page render verification, extraction/table structure, generated-PDF QA.
+  - ImageGen: EcoreX multi-provider routing remains default while structural QA, vision anomaly QA, reference fidelity, retry ledger, and project-safe outputs are specified as gates.
+- Added/updated focused verification:
+  - `tests/test_v024_native_skill_facades.py`
+  - `scripts/smoke-v024-native-skill-facades.py`
+  - `scripts/smoke-office-preinstall.py`
+  - `scripts/smoke-v024-release-artifact-contracts.py`
+- Verification passed:
+  - `python -m py_compile agent\skills\formatter.py agent\skills\service.py scripts\smoke-office-preinstall.py scripts\smoke-v024-native-skill-facades.py tests\test_v024_native_skill_facades.py scripts\smoke-v024-release-artifact-contracts.py` -> PASS
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_v024_native_skill_facades.py -q` -> `2 passed`
+  - `python scripts\smoke-v024-native-skill-facades.py --output docs\v0.2.4\artifacts\native-skill-facades-smoke.json` -> PASS
+  - `python scripts\smoke-office-preinstall.py --version 0.2.4 --output docs\v0.2.4\artifacts\native-skill-facades-office-smoke.json --skip-module-imports` -> PASS
+  - `python scripts\smoke-v024-release-artifact-contracts.py --version 0.2.3 --release-dir release-artifacts` -> PASS
+  - `python scripts\scan-session-artifacts-privacy.py ... --json-output docs\v0.2.4\artifacts\native-skill-facades-privacy.json` -> PASS with `findingCount=0`
+- Rebuilt WebUI Windows/macOS and public release artifacts after the skill facade changes. Final artifact hashes after the R24-01 rebuild:
+  - Windows WebUI sha256 `92E44AC3DCC102F514B42A9B60701CD25AC14F457E6ED5CE95B6FF5CDE71AF00`
+  - macOS WebUI sha256 `FAE12D73267F1D050B714A4E2EACCFAF75EAB55A1836944CA1ED9ADB767F9572`
+  - public-release sha256 `5FC995ABFB7592B0EF98A47806B2ABE5954D9BE041F95BCDA690C8336F2EC81E`
+- Updated `deploy/ecorex-site/manifest.json` and regenerated `release-artifacts\EcoreX_0.2.3-public-release.zip`; `python scripts\validate-ecorex-release-artifacts.py --version 0.2.3` and `python scripts\smoke-v023-install-packaging-contracts.py` both passed.
+- Strengthened `scripts/smoke-v024-release-artifact-contracts.py` after reviewer feedback so the refreshed Feishu/Lark contract also emits package-level Feishu raw-log denylist checks. The final `docs\v0.2.4\artifacts\feishu-lark-oapi-release-artifact-contract.json` is PASS with 17 checks, including both Windows/macOS Feishu redaction helpers and `hitCount=0` for legacy raw channel/message templates.
+- Refreshed stale privacy evidence so `docs\v0.2.4\artifacts` has no remaining `status=failed` or positive `findingCount` artifacts.
+- R24-01 multi-agent review converged to PASS:
+  - Herschel PASS for runtime/skill-loader/API compatibility.
+  - Lagrange PASS for legacy ID discoverability and user-facing upgrade coverage.
+  - Franklin PASS for deterministic harness and release-contract coverage.
+  - Hypatia PASS for WebUI package/public-release consistency.
+  - Wegener PASS for security/privacy evidence after the Feishu contract output-filter fix.
+- Residual non-blocker recorded by multiple reviewers: the v0.2.4 iteration still packages `EcoreX_0.2.3-*` WebUI artifacts because this long goal is layered on the current v0.2.3 release baseline.
+
+## R24-03
+
+- Implemented the focused session-row visual cleanup:
+  - Normal project/general session rows no longer render the left `FolderOpen` or `Bot` type icon.
+  - Running rows still render `ThinkingIndicator compact`.
+  - Unread rows still render `session-unread-dot`.
+  - Normal rows now use a two-column title/time grid; rows with leading status use the previous three-column layout.
+- Added a source contract test in `tests/test_ecorex_web_parallel_backend.py` to prevent reintroducing the normal-row robot/folder icons.
+- Verification passed:
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_ecorex_web_parallel_backend.py -q -k "session_list_normal_rows_have_no_left_type_icons"` -> `1 passed, 389 deselected`
+  - `npm --prefix desktop run typecheck` -> PASS
+- Multi-agent review is running before R24-03 can be marked PASS.
+- Review requested render-level evidence rather than source-only assertions, so a dedicated `scripts/smoke-v024-session-list-visual-cleanup-browser.py` browser smoke was added.
+- Added `ecorex-unread-sessions` local persistence for unread/completed session dots. This stabilizes the browser smoke through the same WebUI state path users get after refresh: unread orange dot remains until the session is read, then clears.
+- Browser smoke passed after renderer rebuild:
+  - `python scripts\smoke-v024-session-list-visual-cleanup-browser.py --output docs\v0.2.4\artifacts\session-list-visual-cleanup-browser-smoke.json` -> PASS
+  - Normal project/general rows use two columns and have no direct left SVG type icon; running rows keep the three-column leading `ThinkingIndicator`.
+- Re-ran R24-03 verification after Feishu slice changes:
+  - source contract pytest -> PASS (`1 passed, 390 deselected`)
+  - `npm --prefix desktop run typecheck` -> PASS
+  - browser smoke -> PASS with `normalDirectSvgCount=0`, project/general normal columns at `2`, running indicator count `1`, and unread clears after read.
+  - `python scripts\scan-session-artifacts-privacy.py docs\v0.2.4\artifacts\session-list-visual-cleanup-browser-smoke.json --json-output docs\v0.2.4\artifacts\session-list-visual-cleanup-privacy.json` -> PASS
+- R24-03 final multi-agent review converged to PASS from Herschel, Lagrange, Franklin, Wegener, and Hypatia.
+
+## R24-02A
+
+- Added a new independent slice for Feishu/Lark External Connections reporting `lark_oapi not installed` even after the user has completed app authorization and entered the correct App ID/Secret.
+- Wrote the slice plan in `docs/v0.2.4/feishu-lark-oapi-slice-plan.md`.
+- Initial scan found `lark-oapi>=1.5.5` in both root `requirements.txt` and `desktop/runtime-packs/core-requirements.txt`, so the working hypothesis is active runtime/package/update mismatch or readiness misclassification rather than bad credentials.
+- Local runtime check confirmed the active WebUI runtime Python under `desktop/runtime/ecorex-runtime/python/python.exe` and the release runtime Python under `desktop/release/win-unpacked/resources/ecorex-runtime/python/python.exe` cannot import `lark_oapi`.
+- Packaging scan found the previous v0.2.3 local WebUI contract intentionally writes only an optional `lark_oapi` notice and prunes `lark-oapi` from local macOS core requirements, which conflicts with making valid Feishu websocket credentials work by default.
+- This slice must keep manual App ID/Secret connection, one-click legacy SDK registration, and read-only CLI/skill flows separate.
+- Multi-agent review has been requested before implementation proceeds.
+- User reported the other v0.2.3 thread had ended; readback confirmed thread `019f029a-d132-7b63-9c7b-d1a33b4cef16` is idle, so the packaging/release overlap brake was released for this slice.
+- Installed `lark-oapi` into the active installed WebUI Python runtime and verified `lark_oapi` import from that runtime. The active-runtime smoke records SDK version `1.6.9` and `registerAppAvailable=true` without exposing the executable path.
+- Added `common/feishu_runtime_readiness.py` as the local-only readiness source. It reports SDK presence/version, mode, credential presence, and remediation without network calls or raw executable paths. Normal UI status checks use `find_spec` plus package metadata and do not import the heavy SDK.
+- Updated `channel/feishu/feishu_channel.py` to avoid stale import-time SDK availability and to dynamically check the active runtime for websocket startup and one-click legacy app registration.
+- Updated External Connections backend projection:
+  - Missing SDK now becomes `dependency_missing` with `dependencyStatus` and does not imply invalid App ID/Secret.
+  - Manual credentials can be saved while startup is blocked on the runtime dependency.
+  - Sensitive Feishu fields are masked and skipped on save when the UI sends placeholder values.
+  - Feishu home channel IDs are never projected raw; the public payload uses configured state plus HMAC digest and optional display name.
+- Updated frontend External Connections UX:
+  - Dependency-missing cards show `运行依赖缺失`.
+  - Copy explains that saved App ID/Secret are not a credential validation failure.
+  - Masked App ID/Secret fields are not echoed back during save.
+  - Home-channel action remains visible but disabled when only a hashed Feishu target is available.
+- Updated redaction and privacy scans for Feishu App IDs, App Secrets, open/chat/message IDs, tenant tokens, QR URLs, and QR data images.
+- Updated local WebUI packaging contracts so Windows package build preinstalls `lark_oapi` into bundled Python and Windows first-run install does not run pip; macOS local requirements keep `lark-oapi`.
+- Verification passed:
+  - `python -m py_compile common\feishu_runtime_readiness.py channel\feishu\feishu_channel.py channel\web\web_channel.py channel\messaging_adapter_contract.py scripts\smoke-v024-feishu-lark-oapi-runtime.py scripts\scan-session-artifacts-privacy.py scripts\smoke-web-external-connections-browser.py scripts\smoke-v023-install-packaging-contracts.py scripts\smoke-web-hotfix-contracts.py` -> PASS
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_v024_feishu_lark_oapi_recovery.py -q` -> `5 passed`
+  - Targeted external-connection regression tests for homeChannel projection and browser-smoke harness -> PASS
+  - `npm --prefix desktop run typecheck` -> PASS
+  - `python scripts\smoke-v023-install-packaging-contracts.py` -> PASS
+  - `npm --prefix desktop run build:renderer` -> PASS with the pre-existing Vite chunk-size warning.
+  - `python scripts\smoke-v024-feishu-lark-oapi-runtime.py --json-output docs\v0.2.4\artifacts\feishu-lark-oapi-active-runtime.json` -> PASS
+  - `python scripts\smoke-web-external-connections-browser.py --artifact docs\v0.2.4\artifacts\feishu-lark-oapi-external-connections-browser.json` -> PASS
+  - `python scripts\scan-session-artifacts-privacy.py docs\v0.2.4\artifacts\feishu-lark-oapi-active-runtime.json docs\v0.2.4\artifacts\feishu-lark-oapi-external-connections-browser.json docs\v0.2.4\artifacts\session-list-visual-cleanup-browser-smoke.json --json-output docs\v0.2.4\artifacts\feishu-lark-oapi-privacy.json` -> PASS
+- Known unrelated verification note:
+  - `python scripts\smoke-web-hotfix-contracts.py` still fails HFX-04 legacy v0.2.2 version-surface checks because this tree is on v0.2.3/v0.2.4 surfaces. HFX-05 Feishu writeback and the new `lark_oapi` install checks inside the same smoke pass.
+- Packaging re-review found a real release binding gap: source scripts were fixed, but public manifest and ready ZIPs still pointed at older WebUI packages without `lark-oapi`.
+- Rebuilt WebUI local release artifacts with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\prepare-ecorex-webui-local-release.ps1 -Version 0.2.3 -OutputDir release-artifacts`.
+- Updated `deploy/ecorex-site/manifest.json` for rebuilt WebUI Windows/macOS artifacts with `scripts\update-ecorex-desktop-release-manifest.ps1`.
+- Rebuilt `release-artifacts\EcoreX_0.2.3-public-release.zip` with `scripts\prepare-ecorex-public-release.ps1`; the script reported PASS for the two WebUI ZIPs, web-linux-service, nested runtime/assets, and the public ZIP.
+- Independent validation passed:
+  - `python scripts\validate-ecorex-release-artifacts.py --version 0.2.3` -> PASS
+  - `docs\v0.2.4\artifacts\feishu-lark-oapi-release-artifact-contract.json` records Windows bundled `lark_oapi` payload, macOS `coreRequirementsHasLarkOapi=true`, macOS `larkWheelEntries=2`, and public-release embedded manifest consistency.
+  - Final privacy scan over the four R24-02A/R24-03 evidence JSON artifacts -> PASS.
+- Security re-review found a real log-redaction gap in legacy Feishu channel logs and host diagnostics log masking.
+- Fixed Feishu log emission so App ID/Secret, verification token, bot open_id, message_id, chat_id, full websocket event payloads, card/message IDs, tenant-token errors, and upload responses are logged as presence, HMAC references, or masked text rather than raw values.
+- Fixed `channel/feishu/feishu_message.py` download/parse logs so image keys, file keys, message IDs, session IDs, local paths, response bodies, and message/post content are logged as HMAC references, counts, lengths, status, or masked text.
+- Fixed `agent/tools/host_diagnostics/host_diagnostics.py::_mask` to reuse `common.ecorex_public_payload.mask_sensitive_text`, covering Feishu `cli_`, `ou_`, `oc_`, `om_`, QR URLs, and data-image payloads when diagnostics tails logs.
+- Added regression coverage in `tests/test_v024_feishu_lark_oapi_recovery.py`:
+  - Feishu log helpers do not expose raw identifiers or message content.
+  - Legacy raw QR URL, webhook request, session ID, and register status log templates stay absent.
+  - Host diagnostics mask redacts Feishu runtime log values.
+- Verification after security fix:
+  - `python -m py_compile channel\feishu\feishu_channel.py agent\tools\host_diagnostics\host_diagnostics.py tests\test_v024_feishu_lark_oapi_recovery.py` -> PASS
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_v024_feishu_lark_oapi_recovery.py -q` -> `8 passed`
+- Rebuilt WebUI Windows/macOS/public release artifacts again after the final Feishu log-redaction, upload-response sanitization, message-download response-body sanitization, ffprobe sanitization, broad Feishu exception-log sanitization changes, and the later R24-01 facade packaging refresh. Final release evidence now records:
+  - Windows WebUI sha256 `92E44AC3DCC102F514B42A9B60701CD25AC14F457E6ED5CE95B6FF5CDE71AF00`
+  - macOS WebUI sha256 `FAE12D73267F1D050B714A4E2EACCFAF75EAB55A1836944CA1ED9ADB767F9572`
+  - public-release sha256 `5FC995ABFB7592B0EF98A47806B2ABE5954D9BE041F95BCDA690C8336F2EC81E`
+  - both WebUI ZIPs include Feishu log-redaction helpers and no legacy raw webhook/QR/message log templates.
+  - final privacy scan over the active-runtime, browser, session-list, and release-artifact evidence JSON files passed with `findingCount=0`.
+- Security follow-up fixed the last raw download response-body risk:
+  - file/audio download failure logs now keep only HMAC file refs, HTTP status, and body byte counts.
+  - audio download exception logs now keep only HMAC file refs and exception type, without `exc_info=True`.
+  - video duration ffprobe failures now keep only path HMAC refs, return code, stderr byte count, and exception type.
+  - Feishu websocket, streaming-card, upload, cleanup, and webhook exception/failure logs now use `error_type` or `_feishu_api_response_log_summary` instead of raw exception text or raw API response JSON.
+  - stream create/send card failure now uses `_feishu_api_response_log_summary`; create/send exceptions log only `error_type`, so reply URLs cannot leak raw `message_id`.
+  - public payload masking now covers Feishu `file_v3_...`, `img_v3_...`, and Windows user paths as an additional diagnostics guardrail.
+  - `tests/test_v024_feishu_lark_oapi_recovery.py` still passes `8 passed` after these changes.
+  - final source grep for raw Feishu exception/response templates leaves only safe post-element tag, register status summary, and websocket event summary logs.
+- R24-02A final review converged to PASS after multiple security follow-ups:
+  - Herschel PASS for runtime/backend readiness and active-runtime SDK handling.
+  - Lagrange PASS for External Connections UX/state separation.
+  - Franklin PASS for browser harness and UI evidence.
+  - Hypatia PASS for final packaging/release artifacts and manifest consistency.
+  - Wegener PASS for final Feishu privacy/logging audit after stream create/send, ffprobe, download, upload, webhook, and exception logs were sanitized.
+
+## R24-04
+
+- Implemented the shared Office/PDF runtime pack:
+  - Added `common/office_pdf_runtime.py` and synchronized it into `desktop/runtime/ecorex-runtime/common/office_pdf_runtime.py`.
+  - Added redacted runtime probes for parser/writer/render readiness across presentation, spreadsheet, document, and PDF artifacts.
+  - Added content-free artifact inspection for DOCX/XLSX/XLSM/CSV/TSV/PPTX/PDF, including HMAC artifact refs, counts, dimensions, and bounded spreadsheet scanning.
+  - Added PDF page rendering through `fitz`/PyMuPDF with no raw page paths in returned evidence.
+  - Added quality-evidence assembly that fails closed when required gates are missing.
+- Tightened spreadsheet compatibility after review:
+  - Packaged spreadsheet extensions now advertise `.csv`, `.tsv`, `.xlsm`, and `.xlsx`.
+  - Legacy `.xls` is intentionally not advertised until a real converter/parser path exists.
+  - `skills/office-spreadsheets/SKILL.md` and the staged runtime copy now require converting legacy `.xls` to `.xlsx` before structural verification.
+- Added WebUI runtime dependencies:
+  - `pypdf`
+  - `pdfminer.six`
+  - `python-docx`
+  - `python-pptx`
+  - `openpyxl`
+  - `xlsxwriter`
+  - `markdownify`
+  - `reportlab`
+  - `PyMuPDF`
+- Installed `PyMuPDF` and repaired `reportlab` in the staged Windows WebUI runtime so PDF render smoke can run from the actual packaged runtime.
+- Strengthened release gates:
+  - `scripts/smoke-v024-release-artifact-contracts.py` now validates packaged Office/PDF runtime primitives, spreadsheet extensions, staged skill guidance, `capabilities.json`, core requirements, Windows installed payloads, macOS wheelhouse entries, and public-release embedding.
+  - The release gate rejects packaged runtime code containing `include_paths` or raw `item["path"]` / `item['path']` render evidence.
+  - The AST parser now handles annotated `ARTIFACT_KINDS` assignments.
+  - `scripts/validate-ecorex-release-artifacts.py` requires the shared runtime file for WebUI ZIPs while keeping Linux service out of this WebUI-only slice.
+- Verification passed:
+  - `python -m py_compile common\office_pdf_runtime.py scripts\smoke-v024-office-pdf-runtime.py scripts\smoke-v024-release-artifact-contracts.py scripts\validate-ecorex-release-artifacts.py` -> PASS
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_v024_office_pdf_runtime.py -q` -> `7 passed`
+  - `desktop\runtime\ecorex-runtime\python\python.exe scripts\smoke-v024-office-pdf-runtime.py --require-pdf-render --output docs\v0.2.4\artifacts\office-pdf-runtime-smoke.json` -> PASS
+  - `python scripts\smoke-v024-office-pdf-runtime.py --output docs\v0.2.4\artifacts\office-pdf-runtime-root-smoke.json` -> PASS with expected root-runtime degradation when PDF render deps are absent.
+  - `python scripts\smoke-office-preinstall.py --version 0.2.4 --output docs\v0.2.4\artifacts\office-pdf-runtime-preinstall-smoke.json --require-staged-runtime` -> PASS
+  - `python scripts\scan-session-artifacts-privacy.py ... --json-output docs\v0.2.4\artifacts\office-pdf-runtime-privacy.json` -> PASS with `filesScanned=6`, `findingCount=0`, and `redacted=true`.
+  - `python scripts\validate-ecorex-release-artifacts.py --version 0.2.3` -> PASS
+  - `python scripts\smoke-v023-install-packaging-contracts.py` -> PASS
+  - `python scripts\smoke-v024-release-artifact-contracts.py --version 0.2.3 --release-dir release-artifacts` -> PASS with native, lark, and Office/PDF checks passing.
+- Rebuilt WebUI Windows/macOS and public release artifacts after the Office/PDF runtime changes. Final artifact hashes after the R24-04 rebuild:
+  - Windows WebUI sha256 `76BECF1745050701BF9C9309CBB62F8DA5F87D72353CE8A47158F2D0A9E601BF`, size `102766274`
+  - macOS WebUI sha256 `2D923ED9EE2CA2FFF1187230BD9FA0838003E1CEB315FE516DAD6CDC4EECF56B`, size `263065687`
+  - combined win-mac release sha256 `C1A7DDDA17B566E5F3E4A2F2D4218DEE87AC1754631827F9DF64370C8E2E5D7B`, size `366079571`
+  - public-release sha256 `124889E186EC24FCE759C0C6668F3B1B67437CBF44EB26F530E7E0AEF2ABA7D6`, size `371332127`
+- Final R24-04 multi-agent review converged to PASS:
+  - Herschel PASS after release-gate hardening for packaged runtime redaction, `.tsv` support, `.xls` exclusion, and spreadsheet skill guidance.
+  - Lagrange PASS for UX/compat routing and official-skill facade compatibility.
+  - Hypatia PASS for WebUI package/public-release consistency and macOS/Windows dependency payload checks.
+  - Wegener PASS for privacy, raw-path prevention, and content-free evidence.
+  - Franklin PASS for deterministic runtime/package harness coverage.
+- Residual non-blockers:
+  - Office/PPT/Excel/Word render backends still report partial readiness because the full render/visual QA flows belong to R24-05 through R24-09.
+  - PDF render primitive is ready in the staged WebUI runtime.
+  - Release filenames still use `EcoreX_0.2.3-*` because v0.2.4 is currently layered on the v0.2.3 WebUI release baseline.
+
+## R24-05
+
+- Implemented PPT-specific quality evidence on top of the shared Office/PDF runtime:
+  - `analyze_presentation_quality()` returns content-free slide counts, title presence/length buckets, empty-slide counts, out-of-bounds shape counts, overlap warnings, font violations, chart counts/issues, picture/table/text-shape counts, and bounded slide evidence.
+  - `render_presentation_preview()` converts PPTX to PDF through LibreOffice when available, renders preview pages through the existing PDF renderer, and raises `OfficePdfRuntimeError` instead of faking a preview when the backend is missing.
+  - `build_presentation_quality_evidence()` assembles the required gates: `story-flow`, `artifact-tool-authoring`, `layout-bounds`, `font-size-check`, `chart-integrity`, `render-preview`, `overlap-check`, and `visual-inspection`.
+- Hardened the PPT evidence boundary after multi-agent review:
+  - Render metadata is whitelisted and source/path-like values are HMAC-referenced.
+  - `authoring_route` is an enum only: `artifact-tool`, `template-following`, `verified-existing-deck`, or `unspecified`.
+  - Check IDs must match known quality gates; unknown caller IDs become `unknown-check`.
+  - Check detail/summary text is reduced to generated numeric/enum `key=value` fragments only.
+  - `render_pdf_pages()` now emits `renderProof` for actual rendered artifacts, and PPT `render-preview` counts only sanitized artifacts with a valid proof.
+  - Plain caller-provided refs such as `hmac:deadbeef` and synthetic render metadata are rejected for PPT pass/fail semantics.
+- Updated `skills/office-presentations/SKILL.md` and the staged runtime copy so the official Presentations facade requires the EcoreX presentation QA evidence builder and treats story/layout/font/chart/render/overlap/visual failures as blockers.
+- Added/updated focused verification:
+  - `tests/test_v024_office_pdf_runtime.py` now covers clean PPT quality evidence, bad-deck failures, malicious render metadata, malicious authoring route, missing/tampered render proof, and malicious check id/detail inputs.
+  - `scripts/smoke-v024-presentation-quality.py` now verifies both a clean PPT fixture and a bad PPT fixture. On this host, LibreOffice is unavailable, so the smoke correctly records `actualRenderAvailable=false`, `cleanStatus=fail`, `cleanFailedChecks=["render-preview"]`, and `syntheticRenderRejected=true` rather than pretending a real render happened.
+  - `scripts/smoke-v024-release-artifact-contracts.py` now requires packaged Office/PDF runtime proof-hardening markers and the trusted presentation render contract.
+- Verification passed:
+  - `python -m py_compile common\office_pdf_runtime.py desktop\runtime\ecorex-runtime\common\office_pdf_runtime.py scripts\smoke-v024-presentation-quality.py scripts\smoke-v024-release-artifact-contracts.py` -> PASS
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_v024_office_pdf_runtime.py -q` -> `13 passed`
+  - `python scripts\smoke-v024-presentation-quality.py --output docs\v0.2.4\artifacts\presentation-quality-smoke.json` -> PASS with `syntheticRenderRejected=true`, `leakCount=0`, and bad deck failures `font-size-check`, `layout-bounds`, `overlap-check`, `render-preview`.
+  - `python scripts\scan-session-artifacts-privacy.py ... --json-output docs\v0.2.4\artifacts\presentation-quality-release-privacy.json` -> PASS with `findingCount=0`.
+  - `python scripts\smoke-office-preinstall.py --version 0.2.4 --output docs\v0.2.4\artifacts\presentation-quality-office-preinstall-smoke.json --skip-module-imports` -> PASS.
+  - `python scripts\smoke-v024-release-artifact-contracts.py --version 0.2.3 --release-dir release-artifacts --tongxin-output docs\v0.2.4\artifacts\tongxin-cli-release-contract.json` -> PASS with `officePdf=PASS`.
+  - `python scripts\validate-ecorex-release-artifacts.py --version 0.2.3` -> PASS.
+  - `python scripts\smoke-v023-install-packaging-contracts.py` -> PASS.
+- Rebuilt WebUI Windows/macOS, web-linux-service, manifest, and public release artifacts after the final proof-gated render fix:
+  - Windows WebUI sha256 `3DB29EFB19BB155EA9DDC0101DF2086596A11990B1C78B8474FFDDE3AA2BB517`, size `102798501`
+  - macOS WebUI sha256 `F2D63304FE5FB6B02AB75F41AFD6ACC121A937451D36240A69421FA123859522`, size `263098435`
+  - web-linux-service sha256 `1A03979F224A4DDD4EE9AD23097A52C35F4BA16219F0A5EFBFCB56A0DF3E43E8`, size `3764807`
+  - public-release sha256 `5264B2398CC05DCEB8CD55190785AF203E0D16A293F39D948465A88F34E2BF3E`, size `371429027`
+- Final R24-05 multi-agent review converged to PASS:
+  - Copernicus PASS for architecture/runtime consistency and packaged trusted-render symbols.
+  - Dirac PASS for product-quality evidence after synthetic render metadata could no longer pass `render-preview`.
+  - Avicenna PASS for QA/test contract coverage, including ref-without-proof and missing-LibreOffice smoke semantics.
+  - Bernoulli PASS for security/privacy after render metadata, route, check id/detail, and render-count spoofing blockers were fixed.
+  - Parfit PASS for final manifest/package/public-release consistency.
+- Residual non-blockers:
+  - This host has no LibreOffice preview backend, so local smoke proves fail-closed behavior rather than a successful clean PPT render. Environments with LibreOffice should produce trusted `renderProof` artifacts and allow `render-preview` to pass.
+  - R24-06 through R24-09 still need the equivalent Excel, Word, PDF, and Web/API evidence projection work.
+
+## R24-06
+
+- Implemented spreadsheet-specific quality evidence on top of the shared Office/PDF runtime:
+  - `render_spreadsheet_preview()` converts spreadsheets to PDF through LibreOffice when available, renders preview pages through the existing PDF renderer, and raises `OfficePdfRuntimeError` instead of faking previews when the backend is missing.
+  - `analyze_spreadsheet_quality()` emits content-free workbook evidence: sheet counts, visible/hidden/empty/nonempty sheet counts, bounded cell scan counts, formula counts, formula error-token counts, typed-value counts, numeric/date-as-text risks, chart/table/merged-range counts, and bounded sheet evidence with HMAC `sheetRef`.
+  - `build_spreadsheet_quality_evidence()` assembles `typed-values`, `formula-audit`, `dashboard-structure`, `chart-render`, `render-preview`, `visual-inspection`, and `export-verify` checks.
+  - Spreadsheet render/preview checks reuse the R24-05 `renderProof` contract, so arbitrary caller refs cannot pass `render-preview` or chart render evidence.
+- Updated `skills/office-spreadsheets/SKILL.md` and the staged runtime copy:
+  - Added `dashboard-structure` and `render-preview` gates.
+  - Added explicit wording that render-preview evidence must come from trusted runtime render output, not caller-provided metadata.
+- Added/updated focused verification:
+  - `tests/test_v024_office_pdf_runtime.py` now covers clean workbook evidence, bad workbook failures, no-leak behavior for cell values/sheet names/formulas/file names, and no-proof render rejection.
+  - `scripts/smoke-v024-spreadsheet-quality.py` creates clean and bad `.xlsx` fixtures, attempts real spreadsheet preview rendering, records fail-closed no-LibreOffice behavior, and requires bad workbook failures for `typed-values`, `formula-audit`, `chart-render`, and `render-preview`.
+  - The smoke was tightened after QA review so no-render clean workbooks must fail exactly `chart-render` and `render-preview`; typed/formula/dashboard/export regressions can no longer hide behind missing render backend.
+  - `scripts/smoke-v024-release-artifact-contracts.py` now requires packaged spreadsheet quality evidence functions and spreadsheet skill gates.
+- Verification passed:
+  - `python -m py_compile common\office_pdf_runtime.py desktop\runtime\ecorex-runtime\common\office_pdf_runtime.py scripts\smoke-v024-spreadsheet-quality.py scripts\smoke-v024-release-artifact-contracts.py` -> PASS
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_v024_office_pdf_runtime.py -q` -> `15 passed`
+  - `python scripts\smoke-v024-spreadsheet-quality.py --output docs\v0.2.4\artifacts\spreadsheet-quality-smoke.json` -> PASS with `syntheticRenderRejected=true`, `cleanFailedChecks=["chart-render","render-preview"]`, `expectedCleanNoRenderFailures=["chart-render","render-preview"]`, bad failures `chart-render`, `formula-audit`, `render-preview`, `typed-values`, and `leakCount=0`.
+  - `python scripts\scan-session-artifacts-privacy.py ... --json-output docs\v0.2.4\artifacts\spreadsheet-quality-release-privacy.json` -> PASS with `findingCount=0`.
+  - `python scripts\smoke-office-preinstall.py --version 0.2.4 --output docs\v0.2.4\artifacts\spreadsheet-quality-office-preinstall-smoke.json --skip-module-imports` -> PASS.
+  - `python scripts\smoke-v024-release-artifact-contracts.py --version 0.2.3 --release-dir release-artifacts --tongxin-output docs\v0.2.4\artifacts\tongxin-cli-release-contract.json` -> PASS with `officePdf=PASS`.
+  - `python scripts\validate-ecorex-release-artifacts.py --version 0.2.3` -> PASS.
+  - `python scripts\smoke-v023-install-packaging-contracts.py` -> PASS.
+- Rebuilt WebUI Windows/macOS, web-linux-service, manifest, and public release artifacts after the spreadsheet QA changes:
+  - Windows WebUI sha256 `56E51A7D2C74B7AE97E88B614C7D0353BA87044FDB083738EB2AFEA27C49613D`, size `102802871`
+  - macOS WebUI sha256 `5367CC9293707910295DAE40ED951E8EA66B81DF8E7D7EE54BB3C355B35C64F6`, size `263102910`
+  - web-linux-service sha256 `00CFDC6F88D6F03E8FE90C6656F7F0756B5495373A7E5326CC415E15AEE46865`, size `3766378`
+  - public-release sha256 `6A792C1A2E48FCA9EAA534DC03597E9A5BFCD436E36AD7C3B58647CACA9440A5`, size `371438062`
+- Final R24-06 multi-agent review converged to PASS:
+  - Copernicus PASS for runtime/architecture consistency, staged-copy sync, proof-gated spreadsheet evidence, and packaged symbols.
+  - Dirac PASS for product/UX quality semantics, including fake render refs being dropped and no sheet/value/formula exposure.
+  - Avicenna PASS for QA after the no-render clean failure set was made exact.
+  - Bernoulli PASS for security/privacy after confirming counts/HMAC-only evidence and no-proof render rejection.
+  - Parfit PASS for final manifest/package/public-release consistency.
+- Residual non-blockers:
+  - This host has no LibreOffice preview backend, so local smoke proves fail-closed behavior rather than a successful clean spreadsheet render. Environments with LibreOffice should produce trusted `renderProof` artifacts and allow `chart-render` / `render-preview` to pass.
+  - R24-07 through R24-09 still need Word, PDF, and Web/API evidence projection work.
+
+## R24-07
+
+- Implemented DOCX-specific quality evidence on top of the shared Office/PDF runtime:
+  - `render_document_preview()` converts DOCX to PDF through LibreOffice when available, renders preview pages through the existing PDF renderer, and raises `OfficePdfRuntimeError` instead of faking render output when the backend is missing.
+  - `analyze_document_quality()` emits content-free document evidence: paragraph/heading/title/list/table/section counts, table row/cell counts, OOXML table geometry issue counts, comment/comment-reference counts, tracked insert/delete counts, and boolean summary evidence.
+  - `_inspect_docx_ooxml()` reads `word/document.xml` and `word/comments.xml` to count comments, comment references, tracked changes, table-grid/table-width/cell-width issues, and `commentIdMismatchCount` without emitting raw IDs or text.
+  - `build_document_quality_evidence()` assembles `design-preset`, `structure-check`, `render-docx`, `table-geometry`, `visual-inspection`, and `redline-preserve` checks with proof-gated render artifacts.
+- Hardened redline/comment preservation after QA review:
+  - `redline-preserve` now fails when comment counts differ or when comment/commentReference ID sets do not match.
+  - Added an equal-count mismatch regression where `comments.xml` contains id `0` and `document.xml` references id `1`; the gate fails through `commentIdMismatchCount` while evidence remains count-only.
+- Updated `skills/office-documents/SKILL.md` and the staged runtime copy:
+  - Added `structure-check`.
+  - Added explicit wording that `render-docx` evidence must come from trusted runtime render output, not caller-provided metadata.
+- Added/updated focused verification:
+  - `tests/test_v024_office_pdf_runtime.py` now covers clean DOCX evidence, bad DOCX structure/table/redline/render failures, equal-count comment ID mismatch failures, no-leak behavior for text/table cells/comments/file names, and no-proof render rejection.
+  - `scripts/smoke-v024-document-quality.py` creates clean and bad `.docx` fixtures, mutates bad OOXML table geometry, injects orphan comments, attempts real DOCX preview rendering, and records fail-closed no-LibreOffice behavior.
+  - `scripts/smoke-v024-release-artifact-contracts.py` now requires packaged document quality evidence functions, document quality gates, and `commentIdMismatchCount`.
+- Verification passed:
+  - `python -m py_compile common\office_pdf_runtime.py desktop\runtime\ecorex-runtime\common\office_pdf_runtime.py scripts\smoke-v024-document-quality.py scripts\smoke-v024-release-artifact-contracts.py` -> PASS
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_v024_office_pdf_runtime.py -q` -> `18 passed`
+  - `python scripts\smoke-v024-document-quality.py --output docs\v0.2.4\artifacts\document-quality-smoke.json` -> PASS with `syntheticRenderRejected=true`, `cleanFailedChecks=["render-docx"]`, bad failures `design-preset`, `redline-preserve`, `render-docx`, `table-geometry`, `commentIdMismatchCount=1`, and `leakCount=0`.
+  - `python scripts\scan-session-artifacts-privacy.py ... --json-output docs\v0.2.4\artifacts\document-quality-release-privacy.json` -> PASS with `findingCount=0`.
+  - `python scripts\smoke-office-preinstall.py --version 0.2.4 --output docs\v0.2.4\artifacts\document-quality-office-preinstall-smoke.json --skip-module-imports` -> PASS.
+  - `python scripts\smoke-v024-release-artifact-contracts.py --version 0.2.3 --release-dir release-artifacts --tongxin-output docs\v0.2.4\artifacts\tongxin-cli-release-contract.json` -> PASS with `officePdf=PASS`.
+  - `python scripts\validate-ecorex-release-artifacts.py --version 0.2.3` -> PASS.
+  - `python scripts\smoke-v023-install-packaging-contracts.py` -> PASS.
+- Rebuilt WebUI Windows/macOS, web-linux-service, manifest, and public release artifacts after the final comment-ID mismatch fix:
+  - Windows WebUI sha256 `9CA6D0A92394554D6292E88AD1B4E3FF80E139A90CED431A0A6BC1238D382284`, size `102807101`
+  - macOS WebUI sha256 `286C5B5F00A1E6EDC6F13E035ADCCB2C987B7FB9FE836A686F8D679EC00243D1`, size `263107243`
+  - web-linux-service sha256 `0133BD63B85B356A11A8F6FD30977675D6E306A34376E34E23D2158C62214EF2`, size `3767259`
+  - public-release sha256 `1ADDB3D2CA72EEDC62FA46E6051A0B3D7EE570C7F73EA2C9E994BFDA292473FD`, size `371447204`
+- Final R24-07 multi-agent review converged to PASS:
+  - Copernicus PASS for runtime/architecture consistency, staged-copy sync, packaged symbols, and count-only OOXML inspection.
+  - Dirac PASS for product/UX quality semantics after equal-count comment ID mismatches were covered.
+  - Avicenna PASS for QA after the redline-preserve mismatch blocker was fixed.
+  - Bernoulli PASS for security/privacy after confirming no raw comment IDs/text/OOXML snippets leak.
+  - Parfit PASS for final manifest/package/public-release consistency.
+- Residual non-blockers:
+  - This host has no LibreOffice preview backend, so local smoke proves fail-closed behavior rather than a successful clean DOCX render. Environments with LibreOffice should produce trusted `renderProof` artifacts and allow `render-docx` to pass.
+  - R24-08 and R24-09 still need PDF-specific QA and Web/API evidence projection.
+
+## R24-01B
+
+- Added a new independent skill governance/display slice from the user's latest requirement.
+- Required model:
+  - Primary source grouping: `external`, `custom`, `builtin`.
+  - Built-in/original factory capability packs are default enabled, always available, and cannot be closed/disabled by users.
+  - All skills use a unified WebUI presentation model regardless of source.
+  - Secondary grouping is purpose-based, such as system capability, office capability, image/media capability, collaboration capability, data capability, and development capability.
+- This slice must review the real v0.2.3/v0.2.4 skill and extension surfaces before editing because previous versions already merged `/api/extensions` and `/api/skills` for display.
+- Acceptance must include API/renderer contract tests, browser evidence for unified display and non-toggleable built-ins, package/release contract checks, privacy-safe evidence, and five-agent consensus.
+- Implemented source/purpose governance in the runtime skill APIs:
+  - `agent/skills/service.py` now decorates skill rows with `source_group/sourceGroup`, `source_label/sourceLabel`, `purpose_group/purposeGroup`, `purpose_label/purposeLabel`, `toggleable`, `locked`, `lock_reason/lockReason`, and `builtin_catalog/builtinCatalog`.
+  - `agent/skills/manager.py` now snapshots the factory built-in catalog and forces catalog members enabled/default-enabled even if a same-name extra/custom skill shadows the effective loaded source.
+  - `SkillService.close()` and `SkillManager.set_skill_enabled(False)` now reject factory catalog skills even when the effective `source` is `extra` or `custom`.
+  - `agent/extensions/registry.py` projects the same governance fields into `/api/extensions` and assigns `built-in-locked` policy from the decorated source group rather than raw source alone.
+- Implemented the unified WebUI display:
+  - `desktop/src/services/ecorexApi.ts` accepts the new governance fields and only auto-opens built-in source-group rows by default.
+  - `desktop/src/App.tsx` builds one skill display row model from `/api/extensions` plus `/api/skills`, groups by source first and purpose second, and disables built-in rows with the lock copy `内置能力默认启用`.
+  - `desktop/src/styles/app.css` adds source/purpose grouping styles without changing unrelated settings surfaces.
+- Fixed security/UX reviewer blockers:
+  - Same-name global/extra skills that shadow a factory built-in, such as the real `skill-creator` case reported by review, now remain grouped as `builtin`, default enabled, locked, and non-toggleable.
+  - Legacy `channel/web/static/js/console.js` now consumes `locked`, `toggleable`, and `source_group/sourceGroup`; locked rows render `disabled aria-disabled="true"` and the local `toggleSkill()` guard returns before posting `close`.
+- Synchronized the changed backend/runtime files into `desktop/runtime/ecorex-runtime/agent/...` and synchronized the legacy console copy under `desktop/runtime/ecorex-runtime/channel/web/static/js/console.js`.
+- Added/updated focused verification:
+  - `tests/test_v024_skill_governance.py` now covers built-in default lock, service/manager close rejection, custom/external schema parity, extension projection, same-name extra shadowing of factory catalog skills, and legacy-console lock guard source contract.
+  - `scripts/smoke-v024-skill-governance-browser.py` verifies three source sections, purpose headings, non-toggleable built-in rows, toggleable custom/external rows, preserved external disabled state, no legacy background-details display, and no close POST for built-ins.
+  - `scripts/smoke-v024-release-artifact-contracts.py` now validates packaged governance schema, catalog lock code, extension projection, React WebUI grouping, and legacy console disable/guard logic inside the WebUI ZIP runtime.
+- Verification passed after the blocker fixes:
+  - `python -m py_compile agent\skills\manager.py agent\skills\service.py agent\extensions\registry.py desktop\runtime\ecorex-runtime\agent\skills\manager.py desktop\runtime\ecorex-runtime\agent\skills\service.py desktop\runtime\ecorex-runtime\agent\extensions\registry.py` -> PASS
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_v024_skill_governance.py -q` -> `6 passed`
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_v024_native_skill_facades.py tests\test_v024_skill_governance.py -q` -> `8 passed`
+  - `npm --prefix desktop run typecheck` -> PASS
+  - `npm --prefix desktop run build:renderer` -> PASS with the existing Vite chunk-size warning.
+  - `python scripts\smoke-v024-skill-governance-browser.py --output docs\v0.2.4\artifacts\skill-governance-browser-smoke.json` -> PASS with `sourceSectionCount=3` and `skillPostCount=0`.
+  - `python scripts\smoke-v024-native-skill-facades.py --output docs\v0.2.4\artifacts\native-skill-facades-smoke.json` -> PASS
+  - `python scripts\smoke-office-preinstall.py --version 0.2.4 --output docs\v0.2.4\artifacts\skill-governance-office-preinstall-smoke.json --skip-module-imports` -> PASS
+  - skill-governance privacy scan -> PASS with `findingCount=0` and `redacted=true`.
+  - `python scripts\validate-ecorex-release-artifacts.py --version 0.2.3` -> PASS
+  - `python scripts\smoke-v023-install-packaging-contracts.py` -> PASS
+  - `python scripts\smoke-v024-release-artifact-contracts.py --version 0.2.3 --release-dir release-artifacts` -> PASS with `native=PASS`, `skillGovernance=PASS`, `lark=PASS`, and `officePdf=PASS`.
+- Rebuilt WebUI Windows/macOS and public release artifacts after the R24-01B governance fixes. Current artifact hashes after this rebuild:
+  - Windows WebUI sha256 `F30EB7BDE82E167EB5379E81DA85BA3AB4914CBA0BCB31CA2761553D7296294D`, size `102775891`
+  - macOS WebUI sha256 `95E357FFC1DBDE80534682E8A8923BFE77D37D1600919FD2416B93F774BD0073`, size `263075408`
+  - combined win-mac release sha256 `0EDD942D8C19C4A542FE2476EF4C5EFFE17DDFF050253E433E4DF53A4A37B2A3`, size `366098941`
+  - public-release sha256 `3CD034809F5336662D25293BB1C4D8338D692959907B4C47C9EDB9053AE43200`, size `371350670`
+- Final R24-01B multi-agent review converged to PASS after the same-name shadowing and legacy-console blocker fixes:
+  - Bernoulli PASS for runtime/backend catalog locking; the real `skill-creator` shadow case now projects as `builtin`, `enabled=True`, `toggleable=False`, `locked=True`, and close/disable both raise `PermissionError`.
+  - Copernicus PASS for unified WebUI grouping and lock UX across React and legacy console.
+  - Parfit PASS for rebuilt Windows/macOS/public release artifacts, manifest consistency, and packaged governance checks.
+  - Avicenna PASS for security/privacy after legacy console close POST was removed for locked rows and backend close remained blocked.
+  - Dirac PASS for QA/harness/process coverage and documentation completeness.
+
+## R24-14A
+
+- Added a new rendering parity/performance slice from the user's CowAgent comparison.
+- User-visible gap to close:
+  - CowAgent streams assistant `delta` directly into message content and renders that content through its Markdown component during the stream.
+  - EcoreX currently uses a more complex long-text streaming path in `desktop/src/components/MessageContent.tsx`, including `streamingWindowMarkdown`, stable chunks, and a tail path that can make long answers feel like raw Markdown until completion.
+- Initial CowAgent comparison source:
+  - `tmp/CowAgent-upstream/desktop/src/renderer/src/components/Markdown.tsx`
+  - `tmp/CowAgent-upstream/desktop/src/renderer/src/components/MessageBubble.tsx`
+  - `tmp/CowAgent-upstream/desktop/src/renderer/src/store/chatStore.ts`
+- Intended EcoreX-native adaptation:
+  - Preserve EcoreX local-file/artifact safety and process disclosure.
+  - Remove or narrow the raw Markdown tail/window behavior for long assistant output.
+  - Render streaming Markdown continuously in the same visual component users see after completion.
+  - Add browser smoke/performance evidence for long headings, lists, tables, links, and code fences during streaming.
+  - Compare p50/p95 render/update cost before and after, without lowering content safety or artifact extraction.
+- Implemented CowAgent-style live Markdown rendering while keeping EcoreX-native safety:
+  - Removed the long-streaming head/tail window path from `desktop/src/components/MessageContent.tsx`.
+  - `StreamingMarkdownBlock` now normalizes/redacts the currently visible pending content and sends it through `StreamingStableMarkdown`, which renders chunks with the same `MarkdownBlock` used for final answers.
+  - Removed the old `.streaming-tail`, `.streaming-code`, and `.streaming-progress-note` CSS branches from `desktop/src/styles/app.css`.
+  - Kept `useThrottledStreamingContent` so very long pending text still coalesces render updates instead of rerendering every token.
+  - Kept artifact/local-file safety in `MarkdownBlock`: local links still go through safe URL handling and `data-ecorex-file-path` click/context handlers.
+- Fixed a runtime-review blocker in `injectLinkedMediaPreviews`:
+  - Local media links that already carry `data-ecorex-file-path` are no longer replaced with bare `<img>/<video>/<audio>` elements.
+  - This preserves EcoreX local-file open/context-menu handlers for Markdown links such as `[preview](artifacts/foo.png)` while still allowing regular remote media links to preview inline.
+- Fixed a security-review blocker in the live WebUI static surface:
+  - Synchronized the current `desktop/dist` output into `channel/web/static/app`.
+  - Verified `channel/web/static/app`, `desktop/dist`, `MessageContent.tsx`, and `app.css` have zero `streaming-tail`, `streaming-code`, `chars streaming`, `streamingWindowMarkdown`, `splitStreamingMarkdown`, or `cleanStreamingTail` hits.
+- Updated contracts/harnesses:
+  - `tests/test_ecorex_web_parallel_backend.py` now asserts streaming uses `StreamingStableMarkdown`/`MarkdownBlock` and explicitly rejects `streamingWindowMarkdown`, `chars streaming`, `.streaming-tail`, `.streaming-code`, and old `LiveStreamingText` fallback paths.
+  - Added `scripts/smoke-v024-streaming-markdown-browser.py`, a Playwright smoke against real `desktop/dist` that injects an 18,333-character pending assistant message and checks formatted DOM while streaming.
+  - `scripts/smoke-v024-release-artifact-contracts.py` now rejects packaged WebUI bundles containing old raw streaming markers and requires `streaming-markdown`.
+- Verification passed:
+  - `npm --prefix desktop run typecheck` -> PASS
+  - `npm --prefix desktop run build:renderer` -> PASS with the existing Vite chunk-size warning.
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_ecorex_web_parallel_backend.py -q -k "streaming_uses_markdown_blocks or comprehensive_runtime_contract"` -> PASS (`1 passed, 390 deselected`)
+  - `python scripts\smoke-v024-streaming-markdown-browser.py --output docs\v0.2.4\artifacts\streaming-markdown-browser-smoke.json --screenshot docs\v0.2.4\artifacts\streaming-markdown-browser-smoke.png --iterations 5` -> PASS
+  - Browser smoke evidence: `contentLength=18333`, `headingCount=61`, `unorderedListCount=60`, `orderedListCount=60`, `tableCount=60`, `linkCount=60`, `codeBlockCount=60`, `rawTailNodeCount=0`, `hasOmittedStreamingText=false`.
+  - Performance evidence from the final browser smoke after syncing the live WebUI static bundle: p50 formatted-ready `568.7ms`, p95/max formatted-ready `773.6ms`, `sampleCount=5`.
+  - `python scripts\scan-session-artifacts-privacy.py docs\v0.2.4\artifacts\streaming-markdown-browser-smoke.json --json-output docs\v0.2.4\artifacts\streaming-markdown-privacy.json` -> PASS with `findingCount=0`.
+  - `python scripts\validate-ecorex-release-artifacts.py --version 0.2.3` -> PASS.
+  - `python scripts\smoke-v023-install-packaging-contracts.py` -> PASS.
+  - `python scripts\smoke-v024-release-artifact-contracts.py --version 0.2.3 --release-dir release-artifacts` -> PASS with `native=PASS`, `skillGovernance=PASS`, `lark=PASS`, and `officePdf=PASS`; the skill governance release artifact now includes `Skill governance Streaming Markdown live render packaged` for both WebUI ZIPs.
+- Rebuilt WebUI Windows/macOS and public release artifacts after the R24-14A streaming render change. Current artifact hashes:
+  - Windows WebUI sha256 `820AE816478020FBAB69CDEC5E65013EFD16127103137D536D3B11B216FC37AF`, size `102779821`
+  - macOS WebUI sha256 `BAFC1D859DCA678141FC7CD2DE8231193EF0160C54ED91864FD18A7A576DA39B`, size `263079442`
+  - combined win-mac release sha256 `561A5FCD799BA8A4A098E12A580FE7DE826A9B73F91BA89965D713188ABDBE58`, size `366106937`
+  - public-release sha256 `C648DD5800EF3A2D8492E537F240D2B205449564AE02C222BA88E5E2D0CF8159`, size `371358411`
+- Final R24-14A multi-agent review converged to PASS after the runtime and security blocker fixes:
+  - Bernoulli PASS for runtime/streaming path after local media anchors remained protected and live `/app` markers were removed.
+  - Copernicus PASS for UX/display parity with CowAgent-style formatted streaming.
+  - Parfit PASS for release/package consistency; live `channel/web/static/app` files match the packaged WebUI app payloads and release hashes remain consistent.
+  - Avicenna PASS for security/privacy after stale `/app` bundle markers were removed and local-file handlers remained intact.
+  - Dirac PASS for QA/harness/performance evidence, including zero old marker hits across source, dist, and live static app.
+
+## R24-02
+
+- Implemented the Tongxin Assistant CLI as an EcoreX-native, structured, default read-only capability for WebUI dual-end:
+  - Added `agent/tools/tongxin_cli/tongxin_cli.py` with `status`, `schema`, `diagnose`, and `run` actions.
+  - Discovery supports config/env paths plus the real `C:\自动报表工具\xin_agent_cli.py`, but default status hides path/candidate fields unless explicitly requested.
+  - `run` uses `subprocess.Popen` without `shell=True` and validates the exact read-only command contract before execution.
+  - Allowed commands are limited to `schema`, `account list`, `project list`, `report summary`, `note detail`, and `realtime summary`.
+  - Command-specific flags are enforced, and all extra positional arguments after the command head are rejected unless consumed by an allowed flag.
+- Wired the default read-only capability through EcoreX:
+  - Registered `tongxin_cli` in tool loading, agent initializer config injection, default config, config template, host diagnostics, and Web channel capability/install request guidance.
+  - Permission broker allows read-only Tongxin requests by default and denies non-read-only actions in read-only mode.
+  - Raw `bash`/shell attempts against `xin_agent_cli.py` or Tongxin aliases are blocked or autorouted to the structured tool path.
+  - `agent_capability` and `optional_abilities` treat `tongxin-cli` aliases as configure-only, not installable, and return `capability_configure_only` instead of pretending a generic pack installed successfully.
+  - `desktop/runtime-packs/capabilities.json` marks `tongxin-cli` as `configureOnly`, `defaultEnabled`, and `readOnly`.
+- Updated WebUI product semantics:
+  - `desktop/src/services/ecorexApi.ts` carries `defaultEnabled`, `readOnly`, `configureOnly`, and `allowedCommands`.
+  - `desktop/src/App.tsx` forces default read-only packs enabled, disables their toggle, shows `默认只读`, uses `配置检查` for configure-only actions, and does not start a generic install watcher for Tongxin.
+- Hardened output safety after review:
+  - Structured JSON output is recursively sanitized through `_sanitize_json`.
+  - Sensitive snake/kebab/camel keys such as `access_token`, `accessToken`, `refreshToken`, `appSecret`, `authHeader`, `apiKey`, and `credentialId` redact to `***`.
+  - Quoted, human-format, and standalone `Bearer <token>` output in stdout/stderr is redacted before entering the public `output` field.
+  - The release contract now requires the JSON compact-key sanitizer, `authHeader`/`credentialId` text handling, and standalone Bearer marker in packaged tools.
+- Fixed an adjacent observability debt discovered during regression:
+  - `agent/protocol/runtime_projection.py` now has a dedicated safe projection for `capability.policy_blocked`, preserving safe audit fields such as `pack_id`, `policy_mode`, and `install_allowed` while retaining redaction behavior.
+- Verification passed:
+  - `python -m py_compile agent\tools\tongxin_cli\tongxin_cli.py agent\tools\optional_abilities\optional_abilities.py agent\tools\agent_capability\agent_capability.py agent\protocol\agent_stream.py agent\protocol\runtime_projection.py channel\web\web_channel.py scripts\smoke-v024-release-artifact-contracts.py` -> PASS
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; pytest tests\test_v024_tongxin_cli_readonly.py -q` -> `7 passed`
+  - focused backend regression for capability/permission/diagnostics paths -> `20 passed, 371 deselected, 4 subtests passed`
+  - `npm --prefix desktop run typecheck` -> PASS
+  - `npm --prefix desktop run build:renderer` -> PASS with the existing Vite chunk-size warning.
+  - `python scripts\smoke-v024-release-artifact-contracts.py --version 0.2.3 --release-dir release-artifacts --tongxin-output docs\v0.2.4\artifacts\tongxin-cli-release-contract.json` -> PASS
+  - `python scripts\validate-ecorex-release-artifacts.py --version 0.2.3` -> PASS
+  - `python scripts\smoke-v023-install-packaging-contracts.py` -> PASS
+  - `python scripts\scan-session-artifacts-privacy.py docs\v0.2.4\artifacts\tongxin-cli-release-contract.json --json-output docs\v0.2.4\artifacts\tongxin-cli-release-contract-privacy.json` -> PASS with `findingCount=0`.
+  - Real `tongxin_cli` probe: `status` and `schema` return `success`, `readOnly=true`, `schemaExitCode=0`, and default status has no path/candidate fields.
+  - Redaction probe: human output becomes `authorization: ***`, `authHeader: ***`, `credentialId=***`, and `Bearer ***`; `textLeaks=false`; JSON camelCase probe has all sensitive values as `***`.
+- Rebuilt WebUI Windows/macOS, web-linux-service, and public release artifacts after the final R24-02 security hardening:
+  - Windows WebUI sha256 `F7A6C91DD98B8DDE059A50EE3DE6A5CBDDD91BC375B4AF0A1F3FD0F15A240FF1`, size `102791875`
+  - macOS WebUI sha256 `029AFB1A53E77D4BD582B993F552F4DB28546EAAFC1E5444CE221E3CDCDAD4BF`, size `263091704`
+  - web-linux-service sha256 `BB6A7BF48CBBB89E19C06B04F57D634660A38850E7B9F07EC32E86066E9F7148`, size `3761884`
+  - public-release sha256 `DF3CEF8395C9188B53F71371ACC211AC97C7F5624644D6CD9CE401C339808340`, size `371413380`
+- Final R24-02 multi-agent review converged to PASS:
+  - Bernoulli PASS for security/privacy after JSON, human-format, and standalone Bearer redaction blockers were fixed.
+  - Copernicus PASS for runtime/architecture drift after staged runtime and final packages matched the root source.
+  - Parfit PASS for publication/package consistency and public-release embedding.
+  - Avicenna PASS for QA/read-only correctness after command-specific flags and positional bypasses were blocked.
+  - Dirac PASS for product/UX configure-only/default-read-only semantics.
+- Residual non-blockers:
+  - The real CLI is available and schema-probeable on this host, but `status.configured=false` until `tools.tongxin_cli.script_path` or env path is explicitly configured for a deployed environment.
+  - Release filenames still use `EcoreX_0.2.3-*` because v0.2.4 is layered on the v0.2.3 WebUI release baseline.
+
+## R24-08
+
+- Implemented PDF-specific quality evidence on top of the shared Office/PDF runtime:
+  - `analyze_pdf_quality()` emits content-free page metrics: page counts, extraction success/error counts, glyph-risk counts, orientation/rotation buckets, page-size variants, image/drawing counts, table candidate counts, blank-page risks, image-only page counts, and bounded page evidence.
+  - pypdf is the baseline inspection path, and PyMuPDF enriches image/drawing/table evidence when available.
+  - `_inspect_pdf_page_drawing_stream()` detects basic ReportLab-style table drawings even when PyMuPDF is unavailable.
+  - `compare_pdf_page_quality()` compares reference and candidate PDFs through redacted page-size, orientation, text-length-bucket, table-candidate, and image-count evidence.
+  - `build_pdf_quality_evidence()` assembles `text-orientation`, `page-render`, `layout-inspection`, `table-structure`, `generation-verify`, and `visual-diff`.
+- Updated `skills/office-pdf/SKILL.md` and the staged runtime copy:
+  - Added the `visual-diff` gate.
+  - Added explicit reference-PDF comparison guidance.
+  - Added wording that render evidence must come from trusted runtime render output, not caller-provided metadata.
+- Fixed a security-review blocker:
+  - Initial proof-gating still allowed a caller to compute `_render_artifact_proof()` over fake metadata.
+  - `render_pdf_pages()` now registers source-bound trusted render artifacts in `_TRUSTED_RENDER_REGISTRY`.
+  - PDF `page-render` now sanitizes with `require_registered_proof=True` and `trusted_source_ref=_hash_ref(source)`.
+  - Added `test_pdf_quality_evidence_rejects_forged_render_proof_without_runtime_registration`.
+- Added/updated focused verification:
+  - `tests/test_v024_office_pdf_runtime.py` now covers clean PDF evidence, blank-page/fake-render failures, forged-proof rejection, and reference layout mismatch through `visual-diff`.
+  - `scripts/smoke-v024-pdf-quality.py` creates clean, blank, and reference-mismatched PDF fixtures, records no-PyMuPDF fail-closed behavior, and checks `leakCount=0`.
+  - `scripts/smoke-v024-release-artifact-contracts.py` now requires packaged PDF QA functions, `visual-diff`, drawing-stream detection, and registered render-proof markers.
+- Verification passed after the blocker fix:
+  - `python -m py_compile common\office_pdf_runtime.py desktop\runtime\ecorex-runtime\common\office_pdf_runtime.py scripts\smoke-v024-pdf-quality.py scripts\smoke-v024-release-artifact-contracts.py` -> PASS
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_v024_office_pdf_runtime.py -q` -> `22 passed`
+  - `python scripts\smoke-v024-pdf-quality.py --output docs\v0.2.4\artifacts\pdf-quality-smoke.json` -> PASS with `syntheticRenderRejected=true`, clean failures `["page-render"]`, blank failures `layout-inspection`, `page-render`, `text-orientation`, mismatch failure `visual-diff`, `tableCandidatePageCount=1`, and `leakCount=0`.
+  - `desktop\runtime\ecorex-runtime\python\python.exe scripts\smoke-v024-office-pdf-runtime.py --require-pdf-render --output docs\v0.2.4\artifacts\office-pdf-runtime-smoke.json` -> PASS with actual PDF `renderProof`.
+  - `python scripts\smoke-v024-native-skill-facades.py --output docs\v0.2.4\artifacts\native-skill-facades-smoke.json` -> PASS.
+  - `python scripts\smoke-office-preinstall.py --version 0.2.4 --output docs\v0.2.4\artifacts\pdf-quality-office-preinstall-smoke.json --skip-module-imports` -> PASS.
+  - `python scripts\scan-session-artifacts-privacy.py ... --json-output docs\v0.2.4\artifacts\pdf-quality-release-privacy.json` -> PASS with `findingCount=0`.
+  - `python scripts\smoke-v024-release-artifact-contracts.py --version 0.2.3 --release-dir release-artifacts --tongxin-output docs\v0.2.4\artifacts\tongxin-cli-release-contract.json` -> PASS with `officePdf=PASS`.
+  - `python scripts\validate-ecorex-release-artifacts.py --version 0.2.3` -> PASS.
+  - `python scripts\smoke-v023-install-packaging-contracts.py` -> PASS.
+- Rebuilt WebUI Windows/macOS, web-linux-service, manifest, and public release artifacts after the registered-proof fix:
+  - Windows WebUI sha256 `625A4A22FB122F1DC7E887857065D79674A4ADA319C2D5BAB22EB0BFBDF226C2`, size `102814315`
+  - macOS WebUI sha256 `5B97DC8CC0DCABCF682C29EB0CC36593687864A2D371E74D3AC8DA2CAFBBCDAC`, size `263114560`
+  - web-linux-service sha256 `082D0D07170C38F432234F0BD59C795718ECDB442217D960C12A7ACFF5FCCC95`, size `3773348`
+  - public-release sha256 `42A976DEC978344E2C88CC38D60478B3486ECA3357BDC4D81086E0C6307059FF`, size `371468009`
+- Final R24-08 multi-agent review converged to PASS:
+  - Bernoulli PASS after the forged render-proof blocker was fixed.
+  - Copernicus PASS for runtime/architecture consistency and source/staged/package sync.
+  - Parfit PASS for manifest, release artifacts, and public-release embedding.
+  - Avicenna PASS for QA/test coverage after the forged-proof regression landed.
+  - Dirac PASS for product behavior: render unavailable is explicit, blank/diff/table risks are surfaced, and existing `office-pdf` compatibility remains intact.
+
+## R24-09
+
+- Implemented additive Office/PDF QA evidence projection through Web/API:
+  - `agent/protocol/runtime_projection.py` now extracts Office/PDF `qualityEvidence` from tool results, strips nested raw evidence from `result`, and projects a top-level sanitized `qualityEvidence` for tool calls and artifacts.
+  - The staged WebUI runtime copy was kept in sync at `desktop/runtime/ecorex-runtime/agent/protocol/runtime_projection.py`.
+  - Artifact projection accepts `quality_evidence` and normalizes it to `qualityEvidence` without changing existing artifact/tool DTO compatibility.
+- Hardened the evidence sanitizer after multi-agent blockers:
+  - Check IDs and gates are exact allowlist values or become `unknown-check`.
+  - Check details only preserve low-information `key=value` fragments with approved keys and numeric/enum values.
+  - Analysis metrics are limited to known Office/PDF summary/evidence keys; arbitrary string metrics are dropped.
+  - Quality refs only preserve strict `hmac:<hex>` refs; paths, URLs, filenames, and other non-HMAC refs become stable `quality-ref-*` hashes.
+  - Unsafe fields such as `renderProof`, `rawText`, `content`, `body`, `markdown`, `prompt`, `source`, paths, URLs, and provider raw responses are omitted from public projection.
+- Updated the WebUI display/persistence path:
+  - `desktop/src/services/ecorexApi.ts` adds typed `QualityEvidence`.
+  - `desktop/src/App.tsx` normalizes tool/artifact/stream/history evidence and applies the same compact gate/check/detail/ref fallback sanitizer before local persistence.
+  - `desktop/src/components/MessageContent.tsx` renders a compact artifact QA badge and tool-step QA panel while avoiding raw fallback analysis disclosure.
+  - `desktop/src/styles/app.css` adds the QA badge/panel styling.
+- Added/updated focused verification:
+  - `tests/test_ecorex_web_parallel_backend.py` covers service/API projection, frontend contract markers, raw document phrase leakage, analysis metric leakage, local path/URL ref leakage, and old CowAgent-style streaming contract preservation.
+  - `scripts/smoke-v024-office-pdf-web-evidence.py` validates Web/API projection, render-proof omission, and privacy leak absence.
+  - `scripts/smoke-v024-office-pdf-evidence-browser.py` validates real rendered badge/panel/artifact rows in `desktop/dist`.
+  - `scripts/smoke-v024-release-artifact-contracts.py` now checks Windows/macOS WebUI ZIPs plus the web-linux-service tar for Office/PDF QA projection and UI markers.
+  - `scripts/validate-ecorex-release-artifacts.py` now checks runtime projection QA sanitizer markers across ZIP/TAR/Desktop runtime surfaces.
+- Final verification passed:
+  - `python -m py_compile ...` for changed projection and release scripts -> PASS.
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_ecorex_web_parallel_backend.py -q -k "office_pdf_quality_evidence or frontend_quality_evidence or streaming_uses_markdown"` -> `3 passed`.
+  - `npm --prefix desktop run typecheck` -> PASS.
+  - `npm --prefix desktop run build:renderer` -> PASS with the existing Vite chunk-size warning.
+  - `python scripts\smoke-v024-office-pdf-web-evidence.py --output docs\v0.2.4\artifacts\office-pdf-web-evidence-smoke.json` -> PASS.
+  - `python scripts\smoke-v024-office-pdf-evidence-browser.py --output docs\v0.2.4\artifacts\office-pdf-evidence-browser-smoke.json --screenshot docs\v0.2.4\artifacts\office-pdf-evidence-browser-smoke.png` -> PASS with `artifactBadgeCount=1`, `toolPanelCount=1`, `failBadgeCount=2`, and `leaks=[]`.
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_v024_office_pdf_runtime.py -q` -> `22 passed`.
+  - `python scripts\smoke-v024-release-artifact-contracts.py --version 0.2.3 --release-dir release-artifacts --office-output docs\v0.2.4\artifacts\office-pdf-web-evidence-release-contract.json` -> PASS.
+  - `python scripts\validate-ecorex-release-artifacts.py --version 0.2.3` -> PASS.
+  - `python scripts\smoke-v023-install-packaging-contracts.py` -> PASS.
+  - Final privacy scan over Web/API, browser, and release evidence -> PASS with `findingCount=0`.
+  - Explicit evidence readback confirmed release, Web/API, and browser artifacts all have PASS/success status and no failed/failures entries.
+- Rebuilt WebUI Windows/macOS, web-linux-service, manifest, and public release artifacts after the final ref-sanitizer fix:
+  - Windows WebUI sha256 `F90565640C88AFC26E93EEADB87F4B4A85F7359F1D6D870317B67894D19008D0`, size `105117981`
+  - macOS WebUI sha256 `A6705902159B1891259419CC8E60142AE3540DD6182A5A5B4C0BF36A47FF74DF`, size `263129865`
+  - web-linux-service sha256 `93036AA1118402D2AEFF9591A511A1E7B968D067E9D1DA29C05B94F57B2CE8E3`, size `3784788`
+  - public-release sha256 `27C23B5B8CE022511E028946936260EB1A4352B4BE8B0A0D69BF8BABE99C683C`, size `373971453`
+- Final R24-09 multi-agent review converged to PASS:
+  - Bernoulli PASS after fixing free-text check/detail leakage, analysis metric leakage, and non-HMAC ref leakage.
+  - Copernicus PASS for additive schema/runtime mapping and final source/staged/package/public projection sync.
+  - Parfit PASS for final package hashes, manifest/public embedding, service tar coverage, and release contract gates.
+  - Avicenna PASS for refreshed evidence, regression breadth, browser/API smoke, and privacy scans.
+  - Dirac PASS for product/UX after the compact QA badge/panel remained visible and not noisy.
+
+## R24-10
+
+- Implemented generated image structural QA as an EcoreX-native compatibility layer over the image-generation facade:
+  - Added `common/image_quality_runtime.py` and staged runtime copy with content-safe `build_image_quality_evidence()` / `analyze_image_quality()` helpers.
+  - The analyzer checks decode/open validity, zero-byte/corrupt files, blank/near-blank output, center seam/discontinuity risk, translucent overlay/ghosting risk, and basic integrity metrics without emitting prompt text, image text, local paths, URLs, or provider raw responses.
+  - Evidence uses `kind=image`, additive `qualityEvidence`, HMAC source refs, allowlisted gates (`decode-valid`, `artifact-integrity`, `non-blank`, `seam-check`, `overlay-ghosting-check`, `visual-inspection`), and numeric/enum details only.
+- Wired the evidence into both image surfaces:
+  - `agent/protocol/image_job_service.py` attaches locally computed QA evidence to generated image artifacts before emitting `artifact.created` / `image_job.artifact`, drops caller-provided QA fields, and reuses already-safe in-memory artifacts in `status()`.
+  - `agent/tools/imagegen/imagegen.py` attaches per-image evidence and a top-level aggregate tool `qualityEvidence` so ordinary tool calls can show QA status too.
+  - `agent/protocol/runtime_projection.py` and staged copy allow image gates/details/metrics under the same sanitizer used by Office/PDF evidence.
+  - `desktop/src/App.tsx` and `desktop/src/components/MessageContent.tsx` accept the new image QA gate/detail enums for fallback parsing and persistence.
+- Removed a small staged-runtime structure debt:
+  - `desktop/runtime/ecorex-runtime/agent/tools/imagegen/` was missing even though the staged `agent/tools/__init__.py` imports `agent.tools.imagegen.imagegen`; the directory and `__init__.py`/`imagegen.py` are now present.
+  - Synced `desktop/dist` into `channel/web/static/app` and removed one stale unreferenced hashed JS asset after verifying the current `index.html` references only `index-DdmAyrpd.js` and `index-DUXL0QNb.css`.
+- Added/updated focused verification:
+  - `tests/test_v024_image_quality_runtime.py` covers clean image pass, blank/corrupt/seam/overlay detections, no path leakage, and image job projection overriding caller-supplied malicious QA evidence.
+  - `scripts/smoke-v024-image-structural-quality.py` creates deterministic clean/blank/corrupt/seam/overlay fixtures and validates job projection plus `leakCount=0`.
+  - `scripts/smoke-v024-release-artifact-contracts.py` now requires packaged `image_quality_runtime.py`, image job/tool integration, and image QA WebUI gate markers in Windows/macOS WebUI ZIPs and web-linux-service tar.
+  - `scripts/validate-ecorex-release-artifacts.py` now requires image QA runtime/projection/tool markers across runtime/package surfaces and the live static app bundle.
+- Verification passed before multi-agent review:
+  - `python -m py_compile ...` for changed image QA runtime, image job service, imagegen tool, projection, staged runtime copies, and release scripts -> PASS.
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_v024_image_quality_runtime.py -q` -> `3 passed`.
+  - Focused backend regression: `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_v024_image_quality_runtime.py tests\test_ecorex_web_parallel_backend.py -q -k "image_job_service or image_jobs_api or image_quality or office_pdf_quality_evidence or frontend_quality_evidence"` -> `29 passed`.
+  - `npm --prefix desktop run typecheck` -> PASS.
+  - `npm --prefix desktop run build:renderer` -> PASS with existing Vite chunk-size warning.
+  - `python scripts\smoke-v024-image-structural-quality.py --output docs\v0.2.4\artifacts\image-structural-quality-smoke.json` -> PASS with `cleanStatus=pass`, `blankStatus=fail`, `corruptStatus=fail`, `seamStatus=fail`, `overlayStatus=warn`, and `leakCount=0`.
+  - `python scripts\smoke-v024-office-pdf-evidence-browser.py --output docs\v0.2.4\artifacts\office-pdf-evidence-browser-smoke.json --screenshot docs\v0.2.4\artifacts\office-pdf-evidence-browser-smoke.png` -> PASS.
+  - `python scripts\smoke-v024-release-artifact-contracts.py --version 0.2.3 --release-dir release-artifacts --office-output docs\v0.2.4\artifacts\office-pdf-web-evidence-release-contract.json` -> PASS.
+  - `python scripts\validate-ecorex-release-artifacts.py --version 0.2.3` -> PASS.
+  - `python scripts\smoke-v023-install-packaging-contracts.py` -> PASS.
+  - Final privacy scan over image structural smoke, browser smoke, and release contract evidence -> PASS with `findingCount=0`.
+- Rebuilt WebUI Windows/macOS, web-linux-service, manifest, and public release artifacts after R24-10:
+  - Windows WebUI sha256 `6DF79E146C25C38433C475652E6565D1111639EC10B2AD281BA34BF1CF3E5822`, size `102838217`
+  - macOS WebUI sha256 `DAD07125F0C48B26C40A18BDF481187755A09CE07161C4EE27EBBD49E00F33BA`, size `263138879`
+  - web-linux-service sha256 `AB4B3618FDA7D8D2F7298A7110A5C5866EB8DC0988E3F06962E29FCE91FCE162`, size `3791428`
+  - public-release sha256 `85C498985C93A3D03F7E76460EA9531289CB14246110E730760536D583D65BA9`, size `371531979`
+- Multi-agent review found and fixed imagegen output-boundary blockers before PASS:
+  - Direct `imagegen` success rows now pass through `_safe_image_result_row()` before returning to tool callers; arbitrary provider fields such as raw responses, prompt text, raw OCR/text, and caller-provided QA evidence are dropped.
+  - Direct `imagegen` failure paths now use `_safe_imagegen_failure_payload()` plus presence/count-only stderr summaries instead of returning parsed raw subprocess stdout.
+  - Successful `stderrTail` text output was removed and release validators now require `stderrTail` to be absent from packaged `imagegen.py`.
+  - Release contracts now require `_safe_image_result_row`, `_safe_imagegen_failure_payload`, `_safe_text_presence`, packaged image QA integration markers, and Windows/macOS/service Image structural QA evidence labels.
+  - Windows/macOS/service/public packages were rebuilt after each security fix and package hash checks verified staged, Windows, macOS, and service `runtime/agent/tools/imagegen/imagegen.py` all match SHA256 `88C17B7E55F7AAD58B26C44704DEB97A25AA31F0193FA8939E4F5D380E940229`.
+- Final R24-10 verification after review fixes:
+  - `python -m py_compile ...` for image QA runtime, image job service, imagegen tool, projection, staged runtime copies, tests, and release scripts -> PASS.
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_v024_image_quality_runtime.py -q` -> `6 passed`.
+  - Focused backend regression -> `32 passed, 367 deselected` with existing pydub/ffmpeg warnings.
+  - `python scripts\smoke-v024-image-structural-quality.py --output docs\v0.2.4\artifacts\image-structural-quality-smoke.json` -> PASS with `leakCount=0`.
+  - `python scripts\smoke-v024-release-artifact-contracts.py --version 0.2.3 --release-dir release-artifacts --office-output docs\v0.2.4\artifacts\office-pdf-web-evidence-release-contract.json` -> PASS.
+  - `python scripts\validate-ecorex-release-artifacts.py --version 0.2.3` -> PASS.
+  - `python scripts\smoke-v023-install-packaging-contracts.py` -> PASS.
+  - Final privacy scan -> PASS with `findingCount=0`.
+- Final rebuilt artifacts after R24-10 review fixes:
+  - Windows WebUI sha256 `B2BEC3F42C6DAB865DCBE2987A41363A66EB5FF387123B1089243951833D2E28`, size `102839051`
+  - macOS WebUI sha256 `E1F5B074BACF0840FEE2F54E48108B5AFD9B22E8A072B3CE7B43B8CC80FAF862`, size `263139713`
+  - web-linux-service sha256 `0C6C0BD6C548D86081DF96F0DC0CDFFBFA88F7EAE84C0DD9F409F04DF601A1F1`, size `3792219`
+  - public-release sha256 `90E2B33C139BFA35A5D10135D83D797CFE662292FE7B1BC339E5D54133B961B7`, size `371534884`
+- Final multi-agent consensus PASS from Bernoulli, Copernicus, Parfit, Avicenna, and Dirac. Scope boundary: this slice makes structural defects observable and blocks silent known-bad evidence projection; R24-11 handles vision/text/anatomy/watermark QA, R24-12 handles reference fidelity, R24-13 handles automatic retry/finalization policy, and R24-14B will compare EcoreX vs Codex image-generation efficiency after the image QA chain is complete.
+
+## R24-11
+
+- Implemented image vision/anomaly QA as an additive extension of the existing EcoreX image `qualityEvidence` contract:
+  - `common/image_quality_runtime.py` and the staged runtime copy now add `text-glyph-check`, `watermark-check`, `subject-structure-check`, and `anomaly-check` gates.
+  - The runtime reuses the same decoded/resized image sample from R24-10 and emits content-free metrics only: `textLikeRegionCount`, `smallEdgeComponentCount`, `lineLikeComponentCount`, `textDensityPct`, `saliencyCoveragePct`, `glyphFragmentRisk`, `watermarkRisk`, `subjectStructureRisk`, and `anomalyRisk`.
+  - Clean gradient output remains `pass`; dense text/glyph-like output warns on `text-glyph-check`; transparent watermark-like overlays warn on `watermark-check`; high-noise visual patterns warn on `anomaly-check`; prompt/OCR text is never emitted.
+- Wired projection and frontend compatibility:
+  - `agent/protocol/runtime_projection.py` and staged copy allow the new image gates/detail keys/analysis metrics through the strict QA sanitizer.
+  - `desktop/src/App.tsx` and `desktop/src/components/MessageContent.tsx` allow the new gates/details in fallback parsing and persistence.
+  - `channel/web/static/app` was synced from the latest renderer build (`index-Cyq-oWre.js`).
+- Verification before multi-agent review:
+  - `python -m py_compile ...` for image runtime, staged runtime, projection, tests, smoke, and release scripts -> PASS.
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_v024_image_quality_runtime.py -q` -> `7 passed`.
+  - Focused backend regression -> `33 passed, 367 deselected` with existing pydub/ffmpeg warnings.
+  - `npm --prefix desktop run typecheck` -> PASS.
+  - `npm --prefix desktop run build:renderer` -> PASS with existing Vite chunk-size warning.
+  - `python scripts\smoke-v024-image-structural-quality.py --output docs\v0.2.4\artifacts\image-structural-quality-smoke.json` -> PASS with clean/blank/corrupt/seam/overlay/dense-text/noise coverage and `leakCount=0`.
+  - `python scripts\smoke-v024-office-pdf-evidence-browser.py --output docs\v0.2.4\artifacts\office-pdf-evidence-browser-smoke.json --screenshot docs\v0.2.4\artifacts\office-pdf-evidence-browser-smoke.png` -> PASS.
+  - Release contract, release validator, install packaging, package hash check, and privacy scan -> PASS with `findingCount=0`.
+- Rebuilt WebUI Windows/macOS, web-linux-service, manifest, and public release artifacts after R24-11:
+  - Windows WebUI sha256 `A67F11FE763E436271470F73C5638668DE6EAD20AD0A928E10C4020954ABE2C3`, size `102841058`
+  - macOS WebUI sha256 `FF38DE468A0D634577088066E855506CD818ECF783363D37BE7C1FE85BEE731A`, size `263141721`
+  - web-linux-service sha256 `41457EF33D7E6BCC056E0BFC9C19DAD535EE986EDAEB3FC18FB87DD8E866F503`, size `3794970`
+  - public-release sha256 `DC6E6EDC5C44D8935EAC10261255C0BCBC63BED173711E5E6A91395D008CF285`, size `371542218`
+- Multi-agent review found and fixed two QA coverage blockers before PASS:
+  - `scripts/smoke-v024-image-structural-quality.py` now has a dedicated watermark fixture, asserts `watermarkDetected=true`, and records `watermarkStatus=warn`.
+  - `scripts/smoke-v024-release-artifact-contracts.py`, `scripts/validate-ecorex-release-artifacts.py`, and `tests/test_ecorex_web_parallel_backend.py` now require `anomaly-check` in packaged renderer/source evidence.
+- Final R24-11 review verification after the QA fixes:
+  - image quality smoke -> PASS with `watermarkDetected=true`, `textGlyphDetected=true`, `anomalyDetected=true`, and `leakCount=0`.
+  - frontend quality evidence source test -> `1 passed`.
+  - release validator -> PASS.
+  - release contract -> PASS.
+  - privacy scan -> PASS with `findingCount=0`.
+- Final multi-agent consensus PASS from Bernoulli, Copernicus, Parfit, Avicenna, and Dirac. Scope boundary: this slice detects local visual/text/glyph/watermark/anomaly risks from generated output; R24-12 handles reference-image fidelity, R24-13 handles retry/finalization policy, and R24-14B handles EcoreX-vs-Codex ImageGen efficiency comparison after the image QA chain is complete.
+
+## R24-12
+
+- Implemented reference-image fidelity QA as an additive image `qualityEvidence` extension:
+  - `common/image_quality_runtime.py` now adds the `reference-fidelity` gate.
+  - `build_image_quality_evidence(..., reference_images=...)` compares generated local output to local reference images using a bounded 32x32 thumbnail, luminance histogram, mean color, aspect-ratio, and edge-density signature.
+  - The comparison emits content-free metrics only: `referenceCount`, `localReferenceCount`, `remoteReferenceCount`, `referenceComparedCount`, `referenceDecodeFailureCount`, `referenceSimilarityPct`, `referenceMismatchRisk`, `referenceAspectMismatchRisk`, and HMAC `referenceRef`.
+  - Remote/data references are counted and skipped instead of fetched or projected; no reference URL, path, OCR text, prompt, or provider raw output is emitted.
+  - A score below the current warn threshold (`78%`) marks `reference-fidelity` as `warn`; reference mismatch never hard-fails generation in this slice.
+- Wired reference QA into both image-generation surfaces:
+  - Direct `agent/tools/imagegen/imagegen.py` passes permission-authorized `image_url` / `image_urls` references into local QA and aggregates `qualityGates` from the actual per-image evidence instead of an older hardcoded structural-only list.
+  - `agent/protocol/image_job_service.py` now passes task reference fields (`image_url`, `image_urls`, `image_path`, `image_paths`, `input_image`, `input_images`, `reference_image`, `reference_images`, `referenceImage`, `referenceImages`) into artifact QA while still dropping caller-provided `qualityEvidence`.
+  - Security review found that the image job path needed the same local-reference read authorization as direct `imagegen`; `agent/protocol/image_job_service.py` and its staged runtime copy now use `_authorized_quality_reference_images()` / `_authorize_reference_read()` so unauthorized local references are skipped before decode.
+  - Security follow-up found that runner artifacts could still inject `reference_image` fields into the runtime fallback; `_safe_artifact()` now calls `build_image_quality_evidence()` with `_image_quality_target(normalized)`, a stripped generated-target object containing only image target path fields, plus the authorized task references.
+  - `agent/protocol/runtime_projection.py`, staged projection copy, `desktop/src/App.tsx`, and `desktop/src/components/MessageContent.tsx` allowlist `reference-fidelity` and reference detail/metric keys.
+  - `desktop/src/services/ecorexApi.ts` now includes `imageAnalysis` in the `QualityEvidence` type.
+  - Product review found that remote/data references skipped by local QA were hidden behind an overall pass badge; `desktop/src/components/MessageContent.tsx` now surfaces `reference-fidelity` skipped checks when `reference_count` or `remote_references` is non-zero, showing the badge as `待复核` while ordinary no-reference text-to-image remains clean.
+- Fixed a small packaging/runtime compatibility debt found during the slice:
+  - `prepare-ecorex-webui-local-release.ps1`, `prepare-ecorex-web-release.ps1`, `update-ecorex-desktop-release-manifest.ps1`, and `prepare-ecorex-public-release.ps1` now use `Get-EcoreXFileSha256`, which falls back to .NET SHA256 when the host PowerShell lacks `Get-FileHash`.
+- Verification before multi-agent review:
+  - `python -m py_compile ...` for image runtime, imagegen tool, image job service, runtime projection, staged runtime copies, tests, smoke, release contracts, validator, and packaging scripts -> PASS.
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_v024_image_quality_runtime.py -q` -> `10 passed`.
+  - Focused backend regression -> `36 passed, 367 deselected` with existing pydub/ffmpeg warnings.
+  - `npm --prefix desktop run typecheck` -> PASS.
+  - `npm --prefix desktop run build:renderer` -> PASS with existing Vite chunk-size warning.
+  - `python scripts\smoke-v024-image-structural-quality.py --output docs\v0.2.4\artifacts\image-structural-quality-smoke.json` -> PASS with `referenceMatchDetected=true`, `referenceSimilarDetected=true`, `referenceMismatchDetected=true`, `referenceRemoteSkipped=true`, `referenceDataSkipped=true`, `referenceNoReferenceSkipped=true`, and `leakCount=0`.
+  - `python scripts\smoke-v024-release-artifact-contracts.py --version 0.2.3 --release-dir release-artifacts --office-output docs\v0.2.4\artifacts\office-pdf-web-evidence-release-contract.json` -> PASS.
+  - `python scripts\validate-ecorex-release-artifacts.py --version 0.2.3` -> PASS.
+  - `python scripts\smoke-v023-install-packaging-contracts.py` -> PASS.
+  - `python scripts\smoke-v024-office-pdf-evidence-browser.py --output docs\v0.2.4\artifacts\office-pdf-evidence-browser-smoke.json --screenshot docs\v0.2.4\artifacts\office-pdf-evidence-browser-smoke.png` -> PASS.
+  - Privacy scan over image, browser, release, and existing v0.2.4 artifacts -> PASS with `findingCount=0`.
+- Rebuilt WebUI Windows/macOS, web-linux-service, manifest, and public release artifacts:
+  - Windows WebUI sha256 `5E55A6D83A0AC1A5021C6D69889BC9A25700A16568F7467DB7E4DAC05D8F102F`, size `102845248`
+  - macOS WebUI sha256 `80AEDF1AFBC5229710B15E37B44950CD99C03171176248FAD412AB2AC7399541`, size `263145909`
+  - web-linux-service sha256 `C256CE68AC8D87BEB0D2D562A95CB6D13ADC579CE55505305C32C6BAB2BD3F88`, size `3801803`
+  - public-release sha256 `47595E145D042003829289751C713C6C84F4B24C70CA5548239C4D1F3EC9367D`, size `371557883`
+- Package hash spot check:
+  - `common/image_quality_runtime.py` source/staged/Windows/macOS/service SHA256 `508EAC0BE910757371F5C33F4B1EF4F9123CC2E30F036D2185A563EDA2C681C6`.
+  - `agent/protocol/runtime_projection.py` source/staged/Windows/macOS/service SHA256 `CFB37B21E0E43C9FD468A48459BDABFD5F8015D92794B01CD43D2CBD2A4C4F40`.
+  - `agent/tools/imagegen/imagegen.py` source/staged/Windows/macOS/service SHA256 `71DB4DA7AE99483D793817812D3D8D72177AD91FCBB9A4AB69A9D3CA71B2D162`.
+  - `agent/protocol/image_job_service.py` source/staged/Windows/macOS/service SHA256 `6B1D7DE7E4DA9BE3F20A9F1A3F9596D0AED1AA8FBC8DEF92595FF53442FEDE24`, with `_image_quality_target` present in packaged job-service copies.
+  - Windows/macOS/service renderer bundles contain `reference-fidelity-skipped-review`.
+  - Package hash report: `docs/v0.2.4/artifacts/image-reference-fidelity-package-hashes.json`.
+  - Final privacy scan: `docs/v0.2.4/artifacts/image-reference-fidelity-release-privacy.json` with `findingCount=0`.
+- Final multi-agent consensus PASS from Bernoulli, Copernicus, Parfit, Avicenna, and Dirac after fixing the artifact-injected reference bypass, similar/data/no-reference coverage gaps, skipped-reference UX visibility, and package marker coverage. Scope boundary: R24-13 handles automatic retry/finalization policy, R24-14 handles quality-preserving visual-analysis speed, and R24-14B runs the EcoreX-vs-Codex ImageGen efficiency benchmark after the image QA/finalization chain is complete.
+
+## R24-13
+
+- Implemented EcoreX-native image finalization and bounded post-QA retry:
+  - `common/image_quality_runtime.py` now exposes content-safe `build_image_finalization_decision()`, `attach_image_finalization_evidence()`, and `aggregate_image_finalization_decisions()` using policy `v0.2.4-image-finalization-v1`.
+  - Retry-worthy gates are explicit and bounded: hard structural failures (`decode-valid`, `artifact-integrity`, `non-blank`, `seam-check`) and high-confidence warnings (`overlay-ghosting-check`, `text-glyph-check`, `watermark-check`, `subject-structure-check`, `anomaly-check`, `reference-fidelity`).
+  - Finalization details are attached to the existing `visual-inspection` check as safe enum/numeric detail (`retry_count`, `max_retries`, `retry_recommended`, `finalized`, `retry_gate`) and to `imageAnalysis.summary` as safe metrics.
+- Wired retry/finalization into both generation paths:
+  - Direct `agent/tools/imagegen/imagegen.py` defaults to one post-QA retry, capped at two; on retry it reuses the same provider route with a fixed internal quality-retry prompt suffix and returns allowlisted image rows plus safe `finalization`.
+  - `agent/protocol/image_job_service.py` adds opt-in retry/finalization for runner tasks, discards failed intermediate artifacts, emits a sanitized `image_job.progress` retry event, and appends only the final selected artifact.
+  - `channel/web/web_channel.py` makes WebUI image-job tasks opt into `quality_retry_max=1` by default while preserving caller override and keeping the generic `ImageJobService` compatible for old direct callers.
+  - RuntimeProjection and WebUI QA detail allowlists now preserve finalization retry counters without exposing raw prompt/path/provider data.
+- Verification before multi-agent review:
+  - `python -m py_compile ...` for image runtime, staged runtime copies, direct tool, job service, projection, WebChannel, tests, smoke, release contracts, and validator -> PASS.
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_v024_image_quality_runtime.py -q` -> `14 passed`.
+  - Focused backend regression -> `40 passed, 367 deselected` with existing pydub/ffmpeg warnings.
+  - `npm --prefix desktop run typecheck` -> PASS.
+  - `npm --prefix desktop run build:renderer` -> PASS with existing Vite chunk-size warning; `channel/web/static/app` synced to `index-CYmjxf9c.js`.
+  - `python scripts\smoke-v024-image-structural-quality.py --output docs\v0.2.4\artifacts\image-structural-quality-smoke.json` -> PASS with `finalizationRetryDetected=true`, `jobProjectionEvidence=true`, and `leakCount=0`.
+- Current compatibility decision:
+  - Direct `imagegen` and WebUI API default to one bounded QA retry.
+  - Bare `ImageJobService` callers remain opt-in so old test harnesses and custom runners are not retried unexpectedly; WebUI tasks explicitly carry `quality_retry_max`.
+- QA review follow-up fixed before packaging:
+  - Added direct-tool coverage that remote/no-local-output results do not retry and report `finalization.status=unknown` without `qualityEvidence`.
+  - Added service cancellation coverage that cancelling immediately after retry progress prevents the second runner attempt and appends no artifact.
+- Security/product review follow-up fixed before final package rebuild:
+  - Hardened image job and RuntimeProjection telemetry token sanitizers so URL/path-shaped provider/model/retry values (`http://`, `https://`, `file://`, `data:`, slash, backslash, or colon) are rejected before raw ledger or UI projection.
+  - Added focused regression coverage for URL/path-shaped telemetry rejection in `tests/test_ecorex_web_parallel_backend.py`.
+  - Added `max_retries` to RuntimeProjection finalization detail allowlists and kept frontend renderer allowlists aligned with `retry_count`, `max_retries`, and `retry_gate`.
+- Product re-review follow-up fixed before the final package rebuild:
+  - RuntimeProjection now preserves `imageAnalysis.summary.retryGate` only when it matches the existing image quality gate allowlist via `_safe_projection_quality_gate(text)`, so summary retry reasons such as `non-blank` survive replay/history while URL/path-shaped strings are still omitted.
+  - Added `test_v024_runtime_projection_preserves_image_finalization_retry_gate_summary` to cover the real `tool.completed -> RuntimeProjectionService.request_projection` path.
+  - Strengthened `scripts/validate-ecorex-release-artifacts.py` and `scripts/smoke-v024-release-artifact-contracts.py` so packaged `runtime_projection.py` must include both `"retryGate"` and `_safe_projection_quality_gate(text)`.
+- Final package/release verification before multi-agent consensus:
+  - Focused backend after security hardening -> `41 passed, 367 deselected` with existing pydub/ffmpeg warnings.
+  - Product blocker focused regression -> `3 passed, 392 deselected`; v0.2.4 projection slice -> `5 passed, 390 deselected`.
+  - `python scripts\smoke-v024-release-artifact-contracts.py --version 0.2.3 --release-dir release-artifacts --office-output docs\v0.2.4\artifacts\office-pdf-web-evidence-release-contract.json` -> PASS.
+  - `python scripts\validate-ecorex-release-artifacts.py --version 0.2.3` -> PASS.
+  - `python scripts\smoke-v023-install-packaging-contracts.py` -> PASS.
+  - `docs/v0.2.4/artifacts/image-finalization-package-hashes.json` -> PASS with all nested Windows/macOS/service/public package markers true for runtime policy, service retry, WebUI retry opt-in, projection retry-gate summary, renderer retry display, reference review, and telemetry hardening.
+  - `python scripts\scan-session-artifacts-privacy.py ... --json-output docs\v0.2.4\artifacts\image-finalization-release-privacy.json` -> PASS with `findingCount=0`.
+  - Final rebuilt artifacts: Windows `47585CDFB05A17C578D99BCFC2F00FDF107FB6DB749D65D36FCA824A0F596B2A` size `102849403`, macOS `43DFA23B2A9A5922F070D8B1394B73A19F29DBA9AE19B631F28C1434DF4E3755` size `263150064`, web-linux-service `D5C5FC8D9D330BF85103D6108185CFEB2D61848894F63DF76201A788C8C95823` size `3803544`, public release `90FB197D134C2D54228996E3123B1377ED1525011A7BAE0A97CC6C79E7E920EF` size `371568072`.
+- Final multi-agent consensus PASS from Bernoulli, Copernicus, Parfit, Avicenna, and Dirac after fixing URL/path-shaped telemetry leakage, missing no-evidence/no-retry and retry-cancel coverage, stale package drift, missing `max_retries` projection detail, and omitted `imageAnalysis.summary.retryGate`. Scope boundary: R24-14 handles quality-preserving visual-analysis speed, and R24-14B runs the EcoreX-vs-Codex ImageGen efficiency benchmark after the image QA/finalization chain is complete.
+
+## R24-14
+
+- Implemented quality-preserving visual-analysis acceleration:
+  - `common/image_quality_runtime.py` and staged runtime copy now use `_analysis_sample()` so generated image QA records original dimensions first, then performs local visual analysis on a bounded sample instead of converting the full image to RGBA before resize.
+  - `_apply_decoder_draft()` lets PIL reduce JPEG/WebP decoding work where supported, while `_image_has_alpha()` keeps transparent images on a safe alpha-preserving path.
+  - `_alpha_sample_metrics()` now computes alpha statistics only when the sampled image actually has transparency, removing unnecessary RGBA/alpha work for ordinary PNG/JPEG outputs while preserving overlay/ghosting detection.
+  - Reference similarity signatures now downsample before RGB/luminance conversion, preserving the same reference-fidelity check contract while avoiding unnecessary full-size RGB conversion.
+- Added reusable performance evidence:
+  - `scripts/smoke-v024-image-visual-analysis-performance.py` builds content-free local fixtures, measures `build_image_quality_evidence()` median/p95, compares status/check compatibility against a baseline artifact, and fails if performance regresses past the slice thresholds.
+  - Baseline artifact: `docs/v0.2.4/artifacts/image-visual-analysis-speed-baseline.json`.
+  - Optimized artifact: `docs/v0.2.4/artifacts/image-visual-analysis-speed-optimized.json`.
+  - Optimized median deltas against baseline from the standalone final run: large PNG `-20.41%`, large JPEG `-45.30%`, alpha overlay `-31.84%`, noise fixture `-29.58%`; average median delta `-31.78%`, improved cases `4/4`, max regression `0.0%`, and all cases preserved top-level status plus every QA check status.
+  - QA blocker coverage was added for large seam, large dense-text, and large anomaly fixtures; the smoke now asserts `seam-check=fail`, `text-glyph-check=warn`, and `anomaly-check=warn` on those large sampled cases.
+- Verification before multi-agent review:
+  - `python -m py_compile common\image_quality_runtime.py desktop\runtime\ecorex-runtime\common\image_quality_runtime.py scripts\smoke-v024-image-visual-analysis-performance.py scripts\smoke-v024-release-artifact-contracts.py scripts\validate-ecorex-release-artifacts.py` -> PASS.
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_v024_image_quality_runtime.py -q` -> `14 passed`.
+  - `python scripts\smoke-v024-image-structural-quality.py --output docs\v0.2.4\artifacts\image-structural-quality-smoke.json` -> PASS with all existing image QA/finalization checks and `leakCount=0`.
+  - `python scripts\smoke-v024-image-visual-analysis-performance.py --baseline docs\v0.2.4\artifacts\image-visual-analysis-speed-baseline.json --output docs\v0.2.4\artifacts\image-visual-analysis-speed-optimized.json` -> PASS with `qualityExpectations.ok=true`, `compatible=true`, and `performanceAcceptable=true`.
+  - `scripts\smoke-v024-release-artifact-contracts.py`, `scripts\validate-ecorex-release-artifacts.py`, and `scripts\smoke-v023-install-packaging-contracts.py` -> PASS after package rebuild.
+  - `docs/v0.2.4/artifacts/image-visual-analysis-performance-package-hashes.json` -> PASS with Windows/macOS/service/dual/public package markers true for `_analysis_sample`, `_apply_decoder_draft`, `_image_has_alpha`, `_alpha_sample_metrics`, and existing image QA gates.
+  - `docs/v0.2.4/artifacts/image-visual-analysis-performance-privacy.json` -> PASS with `findingCount=0`.
+  - Final rebuilt artifacts for this slice: Windows `4EE28E134951E78E29FDB649D046E13DE8707AEF3A7C88BBD508B35C22AF8D3E` size `102853416`, macOS `80721AF46FE0F2FDCB5CB4613AF56A679BD58342B853D06950B6574E26FC4BD6` size `263154182`, web-linux-service `2167767B78A88CA922954FB0A11664FEC8CEB0959FD997065EBEF37F2681B968` size `3803900`, dual WebUI `FE3810600AC009382D89313848538815B1BA76966586F21EA9AE333312654107` size `366255624`, public release `AB2FD80D0CC8487E20B6505145C56D6E5189CD49F1EDD8EB5F867941A0AE8932` size `371575657`.
+- Final multi-agent consensus PASS from Bernoulli, Copernicus, Parfit, Avicenna, and Dirac after closing the performance-regression gate gap, adding large seam/dense-text/anomaly recall coverage, verifying alpha/palette transparency behavior, and confirming source/staged/package/public release marker sync. Scope boundary: R24-14B handles the EcoreX-vs-Codex ImageGen timing benchmark after imagegen completion.
+
+## R24-14B
+
+- Planned ImageGen efficiency parity benchmark after the image generation QA/finalization chain is complete:
+  - Use identical prompt text, size/aspect/output format, reference-image inputs when present, quality requirements, and retry policy across EcoreX and Codex runs.
+  - Measure first visible response, provider generation completion, local QA/vision/reference-check cost, retry/finalization count, final usable-image time, and WebUI rendering/projection overhead.
+  - Optimize only EcoreX-controllable time such as dispatch, polling, artifact persistence, projection, QA scheduling, and frontend update cadence; do not weaken structural/vision/reference/finalization gates to win time.
+  - Run no-reference and reference-image cases, then send the timing evidence through the same multi-agent runtime/QA/security/product/release consensus gate before marking PASS.
+- Current implementation state:
+  - Direct `agent/tools/imagegen/imagegen.py` and staged copy now return a safe numeric `timing` object with provider, quality, finalization, postprocess, total, attempt, and retry counters; successful `durationMs` now represents final usable time after QA/finalization, not only provider completion.
+  - `agent/protocol/image_job_service.py`, staged copy, and RuntimeProjection now emit/project `provider_latency_ms`, `quality_latency_ms`, `finalization_latency_ms`, `postprocess_latency_ms`, and `quality_check` progress as sanitized nonnegative integers.
+  - Added shared `agent/tools/imagegen/provider_runner.py` and staged copy. Direct `imagegen`, WebUI image job runner, and benchmark job path now use the same cached in-process provider runner instead of launching `skills/image-generation/scripts/generate.py` in a fresh Python subprocess per attempt.
+  - The in-process runner keeps prompt/provider/model/OCR-brief values in memory payloads, overlays config/env only while constructing provider instances, preserves the existing provider output shape, and records `runnerMode=in_process` plus numeric `providerElapsedMs`.
+  - Security checkpoint found and fixed a real concurrent env-overlay risk: `_build_providers_with_env()` now snapshots, overlays, and restores provider env under one `_ENV_LOCK` critical section, so concurrent in-process provider builds cannot restore another request's temporary API key/base into process env.
+  - `scripts/smoke-v024-imagegen-efficiency-benchmark.py` runs identical no-reference and reference-image cases, supports `fake`, `preflight`, `real`, `codex-template`, and `codex-result` modes, writes redacted prompt hashes/lengths only, can merge a future Codex timing JSON by `caseId`, and records timing semantics so `providerLatencyMs` is understood as whole in-process provider-runner latency, including provider API call, response decode, and local image save.
+  - `codex-template` mode writes `docs/v0.2.4/artifacts/imagegen-efficiency-codex-template.json` with the exact case ids, prompt hashes, prompt lengths, reference counts, size, format, retry policy, and `schemaVersion=r24-14b-codex-timing-v1` needed for the Codex-side timing run, but no prompt text or image contents. The loader rejects incomplete templates, missing schema versions, missing prompt hashes, mismatched prompt lengths, missing/partial case coverage, unknown or duplicate case ids, prompt-hash mismatches, missing or nonpositive `finalUsableMs`, non-redacted payloads, wrong result modes, failed case status, mismatched reference/size/output/retry requirements, and unknown raw fields outside the strict result/case allowlists so a placeholder, partial/failed/wall-time-only Codex result, or template with `status` edited to `PASS` cannot be mistaken for real parity evidence. Safe template metadata (`resultModeRequired`, `resultStatusRequired`, `timingSemantics`, `promptLength`) may remain in a filled result. `wallMs` is optional auxiliary timing only and cannot replace final usable-image timing. When a valid Codex timing result is merged, benchmark output records only `schemaVersion`, `caseCount`, `sourceSha256`, and `validatedBy` as the top-level Codex evidence summary.
+  - The benchmark job runner now injects EcoreX config-backed provider environment variables the same way direct `imagegen` does, so a future real-provider benchmark does not drift between the direct and image-job paths.
+  - Fake-provider overhead evidence: `docs/v0.2.4/artifacts/imagegen-efficiency-benchmark-fake.json` -> PASS, `redacted=true`, no failed cases, direct EcoreX final usable time `297-312ms`, WebUI job final usable time `327-375ms`, QA/finalization `16-31ms`, direct EcoreX controllable overhead `47-62ms`, and image-job controllable overhead `77-125ms` at synthetic `250ms` provider delay.
+  - Real-provider preflight evidence: `docs/v0.2.4/artifacts/imagegen-efficiency-real-preflight.json` -> `BLOCKED`, `redacted=true`, selected provider `openai`, all real provider readiness booleans false, and no generation attempted.
+  - Real-provider execution guard evidence: `docs/v0.2.4/artifacts/imagegen-efficiency-real-blocked.json` -> `BLOCKED`; `--mode real --provider openai` returns nonzero when credentials are missing and does not fall back to fake-provider timing.
+  - The previous fake-provider overhead shape pointed to standalone `generate.py` provider-runner startup as the largest EcoreX-controllable fixed cost. The in-process runner removes that fixed startup from the EcoreX path while preserving the final QA/finalization gates.
+  - Privacy evidence over fake benchmark, real preflight, real-mode blocked, and Codex timing template artifacts: `docs/v0.2.4/artifacts/imagegen-efficiency-benchmark-privacy.json` -> PASS with `findingCount=0`.
+- Verification in this checkpoint:
+  - `python -m py_compile agent\tools\imagegen\provider_runner.py agent\tools\imagegen\imagegen.py desktop\runtime\ecorex-runtime\agent\tools\imagegen\provider_runner.py desktop\runtime\ecorex-runtime\agent\tools\imagegen\imagegen.py channel\web\web_channel.py desktop\runtime\ecorex-runtime\channel\web\web_channel.py scripts\smoke-v024-imagegen-efficiency-benchmark.py scripts\smoke-v024-release-artifact-contracts.py scripts\validate-ecorex-release-artifacts.py tests\test_v024_image_quality_runtime.py tests\test_ecorex_web_parallel_backend.py` -> PASS.
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_v024_image_quality_runtime.py -q -k "imagegen_efficiency"` -> `3 passed, 15 deselected`.
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_v024_image_quality_runtime.py -q -k "imagegen_efficiency"` -> `13 passed, 16 deselected`.
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_v024_image_quality_runtime.py -q -k "imagegen_efficiency"` -> `15 passed, 16 deselected`.
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_v024_image_quality_runtime.py -q -k "imagegen_efficiency"` -> `16 passed, 16 deselected`.
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_v024_image_quality_runtime.py -q` -> `32 passed`.
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_ecorex_web_parallel_backend.py -q -k "image_job_skill_runner or provider_fallback or image_jobs_api_starts_collects"` -> `3 passed, 392 deselected`.
+  - `npm --prefix desktop run typecheck` -> PASS.
+  - `python scripts\smoke-v024-imagegen-efficiency-benchmark.py --mode fake --provider openai --provider-delay-ms 250 --output docs\v0.2.4\artifacts\imagegen-efficiency-benchmark-fake.json` -> PASS.
+  - `python scripts\smoke-v024-imagegen-efficiency-benchmark.py --mode preflight --provider openai --output docs\v0.2.4\artifacts\imagegen-efficiency-real-preflight.json` -> `BLOCKED` artifact with command exit `0` for preflight recording.
+  - `python scripts\smoke-v024-imagegen-efficiency-benchmark.py --mode real --provider openai --output docs\v0.2.4\artifacts\imagegen-efficiency-real-blocked.json; if ($LASTEXITCODE -eq 1) { exit 0 } else { exit 1 }` -> expected blocked artifact and expected nonzero real-mode exit.
+  - `python scripts\smoke-v024-imagegen-efficiency-benchmark.py --mode codex-template --output docs\v0.2.4\artifacts\imagegen-efficiency-codex-template.json` -> TEMPLATE artifact with command exit `0`.
+  - `python scripts\scan-session-artifacts-privacy.py docs\v0.2.4\artifacts\imagegen-efficiency-benchmark-fake.json docs\v0.2.4\artifacts\imagegen-efficiency-real-preflight.json docs\v0.2.4\artifacts\imagegen-efficiency-real-blocked.json docs\v0.2.4\artifacts\imagegen-efficiency-codex-template.json --json-output docs\v0.2.4\artifacts\imagegen-efficiency-benchmark-privacy.json` -> PASS with `findingCount=0`.
+  - Codex-template checkpoint review found two false-ready blockers: Codex cases with a missing `promptHash` could be accepted, and a partially filled Codex result could make the whole comparison look ready. Both blockers were fixed in `_codex_case_valid()` / `_load_codex_result()` and covered by new regression tests.
+  - Follow-up Codex-result contract hardening now requires `mode=codex-imagegen-timing-result` plus `redacted=true`; regression tests reject a filled template left in `codex-imagegen-timing-template` mode and a non-redacted Codex timing payload.
+  - Follow-up same-requirements hardening now requires future Codex timing cases and future real benchmark cases to preserve the expected `referenceImageCount`, `size`, `outputFormat`, and `qualityRetryMax`; regressions reject Codex result requirement mismatch and real benchmark requirement mismatch.
+  - Follow-up Codex evidence-summary hardening now requires `schemaVersion=r24-14b-codex-timing-v1`; valid merged Codex timing contributes only redacted `caseCount/sourceSha256/validatedBy` evidence, and regressions reject missing schema plus missing final-gate Codex comparison evidence summary.
+  - Follow-up blocker fix requires a future `docs/v0.2.4/artifacts/imagegen-efficiency-codex-result.json` artifact. The final gate validates that artifact independently, recomputes its canonical JSON SHA-256, requires the real benchmark summary to match that SHA, and checks each `codexFinalUsableMs` against the Codex result case timing.
+  - Follow-up security blocker fix adds strict allowlists to both the Codex result loader and final gate Codex artifact validator. Filled results may retain safe template metadata but raw extra fields such as `rawPrompt` or `referencePath` are rejected before readiness.
+  - Follow-up handoff usability hardening adds `--mode codex-result`: it validates a filled external Codex timing candidate and writes a canonical redacted `codex-imagegen-timing-result` payload when valid, or a redacted FAIL report with no raw prompt/path content when invalid. A follow-up security fix ensures the invalid report does not project caller-controlled unknown key names either; it emits counts only.
+  - Follow-up failed-case-status hardening requires every Codex timing case to carry `status=pass` in both the benchmark loader and the final release gate, so a failed Codex generation cannot become parity evidence merely by carrying positive timing numbers.
+  - Follow-up promptLength/self-consistency hardening requires Codex timing cases and future real benchmark cases to preserve template prompt lengths, and requires each real benchmark `comparison.ecorexFinalUsableMs` to equal the same case's `ecorexDirect.finalUsableMs`.
+  - Follow-up final-usable hardening requires future Codex timing cases to carry explicit positive `finalUsableMs`; `wallMs` is accepted only as optional auxiliary metadata and can no longer unlock readiness or comparisons by itself.
+  - Follow-up real-benchmark shape hardening requires a future PASS `real-provider-benchmark` artifact to stay within strict top-level, provider-readiness, timing-semantics, Codex-summary, case, direct, job, and comparison allowlists. Extra raw fields such as `rawPrompt`, `referencePath`, `providerPayload`, or `rawCodexResponse` fail with `r24-14b-real-benchmark-shape-not-clean`.
+  - Follow-up privacy-coverage hardening keeps the current checkpoint scan at four artifacts, but once both the future real benchmark and Codex timing result are clean PASS, the final gate requires the imagegen benchmark privacy artifact to scan at least six files so a stale fake/preflight/template-only scan cannot unlock final PASS.
+  - Follow-up hardening added duplicate/unknown Codex case-id regressions and tightened the final release gate to require the exact R24-14B real benchmark case set (`icon-no-reference` and `poster-reference-edit`) before a future real artifact can pass.
+- Release/package status:
+  - Rebuilt Windows/macOS WebUI ZIPs, web-linux-service tarball, manifest, dual WebUI ZIP, and public release ZIP so package artifacts now include the R24-14B in-process runner timing markers. A staged-runtime drift check found `desktop/runtime/ecorex-runtime` was still on the older subprocess runner; `imagegen.py`, `provider_runner.py`, and `web_channel.py` were mechanically synchronized before the final rebuild.
+    - Windows WebUI `9036D3D284F69ABEDF0D21A8AE37081CE8542661776F19E7C66F0A059E82535C`, size `102862577`
+    - macOS WebUI `17EA3DDF472A28AA17FEE137CE3B0583C0B3430FE08F4557B829AD93CD82B808`, size `263163551`
+    - web-linux-service `BC7B7F52EF9B407186C9185AF83EA123404A775BDCFE378AB4754A638130D17B`, size `3806427`
+    - dual WebUI `784E0EF74BC3D334C5314118C6260F408F817BDEBF64F04D112B0127F40EB99F`, size `366274219`
+    - public release `395BE42C7310BCDF5296441E767F469A7CAB73664947188DDDE1964BB755E167`, size `371597191`
+  - `npm --prefix desktop run typecheck` -> PASS.
+  - `npm --prefix desktop run webui:package` -> PASS.
+  - `powershell -ExecutionPolicy Bypass -File scripts\prepare-ecorex-web-release.ps1 -Version 0.2.3` -> PASS.
+  - `powershell -ExecutionPolicy Bypass -File scripts\update-ecorex-desktop-release-manifest.ps1 -Version 0.2.3 -PromoteVersion -WebUiWindowsPath release-artifacts\EcoreX_0.2.3-webui-windows-x64.zip -WebUiMacosPath release-artifacts\EcoreX_0.2.3-webui-macos-universal.zip -WebLinuxServicePath release-artifacts\EcoreX_0.2.3-web-linux-service.tar.gz` -> PASS.
+  - `powershell -ExecutionPolicy Bypass -File scripts\prepare-ecorex-public-release.ps1 -Version 0.2.3` -> PASS and its internal release artifact validation passed.
+  - `python scripts\smoke-v024-release-artifact-contracts.py --version 0.2.3 --release-dir release-artifacts --office-output docs\v0.2.4\artifacts\r24-14b-release-contract-check.json` -> PASS.
+  - `python scripts\validate-ecorex-release-artifacts.py --version 0.2.3` -> PASS.
+  - `python scripts\smoke-v023-install-packaging-contracts.py` -> PASS.
+  - This is a package-sync checkpoint PASS only; R24-14B is still not final PASS because the real same-prompt EcoreX-vs-Codex timing comparison has not run.
+- Multi-agent checkpoint review:
+  - Bernoulli/security -> PASS-CHECKPOINT; timing artifact is redacted and no raw prompts, provider secrets, localhost base URL, image bytes, fixture filenames, or absolute paths were found.
+  - Copernicus/architecture -> PASS-CHECKPOINT; timing design was sound for that IN PROGRESS checkpoint, with a then-current semantic boundary that `provider_latency_ms` covered whole runner invocation latency, including subprocess startup, not pure provider API time.
+  - Parfit/release -> PASS-CHECKPOINT; package rebuild was still pending at this checkpoint and therefore blocked any final release/package PASS claim until the later package-sync checkpoint.
+  - Avicenna/QA -> PASS-CHECKPOINT; fake benchmark, privacy artifact, and then-current `15 passed` image QA pytest supported that checkpoint while real Codex result merge remained pending.
+  - Dirac/product -> PASS-CHECKPOINT; user-facing wording honestly separates fake-provider overhead evidence from the requested real EcoreX-vs-Codex comparison.
+- Incremental multi-agent checkpoint after adding `fake` / `preflight` / `real` modes:
+  - Bernoulli/security -> PASS-CHECKPOINT; fake, preflight, and real-blocked artifacts expose provider ids/readiness booleans and integer timings only, with no credential/prompt/path leakage and privacy `findingCount=0`.
+  - Copernicus/architecture -> PASS-CHECKPOINT; `timingSemantics` is clear enough for IN PROGRESS, direct and job paths now share provider config-env mapping, and real mode blocks instead of falling back to fake.
+  - Parfit/release -> PASS-CHECKPOINT; release artifacts were still stale for R24-14B timing markers at this checkpoint, so it was checkpoint-only until the later package-sync checkpoint.
+  - Avicenna/QA -> PASS-CHECKPOINT; harness separation is clean, preflight records `BLOCKED`, fake returns `PASS`, and final acceptance still needs real same-prompt evidence.
+  - Dirac/product -> PASS-CHECKPOINT; product state remains honest and useful while waiting for real provider credentials.
+- Additional regression coverage:
+  - `tests/test_v024_image_quality_runtime.py` now includes focused benchmark contract tests for preflight blocking without credentials, real mode refusing to fall back to fake without credentials, and fake mode prompt redaction plus overhead metric calculation.
+- Incremental multi-agent checkpoint after adding benchmark contract tests:
+  - Bernoulli/security -> PASS-CHECKPOINT; tests are scoped to redaction and mode separation, and artifacts/docs still separate fake/preflight/real-blocked states without raw prompts, secrets, absolute paths, local provider URLs, or image bytes.
+  - Copernicus/architecture -> PASS-CHECKPOINT; tests strengthen the IN PROGRESS contract without changing the release/package boundary.
+  - Parfit/release -> PASS-CHECKPOINT; new tests/docs are acceptable checkpoint evidence only, with no final package PASS claim.
+  - Avicenna/QA -> PASS-CHECKPOINT; focused `imagegen_efficiency` tests passed `3/3` and cover preflight blocking, real-mode no-fake fallback, and fake-mode redaction/overhead metrics.
+  - Dirac/product -> PASS-CHECKPOINT; product state remains honest because real parity is still explicitly pending provider credentials and same-prompt evidence.
+- Incremental multi-agent checkpoint after rebuilding packages and rerunning release contracts:
+  - Bernoulli/security -> PASS-CHECKPOINT; package rebuild did not add raw prompts, credentials, provider payloads, local paths, or image contents to the benchmark artifacts, and privacy scan still reports `findingCount=0`.
+  - Copernicus/architecture -> PASS-CHECKPOINT; source/staged/package timing surfaces are now aligned, while the provider-latency semantic boundary remains explicitly documented.
+  - Parfit/release -> PASS-CHECKPOINT; Windows/macOS WebUI, web-linux-service, dual WebUI, manifest, public release, release contract, validator, and install packaging checks are now synchronized for timing markers.
+  - Avicenna/QA -> PASS-CHECKPOINT; image QA `18 passed`, benchmark-mode `3 passed`, fake benchmark PASS, preflight `BLOCKED`, and real-mode blocked guard are consistent after package rebuild.
+  - Dirac/product -> PASS-CHECKPOINT; package evidence is shippable for timing observability, but product parity remains unclaimed until a real provider run and Codex timing merge exist.
+- Incremental multi-agent checkpoint after in-process runner optimization and env-overlay blocker fix:
+  - Bernoulli/security -> PASS-CHECKPOINT; previous env snapshot-before-lock blocker is fixed in source and staged runtime, artifacts remain redacted, privacy scan has `findingCount=0`, and docs still keep R24-14B checkpoint-only.
+  - Copernicus/architecture -> PASS-CHECKPOINT; locked env snapshot/overlay/restore, direct/job/shared helper parity, staged sync, package readback, and real-provider blocked state are coherent.
+  - Parfit/release -> PASS-CHECKPOINT; rebuilt Windows/macOS/service/dual/public packages match the final hashes and contain locked `provider_runner.py` plus timing/WebUI markers.
+  - Avicenna/QA -> PASS-CHECKPOINT; the new concurrent env-overlay regression covers the failing interleaving, focused runner/efficiency tests passed, image QA is `19 passed`, and final real same-prompt comparison remains pending.
+  - Dirac/product -> PASS-CHECKPOINT; product state is honest with corrected fake timing ranges, a recorded blocker fix, and no real parity claim before provider credentials plus Codex timing exist.
+- Incremental multi-agent checkpoint after Codex-template false-ready blocker fixes:
+  - Bernoulli/security -> PASS-CHECKPOINT; no prompt/secret leakage or false parity claim found, privacy remains `findingCount=0`, and missing/mismatched hashes, unknown/duplicate ids, partial coverage, and nonpositive timings fail closed.
+  - Copernicus/architecture -> PASS-CHECKPOINT; the loader now requires top-level `PASS`, exact prompt hashes, known non-duplicate case ids, positive timings, and complete CASES coverage before returning ready.
+  - Parfit/release -> PASS-CHECKPOINT; final gate remains `PENDING`, `complete=false`, `--require-complete` still blocks, and docs keep R24-14B/R24-15 non-final.
+  - Avicenna/QA -> PASS-CHECKPOINT; the previous partial-result false-ready probe and a full-case missing-hash variant are rejected, and focused tests pass.
+  - Dirac/product -> PASS-CHECKPOINT; the user-facing state remains honest that the Codex template is only a handoff and real timing is still pending.
+- Incremental multi-agent checkpoint after Codex result-mode/redaction hardening:
+  - Bernoulli/security -> PASS-CHECKPOINT; `_load_codex_result()` requires explicit result mode and `redacted=true`, the regenerated template remains hashes/requirements only, privacy is `findingCount=0`, and no false parity claim is exposed.
+  - Copernicus/architecture -> PASS-CHECKPOINT; the fail-closed contract rejects template-mode PASS while preserving the valid future result path with complete cases, exact hashes, and positive timings.
+  - Parfit/release -> PASS-CHECKPOINT; py_compile, focused efficiency `12 passed`, full image QA `28 passed`, final gate `10 passed`, and current final gate `PENDING/complete=false` all hold.
+  - Avicenna/QA -> PASS-CHECKPOINT; the template-mode PASS and non-redacted result false-ready cases are covered, with no remaining material false-PASS shape in this handoff layer.
+  - Dirac/product -> PASS-CHECKPOINT; docs keep R24-14B/R24-15 pending and clearly avoid fake/template parity claims.
+- Incremental multi-agent checkpoint after same-requirements hardening:
+  - Bernoulli/security -> PASS-CHECKPOINT; no leakage or false same-requirements/parity claim found, and both Codex loader plus final gate reject requirement drift before readiness.
+  - Copernicus/architecture -> PASS-CHECKPOINT; `referenceImageCount`, `size`, `outputFormat`, and `qualityRetryMax` are now enforced in both the loader and final gate while the valid future fixture remains usable.
+  - Parfit/release -> PASS-CHECKPOINT; py_compile, focused efficiency `13 passed`, final gate `11 passed`, full image QA `29 passed`, privacy `findingCount=0`, and final gate `PENDING/complete=false` all hold.
+  - Avicenna/QA -> PASS-CHECKPOINT; same-prompt but different-requirement false PASS is covered by Codex result mismatch and real benchmark mismatch regressions.
+  - Dirac/product -> PASS-CHECKPOINT; docs still state fake/template evidence is not parity and real EcoreX/Codex timing remains pending.
+- Incremental checkpoint after Codex evidence-summary hardening:
+  - Local verification before multi-agent review: py_compile PASS; focused `imagegen_efficiency` tests `22 passed`; final gate tests `19 passed`; full image QA `38 passed`; benchmark privacy and final-gate privacy scans both report `findingCount=0`; `--require-complete` still exits nonzero while R24-14B/R24-15 are pending.
+  - Copernicus/architecture found a real false-ready blocker in the first version: the final gate accepted a hand-authored 64-character `sourceSha256` without proving it matched an actual Codex timing artifact. The blocker was fixed by adding the independent Codex result artifact validator plus source SHA and per-case timing matching.
+  - Bernoulli/security found a real redaction blocker in the next version: the final gate would accept extra raw fields inside an otherwise valid `redacted=true` Codex result artifact. The blocker was fixed with strict top-level and per-case allowlists in both the benchmark loader and final gate, plus regressions for extra raw fields.
+  - Bernoulli/security found one more redaction blocker after `codex-result` mode was added: invalid FAIL reports projected caller-controlled unknown key names. The report now emits only counts such as `unknownTopLevelKeyCount`, `unknownCaseKeyCaseCount`, and `unknownCaseKeyCount`, and regression coverage uses path/token-shaped unknown keys.
+  - Final convergence review:
+    - Bernoulli/security -> PASS-CHECKPOINT; prior raw-field and unknown-key-name blockers are resolved, strict allowlists still protect the loader/final gate, path/domain/token-shaped unknown key names do not appear in serialized FAIL reports, and no remaining security/privacy false-ready blocker was found.
+    - Copernicus/architecture -> PASS-CHECKPOINT; independent Codex artifact validation, canonical SHA matching, per-case final usable timing matching, failed-case-status rejection, promptLength consistency, EcoreX comparison self-consistency, explicit finalUsableMs requirement, and unknown-field rejection remain coherent while safe template metadata is preserved.
+    - Parfit/release -> PASS-CHECKPOINT; final gate `19 passed`, imagegen efficiency `22 passed`, full image QA `38 passed`, py_compile clean, privacy `findingCount=0`, and `--require-complete` still exits nonzero.
+    - Avicenna/QA -> PASS-CHECKPOINT; schema, mode/redaction, requirements, case-set, raw-field, failed case status, promptLength mismatch, wall-time-only rejection, source-SHA, EcoreX comparison timing mismatch, and per-case timing mismatch coverage is sufficient for the checkpoint.
+    - Dirac/product -> PASS-CHECKPOINT; docs and artifacts still avoid parity claims and list the missing Codex result plus real EcoreX provider benchmark as blockers.
+- Incremental real-benchmark shape and privacy-coverage checkpoint:
+  - Local verification: py_compile PASS for `scripts\audit-v024-final-release-gate.py` and `tests\test_v024_final_release_gate.py`; `tests\test_v024_final_release_gate.py` -> `21 passed`; focused `imagegen_efficiency` -> `22 passed, 16 deselected`; full image QA -> `38 passed`; regenerated final-gate preflight remains `PENDING`, `complete=false`, `remainingSlices=["R24-14B","R24-15"]`, `blockerCount=8`; `--require-complete` still exits nonzero; benchmark and final-gate privacy scans report `findingCount=0`.
+  - Bernoulli/security -> PASS-CHECKPOINT; path/token-shaped unknown fields plus `rawPrompt`/`providerPayload`/`rawCodexResponse` stay blocked without being serialized into audit artifacts, and privacy remains clean.
+  - Copernicus/architecture -> PASS-CHECKPOINT; the new allowlists match the successful real-mode benchmark payload shape while applying only to future PASS real benchmark artifacts, so current no-credential blocked artifacts remain PENDING.
+  - Parfit/release -> PASS-CHECKPOINT; the current gate remains PENDING, future clean override path still passes with refreshed six-file privacy coverage, malformed raw-field real benchmark fails, stale four-file future privacy scans fail, and `--require-complete` still fails while pending.
+  - Avicenna/QA -> PASS-CHECKPOINT; coverage now injects top-level `rawPrompt`, case `referencePath`, direct `providerPayload`, comparison `rawCodexResponse`, and stale future privacy coverage, asserting the corresponding blockers.
+  - Dirac/product -> PASS-CHECKPOINT; this remains aligned to the user's same-prompt EcoreX-vs-Codex timing request and still makes no parity claim before real provider and Codex timing evidence exists.
+- Current blocker for the real EcoreX-vs-Codex timing comparison:
+  - Local EcoreX provider credentials are not configured in config or environment (`openai/linkai/gemini/seedream/qwen/minimax=false` in the redacted benchmark report), so a real same-prompt EcoreX run would fail before provider generation. Do not compare Codex real output to EcoreX fake-provider output as if it were parity evidence.
+
+## R24-15
+
+- Added a non-promoting final gate preflight for the v0.2.4 long goal:
+  - `scripts/audit-v024-final-release-gate.py` reads `docs/v0.2.4/acceptance-checklist.md`, `docs/v0.2.4/review-log.md`, and key v0.2.4 artifacts, then reports final readiness without changing any slice status.
+  - The audit requires all completed slices to remain exact `PASS`, requires R24-14B and R24-15 to become exact `PASS` before completion, and rejects fake-provider ImageGen timing as final parity evidence.
+  - The ImageGen final gate requires a real `real-provider-benchmark` artifact with the exact required same-prompt case set (`icon-no-reference` and `poster-reference-edit`), matching prompt hashes and prompt lengths, matching reference/size/output/retry requirements, strict redacted real-benchmark shape allowlists, real case results, `codexComparison.available=true`, validated Codex comparison evidence summary (`schemaVersion`, `caseCount`, `sourceSha256`, `validatedBy`), an independently validated `imagegen-efficiency-codex-result.json` artifact backing that summary, refreshed imagegen privacy scan coverage once real/Codex artifacts exist, per-case Codex `status=pass`, explicit positive per-case Codex `finalUsableMs`, per-case comparison availability, comparison EcoreX timing matching `ecorexDirect.finalUsableMs`, positive Codex/EcoreX comparison timings, and no failed cases.
+- Verification:
+  - `python -m py_compile scripts\audit-v024-final-release-gate.py tests\test_v024_final_release_gate.py` -> PASS.
+  - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests\test_v024_final_release_gate.py -q` -> `21 passed`.
+  - `python scripts\audit-v024-final-release-gate.py --output docs\v0.2.4\artifacts\final-release-gate-preflight.json` -> `PENDING`, `complete=false`, `remainingSlices=["R24-14B","R24-15"]`, `completedPassSliceCount=18`, `artifactCount=9`, `blockerCount=8`.
+  - `python scripts\audit-v024-final-release-gate.py --output docs\v0.2.4\artifacts\final-release-gate-preflight.json --require-complete` correctly exits nonzero while the goal is still pending.
+  - `python scripts\scan-session-artifacts-privacy.py docs\v0.2.4\artifacts\final-release-gate-preflight.json --json-output docs\v0.2.4\artifacts\final-release-gate-preflight-privacy.json` -> PASS with `findingCount=0`.
+- Checkpoint review blockers fixed before keeping the preflight:
+  - Architecture/runtime review found the first version would reject a future real preflight `PASS` because `imagegen-real-preflight` only accepted `BLOCKED`; the artifact spec now allows both `BLOCKED` for checkpoint state and `PASS` for final-ready state, and the future-pass test overrides preflight to `PASS`.
+  - QA review found the first future-pass path did not require each real benchmark case's EcoreX direct/job results to be `pass`; `_imagegen_real_ready()` now requires both `ecorexDirect` and `ecorexJob` to have `status="pass"` plus positive `finalUsableMs`, with a malformed-real-benchmark regression.
+  - Follow-up gate hardening now rejects incomplete, unknown, or duplicate R24-14B real benchmark case sets, so a future final PASS requires both required no-reference and reference-image timing cases rather than any single clean or duplicated case.
+  - Follow-up same-requirements hardening now rejects R24-14B real benchmark cases whose reference count, size, output format, or retry policy drift from the required template.
+- Final R24-15 preflight checkpoint review:
+  - Bernoulli/security -> PASS-CHECKPOINT; no secret leakage or overclaim found, `findingCount=0`, and malformed real timing cannot unlock final PASS.
+  - Copernicus/architecture -> PASS-CHECKPOINT; both fixes hold, the gate remains fail-closed, and the regenerated artifact is still `PENDING` with only R24-14B/R24-15 remaining.
+  - Parfit/release -> PASS-CHECKPOINT; py_compile, isolated gate tests, privacy scan, and `--require-complete` negative path all hold after the fixes.
+  - Avicenna/QA -> PASS-CHECKPOINT; the previous malformed case false-PASS path and zero-timing variant are rejected.
+  - Dirac/product -> PASS-CHECKPOINT; product wording remains honest and no fake-provider parity claim is exposed.
+- Final path-compat micro checkpoint:
+  - `imagegen-real-benchmark` now prefers future `docs/v0.2.4/artifacts/imagegen-efficiency-real-benchmark.json` and falls back to the current `imagegen-efficiency-real-blocked.json`, so a successful real run does not need to overwrite a blocked-named artifact.
+  - Bernoulli, Copernicus, Parfit, Avicenna, and Dirac all returned PASS-CHECKPOINT; current artifact still sources the blocked fallback, remains `PENDING`, and does not claim final PASS.
+- Exact real benchmark case-set hardening checkpoint:
+  - `REQUIRED_IMAGEGEN_CASE_IDS` now requires both `icon-no-reference` and `poster-reference-edit`; incomplete, unknown, and duplicate real benchmark case sets stay pending through `r24-14b-real-case-set-mismatch`.
+  - Regression coverage added for incomplete, unknown, and duplicate real case sets; isolated final gate pytest now reports `7 passed`.
+  - Bernoulli, Copernicus, Parfit, Avicenna, and Dirac all returned PASS-CHECKPOINT after the duplicate-case follow-up; current artifact still remains `PENDING` and does not claim final PASS.
+- Same-prompt and timing-value hardening checkpoint:
+  - The final gate now stores the required R24-14B prompt hashes and rejects missing or mismatched real benchmark `promptHash` values through `r24-14b-real-case-prompt-hash-mismatch`.
+  - `_real_case_clean()` now also requires positive `codexFinalUsableMs` and `ecorexFinalUsableMs` in each case comparison, so `comparison.available=true` alone cannot unlock final PASS.
+  - Regression coverage added for missing prompt hash, wrong prompt hash, mismatched prompt length, wall-time-only Codex artifact without positive `finalUsableMs`, nonpositive Codex comparison timing, mismatched real benchmark requirements, extra raw fields in future PASS real benchmark artifacts, stale future imagegen privacy scan coverage, missing validated Codex comparison evidence summary, unbacked Codex summary source SHA, extra raw Codex result fields, failed Codex case status, EcoreX comparison timing mismatch, and per-case Codex timing mismatch; isolated final gate pytest now reports `21 passed`.
+  - Bernoulli/security, Copernicus/architecture, Parfit/release, Avicenna/QA, and Dirac/product all returned PASS-CHECKPOINT for the stricter promptHash and positive Codex/EcoreX timing gate; the regenerated preflight still remains `PENDING`, not final PASS.
+- Current final-gate blockers:
+  - R24-14B final PASS/review is not earned yet.
+  - `imagegen-efficiency-real-blocked.json` is still `BLOCKED`, so `imagegen-real-benchmark` is not clean/PASS.
+  - `imagegen-efficiency-codex-result.json` is intentionally missing until the same-prompt Codex timing run is filled and validated.
+  - Real EcoreX provider timing, same-prompt Codex timing merge, per-case real comparisons, and final R24-15 release-completion multi-agent consensus are still missing.
+
+## Deployment Exception
+
+- 2026-06-28: User instructed this thread to skip the current blocked R24-14B real same-prompt EcoreX-vs-Codex timing step and proceed directly to production deployment. Recorded `docs/v0.2.4/artifacts/deployment-exception-skip-r24-14b.json` with `status=APPROVED_EXCEPTION`. This exception does not mark R24-14B or R24-15 as PASS, does not claim ImageGen parity, and does not allow fake-provider evidence to substitute for real provider/Codex timing. Production deployment is allowed to continue as v0.2.4 WebUI dual-end with the final gate still honestly `PENDING`.
+
+## Production Deployment
+
+- 2026-06-28: Promoted WebUI dual-end release metadata to v0.2.4 and rebuilt deployable artifacts after the user-approved R24-14B timing exception:
+- 2026-06-28 hotfix refresh after installation feedback that Python environment setup could still block local install:
+  - Windows local WebUI install no longer runs first-run `pip install`; the package build preinstalls `lark_oapi` into the bundled Python runtime and the installer only checks/logs if the module is unexpectedly unavailable.
+  - `release-artifacts/EcoreX_0.2.4-webui-windows-x64.zip` SHA256 `8F1BB474D78A2D7BA461D45724EB8B5BD6F812497575E8A9A3A640520BA0AD8C`, size `136394935`.
+  - `release-artifacts/EcoreX_0.2.4-webui-macos-universal.zip` SHA256 `8A4A8B2F4824D09608F394CF08E0A944610E73676A77BB21B016CC18FC9864D5`, size `263172470`.
+  - `release-artifacts/EcoreX_0.2.4-web-linux-service.tar.gz` SHA256 `364C7F2EDCE786E2725C892C17FC2A285C27A820308585AF31CC986D81FE5828`, size `3806498`.
+  - `release-artifacts/EcoreX_0.2.4-public-release.zip` SHA256 `2F8C14FC0489518EAEE9E3FEC9F293FA2B93C734D6E757C683840B9D38C70F5E`, size `399408328`.
+- 2026-06-28 command-line install hotfix after a Windows user hit `Microsoft.PowerShell.Archive` cleanup race during `Expand-Archive -Force`:
+  - `deploy/ecorex-site/install-webui.ps1` now prefers `curl.exe` with `--continue-at -`, retry, speed-stall detection, and SHA256 verification before falling back to the PowerShell streaming downloader.
+  - The Windows bootstrap no longer calls `Expand-Archive`; it uses `Expand-EcoreXZip`, a `.NET ZipFile` extractor that clears a fresh destination, extracts entries one by one, and blocks unsafe zip-slip paths.
+  - Rebuilt public release ZIP only; WebUI Windows/macOS package hashes remain unchanged. Online `https://mvdcm.ecoremedia.net/ecorex-agent/install-webui.ps1` contains `Try-SaveUrlWithCurl` and `Expand-EcoreXZip`, and contains no `Expand-Archive`.
+- Verification before deploy:
+  - `npm --prefix desktop run typecheck` -> PASS.
+  - `npm --prefix desktop run build:renderer` -> PASS.
+  - `scripts/prepare-ecorex-webui-local-release.ps1 -Version 0.2.4` -> PASS.
+  - `scripts/prepare-ecorex-web-release.ps1 -Version 0.2.4 -WebBuildRoot desktop\dist` -> PASS with `webBuild=provided-web-build`.
+  - `scripts/update-ecorex-desktop-release-manifest.ps1 -Version 0.2.4 -PromoteVersion ...` -> PASS.
+  - `scripts/prepare-ecorex-public-release.ps1 -Version 0.2.4` -> PASS.
+  - `scripts/validate-ecorex-release-artifacts.py --version 0.2.4` -> PASS.
+  - `scripts/smoke-v024-release-artifact-contracts.py --version 0.2.4` -> PASS for native facades, skill governance, Tongxin, Lark, and Office/PDF.
+  - `scripts/smoke-v023-install-packaging-contracts.py --version 0.2.4` -> PASS, including `windows package preinstalls lark_oapi before first-run`, `windows first-run installer does not run pip`, `windows bootstrap prefers curl accelerated resumable download`, and `windows bootstrap avoids Expand-Archive cleanup race`.
+  - `tests/test_v024_final_release_gate.py` -> `21 passed`; regenerated final release gate remains `PENDING` with R24-14B/R24-15 remaining.
+  - Deployment exception, final-gate, and production deployment privacy scans all report `findingCount=0`.
+- Production deployment evidence:
+  - `docs/v0.2.4/artifacts/production-deploy-online.json` -> `status=PASS`.
+  - Initial v0.2.4 deploy advanced web service, installation manifest, and public manifest from v0.2.3 to v0.2.4.
+  - Hotfix redeploy first hit `/tmp` space exhaustion while installing the larger public release ZIP; cleaned only stale `/tmp/ecorex-v0*-release-*` deployment staging directories, reducing `/tmp` from 92% to 60%, then redeployed successfully.
+  - Final post-state is v0.2.4 for web service, installation manifest, and public manifest.
+  - Online checks: `serviceActive=true`, `serviceEnabled=true`, `/api/version` status `200`, and body contains `0.2.4`.
+  - Public release check passed manifest/root/assets/admin gate/client gate and download URLs for Windows WebUI, macOS WebUI, and web-linux-service.
+
+## R24-16 Skill Tool Exposure and Feishu CLI Auth Hotfix
+
+- 2026-06-29: Added a standalone v0.2.4 hotfix slice for newly added skills whose instructions were visible but whose callable tools were not exposed into the model/runtime environment:
+  - Added an EcoreX-native skill-to-tool bridge so official-style Office/PDF, ImageGen, and Tongxin aliases resolve to callable tool names while preserving old EcoreX skill IDs.
+  - Added `<callable_tool>` prompt metadata, extension-registry `agentSurface` projection, model tool-schema aliases, and Office/PDF wrapper tools for documents, presentations, spreadsheets, and PDF.
+  - Included Tongxin CLI in the same exposure path so the default read-only CLI capability is visible as a callable tool instead of only as a configuration surface.
+- Feishu CLI auth parity now follows the Codex/lark-shared split flow:
+  - Auth start uses non-blocking JSON output and generates a QR image from the returned URL.
+  - Auth completion accepts a device code in a later call.
+  - App configuration supports stdin credential initialization and masks sensitive command arguments in display output.
+  - External Connections test results now include a sanitized `agentCliStatus` probe instead of raw CLI output.
+- 2026-06-29 Web-only Feishu CLI auth refresh after user supplied a Codex-successful new-device flow:
+  - `feishu_cli config_init --new` now starts `lark-cli config init --new`, reads stdout/stderr concurrently, returns as soon as the official `open.feishu.cn` / `open.larksuite.com` auth URL appears, and leaves the CLI process alive for callback writeback instead of waiting 240 seconds before surfacing the link.
+  - Web External Connections now exposes an `agent_auth` action for Feishu and injects a browser-only bridge that opens/copies the official auth URL and shows a fallback notice. No Electron desktop shell changes are part of this refresh.
+  - Public payload restoration is limited to Feishu CLI auth fields; QR payloads expose only safe status/relative refs, and `device_code`, `app_secret`, tokens, stdout/stderr log paths, and raw command output are redacted from SSE, external-connection payloads, and agent-stream logs.
+- Verification:
+  - Real CLI status probe reported `authState=ready` and `authenticated=true`.
+  - Real read-only Feishu CLI help and user-scoped contact command both succeeded; raw user data was not persisted into artifacts.
+  - Source and package tests passed for the Web-only auth refresh: py_compile PASS; `node --check channel/web/static/js/console.js` PASS; focused Feishu/Tongxin/skill exposure pytest `26 passed`; focused Web backend pytest `34 passed, 10 subtests passed`; release validation PASS; release artifact contracts PASS; install packaging contract PASS.
+  - Local short-path Windows install smoke passed from the rebuilt public release: download SHA verified, robust ZIP extraction completed, local installer finished, WebUI returned HTTP 200, package files for Feishu CLI/WebChannel/public payload redaction were present, bundled `lark_oapi` was present, and installed Web app assets matched the latest renderer build. Evidence: `docs/v0.2.4/artifacts/webui-install-smoke-local.json`.
+- Final rebuilt/deployed artifacts:
+  - `release-artifacts/EcoreX_0.2.4-webui-windows-x64.zip` SHA256 `1E395A345555330B6F475E7EA1BCBC7845CFD17EEB98E846BFA40FCD2A5F307E`, size `116299310`.
+  - `release-artifacts/EcoreX_0.2.4-webui-macos-universal.zip` SHA256 `DA5DC96EAF80A75D161BB5B85AF7228120833F06B658A1512B35F1A99E4426BB`, size `263191059`.
+  - `release-artifacts/EcoreX_0.2.4-web-linux-service.tar.gz` SHA256 `C8CEC63F0F722FF30DCE9848A7E6617735824B5D879783CCA6F0861156594A18`, size `3820515`.
+  - `release-artifacts/EcoreX_0.2.4-public-release.zip` SHA256 `E3B003CFE32B2993410E1587DF9DAAA7B8308EF81284ABF18A8F447ADDBD0566`, size `382672062`.
+- Production deployment was refreshed successfully with the Web-only package. Final online checks remain v0.2.4 for web service, installation manifest, and public manifest; `/api/version` returns 200 and contains `0.2.4`.
+
+## R24-17 Feishu CLI Writeback and Lark Skill Discovery Hotfix
+
+- 2026-06-29: Added a follow-up Web-only hotfix slice after the user reported that Feishu CLI authorization could open/close the browser page but never write back to the local CLI config, and that Feishu/Lark skills/MCP were probably not being discovered or callable in EcoreX.
+- Feishu CLI writeback now has a durable in-process auth session:
+  - `feishu_cli config_init --new` still returns the official Feishu/Lark authorization URL as soon as it appears, but now also registers the blocking `lark-cli` process, stdout/stderr readers, log paths, deadline, and `sessionId` in `_AUTH_SESSIONS`.
+  - New `feishu_cli config_init_status` / `agent_auth_status` polling reads the same session, reports `writebackPending`, `authCompleted`, `authState`, and `authenticated`, and probes `auth status` only after the CLI process completes.
+  - Process completion alone is not enough to mark authorization complete; if `auth status` is not ready/authenticated, the session reports `auth_incomplete`, while timeout and superseded sessions are killed/cancelled and surfaced as failures.
+  - Web External Connections now supports `agent_auth_status`; both the injected WebChannel bridge and legacy Web console poll the session after opening/copying the auth URL, so closing the Feishu authorization page does not lose the local writeback confirmation.
+  - The Web console now renders timeout/error/cancelled/auth-incomplete states as failures with retry, rather than showing a green completed state for a non-pending non-success result.
+  - `config_init_status` is treated as read-only by `ToolPermissionBroker`; install/run/write-style Feishu CLI actions remain permission-gated.
+- Lark skill discovery and callable mapping are now explicit:
+  - `agent/skills/tool_bridge.py` maps `feishu`, `lark`, `lark-cli`, and all `lark-*` / `feishu-*` skill names to `feishu_cli`.
+  - `SkillService` no longer hides lark/feishu skills as `background` only; they are visible as external collaboration skills unless a skill explicitly disables invocation.
+  - Local runtime scan found 26 `lark-*` skills, all `source_group=external`, `purpose_group=collaboration`, `mentionable=True`, and `tool=feishu_cli`.
+- MCP observation:
+  - Current local EcoreX MCP status is `{}` with `mcpToolCount=0`; no Feishu/Lark MCP server is configured in `mcp.json` or `mcp_servers`.
+  - Codex's Feishu path in this environment is `lark-*` skills plus `lark-cli`, not an active Feishu MCP server. This is recorded to avoid chasing a non-configured MCP as a hidden runtime bug.
+  - `optional_abilities` now exposes a `feishuMcp` observation object with `configured`, `configuredServers`, `status`, `toolCount`, and `callable`, so Web/diagnostics can distinguish "not configured" from "configured but not ready/callable".
+- Tongxin CLI remote bootstrap from the same hotfix train:
+  - `tongxin_cli bootstrap/download` can now use configured authenticated server URLs with required SHA256 verification, safe target naming, UTF-8 Python compilation, atomic write, and persisted `script_path`.
+  - Permission broker allows only config-driven bootstrap by default; explicit URL/token bootstrap remains outside the default read-only path.
+- Final verification:
+  - `python -m py_compile` over changed Feishu/Tongxin/skill/Web/validator files -> PASS.
+  - `node --check channel/web/static/js/console.js` -> PASS.
+  - Focused Feishu auth regression -> `17 passed, 3 warnings`.
+  - Focused regression: `tests/test_v024_feishu_cli_auth_parity.py`, `tests/test_v024_tongxin_cli_readonly.py`, `tests/test_v024_skill_tool_exposure.py`, `tests/test_v024_skill_governance.py`, `tests/test_v024_feishu_lark_oapi_recovery.py::test_webui_packaging_requires_lark_oapi_runtime_install`, and `TestAgentCapabilityPermissions` -> `68 passed, 3 warnings, 10 subtests passed`.
+  - Real local Feishu CLI status probe -> `available=True`, `authState=ready`, `authenticated=True`, `commandPresent=True`.
+  - Sub-agent lifecycle review first found auth-completion, frontend failure-state, timeout cleanup, and repeated-start process risks; all were fixed, re-reviewed PASS, and the two low-risk follow-ups were applied.
+  - Source evidence: `docs/v0.2.4/artifacts/feishu-cli-writeback-skill-discovery-source.json`.
+  - Release validator PASS; v0.2.4 artifact contracts PASS; install packaging contract PASS; local Windows install smoke PASS; production deploy PASS; privacy scan over R24-17 source/install/deploy evidence has `findingCount=0`.
+- Final rebuilt/deployed artifacts:
+  - `release-artifacts/EcoreX_0.2.4-webui-windows-x64.zip` SHA256 `13535AAB7541E19ECC6DE95D9A13670AEABC78B11784CEB6C99946A39AFE7322`, size `113925024`.
+  - `release-artifacts/EcoreX_0.2.4-webui-macos-universal.zip` SHA256 `27801CFCAB2C52619ED8A08280301E16F4292A0D0443FCE47BB84E3A2E9D4FBE`, size `263199687`.
+  - `release-artifacts/EcoreX_0.2.4-web-linux-service.tar.gz` SHA256 `AA5DF4F7C65E7097D16B08F62C005A529618CFBE995D2BEDF78E748B2EA19D2A`, size `3828980`.
+  - `release-artifacts/EcoreX_0.2.4-public-release.zip` SHA256 `C0167695F6DF52117479046E7CCAE282A778D1C5F1A31C134A01726B3E90463B`, size `380138246`.
+- Production deployment was refreshed successfully. Final online checks report web service, installation manifest, and public manifest all on v0.2.4; service is active/enabled; `/api/version` returns 200 and contains `0.2.4`.
+
+## R24-18 External Connection Agent-Discovery and Tongxin Open-Box Auth Hotfix
+
+- 2026-06-29: Started a v0.2.4 follow-up long-goal slice after the user clarified that Feishu CLI authorization and other external connection tools must not encode fixed install/auth/config flows in WebUI or prompts. The slice records a cross-connection rule: Web surfaces only display/forward declared agent actions; the agent/tool must inspect official diagnostics/status/help and choose the flow at runtime.
+- Feishu CLI changes:
+  - Added `feishu_cli agent_auth` as the Web/default authorization entrypoint.
+  - `agent_auth` runs official `lark-cli` `auth status`, `auth login --help`, `config init --help`, and `auth qrcode --help` probes before choosing a flow.
+  - `auth_login` no longer defaults to `domain=base`; missing scope/domain now returns `needs_target_scope` with `nextAction=agent_auth`.
+  - Raw `lark auth login` without explicit `--scope` or `--domain` now autoroutes to `feishu_cli agent_auth`; explicit official flags are preserved without inventing defaults.
+  - Web External Connections no longer passes saved Feishu App ID/Secret into CLI auth, preventing a static credential branch from bypassing the visible official CLI URL flow.
+- External connection contract:
+  - `channel_auth_surface()` now exposes `agentDiscoveryContract` for all external connections with `discoveryDriven=true` and `webOwnsInstallOrAuthFlow=false`.
+  - Web action projection now reads `auth.agentAuthSupported` and `agentAuthorizationAction` from catalog/runtime projection instead of hardcoding `name == feishu`.
+  - Non-Feishu declared agent auth actions use a generic handler that dispatches the declared structured tool; undeclared platforms return a discovery instruction rather than a fake fixed flow.
+  - Prompt host-boundary rules now instruct agents to call structured tool `status/diagnose/agent_auth` first and avoid hardcoding vendor auth parameters in WebUI, prompts, or raw shell.
+  - Feishu authorization labels in the Web console and injected notice now say Agent authorization instead of the old CLI authorization wording.
+- Tongxin/Xin Assistant changes:
+  - Added `tongxin_cli auth/login/auto_configure`.
+  - `auto_configure` first accepts an already configured/trusted local script, then falls back to configured remote auth/bootstrap.
+  - Remote auth posts username/password/thread context to a configured auth endpoint, receives a token and inline or URL manifest, downloads `xin_agent_cli.py`, verifies SHA256, validates UTF-8 Python source, writes atomically, and persists only `script_path`, read-only state, and safe refs.
+  - No raw Tongxin password, token, username, or raw remote URL is returned or persisted; public output records only hashed refs and read-only permission-visible scope.
+  - Permission broker allows config-driven `auth/auto_configure/bootstrap` by default but denies explicit remote URL/token/bootstrap paths in read-only mode.
+  - `optional_abilities`, `agent_capability`, and `AgentStreamExecutor` now proxy default Tongxin install/config requests to `auto_configure` when no explicit local script path is supplied.
+- Source verification:
+  - `python -m py_compile` over changed Feishu/Tongxin/channel/Web/permission/prompt/test files -> PASS.
+  - `node --check channel/web/static/js/console.js` -> PASS.
+  - Focused regression with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` -> `38 passed, 3 warnings`.
+  - Anti-regression search found no `domain=base` default auth flow, no `agentAuthorizationAction=config_init`, no Feishu-only Web action projection, and no legacy `CLI 授权` marker.
+  - Evidence: `docs/v0.2.4/artifacts/external-connection-agent-discovery-hotfix-source.json`.
+- Follow-up after runtime user report:
+  - Added Tongxin script health probing for `configure`, `auto_configure`, `bootstrap`, and real read-only `run` calls. The probe runs `schema` plus `project list --source cache --limit 1`, clears `PYTHONPATH`, and classifies `models.DATABASE` failures as `dependency_failed` rather than letting the query fail with a raw Python import error.
+  - `auto_configure` now skips bad local script copies and continues to a healthy trusted copy or configured remote bootstrap. Bad scripts are not persisted.
+  - `bootstrap` now backs up any previous target script, places the candidate into the final target directory, runs the health probe under final target-dir dependency semantics, restores the previous script if the probe fails, and only persists `script_path` after the final probe passes.
+  - Added regression coverage for explicit bad-script configure rejection, auto-configure skipping bad script copies, pre-query dependency failure reporting, and final target-dir bootstrap recovery when a bad local `models.py` shadows the candidate.
+- Final verification:
+  - `python -m py_compile agent\tools\tongxin_cli\tongxin_cli.py tests\test_v024_tongxin_cli_readonly.py` -> PASS.
+  - `node --check channel\web\static\js\console.js` -> PASS.
+  - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=. pytest -q tests\test_v024_tongxin_cli_readonly.py` -> `17 passed`.
+  - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=. pytest -q tests\test_v024_skill_tool_exposure.py tests\test_v024_skill_governance.py tests\test_v024_feishu_lark_oapi_recovery.py tests\test_v024_feishu_cli_auth_parity.py tests\test_v024_tongxin_cli_readonly.py` -> `59 passed, 3 warnings`.
+  - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=. pytest -q tests\test_ecorex_web_parallel_backend.py` -> `399 passed, 3 warnings, 26 subtests passed`.
+  - Release validation, v0.2.4 artifact contracts, and install packaging contracts -> PASS.
+  - Nash cross-review first found the final target-dir bootstrap health blocker, then re-reviewed the restored-script fix and returned PASS.
+- Final rebuilt/deployed artifacts:
+  - `release-artifacts/EcoreX_0.2.4-webui-windows-x64.zip` SHA256 `5A0DC6E0A59C70CB3823DE2A256EA44F334E056D37BD6A2510AA49878E9ADF61`, size `113931610`.
+  - `release-artifacts/EcoreX_0.2.4-webui-macos-universal.zip` SHA256 `00BF5C1E67FF7855F6CCA59D87073B77869CD83064893D1CBD8F18183A2EFBAD`, size `263206273`.
+  - `release-artifacts/EcoreX_0.2.4-web-linux-service.tar.gz` SHA256 `0EC37896C78879A9B390C68AC5036BA651473EF268D72CBD65B386082B04989A`, size `3834803`.
+  - `release-artifacts/EcoreX_0.2.4-public-release.zip` SHA256 `0038903FEA2437989C120FF6AD32EFD5D99C4E6126C89F93BCFD72317EC6ADC9`, size `380156993`.
+- Production deployment:
+  - Final `docs/v0.2.4/artifacts/production-deploy-online.json` reports `status=PASS`; web service, installation manifest, and public manifest are all v0.2.4; service is active/enabled; `/api/version` returns 200 and contains `0.2.4`.
+  - The first final deploy retry failed because old `/tmp/ecorex-v024-release-*` staging directories filled `/tmp` to `100%`; removed only 5 matching deployment staging directories, reducing `/tmp` to `66%`, then redeployed successfully.
+  - Privacy scan over R24-18 source/deploy evidence reports `findingCount=0`.

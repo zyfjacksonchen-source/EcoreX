@@ -18,23 +18,43 @@ import urllib.error
 from typing import Optional
 
 from common.log import logger
+from common.tool_execution_environment import ToolExecutionEnvironment
 
 
 # Aliases accepted for the Streamable HTTP transport type
 _STREAMABLE_HTTP_ALIASES = {"streamable-http", "streamable_http", "streamablehttp", "http"}
 _DEFAULT_CDP_ENDPOINT = "http://127.0.0.1:9222"
+_TRUSTED_CHROME_DEVTOOLS_FLAGS = {
+    "--no-usage-statistics",
+    "--no-performance-crux",
+    "--experimentalPageIdRouting",
+    "--experimentalDevtools",
+    "--experimentalVision",
+    "--experimentalStructuredContent",
+    "--experimentalIncludeAllPages",
+    "--memoryDebugging",
+    "--categoryExperimentalThirdParty",
+    "--categoryExperimentalWebmcp",
+    "--redactNetworkHeaders",
+}
+_REQUIRED_CHROME_DEVTOOLS_PRIVACY_FLAGS = {
+    "--no-usage-statistics",
+    "--no-performance-crux",
+    "--redactNetworkHeaders",
+}
 
 
 _SENSITIVE_RE = re.compile(
-    r"(?i)(api[_-]?key|token|password|secret|authorization)(\"?\s*[:=]\s*\"?)[^\",\s&}]+"
+    r"(?i)(['\"]?(?:api[_-]?key|token|password|secret|authorization|cookie|session)['\"]?\s*[:=]\s*['\"]?)[^'\",\s&}]+"
 )
 
 
 def _mask_sensitive(text: str) -> str:
     value = text or ""
+    value = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._\-]+", r"\1***", value)
     value = re.sub(r"sk-[A-Za-z0-9_\-]{12,}", "sk-***", value)
     value = re.sub(r"gh[pousr]_[A-Za-z0-9_]{12,}", "ghp_***", value)
-    return _SENSITIVE_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}***", value)
+    return _SENSITIVE_RE.sub(lambda m: f"{m.group(1)}***", value)
 
 
 def _mcp_permission_tool_name(server_name: str) -> str:
@@ -58,12 +78,16 @@ def _is_default_chrome_devtools_config(server_name: str, command, args) -> bool:
     if not isinstance(args, list):
         return False
     parts = [str(item).strip() for item in args]
-    return parts == [
-        "chrome-devtools-mcp@latest",
-        "--browserUrl",
-        _DEFAULT_CDP_ENDPOINT,
-        "--no-usage-statistics",
-    ]
+    if parts and parts[0] == "-y":
+        parts = parts[1:]
+    if len(parts) < 4 or parts[0] != "chrome-devtools-mcp@latest":
+        return False
+    if parts[1] not in {"--browserUrl", "--browser-url"} or parts[2] != _DEFAULT_CDP_ENDPOINT:
+        return False
+    flags = set(parts[3:])
+    if not _REQUIRED_CHROME_DEVTOOLS_PRIVACY_FLAGS.issubset(flags):
+        return False
+    return flags.issubset(_TRUSTED_CHROME_DEVTOOLS_FLAGS)
 
 
 class McpClient:
@@ -235,23 +259,45 @@ class McpClient:
         if not self._authorize_stdio_start(command, args):
             return False
         extra_env = self.config.get("env", None)
-        env = {**os.environ, **extra_env} if extra_env else None
+        executor = ToolExecutionEnvironment(tool_name=f"mcp:{self.name}")
+        prepared = executor.prepare_command([str(command), *[str(item) for item in args]], required_by=f"mcp:{self.name}")
+        if not prepared.ok:
+            logger.warning(
+                f"[MCP:{self.name}] stdio startup missing dependency: "
+                f"{(prepared.missing or {}).get('dependency') or command}"
+            )
+            return False
+        env = dict(prepared.env)
+        if isinstance(extra_env, dict):
+            blocked_env_keys = {
+                "path",
+                "node_path",
+                "pythonpath",
+                "pythonhome",
+                "pythonstartup",
+                "node_options",
+                "ld_library_path",
+                "ld_preload",
+                "dyld_library_path",
+                "dyld_fallback_library_path",
+                "dyld_insert_libraries",
+            }
+            env.update({
+                str(key): str(value)
+                for key, value in extra_env.items()
+                if str(key).lower() not in blocked_env_keys
+                and not str(key).lower().startswith("npm_config_")
+            })
+        command_parts = prepared.command
 
-        popen_kwargs = {}
-        if os.name == "nt":
-            popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        else:
-            popen_kwargs["start_new_session"] = True
-
-        self._proc = subprocess.Popen(
-            [command] + list(args),
+        self._proc = executor.popen(
+            command_parts,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             env=env,
-            **popen_kwargs,
         )
         logger.debug(f"[MCP:{self.name}] stdio process started (pid={self._proc.pid})")
 
@@ -279,7 +325,7 @@ class McpClient:
                 {
                     "server": self.name,
                     "command": str(command),
-                    "args": [str(item) for item in list(args or [])[:12]],
+                    "args": [str(item) for item in list(args or [])[:32]],
                     "trusted_default_chrome_devtools": _is_default_chrome_devtools_config(
                         self.name,
                         command,
@@ -512,7 +558,7 @@ class McpClient:
             except Exception:
                 pass
             raise IOError(
-                f"[MCP:{self.name}] streamable-http HTTP {e.code}: {detail[:200]}"
+                f"[MCP:{self.name}] streamable-http HTTP {e.code}: {_mask_sensitive(detail)[:200]}"
             )
 
         with resp:
@@ -610,10 +656,11 @@ class McpClient:
             code = error.get("code")
             message = error.get("message", "Unknown MCP error")
             data = error.get("data")
+            message = _mask_sensitive(str(message))
             if data is not None:
                 return f"MCP error {code}: {message}; data={_mask_sensitive(str(data))[:300]}"
             return f"MCP error {code}: {message}"
-        return f"MCP error: {error}"
+        return f"MCP error: {_mask_sensitive(str(error))}"
 
     def _raise_for_rpc_error(self, resp: dict) -> None:
         if isinstance(resp, dict) and "error" in resp:
@@ -695,7 +742,7 @@ class McpClient:
 
         if "error" in resp:
             self._initialized = False
-            logger.warning(f"[MCP:{self.name}] Handshake error: {resp['error']}")
+            logger.warning(f"[MCP:{self.name}] Handshake error: {self._format_rpc_error(resp['error'])}")
             return False
 
         self._send_notification("notifications/initialized", {})

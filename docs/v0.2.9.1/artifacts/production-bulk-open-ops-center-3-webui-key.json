@@ -1,0 +1,68 @@
+{
+  "artifact": "production-bulk-open-ops-center-3-webui-key",
+  "createdAtLocal": "2026-07-06T15:07:04",
+  "sourceWorkbook": "C:\\Users\\user\\Desktop\\桌面整理_20260601\\表格_Excel\\运营三中心-人员明细.xlsx",
+  "passwordPolicy": "unified operator-provided initial password applied; plaintext omitted in evidence",
+  "productionDomain": "mvdcm.ecoremedia.net",
+  "productionAuditEvent": {
+    "action": "user.bulk_open.verify",
+    "actor": "codex",
+    "target": "ops-center-3",
+    "createdAt": "2026-07-06T15:08:00.778482+08:00"
+  },
+  "result": {
+    "ok": true,
+    "startedAt": "2026-07-06T15:06:55.245246+08:00",
+    "peopleCount": 25,
+    "clientKeys": [
+      "ecorex-web-v0.2.9.1-web.1",
+      "ecorex-web-v0.2.9-web.1",
+      "ecorex-web-v0.2.7.1-web.1"
+    ],
+    "activeUserRows": 25,
+    "loginTotal": 75,
+    "loginOk": 75,
+    "modelConfigTotal": 75,
+    "modelConfigOk": 75,
+    "webModelsTotal": 75,
+    "webModelsOk": 75,
+    "sessionsRevoked": 75,
+    "failed": [],
+    "sampleModelConfig": {
+      "ecorex-web-v0.2.9.1-web.1": [
+        "openai:gpt-5.5",
+        "deepseek:deepseek-v4-pro",
+        "doubao:doubao-seed-2-0-pro-260215",
+        "gemini:gemini-3.1-pro-preview"
+      ],
+      "ecorex-web-v0.2.9-web.1": [
+        "openai:gpt-5.5",
+        "deepseek:deepseek-v4-pro",
+        "doubao:doubao-seed-2-0-pro-260215",
+        "gemini:gemini-3.1-pro-preview"
+      ],
+      "ecorex-web-v0.2.7.1-web.1": [
+        "openai:gpt-5.5",
+        "deepseek:deepseek-v4-pro",
+        "doubao:doubao-seed-2-0-pro-260215",
+        "gemini:gemini-3.1-pro-preview"
+      ]
+    },
+    "sampleWebModels": {
+      "ecorex-web-v0.2.9.1-web.1": {
+        "current": "deepseek-v4-pro",
+        "provider": "deepseek"
+      },
+      "ecorex-web-v0.2.9-web.1": {
+        "current": "deepseek-v4-pro",
+        "provider": "deepseek"
+      },
+      "ecorex-web-v0.2.7.1-web.1": {
+        "current": "deepseek-v4-pro",
+        "provider": "deepseek"
+      }
+    },
+    "ecorexWebService": "active",
+    "finishedAt": "2026-07-06T15:07:03.919698+08:00"
+  }
+}

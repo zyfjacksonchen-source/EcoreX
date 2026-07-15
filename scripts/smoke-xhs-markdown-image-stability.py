@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke checks for the v0.1.19 Xiaohongshu markdown + image reliability gate."""
+"""Smoke checks for the v0.2.0 Xiaohongshu markdown + image reliability gate."""
 
 from __future__ import annotations
 
@@ -128,18 +128,44 @@ def run_generic_bad_image_probe(root: pathlib.Path, tmp_dir: pathlib.Path) -> di
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=".")
-    parser.add_argument("--version", default="0.1.19")
+    parser.add_argument("--version", default="0.2.0")
     parser.add_argument("--output", default="")
     args = parser.parse_args(argv)
 
     root = pathlib.Path(args.root).resolve()
     checks: list[dict[str, Any]] = []
+    xhs_script = root / "skills" / "create-xiaohongshu-note" / "scripts" / "generate_cover_image.py"
+    if not xhs_script.exists():
+        payload = {
+            "status": "skipped",
+            "version": args.version,
+            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "changeIds": CHANGE_IDS,
+            "checks": [
+                {
+                    "name": "fixed XHS skill smoke migrated",
+                    "status": "skipped",
+                    "evidence": (
+                        "create-xiaohongshu-note is no longer a managed built-in skill; "
+                        "v0.2.3 routes vertical workflows through self-learning skill drafts."
+                    ),
+                }
+            ],
+        }
+        text = json.dumps(payload, ensure_ascii=False, indent=2)
+        if args.output:
+            output = pathlib.Path(args.output)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(text + "\n", encoding="utf-8")
+        else:
+            print(text)
+        return 0
 
     app = read_text(root / "desktop" / "src" / "App.tsx")
     message = read_text(root / "desktop" / "src" / "components" / "MessageContent.tsx")
     ecorex_api = read_text(root / "desktop" / "src" / "services" / "ecorexApi.ts")
     web = read_text(root / "channel" / "web" / "web_channel.py")
-    xhs = read_text(root / "skills" / "create-xiaohongshu-note" / "scripts" / "generate_cover_image.py")
+    xhs = read_text(xhs_script)
     image_gen = read_text(root / "skills" / "image-generation" / "scripts" / "generate.py")
 
     refresh_slice = app[app.find("async function refreshSessionFromHistory"):app.find("function historyRecoveryKey")]
@@ -193,22 +219,23 @@ def main(argv: list[str]) -> int:
     )
     add_check(
         checks,
-        "streaming long markdown uses live window",
-        "function streamingWindowMarkdown" in message
-        and "STREAM_LIVE_FULL_RENDER_CHARS" in message
-        and "chars streaming" in message,
-        "100k+ pending markdown renders a bounded head/tail window before terminal collapse",
+        "streaming long markdown uses formatted markdown blocks",
+        "function StreamingMarkdownBlock" in message
+        and "function StreamingStableMarkdown" in message
+        and "normalizeMarkdownForRender(redactInternalPromptText(content || \"\"))" in message
+        and "<StreamingStableMarkdown content={liveContent}" in message
+        and "function streamingWindowMarkdown" not in message
+        and "chars streaming" not in message,
+        "Long pending markdown renders through the same MarkdownBlock path used after completion",
     )
-    streaming_window_slice = message[message.find("function streamingWindowMarkdown"):message.find("function StreamingStableMarkdown")]
     add_check(
         checks,
-        "streaming long markdown normalizes bounded window",
-        "streamingWindowHeadEnd" in message
-        and "trimUnbalancedFenceTail" in message
-        and "normalizeMarkdownForRender(rawHead)" in streaming_window_slice
-        and "normalizeMarkdownForRender(rawTail)" in streaming_window_slice
-        and "normalizeMarkdownForRender(content)" not in streaming_window_slice,
-        "Long pending streams slice head/tail before markdown normalization to keep CPU bounded",
+        "streaming long markdown has no raw tail fallback",
+        ".streaming-tail" not in read_text(root / "desktop" / "src" / "styles" / "app.css")
+        and ".streaming-code" not in read_text(root / "desktop" / "src" / "styles" / "app.css")
+        and "splitStreamingMarkdown" not in message
+        and "cleanStreamingTail" not in message,
+        "Pending markdown no longer falls back to raw pre/code tail rendering",
     )
     add_check(
         checks,

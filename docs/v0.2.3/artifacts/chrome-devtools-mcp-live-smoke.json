@@ -1,0 +1,63 @@
+{
+  "status": "pass",
+  "endpoint": "http://127.0.0.1:9222",
+  "command": "npx.cmd",
+  "args": [
+    "-y",
+    "chrome-devtools-mcp@latest",
+    "--browserUrl",
+    "http://127.0.0.1:9222",
+    "--no-usage-statistics",
+    "--no-performance-crux",
+    "--experimentalPageIdRouting",
+    "--experimentalDevtools",
+    "--experimentalVision",
+    "--experimentalStructuredContent",
+    "--experimentalIncludeAllPages",
+    "--memoryDebugging",
+    "--categoryExperimentalThirdParty",
+    "--categoryExperimentalWebmcp",
+    "--redactNetworkHeaders"
+  ],
+  "startedAt": 1782469696.1564744,
+  "cdp": {
+    "configured": true,
+    "ready": true,
+    "endpoint": "http://127.0.0.1:9222",
+    "browser": "Chrome/149.0.7827.200",
+    "protocolVersion": "1.3",
+    "webSocketDebuggerUrl": true
+  },
+  "autoLaunchedChrome": true,
+  "mcpInitialized": true,
+  "toolCount": 42,
+  "sampleTools": [
+    "click",
+    "click_at",
+    "close_heapsnapshot",
+    "close_page",
+    "drag",
+    "emulate",
+    "evaluate_script",
+    "execute_3p_developer_tool",
+    "execute_webmcp_tool",
+    "fill",
+    "fill_form",
+    "get_console_message",
+    "get_heapsnapshot_class_nodes",
+    "get_heapsnapshot_details",
+    "get_heapsnapshot_dominators",
+    "get_heapsnapshot_edges",
+    "get_heapsnapshot_retainers",
+    "get_heapsnapshot_retaining_paths",
+    "get_heapsnapshot_summary",
+    "get_network_request"
+  ],
+  "requiredToolsPresent": [
+    "list_network_requests",
+    "performance_start_trace",
+    "take_screenshot",
+    "take_snapshot"
+  ],
+  "finishedAt": 1782469706.1623793
+}

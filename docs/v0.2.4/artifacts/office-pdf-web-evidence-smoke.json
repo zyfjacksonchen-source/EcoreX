@@ -1,0 +1,15 @@
+{
+  "status": "PASS",
+  "checks": {
+    "serviceToolEvidence": true,
+    "serviceArtifactEvidence": true,
+    "apiProjectionEvidence": true,
+    "renderProofOmitted": true,
+    "privacyLeaksAbsent": true
+  },
+  "toolStatus": "fail",
+  "artifactStatus": "fail",
+  "apiEventCount": 2,
+  "leaks": [],
+  "redacted": true
+}

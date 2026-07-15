@@ -1,0 +1,350 @@
+{
+  "status": "PASS",
+  "schemaVersion": "real-release-rerun-strategy-v1",
+  "version": "0.2.6",
+  "scope": "real-release-rerun-strategy",
+  "generatedAt": "2026-07-01T15:53:24.303783+00:00",
+  "action": "FOCUSED_RERUN_THEN_FINAL_GATE",
+  "reportPath": "docs\\v0.2.6\\artifacts\\production-agent-product-acceptance.json",
+  "failureCount": 9,
+  "failureGroups": [
+    "runtime-api",
+    "ui-ux",
+    "stream-state-machine",
+    "concurrency-pressure",
+    "security-observability"
+  ],
+  "selectedGroups": [
+    "fresh-env",
+    "auth-first-use",
+    "runtime-api",
+    "ui-ux",
+    "stream-state-machine",
+    "concurrency-pressure",
+    "security-observability"
+  ],
+  "priorityCounts": {
+    "P0": 4,
+    "P1": 0,
+    "P2": 5,
+    "unknown": 0
+  },
+  "needsStatefulRerun": true,
+  "needsImageRouteRerun": false,
+  "needsSerialPressureRerun": true,
+  "mustRunFullGateBeforePromotion": true,
+  "runFullGateImmediatelyAfterEachFix": false,
+  "recommendedBatching": {
+    "maxFocusedAttemptsBeforeInvestigation": 2,
+    "batchFixesBeforeFinalGate": true,
+    "finalGatePolicy": "Run full real release validation once after all P0/P1 focused reruns pass."
+  },
+  "commands": [
+    {
+      "step": 1,
+      "name": "local contract preflight",
+      "command": "python scripts/真实发布轻量校验.py",
+      "reason": "Catch syntax, matrix, wrapper, docs, and strategy regressions before touching production.",
+      "releaseBlocking": false
+    },
+    {
+      "step": 2,
+      "name": "focused proof-of-fix rerun",
+      "command": "python scripts/真实发布校验.py --focus-groups fresh-env,auth-first-use,runtime-api,ui-ux,stream-state-machine,concurrency-pressure,security-observability --skip-legacy --output docs/v0.2.6/artifacts/real-release-focused-rerun.json",
+      "reason": "Rerun only failed groups plus required setup/dependency groups.",
+      "releaseBlocking": false
+    },
+    {
+      "step": 3,
+      "name": "serial pressure confirmation",
+      "command": "python scripts/真实发布校验.py --focus-groups concurrency-pressure --skip-legacy --output docs/v0.2.6/artifacts/real-release-focused-pressure-rerun.json",
+      "reason": "Pressure tests must be serial and must prove active requests drain to zero.",
+      "releaseBlocking": false
+    },
+    {
+      "step": 4,
+      "name": "final full real release gate",
+      "command": "python scripts/真实发布校验.py",
+      "reason": "Run once after fixes are batched and focused proof-of-fix evidence is green.",
+      "releaseBlocking": true
+    }
+  ],
+  "rules": [
+    "Do not rerun the full gate after every single fix.",
+    "Freeze and keep the failed artifact; do not overwrite it until a rerun plan is generated.",
+    "Run lightweight validation first after code changes.",
+    "Run focused groups plus dependencies as proof-of-fix evidence.",
+    "If the focused rerun fails twice, stop and debug evidence instead of retrying blindly.",
+    "Run the full real release gate once at the end, before promotion."
+  ],
+  "failurePreview": [
+    {
+      "index": 288,
+      "source": "production-agent-product-fresh-user-218",
+      "sourceIndex": 56,
+      "caseId": "v026-agent-runtime-api-022",
+      "group": "runtime-api",
+      "name": "/api/installations responds under 5s",
+      "status": "FAIL",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 0
+      }
+    },
+    {
+      "index": 290,
+      "source": "production-agent-product-fresh-user-218",
+      "sourceIndex": 58,
+      "caseId": "v026-agent-runtime-api-024",
+      "group": "runtime-api",
+      "name": "/api/runtime-projection responds under 5s",
+      "status": "FAIL",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 0
+      }
+    },
+    {
+      "index": 294,
+      "source": "production-agent-product-fresh-user-218",
+      "sourceIndex": 62,
+      "caseId": "v026-agent-runtime-api-028",
+      "group": "runtime-api",
+      "name": "/api/tool-permissions responds under 5s",
+      "status": "FAIL",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 0
+      }
+    },
+    {
+      "index": 307,
+      "source": "production-agent-product-fresh-user-218",
+      "sourceIndex": 75,
+      "caseId": "v026-agent-ui-ux-011",
+      "group": "ui-ux",
+      "name": "desktop buttons do not materially overlap",
+      "status": "FAIL",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 3910,
+        "buttonCount": 45,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 21,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 3,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 129407,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true
+      }
+    },
+    {
+      "index": 311,
+      "source": "production-agent-product-fresh-user-218",
+      "sourceIndex": 79,
+      "caseId": "v026-agent-ui-ux-015",
+      "group": "ui-ux",
+      "name": "browser console has no fatal UI errors",
+      "status": "FAIL",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "ui",
+        "ux",
+        "browser"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "playwrightImport": true,
+        "browserLaunched": true,
+        "loginRequestOk": true,
+        "desktopAppLoaded": true,
+        "bodyTextLength": 3910,
+        "buttonCount": 45,
+        "emptyButtonCount": 0,
+        "unnamedButtonCount": 0,
+        "composerPresent": true,
+        "desktopHorizontalOverflow": false,
+        "largeOverlapCount": 21,
+        "mobileAppLoaded": true,
+        "mobileHorizontalOverflow": false,
+        "mobileUnnamedButtonCount": 0,
+        "fatalConsoleErrors": 3,
+        "appIndexHasScript": true,
+        "jsAssetBytes": 578525,
+        "cssAssetBytes": 81764,
+        "namedEcoreX": true,
+        "screenshotBytes": 129407,
+        "runtimeStatusVisible": true,
+        "sessionUiVisible": true,
+        "modelUiVisible": true
+      }
+    },
+    {
+      "index": 328,
+      "source": "production-agent-product-fresh-user-218",
+      "sourceIndex": 96,
+      "caseId": "v026-agent-stream-state-machine-008",
+      "group": "stream-state-machine",
+      "name": "SSE has no error terminal",
+      "status": "FAIL",
+      "priority": "P0",
+      "cost": "model",
+      "tags": [
+        "streaming",
+        "state-machine",
+        "sse"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "terminalTypes": [
+          "error"
+        ]
+      }
+    },
+    {
+      "index": 433,
+      "source": "production-agent-product-fresh-user-218",
+      "sourceIndex": 201,
+      "caseId": "v026-agent-concurrency-pressure-011",
+      "group": "concurrency-pressure",
+      "name": "active requests endpoint works after pressure",
+      "status": "FAIL",
+      "priority": "P0",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "users": 20,
+        "turnsPerUser": 3,
+        "requestedOperations": 60,
+        "completedOperations": 60,
+        "loginSuccess": 20,
+        "durationMs": 92,
+        "p95LatencyMs": 34,
+        "maxLatencyMs": 34,
+        "statusCounts": {
+          "200": 60
+        },
+        "errorCount": 0,
+        "sessionHashCount": 20,
+        "activeAfterCount": 0,
+        "activeBeforeStatus": 401,
+        "activeAfterStatus": 401
+      }
+    },
+    {
+      "index": 436,
+      "source": "production-agent-product-fresh-user-218",
+      "sourceIndex": 204,
+      "caseId": "v026-agent-concurrency-pressure-014",
+      "group": "concurrency-pressure",
+      "name": "runStatusCounts remains bounded",
+      "status": "FAIL",
+      "priority": "P2",
+      "cost": "stress",
+      "tags": [
+        "concurrency",
+        "pressure",
+        "stability"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "status": "error",
+        "message": "Unauthorized"
+      }
+    },
+    {
+      "index": 446,
+      "source": "production-agent-product-fresh-user-218",
+      "sourceIndex": 214,
+      "caseId": "v026-agent-security-observability-006",
+      "group": "security-observability",
+      "name": "new matrix reaches expected checks",
+      "status": "FAIL",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "security",
+        "observability",
+        "redaction"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "checksBeforeFinal": 213,
+        "target": 218,
+        "focusMode": false
+      }
+    }
+  ]
+}

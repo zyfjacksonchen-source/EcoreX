@@ -86,6 +86,26 @@ class Bridge(object):
                 if not conf().get("text_to_voice") or conf().get("text_to_voice") in ["openai", const.TTS_1, const.TTS_1_HD]:
                     self.btype["text_to_voice"] = const.LINKAI
 
+        try:
+            from models.model_capabilities import infer_provider_id
+
+            inferred_chat_type = infer_provider_id(
+                conf().get("model") or const.GPT_41_MINI,
+                configured_bot_type=conf().get("bot_type") or "",
+                use_linkai=bool(conf().get("use_linkai", False)),
+                has_linkai_key=bool(conf().get("linkai_api_key")),
+                use_azure_chatgpt=bool(conf().get("use_azure_chatgpt", False)),
+                gemini_api_base=conf().get("gemini_api_base") or "",
+                has_gemini_key=bool(conf().get("gemini_api_key")),
+                gemini_api_key=conf().get("gemini_api_key") or "",
+                custom_api_base=conf().get("custom_api_base") or "",
+                custom_api_key=conf().get("custom_api_key") or "",
+            )
+            if inferred_chat_type in (const.CUSTOM, const.GEMINI):
+                self.btype["chat"] = inferred_chat_type
+        except Exception as exc:
+            logger.warning(f"[Bridge] custom Gemini route detection failed: {exc}")
+
         self.bots = {}
         self.chat_bots = {}
         self._agent_bridge = None
@@ -108,6 +128,42 @@ class Bridge(object):
         self.bots.pop("voice_to_text", None)
         self.bots.pop("text_to_voice", None)
         logger.info(f"[Bridge] voice refreshed: voice_to_text={new_v2t}, text_to_voice={new_t2v}")
+
+    def refresh_chat_routing(self) -> dict:
+        """Re-read chat routing without destroying AgentBridge session state."""
+        from models.model_capabilities import infer_provider_id
+
+        old_chat_type = self.btype.get("chat")
+        new_chat_type = infer_provider_id(
+            conf().get("model") or const.GPT_41_MINI,
+            configured_bot_type=conf().get("bot_type") or "",
+            use_linkai=bool(conf().get("use_linkai", False)),
+            has_linkai_key=bool(conf().get("linkai_api_key")),
+            use_azure_chatgpt=bool(conf().get("use_azure_chatgpt", False)),
+            gemini_api_base=conf().get("gemini_api_base") or "",
+            has_gemini_key=bool(conf().get("gemini_api_key")),
+            gemini_api_key=conf().get("gemini_api_key") or "",
+            custom_api_base=conf().get("custom_api_base") or "",
+            custom_api_key=conf().get("custom_api_key") or "",
+        )
+        self.btype["chat"] = new_chat_type
+        self.bots.pop("chat", None)
+        self.chat_bots.clear()
+
+        model_routes_reset = 0
+        if self._agent_bridge is not None:
+            reset_routes = getattr(self._agent_bridge, "reset_model_routes", None)
+            if callable(reset_routes):
+                model_routes_reset = reset_routes()
+
+        result = {
+            "oldChatType": old_chat_type,
+            "newChatType": new_chat_type,
+            "agentBridgePreserved": self._agent_bridge is not None,
+            "modelRoutesReset": model_routes_reset,
+        }
+        logger.info(f"[Bridge] chat routing refreshed: {result}")
+        return result
 
     @staticmethod
     def _auto_pick_voice_to_text() -> str:

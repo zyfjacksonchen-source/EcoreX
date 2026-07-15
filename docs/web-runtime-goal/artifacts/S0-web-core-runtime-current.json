@@ -1,0 +1,544 @@
+{
+  "schemaVersion": "web-core-runtime-baseline-v1",
+  "generatedAt": "2026-06-30T09:55:55.911432+00:00",
+  "runtimeRoot": "%RUNTIME_ROOT%",
+  "stateRoot": "%STATE_ROOT%",
+  "systemPathIncluded": false,
+  "categories": {
+    "coreRequired": "Must be ready for a Web runtime release.",
+    "defaultPreinstalled": "Expected to ship or install by default, but not represented separately yet.",
+    "optionalRepairable": "May be absent when a repair action exists.",
+    "credentialRequired": "Requires user/admin model or connector credentials; absence is not a package failure."
+  },
+  "dependencies": [
+    {
+      "name": "python",
+      "category": "coreRequired",
+      "dependencyType": "python",
+      "status": "missing_python",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "all Python tools",
+        "Web service",
+        "diagnostics"
+      ],
+      "repairable": true,
+      "repairAction": "repair_core_python",
+      "blocking": true
+    },
+    {
+      "name": "node",
+      "category": "coreRequired",
+      "dependencyType": "executable",
+      "status": "missing_executable",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "MCP bootstrap",
+        "browser tooling",
+        "Feishu/Lark CLI install"
+      ],
+      "repairable": true,
+      "repairAction": "repair_core_node",
+      "blocking": true
+    },
+    {
+      "name": "npm",
+      "category": "coreRequired",
+      "dependencyType": "executable",
+      "status": "missing_executable",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "capability package installs",
+        "Feishu/Lark CLI install"
+      ],
+      "repairable": true,
+      "repairAction": "repair_core_node",
+      "blocking": true
+    },
+    {
+      "name": "npx",
+      "category": "coreRequired",
+      "dependencyType": "executable",
+      "status": "missing_executable",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "MCP bootstrap",
+        "Chrome DevTools MCP"
+      ],
+      "repairable": true,
+      "repairAction": "repair_core_node",
+      "blocking": true
+    },
+    {
+      "name": "pip",
+      "category": "coreRequired",
+      "dependencyType": "python-package",
+      "status": "missing_package",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "Python package installation"
+      ],
+      "repairable": true,
+      "repairAction": "repair_core_python",
+      "blocking": true
+    },
+    {
+      "name": "PIL",
+      "category": "coreRequired",
+      "dependencyType": "python-package",
+      "status": "missing_package",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "image preprocessing, OCR, image quality checks"
+      ],
+      "repairable": true,
+      "repairAction": "repair_fast_ocr",
+      "blocking": true
+    },
+    {
+      "name": "rapidocr_onnxruntime",
+      "category": "coreRequired",
+      "dependencyType": "python-package",
+      "status": "missing_package",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "local OCR"
+      ],
+      "repairable": true,
+      "repairAction": "repair_fast_ocr",
+      "blocking": true
+    },
+    {
+      "name": "onnxruntime",
+      "category": "coreRequired",
+      "dependencyType": "python-package",
+      "status": "missing_package",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "local OCR runtime"
+      ],
+      "repairable": true,
+      "repairAction": "repair_fast_ocr",
+      "blocking": true
+    },
+    {
+      "name": "playwright",
+      "category": "coreRequired",
+      "dependencyType": "python-package",
+      "status": "missing_package",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "browser automation package"
+      ],
+      "repairable": true,
+      "repairAction": "repair_browser_automation",
+      "blocking": true
+    },
+    {
+      "name": "lark_oapi",
+      "category": "coreRequired",
+      "dependencyType": "python-package",
+      "status": "missing_package",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "Feishu/Lark SDK"
+      ],
+      "repairable": true,
+      "repairAction": "repair_feishu_core",
+      "blocking": true
+    },
+    {
+      "name": "pypdf",
+      "category": "coreRequired",
+      "dependencyType": "python-package",
+      "status": "missing_package",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "PDF parsing"
+      ],
+      "repairable": true,
+      "repairAction": "repair_office_pdf_python",
+      "blocking": true
+    },
+    {
+      "name": "pdfminer",
+      "category": "coreRequired",
+      "dependencyType": "python-package",
+      "status": "missing_package",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "PDF text extraction"
+      ],
+      "repairable": true,
+      "repairAction": "repair_office_pdf_python",
+      "blocking": true
+    },
+    {
+      "name": "docx",
+      "category": "coreRequired",
+      "dependencyType": "python-package",
+      "status": "missing_package",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "Word parsing"
+      ],
+      "repairable": true,
+      "repairAction": "repair_office_pdf_python",
+      "blocking": true
+    },
+    {
+      "name": "pptx",
+      "category": "coreRequired",
+      "dependencyType": "python-package",
+      "status": "missing_package",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "PowerPoint parsing"
+      ],
+      "repairable": true,
+      "repairAction": "repair_office_pdf_python",
+      "blocking": true
+    },
+    {
+      "name": "openpyxl",
+      "category": "coreRequired",
+      "dependencyType": "python-package",
+      "status": "missing_package",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "Excel parsing"
+      ],
+      "repairable": true,
+      "repairAction": "repair_office_pdf_python",
+      "blocking": true
+    },
+    {
+      "name": "xlsxwriter",
+      "category": "coreRequired",
+      "dependencyType": "python-package",
+      "status": "missing_package",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "Excel generation"
+      ],
+      "repairable": true,
+      "repairAction": "repair_office_pdf_python",
+      "blocking": true
+    },
+    {
+      "name": "markdownify",
+      "category": "coreRequired",
+      "dependencyType": "python-package",
+      "status": "missing_package",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "HTML/document markdown conversion"
+      ],
+      "repairable": true,
+      "repairAction": "repair_office_pdf_python",
+      "blocking": true
+    },
+    {
+      "name": "reportlab",
+      "category": "coreRequired",
+      "dependencyType": "python-package",
+      "status": "missing_package",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "PDF generation"
+      ],
+      "repairable": true,
+      "repairAction": "repair_office_pdf_python",
+      "blocking": true
+    },
+    {
+      "name": "fitz",
+      "category": "coreRequired",
+      "dependencyType": "python-package",
+      "status": "missing_package",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "PDF/image rendering via PyMuPDF"
+      ],
+      "repairable": true,
+      "repairAction": "repair_office_pdf_python",
+      "blocking": true
+    },
+    {
+      "name": "vision",
+      "category": "coreRequired",
+      "dependencyType": "tool-entrypoint",
+      "status": "ready",
+      "available": true,
+      "source": "ecorex-bundled",
+      "path": "%RUNTIME_ROOT%/agent/tools/vision/vision.py",
+      "requiredFor": [
+        "vision tool invocation"
+      ],
+      "repairable": true,
+      "repairAction": "repair_core_tools",
+      "blocking": false
+    },
+    {
+      "name": "ocr",
+      "category": "coreRequired",
+      "dependencyType": "tool-entrypoint",
+      "status": "ready",
+      "available": true,
+      "source": "ecorex-bundled",
+      "path": "%RUNTIME_ROOT%/agent/tools/ocr/ocr.py",
+      "requiredFor": [
+        "ocr tool invocation"
+      ],
+      "repairable": true,
+      "repairAction": "repair_core_tools",
+      "blocking": false
+    },
+    {
+      "name": "imagegen",
+      "category": "coreRequired",
+      "dependencyType": "tool-entrypoint",
+      "status": "ready",
+      "available": true,
+      "source": "ecorex-bundled",
+      "path": "%RUNTIME_ROOT%/agent/tools/imagegen/imagegen.py",
+      "requiredFor": [
+        "imagegen tool invocation"
+      ],
+      "repairable": true,
+      "repairAction": "repair_core_tools",
+      "blocking": false
+    },
+    {
+      "name": "lark-cli",
+      "category": "optionalRepairable",
+      "dependencyType": "native-runtime",
+      "status": "missing_native_runtime",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "Feishu/Lark structured CLI"
+      ],
+      "repairable": true,
+      "repairAction": "repair_feishu_lark_cli",
+      "blocking": false
+    },
+    {
+      "name": "soffice",
+      "category": "optionalRepairable",
+      "dependencyType": "native-runtime",
+      "status": "missing_native_runtime",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "Office document rendering"
+      ],
+      "repairable": true,
+      "repairAction": "repair_office_native_backend",
+      "blocking": false
+    },
+    {
+      "name": "libreoffice",
+      "category": "optionalRepairable",
+      "dependencyType": "native-runtime",
+      "status": "missing_native_runtime",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "Office document rendering"
+      ],
+      "repairable": true,
+      "repairAction": "repair_office_native_backend",
+      "blocking": false
+    },
+    {
+      "name": "pdftoppm",
+      "category": "optionalRepairable",
+      "dependencyType": "native-runtime",
+      "status": "missing_native_runtime",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "PDF rasterization"
+      ],
+      "repairable": true,
+      "repairAction": "repair_office_native_backend",
+      "blocking": false
+    },
+    {
+      "name": "pdftocairo",
+      "category": "optionalRepairable",
+      "dependencyType": "native-runtime",
+      "status": "missing_native_runtime",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "PDF rasterization"
+      ],
+      "repairable": true,
+      "repairAction": "repair_office_native_backend",
+      "blocking": false
+    },
+    {
+      "name": "pdfinfo",
+      "category": "optionalRepairable",
+      "dependencyType": "native-runtime",
+      "status": "missing_native_runtime",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "PDF metadata/probe"
+      ],
+      "repairable": true,
+      "repairAction": "repair_office_native_backend",
+      "blocking": false
+    },
+    {
+      "name": "tesseract",
+      "category": "optionalRepairable",
+      "dependencyType": "native-runtime",
+      "status": "missing_native_runtime",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "native OCR fallback"
+      ],
+      "repairable": true,
+      "repairAction": "repair_ocr_native_backend",
+      "blocking": false
+    },
+    {
+      "name": "openai_image_provider",
+      "category": "credentialRequired",
+      "dependencyType": "credential",
+      "status": "missing_model_credentials",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "imagegen gpt-image-2-pro",
+        "vision OpenAI-compatible route"
+      ],
+      "repairable": true,
+      "repairAction": "configure_model_provider",
+      "blocking": false,
+      "credentialPresent": false,
+      "credentialEnvKeys": []
+    },
+    {
+      "name": "vision_provider",
+      "category": "credentialRequired",
+      "dependencyType": "credential",
+      "status": "missing_model_credentials",
+      "available": false,
+      "source": "missing",
+      "path": "",
+      "requiredFor": [
+        "vision image analysis"
+      ],
+      "repairable": true,
+      "repairAction": "configure_model_provider",
+      "blocking": false,
+      "credentialPresent": false,
+      "credentialEnvKeys": []
+    }
+  ],
+  "summary": {
+    "total": 31,
+    "ready": 3,
+    "blocking": 19,
+    "blockingNames": [
+      "python",
+      "node",
+      "npm",
+      "npx",
+      "pip",
+      "PIL",
+      "rapidocr_onnxruntime",
+      "onnxruntime",
+      "playwright",
+      "lark_oapi",
+      "pypdf",
+      "pdfminer",
+      "docx",
+      "pptx",
+      "openpyxl",
+      "xlsxwriter",
+      "markdownify",
+      "reportlab",
+      "fitz"
+    ],
+    "categoryCounts": {
+      "coreRequired": 22,
+      "credentialRequired": 2,
+      "optionalRepairable": 7
+    },
+    "statusCounts": {
+      "missing_executable": 3,
+      "missing_model_credentials": 2,
+      "missing_native_runtime": 7,
+      "missing_package": 15,
+      "missing_python": 1,
+      "ready": 3
+    },
+    "repairActionCounts": {
+      "configure_model_provider": 2,
+      "repair_browser_automation": 1,
+      "repair_core_node": 3,
+      "repair_core_python": 2,
+      "repair_core_tools": 3,
+      "repair_fast_ocr": 3,
+      "repair_feishu_core": 1,
+      "repair_feishu_lark_cli": 1,
+      "repair_ocr_native_backend": 1,
+      "repair_office_native_backend": 5,
+      "repair_office_pdf_python": 9
+    },
+    "releaseReady": false
+  }
+}

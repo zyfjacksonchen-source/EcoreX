@@ -1,0 +1,468 @@
+{
+  "status": "PASS",
+  "generatedAt": "2026-06-29T08:00:45Z",
+  "scope": "R24-04 webui release Office/PDF runtime contract",
+  "windows": {
+    "artifactId": "webui-windows-x64",
+    "artifactName": "EcoreX_0.2.4-webui-windows-x64.zip",
+    "size": 113931610,
+    "sha256": "5A0DC6E0A59C70CB3823DE2A256EA44F334E056D37BD6A2510AA49878E9ADF61"
+  },
+  "macos": {
+    "artifactId": "webui-macos-universal",
+    "artifactName": "EcoreX_0.2.4-webui-macos-universal.zip",
+    "size": 263206273,
+    "sha256": "00BF5C1E67FF7855F6CCA59D87073B77869CD83064893D1CBD8F18183A2EFBAD"
+  },
+  "webLinuxService": {
+    "artifactId": "web-linux-service",
+    "artifactName": "EcoreX_0.2.4-web-linux-service.tar.gz",
+    "size": 3834803,
+    "sha256": "0EC37896C78879A9B390C68AC5036BA651473EF268D72CBD65B386082B04989A"
+  },
+  "publicRelease": {
+    "artifactId": "public-release",
+    "artifactName": "EcoreX_0.2.4-public-release.zip",
+    "size": 380156993,
+    "sha256": "0038903FEA2437989C120FF6AD32EFD5D99C4E6126C89F93BCFD72317EC6ADC9"
+  },
+  "checks": [
+    {
+      "label": "webui-windows-x64 office-pdf facade metadata",
+      "status": "PASS",
+      "evidence": {
+        "compatibility": true,
+        "official": true,
+        "nativeFacade": true,
+        "qualityGates": true,
+        "entrySuffix": "skills/office-pdf/SKILL.md"
+      }
+    },
+    {
+      "label": "webui-windows-x64 Office/PDF QA evidence WebUI display packaged",
+      "status": "PASS",
+      "evidence": {
+        "bundleTextScanned": true
+      }
+    },
+    {
+      "label": "webui-windows-x64 Office/PDF callable skill tools packaged",
+      "status": "PASS",
+      "evidence": {
+        "toolsInitEntrySuffix": "agent/tools/__init__.py",
+        "officeToolsEntrySuffix": "agent/tools/office_artifacts/office_artifacts.py"
+      }
+    },
+    {
+      "label": "webui-windows-x64 Office/PDF runtime primitives packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "common/office_pdf_runtime.py"
+      }
+    },
+    {
+      "label": "webui-windows-x64 Office/PDF runtime redacted render contract",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "common/office_pdf_runtime.py"
+      }
+    },
+    {
+      "label": "webui-windows-x64 Office/PDF trusted presentation render contract",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "common/office_pdf_runtime.py"
+      }
+    },
+    {
+      "label": "webui-windows-x64 Office/PDF spreadsheet quality evidence packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "common/office_pdf_runtime.py"
+      }
+    },
+    {
+      "label": "webui-windows-x64 Office/PDF document quality evidence packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "common/office_pdf_runtime.py"
+      }
+    },
+    {
+      "label": "webui-windows-x64 Office/PDF PDF quality evidence packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "common/office_pdf_runtime.py"
+      }
+    },
+    {
+      "label": "webui-windows-x64 Office/PDF PDF registered render proof packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "common/office_pdf_runtime.py"
+      }
+    },
+    {
+      "label": "webui-windows-x64 Office/PDF QA evidence projection packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "agent/protocol/runtime_projection.py",
+        "missing": []
+      }
+    },
+    {
+      "label": "webui-windows-x64 Image structural QA runtime packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "common/image_quality_runtime.py",
+        "missing": []
+      }
+    },
+    {
+      "label": "webui-windows-x64 Image structural QA job/tool integration packaged",
+      "status": "PASS",
+      "evidence": {
+        "imageJobEntrySuffix": "agent/protocol/image_job_service.py",
+        "imagegenEntrySuffix": "agent/tools/imagegen/imagegen.py",
+        "providerRunnerEntrySuffix": "agent/tools/imagegen/provider_runner.py"
+      }
+    },
+    {
+      "label": "webui-windows-x64 Office/PDF spreadsheet extension contract",
+      "status": "PASS",
+      "evidence": {
+        "extensions": [
+          ".csv",
+          ".tsv",
+          ".xlsm",
+          ".xlsx"
+        ]
+      }
+    },
+    {
+      "label": "webui-windows-x64 Office/PDF presentation quality gates packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "skills/office-presentations/SKILL.md"
+      }
+    },
+    {
+      "label": "webui-windows-x64 Office/PDF document quality gates packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "skills/office-documents/SKILL.md"
+      }
+    },
+    {
+      "label": "webui-windows-x64 Office/PDF spreadsheet legacy XLS guidance",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "skills/office-spreadsheets/SKILL.md"
+      }
+    },
+    {
+      "label": "webui-windows-x64 Office/PDF spreadsheet quality gates packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "skills/office-spreadsheets/SKILL.md"
+      }
+    },
+    {
+      "label": "webui-windows-x64 Office/PDF PDF quality gates packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "skills/office-pdf/SKILL.md"
+      }
+    },
+    {
+      "label": "webui-windows-x64 Office/PDF capability manifest packaged",
+      "status": "PASS",
+      "evidence": {
+        "missingRequirements": [],
+        "missingModules": []
+      }
+    },
+    {
+      "label": "webui-windows-x64 core runtime declares Office/PDF dependencies",
+      "status": "PASS",
+      "evidence": {
+        "missing": [],
+        "entrySuffix": "core-requirements.txt"
+      }
+    },
+    {
+      "label": "webui-windows-x64 bundled Office/PDF wheels installed",
+      "status": "PASS",
+      "evidence": {
+        "reportlabEntryCount": 198,
+        "pymupdfEntryCount": 118
+      }
+    },
+    {
+      "label": "webui-macos-universal office-pdf facade metadata",
+      "status": "PASS",
+      "evidence": {
+        "compatibility": true,
+        "official": true,
+        "nativeFacade": true,
+        "qualityGates": true,
+        "entrySuffix": "skills/office-pdf/SKILL.md"
+      }
+    },
+    {
+      "label": "webui-macos-universal Office/PDF QA evidence WebUI display packaged",
+      "status": "PASS",
+      "evidence": {
+        "bundleTextScanned": true
+      }
+    },
+    {
+      "label": "webui-macos-universal Office/PDF callable skill tools packaged",
+      "status": "PASS",
+      "evidence": {
+        "toolsInitEntrySuffix": "agent/tools/__init__.py",
+        "officeToolsEntrySuffix": "agent/tools/office_artifacts/office_artifacts.py"
+      }
+    },
+    {
+      "label": "webui-macos-universal Office/PDF runtime primitives packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "common/office_pdf_runtime.py"
+      }
+    },
+    {
+      "label": "webui-macos-universal Office/PDF runtime redacted render contract",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "common/office_pdf_runtime.py"
+      }
+    },
+    {
+      "label": "webui-macos-universal Office/PDF trusted presentation render contract",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "common/office_pdf_runtime.py"
+      }
+    },
+    {
+      "label": "webui-macos-universal Office/PDF spreadsheet quality evidence packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "common/office_pdf_runtime.py"
+      }
+    },
+    {
+      "label": "webui-macos-universal Office/PDF document quality evidence packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "common/office_pdf_runtime.py"
+      }
+    },
+    {
+      "label": "webui-macos-universal Office/PDF PDF quality evidence packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "common/office_pdf_runtime.py"
+      }
+    },
+    {
+      "label": "webui-macos-universal Office/PDF PDF registered render proof packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "common/office_pdf_runtime.py"
+      }
+    },
+    {
+      "label": "webui-macos-universal Office/PDF QA evidence projection packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "agent/protocol/runtime_projection.py",
+        "missing": []
+      }
+    },
+    {
+      "label": "webui-macos-universal Image structural QA runtime packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "common/image_quality_runtime.py",
+        "missing": []
+      }
+    },
+    {
+      "label": "webui-macos-universal Image structural QA job/tool integration packaged",
+      "status": "PASS",
+      "evidence": {
+        "imageJobEntrySuffix": "agent/protocol/image_job_service.py",
+        "imagegenEntrySuffix": "agent/tools/imagegen/imagegen.py",
+        "providerRunnerEntrySuffix": "agent/tools/imagegen/provider_runner.py"
+      }
+    },
+    {
+      "label": "webui-macos-universal Office/PDF spreadsheet extension contract",
+      "status": "PASS",
+      "evidence": {
+        "extensions": [
+          ".csv",
+          ".tsv",
+          ".xlsm",
+          ".xlsx"
+        ]
+      }
+    },
+    {
+      "label": "webui-macos-universal Office/PDF presentation quality gates packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "skills/office-presentations/SKILL.md"
+      }
+    },
+    {
+      "label": "webui-macos-universal Office/PDF document quality gates packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "skills/office-documents/SKILL.md"
+      }
+    },
+    {
+      "label": "webui-macos-universal Office/PDF spreadsheet legacy XLS guidance",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "skills/office-spreadsheets/SKILL.md"
+      }
+    },
+    {
+      "label": "webui-macos-universal Office/PDF spreadsheet quality gates packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "skills/office-spreadsheets/SKILL.md"
+      }
+    },
+    {
+      "label": "webui-macos-universal Office/PDF PDF quality gates packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "skills/office-pdf/SKILL.md"
+      }
+    },
+    {
+      "label": "webui-macos-universal Office/PDF capability manifest packaged",
+      "status": "PASS",
+      "evidence": {
+        "missingRequirements": [],
+        "missingModules": []
+      }
+    },
+    {
+      "label": "webui-macos-universal core runtime declares Office/PDF dependencies",
+      "status": "PASS",
+      "evidence": {
+        "missing": [],
+        "entrySuffix": "core-requirements.txt"
+      }
+    },
+    {
+      "label": "webui-macos-universal bundled Office/PDF macOS wheels",
+      "status": "PASS",
+      "evidence": {
+        "mac-arm64": {
+          "reportlab": true,
+          "pymupdf": true
+        },
+        "mac-x64": {
+          "reportlab": true,
+          "pymupdf": true
+        }
+      }
+    },
+    {
+      "label": "web-linux-service Office/PDF QA evidence projection packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "agent/protocol/runtime_projection.py",
+        "missing": []
+      }
+    },
+    {
+      "label": "web-linux-service Image structural QA runtime packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "common/image_quality_runtime.py",
+        "missing": []
+      }
+    },
+    {
+      "label": "web-linux-service Image structural QA job/tool integration packaged",
+      "status": "PASS",
+      "evidence": {
+        "imageJobEntrySuffix": "agent/protocol/image_job_service.py",
+        "imagegenEntrySuffix": "agent/tools/imagegen/imagegen.py",
+        "providerRunnerEntrySuffix": "agent/tools/imagegen/provider_runner.py"
+      }
+    },
+    {
+      "label": "web-linux-service Web image retry defaults packaged",
+      "status": "PASS",
+      "evidence": {
+        "webChannelEntrySuffix": "channel/web/web_channel.py"
+      }
+    },
+    {
+      "label": "web-linux-service Office/PDF QA evidence WebUI display packaged",
+      "status": "PASS",
+      "evidence": {
+        "bundleTextScanned": true
+      }
+    },
+    {
+      "label": "public release embeds webui-windows-x64",
+      "status": "PASS",
+      "evidence": {
+        "entry": "site/downloads/EcoreX_0.2.4-webui-windows-x64.zip"
+      }
+    },
+    {
+      "label": "public manifest matches webui-windows-x64",
+      "status": "PASS",
+      "evidence": {
+        "manifestSize": 113931610,
+        "artifactSize": 113931610,
+        "hashMatches": true
+      }
+    },
+    {
+      "label": "public release embeds webui-macos-universal",
+      "status": "PASS",
+      "evidence": {
+        "entry": "site/downloads/EcoreX_0.2.4-webui-macos-universal.zip"
+      }
+    },
+    {
+      "label": "public manifest matches webui-macos-universal",
+      "status": "PASS",
+      "evidence": {
+        "manifestSize": 263206273,
+        "artifactSize": 263206273,
+        "hashMatches": true
+      }
+    },
+    {
+      "label": "public release embeds web-linux-service",
+      "status": "PASS",
+      "evidence": {
+        "entry": "site/downloads/EcoreX_0.2.4-web-linux-service.tar.gz"
+      }
+    },
+    {
+      "label": "public manifest matches web-linux-service",
+      "status": "PASS",
+      "evidence": {
+        "manifestSize": 3834803,
+        "artifactSize": 3834803,
+        "hashMatches": true
+      }
+    }
+  ],
+  "failed": [],
+  "redacted": true
+}

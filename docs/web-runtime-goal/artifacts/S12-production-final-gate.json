@@ -1,0 +1,442 @@
+{
+  "status": "PASS",
+  "version": "0.2.6",
+  "scope": "S12-production-final-gate",
+  "generatedAt": "2026-07-02T01:53:16.872644+00:00",
+  "checkCount": 24,
+  "passCount": 24,
+  "failCount": 0,
+  "checks": [
+    {
+      "name": "deploy artifact PASS",
+      "status": "PASS",
+      "detail": {
+        "checkCount": null,
+        "passCount": null,
+        "failCount": null
+      }
+    },
+    {
+      "name": "userBehavior200 artifact PASS",
+      "status": "PASS",
+      "detail": {
+        "checkCount": 200,
+        "passCount": 200,
+        "failCount": 0
+      }
+    },
+    {
+      "name": "imageOcrVision32 artifact PASS",
+      "status": "PASS",
+      "detail": {
+        "checkCount": 32,
+        "passCount": 32,
+        "failCount": 0
+      }
+    },
+    {
+      "name": "browserUi18 artifact PASS",
+      "status": "PASS",
+      "detail": {
+        "checkCount": 18,
+        "passCount": 18,
+        "failCount": 0
+      }
+    },
+    {
+      "name": "agentProduct450 artifact PASS",
+      "status": "PASS",
+      "detail": {
+        "checkCount": 450,
+        "passCount": 450,
+        "failCount": 0
+      }
+    },
+    {
+      "name": "tongxinS13 artifact PASS",
+      "status": "PASS",
+      "detail": {
+        "checkCount": null,
+        "passCount": null,
+        "failCount": null
+      }
+    },
+    {
+      "name": "tongxinPostdeploy artifact PASS",
+      "status": "PASS",
+      "detail": {
+        "checkCount": 17,
+        "passCount": 17,
+        "failCount": 0
+      }
+    },
+    {
+      "name": "agent product acceptance covers full 450-check matrix",
+      "status": "PASS",
+      "detail": {
+        "checkCount": 450,
+        "passCount": 450,
+        "failCount": 0
+      }
+    },
+    {
+      "name": "S13 Tongxin realtime account-id direct path validated",
+      "status": "PASS",
+      "detail": {
+        "numericAccountCount": 42,
+        "testedRealtimeAccountCount": 42,
+        "realtimeStatusCounts": {
+          "ok": 42
+        },
+        "accountResolution": "direct_account_id"
+      }
+    },
+    {
+      "name": "S13 Tongxin artifact redacts business and credential material",
+      "status": "PASS",
+      "detail": {
+        "rawAccountListQueryPersisted": false,
+        "rawAccountIdsPersisted": false,
+        "rawAccountNamesPersisted": false,
+        "rawCompanyNamesPersisted": false,
+        "exactRealtimeCostPersisted": false
+      }
+    },
+    {
+      "name": "S13 Tongxin models compatibility exports DATABASE Database database and get_db",
+      "status": "PASS",
+      "detail": {
+        "fileEndsWith": "tools/tongxin/models.py",
+        "hasDatabase": true,
+        "hasDatabaseAlias": true,
+        "hasLowercaseDatabase": true,
+        "databaseEquals": true,
+        "DatabaseEquals": true,
+        "hasGetDb": true
+      }
+    },
+    {
+      "name": "S13 Tongxin postdeploy server runtime and state package compatibility validated",
+      "status": "PASS",
+      "detail": {
+        "releaseVersion": "0.2.6",
+        "fileSummary": {
+          "allMatch": true,
+          "count": 8,
+          "matchCount": 8,
+          "presentCount": 8
+        },
+        "wrapperStatus": {
+          "bundledAvailable": true,
+          "remotePreferred": false
+        }
+      }
+    },
+    {
+      "name": "S13 Tongxin postdeploy real account discovery and sampled realtime path validated",
+      "status": "PASS",
+      "detail": {
+        "numericAccountCount": 42,
+        "sampledRealtimeAccountCount": 3,
+        "realtimeStatusCounts": {
+          "ok": 3
+        },
+        "sampleWrapperRealtime": {
+          "metaAccountResolution": "direct_account_id",
+          "ok": true,
+          "rowCount": 1,
+          "toolStatus": "success",
+          "totalCostBucket": "200-250"
+        }
+      }
+    },
+    {
+      "name": "S13 Tongxin cryptography dependency declared in core runtime",
+      "status": "PASS",
+      "detail": {
+        "cryptographyDeclaredInRootRequirements": true,
+        "cryptographyDeclaredInWebCoreRequirements": true,
+        "webAndDesktopCoreRequirementsMatch": true,
+        "runtimeCoreRequirementsSha256": "3676F5F126F5E500852272EA2866666BDDB28F0FB30E4783857FF1BD4A09617F"
+      }
+    },
+    {
+      "name": "S13 Tongxin bundled package hashes are present in release artifacts",
+      "status": "PASS",
+      "detail": {
+        "artifactCount": 3,
+        "fileCount": 8,
+        "results": {
+          "webui-windows-x64": {
+            "tools/tongxin/xin_agent_cli.py": {
+              "present": true,
+              "match": true
+            },
+            "tools/tongxin/config.py": {
+              "present": true,
+              "match": true
+            },
+            "tools/tongxin/models.py": {
+              "present": true,
+              "match": true
+            },
+            "tools/tongxin/models_init_.py": {
+              "present": true,
+              "match": true
+            },
+            "tools/tongxin/mpi.py": {
+              "present": true,
+              "match": true
+            },
+            "tools/tongxin/bili_column_defs.py": {
+              "present": true,
+              "match": true
+            },
+            "tools/tongxin/models/__init__.py": {
+              "present": true,
+              "match": true
+            },
+            "tools/tongxin/database.py": {
+              "present": true,
+              "match": true
+            }
+          },
+          "webui-macos-universal": {
+            "tools/tongxin/xin_agent_cli.py": {
+              "present": true,
+              "match": true
+            },
+            "tools/tongxin/config.py": {
+              "present": true,
+              "match": true
+            },
+            "tools/tongxin/models.py": {
+              "present": true,
+              "match": true
+            },
+            "tools/tongxin/models_init_.py": {
+              "present": true,
+              "match": true
+            },
+            "tools/tongxin/mpi.py": {
+              "present": true,
+              "match": true
+            },
+            "tools/tongxin/bili_column_defs.py": {
+              "present": true,
+              "match": true
+            },
+            "tools/tongxin/models/__init__.py": {
+              "present": true,
+              "match": true
+            },
+            "tools/tongxin/database.py": {
+              "present": true,
+              "match": true
+            }
+          },
+          "web-linux-service": {
+            "tools/tongxin/xin_agent_cli.py": {
+              "present": true,
+              "match": true
+            },
+            "tools/tongxin/config.py": {
+              "present": true,
+              "match": true
+            },
+            "tools/tongxin/models.py": {
+              "present": true,
+              "match": true
+            },
+            "tools/tongxin/models_init_.py": {
+              "present": true,
+              "match": true
+            },
+            "tools/tongxin/mpi.py": {
+              "present": true,
+              "match": true
+            },
+            "tools/tongxin/bili_column_defs.py": {
+              "present": true,
+              "match": true
+            },
+            "tools/tongxin/models/__init__.py": {
+              "present": true,
+              "match": true
+            },
+            "tools/tongxin/database.py": {
+              "present": true,
+              "match": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "deployment service active/enabled/version",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "name": "webui-windows-x64 release artifact present",
+      "status": "PASS",
+      "detail": {
+        "size": 127045258,
+        "sha256": "F8E01999A4D09F05D997CB3C6E9CB8D5E3AE7DC3B56313BE2EAF05F0F15EFD2F"
+      }
+    },
+    {
+      "name": "webui-windows-x64 manifest hash matches file",
+      "status": "PASS",
+      "detail": {
+        "manifestSha256": "F8E01999A4D09F05D997CB3C6E9CB8D5E3AE7DC3B56313BE2EAF05F0F15EFD2F",
+        "sha256": "F8E01999A4D09F05D997CB3C6E9CB8D5E3AE7DC3B56313BE2EAF05F0F15EFD2F"
+      }
+    },
+    {
+      "name": "webui-macos-universal release artifact present",
+      "status": "PASS",
+      "detail": {
+        "size": 301423658,
+        "sha256": "D5F5CB900C3ED2E97D03DD1616133B282F0D30402525F2A816259D7DF3747560"
+      }
+    },
+    {
+      "name": "webui-macos-universal manifest hash matches file",
+      "status": "PASS",
+      "detail": {
+        "manifestSha256": "D5F5CB900C3ED2E97D03DD1616133B282F0D30402525F2A816259D7DF3747560",
+        "sha256": "D5F5CB900C3ED2E97D03DD1616133B282F0D30402525F2A816259D7DF3747560"
+      }
+    },
+    {
+      "name": "web-linux-service release artifact present",
+      "status": "PASS",
+      "detail": {
+        "size": 4068058,
+        "sha256": "72D075CE282754C3E611F8D2DA693AB91B5259AB65FFCAF1DAE3482E069527E2"
+      }
+    },
+    {
+      "name": "web-linux-service manifest hash matches file",
+      "status": "PASS",
+      "detail": {
+        "manifestSha256": "72D075CE282754C3E611F8D2DA693AB91B5259AB65FFCAF1DAE3482E069527E2",
+        "sha256": "72D075CE282754C3E611F8D2DA693AB91B5259AB65FFCAF1DAE3482E069527E2"
+      }
+    },
+    {
+      "name": "public-release release artifact present",
+      "status": "PASS",
+      "detail": {
+        "size": 431511865,
+        "sha256": "5E4B7D991F092B31E56A5A8AEA88B2191FC73061E5C1A1A6523E7E18E676DB23"
+      }
+    },
+    {
+      "name": "desktop shortcut points to v0.2.6 web app",
+      "status": "PASS",
+      "detail": {
+        "exists": true,
+        "rawUrlPersisted": false
+      }
+    }
+  ],
+  "inputs": {
+    "deploy": {
+      "path": "C:\\EcoreX-Agent生产版\\docs\\v0.2.6\\artifacts\\production-deploy-online.json",
+      "status": "PASS",
+      "checkCount": null,
+      "passCount": null,
+      "failCount": null,
+      "sha256": "A85B01511E80C2EFD5C8AEBFDD8D170F8D3AEAF70F14962772DFD53E8C433069"
+    },
+    "userBehavior200": {
+      "path": "C:\\EcoreX-Agent生产版\\docs\\v0.2.6\\artifacts\\production-200-user-behavior.json",
+      "status": "PASS",
+      "checkCount": 200,
+      "passCount": 200,
+      "failCount": 0,
+      "sha256": "C3FFE59A75192109D141138D449C3DEDC9C22935F64A72AB4CFAE2CD522C4398"
+    },
+    "imageOcrVision32": {
+      "path": "C:\\EcoreX-Agent生产版\\docs\\v0.2.6\\artifacts\\production-32-image-ocr-vision-toolchain.json",
+      "status": "PASS",
+      "checkCount": 32,
+      "passCount": 32,
+      "failCount": 0,
+      "sha256": "9368F09D8EF0CCCD19667B857CCF626A9C3DA833F0EEA2B57F57EF29919CAF7D"
+    },
+    "browserUi18": {
+      "path": "C:\\EcoreX-Agent生产版\\docs\\v0.2.6\\artifacts\\production-browser-ui-v026-smoke.json",
+      "status": "PASS",
+      "checkCount": 18,
+      "passCount": 18,
+      "failCount": 0,
+      "sha256": "4A3928E2FFBD3D340D6F9B32E84B3E39A081841F4059293C04CE3C81CB5E95D3"
+    },
+    "agentProduct450": {
+      "path": "C:\\EcoreX-Agent生产版\\docs\\v0.2.6\\artifacts\\production-agent-product-acceptance.json",
+      "status": "PASS",
+      "checkCount": 450,
+      "passCount": 450,
+      "failCount": 0,
+      "sha256": "B734D8DCF6690157F1152F5EE105823BC76CDD97D749F7A79127EA671BAAB3FB"
+    },
+    "tongxinS13": {
+      "path": "C:\\EcoreX-Agent生产版\\docs\\web-runtime-goal\\artifacts\\S13-tongxin-cli-bundled-realtime.json",
+      "status": "pass",
+      "checkCount": null,
+      "passCount": null,
+      "failCount": null,
+      "sha256": "12E0EAFC897CB0294F8180EB003CB4D617BAD238914235D2023CAE5924DAFB89"
+    },
+    "tongxinPostdeploy": {
+      "path": "C:\\EcoreX-Agent生产版\\docs\\v0.2.6\\artifacts\\production-tongxin-postdeploy.json",
+      "status": "PASS",
+      "checkCount": 17,
+      "passCount": 17,
+      "failCount": 0,
+      "sha256": "484E7AFC73FDC03A420587FC66E824F4C82C4008461A2B2C16989C29A4D07A88"
+    }
+  },
+  "releaseArtifacts": {
+    "webui-windows-x64": {
+      "file": "EcoreX_0.2.6-webui-windows-x64.zip",
+      "size": 127045258,
+      "sha256": "F8E01999A4D09F05D997CB3C6E9CB8D5E3AE7DC3B56313BE2EAF05F0F15EFD2F",
+      "manifestSha256": "F8E01999A4D09F05D997CB3C6E9CB8D5E3AE7DC3B56313BE2EAF05F0F15EFD2F",
+      "manifestSize": 127045258,
+      "manifestMatch": true
+    },
+    "webui-macos-universal": {
+      "file": "EcoreX_0.2.6-webui-macos-universal.zip",
+      "size": 301423658,
+      "sha256": "D5F5CB900C3ED2E97D03DD1616133B282F0D30402525F2A816259D7DF3747560",
+      "manifestSha256": "D5F5CB900C3ED2E97D03DD1616133B282F0D30402525F2A816259D7DF3747560",
+      "manifestSize": 301423658,
+      "manifestMatch": true
+    },
+    "web-linux-service": {
+      "file": "EcoreX_0.2.6-web-linux-service.tar.gz",
+      "size": 4068058,
+      "sha256": "72D075CE282754C3E611F8D2DA693AB91B5259AB65FFCAF1DAE3482E069527E2",
+      "manifestSha256": "72D075CE282754C3E611F8D2DA693AB91B5259AB65FFCAF1DAE3482E069527E2",
+      "manifestSize": 4068058,
+      "manifestMatch": true
+    },
+    "public-release": {
+      "file": "EcoreX_0.2.6-public-release.zip",
+      "size": 431511865,
+      "sha256": "5E4B7D991F092B31E56A5A8AEA88B2191FC73061E5C1A1A6523E7E18E676DB23",
+      "manifestSha256": null,
+      "manifestSize": null,
+      "manifestMatch": "not-applicable"
+    }
+  },
+  "redaction": {
+    "rawPasswordPersisted": false,
+    "rawUrlPersisted": false,
+    "rawSecretPersisted": false
+  }
+}

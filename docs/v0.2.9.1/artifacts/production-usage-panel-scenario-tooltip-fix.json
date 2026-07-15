@@ -1,0 +1,143 @@
+{
+  "scope": "production-usage-panel-scenario-tooltip-fix",
+  "status": "PASS",
+  "version": "0.2.9.1",
+  "releaseDir": "/srv/ecorex-agent-usage-panel/releases/20260706133954-v0.2.9.1-scenario-tooltip-fix",
+  "files": {
+    "index.html": {
+      "size": 9327,
+      "sha256": "A07B139DECB43DA2E49DDC9E2E2D58181F09D21962DE4FEF260F1BA1CC755D63"
+    },
+    "styles.css": {
+      "size": 20278,
+      "sha256": "50A8A5F1CBAB0F37FB56860DAF8437B784967D1EC8A673F1F7348DD76AB05CBC"
+    },
+    "app.js": {
+      "size": 94617,
+      "sha256": "FB32AF32AFDD11B1DBE2041A58A8E7A865F4B9CC6528AC7C15652E70F07BBEA4"
+    },
+    "data.js": {
+      "size": 492,
+      "sha256": "E035668C51D0DA8A13D3AA24E5ECCF58F3DC301D3175A1C973E65D139B42FF7A"
+    },
+    "usage_panel_api.py": {
+      "size": 30252,
+      "sha256": "5C96B98EF19CB1FBEB01F2EB959075983D74759B08D28E109BFCB6ECDB96F15C"
+    }
+  },
+  "probe": {
+    "healthVersion": "0.2.9.1",
+    "publicStatus": 401,
+    "currentTarget": "/srv/ecorex-agent-usage-panel/releases/20260706133954-v0.2.9.1-scenario-tooltip-fix",
+    "markers": {
+      "currentTargetMatchesRelease": true,
+      "scenarioRowsUseDetails": true,
+      "scenarioRowsNoCustomTip": true,
+      "tokenScenarioTitleOnly": true,
+      "scenarioDetailWraps": true,
+      "scenarioDefinitionsStillPresent": true,
+      "noOldDuplicateTaskTooltip": true,
+      "indexStillUsagePanel": true,
+      "cssStillValid": true
+    },
+    "hashes": {
+      "index.html": "A07B139DECB43DA2E49DDC9E2E2D58181F09D21962DE4FEF260F1BA1CC755D63",
+      "styles.css": "50A8A5F1CBAB0F37FB56860DAF8437B784967D1EC8A673F1F7348DD76AB05CBC",
+      "app.js": "FB32AF32AFDD11B1DBE2041A58A8E7A865F4B9CC6528AC7C15652E70F07BBEA4",
+      "data.js": "E035668C51D0DA8A13D3AA24E5ECCF58F3DC301D3175A1C973E65D139B42FF7A",
+      "usage_panel_api.py": "5C96B98EF19CB1FBEB01F2EB959075983D74759B08D28E109BFCB6ECDB96F15C"
+    }
+  },
+  "commands": [
+    {
+      "name": "prepare_usage_panel_release",
+      "argvHash": "5B2242C510A8067E34711619263397BD297E344C545EAE0A5A02928200611E53",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stderrExcerptRedacted": ""
+    },
+    {
+      "name": "upload_index.html",
+      "argvHash": "FFA0BD2F641D05449354301214FCA6086E90F42D270DAB2F1DC3F0C1EA9A1AD2",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stderrExcerptRedacted": ""
+    },
+    {
+      "name": "upload_styles.css",
+      "argvHash": "B556C76ED091057C40690BDD688CDE6BE06184B8BE6143921522D00BF306A0B7",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stderrExcerptRedacted": ""
+    },
+    {
+      "name": "upload_app.js",
+      "argvHash": "708650848913E7FE8341B1E5D8966D8BA18DEE73F4AA142010AB1BEF6EB140AF",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stderrExcerptRedacted": ""
+    },
+    {
+      "name": "upload_data.js",
+      "argvHash": "ED9DAE249D322F732E398F32DA22907B6376DC4B7F703D3B3243E7BA59332AB0",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stderrExcerptRedacted": ""
+    },
+    {
+      "name": "upload_usage_panel_api.py",
+      "argvHash": "3D86E33F7972C397A5D5F25BCA2CA8E4955F4B03E405DAE2A6E275E103C674C3",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stderrExcerptRedacted": ""
+    },
+    {
+      "name": "install_usage_panel_api.py",
+      "argvHash": "A7402AF6FF4A11A86AACAC98D0BEBDA151C0047A87B0FBFE13ACBE5F327CDC67",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stderrExcerptRedacted": ""
+    },
+    {
+      "name": "promote_usage_panel_static",
+      "argvHash": "B94958C0A4EE96697619731F01F79CACF36585DE11DCA990490A7C9F26C98FE2",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stderrExcerptRedacted": ""
+    },
+    {
+      "name": "restart_usage_panel_api",
+      "argvHash": "B348E0272EFDDEA78302ACF55AEBF433C051F49599287AB2079D70EF7B733D45",
+      "exitCode": 0,
+      "stdoutHash": "45DF5AD5E0ECFA54D3226343E0E6857337494BA6E32F189D1174070665D8C659",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "active\n",
+      "stderrExcerptRedacted": ""
+    },
+    {
+      "name": "postdeploy_usage_panel_probe",
+      "argvHash": "A6D435E4AA24C6BF18BCFB05F490FC67659FA5DBD906B6C844AEB03E7C48C5C2",
+      "exitCode": 0,
+      "stdoutHash": "5D1EB400ED401F39F809A6097D5774ABEAB103C910BF8B6019822410DDD2C355",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "{\"healthVersion\": \"0.2.9.1\", \"publicStatus\": 401, \"currentTarget\": \"/srv/ecorex-agent-usage-panel/releases/20260706133954-v0.2.9.1-scenario-tooltip-fix\", \"markers\": {\"currentTargetMatchesRelease\": true, \"scenarioRowsUseDetails\": true, \"scenarioRowsNoCustomTip\": true, \"tokenScenarioTitleOnly\": true, \"scenarioDetailWraps\": true, \"scenarioDefinitionsStillPresent\": true, \"noOldDuplicateTaskTooltip\": true, \"indexStillUsagePanel\": true, \"cssStillValid\": true}, \"hashes\": {\"index.html\": \"A07B139DECB43DA2E49DDC9E2E2D58181F09D21962DE4FEF260F1BA1CC755D63\", \"styles.css\": \"50A8A5F1CBAB0F37FB56860DAF8437B784967D1EC8A673F1F7348DD76AB05CBC\", \"app.js\": \"FB32AF32AFDD11B1DBE2041A58A8E7A865F4B9CC6528AC7C15652E70F07BBEA4\", \"data.js\": \"E035668C51D0DA8A13D3AA24E5ECCF58F3DC301D3175A1C973E65D139B42FF7A\", \"usage_panel_api.py\": \"5C96B98EF19CB1FBEB01F2EB959075983D74759B08D28E109BFCB6ECDB96F15C\"}}\n",
+      "stderrExcerptRedacted": ""
+    }
+  ]
+}

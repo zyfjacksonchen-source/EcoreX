@@ -4,7 +4,7 @@ Skill manager for managing skill lifecycle and operations.
 
 import os
 import json
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 from pathlib import Path
 from common.log import logger
 from agent.skills.types import Skill, SkillEntry, SkillSnapshot
@@ -21,16 +21,12 @@ MANAGED_BUILTIN_REFRESH_MARKERS: Dict[str, List[str]] = {
     # silently overrides the fixed built-in version.
     "image-generation": [
         'DEFAULT_MODEL = "gpt-image-2-pro"',
-        "OpenAI default mode uses `gpt-image-2-pro` only",
+        "OpenAI default mode starts with `gpt-image-2-pro`",
+        "model_fallback",
         "LinkAI default model follows EcoreX's OpenAI image default",
         '"output_format"',
         "/images/edits",
         "requests with `image_url` use",
-    ],
-    "create-xiaohongshu-note": [
-        'parser.add_argument("--model", default="gpt-image-2-pro")',
-        "/images/generations",
-        '"output_format"',
     ],
 }
 
@@ -64,6 +60,7 @@ class SkillManager:
 
         self.loader = SkillLoader()
         self.skills: Dict[str, SkillEntry] = {}
+        self.builtin_catalog_names: Set[str] = set()
         self.last_load_diagnostics: List[str] = []
 
         # Load skills on initialization
@@ -72,6 +69,7 @@ class SkillManager:
     def refresh_skills(self):
         """Reload all skills from builtin and custom directories, then sync config."""
         self._refresh_managed_builtin_overlays()
+        self.builtin_catalog_names = self._load_builtin_catalog_names()
         self.skills = self.loader.load_all_skills(
             builtin_dir=self.builtin_dir,
             custom_dir=self.custom_dir,
@@ -80,6 +78,25 @@ class SkillManager:
         self.last_load_diagnostics = self.loader.get_last_diagnostics()
         self._sync_skills_config()
         logger.debug(f"SkillManager: Loaded {len(self.skills)} skills")
+
+    def _load_builtin_catalog_names(self) -> Set[str]:
+        """Snapshot names shipped in the factory built-in catalog."""
+        if not self.builtin_dir or not os.path.isdir(self.builtin_dir):
+            return set()
+        try:
+            result = self.loader.load_skills_from_dir(self.builtin_dir, source="builtin")
+            if result.diagnostics:
+                logger.debug(
+                    f"[SkillManager] Built-in catalog diagnostics: {len(result.diagnostics)} issues"
+                )
+            return {skill.name for skill in result.skills}
+        except Exception as exc:
+            logger.warning(f"[SkillManager] Failed loading built-in skill catalog: {exc}")
+            return set()
+
+    def is_builtin_catalog_skill(self, name: str) -> bool:
+        """Return True when ``name`` belongs to the shipped factory catalog."""
+        return name in self.builtin_catalog_names
 
     def _refresh_managed_builtin_overlays(self) -> None:
         """
@@ -219,8 +236,11 @@ class SkillManager:
             skill = entry.skill
             prev = saved.get(name, {})
             category = prev.get("category") or get_frontmatter_value(skill.frontmatter, "category") or "skill"
+            builtin_catalog = self.is_builtin_catalog_skill(name) or skill.source == "builtin"
 
-            if name in saved:
+            if builtin_catalog:
+                enabled = True
+            elif name in saved:
                 enabled = prev.get("enabled", True)
             else:
                 enabled = entry.metadata.default_enabled if entry.metadata else True
@@ -228,8 +248,10 @@ class SkillManager:
             entry_dict = {
                 "name": name,
                 "description": skill.description,
-                "source": prev.get("source") or skill.source,
+                "source": skill.source,
                 "enabled": enabled,
+                "default_enabled": True if builtin_catalog else bool(entry.metadata.default_enabled if entry.metadata else True),
+                "builtin_catalog": builtin_catalog,
                 "category": category,
             }
             mentionable_raw = get_frontmatter_value(skill.frontmatter, "mentionable")
@@ -283,6 +305,11 @@ class SkillManager:
         """
         if name not in self.skills_config:
             raise ValueError(f"skill '{name}' not found in config")
+        if enabled is False and (
+            self.is_builtin_catalog_skill(name)
+            or bool(self.skills_config[name].get("builtin_catalog"))
+        ):
+            raise PermissionError("Built-in factory skills are always enabled and cannot be disabled.")
         self.skills_config[name]["enabled"] = enabled
         self._save_skills_config()
 

@@ -1,0 +1,162 @@
+{
+  "status": "PASS",
+  "duration_ms": 1862,
+  "metrics": [
+    {
+      "theme": "light",
+      "width": 1120,
+      "ok": true,
+      "body": {
+        "x": 375.453125,
+        "y": 146.09375,
+        "width": 664.546875,
+        "height": 127.796875
+      },
+      "bubble": {
+        "x": 375.453125,
+        "y": 228.09375,
+        "width": 664.546875,
+        "height": 45.796875
+      },
+      "files": {
+        "x": 520,
+        "y": 146.09375,
+        "width": 520,
+        "height": 74
+      },
+      "fileButtons": [
+        {
+          "width": 253.671875,
+          "height": 38,
+          "background": "color(srgb 0.995046 0.948634 0.911424)",
+          "borderColor": "color(srgb 0.891364 0.793997 0.71309)"
+        },
+        {
+          "width": 96,
+          "height": 74,
+          "background": "oklch(0.995 0.004 78)",
+          "borderColor": "color(srgb 0.891364 0.793997 0.71309)"
+        }
+      ],
+      "bodyStyle": {
+        "background": "rgba(0, 0, 0, 0)",
+        "borderColor": "rgb(24, 24, 27)",
+        "borderRadius": "14px",
+        "display": "grid"
+      },
+      "bubbleStyle": {
+        "background": "color(srgb 0.994282 0.944313 0.909781)",
+        "borderColor": "color(srgb 0.888858 0.810728 0.742419)",
+        "borderRadius": "20px",
+        "display": "block"
+      },
+      "textLength": 47,
+      "screenshot": "docs/v0.2.3/artifacts/chat-attachment-bubble-light.png",
+      "console_errors": []
+    },
+    {
+      "theme": "dark",
+      "width": 1120,
+      "ok": true,
+      "body": {
+        "x": 375.453125,
+        "y": 146.09375,
+        "width": 664.546875,
+        "height": 127.796875
+      },
+      "bubble": {
+        "x": 375.453125,
+        "y": 228.09375,
+        "width": 664.546875,
+        "height": 45.796875
+      },
+      "files": {
+        "x": 520,
+        "y": 146.09375,
+        "width": 520,
+        "height": 74
+      },
+      "fileButtons": [
+        {
+          "width": 253.671875,
+          "height": 38,
+          "background": "color(srgb 0.225348 0.153212 0.0994842)",
+          "borderColor": "color(srgb 0.378966 0.264164 0.173014)"
+        },
+        {
+          "width": 96,
+          "height": 74,
+          "background": "oklch(0.245 0.02 55)",
+          "borderColor": "color(srgb 0.378966 0.264164 0.173014)"
+        }
+      ],
+      "bodyStyle": {
+        "background": "rgba(0, 0, 0, 0)",
+        "borderColor": "rgb(244, 244, 245)",
+        "borderRadius": "14px",
+        "display": "grid"
+      },
+      "bubbleStyle": {
+        "background": "color(srgb 0.205749 0.130471 0.0730721)",
+        "borderColor": "color(srgb 0.349014 0.250001 0.172173)",
+        "borderRadius": "20px",
+        "display": "block"
+      },
+      "textLength": 47,
+      "screenshot": "docs/v0.2.3/artifacts/chat-attachment-bubble-dark.png",
+      "console_errors": []
+    },
+    {
+      "theme": "light",
+      "width": 390,
+      "ok": true,
+      "body": {
+        "x": 78.734375,
+        "y": 99.296875,
+        "width": 287.265625,
+        "height": 221.390625
+      },
+      "bubble": {
+        "x": 78.734375,
+        "y": 227.296875,
+        "width": 287.265625,
+        "height": 93.390625
+      },
+      "files": {
+        "x": 78.734375,
+        "y": 99.296875,
+        "width": 287.265625,
+        "height": 120
+      },
+      "fileButtons": [
+        {
+          "width": 253.671875,
+          "height": 38,
+          "background": "color(srgb 0.995046 0.948634 0.911424)",
+          "borderColor": "color(srgb 0.891364 0.793997 0.71309)"
+        },
+        {
+          "width": 96,
+          "height": 74,
+          "background": "oklch(0.995 0.004 78)",
+          "borderColor": "color(srgb 0.891364 0.793997 0.71309)"
+        }
+      ],
+      "bodyStyle": {
+        "background": "rgba(0, 0, 0, 0)",
+        "borderColor": "rgb(24, 24, 27)",
+        "borderRadius": "14px",
+        "display": "grid"
+      },
+      "bubbleStyle": {
+        "background": "color(srgb 0.994282 0.944313 0.909781)",
+        "borderColor": "color(srgb 0.888858 0.810728 0.742419)",
+        "borderRadius": "20px",
+        "display": "block"
+      },
+      "textLength": 47,
+      "screenshot": "docs/v0.2.3/artifacts/chat-attachment-bubble-narrow.png",
+      "console_errors": []
+    }
+  ]
+}

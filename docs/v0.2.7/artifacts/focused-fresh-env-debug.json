@@ -1,0 +1,407 @@
+{
+  "status": "PASS",
+  "version": "0.2.7",
+  "scope": "production-agent-product-focused-rerun",
+  "generatedAt": "2026-07-02T17:05:44.561006+00:00",
+  "durationSeconds": 0.14,
+  "budgetMode": "tiered",
+  "releaseBlocking": false,
+  "focusGroups": [
+    "fresh-env"
+  ],
+  "selectedGroups": [
+    "fresh-env"
+  ],
+  "expectedCheckCount": 18,
+  "checkCount": 18,
+  "passCount": 18,
+  "failCount": 0,
+  "skipCount": 0,
+  "hardGateFailures": [],
+  "checks": [
+    {
+      "index": 1,
+      "caseId": "v027-agent-fresh-env-001",
+      "group": "fresh-env",
+      "name": "current release directory exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 2,
+      "caseId": "v027-agent-fresh-env-002",
+      "group": "fresh-env",
+      "name": "runtime directory exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 3,
+      "caseId": "v027-agent-fresh-env-003",
+      "group": "fresh-env",
+      "name": "release version is v0.2.7",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "version": "0.2.7"
+      }
+    },
+    {
+      "index": 4,
+      "caseId": "v027-agent-fresh-env-004",
+      "group": "fresh-env",
+      "name": "service env file exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 5,
+      "caseId": "v027-agent-fresh-env-005",
+      "group": "fresh-env",
+      "name": "state config exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 6,
+      "caseId": "v027-agent-fresh-env-006",
+      "group": "fresh-env",
+      "name": "state directory exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 7,
+      "caseId": "v027-agent-fresh-env-007",
+      "group": "fresh-env",
+      "name": "workspace directory exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 8,
+      "caseId": "v027-agent-fresh-env-008",
+      "group": "fresh-env",
+      "name": "fresh envelope directory created",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "runHash": "CE7FFBC87AD5DB8D"
+      }
+    },
+    {
+      "index": 9,
+      "caseId": "v027-agent-fresh-env-009",
+      "group": "fresh-env",
+      "name": "fresh home starts without app state",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 10,
+      "caseId": "v027-agent-fresh-env-010",
+      "group": "fresh-env",
+      "name": "fresh state starts empty",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 11,
+      "caseId": "v027-agent-fresh-env-011",
+      "group": "fresh-env",
+      "name": "fresh workspace starts empty",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 12,
+      "caseId": "v027-agent-fresh-env-012",
+      "group": "fresh-env",
+      "name": "fresh browser profile starts empty",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 13,
+      "caseId": "v027-agent-fresh-env-013",
+      "group": "fresh-env",
+      "name": "runtime manifest exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 14,
+      "caseId": "v027-agent-fresh-env-014",
+      "group": "fresh-env",
+      "name": "capability state exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 15,
+      "caseId": "v027-agent-fresh-env-015",
+      "group": "fresh-env",
+      "name": "permission matrix exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 16,
+      "caseId": "v027-agent-fresh-env-016",
+      "group": "fresh-env",
+      "name": "bundled node exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 17,
+      "caseId": "v027-agent-fresh-env-017",
+      "group": "fresh-env",
+      "name": "runtime venv python exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 18,
+      "caseId": "v027-agent-fresh-env-018",
+      "group": "fresh-env",
+      "name": "systemd service active",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "state": "active"
+      }
+    }
+  ],
+  "failurePreview": [],
+  "pressureProfile": {},
+  "modelRouteEvidence": [],
+  "stateMachineEvidence": {},
+  "securityEvidence": {},
+  "target": {
+    "domainHash": "A753D877497CBE35",
+    "sshHostHash": "CDF1CF905198CA97",
+    "sshUserHash": "4813494D137E1631",
+    "rawTargetPersisted": false
+  },
+  "redaction": {
+    "rawPasswordPersisted": false,
+    "rawSecretPersisted": false,
+    "rawUrlPersisted": false,
+    "rawUserPathPersisted": false
+  },
+  "remoteExitCode": 0,
+  "remoteStdoutHash": "486764B53476367979679F93C83D69879736BFE53D455EEBEA0D0CE91D1E8934",
+  "remoteStderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+  "remoteStderrExcerptRedacted": "",
+  "generatedLocallyAt": "2026-07-02T17:05:47.240002+00:00",
+  "releaseDecision": "not-authoritative-run-full-real-release-gate-before-promotion",
+  "matrixChangeLog": [
+    {
+      "action": "focused-rerun",
+      "requestedGroups": [
+        "fresh-env"
+      ],
+      "selectedGroups": [
+        "fresh-env"
+      ],
+      "releaseBlocking": false,
+      "finalGateRequiredBeforePromotion": true
+    }
+  ]
+}

@@ -1,6 +1,8 @@
 # encoding:utf-8
 
 import copy
+import ast
+import io
 import json
 import logging
 import os
@@ -10,6 +12,57 @@ import sqlite3
 
 from common.log import logger
 from common import i18n
+
+DEFAULT_CDP_ENDPOINT = "http://127.0.0.1:9222"
+DEFAULT_TONGXIN_AUTH_URL = "https://mvdcm.ecoremedia.net/ecorex-agent/client/tongxin/auth"
+DEFAULT_ECOREX_CHARACTER_DESC = (
+    "你是小芯，亦芯广告 EcoreX WebUI 的 AI Agent。始终以“小芯”作为助手身份，"
+    "默认称呼用户为“同学”。沟通风格专业、严谨、克制、简洁。回答时先确认目标和约束，"
+    "再给出可执行步骤；需要使用工具、读写文件、联网搜索、调用 Skill 或 MCP 时，清晰说明原因与结果。"
+)
+LEGACY_ECOREX_CHARACTER_DESCS = {
+    "You are a helpful AI assistant. You aim to answer and solve any questions people have, and can communicate in multiple languages.",
+    "You are EcoreX, the desktop AI Agent for Yixin Advertising. Keep a professional, rigorous, concise tone. Address the user as tongxue. Always identify as EcoreX. Confirm goals and constraints first, then provide executable steps. When using tools, files, web search, Skills, or MCP, clearly explain the reason and result.",
+    "你是 EcoreX，亦芯广告的桌面端 AI Agent。默认沟通风格专业、严谨、克制，称呼用户为“同学”。回答时先确认目标和约束，再给出可执行步骤；需要使用工具、读写文件、联网搜索、调用 Skill 或 MCP 时，清晰说明原因与结果。",
+}
+USER_DATAS_JSON_FILENAME = "user_datas.json"
+USER_DATAS_LEGACY_PICKLE_FILENAME = "user_datas.pkl"
+CHROME_DEVTOOLS_MCP_FULL_FLAGS = [
+    "--no-usage-statistics",
+    "--no-performance-crux",
+    "--experimentalPageIdRouting",
+    "--experimentalDevtools",
+    "--experimentalVision",
+    "--experimentalStructuredContent",
+    "--experimentalIncludeAllPages",
+    "--memoryDebugging",
+    "--categoryExperimentalThirdParty",
+    "--categoryExperimentalWebmcp",
+    "--redactNetworkHeaders",
+]
+
+
+def chrome_devtools_mcp_args(endpoint: str = DEFAULT_CDP_ENDPOINT) -> list:
+    browser_url = str(endpoint or DEFAULT_CDP_ENDPOINT)
+    return [
+        "-y",
+        "chrome-devtools-mcp@latest",
+        "--browserUrl",
+        browser_url,
+        *CHROME_DEVTOOLS_MCP_FULL_FLAGS,
+    ]
+
+
+def _chrome_devtools_mcp_args_need_upgrade(args, endpoint: str = DEFAULT_CDP_ENDPOINT) -> bool:
+    if not isinstance(args, list):
+        return True
+    parts = [str(item).strip() for item in args]
+    joined = " ".join(parts)
+    if not parts or "--autoConnect" in joined or "--auto-connect" in joined:
+        return True
+    expected = chrome_devtools_mcp_args(endpoint)
+    return parts != expected
+
 
 # All available config keys are listed in this dict (use lowercase keys).
 # The values here are placeholders only; the program does NOT read them.
@@ -72,11 +125,12 @@ available_setting = {
     "image_output_format": "png",  # GPT Image output format: png, jpeg, webp
     "image_background": "auto",  # GPT Image background: auto, opaque, transparent
     "image_moderation": "auto",  # GPT Image moderation: auto, low
+    "image_job_default_max_parallel": 2,  # default parallel lanes for multi-image jobs when max_parallel is omitted
     "group_chat_exit_group": False,
     # chatgpt session params
     "expires_in_seconds": 3600,  # idle session expiry time
     # persona description (only used in chat mode)
-    "character_desc": "你是 EcoreX，亦芯广告的桌面端 AI Agent。默认沟通风格专业、严谨、克制，称呼用户为“同学”。回答时先确认目标和约束，再给出可执行步骤；需要使用工具、读写文件、联网搜索、调用 Skill 或 MCP 时，清晰说明原因与结果。",
+    "character_desc": DEFAULT_ECOREX_CHARACTER_DESC,
     "conversation_max_tokens": 1000,  # max characters of context memory
     # chatgpt rate limit config
     "rate_limit_chatgpt": 20,  # chatgpt call rate limit
@@ -255,7 +309,9 @@ available_setting = {
     "web_file_serve_root": "~",  # Root dir the /api/file endpoint may serve; "/" allows the whole filesystem
     "agent": True,  # whether to enable Agent mode
     "agent_workspace": "~/EcoreX",  # agent workspace path, used to store skills, memory, etc.
-    "agent_max_context_tokens": 258000,  # max context tokens in Agent mode
+    "model_context_window": 1000000,  # active chat model context window, synced by the Web model selector
+    "model_auto_compact_token_limit": 800000,  # active chat model soft auto-compact threshold
+    "agent_max_context_tokens": 800000,  # legacy Agent context budget; synced from model_auto_compact_token_limit
     "agent_max_context_turns": 20,  # max context memory turns in Agent mode
     "agent_max_steps": 20,  # max decision steps per run in Agent mode
     "agent_context_budget_warn_ratio": 0.85,  # emit near-limit context-budget evidence above this fraction of the effective input limit
@@ -273,10 +329,28 @@ available_setting = {
     "skill": {},  # Per-skill runtime config; nested keys flatten to SKILL_<NAME>_<KEY> env vars at startup
     "tools": {
         "browser": {
-            "cdp_endpoint": "http://127.0.0.1:9222",
-            "cdp_auto_launch": False,
+            "cdp_endpoint": DEFAULT_CDP_ENDPOINT,
+            "cdp_auto_launch": True,
             "cdp_fallback": True,
-            "persistent": True
+            "persistent": True,
+            "cdp_persist_session": True,
+            "cdp_keepalive_interval": 60,
+            "idle_timeout": 0
+        },
+        "feishu_cli": {
+            "package": "@larksuite/cli@1.0.56",
+            "auto_install": False,
+            "allow_system_node": False
+        },
+        "tongxin_cli": {
+            "script_path": "",
+            "python_path": "",
+            "read_only": True,
+            "auth_url": DEFAULT_TONGXIN_AUTH_URL,
+            "bootstrap_manifest_url": "",
+            "bootstrap_url": "",
+            "bootstrap_sha256": "",
+            "bootstrap_dir": ""
         }
     },
     "mcp_servers": [
@@ -284,8 +358,8 @@ available_setting = {
             "name": "chrome-devtools",
             "type": "stdio",
             "command": "npx",
-            "args": ["chrome-devtools-mcp@latest", "--browserUrl", "http://127.0.0.1:9222", "--no-usage-statistics"],
-            "timeout": 30
+            "args": chrome_devtools_mcp_args(DEFAULT_CDP_ENDPOINT),
+            "timeout": 45
         }
     ],  # MCP server list; each entry supports type "stdio" (local process) or "sse" (remote URL); loaded only when mcp_auto_start or optional_abilities enables it
 }
@@ -330,20 +404,37 @@ class Config(dict):
         return self.user_datas[user]
 
     def load_user_datas(self):
+        json_path = os.path.join(get_appdata_dir(), USER_DATAS_JSON_FILENAME)
+        legacy_pickle_path = os.path.join(get_appdata_dir(), USER_DATAS_LEGACY_PICKLE_FILENAME)
         try:
-            with open(os.path.join(get_appdata_dir(), "user_datas.pkl"), "rb") as f:
-                self.user_datas = pickle.load(f)
-                logger.debug("[Config] User datas loaded.")
+            with open(json_path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            self.user_datas = _coerce_user_datas(loaded)
+            logger.debug("[Config] User datas loaded from JSON.")
+            return
         except FileNotFoundError as e:
-            logger.debug("[Config] User datas file not found, ignore.")
+            logger.debug("[Config] User datas JSON file not found, checking legacy file.")
         except Exception as e:
             logger.warning("[Config] User datas error: {}".format(e))
             self.user_datas = {}
 
+        try:
+            loaded = _load_legacy_user_datas_pickle(legacy_pickle_path)
+            if loaded is None:
+                self.user_datas = {}
+                return
+            self.user_datas = _coerce_user_datas(loaded)
+            self.save_user_datas()
+            logger.warning("[Config] Migrated legacy user datas pickle to JSON.")
+        except Exception as e:
+            logger.warning("[Config] Legacy user datas migration skipped: {}".format(e))
+            self.user_datas = {}
+
     def save_user_datas(self):
         try:
-            with open(os.path.join(get_appdata_dir(), "user_datas.pkl"), "wb") as f:
-                pickle.dump(self.user_datas, f)
+            with open(os.path.join(get_appdata_dir(), USER_DATAS_JSON_FILENAME), "w", encoding="utf-8") as f:
+                json.dump(_coerce_user_datas(self.user_datas), f, ensure_ascii=False, indent=2, sort_keys=True)
+                f.write("\n")
                 logger.info("[Config] User datas saved.")
         except Exception as e:
             logger.info("[Config] User datas error: {}".format(e))
@@ -362,6 +453,181 @@ def _mask_sensitive_config_value(key, value):
     if not is_sensitive or not isinstance(value, str):
         return value
     return "***"
+
+
+class _RestrictedUserDataUnpickler(pickle.Unpickler):
+    """Best-effort legacy importer that rejects arbitrary globals/classes."""
+
+    def find_class(self, module, name):
+        raise pickle.UnpicklingError("legacy user data pickle contains unsupported global reference")
+
+
+def _load_legacy_user_datas_pickle(path: str):
+    if not os.path.exists(path):
+        logger.debug("[Config] Legacy user datas file not found, ignore.")
+        return None
+    try:
+        if os.path.getsize(path) > 1024 * 1024:
+            raise ValueError("legacy user data pickle is too large")
+        with open(path, "rb") as f:
+            return _RestrictedUserDataUnpickler(io.BytesIO(f.read())).load()
+    except Exception as exc:
+        raise ValueError(f"unsafe or unreadable legacy user data pickle: {exc}") from exc
+
+
+def _coerce_json_safe_value(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_coerce_json_safe_value(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            str(key): _coerce_json_safe_value(item)
+            for key, item in value.items()
+            if isinstance(key, (str, int, float, bool))
+        }
+    return str(value)
+
+
+def _coerce_user_datas(value) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(user): _coerce_json_safe_value(data) if isinstance(data, dict) else {}
+        for user, data in value.items()
+    }
+
+
+def _parse_bool_env_value(value: str):
+    lowered = str(value or "").strip().lower()
+    if lowered in {"1", "true", "yes", "y", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError("not a boolean value")
+
+
+def _parse_structured_env_value(value: str):
+    text = str(value or "").strip()
+    if not text:
+        return text
+    if len(text) > 65536:
+        raise ValueError("environment override is too large")
+    try:
+        return json.loads(text)
+    except Exception:
+        return ast.literal_eval(text)
+
+
+def _parse_env_config_value(name: str, value: str):
+    template = available_setting.get(str(name or "").lower())
+    text = str(value)
+    if isinstance(template, bool):
+        try:
+            return _parse_bool_env_value(text)
+        except ValueError:
+            logger.warning("[INIT] invalid boolean environment override for %s; using configured default", name)
+            return copy.deepcopy(template)
+    if isinstance(template, int) and not isinstance(template, bool):
+        try:
+            return int(text.strip())
+        except ValueError:
+            logger.warning("[INIT] invalid integer environment override for %s; using configured default", name)
+            return copy.deepcopy(template)
+    if isinstance(template, float):
+        try:
+            return float(text.strip())
+        except ValueError:
+            logger.warning("[INIT] invalid float environment override for %s; using configured default", name)
+            return copy.deepcopy(template)
+    if isinstance(template, list):
+        if "," in text and not text.strip().startswith(("[", "(")):
+            return [item.strip() for item in text.split(",") if item.strip()]
+        try:
+            parsed = _parse_structured_env_value(text)
+            if isinstance(parsed, tuple):
+                parsed = list(parsed)
+            if isinstance(parsed, list):
+                return parsed
+        except Exception:
+            pass
+        logger.warning("[INIT] invalid list environment override for %s; using configured default", name)
+        return copy.deepcopy(template)
+    if isinstance(template, dict):
+        try:
+            parsed = _parse_structured_env_value(text)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+        logger.warning("[INIT] invalid dict environment override for %s; using configured default", name)
+        return copy.deepcopy(template)
+    return text
+
+
+def _enterprise_model_policy_paths(*, include_desktop_cache: bool = True):
+    configured = os.environ.get("ECOREX_ENTERPRISE_MODEL_POLICY_FILE", "").strip()
+    if configured:
+        yield configured
+    if not include_desktop_cache:
+        return
+
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        yield os.path.join(appdata, "ecorex-desktop", "enterprise-model-policy.json")
+
+    localappdata = os.environ.get("LOCALAPPDATA")
+    if localappdata:
+        yield os.path.join(localappdata, "ecorex-desktop", "enterprise-model-policy.json")
+
+    home = os.path.expanduser("~")
+    if home and home != "~":
+        yield os.path.join(home, "Library", "Application Support", "ecorex-desktop", "enterprise-model-policy.json")
+        xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
+        yield os.path.join(xdg, "ecorex-desktop", "enterprise-model-policy.json")
+
+
+def _apply_cached_enterprise_model_policy(cfg: dict) -> bool:
+    """Apply admin-managed model settings from the desktop policy cache.
+
+    The cache is read-only here: we only merge the `settings` payload and never
+    write it back to config.json. Environment variables are applied afterwards
+    in load_config(), so sidecar-provided fresh policy still wins over a stale
+    cache.
+    """
+    if not isinstance(cfg, dict):
+        return False
+    channel_type = str(cfg.get("channel_type") or os.environ.get("CHANNEL_TYPE") or "").lower()
+    include_desktop_cache = "web" not in channel_type
+    for raw_path in _enterprise_model_policy_paths(include_desktop_cache=include_desktop_cache):
+        try:
+            path = os.path.abspath(os.path.expanduser(raw_path))
+            if not os.path.isfile(path):
+                continue
+            with open(path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            if not isinstance(payload, dict) or not payload.get("configured"):
+                continue
+            settings = payload.get("settings")
+            if not isinstance(settings, dict):
+                continue
+            applied = 0
+            for key, value in settings.items():
+                key = str(key or "").lower()
+                if key in available_setting and value is not None:
+                    cfg[key] = value
+                    applied += 1
+            if applied:
+                logger.info(
+                    "[INIT] applied cached enterprise model policy: provider=%s model=%s source=%s",
+                    payload.get("provider") or cfg.get("bot_type") or "",
+                    payload.get("model") or cfg.get("model") or "",
+                    path,
+                )
+                return True
+        except Exception as exc:
+            logger.debug("[INIT] cached enterprise model policy skipped: %s", exc)
+    return False
 
 
 def drag_sensitive(config):
@@ -384,6 +650,14 @@ def _ensure_ecorex_runtime_defaults(cfg: dict):
     if not isinstance(cfg, dict):
         return
 
+    character_desc = str(cfg.get("character_desc") or "").strip()
+    if (
+        not character_desc
+        or character_desc in LEGACY_ECOREX_CHARACTER_DESCS
+        or "COW" in character_desc.upper()
+    ):
+        cfg["character_desc"] = DEFAULT_ECOREX_CHARACTER_DESC
+
     if cfg.get("agent_workspace") in (None, ""):
         cfg["agent_workspace"] = "~/EcoreX"
 
@@ -405,14 +679,39 @@ def _ensure_ecorex_runtime_defaults(cfg: dict):
         cfg["self_evolution_enabled"] = True
 
     browser_defaults = {
-        "cdp_endpoint": "http://127.0.0.1:9222",
-        "cdp_auto_launch": False,
+        "cdp_endpoint": DEFAULT_CDP_ENDPOINT,
+        "cdp_auto_launch": True,
         "cdp_fallback": True,
         "persistent": True,
+        "cdp_persist_session": True,
+        "cdp_keepalive_interval": 60,
+        "idle_timeout": 0,
     }
     for key, value in browser_defaults.items():
         if browser.get(key) in (None, ""):
             browser[key] = value
+
+    channel_type = str(cfg.get("channel_type") or os.environ.get("CHANNEL_TYPE") or "").lower()
+    if "web" in channel_type:
+        def _web_bool_env(name: str, default: bool = True) -> bool:
+            value = os.environ.get(name)
+            if value in (None, ""):
+                return default
+            try:
+                return bool(_parse_bool_env_value(value))
+            except ValueError:
+                logger.warning("[INIT] invalid %s value; using %s", name, default)
+                return default
+
+        browser["cdp_auto_launch"] = _web_bool_env("ECOREX_BROWSER_CDP_AUTO_LAUNCH")
+        browser["cdp_fallback"] = _web_bool_env("ECOREX_BROWSER_CDP_FALLBACK")
+        browser["persistent"] = _web_bool_env("ECOREX_BROWSER_PERSISTENT")
+        browser["cdp_persist_session"] = _web_bool_env("ECOREX_BROWSER_CDP_PERSIST_SESSION")
+        try:
+            browser["idle_timeout"] = int(os.environ.get("ECOREX_BROWSER_IDLE_TIMEOUT", "0") or "0")
+        except ValueError:
+            logger.warning("[INIT] invalid ECOREX_BROWSER_IDLE_TIMEOUT value; using 0")
+            browser["idle_timeout"] = 0
 
     feishu_cli = tools.get("feishu_cli")
     if not isinstance(feishu_cli, dict):
@@ -421,6 +720,24 @@ def _ensure_ecorex_runtime_defaults(cfg: dict):
     if feishu_cli.get("package") in (None, "", "@larksuite/cli@1.0.40"):
         feishu_cli["package"] = "@larksuite/cli@1.0.56"
     feishu_cli.setdefault("auto_install", False)
+    if "web" in channel_type:
+        feishu_cli["allow_system_node"] = False
+    else:
+        feishu_cli.setdefault("allow_system_node", False)
+
+    tongxin_cli = tools.get("tongxin_cli")
+    if not isinstance(tongxin_cli, dict):
+        tongxin_cli = {}
+        tools["tongxin_cli"] = tongxin_cli
+    tongxin_cli.setdefault("script_path", "")
+    tongxin_cli.setdefault("python_path", "")
+    if tongxin_cli.get("auth_url") in (None, ""):
+        tongxin_cli["auth_url"] = os.environ.get("ECOREX_TONGXIN_AUTH_URL") or DEFAULT_TONGXIN_AUTH_URL
+    tongxin_cli.setdefault("bootstrap_manifest_url", "")
+    tongxin_cli.setdefault("bootstrap_url", "")
+    tongxin_cli.setdefault("bootstrap_sha256", "")
+    tongxin_cli.setdefault("bootstrap_dir", "")
+    tongxin_cli["read_only"] = True
 
     mcp_servers = cfg.get("mcp_servers")
     if not isinstance(mcp_servers, list):
@@ -440,13 +757,8 @@ def _ensure_ecorex_runtime_defaults(cfg: dict):
             "name": "chrome-devtools",
             "type": "stdio",
             "command": command,
-            "args": [
-                "chrome-devtools-mcp@latest",
-                "--browserUrl",
-                str(browser.get("cdp_endpoint") or "http://127.0.0.1:9222"),
-                "--no-usage-statistics",
-            ],
-            "timeout": 30,
+            "args": chrome_devtools_mcp_args(str(browser.get("cdp_endpoint") or DEFAULT_CDP_ENDPOINT)),
+            "timeout": 45,
         })
     else:
         for server in mcp_servers:
@@ -463,13 +775,17 @@ def _ensure_ecorex_runtime_defaults(cfg: dict):
                 server["command"] = "npx.cmd"
             args = server.get("args")
             args_text = " ".join(str(item) for item in args) if isinstance(args, list) else ""
-            if not isinstance(args, list) or "--autoConnect" in args_text or "--auto-connect" in args_text:
-                server["args"] = [
-                    "chrome-devtools-mcp@latest",
-                    "--browserUrl",
-                    str(browser.get("cdp_endpoint") or "http://127.0.0.1:9222"),
-                    "--no-usage-statistics",
-                ]
+            if _chrome_devtools_mcp_args_need_upgrade(
+                args,
+                str(browser.get("cdp_endpoint") or DEFAULT_CDP_ENDPOINT),
+            ):
+                server["args"] = chrome_devtools_mcp_args(str(browser.get("cdp_endpoint") or DEFAULT_CDP_ENDPOINT))
+            try:
+                timeout = int(server.get("timeout") or 0)
+            except (TypeError, ValueError):
+                timeout = 0
+            if timeout < 45:
+                server["timeout"] = 45
 
 
 def _prepend_to_path(path: str):
@@ -635,10 +951,18 @@ def load_config():
     logger.info(" \\____\\___/ \\_/\\_//_/   \\_\\__, |\\___|_| |_|\\__|")
     logger.info("                          |___/                 ")
     logger.info("")
-    config_path = "./config.json"
+    config_path = os.environ.get("ECOREX_CONFIG_PATH", "").strip()
+    if config_path:
+        config_path = os.path.abspath(os.path.expanduser(config_path))
+        if not os.path.exists(config_path):
+            logger.warning("[INIT] ECOREX_CONFIG_PATH does not exist: %s", config_path)
+            config_path = ""
+    if not config_path:
+        config_path = "./config.json"
     if not os.path.exists(config_path):
-        logger.info("config file not found, falling back to config-template.json")
-        config_path = "./config-template.json"
+        template_path = os.environ.get("ECOREX_TEMPLATE_PATH", "").strip() or "./config-template.json"
+        logger.info("config file not found, falling back to %s", template_path)
+        config_path = os.path.abspath(os.path.expanduser(template_path))
 
     config_str = read_file(config_path)
     logger.debug("[INIT] config str: {}".format(drag_sensitive(config_str)))
@@ -656,6 +980,7 @@ def load_config():
     _merge_legacy_namespace(config, legacy="tool",  canonical="tools")
     _merge_legacy_namespace(config, legacy="skill", canonical="skills")
     _ensure_ecorex_runtime_defaults(config)
+    _apply_cached_enterprise_model_policy(config)
 
     # override config with environment variables.
     # Some online deployment platforms (e.g. Railway) deploy project from github directly. So you shouldn't put your secrets like api key in a config file, instead use environment variables to override the default config.
@@ -669,15 +994,7 @@ def load_config():
                 name,
                 _mask_sensitive_config_value(name, value),
             ))
-            try:
-                config[name] = eval(value)
-            except Exception:
-                if value == "false":
-                    config[name] = False
-                elif value == "true":
-                    config[name] = True
-                else:
-                    config[name] = value
+            config[name] = _parse_env_config_value(name, value)
 
     _ensure_ecorex_runtime_defaults(config)
     _ensure_external_cli_path()

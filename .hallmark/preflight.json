@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "scanned_at": "2026-07-15",
+  "target": "EcoreX React WebUI",
+  "framework": {
+    "name": "React",
+    "version": "19.2.3",
+    "builder": "Vite 7.2.7"
+  },
+  "font_stack": {
+    "body": "system CJK sans",
+    "mono": "system monospace",
+    "external_fonts": false
+  },
+  "palette": {
+    "source": "desktop/src/styles/tokens.css",
+    "format": "semantic OKLCH tokens",
+    "anchor": "Codex neutral surfaces and blue interaction accent with EcoreX orange brand actions",
+    "dark_reference": "non-chat #0f0f0f, chat #111111, composer/session/scrollbar #202020, ink #fcfcfc, accent #0169cc, contrast 60",
+    "light_reference": "non-chat #f7f7f7, chat/composer #ffffff, session #ebebeb, scrollbar #e5e5e5, ink #1a1c1f, accent #339cff, contrast 45",
+    "requires_normalization": false
+  },
+  "motion": {
+    "library": null,
+    "stance": "motion-cut",
+    "implementation": "CSS only"
+  },
+  "spacing": {
+    "base_px": 4,
+    "source": "desktop/src/styles/tokens.css"
+  },
+  "design_system_file": "design.md",
+  "genre": "modern-minimal",
+  "tone": "quiet utilitarian office tool",
+  "preserve": [
+    "product information architecture",
+    "warm brand anchor",
+    "system CJK font strategy",
+    "Lucide icon family",
+    "4px spacing basis"
+  ],
+  "replace": [
+    "Electron titlebar chrome",
+    "top-only workspace radii",
+    "hard-coded colours, radii, shadows, and z-index values",
+    "duplicate artifact presentation components",
+    "source/build/overlay drift"
+  ]
+}

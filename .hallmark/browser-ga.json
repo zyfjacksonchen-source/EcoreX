@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "run_id": "ecorex-v1-webui-ga-20260711-0100-cst",
+  "recorded_at": "2026-07-11T01:00:28.6481598+08:00",
+  "branch": "codex/ecorex-v0.3.0-hardening",
+  "baseline_commit": "9ac3b958",
+  "target": "desktop/src/v1",
+  "browser_surface": {
+    "skill": "browser:control-in-app-browser@26.707.31428",
+    "runtime_initialized": true,
+    "selection_result": "Codex in-app Browser selected",
+    "inventory": ["local GA tab at http://127.0.0.1:4179"],
+    "troubleshooting_followed": true,
+    "fallback_playwright_used": false,
+    "status": "partial_pass",
+    "reason": "Desktop Artifact, preview, Settings, Output, health and focus paths were exercised in the real in-app Browser. The full responsive/theme/touch/forced-colors/reduced-motion/axe matrix remains pending.",
+    "screenshots": [
+      "docs/v1.0/evidence/artifact-task-1440.jpg",
+      "docs/v1.0/evidence/image-preview-fit-1440.jpg",
+      "docs/v1.0/evidence/image-preview-fit-current.jpg",
+      "docs/v1.0/evidence/settings-output-health-1440.jpg"
+    ]
+  },
+  "viewport_matrix": [
+    { "viewport": "1440x900", "themes": ["light", "dark"], "status": "dark_desktop_paths_partial_pass" },
+    { "viewport": "1280x720", "themes": ["dark"], "status": "artifact_preview_geometry_and_focus_pass" },
+    { "viewport": "1024x768", "themes": ["light", "dark"], "status": "not_run" },
+    { "viewport": "768x900", "themes": ["light", "dark"], "status": "not_run" },
+    { "viewport": "390x844", "themes": ["light", "dark"], "status": "not_run" },
+    { "viewport": "320x800", "themes": ["light", "dark"], "status": "not_run" },
+    { "viewport": "375x812", "themes": ["light", "dark"], "status": "not_run" },
+    { "viewport": "414x896", "themes": ["light", "dark"], "status": "not_run" }
+  ],
+  "browser_only_checks": {
+    "keyboard_focus_path": "partial_pass_settings_and_artifact_preview",
+    "coarse_pointer_bottom_sheet": "not_run",
+    "clipboard_denial_rendering": "not_run",
+    "forced_colors": "not_run",
+    "reduced_motion": "not_run",
+    "horizontal_overflow_sweep": "partial_pass_artifact_preview_1280",
+    "axe": "not_run"
+  },
+  "repeatable_mock_gate": {
+    "entrypoint": "npm run ga:serve",
+    "default_url": "http://127.0.0.1:4179",
+    "default_scenario": "unauthenticated",
+    "scenario_reset": "POST /__ga/reset?scenario={empty|unauthenticated|thinking|retry|hitl|artifact}",
+    "contracts": [
+      "same-origin /api/v1 bootstrap and CSRF",
+      "managed device login begin/get/poll without device_code or tokens",
+      "first-turn terminal SSE",
+      "retry_wait and durable queue intent",
+      "persisted HITL response",
+      "image2 catalog and image Artifact preview",
+      "retouch Artifact Item with change_summary and inspection_regions",
+      "unique ShareSnapshot URLs",
+      "default/full_access permission mutation"
+    ],
+    "production_static_headers": ["Cache-Control: no-store", "CSP self-only", "X-Content-Type-Options: nosniff"],
+    "status": "passed"
+  },
+  "verification": [
+    { "command": "npm run typecheck", "result": "passed" },
+    { "command": "npm run test:v1", "result": "87 passed, 0 failed" },
+    { "command": "python scripts/check-v1-design-system.py", "result": "passed; 5 strict files; all six debt counters zero" },
+    { "command": "npm run build", "result": "passed; 1822 modules; 11 content-addressed assets; bundle budgets passed" },
+    { "command": "git diff --check -- desktop/src/v1 desktop/src/styles/tokens.css desktop/tools desktop/package.json .hallmark", "result": "passed; line-ending warnings only" },
+    { "command": "forbidden CSS pattern scan", "result": "passed; no raw colors, hardcoded spacing, 100vw, transition:all, or numeric z-index" }
+  ],
+  "contract_evidence": {
+    "first_model_selection": "Bootstrap model catalogs map to independent chat/image selectors before a Thread exists; mode-specific empty catalogs disable send.",
+    "thinking_terminal": "runtimeReducer terminal event tests cover zero-output, duplicate terminal, gaps, and projection recovery.",
+    "queue_retry_hitl": "Mock /api/v1 + SSE covers retry_wait, queue mutation, persisted HITL response; HITL controls are re-entry guarded.",
+    "artifact_touch": "Backend actions map to contextual desktop rail and compact overflow; coarse pointers use a real dialog-backed bottom action sheet.",
+    "retouch_result": "Timeline maps backend change_summary and inspection_regions from the Retouch Artifact Item, followed by an auto-loaded image preview.",
+    "clipboard_failure": "Clipboard promise rejection is tested and cannot produce a success state.",
+    "permissions": "Managed bootstrap plus default/full_access mutation contract is tested; unauthenticated users cannot send or mutate permissions.",
+    "device_login": "WebUI keeps flow/user code in memory only, opens HTTPS-only verification URLs, performs GET refresh and explicit POST poll, and reloads only after restart_scheduled."
+  },
+  "hallmark": {
+    "design_system": "design.md",
+    "genre": "modern-minimal",
+    "macrostructure": "Workbench",
+    "pre_emit_critique": { "philosophy": 5, "hierarchy": 4, "execution": 3, "specificity": 5, "restraint": 5, "variety": 4 },
+    "static_gate_status": "passed_with_locked_system_exception",
+    "locked_system_exception": "Slop gate 1 names a system-default display stack, while the user-approved design.md explicitly requires the fixed system CJK display/UI stack for this office product. The locked product system takes precedence.",
+    "contrast": "automated WCAG checks pass for light/dark body, caption, semantic status, accent ink, and two-ring focus tokens",
+    "visual_gate_status": "partial_real_browser_evidence"
+  },
+  "remaining_gaps": [
+    {
+      "kind": "real_environment",
+      "item": "Complete the remaining viewport/theme, full-keyboard, coarse-pointer, forced-colors, reduced-motion, overflow, clipboard UI and axe checks on the immutable candidate."
+    },
+    {
+      "kind": "real_environment",
+      "item": "Managed device authorization was verified against the local contract and Mock Runtime, not a production identity broker."
+    }
+  ]
+}

@@ -1,0 +1,273 @@
+{
+  "status": "PASS",
+  "generatedAt": "2026-06-25T17:10:27Z",
+  "slices": [
+    {
+      "name": "HFX-01 session isolation",
+      "status": "PASS",
+      "checks": [
+        {
+          "label": "new session clears message state ref",
+          "status": "PASS"
+        },
+        {
+          "label": "restore cache syncs message ref before render",
+          "status": "PASS"
+        },
+        {
+          "label": "new session view uses empty visible messages",
+          "status": "PASS"
+        }
+      ],
+      "failed": []
+    },
+    {
+      "name": "HFX-02 sweep removed",
+      "status": "PASS",
+      "checks": [
+        {
+          "label": "desktop css has no ecorex text sweep keyframe",
+          "status": "PASS"
+        },
+        {
+          "label": "legacy css has no ecorexTextSweep keyframe",
+          "status": "PASS"
+        },
+        {
+          "label": "motion smoke asserts no sweep animation",
+          "status": "PASS"
+        }
+      ],
+      "failed": []
+    },
+    {
+      "name": "HFX-03 codex-like new session",
+      "status": "PASS",
+      "checks": [
+        {
+          "label": "chat pane marks new session state",
+          "status": "PASS"
+        },
+        {
+          "label": "new session headline present",
+          "status": "PASS"
+        },
+        {
+          "label": "project folder entry present",
+          "status": "PASS"
+        },
+        {
+          "label": "general conversation entry present",
+          "status": "PASS"
+        },
+        {
+          "label": "legacy web static welcome uses codex-like headline",
+          "status": "PASS"
+        },
+        {
+          "label": "legacy web static welcome has no old example cards",
+          "status": "PASS"
+        },
+        {
+          "label": "legacy newChat builds codex-like welcome",
+          "status": "PASS"
+        }
+      ],
+      "failed": []
+    },
+    {
+      "name": "HFX-04 version surfaces",
+      "status": "PASS",
+      "checks": [
+        {
+          "label": "cli version is v0.2.2",
+          "status": "PASS"
+        },
+        {
+          "label": "release notes version v0.2.2",
+          "status": "PASS"
+        },
+        {
+          "label": "web bridge client key v0.2.2",
+          "status": "PASS"
+        },
+        {
+          "label": "admin api version v0.2.2",
+          "status": "PASS"
+        },
+        {
+          "label": "admin html fallback v0.2.2",
+          "status": "PASS"
+        },
+        {
+          "label": "admin js fallback v0.2.2",
+          "status": "PASS"
+        },
+        {
+          "label": "site html fallback v0.2.2",
+          "status": "PASS"
+        },
+        {
+          "label": "installer ps1 v0.2.2",
+          "status": "PASS"
+        },
+        {
+          "label": "installer sh v0.2.2",
+          "status": "PASS"
+        }
+      ],
+      "failed": []
+    },
+    {
+      "name": "HFX-05 feishu writeback",
+      "status": "PASS",
+      "checks": [
+        {
+          "label": "feishu register calls channel connect",
+          "status": "PASS"
+        },
+        {
+          "label": "feishu writeback reports channel configured",
+          "status": "PASS"
+        },
+        {
+          "label": "feishu writeback reports capability refresh",
+          "status": "PASS"
+        },
+        {
+          "label": "feishu register response does not return raw app secret",
+          "status": "PASS"
+        },
+        {
+          "label": "feishu frontend does not reconnect with raw app secret",
+          "status": "PASS"
+        },
+        {
+          "label": "feishu register logs use redaction helper",
+          "status": "PASS"
+        },
+        {
+          "label": "feishu redaction handles json or colon secrets",
+          "status": "PASS"
+        }
+      ],
+      "failed": []
+    },
+    {
+      "name": "HFX-06 collapse and artifact dedupe",
+      "status": "PASS",
+      "checks": [
+        {
+          "label": "general collapse excludes merely active row",
+          "status": "PASS"
+        },
+        {
+          "label": "react artifact dedupe normalizes full source",
+          "status": "PASS"
+        },
+        {
+          "label": "react artifact dedupe avoids basename-only images",
+          "status": "PASS"
+        },
+        {
+          "label": "message artifact shelf avoids basename-only images",
+          "status": "PASS"
+        },
+        {
+          "label": "legacy artifact canonical key exists",
+          "status": "PASS"
+        },
+        {
+          "label": "legacy artifact dedupe avoids basename-only images",
+          "status": "PASS"
+        },
+        {
+          "label": "legacy artifact append dedupes DOM",
+          "status": "PASS"
+        }
+      ],
+      "failed": []
+    },
+    {
+      "name": "HFX-09 auth identity projection",
+      "status": "PASS",
+      "checks": [
+        {
+          "label": "login identity is not local fallback",
+          "status": "PASS"
+        },
+        {
+          "label": "python session identity is not local fallback",
+          "status": "PASS"
+        },
+        {
+          "label": "login email is sent to local auth",
+          "status": "PASS"
+        },
+        {
+          "label": "generic auth-required local session is rejected",
+          "status": "PASS"
+        },
+        {
+          "label": "auth check can restore cookie identity session",
+          "status": "PASS"
+        },
+        {
+          "label": "web bridge consumes auth check session",
+          "status": "PASS"
+        }
+      ],
+      "failed": []
+    },
+    {
+      "name": "HFX-10 streaming smoothness",
+      "status": "PASS",
+      "checks": [
+        {
+          "label": "stream render throttle lowered",
+          "status": "PASS"
+        },
+        {
+          "label": "long live markdown uses windowed render",
+          "status": "PASS"
+        },
+        {
+          "label": "live tail uses text-node append path",
+          "status": "PASS"
+        },
+        {
+          "label": "live markdown preview strips raw markers",
+          "status": "PASS"
+        }
+      ],
+      "failed": []
+    },
+    {
+      "name": "HFX-11 font baseline",
+      "status": "PASS",
+      "checks": [
+        {
+          "label": "desktop system ui stack",
+          "status": "PASS"
+        },
+        {
+          "label": "desktop mono stack",
+          "status": "PASS"
+        },
+        {
+          "label": "legacy console system ui stack",
+          "status": "PASS"
+        },
+        {
+          "label": "legacy chat tailwind system ui stack",
+          "status": "PASS"
+        },
+        {
+          "label": "public site font baseline",
+          "status": "PASS"
+        }
+      ],
+      "failed": []
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "schemaVersion": "v0.2.7-download-site-sync-v1",
+  "status": "PASS",
+  "remoteProbeExitCode": 0,
+  "remoteProbe": {
+    "checks": {
+      "adminCss": {
+        "exists": true,
+        "hasReleaseSummaryStyle": true,
+        "size": 13718
+      },
+      "adminIndex": {
+        "exists": true,
+        "hasReleaseRefresh": true,
+        "hasReleaseSummary": true,
+        "size": 12098
+      },
+      "adminJs": {
+        "exists": true,
+        "hasElementGuard": true,
+        "hasPromote": true,
+        "hasPromoteButton": true,
+        "hasReleaseState": true,
+        "size": 29263
+      },
+      "index": {
+        "exists": true,
+        "hasVersion027": true,
+        "hasWebUI": true,
+        "size": 8231
+      },
+      "manifest": {
+        "exists": true,
+        "macRecommended": "webui-macos-universal",
+        "promotion": "admin-gated",
+        "size": 16251,
+        "updatedAt": "2026-07-03",
+        "version": "0.2.7",
+        "winRecommended": "webui-windows-x64"
+      }
+    },
+    "status": "PASS"
+  },
+  "redaction": {
+    "rawHostPersisted": false,
+    "rawUrlPersisted": false,
+    "rawPasswordPersisted": false,
+    "rawOutputPersisted": false
+  },
+  "stderrHash": "",
+  "publicHttpProbe": {
+    "rootStatus": 200,
+    "rootHasVersion027": true,
+    "rootHasWebUI": true,
+    "manifestStatus": 200,
+    "manifestVersion": "0.2.7",
+    "manifestUpdatedAt": "2026-07-03",
+    "winRecommended": "webui-windows-x64",
+    "macRecommended": "webui-macos-universal",
+    "promotion": "admin-gated",
+    "channel": "stable",
+    "winInstallerStatus": 200,
+    "macInstallerStatus": 200,
+    "adminUnauthStatus": 401
+  }
+}

@@ -150,6 +150,7 @@ MIMO_V2_FLASH = "mimo-v2-flash"      # MiMo V2 Flash - high-speed
 
 # Doubao (Volcengine Ark)
 DOUBAO = "doubao"
+DOUBAO_SEED_21_PRO = "doubao-seed-2.1-pro"
 DOUBAO_SEED_2_CODE = "doubao-seed-2-0-code-preview-260215"
 DOUBAO_SEED_2_PRO = "doubao-seed-2-0-pro-260215"
 DOUBAO_SEED_2_LITE = "doubao-seed-2-0-lite-260215"
@@ -181,7 +182,7 @@ MODELSCOPE_MODEL_LIST = ["deepseek-ai/DeepSeek-R1-0528", "deepseek-ai/DeepSeek-R
 
 MODEL_LIST = [
               # DeepSeek
-              DEEPSEEK_V4_FLASH, DEEPSEEK_V4_PRO, DEEPSEEK_CHAT, DEEPSEEK_REASONER,
+              DEEPSEEK_V4_PRO, DEEPSEEK_V4_FLASH, DEEPSEEK_CHAT, DEEPSEEK_REASONER,
 
               # Baidu Qianfan / ERNIE
               QIANFAN, ERNIE_5_1, ERNIE_5, ERNIE_X1_1, ERNIE_45_TURBO_128K, ERNIE_45_TURBO_32K, ERNIE_4_TURBO_8K,
@@ -199,7 +200,7 @@ MODEL_LIST = [
               "claude", "claude-3-haiku", "claude-3-sonnet", "claude-3-opus", "claude-3.5-sonnet",
 
               # Gemini
-              GEMINI_35_FLASH, GEMINI_31_FLASH_LITE_PRE, GEMINI_31_PRO_PRE, GEMINI_3_PRO_PRE, GEMINI_3_FLASH_PRE, GEMINI_25_PRO_PRE, GEMINI_25_FLASH_PRE,
+              GEMINI_31_PRO_PRE, GEMINI_35_FLASH, GEMINI_31_FLASH_LITE_PRE, GEMINI_3_PRO_PRE, GEMINI_3_FLASH_PRE, GEMINI_25_PRO_PRE, GEMINI_25_FLASH_PRE,
               GEMINI_20_FLASH, GEMINI_20_flash_exp, GEMINI_15_PRO, GEMINI_15_flash, GEMINI_PRO, GEMINI,
 
               # OpenAI
@@ -220,7 +221,7 @@ MODEL_LIST = [
               QWEN37_PLUS, QWEN37_MAX, QWEN36_PLUS, QWEN35_PLUS, QWEN3_MAX, QWEN_MAX, QWEN_PLUS, QWEN_TURBO, QWEN_LONG,
 
               # Doubao
-              DOUBAO, DOUBAO_SEED_2_CODE, DOUBAO_SEED_2_PRO, DOUBAO_SEED_2_LITE, DOUBAO_SEED_2_MINI,
+              DOUBAO, DOUBAO_SEED_2_PRO, DOUBAO_SEED_21_PRO, DOUBAO_SEED_2_CODE, DOUBAO_SEED_2_LITE, DOUBAO_SEED_2_MINI,
 
               # Kimi (Moonshot)
               MOONSHOT, "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k",

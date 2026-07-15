@@ -1,0 +1,189 @@
+{
+  "status": "PASS",
+  "generatedAt": "2026-06-28T03:47:45.976769+00:00",
+  "requiredMarkers": {
+    "analysis_sample": [
+      "def _analysis_sample",
+      "def _apply_decoder_draft",
+      "def _image_has_alpha",
+      "def _alpha_sample_metrics"
+    ],
+    "quality_gates": [
+      "text-glyph-check",
+      "watermark-check",
+      "anomaly-check",
+      "reference-fidelity",
+      "build_image_finalization_decision"
+    ]
+  },
+  "archives": [
+    {
+      "label": "EcoreX_0.2.3-webui-windows-x64.zip",
+      "type": "zip",
+      "entries": [
+        {
+          "name": "runtime/common/image_quality_runtime.py",
+          "size": 38579,
+          "sha256": "D2E0B61C1202053CF51AAEAA21A149120FD50434ED38032EAD1D2F2F41DCF2FA"
+        }
+      ],
+      "nested": [],
+      "markers": {
+        "analysis_sample": true,
+        "quality_gates": true
+      },
+      "archive": "release-artifacts/EcoreX_0.2.3-webui-windows-x64.zip",
+      "size": 102853416,
+      "sha256": "4EE28E134951E78E29FDB649D046E13DE8707AEF3A7C88BBD508B35C22AF8D3E"
+    },
+    {
+      "label": "EcoreX_0.2.3-webui-macos-universal.zip",
+      "type": "zip",
+      "entries": [
+        {
+          "name": "Install EcoreX WebUI.app/Contents/Resources/package/runtime/common/image_quality_runtime.py",
+          "size": 38579,
+          "sha256": "D2E0B61C1202053CF51AAEAA21A149120FD50434ED38032EAD1D2F2F41DCF2FA"
+        }
+      ],
+      "nested": [],
+      "markers": {
+        "analysis_sample": true,
+        "quality_gates": true
+      },
+      "archive": "release-artifacts/EcoreX_0.2.3-webui-macos-universal.zip",
+      "size": 263154182,
+      "sha256": "80721AF46FE0F2FDCB5CB4613AF56A679BD58342B853D06950B6574E26FC4BD6"
+    },
+    {
+      "label": "EcoreX_0.2.3-web-linux-service.tar.gz",
+      "type": "tar",
+      "entries": [
+        {
+          "name": "ecorex-web-linux-service-0.2.3/runtime/common/image_quality_runtime.py",
+          "size": 38579,
+          "sha256": "D2E0B61C1202053CF51AAEAA21A149120FD50434ED38032EAD1D2F2F41DCF2FA"
+        }
+      ],
+      "markers": {
+        "analysis_sample": true,
+        "quality_gates": true
+      },
+      "archive": "release-artifacts/EcoreX_0.2.3-web-linux-service.tar.gz",
+      "size": 3803900,
+      "sha256": "2167767B78A88CA922954FB0A11664FEC8CEB0959FD997065EBEF37F2681B968"
+    },
+    {
+      "label": "EcoreX_0.2.3-webui-win-mac.zip",
+      "type": "zip",
+      "entries": [
+        {
+          "name": "ecorex-webui-win-mac-0.2.3/macos/runtime/common/image_quality_runtime.py",
+          "size": 38579,
+          "sha256": "D2E0B61C1202053CF51AAEAA21A149120FD50434ED38032EAD1D2F2F41DCF2FA"
+        },
+        {
+          "name": "ecorex-webui-win-mac-0.2.3/windows/runtime/common/image_quality_runtime.py",
+          "size": 38579,
+          "sha256": "D2E0B61C1202053CF51AAEAA21A149120FD50434ED38032EAD1D2F2F41DCF2FA"
+        }
+      ],
+      "nested": [],
+      "markers": {
+        "analysis_sample": true,
+        "quality_gates": true
+      },
+      "archive": "release-artifacts/EcoreX_0.2.3-webui-win-mac.zip",
+      "size": 366255624,
+      "sha256": "FE3810600AC009382D89313848538815B1BA76966586F21EA9AE333312654107"
+    },
+    {
+      "label": "EcoreX_0.2.3-public-release.zip",
+      "type": "zip",
+      "entries": [],
+      "nested": [
+        {
+          "label": "site/downloads/EcoreX_0.2.3-web-linux-service.tar.gz",
+          "type": "tar",
+          "entries": [
+            {
+              "name": "ecorex-web-linux-service-0.2.3/runtime/common/image_quality_runtime.py",
+              "size": 38579,
+              "sha256": "D2E0B61C1202053CF51AAEAA21A149120FD50434ED38032EAD1D2F2F41DCF2FA"
+            }
+          ],
+          "markers": {
+            "analysis_sample": true,
+            "quality_gates": true
+          }
+        },
+        {
+          "label": "site/downloads/EcoreX_0.2.3-webui-macos-universal.zip",
+          "type": "zip",
+          "entries": [
+            {
+              "name": "Install EcoreX WebUI.app/Contents/Resources/package/runtime/common/image_quality_runtime.py",
+              "size": 38579,
+              "sha256": "D2E0B61C1202053CF51AAEAA21A149120FD50434ED38032EAD1D2F2F41DCF2FA"
+            }
+          ],
+          "nested": [],
+          "markers": {
+            "analysis_sample": true,
+            "quality_gates": true
+          }
+        },
+        {
+          "label": "site/downloads/EcoreX_0.2.3-webui-windows-x64.zip",
+          "type": "zip",
+          "entries": [
+            {
+              "name": "runtime/common/image_quality_runtime.py",
+              "size": 38579,
+              "sha256": "D2E0B61C1202053CF51AAEAA21A149120FD50434ED38032EAD1D2F2F41DCF2FA"
+            }
+          ],
+          "nested": [],
+          "markers": {
+            "analysis_sample": true,
+            "quality_gates": true
+          }
+        }
+      ],
+      "markers": {
+        "analysis_sample": true,
+        "quality_gates": true
+      },
+      "archive": "release-artifacts/EcoreX_0.2.3-public-release.zip",
+      "size": 371575657,
+      "sha256": "AB2FD80D0CC8487E20B6505145C56D6E5189CD49F1EDD8EB5F867941A0AE8932"
+    }
+  ],
+  "files": [
+    {
+      "path": "common/image_quality_runtime.py",
+      "size": 38579,
+      "sha256": "D2E0B61C1202053CF51AAEAA21A149120FD50434ED38032EAD1D2F2F41DCF2FA"
+    },
+    {
+      "path": "desktop/runtime/ecorex-runtime/common/image_quality_runtime.py",
+      "size": 38579,
+      "sha256": "D2E0B61C1202053CF51AAEAA21A149120FD50434ED38032EAD1D2F2F41DCF2FA"
+    },
+    {
+      "path": "scripts/smoke-v024-image-visual-analysis-performance.py",
+      "size": 11464,
+      "sha256": "1726EA7F024D560ADDF72CC738DD45D6643DACB021D4F4CAFBC1BD4A201A9098"
+    },
+    {
+      "path": "scripts/smoke-v024-release-artifact-contracts.py",
+      "size": 52130,
+      "sha256": "C708FF84018FD5BFE2D32A0BD26B4883A0C01EB1CB54533B5BBD94B48A9FF3C3"
+    },
+    {
+      "path": "scripts/validate-ecorex-release-artifacts.py",
+      "size": 71125,
+      "sha256": "23519E73543E8A7E188D1EA2EDD4713D324A183DD229E46000F48B037DC6E3E5"
+    }
+  ]
+}

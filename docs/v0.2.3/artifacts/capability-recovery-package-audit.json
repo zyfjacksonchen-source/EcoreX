@@ -1,0 +1,68 @@
+{
+  "status": "PASS",
+  "generatedAt": "2026-06-27T10:04:00Z",
+  "checks": [
+    {
+      "artifact": "web-linux-service",
+      "label": "registry exposes builtin_tool",
+      "status": "PASS"
+    },
+    {
+      "artifact": "web-linux-service",
+      "label": "channel snapshot self-loads tools",
+      "status": "PASS"
+    },
+    {
+      "artifact": "web-linux-service",
+      "label": "ocr rapidocr max-side optimized",
+      "status": "PASS"
+    },
+    {
+      "artifact": "web-linux-service",
+      "label": "imagegen permission boundary bundled",
+      "status": "PASS"
+    },
+    {
+      "artifact": "webui-windows-x64",
+      "label": "registry exposes builtin_tool",
+      "status": "PASS"
+    },
+    {
+      "artifact": "webui-windows-x64",
+      "label": "channel snapshot self-loads tools",
+      "status": "PASS"
+    },
+    {
+      "artifact": "webui-windows-x64",
+      "label": "ocr rapidocr max-side optimized",
+      "status": "PASS"
+    },
+    {
+      "artifact": "webui-windows-x64",
+      "label": "imagegen permission boundary bundled",
+      "status": "PASS"
+    },
+    {
+      "artifact": "webui-macos-universal",
+      "label": "registry exposes builtin_tool",
+      "status": "PASS"
+    },
+    {
+      "artifact": "webui-macos-universal",
+      "label": "channel snapshot self-loads tools",
+      "status": "PASS"
+    },
+    {
+      "artifact": "webui-macos-universal",
+      "label": "ocr rapidocr max-side optimized",
+      "status": "PASS"
+    },
+    {
+      "artifact": "webui-macos-universal",
+      "label": "imagegen permission boundary bundled",
+      "status": "PASS"
+    }
+  ],
+  "failed": [],
+  "redacted": true
+}

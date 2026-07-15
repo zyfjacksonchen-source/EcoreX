@@ -1,0 +1,401 @@
+/* Hallmark · genre: modern-minimal · macrostructure: Workbench · design-system: design.md · designed-as-app */
+/* Hallmark · pre-emit critique: P5 H5 E5 S5 R5 V4 */
+
+.ex-app-shell,
+.ex-app-shell * {
+  box-sizing: border-box;
+}
+
+.ex-app-shell button,
+.ex-app-shell select,
+.ex-app-shell textarea,
+.ex-dialog button {
+  font-family: inherit;
+}
+
+.ex-button,
+.ex-icon-button,
+.ex-new-task,
+.ex-sidebar-action,
+.ex-task-row,
+.ex-composer-tool,
+.ex-composer-model-trigger,
+.ex-permission-inline,
+.ex-usage-summary,
+.ex-search-result,
+.ex-search-continue,
+.ex-skill-card-main,
+.ex-skills-back,
+.ex-skills-tabs button,
+.ex-skill-category-grid button,
+.ex-new-project-trigger,
+.ex-new-conversation-options button,
+.ex-composer-attachment button,
+.ex-disposition,
+.ex-send-button,
+.ex-artifact-primary,
+.ex-retouch-review-tabs button,
+.ex-retouch-region-list > button,
+.ex-artifact-sheet-action {
+  border: 1px solid var(--control-idle-border);
+  color: var(--color-ink);
+  background: var(--control-idle-surface);
+  box-shadow: none;
+  font-size: var(--text-ui-size);
+  line-height: var(--text-ui-line);
+}
+
+.ex-button,
+.ex-new-task,
+.ex-sidebar-action,
+.ex-task-row,
+.ex-composer-tool,
+.ex-composer-model-trigger,
+.ex-skill-card-main,
+.ex-skills-back,
+.ex-new-project-trigger,
+.ex-new-conversation-options button,
+.ex-composer-attachment button,
+.ex-disposition,
+.ex-send-button {
+  min-height: var(--target-desktop);
+  border-radius: var(--radius-control);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.ex-button svg,
+.ex-new-task svg,
+.ex-sidebar-action svg,
+.ex-task-row svg,
+.ex-composer-tool svg,
+.ex-composer-model-trigger svg,
+.ex-new-project-trigger svg,
+.ex-disposition svg,
+.ex-send-button svg {
+  width: var(--icon-size);
+  height: var(--icon-size);
+  stroke-width: 1.8;
+  flex: none;
+}
+
+.ex-button.is-primary,
+.ex-send-button {
+  border-color: transparent;
+  color: var(--color-brand-ink);
+  background: var(--color-brand);
+  font-weight: 600;
+}
+
+.ex-button.is-danger {
+  border-color: transparent;
+  color: var(--color-danger);
+  background: transparent;
+}
+
+.ex-icon-button {
+  width: var(--target-desktop);
+  height: var(--target-desktop);
+  min-width: var(--target-desktop);
+  padding: 0;
+  border-radius: var(--radius-control);
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+  transition:
+    transform var(--duration-fast) var(--ease-out),
+    opacity var(--duration-fast) var(--ease-out);
+}
+
+.ex-icon-button svg {
+  width: var(--icon-size);
+  height: var(--icon-size);
+  stroke-width: 1.8;
+}
+
+.ex-disabled-tooltip-trigger {
+  display: inline-grid;
+  place-items: center;
+}
+
+.ex-button:active,
+.ex-icon-button:active,
+.ex-new-task:active,
+.ex-sidebar-action:active,
+.ex-task-row:active,
+.ex-composer-tool:active,
+.ex-composer-model-trigger:active,
+.ex-new-project-trigger:active,
+.ex-disposition:active,
+.ex-send-button:active,
+.ex-artifact-primary:active,
+.ex-retouch-review-tabs button:active,
+.ex-retouch-region-list > button:active,
+.ex-artifact-sheet-action:active {
+  transform: translateY(1px);
+}
+
+.ex-button:not(.is-primary):not(.is-danger):not(:disabled):active,
+.ex-icon-button:not(.is-selected):not([aria-pressed="true"]):not(:disabled):active,
+.ex-new-task:not(:disabled):active,
+.ex-sidebar-action:not(:disabled):active,
+.ex-task-row:not(.is-current):not(:disabled):active,
+.ex-composer-tool:not(:disabled):active,
+.ex-composer-model-trigger:not(:disabled):active,
+.ex-new-project-trigger:not(.is-selected):not(:disabled):active,
+.ex-disposition:not(:disabled):active,
+.ex-artifact-primary:active,
+.ex-retouch-review-tabs button:not(.is-active):not(:disabled):active,
+.ex-retouch-region-list > button:not(.is-selected):not(:disabled):active,
+.ex-artifact-sheet-action:not(:disabled):active {
+  border-color: var(--control-hover-border);
+  background: var(--control-hover-surface);
+}
+
+.ex-icon-button.is-selected,
+.ex-icon-button[aria-pressed="true"] {
+  border-color: transparent;
+  background: var(--color-selected);
+}
+
+.ex-button:disabled,
+.ex-icon-button:disabled,
+.ex-new-task:disabled,
+.ex-sidebar-action:disabled,
+.ex-task-row:disabled,
+.ex-send-button:disabled,
+.ex-composer-tool:disabled,
+.ex-composer-model-trigger:disabled,
+.ex-new-project-trigger:disabled,
+.ex-retouch-review-tabs button:disabled,
+.ex-retouch-region-list > button:disabled,
+.ex-artifact-sheet-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.ex-menu-item[data-disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ex-app-shell :focus-visible,
+.ex-dialog :focus-visible,
+.ex-artifact-sheet :focus-visible,
+.ex-popover :focus-visible,
+.ex-menu :focus-visible {
+  outline: 0;
+}
+
+.ex-button:not(.is-primary):not(.is-danger):focus-visible,
+.ex-icon-button:not(.is-selected):not([aria-pressed="true"]):focus-visible,
+.ex-new-task:focus-visible,
+.ex-sidebar-action:focus-visible,
+.ex-task-row:not(.is-current):focus-visible,
+.ex-composer-tool:focus-visible,
+.ex-composer-model-trigger:focus-visible,
+.ex-new-project-trigger:not(.is-selected):focus-visible,
+.ex-disposition:focus-visible,
+.ex-artifact-primary:focus-visible,
+.ex-retouch-review-tabs button:not(.is-active):focus-visible,
+.ex-retouch-region-list > button:not(.is-selected):focus-visible,
+  .ex-artifact-sheet-action:focus-visible {
+  border-color: var(--control-hover-border);
+  background: var(--control-hover-surface);
+  box-shadow: var(--focus-subtle-ring);
+}
+
+.ex-button.is-primary:focus-visible,
+.ex-send-button:focus-visible {
+  box-shadow: var(--focus-subtle-ring);
+}
+
+@media (hover: hover) {
+  .ex-button:not(.is-primary):not(.is-danger):not(:disabled):hover,
+  .ex-icon-button:not(.is-selected):not([aria-pressed="true"]):not(:disabled):hover,
+  .ex-new-task:not(:disabled):hover,
+  .ex-sidebar-action:not(:disabled):hover,
+  .ex-task-row:not(.is-current):not(:disabled):hover,
+  .ex-composer-tool:not(:disabled):hover,
+  .ex-composer-model-trigger:not(:disabled):hover,
+  .ex-new-project-trigger:not(.is-selected):not(:disabled):hover,
+  .ex-disposition:not(:disabled):hover,
+  .ex-retouch-review-tabs button:not(.is-active):not(:disabled):hover,
+  .ex-retouch-region-list > button:not(.is-selected):not(:disabled):hover,
+  .ex-artifact-sheet-action:not(:disabled):hover {
+    border-color: var(--control-hover-border);
+    background: var(--control-hover-surface);
+    color: var(--color-ink);
+  }
+
+  .ex-menu-item:not([data-disabled]):hover {
+    background: var(--color-hover);
+    color: var(--color-ink);
+  }
+
+  .ex-button.is-primary:hover,
+  .ex-send-button:hover:not(:disabled) {
+    border-color: var(--color-brand-strong);
+    background: var(--color-brand-strong);
+    color: var(--color-brand-ink);
+  }
+
+  .ex-button.is-danger:not(:disabled):hover {
+    border-color: var(--color-danger);
+    color: var(--color-danger);
+    background: var(--control-hover-surface);
+  }
+}
+
+.ex-tooltip {
+  z-index: var(--z-toast);
+  max-width: 240px;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-rule-strong);
+  border-radius: var(--radius-compact);
+  color: var(--color-ink);
+  background: var(--color-overlay-surface);
+  box-shadow: var(--elevation-popover);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
+.ex-tooltip-arrow {
+  fill: var(--color-overlay-surface);
+}
+
+.ex-popover,
+.ex-menu {
+  z-index: var(--z-popover);
+  border: 1px solid var(--color-rule-strong);
+  color: var(--color-ink);
+  background: var(--color-overlay-surface);
+  box-shadow: var(--elevation-popover);
+}
+
+.ex-popover {
+  border-radius: var(--radius-panel);
+  padding: var(--space-3);
+}
+
+.ex-menu {
+  min-width: 184px;
+  border-radius: var(--radius-card);
+  padding: var(--space-1);
+}
+
+.ex-menu-item {
+  min-height: 36px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-compact);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+}
+
+.ex-menu-item svg {
+  width: var(--icon-size);
+  height: var(--icon-size);
+  stroke-width: 1.8;
+}
+
+.ex-menu-item[data-highlighted] {
+  background: var(--color-hover);
+}
+
+.ex-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: var(--color-overlay);
+  animation: ex-fade-in var(--duration-base) var(--ease-out);
+}
+
+.ex-dialog {
+  box-sizing: border-box;
+  position: fixed;
+  z-index: var(--z-modal);
+  top: 50%;
+  left: 50%;
+  width: min(520px, calc(100% - var(--space-6)));
+  max-height: min(760px, calc(100dvh - var(--space-6)));
+  overflow: auto;
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--color-rule-strong);
+  border-radius: var(--radius-dialog);
+  color: var(--color-ink);
+  background: var(--color-overlay-surface);
+  box-shadow: var(--elevation-dialog);
+  padding: var(--space-5);
+  animation: ex-dialog-in var(--duration-base) var(--ease-out);
+}
+
+@media (forced-colors: active) {
+  .ex-app-shell :focus-visible,
+  .ex-dialog :focus-visible,
+  .ex-artifact-sheet :focus-visible,
+  .ex-popover :focus-visible,
+  .ex-menu :focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+
+  .ex-button.is-primary,
+  .ex-send-button {
+    border-color: Highlight;
+    color: HighlightText;
+    background: Highlight;
+    forced-color-adjust: none;
+  }
+}
+
+@keyframes ex-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes ex-dialog-in {
+  from { opacity: 0; transform: translate(-50%, calc(-50% + 4px)); }
+  to { opacity: 1; transform: translate(-50%, -50%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ex-dialog-overlay,
+  .ex-dialog {
+    animation: none;
+  }
+}
+
+@media (pointer: coarse) {
+  .ex-button,
+  .ex-icon-button,
+  .ex-new-task,
+  .ex-sidebar-action,
+  .ex-task-row,
+  .ex-composer-tool,
+  .ex-composer-model-trigger,
+  .ex-new-project-trigger,
+  .ex-disposition,
+  .ex-send-button,
+  .ex-retouch-review-tabs button,
+  .ex-retouch-region-list > button,
+  .ex-artifact-sheet-action,
+  .ex-menu-item {
+    min-height: var(--target-touch);
+  }
+
+  .ex-icon-button {
+    width: var(--target-touch);
+    min-width: var(--target-touch);
+  }
+}

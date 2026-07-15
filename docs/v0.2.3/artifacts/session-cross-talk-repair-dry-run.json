@@ -1,0 +1,45 @@
+{
+  "status": "success",
+  "mode": "dry-run",
+  "generatedAt": "2026-06-26T11:35:38Z",
+  "scope": {
+    "uiStatePathHash": "hmac:ffc329a83473c361",
+    "conversationDbPathHash": "hmac:c43f2434edcbfaa9"
+  },
+  "integrity": {
+    "conversationDb": {
+      "checked": true,
+      "ok": true,
+      "code": "ok"
+    }
+  },
+  "postApplyIntegrity": null,
+  "activeRequests": {
+    "provided": false,
+    "valid": false,
+    "count": null,
+    "requestHashes": [],
+    "reason": "missing_snapshot"
+  },
+  "summary": {
+    "backendSessionCount": 10,
+    "backendSessionRowCount": 10,
+    "backendSessionRowLimitExceeded": false,
+    "legacyEmptyChannelCount": 0,
+    "uiStateSessionCount": 0,
+    "issueCount": 0,
+    "repairActionCount": 0,
+    "issueTypes": {},
+    "repairActions": {}
+  },
+  "issues": [],
+  "repairs": [],
+  "postRepairSummary": null,
+  "backup": null,
+  "privacy": {
+    "usesHmacHashes": true,
+    "rawIdentifiersIncluded": false,
+    "rawPathsIncluded": false,
+    "messageBodiesIncluded": false
+  }
+}

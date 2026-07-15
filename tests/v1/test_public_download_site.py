@@ -1,0 +1,219 @@
+from __future__ import annotations
+
+import json
+import hashlib
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+import pytest
+
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_public_download_site_static_gate_passes() -> None:
+    result = subprocess.run(
+        [sys.executable, "scripts/check-v1-public-download-site.py"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    evidence = json.loads(result.stdout)
+    assert evidence["status"] == "passed"
+    assert evidence["public_pointer"] == "unpublished"
+    assert evidence["hashed_asset_count"] == 5
+
+
+def test_public_asset_builder_writes_new_hashes_before_switching_html(
+    tmp_path: Path,
+) -> None:
+    site = tmp_path / "site"
+    site.mkdir()
+    stale_script = site / "site.000000000000.js"
+    stale_style = site / "styles.000000000000.css"
+    script_payload = b'export const product = "EcoreX";\n'
+    style_payload = b":root { color-scheme: light dark; }\n"
+    stale_script.write_bytes(script_payload)
+    stale_style.write_bytes(style_payload)
+    (site / "index.html").write_text(
+        '<link rel="stylesheet" href="./styles.000000000000.css">\n'
+        '<script type="module" src="./site.000000000000.js"></script>\n',
+        encoding="utf-8",
+    )
+
+    command = [
+        sys.executable,
+        "scripts/build-v1-public-download-site.py",
+        "--site-root",
+        str(site),
+    ]
+    first = subprocess.run(
+        command,
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+    )
+    assert first.returncode == 0, first.stdout + first.stderr
+    result = json.loads(first.stdout)
+    script_name = f"site.{hashlib.sha256(script_payload).hexdigest()[:12]}.js"
+    style_name = f"styles.{hashlib.sha256(style_payload).hexdigest()[:12]}.css"
+    assert result["javascript"]["name"] == script_name
+    assert result["stylesheet"]["name"] == style_name
+    assert (site / script_name).read_bytes() == script_payload
+    assert (site / style_name).read_bytes() == style_payload
+    assert not stale_script.exists()
+    assert not stale_style.exists()
+    html = (site / "index.html").read_text(encoding="utf-8")
+    assert f'./{script_name}' in html
+    assert f'./{style_name}' in html
+    assert not list(site.glob(".*.tmp-*"))
+
+    interrupted_payload = b"unreferenced bytes written before an HTML switch\n"
+    interrupted_name = (
+        f"site.{hashlib.sha256(interrupted_payload).hexdigest()[:12]}.js"
+    )
+    (site / interrupted_name).write_bytes(interrupted_payload)
+    second = subprocess.run(
+        command,
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+    )
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert json.loads(second.stdout) == result
+    assert not (site / interrupted_name).exists()
+
+
+def test_public_browser_parser_and_manifest_byte_check_fail_closed() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required for the public browser contract test")
+    script = r"""
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+
+const sourcePath = process.argv[1];
+const source = await readFile(sourcePath, "utf8");
+const moduleUrl = `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
+const contract = await import(moduleUrl);
+
+assert.deepEqual(
+  contract.normalizePublicIndex({
+    schema_version: 1,
+    document_type: "ecorex.public-bootstrap-discovery",
+    trust: "untrusted-discovery-hint",
+    status: "unpublished",
+    authority: null,
+    freshness: null,
+    release: null,
+  }),
+  { status: "unpublished", trust: "untrusted-discovery-hint" },
+);
+assert.throws(() => contract.normalizePublicIndex({
+  schema_version: 1,
+  document_type: "ecorex.public-bootstrap-discovery",
+  trust: "untrusted-discovery-hint",
+  status: "unpublished",
+  authority: null,
+  freshness: null,
+  release: null,
+  download_url: "https://ready.invalid/fake.exe",
+}));
+
+const exact = new TextEncoder().encode("exact signed manifest bytes").buffer;
+const expected = await contract.sha256Hex(exact);
+const sources = [
+  { sourceId: "mirror", kind: "github-cn-mirror", priority: 0, url: "https://mirror.example/release-manifest.json", baseUrl: "https://mirror.example" },
+  { sourceId: "github", kind: "github-release", priority: 1, url: "https://github.example/release-manifest.json", baseUrl: "https://github.example" },
+  { sourceId: "cdn", kind: "ecorex-cdn", priority: 2, url: "https://cdn.example/release-manifest.json", baseUrl: "https://cdn.example" },
+];
+let calls = 0;
+const checked = await contract.verifyManifestBytes(
+  { sha256: expected, sources },
+  {
+    fetchImpl: async (url) => {
+      calls += 1;
+      const payload = calls === 1 ? new TextEncoder().encode("wrong").buffer : exact;
+      return {
+        ok: true,
+        url,
+        headers: { get: () => String(payload.byteLength) },
+        arrayBuffer: async () => payload,
+      };
+    },
+  },
+);
+assert.equal(calls, 2);
+assert.equal(checked.kind, "github-release");
+let cancelled = false;
+let oversizedReads = 0;
+const bounded = await contract.verifyManifestBytes(
+  { sha256: expected, sources },
+  {
+    fetchImpl: async (url) => {
+      if (url.includes("mirror")) {
+        return {
+          ok: true,
+          url,
+          headers: { get: () => null },
+          body: {
+            getReader: () => ({
+              read: async () => {
+                oversizedReads += 1;
+                return oversizedReads === 1
+                  ? { done: false, value: new Uint8Array(1024 * 1024 + 1) }
+                  : { done: true };
+              },
+              cancel: async () => { cancelled = true; },
+              releaseLock: () => {},
+            }),
+          },
+        };
+      }
+      return {
+        ok: true,
+        url,
+        headers: { get: () => String(exact.byteLength) },
+        arrayBuffer: async () => exact,
+      };
+    },
+  },
+);
+assert.equal(cancelled, true);
+assert.equal(bounded.kind, "github-release");
+await assert.rejects(() => contract.verifyManifestBytes(
+  { sha256: "f".repeat(64), sources },
+  {
+    fetchImpl: async (url) => ({
+      ok: true,
+      url,
+      headers: { get: () => String(exact.byteLength) },
+      arrayBuffer: async () => exact,
+    }),
+  },
+));
+"""
+    javascript = next((ROOT / "deploy/ecorex-site").glob("site.*.js"))
+    result = subprocess.run(
+        [node, "--input-type=module", "-e", script, str(javascript)],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

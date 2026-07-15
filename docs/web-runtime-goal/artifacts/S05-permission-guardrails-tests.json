@@ -1,0 +1,159 @@
+{
+  "schemaVersion": "web-runtime-goal-artifact-v1",
+  "slice": "S5",
+  "title": "Capability-level permissions and usable guardrails",
+  "date": "2026-07-01",
+  "changedFiles": [
+    "common/ecorex_tool_permissions.py",
+    "agent/protocol/agent_stream.py",
+    "agent/protocol/image_job_service.py",
+    "agent/protocol/__init__.py",
+    "agent/tools/scheduler/integration.py",
+    "channel/web/web_channel.py",
+    "tests/test_web_runtime_goal.py",
+    "tests/test_ecorex_web_parallel_backend.py"
+  ],
+  "permissionMatrix": [
+    {
+      "capability": "optional_abilities",
+      "action": "status/list",
+      "smartAsk": "allow",
+      "readOnly": "allow",
+      "fullAccess": "allow",
+      "reason": "default-low-risk-optional-ability-status"
+    },
+    {
+      "capability": "agent_capability",
+      "action": "diagnose/list_packs",
+      "smartAsk": "allow",
+      "readOnly": "allow",
+      "fullAccess": "allow",
+      "reason": "default-low-risk-agent-capability-status"
+    },
+    {
+      "capability": "scheduler",
+      "action": "list/get/status",
+      "smartAsk": "allow",
+      "readOnly": "allow",
+      "fullAccess": "allow",
+      "reason": "default-low-risk-scheduler-read"
+    },
+    {
+      "capability": "scheduler",
+      "action": "create/update/delete/start/stop/execute",
+      "smartAsk": "prompt-or-deny-noninteractive",
+      "readOnly": "deny",
+      "fullAccess": "allow",
+      "reason": "mutating scheduled work remains high risk"
+    },
+    {
+      "capability": "image_jobs",
+      "action": "status/collect/list",
+      "smartAsk": "allow",
+      "readOnly": "allow",
+      "fullAccess": "allow",
+      "reason": "default-low-risk-image-job-status"
+    },
+    {
+      "capability": "image_jobs",
+      "action": "cancel",
+      "smartAsk": "allow",
+      "readOnly": "allow",
+      "fullAccess": "allow",
+      "reason": "default-safe-image-job-control"
+    },
+    {
+      "capability": "image_jobs",
+      "action": "start/generate/edit",
+      "smartAsk": "allow-for-foreground-user-initiated",
+      "readOnly": "deny",
+      "fullAccess": "allow",
+      "reason": "foreground-user-initiated-image-job-start"
+    },
+    {
+      "capability": "browser",
+      "action": "snapshot/status/list/get",
+      "smartAsk": "allow",
+      "readOnly": "allow",
+      "fullAccess": "allow",
+      "reason": "default-low-risk-browser-snapshot"
+    },
+    {
+      "capability": "workspace/artifact",
+      "action": "read",
+      "smartAsk": "allow-inside-filesystem-profile",
+      "readOnly": "allow-inside-filesystem-profile",
+      "fullAccess": "allow",
+      "reason": "uses authorize_file_access"
+    },
+    {
+      "capability": "bash",
+      "action": "workspace_read/workspace_write",
+      "smartAsk": "allow-inside-filesystem-profile",
+      "readOnly": "read-only-denies-write",
+      "fullAccess": "allow",
+      "reason": "uses authorize_file_access"
+    },
+    {
+      "capability": "bash",
+      "action": "system_shell",
+      "smartAsk": "interactive-confirmation-required",
+      "readOnly": "deny",
+      "fullAccess": "allow",
+      "reason": "System shell requires interactive confirmation, full-access mode, or remembered shell grant; read-only always denies"
+    },
+    {
+      "capability": "feishu_cli",
+      "action": "run read commands",
+      "smartAsk": "allow",
+      "readOnly": "allow",
+      "fullAccess": "allow",
+      "reason": "default-read-only-feishu-cli-run"
+    },
+    {
+      "capability": "feishu_cli",
+      "action": "run download/export commands",
+      "smartAsk": "allow-only-with-authorized-output-path",
+      "readOnly": "deny-local-output-write",
+      "fullAccess": "allow",
+      "reason": "local export/download writes must pass filesystem-profile validation"
+    },
+    {
+      "capability": "feishu_cli",
+      "action": "run write/admin commands",
+      "smartAsk": "prompt-or-deny-noninteractive",
+      "readOnly": "deny",
+      "fullAccess": "allow",
+      "reason": "classified write/admin run commands require stronger boundary"
+    }
+  ],
+  "tests": [
+    {
+      "command": "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_web_runtime_goal.py -q",
+      "status": "passed",
+      "summary": "36 passed, 3 warnings"
+    },
+    {
+      "command": "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -q -k \"image_jobs_api_projects_auditable_parallelism_policy or image_jobs_vision_ocr_provider_requires_tool_permission or smart_ask_requires_permission_for_env_config_and_send or non_web_channel_dangerous_tools_still_fail_closed or read_only_blocks_scheduler_mutations or scheduler_background_execution_requires_noninteractive_permission or scheduler_tool_call_checks_target_tool_permission or tool_permission_handler_round_trips_mode_and_audit or default_filesystem_profile_limits_unprofiled_file_access_to_workspace or custom_filesystem_profile_limits_file_tools_to_workspace or web_file_serve_obeys_custom_filesystem_profile\"",
+      "status": "passed",
+      "summary": "11 passed, 395 deselected, 2 warnings"
+    },
+    {
+      "command": "python -m py_compile common/ecorex_tool_permissions.py agent/protocol/agent_stream.py agent/tools/scheduler/integration.py channel/web/web_channel.py agent/protocol/image_job_service.py agent/protocol/__init__.py",
+      "status": "passed",
+      "summary": "syntax compile passed"
+    }
+  ],
+  "notes": [
+    "Initial pytest run without plugin isolation failed before collection because a global langsmith pytest plugin imported an incompatible pydantic-core version. Re-run with PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 passed.",
+    "Vision/OCR/imagegen provider credential and repair UX remains assigned to S6; S5 only unifies permission semantics and low-risk default access.",
+    "All capability authorization decisions write capability-authorization audit records.",
+    "Web file/artifact helpers now require explicit boolean allowed=true from authorize_file_access decisions; malformed dicts and MagicMock-like broker return values fail closed.",
+    "AgentStream and scheduler legacy broker compatibility now only applies when authorize_capability is absent; malformed authorize_capability return values fail closed instead of falling back to permissive legacy authorize/authorize_noninteractive methods.",
+    "Web scheduler/image status paths have deny-path coverage proving they call the capability broker before projections or image job service reads.",
+    "Image job parallelism policy moved from the Web handler to the shared agent.protocol.image_job_service runtime layer and is exported through agent.protocol.",
+    "Feishu structured install/config/auth actions are no longer default-allowed; read-only blocks them, smart-ask/noninteractive denies without confirmation, and full-access allows them as configure-class actions.",
+    "Web external-connection Feishu agent_auth now calls the capability broker before FeishuCli.execute; read-only denial returns a structured permission_denied payload and skips the CLI call.",
+    "Multi-agent review found and the implementation fixed: image_jobs not being marked dangerous, Web helper legacy fallback bypass, Web helper non-dict/malformed decision truthiness, Web file-access malformed decision truthiness, AgentStream malformed dict fail-open, AgentStream hybrid malformed-capability permissive-legacy fallback, scheduler malformed dict fail-open, scheduler hybrid malformed-capability permissive-legacy fallback, bash action spoofing via model-supplied action, read-only remembered shell grant bypass, Feishu export/download output write bypass, Feishu structured install/config/auth bypass, Web external-connection Feishu agent_auth direct CLI bypass, bare MagicMock truthiness in legacy broker compatibility, missing all-mode low-risk matrix coverage, missing Web status broker-deny tests, and Web-only image job parallelism policy."
+  ]
+}

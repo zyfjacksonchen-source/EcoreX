@@ -1,0 +1,364 @@
+{
+  "authoritativeSources": {
+    "acceptanceChecklist": "docs\\v0.2.2\\acceptance-checklist.md",
+    "harnessMatrix": "docs\\v0.2.2\\harness-matrix.json",
+    "releaseGate": "scripts/check-v022-release-gate.py"
+  },
+  "complete": true,
+  "completionBlockers": [],
+  "generatedAt": "2026-06-26T06:42:08.835186+00:00",
+  "incompleteRequirements": [],
+  "matrix": {
+    "commands": 34,
+    "externalBlockers": 1,
+    "rows": 19,
+    "status": "REVIEWED-PASS"
+  },
+  "objective": "EcoreX v0.2.2 backend-led, observable, replayable, auditable Web runtime release goal",
+  "releaseGate": {
+    "blockers": [],
+    "errors": [],
+    "releasable": true,
+    "status": "PASS"
+  },
+  "requirements": [
+    {
+      "evidence": [
+        {
+          "id": "R22-01",
+          "status": "PASS-SLICE1",
+          "type": "acceptance"
+        },
+        {
+          "id": "R22-02",
+          "status": "PASS-CONTRACT",
+          "type": "acceptance"
+        },
+        {
+          "id": "R22-03",
+          "status": "PASS",
+          "type": "acceptance"
+        },
+        {
+          "id": "R22-06",
+          "status": "PASS",
+          "type": "acceptance"
+        },
+        {
+          "id": "R22-11",
+          "status": "PASS",
+          "type": "acceptance"
+        },
+        {
+          "rows": [
+            "runtime-ledger-replay-core",
+            "web-runtime-projection-reconnect-browser",
+            "web-runtime-real-network-browser",
+            "web-runtime-projection-history-pagination-browser",
+            "sidecar-restart-and-replay-gap",
+            "artifact-and-image-job-projection",
+            "image-jobs-seven-scenario-smoke"
+          ],
+          "surface": "replay",
+          "type": "matrixSurface"
+        },
+        {
+          "rows": [
+            "runtime-ledger-replay-core",
+            "permission-audit-contract",
+            "feishu-agent-capability-contract",
+            "scheduler-management-permission-harness"
+          ],
+          "surface": "permissions",
+          "type": "matrixSurface"
+        }
+      ],
+      "gaps": [],
+      "id": "backend-runtime-source-of-truth",
+      "status": "PROVEN",
+      "title": "Backend runtime events and projections are canonical"
+    },
+    {
+      "evidence": [
+        {
+          "id": "R22-04",
+          "status": "BROWSER-PASS-REVIEWED",
+          "type": "acceptance"
+        },
+        {
+          "id": "R22-05",
+          "status": "BROWSER-PASS-REVIEWED",
+          "type": "acceptance"
+        },
+        {
+          "id": "R22-07",
+          "status": "PASS",
+          "type": "acceptance"
+        },
+        {
+          "rows": [
+            "runtime-ledger-replay-core",
+            "web-runtime-projection-reconnect-browser",
+            "web-runtime-real-network-browser",
+            "web-runtime-projection-history-pagination-browser",
+            "sidecar-restart-and-replay-gap",
+            "artifact-and-image-job-projection",
+            "image-jobs-seven-scenario-smoke"
+          ],
+          "surface": "replay",
+          "type": "matrixSurface"
+        },
+        {
+          "rows": [
+            "web-runtime-projection-reconnect-browser",
+            "web-runtime-real-network-browser",
+            "web-runtime-projection-history-pagination-browser",
+            "artifact-and-image-job-projection",
+            "image-jobs-seven-scenario-smoke",
+            "scheduler-management-permission-harness",
+            "project-session-browser-isolation"
+          ],
+          "surface": "refresh",
+          "type": "matrixSurface"
+        },
+        {
+          "rows": [
+            "web-runtime-projection-reconnect-browser",
+            "web-runtime-real-network-browser",
+            "web-runtime-projection-history-pagination-browser",
+            "sidecar-restart-and-replay-gap"
+          ],
+          "surface": "disconnect",
+          "type": "matrixSurface"
+        },
+        {
+          "rows": [
+            "sidecar-restart-and-replay-gap",
+            "artifact-and-image-job-projection",
+            "image-jobs-seven-scenario-smoke"
+          ],
+          "surface": "restart",
+          "type": "matrixSurface"
+        }
+      ],
+      "gaps": [],
+      "id": "frontend-projection-recovery",
+      "status": "PROVEN",
+      "title": "Frontend consumes projections for refresh, reconnect, and recovery"
+    },
+    {
+      "evidence": [
+        {
+          "id": "R22-08",
+          "status": "PASS-CONTRACT",
+          "type": "acceptance"
+        },
+        {
+          "id": "R22-09",
+          "status": "CHANNELS-PASS-REVIEWED",
+          "type": "acceptance"
+        },
+        {
+          "rows": [
+            "channels-observability-browser"
+          ],
+          "surface": "channels",
+          "type": "matrixSurface"
+        },
+        {
+          "rows": [
+            "channels-observability-browser",
+            "feishu-agent-capability-contract"
+          ],
+          "surface": "feishu",
+          "type": "matrixSurface"
+        },
+        {
+          "id": "feishu-im-real-credential-smoke-valid",
+          "status": "pass",
+          "type": "releaseCheck"
+        }
+      ],
+      "gaps": [],
+      "id": "feishu-im-auth-observability",
+      "status": "PROVEN",
+      "title": "Feishu/IM transport, auth, and callable state are separated"
+    },
+    {
+      "evidence": [
+        {
+          "id": "R22-11",
+          "status": "PASS",
+          "type": "acceptance"
+        },
+        {
+          "rows": [
+            "runtime-ledger-replay-core",
+            "permission-audit-contract",
+            "feishu-agent-capability-contract",
+            "scheduler-management-permission-harness"
+          ],
+          "surface": "permissions",
+          "type": "matrixSurface"
+        }
+      ],
+      "gaps": [],
+      "id": "admin-audit-capability-policy",
+      "status": "PROVEN",
+      "title": "Admin audit and capability policy are runtime-evidence based"
+    },
+    {
+      "evidence": [
+        {
+          "id": "R22-13",
+          "status": "PASS",
+          "type": "acceptance"
+        },
+        {
+          "id": "R22-14",
+          "status": "PASS",
+          "type": "acceptance"
+        },
+        {
+          "rows": [
+            "web-runtime-projection-reconnect-browser",
+            "artifact-and-image-job-projection",
+            "image-jobs-provider-fallback-api",
+            "image-jobs-ocr-reuse-api",
+            "image-jobs-seven-scenario-smoke"
+          ],
+          "surface": "image-jobs",
+          "type": "matrixSurface"
+        },
+        {
+          "rows": [
+            "image-generation-tool-invocation-fallback",
+            "image-jobs-provider-fallback-api",
+            "image-jobs-seven-scenario-smoke"
+          ],
+          "surface": "image-fallback",
+          "type": "matrixSurface"
+        },
+        {
+          "rows": [
+            "runtime-ledger-replay-core",
+            "web-runtime-projection-reconnect-browser",
+            "artifact-and-image-job-projection",
+            "image-jobs-seven-scenario-smoke",
+            "web-ui-polish-browser"
+          ],
+          "surface": "artifacts",
+          "type": "matrixSurface"
+        }
+      ],
+      "gaps": [],
+      "id": "image-generation-runtime-jobs",
+      "status": "PROVEN",
+      "title": "Image generation uses backend ImageJobService, events, and projections"
+    },
+    {
+      "evidence": [
+        {
+          "id": "R22-15",
+          "status": "PASS",
+          "type": "acceptance"
+        },
+        {
+          "rows": [
+            "scheduler-management-permission-harness"
+          ],
+          "surface": "scheduler",
+          "type": "matrixSurface"
+        }
+      ],
+      "gaps": [],
+      "id": "scheduler-projection-management",
+      "status": "PROVEN",
+      "title": "Scheduler state is visible and managed through backend projection"
+    },
+    {
+      "evidence": [
+        {
+          "id": "R22-10",
+          "status": "PASS",
+          "type": "acceptance"
+        },
+        {
+          "id": "R22-16",
+          "status": "PASS",
+          "type": "acceptance"
+        },
+        {
+          "id": "R22-17",
+          "status": "PASS",
+          "type": "acceptance"
+        },
+        {
+          "id": "R22-18",
+          "status": "PASS",
+          "type": "acceptance"
+        },
+        {
+          "id": "R22-19",
+          "status": "PASS",
+          "type": "acceptance"
+        },
+        {
+          "rows": [
+            "project-session-browser-isolation"
+          ],
+          "surface": "project-sessions",
+          "type": "matrixSurface"
+        },
+        {
+          "rows": [
+            "web-markdown-it-browser",
+            "web-ui-polish-browser"
+          ],
+          "surface": "markdown",
+          "type": "matrixSurface"
+        },
+        {
+          "rows": [
+            "web-status-motion-browser"
+          ],
+          "surface": "status-motion",
+          "type": "matrixSurface"
+        },
+        {
+          "rows": [
+            "web-run-center-hidden-browser"
+          ],
+          "surface": "run-center",
+          "type": "matrixSurface"
+        },
+        {
+          "rows": [
+            "web-ui-polish-browser"
+          ],
+          "surface": "ui-polish",
+          "type": "matrixSurface"
+        }
+      ],
+      "gaps": [],
+      "id": "web-ux-session-markdown-status-runcenter",
+      "status": "PROVEN",
+      "title": "Web project sessions, Markdown, status motion, and Run Center hiding pass"
+    },
+    {
+      "evidence": [
+        {
+          "id": "R22-12",
+          "status": "PASS",
+          "type": "acceptance"
+        }
+      ],
+      "gaps": [],
+      "id": "release-target-deploy-rollback",
+      "status": "PROVEN",
+      "title": "Release evidence, deploy, rollback, and final release gate are complete"
+    }
+  ],
+  "schemaVersion": 1,
+  "status": "PASS"
+}

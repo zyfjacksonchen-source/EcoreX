@@ -1,0 +1,100 @@
+{
+  "version": "0.2.5",
+  "status": "PASS",
+  "generatedAt": "2026-06-30T07:20:00Z",
+  "scope": "web-only-session-history-and-imagegen-route-hotfix",
+  "rootCause": {
+    "sessionHistory": [
+      "Production conversation store was empty for historical sessions; previous visible message bodies were browser-local UI state, not durable server history.",
+      "The v0.2.5 startup path pruned sessionUiState before server import, so older cached bodies could disappear from the conversation pane after update.",
+      "The fix imports raw boot local cache into ConversationStore before pruning, imports /api/ui-state cached messages server-side, pre-persists new user messages, and backfills final assistant replies."
+    ],
+    "imageRoute": [
+      "The hot in-process image provider runner accepted image_url but ignored image_urls, so reference/edit inputs could be dropped and degrade to plain text-to-image.",
+      "The image-generation skill documentation still presented scripts/generate.py as the primary route, which could steer agents toward Python/script generation instead of the native imagegen tool.",
+      "The fix normalizes image_urls to the edit/reference route in the runtime runner and fallback script, and strengthens tool/skill instructions around native imagegen plus gpt-image-2-pro defaults."
+    ]
+  },
+  "changedSurfaces": [
+    "channel/web/web_channel.py",
+    "desktop/src/App.tsx",
+    "bridge/agent_bridge.py",
+    "agent/tools/imagegen/provider_runner.py",
+    "agent/tools/imagegen/imagegen.py",
+    "skills/image-generation/SKILL.md",
+    "skills/image-generation/scripts/generate.py",
+    "common/ecorex_release_notes.py",
+    "deploy/ecorex-site/manifest.json",
+    "scripts/update-ecorex-desktop-release-manifest.ps1"
+  ],
+  "localValidation": {
+    "pythonCompile": "PASS",
+    "pytestSessionHistory": "5 passed, 398 deselected, 3 warnings",
+    "pytestImageQualityRoute": "3 passed, 37 deselected",
+    "pytestImageSkillRetry": "3 passed, 10 deselected",
+    "npmTypecheck": "PASS",
+    "npmBuildRenderer": "PASS",
+    "releaseArtifactValidation": "PASS"
+  },
+  "artifacts": {
+    "webuiWindowsX64": {
+      "artifactId": "EcoreX_0.2.5-webui-windows-x64.zip",
+      "size": 126780455,
+      "sha256": "95E13D0EC731A535B3EC63B5D6D7CA5E8EF2F8358A03083DFD77A605DAA4E54E"
+    },
+    "webuiMacosUniversal": {
+      "artifactId": "EcoreX_0.2.5-webui-macos-universal.zip",
+      "size": 301017340,
+      "sha256": "D15B12A39A81D5D68C80B36B0E3F13E76A7A68D6492AA8EB02D7FFA245C79A2F"
+    },
+    "webLinuxService": {
+      "artifactId": "EcoreX_0.2.5-web-linux-service.tar.gz",
+      "size": 3869399,
+      "sha256": "40E0B86FDF6B6BEF1810D507E5C5C977F1DC9AD3EBA3BB8A1A613E4A802540AF"
+    },
+    "publicRelease": {
+      "artifactId": "EcoreX_0.2.5-public-release.zip",
+      "size": 430649579,
+      "sha256": "B3EE079330F1FDD48BB5B2673367FD1D8E5C13DB64EC2993844ECEF3E6715DD0"
+    }
+  },
+  "deployment": {
+    "deployScript": "scripts/deploy-v024-production.py",
+    "status": "PASS",
+    "evidence": "docs/v0.2.5/artifacts/production-deploy-online.json",
+    "onlineChecks": {
+      "webServiceVersion": "0.2.5",
+      "webVersionStatus": 200,
+      "webVersionBodyHasExpectedVersion": true,
+      "installationManifestVersion": "0.2.5",
+      "publicManifestVersion": "0.2.5",
+      "serviceActive": true,
+      "serviceEnabled": true
+    }
+  },
+  "onlineSmoke": {
+    "webChannelHistoryImport": true,
+    "webChannelFinalAssistantBackfill": true,
+    "frontendBootLocalCacheMarker": true,
+    "frontendHistoryImportSourceMarker": true,
+    "providerRunnerImageUrlsAlias": true,
+    "fallbackScriptImageUrlsAlias": true,
+    "skillNativeImagegenInstruction": true,
+    "imagegenToolGptImageProInstruction": true,
+    "apiVersionHasSessionNote": true,
+    "apiVersionHasImageRouteNote": true
+  },
+  "recoveryBoundary": {
+    "recoverable": "Old message bodies still present in a user's browser localStorage are imported on the next WebUI load/refresh.",
+    "notRecoverable": "Message bodies already overwritten in browser localStorage and absent from the server ConversationStore cannot be reconstructed from the empty production backend DB."
+  },
+  "privacy": {
+    "rawHostPersisted": false,
+    "rawDomainPersisted": false,
+    "rawUrlPersisted": false,
+    "rawUsernamePersisted": false,
+    "rawPasswordPersisted": false,
+    "rawTokenPersisted": false,
+    "rawCliOutputPersisted": false
+  }
+}

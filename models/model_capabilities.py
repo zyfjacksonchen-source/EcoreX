@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
+from urllib.parse import urlsplit, urlunsplit
 
 from common import const
 
@@ -39,6 +40,32 @@ class ModelCapabilities:
     reasoning_effort_values: Tuple[str, ...] = ()
     reasoning_style: str = "none"
     max_tokens_param: str = "max_tokens"
+    context_window_tokens: int = 258000
+    max_output_tokens: int = 32000
+    auto_compact_token_limit: int = 206400
+    hard_context_token_limit: int = 237360
+    context_policy_source: str = "ecorex:model-context-policy:v1"
+    tokenizer: str = "heuristic"
+    tokenizer_status: str = "estimated"
+    tokenizer_note: str = "No provider tokenizer is wired; EcoreX uses a conservative estimate."
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class ModelContextPolicy:
+    provider: str
+    model: str
+    context_window_tokens: int
+    max_output_tokens: int
+    auto_compact_token_limit: int
+    hard_context_token_limit: int
+    source: str = "ecorex:model-context-policy:v1"
+    note: str = ""
+    tokenizer: str = "heuristic"
+    tokenizer_status: str = "estimated"
+    tokenizer_note: str = "No provider tokenizer is wired; EcoreX uses a conservative estimate."
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -162,6 +189,7 @@ _OPENAI_BASE_SENSITIVE_PROVIDERS = {
     const.CHATGPT,
     "openai",
 }
+_OFFICIAL_GEMINI_API_BASE = "https://generativelanguage.googleapis.com"
 
 _OPENAI_REASONING_EFFORT_VALUES = ("minimal", "low", "medium", "high")
 _DEEPSEEK_REASONING_EFFORT_VALUES = ("high", "max")
@@ -193,15 +221,146 @@ _AZURE_OPENAI_RULE_PROVIDERS = (const.CHATGPTONAZURE,)
 _DEFAULT_PROVIDER_CAPABILITY_MODELS: Dict[str, Tuple[str, ...]] = {
     const.OPENAI: (const.GPT_55, const.GPT_54_MINI, const.GPT_5, "o1-mini"),
     const.CHATGPTONAZURE: (const.GPT_55, "o1-mini"),
-    const.DEEPSEEK: (const.DEEPSEEK_V4_FLASH, const.DEEPSEEK_CHAT, const.DEEPSEEK_REASONER),
+    const.DEEPSEEK: (const.DEEPSEEK_V4_PRO, const.DEEPSEEK_V4_FLASH, const.DEEPSEEK_CHAT, const.DEEPSEEK_REASONER),
     const.QWEN_DASHSCOPE: (const.QWEN37_PLUS, const.QWEN37_MAX, const.QWEN36_PLUS),
     const.ZHIPU_AI: (const.GLM_5_1, const.GLM_5, const.GLM_4_7),
     const.MOONSHOT: (const.KIMI_K2_6, const.KIMI_K2),
-    const.DOUBAO: (const.DOUBAO_SEED_2_PRO, const.DOUBAO_SEED_2_CODE),
+    const.DOUBAO: (const.DOUBAO_SEED_2_PRO, const.DOUBAO_SEED_21_PRO, const.DOUBAO_SEED_2_CODE),
     const.MIMO: (const.MIMO_V2_5_PRO, const.MIMO_V2_5),
     const.LINKAI: (const.GPT_54_MINI, const.QWEN37_PLUS, const.KIMI_K2_6),
     "custom": (),
 }
+
+_CONTEXT_POLICY_DEFAULT_WINDOW = 258000
+_CONTEXT_POLICY_DEFAULT_MAX_OUTPUT = 32000
+_CONTEXT_POLICY_SOFT_RATIO = 0.80
+_CONTEXT_POLICY_HARD_RATIO = 0.92
+
+_CONTEXT_EXACT: Dict[str, Tuple[int, int, str, str]] = {
+    const.GPT_55: (1000000, 128000, "openai:gpt-5.5", "OpenAI model page lists a 1M context window and 128K max output."),
+    "gpt-5.5-pro": (1050000, 128000, "openai:gpt-5.5-pro", "OpenAI model page lists 1.05M context and 128K max output."),
+    const.GPT_54: (1050000, 128000, "openai:gpt-5.4", "OpenAI model page lists 1.05M context and 128K max output."),
+    const.GPT_54_MINI: (1050000, 128000, "openai:gpt-5.4-mini", "OpenAI model page lists 1.05M context and 128K max output."),
+    const.GPT_54_NANO: (1050000, 128000, "openai:gpt-5.4-nano", "OpenAI model page lists 1.05M context and 128K max output."),
+    const.GPT_5: (400000, 128000, "openai:gpt-5", "OpenAI model page lists 400K context and 128K max output."),
+    const.GPT_5_MINI: (400000, 128000, "openai:gpt-5-mini", "OpenAI model page lists 400K context and 128K max output."),
+    const.GPT_5_NANO: (400000, 128000, "openai:gpt-5-nano", "OpenAI model page lists 400K context and 128K max output."),
+    const.GPT_41: (1000000, 32768, "openai:gpt-4.1", "OpenAI GPT-4.1 family is treated as long-context."),
+    const.GPT_41_MINI: (1000000, 32768, "openai:gpt-4.1-mini", "OpenAI GPT-4.1 family is treated as long-context."),
+    const.GPT_41_NANO: (1000000, 32768, "openai:gpt-4.1-nano", "OpenAI GPT-4.1 family is treated as long-context."),
+    const.GEMINI_31_PRO_PRE: (1048576, 65536, "google:gemini-3.1-pro-preview", "Google model page lists 1,048,576 input tokens and 65,536 output tokens."),
+    const.GEMINI_35_FLASH: (1048576, 65536, "google:gemini-3.5-flash", "Gemini 3 family policy uses the official 1M/64K guidance."),
+    const.GEMINI_31_FLASH_LITE_PRE: (1048576, 65536, "google:gemini-3.1-flash-lite-preview", "Gemini 3 family policy uses the official 1M/64K guidance."),
+    const.GEMINI_3_PRO_PRE: (1048576, 65536, "google:gemini-3-pro-preview", "Gemini 3 family policy uses the official 1M/64K guidance."),
+    const.GEMINI_3_FLASH_PRE: (1048576, 65536, "google:gemini-3-flash-preview", "Gemini 3 family policy uses the official 1M/64K guidance."),
+    const.DEEPSEEK_V4_PRO: (1000000, 64000, "deepseek:v4-pro", "DeepSeek V4 release notes list 1M context; output budget kept conservative."),
+    const.DEEPSEEK_V4_FLASH: (1000000, 64000, "deepseek:v4-flash", "DeepSeek V4 release notes list 1M context; output budget kept conservative."),
+    const.DOUBAO_SEED_21_PRO: (256000, 32000, "volcengine:doubao-seed-2.1-pro", "Doubao Seed policy uses 256K context with conservative output reserve."),
+    const.DOUBAO_SEED_2_PRO: (256000, 32000, "volcengine:doubao-seed-2.0-pro", "Doubao Seed policy uses 256K context with conservative output reserve."),
+    const.DOUBAO_SEED_2_CODE: (256000, 32000, "volcengine:doubao-seed-2.0-code", "Doubao Seed policy uses 256K context with conservative output reserve."),
+}
+
+_CONTEXT_PREFIXES: Tuple[Tuple[str, int, int, str, str], ...] = (
+    ("gpt-5.5-pro", 1050000, 128000, "openai:gpt-5.5-pro", "OpenAI GPT-5.5 Pro long-context policy."),
+    ("gpt-5.5", 1000000, 128000, "openai:gpt-5.5", "OpenAI GPT-5.5 long-context policy."),
+    ("gpt-5.4", 1050000, 128000, "openai:gpt-5.4", "OpenAI GPT-5.4 long-context policy."),
+    ("gpt-5", 400000, 128000, "openai:gpt-5", "OpenAI GPT-5 family policy."),
+    ("gpt-4.1", 1000000, 32768, "openai:gpt-4.1", "OpenAI GPT-4.1 family policy."),
+    ("deepseek-v4", 1000000, 64000, "deepseek:v4", "DeepSeek V4 1M-context policy."),
+    ("gemini-3", 1048576, 65536, "google:gemini-3", "Gemini 3 1M/64K-context policy."),
+    ("gemini-2.5", 1048576, 65536, "google:gemini-2.5", "Gemini 2.5 long-context policy."),
+    ("gemini-1.5", 1048576, 8192, "google:gemini-1.5", "Gemini 1.5 long-context policy."),
+    ("doubao-seed-", 256000, 32000, "volcengine:doubao-seed", "Doubao Seed conservative context policy."),
+    ("kimi-k2", 256000, 32000, "moonshot:kimi-k2", "Kimi K2 conservative context policy."),
+    ("moonshot-v1-128k", 128000, 16000, "moonshot:128k", "Moonshot 128K policy."),
+    ("claude-", 200000, 64000, "anthropic:claude", "Claude long-context policy."),
+    ("qwen3", 128000, 32000, "dashscope:qwen3", "Qwen3 conservative context policy."),
+    ("glm-5", 128000, 16000, "zhipu:glm-5", "GLM-5 conservative context policy."),
+)
+
+
+def _derive_context_limits(context_window: int, max_output: int) -> Tuple[int, int]:
+    context_window = max(1, int(context_window or _CONTEXT_POLICY_DEFAULT_WINDOW))
+    max_output = max(1, int(max_output or _CONTEXT_POLICY_DEFAULT_MAX_OUTPUT))
+    output_headroom = max(8192, min(max_output, max(1, context_window // 4)))
+    soft_limit = min(int(context_window * _CONTEXT_POLICY_SOFT_RATIO), context_window - output_headroom)
+    hard_limit = int(context_window * _CONTEXT_POLICY_HARD_RATIO)
+    hard_limit = max(1, min(context_window - 1 if context_window > 1 else 1, hard_limit))
+    soft_limit = max(1, min(soft_limit, hard_limit))
+    return soft_limit, hard_limit
+
+
+def _tokenizer_policy_for_model(model_name: str, provider_id: str) -> Tuple[str, str, str]:
+    lowered = (model_name or "").lower()
+    if (
+        provider_id in {const.OPENAI, const.OPEN_AI, const.CHATGPT, "openai", const.CHATGPTONAZURE}
+        or lowered.startswith(("gpt-", "o1", "o3", "o4"))
+    ):
+        return (
+            "tiktoken",
+            "local_tokenizer",
+            "OpenAI-family models use local tiktoken when the package is available; otherwise EcoreX falls back to a conservative estimate.",
+        )
+    if lowered.startswith("gemini"):
+        return (
+            "provider_count_tokens",
+            "estimated",
+            "Gemini exposes a countTokens API, but EcoreX does not call it on every keystroke; live UI uses conservative estimation until usage is returned.",
+        )
+    if lowered.startswith("deepseek"):
+        return (
+            "deepseek_encoding_estimate",
+            "estimated",
+            "DeepSeek V4 uses provider-specific encoding; EcoreX keeps a conservative local estimate until provider usage is returned.",
+        )
+    if lowered.startswith("doubao-seed"):
+        return (
+            "ark_token_estimate",
+            "estimated",
+            "Volcengine Ark tokenizer is not bundled; EcoreX keeps a conservative local estimate until provider usage is returned.",
+        )
+    return (
+        "heuristic",
+        "estimated",
+        "No provider tokenizer is wired; EcoreX uses a conservative estimate.",
+    )
+
+
+def context_policy_for_model(model: Optional[str], provider: Optional[str] = None) -> ModelContextPolicy:
+    model_name = normalize_model_name(model)
+    provider_id = provider or infer_provider_id(model_name)
+    lowered = model_name.lower()
+    window = _CONTEXT_POLICY_DEFAULT_WINDOW
+    max_output = _CONTEXT_POLICY_DEFAULT_MAX_OUTPUT
+    source = "ecorex:default-context-policy"
+    note = "Fallback policy used when the provider does not publish a known limit in EcoreX."
+
+    exact = _CONTEXT_EXACT.get(model_name)
+    if exact is None:
+        exact = _CONTEXT_EXACT.get(lowered)
+    if exact:
+        window, max_output, source, note = exact
+    else:
+        for prefix, prefix_window, prefix_output, prefix_source, prefix_note in _CONTEXT_PREFIXES:
+            if lowered.startswith(prefix):
+                window, max_output, source, note = prefix_window, prefix_output, prefix_source, prefix_note
+                break
+
+    auto_limit, hard_limit = _derive_context_limits(window, max_output)
+    tokenizer, tokenizer_status, tokenizer_note = _tokenizer_policy_for_model(model_name, provider_id)
+    return ModelContextPolicy(
+        provider=provider_id,
+        model=model_name,
+        context_window_tokens=int(window),
+        max_output_tokens=int(max_output),
+        auto_compact_token_limit=int(auto_limit),
+        hard_context_token_limit=int(hard_limit),
+        source=source,
+        note=note,
+        tokenizer=tokenizer,
+        tokenizer_status=tokenizer_status,
+        tokenizer_note=tokenizer_note,
+    )
 
 _CAPABILITY_RULES: Tuple[ModelCapabilityRule, ...] = (
     ModelCapabilityRule(
@@ -345,6 +504,93 @@ def normalize_model_name(model: Optional[str]) -> str:
     return str(model or "").strip()
 
 
+def is_official_gemini_api_base(api_base: Optional[str]) -> bool:
+    """Return whether a Gemini REST base is the public Google endpoint."""
+    base = str(api_base or "").strip().rstrip("/")
+    if not base:
+        return True
+    return base == _OFFICIAL_GEMINI_API_BASE.rstrip("/")
+
+
+def is_custom_gemini_transport(
+    model: Optional[str],
+    *,
+    configured_bot_type: Optional[str] = "",
+    gemini_api_base: Optional[str] = "",
+    has_gemini_key: bool = False,
+) -> bool:
+    """Detect Gemini-named models explicitly configured as custom OpenAI API.
+
+    A non-Google ``gemini_api_base`` is still a Gemini REST endpoint in the
+    deployed EcoreX environment; routing it through OpenAI-compatible
+    ``/chat/completions`` causes the provider to fail. Only an explicit
+    ``bot_type=custom`` should use the custom OpenAI-compatible transport.
+    """
+    model_name = normalize_model_name(model).lower()
+    if not model_name.startswith("gemini"):
+        return False
+    route = str(configured_bot_type or "").strip()
+    return bool(route == const.CUSTOM and has_gemini_key)
+
+
+def should_route_custom_gemini_as_rest(
+    model: Optional[str],
+    *,
+    configured_bot_type: Optional[str] = "",
+    gemini_api_base: Optional[str] = "",
+    gemini_api_key: Optional[str] = "",
+    custom_api_base: Optional[str] = "",
+    custom_api_key: Optional[str] = "",
+) -> bool:
+    """Repair v0.2.7.1 custom-Gemini configs that copied Gemini REST fields.
+
+    The failed v0.2.7.1 path migrated ``gemini_*`` credentials into
+    ``custom_*`` and then called ``/chat/completions``. If the custom fields
+    are absent or exactly mirror the Gemini REST fields, route back to the
+    Gemini REST bot. Real custom OpenAI-compatible Gemini deployments keep
+    distinct ``custom_*`` credentials and remain on ``provider=custom``.
+    """
+    model_name = normalize_model_name(model).lower()
+    if not model_name.startswith("gemini"):
+        return False
+    if str(configured_bot_type or "").strip() != const.CUSTOM:
+        return False
+    gemini_key = str(gemini_api_key or "").strip()
+    gemini_base = str(gemini_api_base or "").strip()
+    if not gemini_key or not gemini_base:
+        return False
+    custom_key = str(custom_api_key or "").strip()
+    custom_base = str(custom_api_base or "").strip()
+    if not custom_key and not custom_base:
+        return True
+    normalized_gemini_base = normalize_openai_compatible_api_base(gemini_base).rstrip("/")
+    normalized_custom_base = custom_base.rstrip("/")
+    key_matches = not custom_key or custom_key == gemini_key
+    base_matches = not normalized_custom_base or normalized_custom_base == normalized_gemini_base
+    return bool(key_matches and base_matches)
+
+
+def normalize_openai_compatible_api_base(api_base: Optional[str]) -> str:
+    """Normalize a custom OpenAI-compatible base without rewriting routed paths."""
+    raw = str(api_base or "").strip()
+    if not raw:
+        return ""
+    value = raw.rstrip("/")
+    lowered = value.lower()
+    if lowered.endswith("/chat/completions"):
+        value = value[: -len("/chat/completions")].rstrip("/")
+    try:
+        parsed = urlsplit(value)
+    except Exception:
+        return value
+    if not parsed.scheme or not parsed.netloc:
+        return value
+    path = (parsed.path or "").rstrip("/")
+    if not path:
+        return urlunsplit((parsed.scheme, parsed.netloc, "/v1", parsed.query, parsed.fragment))
+    return value
+
+
 def infer_provider_id(
     model: Optional[str],
     *,
@@ -352,10 +598,31 @@ def infer_provider_id(
     use_linkai: bool = False,
     has_linkai_key: bool = False,
     use_azure_chatgpt: bool = False,
+    gemini_api_base: Optional[str] = "",
+    has_gemini_key: bool = False,
+    gemini_api_key: Optional[str] = "",
+    custom_api_base: Optional[str] = "",
+    custom_api_key: Optional[str] = "",
 ) -> str:
     """Infer the provider id used by the local runtime for a chat model."""
     if use_linkai and has_linkai_key:
         return const.LINKAI
+    if should_route_custom_gemini_as_rest(
+        model,
+        configured_bot_type=configured_bot_type,
+        gemini_api_base=gemini_api_base,
+        gemini_api_key=gemini_api_key,
+        custom_api_base=custom_api_base,
+        custom_api_key=custom_api_key,
+    ):
+        return const.GEMINI
+    if is_custom_gemini_transport(
+        model,
+        configured_bot_type=configured_bot_type,
+        gemini_api_base=gemini_api_base,
+        has_gemini_key=has_gemini_key,
+    ):
+        return const.CUSTOM
     if configured_bot_type:
         return const.OPENAI if configured_bot_type == const.CHATGPT else str(configured_bot_type)
     if use_azure_chatgpt:
@@ -388,6 +655,18 @@ def get_model_capabilities(model: Optional[str], provider: Optional[str] = None)
     )
     for rule in _matching_capability_rules(provider_id, model_name):
         capabilities = replace(capabilities, **dict(rule.overrides))
+    context_policy = context_policy_for_model(model_name, provider_id)
+    capabilities = replace(
+        capabilities,
+        context_window_tokens=context_policy.context_window_tokens,
+        max_output_tokens=context_policy.max_output_tokens,
+        auto_compact_token_limit=context_policy.auto_compact_token_limit,
+        hard_context_token_limit=context_policy.hard_context_token_limit,
+        context_policy_source=context_policy.source,
+        tokenizer=context_policy.tokenizer,
+        tokenizer_status=context_policy.tokenizer_status,
+        tokenizer_note=context_policy.tokenizer_note,
+    )
     return capabilities
 
 
@@ -413,6 +692,11 @@ def capabilities_for_config(local_config: Dict[str, Any]) -> ModelCapabilities:
         use_linkai=bool((local_config or {}).get("use_linkai", False)),
         has_linkai_key=bool((local_config or {}).get("linkai_api_key")),
         use_azure_chatgpt=bool((local_config or {}).get("use_azure_chatgpt", False)),
+        gemini_api_base=(local_config or {}).get("gemini_api_base") or "",
+        has_gemini_key=bool((local_config or {}).get("gemini_api_key")),
+        gemini_api_key=(local_config or {}).get("gemini_api_key") or "",
+        custom_api_base=(local_config or {}).get("custom_api_base") or "",
+        custom_api_key=(local_config or {}).get("custom_api_key") or "",
     )
     api_base = (local_config or {}).get("open_ai_api_base")
     provider = resolve_capability_provider_for_base(provider, api_base)
@@ -472,6 +756,23 @@ def _capability_matrix_row(
         "token_limit": {
             "chat_param": capabilities.max_tokens_param,
             "responses_param": "max_output_tokens",
+            "context_window_tokens": capabilities.context_window_tokens,
+            "max_output_tokens": capabilities.max_output_tokens,
+            "auto_compact_token_limit": capabilities.auto_compact_token_limit,
+            "hard_context_token_limit": capabilities.hard_context_token_limit,
+            "source": capabilities.context_policy_source,
+            "tokenizer": capabilities.tokenizer,
+            "tokenizer_status": capabilities.tokenizer_status,
+        },
+        "context_policy": {
+            "context_window_tokens": capabilities.context_window_tokens,
+            "max_output_tokens": capabilities.max_output_tokens,
+            "auto_compact_token_limit": capabilities.auto_compact_token_limit,
+            "hard_context_token_limit": capabilities.hard_context_token_limit,
+            "source": capabilities.context_policy_source,
+            "tokenizer": capabilities.tokenizer,
+            "tokenizer_status": capabilities.tokenizer_status,
+            "tokenizer_note": capabilities.tokenizer_note,
         },
         "reasoning": {
             "supported": capabilities.supports_reasoning_effort,

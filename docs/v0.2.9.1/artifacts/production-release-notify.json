@@ -1,0 +1,42 @@
+{
+  "commands": [
+    {
+      "argvHash": "92BE1C2591255843B0606F948366285D6C93E39FEE3F9F78E541E0F6A7EA16CF",
+      "exitCode": 0,
+      "name": "notify_release_v0291",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "{\"authMode\": \"basic\", \"error\": \"\", \"httpStatus\": 200, \"noticeFileVersion\": \"\", \"noticeRevision\": \"[IP]-1783308974-39223daf\", \"notifiedVersion\": \"[IP]\", \"ok\": true, \"rawSecretPersisted\": false, \"runtimeUpdateStateMode\": \"\", \"runtimeUpdateStateStatus\": \"\", \"runtimeUpdateStateVersion\": \"\"}\n",
+      "stdoutHash": "3FB752B71BD0442012AE641338C8027081BFA29EA1C292EA690E771F390F975A"
+    }
+  ],
+  "generatedAt": "2026-07-06T03:36:18.417090+00:00",
+  "redaction": {
+    "rawOutputPersisted": false,
+    "rawPasswordPersisted": false,
+    "rawSecretPersisted": false,
+    "rawTargetPersisted": false
+  },
+  "remote": {
+    "authMode": "basic",
+    "error": "",
+    "httpStatus": 200,
+    "noticeFileVersion": "",
+    "noticeRevision": "0.2.9.1-1783308974-39223daf",
+    "notifiedVersion": "0.2.9.1",
+    "ok": true,
+    "rawSecretPersisted": false,
+    "runtimeUpdateStateMode": "",
+    "runtimeUpdateStateStatus": "",
+    "runtimeUpdateStateVersion": ""
+  },
+  "scope": "production-release-notify",
+  "status": "PASS",
+  "target": {
+    "domainHash": "A753D877497CBE35",
+    "rawTargetPersisted": false,
+    "sshHostHash": "CDF1CF905198CA97",
+    "sshUserHash": "4813494D137E1631"
+  },
+  "version": "0.2.9.1"
+}

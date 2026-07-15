@@ -1,0 +1,53 @@
+{
+  "checks": {
+    "browserCdpAbilityDiscoverable": true,
+    "chromeDevtoolsMcpDiscoverable": true,
+    "extensionsExposeBuiltinTools": true,
+    "fastOcrDiscoverable": true,
+    "feishuSurfaceSchemaVisible": true,
+    "toolsExposeV022Core": true
+  },
+  "extensionCount": 66,
+  "externalConnectionCount": 12,
+  "feishuSurface": {
+    "authorizationAction": {
+      "action": "auth_login",
+      "domain": "base",
+      "tool": "feishu_cli"
+    },
+    "callable": false,
+    "callableReason": "tool schema is visible, but CLI/auth readiness requires an explicit status probe",
+    "declaredDiscoverable": true,
+    "discoverable": true,
+    "installAbility": "feishu-cli",
+    "installPack": "feishu-lark",
+    "permissionGated": true,
+    "policy": "find-skill-first-on-demand-cli",
+    "readiness": "unverified",
+    "requiresStatusProbe": true,
+    "schemaVisible": true,
+    "status": "schema_visible_unverified",
+    "statusAction": {
+      "action": "status",
+      "tool": "feishu_cli"
+    },
+    "tool": "feishu_cli",
+    "toolSchemaCallable": true
+  },
+  "generatedAt": "2026-06-27T09:31:51.354867+00:00",
+  "missingExtensions": [],
+  "missingTools": [],
+  "redaction": {
+    "rawPasswordPersisted": false,
+    "rawSecretPersisted": false,
+    "rawTargetPersisted": false,
+    "rawUrlPersisted": false
+  },
+  "scope": "production-capability-recovery-smoke",
+  "status": "PASS",
+  "target": {
+    "domainHash": "A753D877497CBE35",
+    "rawTargetPersisted": false
+  },
+  "toolCount": 22
+}

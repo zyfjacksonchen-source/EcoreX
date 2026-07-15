@@ -1,0 +1,157 @@
+{
+  "schemaVersion": "v0.2.7-s16-admin-one-click-release-v1",
+  "status": "PASS_WITH_EXTERNAL_TONGXIN_BLOCKER",
+  "version": "0.2.7",
+  "generatedAt": "2026-07-03T11:10:00+08:00",
+  "scope": [
+    "管理员页面发布页产品化",
+    "Admin API release state/promote endpoint",
+    "staged release SHA256 verification before stable promotion",
+    "publish-to-online-update real release validation"
+  ],
+  "codeChanges": [
+    {
+      "area": "admin-release-api",
+      "files": [
+        "deploy/ecorex-admin-api/ecorex_admin_api.py"
+      ],
+      "result": "Added protected GET /release/state and POST /release/promote. Promotion validates staged manifest/artifacts with SHA256, writes release.promote audit, and atomically switches current."
+    },
+    {
+      "area": "admin-release-ui",
+      "files": [
+        "deploy/ecorex-site/admin/index.html",
+        "deploy/ecorex-site/admin/admin.js",
+        "deploy/ecorex-site/admin/admin.css"
+      ],
+      "result": "Release panel now shows current stable, staged candidates, update policy, refresh action, and one-click publish button."
+    },
+    {
+      "area": "release-gate",
+      "files": [
+        "scripts/smoke-v026-production-agent-product-acceptance.py",
+        "scripts/light-real-release-validation.py",
+        "tests/test_v026_agent_product_acceptance.py",
+        "tests/test_v025_runtime_manifest.py"
+      ],
+      "result": "Real release matrix increased from 537 to 540 checks and validates Admin release API, promotion guard, and one-click publish UI."
+    }
+  ],
+  "releaseArtifacts": {
+    "publicZip": {
+      "artifactId": "EcoreX_0.2.7-public-release.zip",
+      "size": 2847450,
+      "sha256": "94F59B6966CD23B6A567ABC0DD0E18AA6D07D899CF331B809DFC3FDA77D7A81E",
+      "downloadsExternalized": true
+    },
+    "webLinuxService": {
+      "artifactId": "EcoreX_0.2.7-web-linux-service.tar.gz",
+      "size": 4086246,
+      "sha256": "E4D5482A2DEDCBD5818A3EE7EBBA9AA6178521A002163584E0ACD9F6858CD438"
+    },
+    "webuiWindows": {
+      "artifactId": "EcoreX_0.2.7-webui-windows-x64.zip",
+      "size": 550740315,
+      "sha256": "1A3C3848C44CB5B682E3C5850D6ED89A2022145972920193C71879D975559B22"
+    },
+    "webuiMacos": {
+      "artifactId": "EcoreX_0.2.7-webui-macos-universal.zip",
+      "size": 652195150,
+      "sha256": "DF7DDF8E435E25259BD865FF5CC20BD58F0EADC7C55EA3EEDC49F43D4D1D24AF"
+    }
+  },
+  "verification": {
+    "local": [
+      {
+        "command": "python -m py_compile deploy/ecorex-admin-api/ecorex_admin_api.py scripts/smoke-v026-production-agent-product-acceptance.py scripts/light-real-release-validation.py scripts/real-release-multi-agent-strategy.py",
+        "status": "PASS"
+      },
+      {
+        "command": "node --check deploy/ecorex-site/admin/admin.js",
+        "status": "PASS"
+      },
+      {
+        "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest targeted admin release/matrix tests",
+        "status": "PASS",
+        "selectedTestsPassed": 4
+      },
+      {
+        "command": "python scripts/真实发布轻量校验.py --output docs/v0.2.7/artifacts/real-release-light-validation.json",
+        "status": "PASS",
+        "checkCount": 115
+      },
+      {
+        "command": "powershell -File scripts/prepare-ecorex-public-release.ps1 -Version 0.2.7 -ExternalizeDownloads",
+        "status": "PASS"
+      }
+    ],
+    "productionDeploy": {
+      "artifact": "docs/v0.2.7/artifacts/production-deploy-online.json",
+      "status": "PASS",
+      "onlineChecks": {
+        "webServiceVersion": "0.2.7",
+        "installationManifestVersion": "0.2.7",
+        "publicManifestVersion": "0.2.7",
+        "stagedPublicManifestVersion": "0.2.7",
+        "serviceActive": true,
+        "serviceEnabled": true,
+        "webVersionStatus": 200,
+        "webVersionBodyHasExpectedVersion": true
+      }
+    },
+    "focusedRealRelease": {
+      "artifact": "docs/v0.2.7/artifacts/S16-admin-one-click-release-focused.json",
+      "status": "FAIL",
+      "checkCount": 198,
+      "passCount": 196,
+      "failCount": 2,
+      "confirmedPasses": [
+        "admin release API exposes protected state and promote endpoints",
+        "admin release promotion validates staged artifacts before current switch",
+        "admin release page exposes one-click publish controls",
+        "update-check endpoint exposes WebUI update policy and artifacts"
+      ]
+    }
+  },
+  "blockingFailures": [
+    {
+      "name": "Tongxin MPI accuracy action succeeds",
+      "errorType": "tongxin_mpi_accuracy_zero_project_samples",
+      "dataVolume": {
+        "accountCount": 0,
+        "projectCount": 0
+      }
+    },
+    {
+      "name": "Tongxin MPI accuracy has samples without fallback or drift",
+      "errorType": "tongxin_mpi_accuracy_zero_project_samples",
+      "dataVolume": {
+        "accountCount": 0,
+        "projectCount": 0
+      }
+    }
+  ],
+  "reviewConsensus": [
+    {
+      "role": "runtime-config",
+      "status": "PASS",
+      "notes": "Promotion is an atomic staged-to-current pointer switch and does not execute arbitrary browser-supplied commands."
+    },
+    {
+      "role": "frontend-api",
+      "status": "PASS",
+      "notes": "Admin release panel exposes current/staged state, refresh, and one-click publish through protected Admin API."
+    },
+    {
+      "role": "qa-release",
+      "status": "PASS_WITH_EXTERNAL_BLOCKER",
+      "notes": "New admin release cases passed in focused production validation; final gate remains blocked only by Tongxin data-volume samples."
+    },
+    {
+      "role": "privacy-data",
+      "status": "PASS",
+      "notes": "Evidence stores artifact names, sizes, hashes, statuses, and counts only."
+    }
+  ],
+  "nextUnblockAction": "Mount or configure a non-empty read-only Tongxin data-volume database for production, then rerun python scripts/真实发布校验.py. Do not relax zero-sample MPI failure rules."
+}

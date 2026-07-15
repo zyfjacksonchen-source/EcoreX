@@ -1,0 +1,47 @@
+{
+  "version": "0.2.3",
+  "slice": "R23-16P-08",
+  "scenario": "scheduler-subagent",
+  "generatedAt": "2026-06-27T02:22:14.325468+00:00",
+  "status": "pass",
+  "identity": {
+    "requestHash": "hmac:2484692803e8cb29",
+    "sessionHash": "hmac:3192119478930e31"
+  },
+  "inputShape": {
+    "subagentCount": 40,
+    "schedulerTaskCount": 60,
+    "projectionIterations": 8
+  },
+  "metrics": {
+    "subagentProjectionP95Ms": 23.515,
+    "schedulerProjectionP95Ms": 32.675,
+    "subagentTaskCount": 40,
+    "projectedSubagentToolCount": 40,
+    "projectedSubagentToolShapeValidCount": 40,
+    "projectedSubagentToolFingerprintCount": 40,
+    "completedSubagentCount": 10,
+    "timeoutSubagentCount": 10,
+    "cancelledSubagentCount": 10,
+    "failedSubagentCount": 10,
+    "schedulerTaskCount": 60,
+    "projectedSchedulerTaskCount": 60,
+    "projectedSchedulerTaskShapeValidCount": 60,
+    "schedulerSendMessageTaskCount": 15,
+    "schedulerAgentTaskCount": 15,
+    "schedulerToolCallTaskCount": 15,
+    "schedulerSkillCallTaskCount": 15,
+    "schedulerErrorTaskCount": 6,
+    "schedulerStopMs": 0.457,
+    "orphanThreadCount": 0,
+    "orphanTimerCount": 0,
+    "totalMs": 1829.849
+  },
+  "failureCodes": [],
+  "redaction": {
+    "fullPathsStored": false,
+    "taskBodiesStored": false,
+    "receiverValuesStored": false,
+    "sensitivePatternStored": false
+  }
+}

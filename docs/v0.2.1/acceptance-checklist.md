@@ -1,0 +1,32 @@
+# v0.2.1 Acceptance Checklist
+
+| ID | Area | Requirement | Status | Evidence |
+| --- | --- | --- | --- | --- |
+| R21-01 | Scope | v0.2.1 delivers Web only and does not require Electron/desktop package acceptance. | PASS | Goal/deploy docs and tests target Web runtime, WebUI, Admin API, and `channel/web`; desktop package checks are intentionally excluded. |
+| R21-02 | Final Answer | Final assistant conclusion is not duplicated in call-process output. | PASS | `ConversationStore` grouping keeps final answer in the main assistant content only; source tests cover history extras/dedup markers. |
+| R21-03 | Markdown | Final answers render Markdown; live Markdown rendering remains lightweight. | PASS | Shared Web renderer and legacy console use Markdown renderer for terminal answers and bounded live rendering. |
+| R21-04 | Copy | Answers/artifacts support one-click copy/download paths suitable for Xiaohongshu and other platform copy. | PASS-SOURCE | UI source includes answer/Markdown/platform/Xiaohongshu/file/image copy actions; browser smoke remains required. |
+| R21-05 | Stream Contract | SSE has typed heartbeat, append-only delta, replace snapshot/update, and `done.final_text`. | PASS | `web_channel.py`, React API types, and legacy console handlers updated; selected v0.2.1 tests passed. |
+| R21-06 | Reconnect UX | Transient EventSource errors do not immediately show terminal recovery cards. | PASS | 75-second grace and native EventSource reconnect retained; recovery cards are only terminal/runtime state. |
+| R21-07 | Recovery Ordering | Old interrupted/recovery card does not stay at bottom or reorder new messages above it. | PASS | Stable turn identity extras and frontend history merge/drop rules added. |
+| R21-08 | Project Ownership | Project conversations remain under their project folder. | PASS | Project binding no longer writes cross-session `activeProjectId`; full Web/backend suite passed after the fix. |
+| R21-09 | Long Tools | Image generation and long silent tools get heartbeat/deadline visibility and adaptive lease. | PASS | `agent_stream.py` emits heartbeat/deadline/timeout; bash long-command default is raised; selected tests passed. |
+| R21-10 | Idle Timeout | Agent can extend timeout autonomously when work is still alive, but hard max prevents infinite active-state spinning. | PASS | Lease/extension/max envs and timeout terminal event added. |
+| R21-11 | Activity Indicator | EcoreX-colored indeterminate shimmer/sheen indicator appears on live work states. | PASS | React and legacy console CSS/source include `ecorex-activity-status`/dot and reduced-motion guard. |
+| R21-12 | Artifact Menu | `...` menu closes on outside click, Escape, and focus cleanup. | PASS-SOURCE | Web source includes outside-click and Escape cleanup; browser smoke pending. |
+| R21-13 | Subagent | Subagents are named, observable, timeout-safe, and no longer surface as bare `subagent #9`. | PASS-SOURCE | Backend metadata/events/snapshots added; Web visualization source updated; slow subagent manual smoke pending. |
+| R21-14 | Memory/Knowledge | Web memory, reader, knowledge tree, graph click, and graph scale limits are available. | PASS-SOURCE | Existing API contracts reused and Web UI restored; manual graph smoke pending. |
+| R21-15 | Channels | Channels catalog, config, connect/disconnect, status/error, and capability refresh work in Web settings. | PASS-API | `/api/channels` and connect/disconnect contract extended; production `/api/channels` smoke returned the full channel payload. Real Feishu conversation-call closure is explicitly deferred to v0.2.2. |
+| R21-16 | Feishu/Lark | After Web authorization, a conversation can call Feishu/Lark through the correct channel/connector. | DEFERRED-V0.2.2 | User moved the real Feishu/Lark closed-loop validation out of v0.2.1 and into v0.2.2; it is not a v0.2.1 release blocker. |
+| R21-17 | Browser Automation | `browser-automation` is built in and does not fail with `capability installer not found`. | PASS-SOURCE | Optional ability handles Playwright-present state and installer script is packaged. |
+| R21-18 | Observability | User can see active work, tool heartbeat, lease extension, subagent children, reconnect, timeout, and diagnostics. | PASS-SOURCE | Run Center default visible; tool/subagent/reconnect events rendered. v0.2.2 durable run ledger remains future work. |
+| R21-19 | Deployment | v0.2.1 Web and admin backend serve from `https://mvdcm.ecoremedia.net/ecorex-agent/`. | PASS | Production deploy completed; remote release checker, authenticated Web API smoke, and authenticated Admin page/API smoke passed under the `/ecorex-agent` path prefix. |
+| R21-20 | Tests | Backend, source, typecheck, Web script, package, and deploy checks pass. | PASS | Evidence ledger records py_compile, node check, typecheck, targeted pytest, full Web/backend pytest, package validation, remote release check, and authenticated smoke. |
+| R21-21 | Image Fallback | `gpt-image-2-pro` failures degrade only to `gpt-image-2`, visibly, and never silently to Python/Pillow/HTML/SVG output. | PASS | `image-generation` provider retries same GPT Image compatible route with `gpt-image-2`, returns `model_fallback`, and keeps invalid prompt/safety failures fail-closed. Targeted tests pass. |
+| R21-22 | Admin Logs/Sync | Web-side run logs, message sync, and artifact-file sync align with the administrator backend under explicit server policy. | PASS | Matched linked admin/log iteration: Phase 1 metadata sync, Phase 2 message storage, Phase 3 chunked artifact storage, policy gates, summary counters, prior mvdcm smoke evidence, fresh local Admin test rerun, and production Admin API `/state` smoke passed. |
+| R21-23 | Admin Data Migration | Original-server Admin users, model policy, and model configuration are present on the mvdcm deployment. | PASS | Migrated original Admin tables from `www.ecoreai.cn` with backups. Target DB now has 23 users, 16 active users, one enabled global `openai/gpt-5.5` model credential, one capability policy, 72 client sessions with zero orphan sessions, and historical usage/error/audit data. Authenticated Admin API and client policy smoke passed. |
+
+## Release Notes Before PASS
+
+- Real Feishu/Lark authorization and Web conversation call are intentionally deferred to v0.2.2 by user direction.
+- Full interactive browser matrix for copy/artifact/reconnect/subagent/memory/graph/channel settings remains recommended before broad rollout; server/API/Admin smoke passed on the production domain.

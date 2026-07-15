@@ -1,0 +1,173 @@
+{
+  "status": "PASS",
+  "generatedAt": "2026-06-29T08:00:45Z",
+  "scope": "R24-02 webui release Tongxin CLI read-only contract",
+  "windows": {
+    "artifactId": "webui-windows-x64",
+    "artifactName": "EcoreX_0.2.4-webui-windows-x64.zip",
+    "size": 113931610,
+    "sha256": "5A0DC6E0A59C70CB3823DE2A256EA44F334E056D37BD6A2510AA49878E9ADF61"
+  },
+  "macos": {
+    "artifactId": "webui-macos-universal",
+    "artifactName": "EcoreX_0.2.4-webui-macos-universal.zip",
+    "size": 263206273,
+    "sha256": "00BF5C1E67FF7855F6CCA59D87073B77869CD83064893D1CBD8F18183A2EFBAD"
+  },
+  "publicRelease": {
+    "artifactId": "public-release",
+    "artifactName": "EcoreX_0.2.4-public-release.zip",
+    "size": 380156993,
+    "sha256": "0038903FEA2437989C120FF6AD32EFD5D99C4E6126C89F93BCFD72317EC6ADC9"
+  },
+  "checks": [
+    {
+      "label": "webui-windows-x64 Tongxin CLI WebUI configure-only display packaged",
+      "status": "PASS",
+      "evidence": {
+        "bundleTextScanned": true
+      }
+    },
+    {
+      "label": "webui-windows-x64 Tongxin CLI read-only tool packaged",
+      "status": "PASS",
+      "evidence": {
+        "toolsInitEntrySuffix": "agent/tools/__init__.py",
+        "toolEntrySuffix": "agent/tools/tongxin_cli/tongxin_cli.py"
+      }
+    },
+    {
+      "label": "webui-windows-x64 Tongxin CLI permission and raw bash guard packaged",
+      "status": "PASS",
+      "evidence": {
+        "brokerEntrySuffix": "common/ecorex_tool_permissions.py",
+        "agentStreamEntrySuffix": "agent/protocol/agent_stream.py",
+        "bashEntrySuffix": "agent/tools/bash/bash.py"
+      }
+    },
+    {
+      "label": "webui-windows-x64 Tongxin CLI configure-only auto-configuration packaged",
+      "status": "PASS",
+      "evidence": {
+        "optionalAbilitiesEntrySuffix": "agent/tools/optional_abilities/optional_abilities.py",
+        "agentCapabilityEntrySuffix": "agent/tools/agent_capability/agent_capability.py"
+      }
+    },
+    {
+      "label": "webui-windows-x64 Tongxin CLI install request guidance packaged",
+      "status": "PASS",
+      "evidence": {
+        "webChannelEntrySuffix": "channel/web/web_channel.py"
+      }
+    },
+    {
+      "label": "webui-windows-x64 Tongxin CLI capability manifest packaged",
+      "status": "PASS",
+      "evidence": {
+        "packPresent": true,
+        "readOnly": true,
+        "defaultEnabled": true,
+        "configureOnly": true
+      }
+    },
+    {
+      "label": "webui-macos-universal Tongxin CLI WebUI configure-only display packaged",
+      "status": "PASS",
+      "evidence": {
+        "bundleTextScanned": true
+      }
+    },
+    {
+      "label": "webui-macos-universal Tongxin CLI read-only tool packaged",
+      "status": "PASS",
+      "evidence": {
+        "toolsInitEntrySuffix": "agent/tools/__init__.py",
+        "toolEntrySuffix": "agent/tools/tongxin_cli/tongxin_cli.py"
+      }
+    },
+    {
+      "label": "webui-macos-universal Tongxin CLI permission and raw bash guard packaged",
+      "status": "PASS",
+      "evidence": {
+        "brokerEntrySuffix": "common/ecorex_tool_permissions.py",
+        "agentStreamEntrySuffix": "agent/protocol/agent_stream.py",
+        "bashEntrySuffix": "agent/tools/bash/bash.py"
+      }
+    },
+    {
+      "label": "webui-macos-universal Tongxin CLI configure-only auto-configuration packaged",
+      "status": "PASS",
+      "evidence": {
+        "optionalAbilitiesEntrySuffix": "agent/tools/optional_abilities/optional_abilities.py",
+        "agentCapabilityEntrySuffix": "agent/tools/agent_capability/agent_capability.py"
+      }
+    },
+    {
+      "label": "webui-macos-universal Tongxin CLI install request guidance packaged",
+      "status": "PASS",
+      "evidence": {
+        "webChannelEntrySuffix": "channel/web/web_channel.py"
+      }
+    },
+    {
+      "label": "webui-macos-universal Tongxin CLI capability manifest packaged",
+      "status": "PASS",
+      "evidence": {
+        "packPresent": true,
+        "readOnly": true,
+        "defaultEnabled": true,
+        "configureOnly": true
+      }
+    },
+    {
+      "label": "public release embeds webui-windows-x64",
+      "status": "PASS",
+      "evidence": {
+        "entry": "site/downloads/EcoreX_0.2.4-webui-windows-x64.zip"
+      }
+    },
+    {
+      "label": "public manifest matches webui-windows-x64",
+      "status": "PASS",
+      "evidence": {
+        "manifestSize": 113931610,
+        "artifactSize": 113931610,
+        "hashMatches": true
+      }
+    },
+    {
+      "label": "public release embeds webui-macos-universal",
+      "status": "PASS",
+      "evidence": {
+        "entry": "site/downloads/EcoreX_0.2.4-webui-macos-universal.zip"
+      }
+    },
+    {
+      "label": "public manifest matches webui-macos-universal",
+      "status": "PASS",
+      "evidence": {
+        "manifestSize": 263206273,
+        "artifactSize": 263206273,
+        "hashMatches": true
+      }
+    },
+    {
+      "label": "public release embeds web-linux-service",
+      "status": "PASS",
+      "evidence": {
+        "entry": "site/downloads/EcoreX_0.2.4-web-linux-service.tar.gz"
+      }
+    },
+    {
+      "label": "public manifest matches web-linux-service",
+      "status": "PASS",
+      "evidence": {
+        "manifestSize": 3834803,
+        "artifactSize": 3834803,
+        "hashMatches": true
+      }
+    }
+  ],
+  "failed": [],
+  "redacted": true
+}

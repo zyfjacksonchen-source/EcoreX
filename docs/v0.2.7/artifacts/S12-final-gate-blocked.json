@@ -1,0 +1,107 @@
+{
+  "schemaVersion": "v0.2.7-final-gate-v1",
+  "status": "BLOCKED",
+  "version": "0.2.7",
+  "generatedAt": "2026-07-02T20:32:27.040747+00:00",
+  "reason": "S7 Tongxin MPI accuracy is fail-closed because the Tongxin data volume returned zero account/project samples for the production test account.",
+  "strictMultiAgentReview": {
+    "status": "NOT_AVAILABLE",
+    "countsAsStrictPass": false,
+    "blocker": "multi-agent spawn was unavailable in this thread because the agent thread limit had already been reached",
+    "fallbackEvidence": "docs/v0.2.7/artifacts/S11-online-update-stability-review.json"
+  },
+  "releaseArtifacts": {
+    "publicZip": {
+      "artifactId": "EcoreX_0.2.7-public-release.zip",
+      "size": 2843720,
+      "sha256": "E09254217B2563D9BE9C0AE0CFF880E2CF4C3424884A306BB7432990B7209C86"
+    },
+    "webLinuxService": {
+      "artifactId": "EcoreX_0.2.7-web-linux-service.tar.gz",
+      "size": 4083969,
+      "sha256": "628874C352FE9AA3D58F54355A30D40C2DE1225AD31105DE9E0B649B1AF9C0ED"
+    },
+    "webuiWindows": {
+      "artifactId": "EcoreX_0.2.7-webui-windows-x64.zip",
+      "size": 550735209,
+      "sha256": "351ADDF2F8F80E0DC7F9F37C51C90D041F9329BB722E6BB0B3BA3DA5955812DD"
+    },
+    "webuiMacos": {
+      "artifactId": "EcoreX_0.2.7-webui-macos-universal.zip",
+      "size": 652190044,
+      "sha256": "F4E75D1BB5FF5973BCA90E3672111BC28D9FBA68FFCCB750BDB349C6D54E91B0"
+    }
+  },
+  "localGates": {
+    "releaseArtifactValidation": "PASS",
+    "lightRealReleaseValidation": {
+      "status": "PASS",
+      "checkCount": 107,
+      "passCount": 107,
+      "failCount": 0
+    },
+    "focusedUnitSuites": {
+      "status": "PASS",
+      "testCount": 15
+    }
+  },
+  "productionDeployment": {
+    "status": "PASS",
+    "evidence": "docs/v0.2.7/artifacts/production-deploy-online.json",
+    "generatedAt": "2026-07-02T20:27:21.299051+00:00"
+  },
+  "productionAcceptance": {
+    "status": "FAIL",
+    "evidence": "docs/v0.2.7/artifacts/production-agent-product-acceptance.json",
+    "checkCount": 520,
+    "enabledCheckCount": 512,
+    "passCount": 510,
+    "failCount": 2,
+    "skipCount": 8,
+    "durationSeconds": 305.73
+  },
+  "passedCapabilities": [
+    "custom OpenAI-compatible Gemini routing",
+    "model switch context continuity and assistant artifact history references",
+    "paged model-switch divider UI",
+    "background update state and soft refresh banner",
+    "CDP-first browser open-box capability",
+    "local OCR and Vision open-box capability",
+    "native multi-image generation routing without bash fallback",
+    "large local-file context budgeting",
+    "macOS runtime preinstall alignment",
+    "public manifest artifact sha/size contract"
+  ],
+  "blockingFailures": [
+    {
+      "group": "v027-integrated-capabilities",
+      "name": "Tongxin MPI accuracy action succeeds",
+      "errorType": "tongxin_mpi_accuracy_zero_project_samples",
+      "dataVolume": {
+        "accountCount": 0,
+        "projectCount": 0
+      },
+      "rule": "sampleCount must be greater than zero; cache fallback must not masquerade as MPI"
+    },
+    {
+      "group": "v027-integrated-capabilities",
+      "name": "Tongxin MPI accuracy has samples without fallback or drift",
+      "errorType": "tongxin_mpi_accuracy_zero_project_samples",
+      "dataVolume": {
+        "accountCount": 0,
+        "projectCount": 0
+      },
+      "rule": "sampleCount must be greater than zero before drift can be evaluated"
+    }
+  ],
+  "onlineUpdateDecision": {
+    "activationPolicy": "prompt-soft-refresh-existing-tab",
+    "adminPromotionRequired": true,
+    "backgroundInstall": true,
+    "autoLaunchBrowser": "never-in-background",
+    "healthCheck": "/api/version",
+    "stateFile": "update-state.json",
+    "userExperience": "After background install and health check, the existing WebUI shows a non-forced refresh banner. It does not forcibly open a new browser tab or auto-refresh mid-task."
+  },
+  "nextUnblockAction": "Populate or select a Tongxin data volume/account with at least one project sample for spotlight/chengfeng and rerun python scripts/真实发布校验.py."
+}

@@ -1,0 +1,75 @@
+{
+  "scope": "production-online-update-ghproxy-smoke",
+  "status": "PASS",
+  "generatedAt": "2026-07-05T06:30:20.0782979Z",
+  "version": "0.2.9",
+  "baseUrl": "https://mvdcm.ecoremedia.net/ecorex-agent",
+  "assetBaseUrl": "https://ghproxy.net/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.9",
+  "note": "GitHub Release assets were overwritten with the rebuilt v0.2.9 packages. The ghproxy mirror was then used as the forced first asset base. The outer harness timed out after runtime start because child processes kept handles open, so final runtime/package observations are recorded as verifiedBeforeCleanup.",
+  "manifest": {
+    "version": "0.2.9",
+    "downloadMode": "mirror-first-origin-fallback",
+    "firstMirrorBaseUrl": "https://ghproxy.net/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.9"
+  },
+  "artifact": {
+    "id": "webui-windows-x64",
+    "fileName": "EcoreX_0.2.9-webui-windows-x64.zip",
+    "size": 550823962,
+    "sha256": "7B3F439C789C1B76CAACFC1D7CB012ED1468FDD2322B179291BA741ED33A8A01"
+  },
+  "mirrorHeads": [
+    {
+      "file": "EcoreX_0.2.9-webui-windows-x64.zip",
+      "expectedLength": "550823962",
+      "actualLength": "550823962",
+      "lengthMatches": true
+    },
+    {
+      "file": "EcoreX_0.2.9-webui-macos-universal.zip",
+      "expectedLength": "652283089",
+      "actualLength": "652283089",
+      "lengthMatches": true
+    },
+    {
+      "file": "EcoreX_0.2.9-web-linux-service.tar.gz",
+      "expectedLength": "4220060",
+      "actualLength": "4220060",
+      "lengthMatches": true
+    }
+  ],
+  "install": {
+    "forcedAssetBaseUrl": true,
+    "firstDownloadSourceIsGhproxy": true,
+    "onlineInstallerHash": "4A8557745DB0B399CED33AA46466621CE3C9431BDC5146098BDEE54CE54985CC",
+    "onlineInstallerHasFindWebUIInstallerFix": true,
+    "harnessTimedOutAfterRuntimeStart": true
+  },
+  "verifiedBeforeCleanup": {
+    "observedAt": "2026-07-05T06:27:53.6111263Z",
+    "downloadedPackage": {
+      "exists": true,
+      "size": 550823962,
+      "sha256": "7B3F439C789C1B76CAACFC1D7CB012ED1468FDD2322B179291BA741ED33A8A01",
+      "sizeMatchesManifest": true,
+      "sha256MatchesManifest": true
+    },
+    "runtime": {
+      "apiVersionStatus": 200,
+      "apiVersion": "0.2.9",
+      "updateStatus": "installed",
+      "updateMode": "background",
+      "healthPassed": true,
+      "bundleStatus": 200,
+      "bundleHasRetouchMarker": true,
+      "overlayStatus": 200,
+      "tencentLogoStatus": 200,
+      "tencentLogoBytes": 1584
+    }
+  },
+  "cleanup": {
+    "tempRemoved": true,
+    "baseRemoved": true,
+    "tempRemoveError": null,
+    "performedAt": "2026-07-05T06:30:20.0912259Z"
+  }
+}

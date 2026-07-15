@@ -60,12 +60,12 @@
 - Desktop renderer does not call the upstream model endpoint directly. It sends chat turns to the local sidecar through `POST /message`.
 - The runtime builds the OpenAI-compatible request body from the conversation/session context automatically. Users and admins should configure provider, model, API key, and Base URL; they should not enter the full `/chat/completions` endpoint.
 - For OpenAI-compatible providers, runtime appends `/chat/completions` to the configured Base URL.
-- Current production upstream requires the versioned Base URL `http://43.135.183.53:8080/v1`, so the actual upstream route is `http://43.135.183.53:8080/v1/chat/completions`.
+- Current production upstream requires a versioned redacted Base URL ending in `/v1`, so the actual upstream route is `baseUrl + /chat/completions`.
 - There is no upstream `/v1/message` route in this build. `/message` is only the local desktop-runtime route.
 - Verification on 2026-06-12:
   - Direct `/v1/chat/completions` returned a standard choices response for `gpt-5.5`.
   - Direct root `/chat/completions` returned a non-standard/empty shape.
-  - Production Admin DB global model `api_base` was updated to `http://43.135.183.53:8080/v1`.
+  - Production Admin DB global model `api_base` was updated to the redacted `/v1` OpenAI-compatible base URL.
   - Installed runtime loaded that Base URL and local `/message` plus `/poll` returned `EcoreX OK` when polling until `has_content=true`.
 
 ## Playwright Capability Evidence

@@ -1,0 +1,38 @@
+{
+  "status": "TEMPLATE",
+  "redacted": true,
+  "mode": "codex-imagegen-timing-template",
+  "schemaVersion": "r24-14b-codex-timing-v1",
+  "resultModeRequired": "codex-imagegen-timing-result",
+  "resultStatusRequired": "PASS",
+  "timingSemantics": {
+    "finalUsableMs": "positive integer wall-clock milliseconds from Codex imagegen request start to final usable image availability using the same prompt, size, output format, reference image presence, and quality policy",
+    "wallMs": "optional positive integer total wall-clock milliseconds for the same Codex run; it cannot replace finalUsableMs"
+  },
+  "cases": [
+    {
+      "caseId": "icon-no-reference",
+      "promptHash": "7cc74acddacf4fd6",
+      "promptLength": 86,
+      "referenceImageCount": 0,
+      "size": "1024x1024",
+      "outputFormat": "png",
+      "qualityRetryMax": 1,
+      "status": "pending-measurement",
+      "finalUsableMs": 0,
+      "wallMs": 0
+    },
+    {
+      "caseId": "poster-reference-edit",
+      "promptHash": "f821a39587639d06",
+      "promptLength": 87,
+      "referenceImageCount": 1,
+      "size": "1024x1024",
+      "outputFormat": "png",
+      "qualityRetryMax": 1,
+      "status": "pending-measurement",
+      "finalUsableMs": 0,
+      "wallMs": 0
+    }
+  ]
+}

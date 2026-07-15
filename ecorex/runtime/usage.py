@@ -1,0 +1,235 @@
+"""Provider-reported composer usage projection.
+
+The event stream remains the fact source.  This module intentionally derives a
+small read model from completed model-response facts instead of trusting client
+counters, estimating tokens in JavaScript, or conflating usage with a signed
+managed-service quota.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+import json
+from typing import Any, Callable, Mapping
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from ecorex.capabilities import ManagedModelCatalog, UnknownModelError
+from ecorex.protocol import (
+    ContextUsageProjection,
+    ConversationUsageProjection,
+    TokenUsageWindow,
+)
+
+from .database import SQLiteDatabase
+
+
+_MAX_REPORTED_TOKENS = 10**12
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _storage_time(value: datetime) -> str:
+    if value.tzinfo is None:
+        raise ValueError("usage projection timestamps must be timezone-aware")
+    return value.astimezone(UTC).isoformat(timespec="microseconds")
+
+
+def _parse_time(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(UTC)
+
+
+def _nonnegative_int(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if not 0 <= value <= _MAX_REPORTED_TOKENS:
+        return None
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class _Usage:
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+
+    def add(self, other: "_Usage") -> "_Usage":
+        return _Usage(
+            input_tokens=self.input_tokens + other.input_tokens,
+            output_tokens=self.output_tokens + other.output_tokens,
+            total_tokens=self.total_tokens + other.total_tokens,
+        )
+
+    def projection(self) -> TokenUsageWindow:
+        return TokenUsageWindow(
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            total_tokens=self.total_tokens,
+        )
+
+
+def _usage_from_payload(raw: object) -> _Usage | None:
+    if not isinstance(raw, Mapping):
+        return None
+    input_tokens = _nonnegative_int(raw.get("input_tokens"))
+    output_tokens = _nonnegative_int(raw.get("output_tokens"))
+    total_tokens = _nonnegative_int(raw.get("total_tokens"))
+    # OpenAI-compatible providers may use prompt/completion terminology. It
+    # remains provider-reported data, merely normalized at the local boundary.
+    if input_tokens is None:
+        input_tokens = _nonnegative_int(raw.get("prompt_tokens"))
+    if output_tokens is None:
+        output_tokens = _nonnegative_int(raw.get("completion_tokens"))
+    if input_tokens is None:
+        input_tokens = 0
+    if output_tokens is None:
+        output_tokens = 0
+    if total_tokens is None:
+        total_tokens = input_tokens + output_tokens
+    if total_tokens < input_tokens + output_tokens:
+        # A contradictory provider value cannot become a smaller aggregate;
+        # retain independently reported input/output values without guessing.
+        total_tokens = input_tokens + output_tokens
+    if input_tokens == output_tokens == total_tokens == 0 and not any(
+        key in raw
+        for key in ("input_tokens", "output_tokens", "total_tokens", "prompt_tokens", "completion_tokens")
+    ):
+        return None
+    return _Usage(input_tokens, output_tokens, total_tokens)
+
+
+class UsageProjectionService:
+    """Derive calendar usage and latest context facts from immutable Events."""
+
+    def __init__(
+        self,
+        database: SQLiteDatabase | str,
+        *,
+        model_catalog: ManagedModelCatalog,
+        timezone_name: str = "Asia/Shanghai",
+        clock: Callable[[], datetime] = _utc_now,
+    ) -> None:
+        if not isinstance(timezone_name, str) or not timezone_name.strip():
+            raise ValueError("usage timezone is required")
+        try:
+            zone = ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError:
+            raise ValueError("usage timezone is invalid") from None
+        self.database = (
+            database if isinstance(database, SQLiteDatabase) else SQLiteDatabase(database)
+        )
+        self.model_catalog = model_catalog
+        self.timezone_name = timezone_name
+        self._zone = zone
+        self._clock = clock
+
+    def project(self, thread_id: str) -> ConversationUsageProjection:
+        if not isinstance(thread_id, str) or not thread_id:
+            raise ValueError("usage projection thread identity is invalid")
+        now = self._clock()
+        if now.tzinfo is None:
+            raise ValueError("usage projection clock must be timezone-aware")
+        now = now.astimezone(UTC)
+        local_now = now.astimezone(self._zone)
+        day_start_local = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_start_local = day_start_local - timedelta(days=day_start_local.weekday())
+        day_start = day_start_local.astimezone(UTC)
+        week_start = week_start_local.astimezone(UTC)
+
+        today = _Usage()
+        week = _Usage()
+        latest_context_usage: _Usage | None = None
+        latest_context_time: datetime | None = None
+
+        with self.database.reader() as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM threads WHERE thread_id = ?", (thread_id,)
+            ).fetchone()
+            if exists is None:
+                raise KeyError("usage projection thread does not exist")
+            rows = connection.execute(
+                "SELECT thread_id, created_at, payload_json FROM events "
+                "WHERE event_type = 'model.response_completed' AND created_at >= ? "
+                "ORDER BY created_at ASC, event_id ASC",
+                (_storage_time(week_start),),
+            ).fetchall()
+            context_row = connection.execute(
+                "SELECT events.created_at, events.payload_json, turns.agent_model_id "
+                "FROM events JOIN turns ON turns.turn_id = events.turn_id "
+                "WHERE events.thread_id = ? AND events.event_type = 'model.response_completed' "
+                "ORDER BY events.seq DESC LIMIT 1",
+                (thread_id,),
+            ).fetchone()
+            if context_row is None:
+                latest_turn = connection.execute(
+                    "SELECT agent_model_id FROM turns WHERE thread_id = ? "
+                    "ORDER BY created_at DESC, turn_id DESC LIMIT 1",
+                    (thread_id,),
+                ).fetchone()
+                context_model_id = (
+                    str(latest_turn["agent_model_id"]) if latest_turn is not None else None
+                )
+            else:
+                context_model_id = str(context_row["agent_model_id"])
+
+        for row in rows:
+            created_at = _parse_time(row["created_at"])
+            if created_at is None:
+                continue
+            try:
+                payload = json.loads(str(row["payload_json"]))
+            except (TypeError, ValueError):
+                continue
+            usage = _usage_from_payload(payload.get("usage") if isinstance(payload, Mapping) else None)
+            if usage is None:
+                continue
+            week = week.add(usage)
+            if created_at >= day_start:
+                today = today.add(usage)
+
+        if context_row is not None:
+            try:
+                payload = json.loads(str(context_row["payload_json"]))
+            except (TypeError, ValueError):
+                payload = None
+            latest_context_usage = _usage_from_payload(
+                payload.get("usage") if isinstance(payload, Mapping) else None
+            )
+            latest_context_time = _parse_time(context_row["created_at"])
+
+        window_tokens: int | None = None
+        if context_model_id:
+            try:
+                policy = self.model_catalog.get(context_model_id).model_policy
+            except UnknownModelError:
+                policy = None
+            if policy is not None:
+                window_tokens = policy.compact_threshold_tokens
+        return ConversationUsageProjection(
+            thread_id=thread_id,
+            timezone=self.timezone_name,
+            today=today.projection(),
+            week=week.projection(),
+            context=ContextUsageProjection(
+                used_tokens=(
+                    None if latest_context_usage is None else latest_context_usage.input_tokens
+                ),
+                window_tokens=window_tokens,
+                model_id=context_model_id,
+                measured_at=latest_context_time,
+            ),
+            calculated_at=now,
+        )
+
+
+__all__ = ["UsageProjectionService"]

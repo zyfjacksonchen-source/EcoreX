@@ -1,0 +1,722 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from fastapi.testclient import TestClient
+from starlette.requests import Request
+
+from ecorex.gateway import (
+    GatewayEvent,
+    GatewayEventType,
+    GatewayPrincipal,
+    GatewayQuotaExceeded,
+    GatewayRequestActive,
+    GatewayRequestConflict,
+    GatewaySchemaError,
+    GatewaySchemaManager,
+    GatewayStoreError,
+    ModelGatewayRequest,
+    SQLiteGatewayStore as _SQLiteGatewayStore,
+    create_managed_gateway_app,
+)
+
+
+TOKEN = "managed-session-" + "x" * 32
+
+
+def SQLiteGatewayStore(path):
+    """Test deployment boundary: migrate explicitly before process startup."""
+
+    GatewaySchemaManager(path).migrate()
+    return _SQLiteGatewayStore(path)
+
+
+class Authenticator:
+    def __init__(self, *, limit: int = 10) -> None:
+        self.limit = limit
+
+    def authenticate(self, bearer_token: str) -> GatewayPrincipal:
+        if bearer_token != TOKEN:
+            raise PermissionError("bad secret " + bearer_token)
+        return GatewayPrincipal(
+            subject="user-1",
+            account_id="account-1",
+            allowed_model_ids=frozenset({"ecorex-chat"}),
+            quota_period="2026-07",
+            request_limit=self.limit,
+        )
+
+
+class Provider:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.requests: list[ModelGatewayRequest] = []
+        self.secret = "PROVIDER-SECRET-MUST-STAY-CLOUD"
+        self.fail = False
+        self.gap = False
+        self.report_failure = False
+
+    async def stream(self, request, principal):
+        self.calls += 1
+        self.requests.append(request)
+        assert principal.account_id == "account-1"
+        assert "api_key" not in request.model_dump(mode="json")
+        if self.fail:
+            raise RuntimeError(self.secret)
+        if self.report_failure:
+            yield GatewayEvent(
+                seq=1,
+                event_type=GatewayEventType.RESPONSE_FAILED,
+                response_id="response-failed",
+                error_code="provider_secret_" + self.secret,
+                error_message="upstream rejected key " + self.secret,
+                retryable=False,
+            )
+            return
+        first_seq = 2 if self.gap else 1
+        yield GatewayEvent(
+            seq=first_seq,
+            event_type=GatewayEventType.OUTPUT_TEXT_DELTA,
+            response_id="response-1",
+            delta="你好",
+        )
+        yield GatewayEvent(
+            seq=first_seq + 1,
+            event_type=GatewayEventType.RESPONSE_COMPLETED,
+            response_id="response-1",
+            usage={"input_tokens": 2, "output_tokens": 1},
+        )
+
+
+def request(request_id: str = "request-1", text: str = "hello") -> dict:
+    return ModelGatewayRequest(
+        request_id=request_id,
+        thread_id="thread-1",
+        turn_id="turn-1",
+        trace_id="trace-1",
+        model_id="ecorex-chat",
+        input=text,
+        config_snapshot_id="config-1",
+        capability_snapshot_id="capability-1",
+        permission_snapshot_id="permission-1",
+    ).model_dump(mode="json")
+
+
+def headers(token: str = TOKEN) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {token}",
+        "X-EcoreX-Protocol": "1",
+    }
+
+
+def events(response) -> list[dict]:
+    return [json.loads(line) for line in response.text.splitlines() if line]
+
+
+def test_cloud_gateway_auth_allowlist_persists_before_stream_and_replays(tmp_path) -> None:
+    provider = Provider()
+    store = SQLiteGatewayStore(tmp_path / "gateway.db")
+    app = create_managed_gateway_app(
+        store,
+        authenticator=Authenticator(),
+        provider=provider,
+        allowed_model_ids=frozenset({"ecorex-chat", "ecorex-image"}),
+    )
+    client = TestClient(app)
+
+    assert client.get("/api/v1/models").status_code == 401
+    assert client.get("/api/v1/models", headers=headers()).json() == {
+        "schema_version": 1,
+        "models": ["ecorex-chat"],
+    }
+    first = client.post("/api/v1/model/stream", headers=headers(), json=request())
+    replay = client.post("/api/v1/model/stream", headers=headers(), json=request())
+    assert first.status_code == replay.status_code == 200
+    assert events(first) == events(replay)
+    assert replay.headers["x-ecorex-replay"] == "true"
+    assert provider.calls == 1
+    assert [item.seq for item in store.events("request-1")] == [1, 2]
+
+    with sqlite3.connect(tmp_path / "gateway.db") as connection:
+        assert connection.execute(
+            "SELECT status FROM gateway_requests WHERE request_id='request-1'"
+        ).fetchone()[0] == "completed"
+
+
+def test_gateway_request_identity_quota_and_model_policy_fail_closed(tmp_path) -> None:
+    provider = Provider()
+    app = create_managed_gateway_app(
+        SQLiteGatewayStore(tmp_path / "gateway.db"),
+        authenticator=Authenticator(limit=1),
+        provider=provider,
+        allowed_model_ids=frozenset({"ecorex-chat", "ecorex-image"}),
+    )
+    client = TestClient(app)
+    assert client.post(
+        "/api/v1/model/stream", headers=headers(), json=request()
+    ).status_code == 200
+    conflict = client.post(
+        "/api/v1/model/stream", headers=headers(), json=request(text="different")
+    )
+    assert conflict.status_code == 409
+    exhausted = client.post(
+        "/api/v1/model/stream", headers=headers(), json=request("request-2")
+    )
+    assert exhausted.status_code == 429
+
+    blocked = request("request-3")
+    blocked["model_id"] = "ecorex-image"
+    assert client.post(
+        "/api/v1/model/stream", headers=headers(), json=blocked
+    ).status_code == 403
+    assert provider.calls == 1
+
+
+def test_gateway_request_digest_covers_typed_input_items(tmp_path) -> None:
+    provider = Provider()
+    app = create_managed_gateway_app(
+        SQLiteGatewayStore(tmp_path / "gateway.db"),
+        authenticator=Authenticator(),
+        provider=provider,
+        allowed_model_ids=frozenset({"ecorex-chat"}),
+    )
+    client = TestClient(app)
+    first = request("typed-input")
+    first.pop("input")
+    first["input_items"] = [
+        {
+            "type": "user_message",
+            "message_id": "message-1",
+            "content": "第一版指令",
+        }
+    ]
+    changed = json.loads(json.dumps(first))
+    changed["input_items"][0]["content"] = "被篡改的指令"
+
+    accepted = client.post(
+        "/api/v1/model/stream", headers=headers(), json=first
+    )
+    conflict = client.post(
+        "/api/v1/model/stream", headers=headers(), json=changed
+    )
+
+    assert accepted.status_code == 200
+    assert conflict.status_code == 409
+    assert provider.calls == 1
+    assert provider.requests[0].input_items is not None
+    assert provider.requests[0].input_items[0].message_id == "message-1"
+
+
+def test_provider_failure_and_protocol_gap_are_redacted_terminal_facts(tmp_path) -> None:
+    provider = Provider()
+    provider.fail = True
+    store = SQLiteGatewayStore(tmp_path / "gateway.db")
+    app = create_managed_gateway_app(
+        store,
+        authenticator=Authenticator(),
+        provider=provider,
+        allowed_model_ids=frozenset({"ecorex-chat"}),
+    )
+    client = TestClient(app)
+
+    failed = client.post(
+        "/api/v1/model/stream", headers=headers(), json=request("failed")
+    )
+    assert failed.status_code == 200
+    payload = events(failed)
+    assert payload[-1]["event_type"] == "response.failed"
+    assert payload[-1]["retryable"] is True
+    assert provider.secret not in failed.text
+
+    provider.fail = False
+    provider.report_failure = True
+    reported = client.post(
+        "/api/v1/model/stream", headers=headers(), json=request("reported-failure")
+    )
+    assert reported.status_code == 200
+    reported_events = events(reported)
+    assert reported_events == [
+        {
+            "schema_version": 1,
+            "seq": 1,
+            "event_type": "response.failed",
+            "response_id": "response-failed",
+            "delta": None,
+            "reasoning_id": None,
+            "tool_call_id": None,
+            "tool_name": None,
+            "arguments": None,
+            "idempotency_key": None,
+            "error_code": "provider_response_failed",
+            "error_message": "The managed model provider rejected the request.",
+            "retryable": False,
+            "usage": None,
+        }
+    ]
+    assert provider.secret not in reported.text
+
+    provider.report_failure = False
+    provider.gap = True
+    gap = client.post(
+        "/api/v1/model/stream", headers=headers(), json=request("gap")
+    )
+    assert gap.status_code == 200
+    gap_events = events(gap)
+    assert [item["seq"] for item in gap_events] == [1]
+    assert gap_events[0]["event_type"] == "response.failed"
+    assert provider.secret not in gap.text
+
+
+def test_gateway_rejects_oversized_declared_body_without_auth_leak(tmp_path) -> None:
+    app = create_managed_gateway_app(
+        SQLiteGatewayStore(tmp_path / "gateway.db"),
+        authenticator=Authenticator(),
+        provider=Provider(),
+        allowed_model_ids=frozenset({"ecorex-chat"}),
+    )
+    response = TestClient(app).post(
+        "/api/v1/model/stream",
+        headers={**headers(), "Content-Length": str(5 * 1024 * 1024)},
+        content=b"{}",
+    )
+    assert response.status_code == 413
+    assert TOKEN not in response.text
+
+
+def test_gateway_rejects_chunked_oversized_body_and_requires_protocol(tmp_path) -> None:
+    provider = Provider()
+    app = create_managed_gateway_app(
+        SQLiteGatewayStore(tmp_path / "gateway.db"),
+        authenticator=Authenticator(),
+        provider=provider,
+        allowed_model_ids=frozenset({"ecorex-chat"}),
+    )
+    client = TestClient(app)
+
+    def chunks():
+        block = b"x" * (1024 * 1024)
+        for _ in range(5):
+            yield block
+
+    oversized = client.post(
+        "/api/v1/model/stream",
+        headers={**headers(), "Content-Type": "application/json"},
+        content=chunks(),
+    )
+    assert oversized.status_code == 413
+    assert provider.calls == 0
+
+    missing_protocol = client.post(
+        "/api/v1/model/stream",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json=request("missing-protocol"),
+    )
+    assert missing_protocol.status_code == 400
+    wrong_type = client.post(
+        "/api/v1/model/stream",
+        headers={**headers(), "Content-Type": "text/plain"},
+        content=json.dumps(request("wrong-type")),
+    )
+    assert wrong_type.status_code == 415
+    assert provider.calls == 0
+
+
+def test_gateway_rejects_deep_request_resources_before_provider(tmp_path) -> None:
+    provider = Provider()
+    app = create_managed_gateway_app(
+        SQLiteGatewayStore(tmp_path / "gateway.db"),
+        authenticator=Authenticator(),
+        provider=provider,
+        allowed_model_ids=frozenset({"ecorex-chat"}),
+    )
+    payload = request("deep-request")
+    nested: dict[str, object] = {}
+    cursor = nested
+    for _ in range(24):
+        child: dict[str, object] = {}
+        cursor["child"] = child
+        cursor = child
+    payload["direct_tools"] = [nested]
+    response = TestClient(app).post(
+        "/api/v1/model/stream", headers=headers(), json=payload
+    )
+    assert response.status_code == 422
+
+    invalid_unicode = request("invalid-unicode")
+    invalid_unicode["input"] = "\ud800"
+    response = TestClient(app).post(
+        "/api/v1/model/stream",
+        headers={**headers(), "Content-Type": "application/json"},
+        content=json.dumps(invalid_unicode),
+    )
+    assert response.status_code == 422
+
+    duplicate_outputs = request("duplicate-outputs")
+    duplicate_outputs["previous_response_id"] = "response-before-tools"
+    duplicate_outputs["tool_outputs"] = [
+        {"tool_call_id": "call-1", "output": {"ok": True}},
+        {"tool_call_id": "call-1", "output": {"ok": True}},
+    ]
+    response = TestClient(app).post(
+        "/api/v1/model/stream", headers=headers(), json=duplicate_outputs
+    )
+    assert response.status_code == 422
+    assert provider.calls == 0
+
+
+def test_authenticator_failures_are_redacted(tmp_path) -> None:
+    secret = "AUTH-BACKEND-SECRET"
+
+    class BrokenAuthenticator:
+        def authenticate(self, bearer_token):
+            del bearer_token
+            raise RuntimeError(secret)
+
+    app = create_managed_gateway_app(
+        SQLiteGatewayStore(tmp_path / "gateway.db"),
+        authenticator=BrokenAuthenticator(),
+        provider=Provider(),
+        allowed_model_ids=frozenset({"ecorex-chat"}),
+    )
+    response = TestClient(app).get("/api/v1/models", headers=headers())
+    assert response.status_code == 503
+    assert secret not in response.text
+
+
+def test_quota_admission_is_atomic_under_concurrency(tmp_path) -> None:
+    store = SQLiteGatewayStore(tmp_path / "gateway.db")
+    principal = Authenticator(limit=1).authenticate(TOKEN)
+    barrier = threading.Barrier(2)
+
+    def reserve(request_id: str) -> str:
+        body = ModelGatewayRequest.model_validate(request(request_id))
+        barrier.wait(timeout=5)
+        try:
+            return store.reserve(
+                body, principal, lease_seconds=30
+            ).mode
+        except GatewayQuotaExceeded:
+            return "quota"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(reserve, ["concurrent-1", "concurrent-2"]))
+    assert sorted(outcomes) == ["execute", "quota"]
+
+
+def test_concurrent_request_limit_releases_after_terminal_or_lease_expiry(tmp_path) -> None:
+    store = SQLiteGatewayStore(tmp_path / "gateway.db")
+    principal = GatewayPrincipal(
+        subject="user-1",
+        account_id="account-1",
+        allowed_model_ids=frozenset({"ecorex-chat"}),
+        quota_period="2026-07",
+        request_limit=10,
+        concurrent_request_limit=1,
+    )
+    first = ModelGatewayRequest.model_validate(request("active-1"))
+    second = ModelGatewayRequest.model_validate(request("active-2"))
+    reservation = store.reserve(first, principal, lease_seconds=30)
+    assert reservation.lease_token
+    with pytest.raises(GatewayQuotaExceeded, match="concurrent"):
+        store.reserve(second, principal, lease_seconds=30)
+    store.append_terminal(
+        first.request_id,
+        reservation.lease_token,
+        GatewayEvent(
+            seq=1,
+            event_type=GatewayEventType.RESPONSE_COMPLETED,
+            response_id="response-active-1",
+        ),
+    )
+    assert store.reserve(second, principal, lease_seconds=30).mode == "execute"
+
+    expired_store = SQLiteGatewayStore(tmp_path / "expired-gateway.db")
+    now = datetime.now(timezone.utc)
+    expired_store.reserve(
+        ModelGatewayRequest.model_validate(request("expired-slot")),
+        principal,
+        lease_seconds=30,
+        now=now - timedelta(seconds=31),
+    )
+    assert expired_store.reserve(
+        ModelGatewayRequest.model_validate(request("after-expired-slot")),
+        principal,
+        lease_seconds=30,
+        now=now,
+    ).mode == "execute"
+
+
+def test_request_id_cannot_replay_events_across_accounts(tmp_path) -> None:
+    store = SQLiteGatewayStore(tmp_path / "gateway.db")
+    first = Authenticator().authenticate(TOKEN)
+    second = GatewayPrincipal(
+        subject="user-2",
+        account_id="account-2",
+        allowed_model_ids=frozenset({"ecorex-chat"}),
+        quota_period="2026-07",
+        request_limit=10,
+    )
+    body = ModelGatewayRequest.model_validate(request("shared-id"))
+    reservation = store.reserve(body, first, lease_seconds=30)
+    assert reservation.lease_token
+    store.append_terminal(
+        body.request_id,
+        reservation.lease_token,
+        GatewayEvent(
+            seq=1,
+            event_type=GatewayEventType.RESPONSE_COMPLETED,
+            response_id="response-shared",
+        ),
+    )
+    with pytest.raises(GatewayRequestConflict):
+        store.reserve(body, second, lease_seconds=30)
+
+
+def test_terminal_append_rolls_back_as_one_transaction(tmp_path, monkeypatch) -> None:
+    store = SQLiteGatewayStore(tmp_path / "gateway.db")
+    principal = Authenticator().authenticate(TOKEN)
+    body = ModelGatewayRequest.model_validate(request("terminal-atomic"))
+    reservation = store.reserve(body, principal, lease_seconds=30)
+    assert reservation.lease_token
+    terminal = GatewayEvent(
+        seq=1,
+        event_type=GatewayEventType.RESPONSE_COMPLETED,
+        response_id="response-atomic",
+    )
+    original = store._complete_in_transaction
+
+    with pytest.raises(GatewayStoreError, match="append_terminal"):
+        store.append(body.request_id, reservation.lease_token, terminal)
+    assert store.events(body.request_id) == ()
+
+    def fail_completion(*args, **kwargs):
+        del args, kwargs
+        raise GatewayStoreError("injected completion failure")
+
+    monkeypatch.setattr(store, "_complete_in_transaction", fail_completion)
+    with pytest.raises(GatewayStoreError, match="injected"):
+        store.append_terminal(body.request_id, reservation.lease_token, terminal)
+    assert store.events(body.request_id) == ()
+
+    monkeypatch.setattr(store, "_complete_in_transaction", original)
+    store.append_terminal(body.request_id, reservation.lease_token, terminal)
+    assert store.events(body.request_id) == (terminal,)
+
+
+def test_expired_active_request_converges_without_reinvoking_provider(tmp_path) -> None:
+    store = SQLiteGatewayStore(tmp_path / "gateway.db")
+    principal = Authenticator().authenticate(TOKEN)
+    body = ModelGatewayRequest.model_validate(request("uncertain"))
+    start = datetime.now(timezone.utc)
+    reservation = store.reserve(body, principal, lease_seconds=30, now=start)
+    assert reservation.lease_token
+    store.append(
+        body.request_id,
+        reservation.lease_token,
+        GatewayEvent(
+            seq=1,
+            event_type=GatewayEventType.OUTPUT_TEXT_DELTA,
+            response_id="response-uncertain",
+            delta="partial",
+        ),
+    )
+    with pytest.raises(GatewayRequestActive):
+        store.reserve(
+            body,
+            principal,
+            lease_seconds=30,
+            now=start + timedelta(seconds=1),
+        )
+    recovered = store.reserve(
+        body,
+        principal,
+        lease_seconds=30,
+        now=start + timedelta(seconds=31),
+    )
+    assert recovered.mode == "replay"
+    assert [event.event_type for event in recovered.events] == [
+        GatewayEventType.OUTPUT_TEXT_DELTA,
+        GatewayEventType.RESPONSE_FAILED,
+    ]
+    assert recovered.events[-1].error_code == "gateway_execution_uncertain"
+    with pytest.raises(GatewayRequestConflict):
+        store.append(
+            body.request_id,
+            reservation.lease_token,
+            GatewayEvent(
+                seq=3,
+                event_type=GatewayEventType.OUTPUT_TEXT_DELTA,
+                response_id="response-uncertain",
+                delta="stale owner",
+            ),
+        )
+
+    longest_id = "r" * 256
+    long_body = ModelGatewayRequest.model_validate(request(longest_id))
+    store.reserve(long_body, principal, lease_seconds=30, now=start)
+    long_recovery = store.reserve(
+        long_body,
+        principal,
+        lease_seconds=30,
+        now=start + timedelta(seconds=31),
+    )
+    assert long_recovery.events[-1].event_type is GatewayEventType.RESPONSE_FAILED
+    assert len(long_recovery.events[-1].response_id) <= 256
+
+
+def test_gateway_event_ledger_is_append_only_and_detects_forced_tamper(tmp_path) -> None:
+    provider = Provider()
+    database = tmp_path / "gateway.db"
+    store = SQLiteGatewayStore(database)
+    app = create_managed_gateway_app(
+        store,
+        authenticator=Authenticator(),
+        provider=provider,
+        allowed_model_ids=frozenset({"ecorex-chat"}),
+    )
+    assert TestClient(app).post(
+        "/api/v1/model/stream", headers=headers(), json=request("tamper")
+    ).status_code == 200
+    with sqlite3.connect(database) as connection:
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            connection.execute(
+                "UPDATE gateway_events SET payload_json='{}' "
+                "WHERE request_id='tamper' AND seq=1"
+            )
+        connection.execute("DROP TRIGGER gateway_events_no_update")
+        connection.execute(
+            "UPDATE gateway_events SET payload_json='{}' "
+            "WHERE request_id='tamper' AND seq=1"
+        )
+    with pytest.raises(GatewayStoreError, match="integrity"):
+        store.events("tamper")
+
+
+def test_event_chain_detects_payload_hash_rewrite(tmp_path) -> None:
+    database = tmp_path / "gateway.db"
+    store = SQLiteGatewayStore(database)
+    app = create_managed_gateway_app(
+        store,
+        authenticator=Authenticator(),
+        provider=Provider(),
+        allowed_model_ids=frozenset({"ecorex-chat"}),
+    )
+    assert TestClient(app).post(
+        "/api/v1/model/stream", headers=headers(), json=request("chain-tamper")
+    ).status_code == 200
+    replacement = json.dumps(
+        {
+            "schema_version": 1,
+            "seq": 1,
+            "event_type": "output_text.delta",
+            "response_id": "response-1",
+            "delta": "篡改",
+            "tool_call_id": None,
+            "tool_name": None,
+            "arguments": None,
+            "idempotency_key": None,
+            "error_code": None,
+            "error_message": None,
+            "retryable": False,
+            "usage": None,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    import hashlib
+
+    with sqlite3.connect(database) as connection:
+        connection.execute("DROP TRIGGER gateway_events_no_update")
+        connection.execute(
+            "UPDATE gateway_events SET payload_json=?,payload_sha256=? "
+            "WHERE request_id='chain-tamper' AND seq=1",
+            (replacement, hashlib.sha256(replacement.encode("utf-8")).hexdigest()),
+        )
+    with pytest.raises(GatewayStoreError, match="integrity"):
+        store.events("chain-tamper")
+
+
+def test_stream_disconnect_closes_provider_and_persists_cancelled_terminal(tmp_path) -> None:
+    secret = "PROVIDER-FINALIZER-SECRET"
+
+    class CancellableProvider:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def stream(self, body, principal):
+            del body, principal
+            try:
+                yield GatewayEvent(
+                    seq=1,
+                    event_type=GatewayEventType.OUTPUT_TEXT_DELTA,
+                    response_id="response-cancel",
+                    delta="partial",
+                )
+                await asyncio.Event().wait()
+            finally:
+                self.closed = True
+                raise RuntimeError(secret)
+
+    provider = CancellableProvider()
+    store = SQLiteGatewayStore(tmp_path / "gateway.db")
+    authenticator = Authenticator()
+    principal = authenticator.authenticate(TOKEN)
+    app = create_managed_gateway_app(
+        store,
+        authenticator=authenticator,
+        provider=provider,
+        allowed_model_ids=frozenset({"ecorex-chat"}),
+    )
+    endpoint = next(
+        route.endpoint
+        for route in app.routes
+        if getattr(route, "path", None) == "/api/v1/model/stream"
+    )
+    encoded = json.dumps(request("disconnect")).encode("utf-8")
+
+    async def scenario():
+        delivered = False
+
+        async def receive():
+            nonlocal delivered
+            if delivered:
+                return {"type": "http.disconnect"}
+            delivered = True
+            return {"type": "http.request", "body": encoded, "more_body": False}
+
+        incoming = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/api/v1/model/stream",
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"x-ecorex-protocol", b"1"),
+                ],
+            },
+            receive,
+        )
+        response = await endpoint(incoming, principal)
+        first = await anext(response.body_iterator)
+        assert b"partial" in first
+        await response.body_iterator.aclose()
+
+    asyncio.run(scenario())
+    assert provider.closed is True
+    persisted = store.events("disconnect")
+    assert [event.event_type for event in persisted] == [
+        GatewayEventType.OUTPUT_TEXT_DELTA,
+        GatewayEventType.RESPONSE_FAILED,
+    ]
+    assert persisted[-1].error_code == "gateway_cancelled"
+    assert secret not in json.dumps(
+        [event.model_dump(mode="json") for event in persisted]
+    )

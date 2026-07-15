@@ -1,0 +1,84 @@
+{
+  "schema": "ecorex.v0.2.7.baseline.v1",
+  "generatedAt": "2026-07-02T00:00:00+08:00",
+  "sourceSafety": {
+    "publicArtifactContainsSecrets": false,
+    "publicArtifactContainsRawApiBase": false,
+    "publicArtifactContainsRawLocalPaths": false,
+    "diagnosticPolicy": "hash-count-category-only"
+  },
+  "repo": {
+    "branch": "codex/ecorex-v0.2.0",
+    "head": "ebe2ee0f",
+    "dirtyWorktree": true
+  },
+  "versions": {
+    "cli": "0.2.6",
+    "pyproject": "0.2.6",
+    "desktopPackage": "0.2.5",
+    "target": "0.2.7"
+  },
+  "rootCauseSummary": {
+    "customGemini": "Chat capability routing allowed model-name catalog inference to override an explicit custom provider, sending some gemini aliases toward the official Gemini route.",
+    "modelSwitchContextLoss": "Model switching reset the whole Bridge singleton, clearing AgentBridge session agents and their in-memory messages.",
+    "artifactContextLoss": "ConversationStore restored user attachment references for model context but did not restore assistant artifact references after process-level rebuild.",
+    "dividerUi": "Model switch notices had a divider kind but still rendered through the generic message article path."
+  },
+  "baselineCapabilities": {
+    "browserCdpEndpointDefault": "localhost-cdp",
+    "browserCdpAutoLaunchDefault": true,
+    "browserCdpFallbackDefault": true,
+    "browserPersistentDefault": true,
+    "mcpAutoStartDefault": false,
+    "visionRuntimePackDeclared": true,
+    "ocrRuntimePackDeclared": true,
+    "rapidOcrDeclared": true,
+    "pillowDeclared": true,
+    "playwrightDeclared": true
+  },
+  "sliceStatus": {
+    "S0Baseline": "review_passed",
+    "S1CustomGemini": "review_passed",
+    "S2ModelSwitchContext": "review_passed",
+    "S3SwitchDividerUi": "review_passed",
+    "S4CdpOpenBox": "pending",
+    "S5VisionOcrOpenBox": "pending",
+    "S6TongxinSourcePath": "pending",
+    "S7TongxinMpiAccuracy": "pending",
+    "S8LocalPackageGate": "pending",
+    "S9ServerRealReleaseTest": "pending",
+    "S10FinalGate": "pending"
+  },
+  "reviewGate": {
+    "requiredRoles": [
+      "runtime-config",
+      "frontend-api",
+      "toolchain-cdp-ocr-tongxin",
+      "qa-release",
+      "privacy-data"
+    ],
+    "currentStatus": "S0-S3_passed",
+    "blockingRule": "Every slice requires all roles to explicitly PASS.",
+    "lastPassedSlices": [
+      "S0Baseline",
+      "S1CustomGemini",
+      "S2ModelSwitchContext",
+      "S3SwitchDividerUi"
+    ],
+    "lastReview": {
+      "status": "PASS",
+      "rolePassCount": 5,
+      "roles": [
+        "runtime-config",
+        "frontend-api",
+        "toolchain-cdp-ocr-tongxin",
+        "qa-release",
+        "privacy-data"
+      ],
+      "localVerification": {
+        "focusedPytest": "61 passed, 3 warnings",
+        "pythonCompile": "passed"
+      }
+    }
+  }
+}

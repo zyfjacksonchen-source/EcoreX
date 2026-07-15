@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "document_type": "ecorex.local-live-provider-and-browser-diagnostic",
+  "status": "passed_with_protected_release_gates_unresolved",
+  "generated_at": "2026-07-14T09:30:43.1126576+08:00",
+  "source": {
+    "branch": "codex/ecorex-v0.3.0-hardening",
+    "commit": "a11dbd884054130ecec145c0a2625ec4eb2c4cca",
+    "version": "1.0.0"
+  },
+  "credential_boundary": {
+    "source": "existing-local-administrator-policy",
+    "credential_present": true,
+    "credential_value_recorded": false,
+    "provider_origin_recorded": false,
+    "response_content_recorded": false,
+    "managed_device_session_used": false
+  },
+  "chat_model": {
+    "local_model_id": "ecorex-chat",
+    "upstream_model_id": "gpt-5.6-sol",
+    "reasoning_effort": "medium",
+    "compact_threshold_tokens": 272000,
+    "catalog_http_status": 200,
+    "catalog_contains_model": true,
+    "catalog_duration_milliseconds": 971,
+    "responses_http_status": 200,
+    "responses_terminal": true,
+    "responses_duration_milliseconds": 2839
+  },
+  "image_model": {
+    "canonical_model_id": "gpt-image-2",
+    "single_flight": {
+      "http_status": 200,
+      "duration_milliseconds": 48284,
+      "mime_type": "image/png",
+      "size_bytes": 1962951,
+      "sha256": "434589866e9d612a66398fbaf8b881ef8bdb45da644819f999fe257174112217"
+    },
+    "bounded_concurrency": {
+      "requested": 4,
+      "completed": 4,
+      "unique_artifacts": 4,
+      "server_errors": 0,
+      "automatic_retries": 0,
+      "worker_limit": 4,
+      "total_duration_milliseconds": 47881,
+      "artifacts": [
+        {
+          "duration_milliseconds": 22818,
+          "size_bytes": 1784986,
+          "sha256": "b25384f29afc900a4ea888035817a3c4bf3b18d0488394565783cc5e3f855150"
+        },
+        {
+          "duration_milliseconds": 47866,
+          "size_bytes": 1648678,
+          "sha256": "616ffc8b480cf005575dfba0dd5984f9ae18d5bb604dceeb81916a4ce2ed69c4"
+        },
+        {
+          "duration_milliseconds": 43384,
+          "size_bytes": 2020880,
+          "sha256": "93f3ef129a683ec3dcf90aaaace84d02cfbc21f8af649fa286aa2bbd6e001a19"
+        },
+        {
+          "duration_milliseconds": 45918,
+          "size_bytes": 2394160,
+          "sha256": "b94e040b78a06b4599c225faaa023dcb7ab56577cf4163899039ae1e8777d07b"
+        }
+      ]
+    },
+    "structured_retouch": {
+      "http_status": 200,
+      "duration_milliseconds": 55424,
+      "annotation_kind": "rectangle",
+      "normalized_geometry": [
+        0.0,
+        0.5,
+        0.2298,
+        0.9092
+      ],
+      "base_revision_sha256": "434589866e9d612a66398fbaf8b881ef8bdb45da644819f999fe257174112217",
+      "mask_sha256": "00db27083342c618a36e93b741b198a6f4cfe6dfee6e3f74d401535ec61ee141",
+      "result_revision_sha256": "21a326bbcbb2b0687ae1491aef7f96dd0ebe56f2af3c73106da13597c3431118",
+      "result_size_bytes": 1945772,
+      "target_change_score": 0.182087,
+      "unchanged_region_similarity": 0.991565,
+      "visual_inspection": "passed"
+    }
+  },
+  "browser": {
+    "surface": "Codex in-app browser",
+    "origin": "loopback-only-runtime-fixture",
+    "viewport": "1440x900",
+    "checks": {
+      "model_before_first_message": true,
+      "independent_image_model_selector": true,
+      "normal_composer_viewport_bottom_delta_pixels": 0.000030517578125,
+      "reasoning_first_atom_visible_until_replacement": true,
+      "reasoning_replacement_visible_until_terminal": true,
+      "image_preview_initial_object_fit": "contain",
+      "image_preview_initial_transform": "none",
+      "structured_retouch_result_inline": true,
+      "structured_retouch_exact_instruction_presented": true,
+      "output_location_changed_to_downloads": true,
+      "memory_reset_count_before": 2,
+      "memory_reset_count_after": 0,
+      "memory_undo_available": true,
+      "full_access_persistently_visible": true,
+      "full_access_revoke_available": true,
+      "unified_extension_catalog_visible": true,
+      "formal_feishu_connector_visible": true,
+      "formal_tencent_docs_connector_visible": true,
+      "thread_id_continuation": true
+    },
+    "public_share": {
+      "renderer": "real-control-plane-share-renderer-loopback-fixture",
+      "role_order": [
+        "user",
+        "assistant"
+      ],
+      "role_labels": [
+        "你的指令",
+        "EcoreX"
+      ],
+      "image_complete": true,
+      "natural_size": [
+        1800,
+        1100
+      ],
+      "object_fit": "contain",
+      "horizontal_overflow_pixels": 0,
+      "script_count": 0
+    },
+    "console_warnings_or_errors": 0
+  },
+  "release_boundary": {
+    "official_live_acceptance_receipt": false,
+    "protected_candidate_bound": false,
+    "managed_gateway_session_used": false,
+    "github_repository_ready": false,
+    "github_repository_blocking_findings": 17,
+    "publication_attempted": false,
+    "rollout_attempted": false,
+    "reason": "Direct upstream recovery and loopback browser interaction are diagnostics only. They do not replace the protected device-flow session, immutable Candidate, isolated runner, managed Gateway, signed live-acceptance receipt or publication readback."
+  }
+}

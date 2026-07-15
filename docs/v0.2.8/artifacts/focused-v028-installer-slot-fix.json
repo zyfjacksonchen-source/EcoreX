@@ -1,0 +1,1844 @@
+{
+  "status": "PASS",
+  "version": "0.2.8",
+  "scope": "production-agent-product-focused-rerun",
+  "generatedAt": "2026-07-04T10:18:05.784031+00:00",
+  "durationSeconds": 1.38,
+  "budgetMode": "tiered",
+  "releaseBlocking": false,
+  "focusGroups": [
+    "auth-first-use",
+    "fresh-env",
+    "runtime-api",
+    "v028-runtime-observability-queue"
+  ],
+  "selectedGroups": [
+    "fresh-env",
+    "auth-first-use",
+    "runtime-api",
+    "v028-runtime-observability-queue"
+  ],
+  "expectedCheckCount": 89,
+  "checkCount": 89,
+  "passCount": 89,
+  "failCount": 0,
+  "skipCount": 0,
+  "hardGateFailures": [],
+  "checks": [
+    {
+      "index": 1,
+      "caseId": "v028-agent-fresh-env-001",
+      "group": "fresh-env",
+      "name": "current release directory exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 2,
+      "caseId": "v028-agent-fresh-env-002",
+      "group": "fresh-env",
+      "name": "runtime directory exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 3,
+      "caseId": "v028-agent-fresh-env-003",
+      "group": "fresh-env",
+      "name": "release version is v0.2.8",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "version": "0.2.8"
+      }
+    },
+    {
+      "index": 4,
+      "caseId": "v028-agent-fresh-env-004",
+      "group": "fresh-env",
+      "name": "service env file exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 5,
+      "caseId": "v028-agent-fresh-env-005",
+      "group": "fresh-env",
+      "name": "state config exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 6,
+      "caseId": "v028-agent-fresh-env-006",
+      "group": "fresh-env",
+      "name": "state directory exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 7,
+      "caseId": "v028-agent-fresh-env-007",
+      "group": "fresh-env",
+      "name": "workspace directory exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 8,
+      "caseId": "v028-agent-fresh-env-008",
+      "group": "fresh-env",
+      "name": "fresh envelope directory created",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "runHash": "4574B13CF4D24F22"
+      }
+    },
+    {
+      "index": 9,
+      "caseId": "v028-agent-fresh-env-009",
+      "group": "fresh-env",
+      "name": "fresh home starts without app state",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 10,
+      "caseId": "v028-agent-fresh-env-010",
+      "group": "fresh-env",
+      "name": "fresh state starts empty",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 11,
+      "caseId": "v028-agent-fresh-env-011",
+      "group": "fresh-env",
+      "name": "fresh workspace starts empty",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 12,
+      "caseId": "v028-agent-fresh-env-012",
+      "group": "fresh-env",
+      "name": "fresh browser profile starts empty",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 13,
+      "caseId": "v028-agent-fresh-env-013",
+      "group": "fresh-env",
+      "name": "runtime manifest exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 14,
+      "caseId": "v028-agent-fresh-env-014",
+      "group": "fresh-env",
+      "name": "capability state exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 15,
+      "caseId": "v028-agent-fresh-env-015",
+      "group": "fresh-env",
+      "name": "permission matrix exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 16,
+      "caseId": "v028-agent-fresh-env-016",
+      "group": "fresh-env",
+      "name": "bundled node exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 17,
+      "caseId": "v028-agent-fresh-env-017",
+      "group": "fresh-env",
+      "name": "runtime venv python exists",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 18,
+      "caseId": "v028-agent-fresh-env-018",
+      "group": "fresh-env",
+      "name": "systemd service active",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "fresh-user",
+        "runtime",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "state": "active"
+      }
+    },
+    {
+      "index": 19,
+      "caseId": "v028-agent-auth-first-use-001",
+      "group": "auth-first-use",
+      "name": "pre-login auth check returns 200",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 20,
+      "caseId": "v028-agent-auth-first-use-002",
+      "group": "auth-first-use",
+      "name": "pre-login auth is required",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 21,
+      "caseId": "v028-agent-auth-first-use-003",
+      "group": "auth-first-use",
+      "name": "pre-login is unauthenticated",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 22,
+      "caseId": "v028-agent-auth-first-use-004",
+      "group": "auth-first-use",
+      "name": "login returns 200",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 23,
+      "caseId": "v028-agent-auth-first-use-005",
+      "group": "auth-first-use",
+      "name": "login status success",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 24,
+      "caseId": "v028-agent-auth-first-use-006",
+      "group": "auth-first-use",
+      "name": "login session authenticated",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 25,
+      "caseId": "v028-agent-auth-first-use-007",
+      "group": "auth-first-use",
+      "name": "login is not local fallback",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 26,
+      "caseId": "v028-agent-auth-first-use-008",
+      "group": "auth-first-use",
+      "name": "login auth provider web-password",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 27,
+      "caseId": "v028-agent-auth-first-use-009",
+      "group": "auth-first-use",
+      "name": "login user is fresh smoke email",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 28,
+      "caseId": "v028-agent-auth-first-use-010",
+      "group": "auth-first-use",
+      "name": "login cookie persisted",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 29,
+      "caseId": "v028-agent-auth-first-use-011",
+      "group": "auth-first-use",
+      "name": "post-login auth is authenticated",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 30,
+      "caseId": "v028-agent-auth-first-use-012",
+      "group": "auth-first-use",
+      "name": "tool permission endpoint returns 200 before change",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 31,
+      "caseId": "v028-agent-auth-first-use-013",
+      "group": "auth-first-use",
+      "name": "set full-access returns 200",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 32,
+      "caseId": "v028-agent-auth-first-use-014",
+      "group": "auth-first-use",
+      "name": "full-access mode accepted",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 33,
+      "caseId": "v028-agent-auth-first-use-015",
+      "group": "auth-first-use",
+      "name": "permission audit path present",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 34,
+      "caseId": "v028-agent-auth-first-use-016",
+      "group": "auth-first-use",
+      "name": "sessions endpoint works for fresh user",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "auth",
+        "first-run"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 35,
+      "caseId": "v028-agent-runtime-api-001",
+      "group": "runtime-api",
+      "name": "/api/version returns 2xx",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 36,
+      "caseId": "v028-agent-runtime-api-002",
+      "group": "runtime-api",
+      "name": "/api/version responds under 5s",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 1
+      }
+    },
+    {
+      "index": 37,
+      "caseId": "v028-agent-runtime-api-003",
+      "group": "runtime-api",
+      "name": "/api/models returns 2xx",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 38,
+      "caseId": "v028-agent-runtime-api-004",
+      "group": "runtime-api",
+      "name": "/api/models responds under 5s",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 13
+      }
+    },
+    {
+      "index": 39,
+      "caseId": "v028-agent-runtime-api-005",
+      "group": "runtime-api",
+      "name": "/api/tools returns 2xx",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 40,
+      "caseId": "v028-agent-runtime-api-006",
+      "group": "runtime-api",
+      "name": "/api/tools responds under 5s",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 3
+      }
+    },
+    {
+      "index": 41,
+      "caseId": "v028-agent-runtime-api-007",
+      "group": "runtime-api",
+      "name": "/api/skills returns 2xx",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 42,
+      "caseId": "v028-agent-runtime-api-008",
+      "group": "runtime-api",
+      "name": "/api/skills responds under 5s",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 78
+      }
+    },
+    {
+      "index": 43,
+      "caseId": "v028-agent-runtime-api-009",
+      "group": "runtime-api",
+      "name": "/api/capabilities returns 2xx",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 44,
+      "caseId": "v028-agent-runtime-api-010",
+      "group": "runtime-api",
+      "name": "/api/capabilities responds under 5s",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 123
+      }
+    },
+    {
+      "index": 45,
+      "caseId": "v028-agent-runtime-api-011",
+      "group": "runtime-api",
+      "name": "/api/extensions returns 2xx",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 46,
+      "caseId": "v028-agent-runtime-api-012",
+      "group": "runtime-api",
+      "name": "/api/extensions responds under 5s",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 72
+      }
+    },
+    {
+      "index": 47,
+      "caseId": "v028-agent-runtime-api-013",
+      "group": "runtime-api",
+      "name": "/api/channels returns 2xx",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 48,
+      "caseId": "v028-agent-runtime-api-014",
+      "group": "runtime-api",
+      "name": "/api/channels responds under 5s",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 4
+      }
+    },
+    {
+      "index": 49,
+      "caseId": "v028-agent-runtime-api-015",
+      "group": "runtime-api",
+      "name": "/api/external-connections returns 2xx",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 50,
+      "caseId": "v028-agent-runtime-api-016",
+      "group": "runtime-api",
+      "name": "/api/external-connections responds under 5s",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 6
+      }
+    },
+    {
+      "index": 51,
+      "caseId": "v028-agent-runtime-api-017",
+      "group": "runtime-api",
+      "name": "/api/scheduler returns 2xx",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 52,
+      "caseId": "v028-agent-runtime-api-018",
+      "group": "runtime-api",
+      "name": "/api/scheduler responds under 5s",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 12
+      }
+    },
+    {
+      "index": 53,
+      "caseId": "v028-agent-runtime-api-019",
+      "group": "runtime-api",
+      "name": "/api/active-requests returns 2xx",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 54,
+      "caseId": "v028-agent-runtime-api-020",
+      "group": "runtime-api",
+      "name": "/api/active-requests responds under 5s",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 6
+      }
+    },
+    {
+      "index": 55,
+      "caseId": "v028-agent-runtime-api-021",
+      "group": "runtime-api",
+      "name": "/api/installations returns 2xx",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 56,
+      "caseId": "v028-agent-runtime-api-022",
+      "group": "runtime-api",
+      "name": "/api/installations responds under 5s",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 1
+      }
+    },
+    {
+      "index": 57,
+      "caseId": "v028-agent-runtime-api-023",
+      "group": "runtime-api",
+      "name": "/api/runtime-projection returns 2xx",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 58,
+      "caseId": "v028-agent-runtime-api-024",
+      "group": "runtime-api",
+      "name": "/api/runtime-projection responds under 5s",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 0
+      }
+    },
+    {
+      "index": 59,
+      "caseId": "v028-agent-runtime-api-025",
+      "group": "runtime-api",
+      "name": "/api/sessions returns 2xx",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 60,
+      "caseId": "v028-agent-runtime-api-026",
+      "group": "runtime-api",
+      "name": "/api/sessions responds under 5s",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 1
+      }
+    },
+    {
+      "index": 61,
+      "caseId": "v028-agent-runtime-api-027",
+      "group": "runtime-api",
+      "name": "/api/tool-permissions returns 2xx",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 62,
+      "caseId": "v028-agent-runtime-api-028",
+      "group": "runtime-api",
+      "name": "/api/tool-permissions responds under 5s",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 0
+      }
+    },
+    {
+      "index": 63,
+      "caseId": "v028-agent-runtime-api-029",
+      "group": "runtime-api",
+      "name": "/api/update-check returns 2xx",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "index": 64,
+      "caseId": "v028-agent-runtime-api-030",
+      "group": "runtime-api",
+      "name": "/api/update-check responds under 5s",
+      "status": "PASS",
+      "priority": "P2",
+      "cost": "low",
+      "tags": [
+        "runtime-api",
+        "schema"
+      ],
+      "enabled": true,
+      "removable": true,
+      "hardGate": false,
+      "skipReason": "",
+      "detail": {
+        "latencyMs": 280
+      }
+    },
+    {
+      "index": 65,
+      "caseId": "v028-agent-v028-runtime-observability-queue-001",
+      "group": "v028-runtime-observability-queue",
+      "name": "TaskObserver imports from production runtime",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "taskObserver": true,
+        "runtimeProjectionService": true,
+        "runEventLedger": true,
+        "runLedger": true
+      }
+    },
+    {
+      "index": 66,
+      "caseId": "v028-agent-v028-runtime-observability-queue-002",
+      "group": "v028-runtime-observability-queue",
+      "name": "RunLedger exposes queued claim lease methods",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 67,
+      "caseId": "v028-agent-v028-runtime-observability-queue-003",
+      "group": "v028-runtime-observability-queue",
+      "name": "RunLedger queued lease clears on non-queued terminal phases",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 68,
+      "caseId": "v028-agent-v028-runtime-observability-queue-004",
+      "group": "v028-runtime-observability-queue",
+      "name": "WebChannel packages file-backed queued payload store",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 69,
+      "caseId": "v028-agent-v028-runtime-observability-queue-005",
+      "group": "v028-runtime-observability-queue",
+      "name": "WebChannel starts queued requests through durable claim",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 70,
+      "caseId": "v028-agent-v028-runtime-observability-queue-006",
+      "group": "v028-runtime-observability-queue",
+      "name": "WebChannel cleans failed queue payload admissions",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 71,
+      "caseId": "v028-agent-v028-runtime-observability-queue-007",
+      "group": "v028-runtime-observability-queue",
+      "name": "Runtime projection reduces task observation fields",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 72,
+      "caseId": "v028-agent-v028-runtime-observability-queue-008",
+      "group": "v028-runtime-observability-queue",
+      "name": "Active requests snapshot attaches projected observations",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 73,
+      "caseId": "v028-agent-v028-runtime-observability-queue-009",
+      "group": "v028-runtime-observability-queue",
+      "name": "Image job observer emits task lifecycle and intervention",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 74,
+      "caseId": "v028-agent-v028-runtime-observability-queue-010",
+      "group": "v028-runtime-observability-queue",
+      "name": "Image job observer defaults are 20m soft and 30m hard",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 75,
+      "caseId": "v028-agent-v028-runtime-observability-queue-011",
+      "group": "v028-runtime-observability-queue",
+      "name": "Image job API exposes continue extend background controls",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 76,
+      "caseId": "v028-agent-v028-runtime-observability-queue-012",
+      "group": "v028-runtime-observability-queue",
+      "name": "Permission broker allows safe image job observation controls",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 77,
+      "caseId": "v028-agent-v028-runtime-observability-queue-013",
+      "group": "v028-runtime-observability-queue",
+      "name": "Queue action route is declared",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 78,
+      "caseId": "v028-agent-v028-runtime-observability-queue-014",
+      "group": "v028-runtime-observability-queue",
+      "name": "Run Center static app exposes task observation surface",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {}
+    },
+    {
+      "index": 79,
+      "caseId": "v028-agent-v028-runtime-observability-queue-015",
+      "group": "v028-runtime-observability-queue",
+      "name": "Windows installer copies into versioned runtime slot",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "hrefHash": "C149BD94B6CF9BF9",
+        "zipExists": true,
+        "entry": "scripts\\install-ecorex-webui-win.ps1",
+        "scriptBytes": 17001
+      }
+    },
+    {
+      "index": 80,
+      "caseId": "v028-agent-v028-runtime-observability-queue-016",
+      "group": "v028-runtime-observability-queue",
+      "name": "Synthetic task observation events append",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "requestHash": "308465D7C22B5492",
+        "sessionHash": "9A68D8EE4BDA8C78"
+      }
+    },
+    {
+      "index": 81,
+      "caseId": "v028-agent-v028-runtime-observability-queue-017",
+      "group": "v028-runtime-observability-queue",
+      "name": "Runtime projection API returns task observations",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "requestHash": "308465D7C22B5492",
+        "count": 1
+      }
+    },
+    {
+      "index": 82,
+      "caseId": "v028-agent-v028-runtime-observability-queue-018",
+      "group": "v028-runtime-observability-queue",
+      "name": "Runtime projection marks intervention health",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "health": "waiting_user_decision",
+        "status": "waiting_user_decision"
+      }
+    },
+    {
+      "index": 83,
+      "caseId": "v028-agent-v028-runtime-observability-queue-019",
+      "group": "v028-runtime-observability-queue",
+      "name": "Runtime projection preserves image-job observation details",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "jobHash": "5E0CE99C7AAA4429",
+        "progress": 0.5
+      }
+    },
+    {
+      "index": 84,
+      "caseId": "v028-agent-v028-runtime-observability-queue-020",
+      "group": "v028-runtime-observability-queue",
+      "name": "Active requests includes synthetic observed run",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "requestHash": "308465D7C22B5492",
+        "activeCount": 1
+      }
+    },
+    {
+      "index": 85,
+      "caseId": "v028-agent-v028-runtime-observability-queue-021",
+      "group": "v028-runtime-observability-queue",
+      "name": "Active request row carries task observations",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "requestHash": "308465D7C22B5492",
+        "observationCount": 1
+      }
+    },
+    {
+      "index": 86,
+      "caseId": "v028-agent-v028-runtime-observability-queue-022",
+      "group": "v028-runtime-observability-queue",
+      "name": "Validation session lock can be acquired",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "sessionHash": "A10B8FE41EA373F8"
+      }
+    },
+    {
+      "index": 87,
+      "caseId": "v028-agent-v028-runtime-observability-queue-023",
+      "group": "v028-runtime-observability-queue",
+      "name": "Locked same-session message is accepted as queued",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "requestHash": "52CAF25E7E179F93",
+        "http": 200
+      }
+    },
+    {
+      "index": 88,
+      "caseId": "v028-agent-v028-runtime-observability-queue-024",
+      "group": "v028-runtime-observability-queue",
+      "name": "Same-session contract is queue-first not interrupt",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "decision": "queued",
+        "reason": "session_lock_busy"
+      }
+    },
+    {
+      "index": 89,
+      "caseId": "v028-agent-v028-runtime-observability-queue-025",
+      "group": "v028-runtime-observability-queue",
+      "name": "Queued validation request cancels and drains",
+      "status": "PASS",
+      "priority": "P0",
+      "cost": "low",
+      "tags": [
+        "v0.2.8",
+        "runtime-observability",
+        "queue",
+        "image-job"
+      ],
+      "enabled": true,
+      "removable": false,
+      "hardGate": true,
+      "skipReason": "",
+      "detail": {
+        "requestHash": "52CAF25E7E179F93",
+        "cancelStatus": "success",
+        "activeAfterCount": 0
+      }
+    }
+  ],
+  "failurePreview": [],
+  "pressureProfile": {},
+  "modelRouteEvidence": [],
+  "stateMachineEvidence": {},
+  "securityEvidence": {},
+  "target": {
+    "domainHash": "A753D877497CBE35",
+    "sshHostHash": "CDF1CF905198CA97",
+    "sshUserHash": "4813494D137E1631",
+    "rawTargetPersisted": false
+  },
+  "redaction": {
+    "rawPasswordPersisted": false,
+    "rawSecretPersisted": false,
+    "rawUrlPersisted": false,
+    "rawUserPathPersisted": false
+  },
+  "remoteExitCode": 0,
+  "remoteStdoutHash": "B8EBC61284D6909DA2858FCF55BCE6DB51FDB5E93F7EF5F7C914B5562ADFD48A",
+  "remoteStderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+  "remoteStderrExcerptRedacted": "",
+  "generatedLocallyAt": "2026-07-04T10:18:06.579376+00:00",
+  "releaseDecision": "not-authoritative-run-full-real-release-gate-before-promotion",
+  "matrixChangeLog": [
+    {
+      "action": "focused-rerun",
+      "requestedGroups": [
+        "v028-runtime-observability-queue"
+      ],
+      "selectedGroups": [
+        "fresh-env",
+        "auth-first-use",
+        "runtime-api",
+        "v028-runtime-observability-queue"
+      ],
+      "releaseBlocking": false,
+      "finalGateRequiredBeforePromotion": true
+    }
+  ]
+}

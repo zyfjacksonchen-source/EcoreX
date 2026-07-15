@@ -1,0 +1,228 @@
+name: EcoreX v1 CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ecorex-v1-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: v1 quality and deterministic build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout with the fixed v0.3 release baseline
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Reject invisible untracked source and whitespace drift
+        run: |
+          git diff --check HEAD --
+          python scripts/check-v1-source-tree.py
+
+      - name: Require the complete immutable v0.3 migration baseline
+        run: >-
+          python scripts/check-v1-release-baseline.py
+          --commit f0750d247bfe52ffb95c137cadc9983a03010690
+          --output .ci/v030-baseline.json
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.9"
+          cache: pip
+          cache-dependency-path: |
+            requirements/locks/bootstrap.lock
+            requirements/locks/cloud.lock
+            requirements/locks/dev.lock
+            requirements/locks/manifest.json
+
+      - name: Set up Node 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.23.1"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install Python development dependencies
+        run: python scripts/install-v1-python-profile.py --profile dev
+
+      - name: Resolve production cloud adapters from the reviewed lock
+        run: |
+          python scripts/install-v1-python-profile.py --profile cloud
+          python -c "import boto3, psycopg, psycopg_pool"
+
+      - name: Lint v1 Python
+        run: python scripts/run-v1-lint.py --compile --output-format=github
+
+      # The Python release-pipeline tests invoke the real Vite build. Install
+      # the reviewed Web lock before pytest so those tests exercise the same
+      # dependency closure as the later WebUI gates.
+      - name: Install WebUI dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Test v1 Runtime
+        run: python -m pytest -q
+
+      - name: Reject high-severity WebUI dependency vulnerabilities
+        working-directory: desktop
+        run: npm audit --audit-level=high
+
+      - name: Type-check WebUI
+        working-directory: desktop
+        run: npm run typecheck
+
+      - name: Test WebUI
+        working-directory: desktop
+        run: npm run test:v1
+
+      - name: Build content-addressed WebUI
+        working-directory: desktop
+        run: npm run build
+
+      - name: Run v1 static product gates
+        run: |
+          python scripts/check-v1-design-system.py
+          python scripts/check-v1-legacy-cutoff.py --strict-production
+          python scripts/check-v1-public-download-site.py
+          python scripts/check-v1-dependency-locks.py
+          python scripts/check-v1-runtime-schema-authority.py
+          python scripts/check-v1-server-schema-authority.py
+
+      - name: Record Ubuntu byte contract
+        run: python scripts/check-v1-reproducibility.py --web-dist desktop/dist --write-manifest .ci/ubuntu-x64/byte-contract.json
+
+      - name: Upload Ubuntu byte contract
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ecorex-v1-byte-ubuntu-x64
+          path: .ci/ubuntu-x64/byte-contract.json
+          if-no-files-found: error
+          retention-days: 7
+
+  platform-smoke:
+    name: ${{ matrix.label }} compatibility
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: windows-x64
+            label: Windows x64
+            os: windows-2022
+          - id: macos-arm64
+            label: macOS arm64
+            os: macos-15
+          - id: macos-x64
+            label: macOS x64
+            os: macos-15-intel
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.9"
+          cache: pip
+          cache-dependency-path: |
+            requirements/locks/bootstrap.lock
+            requirements/locks/dev.lock
+            requirements/locks/manifest.json
+
+      - name: Set up Node 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.23.1"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install Python development dependencies
+        run: python scripts/install-v1-python-profile.py --profile dev
+
+      - name: Run platform-sensitive Runtime smoke
+        env:
+          ECOREX_GITHUB_HOSTED_WINDOWS_NATIVE_COMPATIBILITY: ${{ matrix.id == 'windows-x64' && '1' || '0' }}
+        run: >-
+          python -m pytest -q
+          tests/v1/test_version_source.py
+          tests/v1/test_product_packaging_surface.py
+          tests/v1/test_product_runtime_entrypoint.py
+          tests/v1/test_bootstrap_supervisor.py
+          tests/v1/test_connector_vault.py
+          tests/v1/test_output_service.py
+          tests/v1/test_runtime_state_machine_invariants.py
+          tests/v1/test_release_builder.py
+          tests/v1/test_update_manifest.py
+          tests/v1/test_update_coordinator.py
+
+      - name: Install WebUI dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Type-check WebUI
+        working-directory: desktop
+        run: npm run typecheck
+
+      - name: Build content-addressed WebUI
+        working-directory: desktop
+        run: npm run build
+
+      - name: Record runner byte contract
+        run: python scripts/check-v1-reproducibility.py --web-dist desktop/dist --write-manifest .ci/${{ matrix.id }}/byte-contract.json
+
+      - name: Upload runner byte contract
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ecorex-v1-byte-${{ matrix.id }}
+          path: .ci/${{ matrix.id }}/byte-contract.json
+          if-no-files-found: error
+          retention-days: 7
+
+  byte-stability:
+    name: Cross-runner byte stability
+    needs:
+      - quality
+      - platform-smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.9"
+
+      - name: Download runner byte contracts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ecorex-v1-byte-*
+          path: .ci/runner-contracts
+
+      - name: Require identical canonical bytes from all runners
+        run: python scripts/check-v1-reproducibility.py --compare-manifests .ci/runner-contracts --expected-count 4
+
+      - name: State evidence boundary
+        run: echo "Compatibility and byte-stability gates passed; Runtime archive signing, publication and real install evidence are separate release gates."

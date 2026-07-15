@@ -1,0 +1,138 @@
+name: EcoreX v1 protected platform stage
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ecorex-v1-platform-stage-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  stage:
+    name: ${{ matrix.label }} real Runtime and Packs
+    environment:
+      name: ecorex-release-stage
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: windows-x64
+            config_key: WINDOWS_X64
+            label: Windows x64
+            platform: windows
+            architecture: x64
+            runs_on: '["self-hosted","windows","x64","ecorex-platform-windows"]'
+          - id: macos-arm64
+            config_key: MACOS_ARM64
+            label: macOS arm64
+            platform: macos
+            architecture: arm64
+            runs_on: '"macos-15"'
+          - id: macos-x64
+            config_key: MACOS_X64
+            label: macOS x64
+            platform: macos
+            architecture: x64
+            runs_on: '"macos-15-intel"'
+    runs-on: ${{ fromJSON(matrix.runs_on) }}
+    timeout-minutes: 60
+
+    steps:
+      - name: Refuse unprotected or non-dispatch execution
+        if: ${{ github.event_name != 'workflow_dispatch' || github.ref_protected != true }}
+        shell: bash
+        run: exit 1
+
+      - name: Checkout immutable source without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.9"
+
+      - name: Set up Node 22 for the one final Web build
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.23.1"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Set up Go 1.26.5 for the dependency-free Bootstrap
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: "1.26.5"
+          cache: false
+          cache-dependency-path: platform-staging/bootstrap/go.mod
+
+      - name: Install exact stage dependencies and managed Chromium
+        run: |
+          python scripts/install-v1-python-profile.py --profile platform-stage
+          python scripts/check-v1-dependency-locks.py
+          python -m playwright install chromium
+
+      - name: Materialize digest-fenced production Runtime config
+        env:
+          ECOREX_STAGE_RUNTIME_CONFIG_BASE64: ${{ vars[format('ECOREX_STAGE_RUNTIME_CONFIG_{0}_BASE64', matrix.config_key)] }}
+          ECOREX_STAGE_RUNTIME_CONFIG_SHA256: ${{ vars[format('ECOREX_STAGE_RUNTIME_CONFIG_{0}_SHA256', matrix.config_key)] }}
+        run: >-
+          python scripts/materialize-v1-stage-runtime-config.py materialize
+          --output "${{ runner.temp }}/ecorex-runtime-config.json"
+          --receipt .candidate/stage-runtime-config-materialization.json
+
+      - name: Build the final content-addressed Web dist
+        working-directory: desktop
+        run: |
+          npm ci
+          npm run typecheck
+          npm run test:v1
+          npm run build
+
+      - name: Build real Core and six Packs with the source-pinned stager
+        env:
+          ECOREX_STAGE_RUNTIME_CONFIG_TEMPLATE: ${{ runner.temp }}/ecorex-runtime-config.json
+          ECOREX_STAGE_RUNTIME_CONFIG_TEMPLATE_SHA256: ${{ vars[format('ECOREX_STAGE_RUNTIME_CONFIG_{0}_SHA256', matrix.config_key)] }}
+          ECOREX_PUBLIC_BOOTSTRAP_INDEX_URL: ${{ vars.ECOREX_PUBLIC_BOOTSTRAP_INDEX_URL }}
+          ECOREX_PUBLICATION_PUBLIC_KEYS_JSON: ${{ vars.ECOREX_PUBLICATION_PUBLIC_KEYS_JSON }}
+        run: >-
+          python scripts/run-v1-repo-platform-stage.py
+          --output-root .candidate/stage
+          --platform ${{ matrix.platform }}
+          --architecture ${{ matrix.architecture }}
+          --commit-sha ${{ github.sha }}
+          --workflow-run-id ${{ github.run_id }}
+          --workflow-run-attempt ${{ github.run_attempt }}
+
+      - name: Upload real stage and content-bound receipts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ecorex-v1-stage-${{ matrix.id }}
+          path: .candidate/stage
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 3
+
+      - name: Upload typed failure receipt
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ecorex-v1-stage-failure-${{ matrix.id }}
+          path: .candidate/stage/stage-failure.json
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 7
+
+      - name: Remove materialized Runtime config
+        if: ${{ always() }}
+        env:
+          ECOREX_STAGE_RUNTIME_CONFIG_SHA256: ${{ vars[format('ECOREX_STAGE_RUNTIME_CONFIG_{0}_SHA256', matrix.config_key)] }}
+        run: >-
+          python scripts/materialize-v1-stage-runtime-config.py remove
+          --output "${{ runner.temp }}/ecorex-runtime-config.json"

@@ -1,0 +1,60 @@
+{
+  "schemaVersion": "ecorex.chat-model-connectivity-smoke.v1",
+  "generatedAt": "2026-07-01T08:12:16+0800",
+  "prompt": "minimal OK chat completion smoke",
+  "results": [
+    {
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "ok": true,
+      "status": "ok",
+      "latencyMs": 3836,
+      "responsePreview": "OK",
+      "credentialSource": "admin_policy_cache"
+    },
+    {
+      "provider": "deepseek",
+      "model": "deepseek-v4-pro",
+      "ok": true,
+      "status": "ok",
+      "latencyMs": 1024
+    },
+    {
+      "provider": "gemini",
+      "model": "gemini-3.1-pro-preview",
+      "ok": true,
+      "status": "ok",
+      "latencyMs": 4301
+    },
+    {
+      "provider": "doubao",
+      "model": "doubao-seed-2-0-pro-260215",
+      "ok": true,
+      "status": "ok",
+      "latencyMs": 4627,
+      "responsePreview": "OK"
+    }
+  ],
+  "menuModelsPass": [
+    "openai:gpt-5.5",
+    "deepseek:deepseek-v4-pro",
+    "gemini:gemini-3.1-pro-preview",
+    "doubao:doubao-seed-2-0-pro-260215"
+  ],
+  "menuModelsFail": [],
+  "diagnosticOnly": [
+    {
+      "provider": "doubao",
+      "model": "doubao-seed-2.1-pro",
+      "ok": false,
+      "status": "model_not_found_or_no_entitlement",
+      "latencyMs": 287,
+      "httpStatus": 404,
+      "errorPreview": "{\"error\":{\"code\":\"InvalidEndpointOrModel.NotFound\",\"message\":\"The model or endpoint doubao-seed-2.1-pro does not exist or you do not have access to it. Request id: 02178286473371446d1ea52072bfcd170e4d89d85374428b63912\",\"param\":\"\",\"type\":\"Not Found\"}}"
+    }
+  ],
+  "credentialSources": {
+    "openai:gpt-5.5": "admin_policy_cache"
+  },
+  "secretsRedacted": true
+}

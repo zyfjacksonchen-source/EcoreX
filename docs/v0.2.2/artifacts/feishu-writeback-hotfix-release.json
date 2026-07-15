@@ -1,0 +1,68 @@
+{
+  "status": "PASS",
+  "generatedAt": "2026-06-26T06:38:00Z",
+  "scope": "v0.2.2-feishu-writeback-release",
+  "artifacts": {
+    "webLinuxService": {
+      "path": "release-artifacts/EcoreX_0.2.2-web-linux-service.tar.gz",
+      "size": 3679009,
+      "sha256": "3BEA1EF91C61E9E42235AE7695DDAEBEF25B4A6C5B13B6726240539CC937CCF7"
+    },
+    "webuiWindowsX64": {
+      "path": "release-artifacts/EcoreX_0.2.2-webui-windows-x64.zip",
+      "size": 83385608,
+      "sha256": "BE25FAE0B33DAFF66EA7C0749B21A6F3198C021C43B87DA3123F3666E41A96F1"
+    },
+    "webuiMacosUniversal": {
+      "path": "release-artifacts/EcoreX_0.2.2-webui-macos-universal.zip",
+      "size": 175711756,
+      "sha256": "2FD49E130040CAF5E98F2038465441A21F3A995B41316F9493C68299A8FDE261"
+    },
+    "publicRelease": {
+      "path": "release-artifacts/EcoreX_0.2.2-public-release.zip",
+      "size": 264864808,
+      "sha256": "BFA0DD949907ECE14787FB5C1D32F3163C42E72ABFB9A83EF9A7BE8FE6DD5F7C"
+    }
+  },
+  "deployment": {
+    "targetDeployRollback": "PASS",
+    "productionWebAndAdmin": "PASS",
+    "releaseGate": "PASS",
+    "goalCompletionAudit": "PASS",
+    "publicManifestVersion": "0.2.2",
+    "publicApiVersion": "0.2.2"
+  },
+  "localInstallVerification": {
+    "installerSource": "deploy/ecorex-site/install-webui.ps1 -Version 0.2.2 -NoBrowser",
+    "downloadedWindowsZipSha256": "BE25FAE0B33DAFF66EA7C0749B21A6F3198C021C43B87DA3123F3666E41A96F1",
+    "webuiVersion": "0.2.2",
+    "larkOapiVersion": "1.6.9",
+    "larkRegisterAppAvailable": true,
+    "feishuAuthEndpoint": "/api/feishu/register",
+    "feishuConfigStateAfterInstall": "missing",
+    "expectedOperatorAction": "rescan Feishu authorization or manually enter App ID/App Secret because the old secret was never persisted"
+  },
+  "installerBugsCaughtByRealInstall": [
+    {
+      "id": "powershell-variable-colon",
+      "status": "fixed",
+      "summary": "Generated Windows installer now uses ${Reason}: so PowerShell does not parse $Reason: as an invalid variable reference."
+    },
+    {
+      "id": "pip-warning-stderr-nativecommanderror",
+      "status": "fixed",
+      "summary": "Generated Windows installer now redirects pip output to log and uses exit code, so pip warnings on stderr do not abort dependency self-heal."
+    }
+  ],
+  "verification": [
+    "python scripts/check-v022-release-gate.py --json --artifact docs/v0.2.2/artifacts/release-gate-preflight.json --require-releasable",
+    "python scripts/audit-v022-goal-completion.py --json --artifact docs/v0.2.2/artifacts/goal-completion-audit.json --require-complete",
+    "python scripts/smoke-web-hotfix-contracts.py",
+    "focused Feishu pytest: 3 passed, 4 subtests passed",
+    "PowerShell parser check for scripts/prepare-ecorex-webui-local-release.ps1"
+  ],
+  "secretHandling": {
+    "rawCredentialValuesPersistedInEvidence": false,
+    "rawTargetValuesPersistedInEvidence": false
+  }
+}

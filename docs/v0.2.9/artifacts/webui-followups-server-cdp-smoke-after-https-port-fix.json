@@ -1,0 +1,72 @@
+{
+  "status": "PASS",
+  "targetUrl": "https://mvdcm.ecoremedia.net/ecorex-agent/app/",
+  "checks": {
+    "initial": {
+      "hasTencentSession": true,
+      "hasRetouchSession": true,
+      "composerButtons": [
+        "添加本地文件",
+        "AI\ngpt-5.5 当前模型：gpt-5.5",
+        "发送，Enter 也可以发送",
+        "默认权限 本机访问权限：默认权限"
+      ],
+      "composerHasTencentDocs": false,
+      "composerHasLocalFile": true,
+      "composerLayout": {
+        "zonePaddingBottom": 12,
+        "composerHeight": 91,
+        "textareaInside": true,
+        "modelInside": true,
+        "sendInside": true,
+        "modelSendAligned": true
+      }
+    },
+    "external": {
+      "hasTencentCard": true,
+      "hasAgentFlow": true,
+      "logoBackground": "url(\"https://mvdcm.ecoremedia.net/ecorex-agent/app/assets/logos/tencent-docs.png\")"
+    },
+    "graphDefault": {
+      "hasDedicatedGrid": true,
+      "hasSelectionClass": false,
+      "hasDedicatedCanvas": true,
+      "hasDetailPanel": false,
+      "hasRelatedCards": false,
+      "hasChineseCategories": true
+    },
+    "graph": {
+      "hasSelectionClass": true,
+      "hasDetailPanel": true,
+      "hasSummary": true,
+      "hasRelatedCards": false
+    },
+    "graphClosed": {
+      "hasSelectionClass": false,
+      "hasDetailPanel": false
+    },
+    "memory": {
+      "hasMemorySection": true,
+      "hasGraphInsideMemory": false,
+      "text": "记忆\n原项目记忆入口\n项目记忆\n选择项目后自动创建 .ecorex/project-memory.md\n打开\n梦境蒸馏\n通用会话保留原项目记忆入口\n已开启\nproject-memory.md\n2026-07-05 15:35\ndream-distillation.md\n2026-07-05 15:35\nproject-memory.md\n2026-07-05 15:35\ndream-distillation.md\n2026-07-05 15:35"
+    },
+    "retouch": {
+      "hasEditor": true,
+      "hasToolbar": true,
+      "hasStylePanel": true,
+      "hasStageBoard": true,
+      "headerHeight": 34,
+      "pathCount": 2,
+      "lineCount": 0,
+      "labelText": "不要挡住标题",
+      "labelOutsideImage": true
+    },
+    "retouchDraft": {
+      "hasAttachment": true,
+      "attachmentText": "精修标注-1-圣都装饰封面图.png",
+      "hasThumbnail": true,
+      "draft": "请批量处理以下精准修图任务。每张标注图中的箭头尖端指向修改位置，旁边文字是修改意见；未标注区域请保持稳定。\n\n### 精准修图 1：圣都装饰封面图\n标注图附件：精修标注-1-圣都装饰封面图.png\n原图路径：https://ecorex-handtest.invalid/retouch.svg\n请基于原图进行精准局部修图。红色箭头的尖端指向需要修改的位置，箭头旁文字是该处修改要求。\n\n标注要求：\n1. 不要挡住标题\n\n保持未标注区域的构图、材质、光照和文字内容稳定，不要额外添加水印或无关元素。\n请按标注图中的箭头和备注完成局部修图，最终输出干净成图，不要保留箭头、备注文字或标注背景。",
+      "sendEnabled": true
+    }
+  }
+}

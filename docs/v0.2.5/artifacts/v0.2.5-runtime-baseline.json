@@ -1,0 +1,542 @@
+{
+  "schemaVersion": "v025-runtime-baseline-v1",
+  "version": "v0.2.5",
+  "generatedAt": "2026-06-29T09:41:30.765529+00:00",
+  "script": {
+    "path": "scripts/capture-v025-runtime-baseline.py",
+    "sha256": "B25F47CAEC0DB0962279FEE21E917D3477597954DBC02B93C3CD69515A8219A6",
+    "argv": [
+      "scripts/capture-v025-runtime-baseline.py",
+      "--include-production"
+    ]
+  },
+  "classificationLegend": {
+    "ecorex-bundled": "Dependency is inside an EcoreX runtime/release tree.",
+    "ecorex-state": "Dependency is inside writable EcoreX user/service state.",
+    "system-path": "Dependency is resolved from the host system PATH.",
+    "codex-private": "Dependency belongs to Codex/WorkBuddy/development-only private runtimes.",
+    "missing": "Dependency is unavailable."
+  },
+  "baselineComparisonVersion": "0.2.4",
+  "baselineComparisonPurpose": "prior-version runtime gap evidence for v0.2.5 implementation; not v0.2.5 supply-chain assurance",
+  "dependencyExecutionMap": [
+    {
+      "dependency": "node",
+      "currentResolvers": [
+        "system PATH",
+        "Playwright private node on Windows package only"
+      ],
+      "targetResolver": "RuntimeDependencyProvider.resolve_executable('node')",
+      "expectedOwner": "ecorex-bundled or ecorex-state",
+      "usedBy": [
+        "MCP",
+        "Office artifact JS",
+        "PDF JS renderers",
+        "Feishu/Lark CLI runner"
+      ]
+    },
+    {
+      "dependency": "npm/npx",
+      "currentResolvers": [
+        "system PATH",
+        "package config mcp command"
+      ],
+      "targetResolver": "RuntimeDependencyProvider.resolve_executable('npm'/'npx')",
+      "expectedOwner": "ecorex-bundled or ecorex-state",
+      "usedBy": [
+        "capability installs",
+        "MCP bootstrap",
+        "official CLI installs"
+      ]
+    },
+    {
+      "dependency": "lark-cli",
+      "currentResolvers": [
+        "system PATH",
+        "C:/cli-main",
+        "runtime tools path if present"
+      ],
+      "targetResolver": "ToolExecutionEnvironment for feishu_cli",
+      "expectedOwner": "ecorex-state or ecorex-bundled",
+      "usedBy": [
+        "Feishu/Lark structured CLI canary"
+      ]
+    },
+    {
+      "dependency": "xin_agent_cli.py",
+      "currentResolvers": [
+        "explicit config",
+        "env vars",
+        "trusted local roots",
+        "bootstrap config"
+      ],
+      "targetResolver": "ToolExecutionEnvironment for tongxin_cli plus verified bootstrap",
+      "expectedOwner": "ecorex-state or explicit operator-approved path",
+      "usedBy": [
+        "Tongxin structured read-only CLI canary"
+      ]
+    },
+    {
+      "dependency": "python",
+      "currentResolvers": [
+        "sys.executable",
+        "packaged python",
+        "service venv"
+      ],
+      "targetResolver": "RuntimeDependencyProvider.python()",
+      "expectedOwner": "ecorex-bundled",
+      "usedBy": [
+        "all Python tools",
+        "Office/PDF",
+        "Imagegen",
+        "diagnostics"
+      ]
+    }
+  ],
+  "git": {
+    "head": "0516f8d41897093ef264545a86e9557e914c1c0a",
+    "statusShort": " M channel/web/web_channel.py\n M tests/test_ecorex_web_parallel_backend.py\n?? common/runtime_dependencies.py\n?? docs/v0.2.5/\n?? scripts/capture-v025-runtime-baseline.py\n?? scripts/check-v025-runtime-baseline.py\n?? tests/test_v025_runtime_dependencies.py\n",
+    "knownPreexistingEdits": [
+      "channel/web/web_channel.py enterprise-login local fallback hardening",
+      "tests/test_ecorex_web_parallel_backend.py corresponding assertion update"
+    ],
+    "trackedDiffHash": "B0F2FF61D9CC32F418CD4248C174C1D164CF5500738E9D98CFD3995215BCD8C7"
+  },
+  "systemPath": {
+    "node": {
+      "name": "node",
+      "path": "C:/Program Files/nodejs/node.EXE",
+      "source": "system-path"
+    },
+    "npm": {
+      "name": "npm",
+      "path": "C:/Program Files/nodejs/npm.CMD",
+      "source": "system-path"
+    },
+    "npx": {
+      "name": "npx",
+      "path": "C:/Program Files/nodejs/npx.CMD",
+      "source": "system-path"
+    },
+    "larkCli": {
+      "name": "lark-cli",
+      "path": "%USERPROFILE%/AppData/Roaming/npm/lark-cli.CMD",
+      "source": "system-path"
+    }
+  },
+  "codexRuntime": {
+    "source": "codex-private",
+    "node": {
+      "available": true,
+      "node": "%USERPROFILE%/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe",
+      "modules": {
+        "pptxgenjs": true,
+        "pdf-lib": true,
+        "pdfjs-dist": true,
+        "pixelmatch": true,
+        "pngjs": true,
+        "sharp": true,
+        "tesseract.js": true,
+        "docx": true,
+        "marked": true,
+        "playwright": true
+      },
+      "modulePaths": {
+        "pptxgenjs": "%USERPROFILE%/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/pptxgenjs/dist/pptxgen.cjs.js",
+        "pdf-lib": "%USERPROFILE%/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/pdf-lib/cjs/index.js",
+        "pdfjs-dist": "%USERPROFILE%/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/pdfjs-dist/build/pdf.mjs",
+        "pixelmatch": "%USERPROFILE%/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/pixelmatch/index.js",
+        "pngjs": "%USERPROFILE%/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/pngjs/lib/png.js",
+        "sharp": "%USERPROFILE%/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/sharp/lib/index.js",
+        "tesseract.js": "%USERPROFILE%/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/tesseract.js/src/index.js",
+        "docx": "%USERPROFILE%/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/docx/dist/index.cjs",
+        "marked": "%USERPROFILE%/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/marked/lib/marked.esm.js",
+        "playwright": "%USERPROFILE%/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.js"
+      }
+    },
+    "python": {
+      "available": true,
+      "python": "%USERPROFILE%/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe",
+      "modules": {
+        "PIL": true,
+        "docx": true,
+        "lark_oapi": false,
+        "numpy": true,
+        "openpyxl": true,
+        "pandas": true,
+        "pdfplumber": true,
+        "pptx": true,
+        "reportlab": true
+      }
+    },
+    "skills": [
+      "%USERPROFILE%/.codex/plugins/cache/openai-bundled/browser/26.601.21317/skills/control-in-app-browser/SKILL.md",
+      "%USERPROFILE%/.codex/plugins/cache/openai-bundled/chrome/26.601.21317/skills/control-chrome/SKILL.md",
+      "%USERPROFILE%/.codex/plugins/cache/openai-bundled/chrome/latest/skills/control-chrome/SKILL.md",
+      "%USERPROFILE%/.codex/plugins/cache/openai-primary-runtime/documents/26.623.12021/skills/documents/SKILL.md",
+      "%USERPROFILE%/.codex/plugins/cache/openai-primary-runtime/pdf/26.623.12021/skills/pdf/SKILL.md",
+      "%USERPROFILE%/.codex/plugins/cache/openai-primary-runtime/presentations/26.623.12021/skills/presentations/SKILL.md",
+      "%USERPROFILE%/.codex/plugins/cache/openai-primary-runtime/spreadsheets/26.623.12021/skills/spreadsheets/SKILL.md",
+      "%USERPROFILE%/.codex/plugins/cache/openai-primary-runtime/template-creator/26.623.12021/skills/template-creator/SKILL.md",
+      "%USERPROFILE%/.codex/skills/.system/imagegen/SKILL.md",
+      "%USERPROFILE%/.codex/skills/.system/openai-docs/SKILL.md",
+      "%USERPROFILE%/.codex/skills/.system/plugin-creator/SKILL.md",
+      "%USERPROFILE%/.codex/skills/.system/skill-creator/SKILL.md",
+      "%USERPROFILE%/.codex/skills/.system/skill-installer/SKILL.md"
+    ]
+  },
+  "ecorexLocalWebui": {
+    "root": "%USERPROFILE%/AppData/Local/EcoreX WebUI",
+    "runtimeExists": true,
+    "stateExists": true,
+    "runtimeHits": [
+      {
+        "path": "%USERPROFILE%/AppData/Local/EcoreX WebUI/runtime/python/Lib/site-packages/playwright/driver/node.exe",
+        "source": "ecorex-bundled"
+      }
+    ],
+    "toolStatuses": {
+      "feishuCli": {
+        "authState": "ready",
+        "available": true,
+        "command": [
+          "C:/cli-main/bin/lark-cli.EXE"
+        ],
+        "installRoot": "%USERPROFILE%/AppData/Local/EcoreX WebUI/state/tools/lark-cli",
+        "npm": "C:/Program Files/nodejs/npm.CMD",
+        "npx": "C:/Program Files/nodejs/npx.CMD",
+        "pathHints": [
+          "%USERPROFILE%/AppData/Roaming/npm",
+          "C:/Program Files/nodejs",
+          "C:/cli-main/bin"
+        ],
+        "commandSource": "codex-private",
+        "npmSource": "system-path",
+        "npxSource": "system-path"
+      },
+      "tongxinCli": {
+        "available": true,
+        "configurationState": "configured",
+        "configured": true,
+        "persistedConfig": true,
+        "remoteAuthConfigured": false,
+        "remoteBootstrapAvailable": false
+      }
+    }
+  },
+  "ecorexArtifacts": [
+    {
+      "label": "webui-windows-x64",
+      "path": "C:/CowAgent/release-artifacts/EcoreX_0.2.4-webui-windows-x64.zip",
+      "exists": true,
+      "size": 113931610,
+      "sha256": "5A0DC6E0A59C70CB3823DE2A256EA44F334E056D37BD6A2510AA49878E9ADF61",
+      "baselineArtifactVersion": "0.2.4",
+      "baselineUse": "prior-version-runtime-gap-comparison",
+      "runtimeHitCount": 1,
+      "runtimeHits": [
+        "runtime/python/Lib/site-packages/playwright/driver/node.exe"
+      ],
+      "nestedArtifacts": [
+        {
+          "entry": "runtime/python/python311.zip",
+          "size": 4285636,
+          "runtimeHitCount": 0,
+          "runtimeHits": [],
+          "toolEntrypoints": {
+            "feishuCliTool": false,
+            "tongxinCliTool": false,
+            "imagegenTool": false,
+            "officePdfRuntime": false
+          }
+        },
+        {
+          "entry": "runtime/python/Lib/site-packages/dateutil/zoneinfo/dateutil-zoneinfo.tar.gz",
+          "size": 156400,
+          "runtimeHitCount": 0,
+          "runtimeHits": [],
+          "toolEntrypoints": {
+            "feishuCliTool": false,
+            "tongxinCliTool": false,
+            "imagegenTool": false,
+            "officePdfRuntime": false
+          }
+        }
+      ],
+      "toolEntrypoints": {
+        "feishuCliTool": true,
+        "tongxinCliTool": true,
+        "imagegenTool": true,
+        "officePdfRuntime": true
+      },
+      "configSignals": {
+        "hasConfig": true,
+        "hasCapabilitiesManifest": true,
+        "declaresFeishuCli": true,
+        "declaresTongxinCli": true,
+        "declaresNpxMcp": true,
+        "skipsLarkCliPreinstall": true
+      }
+    },
+    {
+      "label": "webui-macos-universal",
+      "path": "C:/CowAgent/release-artifacts/EcoreX_0.2.4-webui-macos-universal.zip",
+      "exists": true,
+      "size": 263206273,
+      "sha256": "00BF5C1E67FF7855F6CCA59D87073B77869CD83064893D1CBD8F18183A2EFBAD",
+      "baselineArtifactVersion": "0.2.4",
+      "baselineUse": "prior-version-runtime-gap-comparison",
+      "runtimeHitCount": 0,
+      "runtimeHits": [],
+      "nestedArtifacts": [
+        {
+          "entry": "Install EcoreX WebUI.app/Contents/Resources/package/python/cpython-3.11.15+20260602-aarch64-apple-darwin-install_only_stripped.tar.gz",
+          "size": 27091323,
+          "runtimeHitCount": 0,
+          "runtimeHits": [],
+          "toolEntrypoints": {
+            "feishuCliTool": false,
+            "tongxinCliTool": false,
+            "imagegenTool": false,
+            "officePdfRuntime": false
+          }
+        },
+        {
+          "entry": "Install EcoreX WebUI.app/Contents/Resources/package/python/cpython-3.11.15+20260602-x86_64-apple-darwin-install_only_stripped.tar.gz",
+          "size": 27000688,
+          "runtimeHitCount": 0,
+          "runtimeHits": [],
+          "toolEntrypoints": {
+            "feishuCliTool": false,
+            "tongxinCliTool": false,
+            "imagegenTool": false,
+            "officePdfRuntime": false
+          }
+        }
+      ],
+      "toolEntrypoints": {
+        "feishuCliTool": true,
+        "tongxinCliTool": true,
+        "imagegenTool": true,
+        "officePdfRuntime": true
+      },
+      "configSignals": {
+        "hasConfig": true,
+        "hasCapabilitiesManifest": true,
+        "declaresFeishuCli": true,
+        "declaresTongxinCli": true,
+        "declaresNpxMcp": true,
+        "skipsLarkCliPreinstall": true
+      }
+    },
+    {
+      "label": "web-linux-service",
+      "path": "C:/CowAgent/release-artifacts/EcoreX_0.2.4-web-linux-service.tar.gz",
+      "exists": true,
+      "size": 3834803,
+      "sha256": "0EC37896C78879A9B390C68AC5036BA651473EF268D72CBD65B386082B04989A",
+      "baselineArtifactVersion": "0.2.4",
+      "baselineUse": "prior-version-runtime-gap-comparison",
+      "runtimeHitCount": 0,
+      "runtimeHits": [],
+      "nestedArtifacts": [],
+      "toolEntrypoints": {
+        "feishuCliTool": true,
+        "tongxinCliTool": true,
+        "imagegenTool": true,
+        "officePdfRuntime": true
+      },
+      "configSignals": {
+        "hasConfig": true,
+        "hasCapabilitiesManifest": true,
+        "declaresFeishuCli": true,
+        "declaresTongxinCli": true,
+        "declaresNpxMcp": true,
+        "skipsLarkCliPreinstall": false
+      }
+    },
+    {
+      "label": "public-release",
+      "path": "C:/CowAgent/release-artifacts/EcoreX_0.2.4-public-release.zip",
+      "exists": true,
+      "size": 380156993,
+      "sha256": "0038903FEA2437989C120FF6AD32EFD5D99C4E6126C89F93BCFD72317EC6ADC9",
+      "baselineArtifactVersion": "0.2.4",
+      "baselineUse": "prior-version-runtime-gap-comparison",
+      "runtimeHitCount": 0,
+      "runtimeHits": [],
+      "nestedArtifacts": [
+        {
+          "entry": "site/downloads/EcoreX_0.2.4-web-linux-service.tar.gz",
+          "size": 3834803,
+          "runtimeHitCount": 0,
+          "runtimeHits": [],
+          "toolEntrypoints": {
+            "feishuCliTool": true,
+            "tongxinCliTool": true,
+            "imagegenTool": true,
+            "officePdfRuntime": true
+          }
+        },
+        {
+          "entry": "site/downloads/EcoreX_0.2.4-webui-macos-universal.zip",
+          "size": 263206273,
+          "runtimeHitCount": 0,
+          "runtimeHits": [],
+          "toolEntrypoints": {
+            "feishuCliTool": true,
+            "tongxinCliTool": true,
+            "imagegenTool": true,
+            "officePdfRuntime": true
+          }
+        },
+        {
+          "entry": "site/downloads/EcoreX_0.2.4-webui-windows-x64.zip",
+          "size": 113931610,
+          "runtimeHitCount": 1,
+          "runtimeHits": [
+            "runtime/python/Lib/site-packages/playwright/driver/node.exe"
+          ],
+          "toolEntrypoints": {
+            "feishuCliTool": true,
+            "tongxinCliTool": true,
+            "imagegenTool": true,
+            "officePdfRuntime": true
+          }
+        }
+      ],
+      "toolEntrypoints": {
+        "feishuCliTool": false,
+        "tongxinCliTool": false,
+        "imagegenTool": false,
+        "officePdfRuntime": false
+      },
+      "configSignals": {
+        "hasConfig": false,
+        "hasCapabilitiesManifest": false,
+        "declaresFeishuCli": false,
+        "declaresTongxinCli": false,
+        "declaresNpxMcp": false,
+        "skipsLarkCliPreinstall": false
+      }
+    }
+  ],
+  "production": {
+    "status": "success",
+    "targetRedacted": true,
+    "sshHostVerification": "system-known-hosts",
+    "authMethod": "password-from-operator-file",
+    "exitCode": 0,
+    "parsed": {
+      "hostShell": {
+        "node": {
+          "pathPresent": false,
+          "source": "missing",
+          "basename": ""
+        },
+        "npm": {
+          "pathPresent": false,
+          "source": "missing",
+          "basename": ""
+        },
+        "npx": {
+          "pathPresent": false,
+          "source": "missing",
+          "basename": ""
+        }
+      },
+      "serviceUser": {
+        "node": {
+          "pathPresent": false,
+          "source": "missing",
+          "basename": ""
+        },
+        "npm": {
+          "pathPresent": false,
+          "source": "missing",
+          "basename": ""
+        },
+        "npx": {
+          "pathPresent": false,
+          "source": "missing",
+          "basename": ""
+        }
+      },
+      "runtimeFileHits": [],
+      "toolStatuses": {
+        "feishuCli": {
+          "available": false,
+          "authState": "cli_missing",
+          "configurationState": null,
+          "configured": null,
+          "persistedConfig": null,
+          "remoteAuthConfigured": null,
+          "remoteBootstrapAvailable": null,
+          "command": {
+            "pathPresent": false,
+            "source": "missing",
+            "basename": ""
+          },
+          "npm": {
+            "pathPresent": false,
+            "source": "missing",
+            "basename": ""
+          },
+          "npx": {
+            "pathPresent": false,
+            "source": "missing",
+            "basename": ""
+          },
+          "installRoot": {
+            "pathPresent": true,
+            "source": "ecorex-bundled",
+            "basename": "lark-cli"
+          }
+        },
+        "tongxinCli": {
+          "available": false,
+          "authState": null,
+          "configurationState": "missing",
+          "configured": false,
+          "persistedConfig": false,
+          "remoteAuthConfigured": false,
+          "remoteBootstrapAvailable": false,
+          "command": {
+            "pathPresent": false,
+            "source": "missing",
+            "basename": ""
+          },
+          "npm": {
+            "pathPresent": false,
+            "source": "missing",
+            "basename": ""
+          },
+          "npx": {
+            "pathPresent": false,
+            "source": "missing",
+            "basename": ""
+          },
+          "installRoot": {
+            "pathPresent": false,
+            "source": "missing",
+            "basename": ""
+          }
+        }
+      }
+    },
+    "stderrPresent": false
+  },
+  "baselineGapSignals": {
+    "schemaVersion": "v025-runtime-gap-signals-v1",
+    "localFeishuCommandUsesCodexPrivatePath": true,
+    "localFeishuUsesSystemPackageManager": true,
+    "productionServiceUserNodeMissing": true,
+    "productionServiceUserNpmMissing": true,
+    "productionFeishuCliMissing": true,
+    "productionTongxinCliMissingConfig": true,
+    "windowsArtifactOnlyHasPlaywrightNode": true,
+    "macosArtifactHasNoRuntimeNode": true,
+    "linuxArtifactHasNoRuntimeNode": true,
+    "publicReleaseContainsNestedArtifacts": true
+  }
+}

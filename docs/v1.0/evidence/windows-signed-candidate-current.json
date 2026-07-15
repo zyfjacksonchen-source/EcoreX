@@ -1,0 +1,305 @@
+{
+  "cleanup": {
+    "temporary_directory_removed": true
+  },
+  "first_install": {
+    "activation_required_user_confirmation": true,
+    "background_download": true,
+    "bootstrap_http_status": 200,
+    "bootstrap_launches": 2,
+    "journal_states": [
+      "resolving",
+      "downloading",
+      "downloading",
+      "downloading",
+      "downloading",
+      "downloading",
+      "downloading",
+      "verifying",
+      "staging",
+      "awaiting_user",
+      "draining",
+      "activating",
+      "activating",
+      "healthchecking",
+      "completed"
+    ],
+    "prepared_state": "awaiting_user",
+    "registration_pin_released": true,
+    "slot_id": "r-6dcbe2472fd257f92d0893557d1c8163d11fb6a9",
+    "terminal_state": "completed"
+  },
+  "network": {
+    "artifact_fetcher": "RecordingFailoverFetcher(LocalSourceFetcher)",
+    "external_publication": false,
+    "runtime_live_endpoints": "loopback-only"
+  },
+  "release": {
+    "build_digest": "017cb334c1a9bfe4785447c3dc9a7e431fec9f88bc62cdb3236f43a9f85f633a",
+    "core_sha256": "c8a3c8169d4d06620d57e7c6c34e4da27a45fe1c7cc838caa1b61a5e5d45aa77",
+    "manifest_sha256": "7ea9453132f3eb885217f3e5729e92d59b2eca403728531c0fafffa56abff096",
+    "release_id": "release-stable-017cb334c1a9bfe4785447c3",
+    "signature_algorithm": "ed25519",
+    "signature_verified": true,
+    "storage_migration": {
+      "compiled_target_match": true,
+      "manifest_sha256": "8799b5aac5a81a0affec2a99a48b43a8005ae4f81f60c1becdec0369c9160cf0",
+      "schema_version": 2,
+      "target_schema_sha256": "238fa9148a524f1ec70e260c1129caf3d0efe39c1177824bc84172d334d6edd2",
+      "target_schema_version": 1
+    },
+    "version": "1.0.0",
+    "web": {
+      "asset_names_bind_sha256_prefix": true,
+      "entrypoint": "index.html",
+      "file_count": 18,
+      "immutable_asset_count": 17
+    },
+    "web_bundle_sha256": "478bb28075568b62eeb039a12a3457a56e9635baf00dabd89ef6f50914a63e9f",
+    "web_manifest_sha256": "529858680137fec6e8462d43247dac9eed8af84395ac353c9e7957ca6bef24a8"
+  },
+  "rollback": {
+    "bootstrap_http_status": 200,
+    "bootstrap_launches": 2,
+    "cross_version_update_claimed": false,
+    "exercise": "signed_same_version_replacement_pre_data",
+    "fault_release": {
+      "build_digest": "9fda7b039e37a0997b8eaa777584a47afac74d08bde0c17552402be61a8b34d6",
+      "core_sha256": "de7e9d97ee5f7d0de6ed47ca17ee180381c56b93883f5dc1faa2127a982e1f60",
+      "manifest_sha256": "d975413d890eb3752d8458edbbad77225cdf38dd79894d9062f2ffd8dd3ac26f",
+      "release_id": "release-stable-9fda7b039e37a0997b8eaa77",
+      "signature_algorithm": "ed25519",
+      "signature_verified": true,
+      "storage_migration": {
+        "compiled_target_match": true,
+        "manifest_sha256": "8799b5aac5a81a0affec2a99a48b43a8005ae4f81f60c1becdec0369c9160cf0",
+        "schema_version": 2,
+        "target_schema_sha256": "238fa9148a524f1ec70e260c1129caf3d0efe39c1177824bc84172d334d6edd2",
+        "target_schema_version": 1
+      },
+      "version": "1.0.0",
+      "web": {
+        "asset_names_bind_sha256_prefix": true,
+        "entrypoint": "index.html",
+        "file_count": 18,
+        "immutable_asset_count": 17
+      },
+      "web_bundle_sha256": "478bb28075568b62eeb039a12a3457a56e9635baf00dabd89ef6f50914a63e9f",
+      "web_manifest_sha256": "5ce25c0b0908bce083ca4a6e5a5e0440952ec91cc1725bdf3f83dbd448357ef8"
+    },
+    "fault_slot_discarded": true,
+    "fault_slot_id": "r-ac0e6a40af1bc6957683912a3865b6f7d3a47286",
+    "journal_states": [
+      "resolving",
+      "downloading",
+      "downloading",
+      "verifying",
+      "staging",
+      "awaiting_user",
+      "draining",
+      "activating",
+      "activating",
+      "healthchecking",
+      "rollback"
+    ],
+    "prepared_state": "awaiting_user",
+    "restored_slot_id": "r-5a995545caddcc58bb64b73cd8b73d678f42357b",
+    "terminal_state": "rollback"
+  },
+  "runtime_dependencies": [
+    {
+      "name": "annotated-types",
+      "version": "0.7.0"
+    },
+    {
+      "name": "anyio",
+      "version": "4.13.0"
+    },
+    {
+      "name": "certifi",
+      "version": "2026.2.25"
+    },
+    {
+      "name": "cffi",
+      "version": "2.0.0"
+    },
+    {
+      "name": "click",
+      "version": "8.4.1"
+    },
+    {
+      "name": "colorama",
+      "version": "0.4.6"
+    },
+    {
+      "name": "cryptography",
+      "version": "46.0.7"
+    },
+    {
+      "name": "fastapi",
+      "version": "0.115.0"
+    },
+    {
+      "name": "h11",
+      "version": "0.16.0"
+    },
+    {
+      "name": "httpcore",
+      "version": "1.0.9"
+    },
+    {
+      "name": "httpx",
+      "version": "0.27.2"
+    },
+    {
+      "name": "idna",
+      "version": "3.12"
+    },
+    {
+      "name": "pycparser",
+      "version": "3.0"
+    },
+    {
+      "name": "pydantic",
+      "version": "2.12.5"
+    },
+    {
+      "name": "pydantic_core",
+      "version": "2.41.5"
+    },
+    {
+      "name": "sniffio",
+      "version": "1.3.1"
+    },
+    {
+      "name": "starlette",
+      "version": "0.38.6"
+    },
+    {
+      "name": "typing_extensions",
+      "version": "4.15.0"
+    },
+    {
+      "name": "typing-inspection",
+      "version": "0.4.2"
+    },
+    {
+      "name": "uvicorn",
+      "version": "0.30.0"
+    },
+    {
+      "name": "websockets",
+      "version": "15.0.1"
+    }
+  ],
+  "schema_version": 2,
+  "signing": {
+    "algorithm": "ed25519",
+    "key_id": "ecorex-local-candidate-drill",
+    "os_application_signing_used": false,
+    "private_key_persisted": false,
+    "public_key_sha256": "58e2253e4be3a672e0f85b3d7ea6758d0c8ec2cb91f0b43aa2b384830bf80f2a"
+  },
+  "source_failover": {
+    "all_replicas_match_signed_digest": true,
+    "artifact_id": "core-windows-x64",
+    "attempt_order": [
+      "github-cn",
+      "github",
+      "cdn"
+    ],
+    "injected_outages": [
+      "github-cn",
+      "github"
+    ],
+    "replicas": [
+      {
+        "kind": "github-cn-mirror",
+        "priority": 0,
+        "sha256": "c8a3c8169d4d06620d57e7c6c34e4da27a45fe1c7cc838caa1b61a5e5d45aa77",
+        "source_id": "github-cn"
+      },
+      {
+        "kind": "github-release",
+        "priority": 1,
+        "sha256": "c8a3c8169d4d06620d57e7c6c34e4da27a45fe1c7cc838caa1b61a5e5d45aa77",
+        "source_id": "github"
+      },
+      {
+        "kind": "ecorex-cdn",
+        "priority": 2,
+        "sha256": "c8a3c8169d4d06620d57e7c6c34e4da27a45fe1c7cc838caa1b61a5e5d45aa77",
+        "source_id": "cdn"
+      }
+    ],
+    "selected_source": "cdn",
+    "signed_sha256": "c8a3c8169d4d06620d57e7c6c34e4da27a45fe1c7cc838caa1b61a5e5d45aa77",
+    "signed_source_order": [
+      "github-cn",
+      "github",
+      "cdn"
+    ]
+  },
+  "status": "passed",
+  "target": {
+    "architecture": "x64",
+    "platform": "windows"
+  },
+  "update_and_refresh": {
+    "active_slot_unchanged_before_confirmation": true,
+    "background_download": true,
+    "bootstrap_http_status": 200,
+    "bootstrap_launches": 2,
+    "cross_version_update_claimed": false,
+    "current_slot_id": "r-5a995545caddcc58bb64b73cd8b73d678f42357b",
+    "journal_states": [
+      "resolving",
+      "downloading",
+      "downloading",
+      "verifying",
+      "staging",
+      "awaiting_user",
+      "draining",
+      "activating",
+      "activating",
+      "healthchecking",
+      "completed"
+    ],
+    "prepared_state": "awaiting_user",
+    "refresh_completed": true,
+    "release": {
+      "build_digest": "1c157160e2e668f0d09e6c80c7f8848608c1a6ac11f5e5875a899b0ce6d5d81c",
+      "core_sha256": "2b1ef1e972e7004146ed8800a8138595d4f9d2fa44154c5d9f1a913e5fe7566e",
+      "manifest_sha256": "5cfbae4d2ea522e76e82a72ef32cf45768d65555b4e74b47ba2b6d9aea1a92c0",
+      "release_id": "release-stable-1c157160e2e668f0d09e6c80",
+      "signature_algorithm": "ed25519",
+      "signature_verified": true,
+      "storage_migration": {
+        "compiled_target_match": true,
+        "manifest_sha256": "8799b5aac5a81a0affec2a99a48b43a8005ae4f81f60c1becdec0369c9160cf0",
+        "schema_version": 2,
+        "target_schema_sha256": "238fa9148a524f1ec70e260c1129caf3d0efe39c1177824bc84172d334d6edd2",
+        "target_schema_version": 1
+      },
+      "version": "1.0.0",
+      "web": {
+        "asset_names_bind_sha256_prefix": true,
+        "entrypoint": "index.html",
+        "file_count": 18,
+        "immutable_asset_count": 17
+      },
+      "web_bundle_sha256": "478bb28075568b62eeb039a12a3457a56e9635baf00dabd89ef6f50914a63e9f",
+      "web_manifest_sha256": "fe6a31978f97fdde2199e10619d5a276dc02e8daadc596cc44a52c054c772f49"
+    },
+    "same_version_replacement": true,
+    "terminal_state": "completed",
+    "user_confirmed_activation": true,
+    "web_cache": {
+      "asset_cache_control": "public, max-age=31536000, immutable",
+      "asset_etag_present": true,
+      "asset_path": "assets/index.432fa727fd3c9eef.js",
+      "index_cache_control": "no-store"
+    }
+  },
+  "version": "1.0.0"
+}

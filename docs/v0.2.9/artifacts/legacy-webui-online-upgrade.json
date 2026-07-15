@@ -1,0 +1,100 @@
+{
+    "schemaVersion":  "ecorex.v0.2.8.legacy-webui-online-upgrade.v1",
+    "status":  "PASS",
+    "startedAt":  "2026-07-04T16:15:24.8512104Z",
+    "finishedAt":  "2026-07-04T16:21:38.4906584Z",
+    "durationSeconds":  373.64,
+    "baseUrl":  "http://127.0.0.1:9808",
+    "targetVersion":  "0.2.9",
+    "legacyVersions":  [
+                           "0.2.8"
+                       ],
+    "checkCount":  4,
+    "passCount":  4,
+    "failCount":  0,
+    "checks":  [
+                   {
+                       "version":  "preflight",
+                       "name":  "default port 9909 is free",
+                       "status":  "PASS",
+                       "detail":  {
+
+                                  }
+                   },
+                   {
+                       "version":  "0.2.8",
+                       "name":  "legacy renderer includes update-check polling hook",
+                       "status":  "PASS",
+                       "detail":  {
+                                      "pollsUpdateCheck":  true,
+                                      "rendersUpdateText":  false,
+                                      "opensUpdatePage":  false,
+                                      "assetBytes":  600072
+                                  }
+                   },
+                   {
+                       "version":  "0.2.8",
+                       "name":  "legacy runtime receives v0.2.8 update notification",
+                       "status":  "PASS",
+                       "detail":  {
+                                      "latestVersion":  "0.2.9",
+                                      "message":  "发现新版本 0.2.9，本机更新器可在空闲时检查并安装",
+                                      "artifactId":  "webui-windows-x64",
+                                      "currentVersion":  "0.2.8",
+                                      "hasUpdate":  true,
+                                      "updateReason":  "version",
+                                      "artifactSha256":  "3323BD22C920C7AA5CD42D4F42D2C1F8322CF76BCF08DD2F90CEDE5EC813FC73"
+                                  }
+                   },
+                   {
+                       "version":  "0.2.8",
+                       "name":  "legacy runtime upgrades online to v0.2.8",
+                       "status":  "PASS",
+                       "detail":  {
+                                      "upgradedBaseUrl":  "http://127.0.0.1:9909",
+                                      "browserAction":  "defer-to-existing-tab-soft-refresh",
+                                      "updateStateMode":  "background",
+                                      "upgradedVersion":  "0.2.9",
+                                      "updateStateStatus":  "installed",
+                                      "urlFileExists":  true,
+                                      "runtimeLeaf":  "runtime-0.2.9-b33f92af"
+                                  }
+                   }
+               ],
+    "results":  [
+                    {
+                        "legacyVersion":  "0.2.8",
+                        "targetVersion":  "0.2.9",
+                        "testRoot":  "C:\\ecx-upgrade-smoke-v029\\v028-3d25c907",
+                        "status":  "PASS",
+                        "legacyVersionPayload":  {
+                                                     "version":  "0.2.8",
+                                                     "url":  null
+                                                 },
+                        "updateCheck":  {
+                                            "latestVersion":  "0.2.9",
+                                            "artifactId":  "webui-windows-x64",
+                                            "currentVersion":  "0.2.8",
+                                            "hasUpdate":  true,
+                                            "updateReason":  "version",
+                                            "artifactSha256":  "3323BD22C920C7AA5CD42D4F42D2C1F8322CF76BCF08DD2F90CEDE5EC813FC73"
+                                        },
+                        "upgrade":  {
+                                        "runtime":  {
+                                                        "currentRuntimePath":  "C:\\ecx-upgrade-smoke-v029\\v028-3d25c907\\LocalAppData\\EcoreX WebUI\\state\\current-runtime.txt",
+                                                        "currentRuntime":  "C:\\ecx-upgrade-smoke-v029\\v028-3d25c907\\LocalAppData\\EcoreX WebUI\\runtime-0.2.9-b33f92af",
+                                                        "currentRuntimeLeaf":  "runtime-0.2.9-b33f92af",
+                                                        "currentRuntimeExists":  true,
+                                                        "configPath":  "C:\\ecx-upgrade-smoke-v029\\v028-3d25c907\\LocalAppData\\EcoreX WebUI\\runtime-0.2.9-b33f92af\\config.json",
+                                                        "port":  9909,
+                                                        "urlFile":  "C:\\ecx-upgrade-smoke-v029\\v028-3d25c907\\LocalAppData\\EcoreX WebUI\\state\\ecorex-webui.url",
+                                                        "urlFileExists":  true,
+                                                        "url":  "http://127.0.0.1:9909/app/"
+                                                    },
+                                        "updateStateStatus":  "installed",
+                                        "version":  "0.2.9",
+                                        "updateStateMode":  "background"
+                                    }
+                    }
+                ]
+}

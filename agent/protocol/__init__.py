@@ -13,6 +13,21 @@ from .run_ledger import (
     get_run_ledger,
     reset_run_ledger_for_tests,
 )
+from .run_event_ledger import (
+    RunEventLedger,
+    RunEventOwnerConflict,
+    get_run_event_ledger,
+    reset_run_event_ledger_for_tests,
+)
+from .runtime_projection import RuntimeProjectionService
+from .task_observer import TaskObserver
+from .image_job_service import (
+    ImageJobCancelled,
+    ImageJobService,
+    get_image_job_service,
+    resolve_image_job_parallelism_policy,
+    reset_image_job_service_for_tests,
+)
 
 __all__ = [
     'Agent', 
@@ -33,4 +48,15 @@ __all__ = [
     'RunLedger',
     'get_run_ledger',
     'reset_run_ledger_for_tests',
+    'RunEventLedger',
+    'RunEventOwnerConflict',
+    'get_run_event_ledger',
+    'reset_run_event_ledger_for_tests',
+    'RuntimeProjectionService',
+    'TaskObserver',
+    'ImageJobCancelled',
+    'ImageJobService',
+    'get_image_job_service',
+    'resolve_image_job_parallelism_policy',
+    'reset_image_job_service_for_tests',
 ]

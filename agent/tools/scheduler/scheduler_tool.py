@@ -2,15 +2,58 @@
 Scheduler tool for creating and managing scheduled tasks
 """
 
+import hashlib
 import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
-from croniter import croniter
 
 from agent.tools.base_tool import BaseTool, ToolResult
+from agent.tools.scheduler.cron_compat import croniter
+from agent.tools.scheduler.delivery_target import apply_scheduler_delivery_target, resolve_scheduler_delivery_target
 from bridge.context import Context, ContextType
 from bridge.reply import Reply, ReplyType
 from common.log import logger
+
+
+def _scheduler_exception_summary(value: Any) -> Dict[str, Any]:
+    text = "" if value is None else str(value)
+    text_bytes = text.encode("utf-8", errors="replace")
+    text_hash = hashlib.sha256(text_bytes).hexdigest()[:16] if text else ""
+    return {
+        "redacted": bool(text),
+        "errorHash": text_hash,
+        "errorType": type(value).__name__ if value is not None else "",
+        "errorLength": len(text),
+        "errorBytes": len(text_bytes),
+    }
+
+
+def _scheduler_public_error(prefix: str, value: Any) -> Dict[str, Any]:
+    summary = _scheduler_exception_summary(value)
+    message = prefix
+    if summary["errorHash"]:
+        message = (
+            f"{prefix} Details redacted "
+            f"(type={summary['errorType']}, hash={summary['errorHash']}, "
+            f"chars={summary['errorLength']}, bytes={summary['errorBytes']})."
+        )
+    return {"message": message, **summary}
+
+
+def _scheduler_hash(value: Any) -> str:
+    text = "" if value is None else str(value)
+    return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:16] if text else ""
+
+
+def _scheduler_body_line(label: str, value: Any) -> str:
+    text = "" if value is None else str(value)
+    if not text:
+        return f"{label}: [empty]"
+    encoded = text.encode("utf-8", errors="replace")
+    return (
+        f"{label}: [redacted-content] "
+        f"hash={_scheduler_hash(text)} chars={len(text)} bytes={len(encoded)}"
+    )
 
 
 class SchedulerTool(BaseTool):
@@ -102,11 +145,20 @@ class SchedulerTool(BaseTool):
                         "Error: Current read-only mode blocks scheduled task changes."
                     )
             except Exception as exc:
-                logger.warning(f"[SchedulerTool] permission broker unavailable; mutation blocked: {exc}")
+                logger.warning(f"[SchedulerTool] permission broker unavailable; mutation blocked: {_scheduler_exception_summary(exc)}")
                 return ToolResult.fail(
                     "Error: Permission broker unavailable; scheduled task change was blocked."
                 )
-        
+
+        if not self.task_store:
+            try:
+                from agent.tools.scheduler.integration import ensure_scheduler_runtime, get_task_store
+
+                if ensure_scheduler_runtime():
+                    self.task_store = get_task_store()
+            except Exception as exc:
+                logger.warning(f"[SchedulerTool] lazy scheduler init failed: {_scheduler_exception_summary(exc)}")
+
         if not self.task_store:
             return ToolResult.fail("错误: 定时任务系统未初始化")
         
@@ -132,8 +184,8 @@ class SchedulerTool(BaseTool):
             else:
                 return ToolResult.fail(f"未知操作: {action}")
         except Exception as e:
-            logger.error(f"[SchedulerTool] Error: {e}")
-            return ToolResult.fail(f"操作失败: {str(e)}")
+            logger.error(f"[SchedulerTool] Error: {_scheduler_exception_summary(e)}")
+            return ToolResult.fail(_scheduler_public_error("操作失败。", e))
     
     def _create_task(self, **kwargs) -> str:
         """Create a new scheduled task"""
@@ -203,6 +255,16 @@ class SchedulerTool(BaseTool):
         msg = context.kwargs.get("msg")
         if msg and hasattr(msg, 'sender_staff_id') and not context.get("isgroup", False):
             action["dingtalk_sender_staff_id"] = msg.sender_staff_id
+
+        delivery_target = resolve_scheduler_delivery_target(
+            {"action": action},
+            prefer_home_channel=True,
+        )
+        if not delivery_target.get("ok"):
+            return f"错误: 无法确定定时任务投递目标 ({delivery_target.get('reason') or 'unknown'})"
+        target_task = {"action": action}
+        apply_scheduler_delivery_target(target_task, delivery_target)
+        action = target_task["action"]
         
         task_data = {
             "id": task_id,
@@ -224,12 +286,12 @@ class SchedulerTool(BaseTool):
         
         # Format response
         schedule_desc = self._format_schedule_description(schedule)
-        receiver_desc = task_data["action"]["receiver_name"] or task_data["action"]["receiver"]
+        receiver_desc = f"receiverHash={_scheduler_hash(task_data['action'].get('receiver'))}"
         
         if message:
-            content_desc = f"💬 固定消息: {message}"
+            content_desc = _scheduler_body_line("固定消息", message)
         else:
-            content_desc = f"🤖 AI任务: {ai_task}"
+            content_desc = _scheduler_body_line("AI任务", ai_task)
         
         return (
             f"✅ 定时任务创建成功\n\n"
@@ -280,6 +342,13 @@ class SchedulerTool(BaseTool):
         next_run_str = datetime.fromisoformat(next_run).strftime('%Y-%m-%d %H:%M:%S') if next_run else "未知"
         last_run = task.get("last_run_at")
         last_run_str = datetime.fromisoformat(last_run).strftime('%Y-%m-%d %H:%M:%S') if last_run else "从未执行"
+        body_value = (
+            action.get("content")
+            if action.get("type") == "send_message"
+            else action.get("task_description")
+            if action.get("type") == "agent_task"
+            else action.get("result_prefix")
+        )
         
         return (
             f"📋 任务详情\n\n"
@@ -287,8 +356,8 @@ class SchedulerTool(BaseTool):
             f"名称: {task['name']}\n"
             f"状态: {status}\n"
             f"调度: {schedule_desc}\n"
-            f"接收者: {action.get('receiver_name', action.get('receiver'))}\n"
-            f"消息: {action.get('content')}\n"
+            f"接收者: receiverHash={_scheduler_hash(action.get('receiver'))}\n"
+            f"{_scheduler_body_line('消息', body_value)}\n"
             f"下次执行: {next_run_str}\n"
             f"上次执行: {last_run_str}\n"
             f"创建时间: {datetime.fromisoformat(task['created_at']).strftime('%Y-%m-%d %H:%M:%S')}"
@@ -386,7 +455,7 @@ class SchedulerTool(BaseTool):
                     return {"type": "once", "run_at": parsed.isoformat()}
             
         except Exception as e:
-            logger.error(f"[SchedulerTool] Invalid schedule: {e}")
+            logger.error(f"[SchedulerTool] Invalid schedule: {_scheduler_exception_summary(e)}")
             return None
         
         return None

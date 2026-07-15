@@ -1,83 +1,107 @@
-# Example Nginx locations for EcoreX v0.1.19.
-# Place these inside the existing https server block for www.ecoreai.cn.
+# EcoreX v1 public Bootstrap site + release Control Plane Web console.
+# Place these locations inside the HTTPS server block.
 
-set $ecorex_admin_api http://127.0.0.1:18084;
-set $ecorex_web_runtime http://127.0.0.1:9909;
+set $ecorex_control_plane http://127.0.0.1:18084;
 
 location = /ecorex-agent {
     return 301 /ecorex-agent/;
 }
 
 location = /ecorex-agent/admin {
-    return 301 /ecorex-agent/admin/;
-}
-
-location = /ecorex-agent/app {
-    return 301 /ecorex-agent/app/;
-}
-
-location ^~ /ecorex-agent/admin/api/ {
-    proxy_pass $ecorex_admin_api/admin/api/;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-}
-
-location ^~ /ecorex-agent/api/admin/ {
-    proxy_pass $ecorex_admin_api/api/admin/;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-}
-
-location ^~ /ecorex-agent/client/ {
-    proxy_pass $ecorex_admin_api/client/;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-}
-
-location ~ ^/ecorex-agent/(stream|api/logs)$ {
-    rewrite ^/ecorex-agent(/.*)$ $1 break;
-    proxy_pass $ecorex_web_runtime;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header Connection "";
-    proxy_buffering off;
-    proxy_cache off;
-    proxy_read_timeout 1h;
-    proxy_send_timeout 1h;
-    add_header X-Accel-Buffering no always;
-}
-
-location ~ ^/ecorex-agent/(app/|auth/|message$|upload$|uploads/|api/|poll$|cancel$|chat$|config$|assets/) {
-    rewrite ^/ecorex-agent(/.*)$ $1 break;
-    proxy_pass $ecorex_web_runtime;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header Connection "";
-    proxy_buffering off;
-    proxy_read_timeout 1h;
-    proxy_send_timeout 1h;
+    return 308 /admin/;
 }
 
 location ^~ /ecorex-agent/admin/ {
-    auth_basic "EcoreX Admin";
-    auth_basic_user_file /etc/nginx/ecorex-admin.htpasswd;
-    alias /srv/ecorex-agent-download/current/admin/;
-    index index.html;
-    autoindex off;
+    return 308 /admin/;
 }
 
-location ^~ /ecorex-agent/ {
+location = /admin {
+    return 301 /admin/;
+}
+
+# The Control Plane itself serves content-addressed /admin assets and validates
+# the in-memory administrator bearer on every /api/v1/admin mutation.
+location ^~ /admin/ {
+    proxy_pass $ecorex_control_plane;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_buffering off;
+}
+
+location = /api/v1/admin {
+    proxy_pass $ecorex_control_plane;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_buffering off;
+}
+
+location ^~ /api/v1/admin/ {
+    proxy_pass $ecorex_control_plane;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_buffering off;
+}
+
+location = /ecorex-agent/ {
+    alias /srv/ecorex-agent-download/current/index.html;
+    default_type text/html;
+    add_header Cache-Control "no-store" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self' https:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'" always;
+}
+
+location = /ecorex-agent/index.html {
+    alias /srv/ecorex-agent-download/current/index.html;
+    default_type text/html;
+    add_header Cache-Control "no-store" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self' https:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'" always;
+}
+
+location = /ecorex-agent/public-bootstrap-index.json {
+    alias /srv/ecorex-agent-download/current/public-bootstrap-index.json;
+    default_type application/json;
+    add_header Cache-Control "no-store" always;
+    add_header X-Content-Type-Options "nosniff" always;
+}
+
+location ~ ^/ecorex-agent/(?<ecorex_public_asset>(?:site|styles)\.[0-9a-f]{12}\.(?:js|css)|assets/[A-Za-z0-9._-]+\.[0-9a-f]{12}\.(?:png|svg|webp|woff2))$ {
+    alias /srv/ecorex-agent-download/current/$ecorex_public_asset;
+    autoindex off;
+    add_header Cache-Control "public, max-age=31536000, immutable" always;
+    add_header X-Content-Type-Options "nosniff" always;
+}
+
+location ^~ /ecorex-agent/downloads/ {
+    alias /srv/ecorex-agent-download/current/downloads/;
+    autoindex off;
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    add_header Accept-Ranges bytes always;
+    add_header Cache-Control "public, max-age=31536000, immutable" always;
+    default_type application/octet-stream;
+    types {
+        application/zip zip;
+        application/gzip gz;
+        application/octet-stream bin;
+    }
+}
+
+location /ecorex-agent/ {
     alias /srv/ecorex-agent-download/current/;
     index index.html;
     autoindex off;
+    add_header Cache-Control "no-store" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self' https:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'" always;
 }

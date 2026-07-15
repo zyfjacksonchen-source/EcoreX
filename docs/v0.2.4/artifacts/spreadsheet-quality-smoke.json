@@ -1,0 +1,80 @@
+{
+  "status": "PASS",
+  "renderBackend": "provided-redacted-metadata",
+  "actualRender": {
+    "status": "unavailable",
+    "errorType": "OfficePdfRuntimeError"
+  },
+  "actualRenderAvailable": false,
+  "syntheticRenderRejected": true,
+  "cleanStatus": "fail",
+  "cleanFailedChecks": [
+    "chart-render",
+    "render-preview"
+  ],
+  "expectedCleanNoRenderFailures": [
+    "chart-render",
+    "render-preview"
+  ],
+  "badStatus": "fail",
+  "badFailedChecks": [
+    "chart-render",
+    "formula-audit",
+    "render-preview",
+    "typed-values"
+  ],
+  "requiredBadFailures": [
+    "chart-render",
+    "formula-audit",
+    "render-preview",
+    "typed-values"
+  ],
+  "cleanSummary": {
+    "sheetCount": 2,
+    "sheetsInspected": 2,
+    "emptySheetCount": 0,
+    "nonEmptySheetCount": 2,
+    "hiddenSheetCount": 0,
+    "cellsScanned": 22,
+    "formulaCellCount": 4,
+    "formulaErrorTokenCount": 0,
+    "errorCellCount": 0,
+    "numericCellCount": 6,
+    "dateCellCount": 0,
+    "booleanCellCount": 0,
+    "textCellCount": 9,
+    "blankCellCount": 3,
+    "numericTextRiskCount": 0,
+    "dateTextRiskCount": 0,
+    "tableCount": 0,
+    "chartCount": 1,
+    "chartIssueCount": 0,
+    "mergedRangeCount": 0,
+    "truncated": false
+  },
+  "badSummary": {
+    "sheetCount": 1,
+    "sheetsInspected": 1,
+    "emptySheetCount": 0,
+    "nonEmptySheetCount": 1,
+    "hiddenSheetCount": 0,
+    "cellsScanned": 4,
+    "formulaCellCount": 1,
+    "formulaErrorTokenCount": 1,
+    "errorCellCount": 0,
+    "numericCellCount": 0,
+    "dateCellCount": 0,
+    "booleanCellCount": 0,
+    "textCellCount": 3,
+    "blankCellCount": 0,
+    "numericTextRiskCount": 1,
+    "dateTextRiskCount": 1,
+    "tableCount": 0,
+    "chartCount": 1,
+    "chartIssueCount": 1,
+    "mergedRangeCount": 0,
+    "truncated": false
+  },
+  "leakCount": 0,
+  "redacted": true
+}

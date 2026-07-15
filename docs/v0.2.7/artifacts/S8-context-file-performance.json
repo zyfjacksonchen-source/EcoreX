@@ -1,0 +1,63 @@
+{
+  "slice": "S8-context-file-performance",
+  "status": "review_passed",
+  "createdAt": "2026-07-02",
+  "problem": {
+    "summary": "Large accumulated chat context with many local files caused noticeable UI/runtime lag.",
+    "primaryCauses": [
+      "Conversation history restoration could inject many local attachment/artifact references into model-visible context.",
+      "Frontend context-size estimation scanned every attachment, step, and legacy tool call for retained messages."
+    ]
+  },
+  "implementation": {
+    "backend": {
+      "file": "agent/memory/conversation_store.py",
+      "changes": [
+        "Bound recovered local attachment/artifact references to 4 per message and 40 per loaded context.",
+        "Deduplicate recovered references by normalized label/path.",
+        "Truncate restored paths to 512 characters and artifact titles to 160 characters.",
+        "Append a compact omitted-reference summary when duplicates or over-budget entries are skipped."
+      ]
+    },
+    "frontend": {
+      "file": "desktop/src/App.tsx",
+      "changes": [
+        "Bound context-size estimation to the first 8 files per message/draft.",
+        "Truncate file keys used by context-size estimation to 240 characters.",
+        "Bound context-size estimation to the first 16 steps and first 12 legacy tool calls per message.",
+        "Add bounded omitted-cost approximations so the meter remains conservative without scanning unbounded arrays."
+      ]
+    }
+  },
+  "privacy": {
+    "publicArtifactPolicy": "No raw file paths are included in this artifact.",
+    "modelContextPolicy": "Local paths may be restored into model-visible context for task continuity, but are deduplicated, truncated, and budgeted.",
+    "publicLogRedactionEvidence": "tests/test_web_runtime_goal.py::test_v027_public_log_redaction_masks_paths_and_api_base passed"
+  },
+  "verification": {
+    "commands": [
+      {
+        "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_ecorex_session_identity_sorting.py -q",
+        "result": "18 passed"
+      },
+      {
+        "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_web_runtime_goal.py::test_s4b_web_app_chat_model_switcher_contract tests/test_web_runtime_goal.py::test_v027_context_estimate_bounds_large_local_file_history tests/test_web_runtime_goal.py::test_v027_public_log_redaction_masks_paths_and_api_base -q",
+        "result": "3 passed"
+      },
+      {
+        "command": "python -m py_compile agent/memory/conversation_store.py",
+        "result": "passed"
+      }
+    ]
+  },
+  "reviewGate": {
+    "status": "pass",
+    "roles": {
+      "runtimeConfig": "PASS",
+      "frontendApi": "PASS",
+      "toolchainCdpOcrTongxin": "PASS",
+      "qaRelease": "PASS",
+      "privacyData": "PASS"
+    }
+  }
+}

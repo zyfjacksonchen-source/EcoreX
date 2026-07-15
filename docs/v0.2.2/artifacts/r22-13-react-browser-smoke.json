@@ -1,0 +1,113 @@
+{
+  "status": "PASS",
+  "duration_ms": 10079,
+  "metrics": {
+    "emailVisible": true,
+    "versionVisible": true,
+    "newSessionHeadline": true,
+    "runCenterHidden": true,
+    "generalCollapse": {
+      "rowsBefore": 3,
+      "collapsed": true
+    },
+    "artifacts": {
+      "count": 2,
+      "titles": [
+        "image-a.png\n路径：C:/EcoreX/out/image-a.png",
+        "image-b.png\n路径：C:/EcoreX/out/image-b.png"
+      ]
+    },
+    "markdownParity": {
+      "rawHeadingMarkerVisible": false,
+      "hashtagParagraph": "#世界杯 #看球 #宅家看球",
+      "headingFontPx": 19.6,
+      "hashtagFontPx": 14,
+      "previewOverflow": "hidden",
+      "previewMaxHeight": "544px"
+    },
+    "artifactMenuOutsideClick": true,
+    "artifactMenuEscape": true,
+    "chatFileMenuOutsideClick": true,
+    "projectMenuOutsideClick": true,
+    "lateHistoryRaceSuppressed": true,
+    "freshSessionIsolation": true,
+    "overflow": {
+      "beforeSend": {
+        "document": 0,
+        "chatPane": 0,
+        "messageList": 0
+      },
+      "afterSend": {
+        "document": 0,
+        "chatPane": 0,
+        "messageList": 0
+      }
+    },
+    "projectStartMenu": true,
+    "runTimingVisible": true,
+    "runTimingInProcessSummary": true,
+    "runTimingAfterHistoryRefresh": true,
+    "streaming": {
+      "samples": 13,
+      "avgIntervalMs": 43.8,
+      "maxIntervalMs": 81.4,
+      "finalLength": 1383,
+      "rawHeadingVisible": false,
+      "headingFontPx": 19.6
+    },
+    "apiCalls": [
+      "/api/tool-permissions",
+      "/api/memory?page=1&page_size=12&category=memory",
+      "/api/memory?page=1&page_size=12&category=dream",
+      "/api/active-requests",
+      "/api/scheduler",
+      "/api/version",
+      "/api/sessions?page=1&page_size=40",
+      "/api/history?session_id=stale-race-session&page=1&page_size=50",
+      "/api/ui-state",
+      "/api/history?session_id=general-history-1&page=1&page_size=50",
+      "/api/file-stat",
+      "/api/file-stat",
+      "/api/ui-state",
+      "/api/file-stat",
+      "/api/file-stat",
+      "/message",
+      "/api/sessions/ecorex-draft-1782448122695-60b4792d/generate_title",
+      "/api/ui-state",
+      "/api/history?session_id=ecorex-draft-1782448122695-60b4792d&page=1&page_size=50",
+      "/api/ui-state"
+    ],
+    "fonts": {
+      "body": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, system-ui, sans-serif",
+      "code": "ui-monospace, SFMono-Regular, \"SF Mono\", Menlo, Monaco, Consolas, \"Liberation Mono\", monospace",
+      "codeFontPx": 12.25,
+      "bodyHasSystemStack": true,
+      "codeHasMonoStack": true
+    },
+    "longMarkdownVisual": {
+      "headingFontPx": 19.6,
+      "hashtagFontPx": 14,
+      "previewOverflow": "hidden",
+      "previewMaxHeight": "544px",
+      "overflow": {
+        "document": 0,
+        "chatPane": 0,
+        "messageList": 0
+      }
+    },
+    "narrowViewport": {
+      "width": 390,
+      "height": 760,
+      "overflow": {
+        "document": 0,
+        "chatPane": 0,
+        "messageList": 0
+      },
+      "choicesStacked": true,
+      "headlineVisible": true,
+      "screenshot": "C:\\CowAgent\\docs\\v0.2.2\\artifacts\\r22-13-react-browser-smoke-narrow.png"
+    }
+  },
+  "console_errors": [],
+  "screenshot": "C:\\CowAgent\\docs\\v0.2.2\\artifacts\\r22-13-react-browser-smoke.png"
+}

@@ -1,0 +1,17 @@
+# EcoreX Web Runtime Release Gate Consensus
+
+- Generated at: 2026-07-02T07:43:51.097557+00:00
+- Automated status: FAIL
+- Scope: Web service package / Web runtime / public agent runtime only.
+- Desktop/Electron scope: excluded.
+
+## Automated Checks
+
+- runtimeBaseline: fail (runtime-baseline.json)
+- capabilityManifest: pass (web-release-gate.json#manifestAudit)
+- capabilityState: pass (capability-state.json)
+- permissionMatrix: pass (permission-matrix.json)
+
+## Human Review Gate
+
+This file is generated for each Web release snapshot. Final publishing still requires the S9 multi-agent consensus record in docs/web-runtime-goal/reviews/S09-consensus.md.

@@ -1,0 +1,1 @@
+{"adapter":"managed-channel-contracts-v1","inventory":"runtime-inventory.json","kind":"dependency-service","pack_id":"channels","runtime_api_version":"1.0.0","schema_version":1,"services":["channels.adapters"]}

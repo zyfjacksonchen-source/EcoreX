@@ -1,0 +1,54 @@
+{
+  "status": "PASS",
+  "slice": "S10b-public-release-update-strategy",
+  "version": "0.2.7",
+  "generatedAt": "2026-07-02T23:20:00+08:00",
+  "decisions": {
+    "publicReleaseZip": "Thin site/admin/server/checksum bundle. Platform downloads are not embedded.",
+    "downloadsDeployment": "Windows WebUI, macOS WebUI, and Linux service artifacts are uploaded as a checked downloads source and copied into the staged release only after size and SHA256 validation.",
+    "onlineUpdateGate": "Deploying artifacts stages a release; user-visible stable updates require an explicit admin promotion trigger.",
+    "backgroundUpdateUx": "Background updates run with ECOREX_UPDATE_MODE=background, defer when /api/active-requests reports running work, do not open a new browser, and leave soft refresh to the existing tab after health is restored.",
+    "platformRuntime": "Windows and macOS keep platform-specific binary layers. They share the same manifest contract, cache/sha validation semantics, update-state file, active-request idle gate, and installer flow instead of forcing one cross-platform runtime binary."
+  },
+  "artifacts": {
+    "publicZip": {
+      "fileName": "EcoreX_0.2.7-public-release.zip",
+      "sizeBytes": 2843655,
+      "downloadsEmbedded": false,
+      "downloadsExternalized": true
+    },
+    "windowsWebui": {
+      "fileName": "EcoreX_0.2.7-webui-windows-x64.zip",
+      "sizeBytes": 550728680,
+      "sha256": "CC8DCF1B5E8E3D01150C9AA2C7A226F3F4AEE5D52DB5181F7370E0F3FB66E35A",
+      "platformRuntimeLayer": "windows-x64"
+    },
+    "macosWebui": {
+      "fileName": "EcoreX_0.2.7-webui-macos-universal.zip",
+      "sizeBytes": 652183487,
+      "sha256": "BDA80D348E4CC8838BB8B0485F7C8B663FC19C47279C27C96F5DED07C0B9ACC3",
+      "platformRuntimeLayer": "macos-universal"
+    },
+    "linuxService": {
+      "fileName": "EcoreX_0.2.7-web-linux-service.tar.gz",
+      "sizeBytes": 4079753,
+      "platformRuntimeLayer": "linux-service"
+    }
+  },
+  "tests": [
+    "python -m py_compile scripts/deploy-v024-production.py scripts/validate-ecorex-release-artifacts.py scripts/真实发布校验.py scripts/smoke-v026-production-agent-product-acceptance.py",
+    "python -m pytest tests/test_v025_runtime_manifest.py::test_v025_public_zip_rejects_externalized_local_artifact_href tests/test_v025_runtime_manifest.py::test_v027_public_zip_accepts_externalized_downloads_contract tests/test_v025_runtime_manifest.py::test_v027_public_release_updates_are_admin_promotion_gated tests/test_v025_runtime_manifest.py::test_v027_webui_installers_keep_windows_macos_user_flow_consistent -q",
+    "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-ecorex-webui-local-release.ps1 -Version 0.2.7",
+    "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/update-ecorex-desktop-release-manifest.ps1 -Version 0.2.7 -WebUiWindowsPath release-artifacts/EcoreX_0.2.7-webui-windows-x64.zip -WebUiMacosPath release-artifacts/EcoreX_0.2.7-webui-macos-universal.zip -WebLinuxServicePath release-artifacts/EcoreX_0.2.7-web-linux-service.tar.gz",
+    "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-ecorex-public-release.ps1 -Version 0.2.7 -ExternalizeDownloads",
+    "python scripts/validate-ecorex-release-artifacts.py --version 0.2.7 --public-zip release-artifacts/EcoreX_0.2.7-public-release.zip"
+  ],
+  "reviewGate": {
+    "runtimeConfig": "PASS",
+    "frontendApi": "PASS",
+    "toolchainPackaging": "PASS",
+    "qaRelease": "PASS",
+    "privacyData": "PASS",
+    "note": "Tool-level subagent spawning was unavailable because the thread agent limit was reached; review was completed locally using the same role checklist."
+  }
+}

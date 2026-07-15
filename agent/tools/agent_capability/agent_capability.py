@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Any, Dict
 
 from agent.tools.base_tool import BaseTool, ToolResult
-from agent.tools.optional_abilities.optional_abilities import OptionalAbilities
+from agent.tools.optional_abilities.optional_abilities import OptionalAbilities, TONGXIN_CLI_INSTALL_HINT
+from common.ecorex_capability_policy import blocked_install_payload
 from common.log import logger
 from config import conf
 
@@ -44,6 +45,14 @@ def _read_json_file(path: Path) -> Dict[str, Any]:
         return {}
 
 
+def _safe_capability_event_identifier(value: Any) -> str:
+    raw = str(value or "").strip()
+    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-"
+    if 1 <= len(raw) <= 128 and all(char in allowed for char in raw):
+        return raw
+    return ""
+
+
 def _write_json_file(path: Path, data: Dict[str, Any]) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -67,6 +76,11 @@ _PACK_ALIASES = {
     "feishu_cli": "feishu-cli",
     "feishu-cli": "feishu-cli",
     "lark-cli": "feishu-cli",
+    "tongxin": "tongxin-cli",
+    "tongxin-cli": "tongxin-cli",
+    "xin-agent": "tongxin-cli",
+    "xin-agent-cli": "tongxin-cli",
+    "tx-assistant": "tongxin-cli",
 }
 
 FEISHU_LARK_SOURCE_URL = "https://github.com/larksuite/cli"
@@ -163,15 +177,31 @@ class AgentCapabilityTool(BaseTool):
         "properties": {
             "action": {
                 "type": "string",
-                "description": "One of: list_packs, diagnose, install_pack, install_skill, enable_skill, disable_skill, configure_mcp, reload_mcp.",
+                "description": "One of: list_packs, diagnose, install_pack, install_skill, enable_skill, disable_skill, configure_mcp, reload_mcp, request_skill_learning, create_skill_draft, approve_skill_draft.",
             },
             "pack_id": {"type": "string", "description": "Capability pack or optional ability id."},
             "skill": {"type": "string", "description": "Skill name."},
+            "name": {"type": "string", "description": "Skill or draft name for learned skills."},
+            "description": {"type": "string", "description": "Skill description for learned skill drafts."},
+            "goal": {"type": "string", "description": "User goal or workflow being learned."},
             "url": {"type": "string", "description": "Skill package/repo URL for install_skill."},
             "files": {"type": "array", "description": "Optional skill file entries for install_skill."},
+            "sources": {"type": "array", "description": "Redacted source summaries for learned skill drafts."},
+            "reviews": {"type": "array", "description": "Role review summaries for learned skill drafts."},
+            "draft": {"type": "object", "description": "Learned skill draft returned by create_skill_draft."},
+            "request_id": {"type": "string", "description": "Optional runtime request id for ledger-backed learning events."},
+            "session_id": {"type": "string", "description": "Optional runtime session id for ledger-backed learning events."},
             "discovery_source": {"type": "string", "description": "Discovery gate used before install_skill, e.g. find-skill."},
             "find_skill_result": {"type": "object", "description": "Optional structured result returned by the find skill/find-skill gate."},
             "server": {"type": "object", "description": "MCP server config for configure_mcp."},
+            "script_path": {
+                "type": "string",
+                "description": "Optional local xin_agent_cli.py path when configuring the Tongxin CLI capability pack. If omitted, EcoreX may auto-detect or use configured authenticated bootstrap settings.",
+            },
+            "python_path": {
+                "type": "string",
+                "description": "Optional EcoreX-owned Python executable path used to run xin_agent_cli.py.",
+            },
             "timeout": {"type": "integer", "description": "Install timeout seconds."},
         },
         "required": ["action"],
@@ -182,7 +212,9 @@ class AgentCapabilityTool(BaseTool):
         workspace = _workspace_for(self)
         try:
             if action == "list_packs":
-                return OptionalAbilities().execute({"action": "list"})
+                from agent.runtime_capabilities import CapabilityService
+
+                return ToolResult.success(CapabilityService(workspace_root=workspace).capabilities_payload(include_related=False))
             if action == "diagnose":
                 return self._diagnose(workspace)
             if action == "install_pack":
@@ -200,14 +232,59 @@ class AgentCapabilityTool(BaseTool):
                 return self._configure_mcp(workspace, params)
             if action == "reload_mcp":
                 return self._reload_mcp()
+            if action == "request_skill_learning":
+                return self._request_skill_learning(params)
+            if action == "create_skill_draft":
+                return self._create_skill_draft(params)
+            if action == "approve_skill_draft":
+                return self._approve_skill_draft(workspace, params)
         except Exception as exc:
             logger.exception(f"[AgentCapability] action failed: {action}")
             return ToolResult.fail({"status": "error", "action": action, "message": str(exc)})
         return ToolResult.fail({"status": "error", "message": "unknown action"})
 
     def _install_pack(self, pack_id: str, params: Dict[str, Any]) -> ToolResult:
+        if pack_id == "tongxin-cli":
+            configure_args: Dict[str, Any] = {
+                "action": "configure",
+                "ability": "tongxin-cli",
+            }
+            script_path = params.get("script_path") or params.get("scriptPath") or params.get("path")
+            if script_path:
+                configure_args["script_path"] = script_path
+            python_path = params.get("python_path") or params.get("pythonPath")
+            if python_path:
+                configure_args["python_path"] = python_path
+            payload = _payload_for_result(OptionalAbilities().execute(configure_args))
+            configured = payload.get("status") == "success" and bool(payload.get("configured"))
+            response = {
+                **payload,
+                "packId": "tongxin-cli",
+                "configureOnly": True,
+                "readOnly": True,
+                "defaultEnabled": True,
+                "installHint": TONGXIN_CLI_INSTALL_HINT,
+                "message": payload.get("message") or (
+                    "tongxin-cli 已配置完成。"
+                    if configured else
+                    "tongxin-cli 未能完成配置，请确认本地 xin_agent_cli.py 路径存在。"
+                ),
+                "nextAction": {
+                    "tool": "tongxin_cli",
+                    "action": "status" if configured else "auto_configure",
+                },
+            }
+            return ToolResult.success(response) if configured else ToolResult.fail(response)
         timeout = params.get("timeout")
         install_plan = ["feishu-cli"] if pack_id in {"feishu-lark", "feishu-cli"} else [pack_id]
+        policy_pack_id = "feishu-lark" if pack_id in {"feishu-lark", "feishu-cli"} else pack_id
+        blocked = blocked_install_payload(policy_pack_id, action="install_pack")
+        if blocked:
+            event_pack_id = str(blocked.get("packId") or "redacted-capability-pack")
+            if not blocked.get("packIdRedacted") and policy_pack_id != pack_id:
+                blocked["requestedPackId"] = pack_id
+            self._record_capability_policy_blocked(event_pack_id, blocked, action="install_pack")
+            return ToolResult.fail(blocked)
         if pack_id in {"feishu-lark", "feishu-cli"} and not _has_find_skill_discovery(params):
             return ToolResult.fail({
                 "status": "error",
@@ -256,23 +333,78 @@ class AgentCapabilityTool(BaseTool):
             "nextAction": "refresh capabilities and continue the user task",
         })
 
-    def _diagnose(self, workspace: str) -> ToolResult:
-        abilities = OptionalAbilities().execute({"action": "list"}).result
-        skills = _skill_service(workspace).dispatch("query")
-        try:
-            from agent.tools import ToolManager
+    def _request_skill_learning(self, params: Dict[str, Any]) -> ToolResult:
+        from agent.skills.learning_service import SkillLearningService
 
-            manager = ToolManager()
-            mcp_status = manager.list_mcp_status()
+        payload = SkillLearningService().learning_prompt(
+            goal=str(params.get("goal") or params.get("description") or ""),
+            request_id=str(params.get("request_id") or params.get("requestId") or ""),
+            session_id=str(params.get("session_id") or params.get("sessionId") or ""),
+        )
+        return ToolResult.success(payload)
+
+    def _create_skill_draft(self, params: Dict[str, Any]) -> ToolResult:
+        from agent.skills.learning_service import SkillLearningService
+
+        payload = SkillLearningService().create_draft(
+            name=str(params.get("name") or params.get("skill") or ""),
+            description=str(params.get("description") or ""),
+            files=params.get("files") if isinstance(params.get("files"), list) else [],
+            goal=str(params.get("goal") or ""),
+            sources=params.get("sources") if isinstance(params.get("sources"), list) else [],
+            request_id=str(params.get("request_id") or params.get("requestId") or ""),
+            session_id=str(params.get("session_id") or params.get("sessionId") or ""),
+            reviews=params.get("reviews") if isinstance(params.get("reviews"), list) else [],
+        )
+        return ToolResult.success(payload)
+
+    def _approve_skill_draft(self, workspace: str, params: Dict[str, Any]) -> ToolResult:
+        from agent.skills.learning_service import SkillLearningService
+
+        draft = params.get("draft") if isinstance(params.get("draft"), dict) else {}
+        payload = SkillLearningService(skill_service=_skill_service(workspace)).approve_and_register(
+            draft=draft,
+            request_id=str(params.get("request_id") or params.get("requestId") or ""),
+            session_id=str(params.get("session_id") or params.get("sessionId") or ""),
+        )
+        return ToolResult.success(payload)
+
+    def _record_capability_policy_blocked(self, pack_id: str, blocked: Dict[str, Any], *, action: str) -> None:
+        context = getattr(self, "context", None)
+        request_id = _safe_capability_event_identifier(getattr(context, "_current_request_id", ""))
+        if not request_id:
+            return
+        session_id = _safe_capability_event_identifier(getattr(context, "_current_session_id", ""))
+        policy = blocked.get("policy") if isinstance(blocked.get("policy"), dict) else {}
+        safe_pack_id = _safe_capability_event_identifier(pack_id) or "redacted-capability-pack"
+        try:
+            from agent.protocol import get_run_event_ledger
+
+            get_run_event_ledger().append_event(
+                request_id=request_id,
+                session_id=session_id,
+                turn_id=request_id,
+                event_type="capability.policy_blocked",
+                payload={
+                    "pack_id": safe_pack_id,
+                    "action": action,
+                    "error_type": blocked.get("errorType") or "capability_policy_blocked",
+                    "policy_mode": policy.get("policyMode") or "disabled",
+                    "install_allowed": bool(policy.get("installAllowed")),
+                    "policy_source": policy.get("policySource") or "",
+                    "policy_updated_at": policy.get("policyUpdatedAt") or "",
+                    "pack_id_redacted": bool(blocked.get("packIdRedacted") or policy.get("packIdRedacted")),
+                },
+                idempotency_key=f"{request_id}:capability.policy_blocked:{safe_pack_id}:{action}",
+                source="tool",
+            )
         except Exception as exc:
-            mcp_status = {"error": str(exc)}
-        return ToolResult.success({
-            "status": "success",
-            "workspace": workspace,
-            "abilities": abilities,
-            "skills": skills,
-            "mcpStatus": mcp_status,
-        })
+            logger.debug(f"[AgentCapability] capability policy event skipped: {exc}")
+
+    def _diagnose(self, workspace: str) -> ToolResult:
+        from agent.runtime_capabilities import CapabilityService
+
+        return ToolResult.success(CapabilityService(workspace_root=workspace).diagnose_payload())
 
     def _install_skill(self, workspace: str, params: Dict[str, Any]) -> ToolResult:
         name = str(params.get("skill") or params.get("name") or "").strip()

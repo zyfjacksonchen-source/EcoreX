@@ -1,0 +1,478 @@
+name: EcoreX v1 publish accepted Candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Exact channel carried by the accepted Candidate
+        required: true
+        type: choice
+        default: canary
+        options:
+          - canary
+          - stable
+      candidate_run_id:
+        description: Successful protected Candidate workflow run ID
+        required: true
+        type: string
+      candidate_run_attempt:
+        description: Exact successful Candidate workflow attempt
+        required: true
+        type: string
+      candidate_artifact_id:
+        description: Exact ecorex-v1-accepted-* artifact ID from that attempt
+        required: true
+        type: string
+      publication_mode:
+        description: Verify only, create a paused rollout, or create and activate it
+        required: true
+        type: choice
+        default: verify-only
+        options:
+          - verify-only
+          - create
+          - create-and-activate
+      rollout_percentage:
+        description: Initial rollout percentage (defaults to 1%)
+        required: true
+        type: string
+        default: "1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ecorex-v1-publication-${{ inputs.channel }}
+  cancel-in-progress: false
+
+jobs:
+  validate-request:
+    name: Authenticate immutable accepted Candidate handoff
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      publication_artifact_id: ${{ steps.publication_input.outputs.artifact-id }}
+      publication_artifact_sha256: ${{ steps.publication_input.outputs.artifact-digest }}
+    steps:
+      - name: Refuse PR, unprotected ref or malformed publication identity
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_PROTECTED: ${{ github.ref_protected }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+          CANDIDATE_ARTIFACT_ID: ${{ inputs.candidate_artifact_id }}
+          ROLLOUT_PERCENTAGE: ${{ inputs.rollout_percentage }}
+        run: |
+          python - <<'PY'
+          import os, re
+          ok = (
+              os.environ["EVENT_NAME"] == "workflow_dispatch"
+              and os.environ["REF_PROTECTED"] == "true"
+              and re.fullmatch(r"[1-9][0-9]{0,18}", os.environ["CANDIDATE_RUN_ID"] or "")
+              and re.fullmatch(r"[1-9][0-9]{0,8}", os.environ["CANDIDATE_RUN_ATTEMPT"] or "")
+              and re.fullmatch(r"[1-9][0-9]{0,18}", os.environ["CANDIDATE_ARTIFACT_ID"] or "")
+              and re.fullmatch(r"(?:[1-9]|[1-9][0-9]|100)", os.environ["ROLLOUT_PERCENTAGE"] or "")
+          )
+          raise SystemExit(0 if ok else 1)
+          PY
+
+      - name: Checkout exact protected publication authority
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.9"
+
+      - name: Install exact Candidate verification dependencies
+        run: python scripts/install-v1-python-profile.py --profile runtime
+
+      - name: Read exact Candidate attempt and artifact metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+        run: |
+          mkdir -p .handoff
+          gh api --header "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_RUN_ID}/attempts/${CANDIDATE_RUN_ATTEMPT}" \
+            > .handoff/run.json
+          gh api --header "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_RUN_ID}/artifacts?per_page=100" \
+            > .handoff/artifacts.json
+
+      - name: Select only the exact live-accepted artifact ID
+        id: candidate
+        run: >-
+          python scripts/select-v1-accepted-candidate.py
+          --run-metadata .handoff/run.json
+          --artifact-metadata .handoff/artifacts.json
+          --repository "${GITHUB_REPOSITORY}"
+          --commit-sha "${GITHUB_SHA}"
+          --workflow-run-id "${{ inputs.candidate_run_id }}"
+          --run-attempt "${{ inputs.candidate_run_attempt }}"
+          --artifact-id "${{ inputs.candidate_artifact_id }}"
+          --channel "${{ inputs.channel }}"
+          --protected-ref refs/heads/main
+          --max-run-age-seconds 2592000
+          --output .handoff/candidate-handoff.json
+          --github-output "${GITHUB_OUTPUT}"
+
+      - name: Download exact archive bytes and fail on any digest mismatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_ARTIFACT_ID: ${{ steps.candidate.outputs.artifact_id }}
+          CANDIDATE_ARTIFACT_SHA256: ${{ steps.candidate.outputs.artifact_sha256 }}
+        run: |
+          curl --fail --location --silent --show-error \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            --output .handoff/candidate.zip \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/artifacts/${CANDIDATE_ARTIFACT_ID}/zip"
+          python scripts/extract-v1-workflow-artifact.py \
+            --archive .handoff/candidate.zip \
+            --expected-sha256 "$CANDIDATE_ARTIFACT_SHA256" \
+            --output .candidate \
+            --required-root output \
+            --required-root gates \
+            --receipt .handoff/candidate-extraction.json
+
+      - name: Re-authenticate signed Candidate and every pre-publication gate
+        env:
+          ECOREX_RELEASE_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+        run: >-
+          python scripts/verify-v1-accepted-candidate.py
+          --candidate-root .candidate
+          --handoff .handoff/candidate-handoff.json
+          --repository "${GITHUB_REPOSITORY}"
+          --commit-sha "${GITHUB_SHA}"
+          --workflow-run-id "${{ inputs.candidate_run_id }}"
+          --run-attempt "${{ inputs.candidate_run_attempt }}"
+          --artifact-id "${{ inputs.candidate_artifact_id }}"
+          --channel "${{ inputs.channel }}"
+          --trusted-public-key "$ECOREX_RELEASE_SIGNER_PUBLIC_KEY"
+          --output .candidate/output/candidate-handoff-verification.json
+
+      - name: Independently verify all release file signatures and supply-chain evidence
+        env:
+          ECOREX_RELEASE_SIGNER_KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          ECOREX_RELEASE_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+        run: |
+          python scripts/verify-v1-release-signatures.py \
+            --release-dir .candidate/output/release \
+            --report .candidate/output/candidate-handoff-signature-report.json
+          python scripts/check-v1-candidate-supply-chain.py release \
+            --release-dir .candidate/output/release \
+            --dependency-lock-manifest requirements/locks/manifest.json \
+            --report .candidate/output/candidate-handoff-supply-chain.json
+          cp .handoff/candidate-handoff.json .candidate/output/evidence/candidate-handoff.json
+          cp .handoff/candidate-extraction.json .candidate/output/evidence/candidate-extraction.json
+
+      - name: Upload exact verified publication input for protected approval
+        id: publication_input
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ecorex-v1-publication-input-${{ inputs.channel }}-${{ github.run_id }}
+          path: |
+            .candidate/output
+            .candidate/gates
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
+
+  publish-and-promote:
+    name: Publish exact bytes and apply administrator rollout decision
+    if: ${{ inputs.publication_mode != 'verify-only' }}
+    needs: validate-request
+    environment:
+      name: ecorex-release-publication-${{ inputs.channel }}
+    runs-on: [self-hosted, linux, x64, ecorex-release-publish]
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout exact protected publication authority
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.9"
+
+      - name: Install runner-only publication dependencies
+        run: python scripts/install-v1-python-profile.py --profile runtime
+
+      - name: Download verified input bytes and fail on any digest mismatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLICATION_ARTIFACT_ID: ${{ needs.validate-request.outputs.publication_artifact_id }}
+          PUBLICATION_ARTIFACT_SHA256: ${{ needs.validate-request.outputs.publication_artifact_sha256 }}
+        run: |
+          curl --fail --location --silent --show-error \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            --output .publication-input.zip \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/artifacts/${PUBLICATION_ARTIFACT_ID}/zip"
+          python scripts/extract-v1-workflow-artifact.py \
+            --archive .publication-input.zip \
+            --expected-sha256 "$PUBLICATION_ARTIFACT_SHA256" \
+            --output .candidate \
+            --required-root output \
+            --required-root gates \
+            --receipt .publication-input-extraction.json
+
+      - name: Re-authenticate handoff and Candidate at the mutation boundary
+        env:
+          ECOREX_RELEASE_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+        run: >-
+          python scripts/verify-v1-accepted-candidate.py
+          --candidate-root .candidate
+          --handoff .candidate/output/evidence/candidate-handoff.json
+          --repository "${GITHUB_REPOSITORY}"
+          --commit-sha "${GITHUB_SHA}"
+          --workflow-run-id "${{ inputs.candidate_run_id }}"
+          --run-attempt "${{ inputs.candidate_run_attempt }}"
+          --artifact-id "${{ inputs.candidate_artifact_id }}"
+          --channel "${{ inputs.channel }}"
+          --trusted-public-key "$ECOREX_RELEASE_SIGNER_PUBLIC_KEY"
+          --output .candidate/output/candidate-publication-verification.json
+
+      - name: Retain exact publication-input extraction identity
+        run: >-
+          cp .publication-input-extraction.json
+          .candidate/output/evidence/publication-input-extraction.json
+
+      - name: Publish in signed source order and make GitHub public last
+        env:
+          ECOREX_GITHUB_TOKEN: ${{ github.token }}
+          ECOREX_MIRROR_TOKEN: ${{ secrets.ECOREX_MIRROR_TOKEN }}
+          ECOREX_CDN_TOKEN: ${{ secrets.ECOREX_CDN_TOKEN }}
+          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+          PUBLICATION_CONFIG: ${{ vars.ECOREX_RELEASE_PUBLICATION_CONFIG }}
+        run: >-
+          ecorex-release publish-assets
+          --release-dir .candidate/output/release
+          --publication-config "$PUBLICATION_CONFIG"
+          --receipt .candidate/output/publication-receipt.json
+          --trusted-key "$KEY_ID=$PUBLIC_KEY"
+          --publish-github
+
+      - name: Reproduce the stable public Bootstrap discovery bytes
+        if: ${{ inputs.channel == 'stable' }}
+        env:
+          ECOREX_RELEASE_SIGNER_EXECUTABLE: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE }}
+          ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256 }}
+          ECOREX_RELEASE_SIGNER_ADAPTER: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER }}
+          ECOREX_RELEASE_SIGNER_ADAPTER_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER_SHA256 }}
+          ECOREX_RELEASE_SIGNER_KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          ECOREX_RELEASE_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+          ECOREX_PUBLICATION_SIGNER_EXECUTABLE: ${{ vars.ECOREX_PUBLICATION_SIGNER_EXECUTABLE }}
+          ECOREX_PUBLICATION_SIGNER_EXECUTABLE_SHA256: ${{ vars.ECOREX_PUBLICATION_SIGNER_EXECUTABLE_SHA256 }}
+          ECOREX_PUBLICATION_SIGNER_ADAPTER: ${{ vars.ECOREX_PUBLICATION_SIGNER_ADAPTER }}
+          ECOREX_PUBLICATION_SIGNER_ADAPTER_SHA256: ${{ vars.ECOREX_PUBLICATION_SIGNER_ADAPTER_SHA256 }}
+          ECOREX_PUBLICATION_SIGNER_KEY_ID: ${{ vars.ECOREX_PUBLICATION_SIGNER_KEY_ID }}
+          ECOREX_PUBLICATION_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_PUBLICATION_SIGNER_PUBLIC_KEY }}
+          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+          PUBLICATION_KEY_ID: ${{ vars.ECOREX_PUBLICATION_SIGNER_KEY_ID }}
+          PUBLICATION_PUBLIC_KEY: ${{ vars.ECOREX_PUBLICATION_SIGNER_PUBLIC_KEY }}
+        run: >-
+          ecorex-release build-public-bootstrap-index
+          --release-dir .candidate/output/release
+          --publication-receipt .candidate/output/publication-receipt.json
+          --output .candidate/output/public-bootstrap-index.json
+          --trusted-key "$KEY_ID=$PUBLIC_KEY"
+          --trusted-publication-key "$PUBLICATION_KEY_ID=$PUBLICATION_PUBLIC_KEY"
+
+      - name: Stage the stable Bootstrap index without changing public authority
+        if: ${{ inputs.channel == 'stable' }}
+        env:
+          ECOREX_BOOTSTRAP_INDEX_TOKEN: ${{ secrets.ECOREX_BOOTSTRAP_INDEX_TOKEN }}
+          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+          PUBLICATION_KEY_ID: ${{ vars.ECOREX_PUBLICATION_SIGNER_KEY_ID }}
+          PUBLICATION_PUBLIC_KEY: ${{ vars.ECOREX_PUBLICATION_SIGNER_PUBLIC_KEY }}
+          BOOTSTRAP_INDEX_PUBLICATION_CONFIG: ${{ vars.ECOREX_BOOTSTRAP_INDEX_PUBLICATION_CONFIG }}
+        run: >-
+          ecorex-release stage-public-bootstrap-index
+          --release-dir .candidate/output/release
+          --publication-receipt .candidate/output/publication-receipt.json
+          --index .candidate/output/public-bootstrap-index.json
+          --publication-config "$BOOTSTRAP_INDEX_PUBLICATION_CONFIG"
+          --receipt .candidate/output/bootstrap-index-stage-receipt.json
+          --trusted-key "$KEY_ID=$PUBLIC_KEY"
+          --trusted-publication-key "$PUBLICATION_KEY_ID=$PUBLICATION_PUBLIC_KEY"
+
+      - name: Assemble exact channel-specific preparation evidence
+        env:
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+        run: |
+          args=(
+            --receipts-dir .candidate/gates
+            --manifest .candidate/output/release/release-manifest.json
+            --publication-receipt .candidate/output/publication-receipt.json
+            --expected-commit ${{ github.sha }}
+            --expected-workflow-run-id ${{ inputs.candidate_run_id }}
+          )
+          if [[ "$RELEASE_CHANNEL" == "stable" ]]; then
+            args+=(--phase prepare --output .candidate/output/release-evidence-prepare-unsigned.json)
+          else
+            args+=(--phase finalize --output .candidate/output/release-evidence-unsigned.json)
+          fi
+          python scripts/assemble-v1-release-evidence.py "${args[@]}"
+
+      - name: Sign the exact Candidate-bound gate bundle
+        env:
+          ECOREX_RELEASE_SIGNER_EXECUTABLE: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE }}
+          ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256 }}
+          ECOREX_RELEASE_SIGNER_ADAPTER: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER }}
+          ECOREX_RELEASE_SIGNER_ADAPTER_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER_SHA256 }}
+          ECOREX_RELEASE_SIGNER_KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          ECOREX_RELEASE_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+        run: |
+          if [[ "$RELEASE_CHANNEL" == "stable" ]]; then
+            unsigned=.candidate/output/release-evidence-prepare-unsigned.json
+            output=.candidate/output/release-evidence-prepare.json
+          else
+            unsigned=.candidate/output/release-evidence-unsigned.json
+            output=.candidate/output/release-evidence.json
+          fi
+          python scripts/sign-v1-release-gate-bundle.py \
+            --unsigned "$unsigned" \
+            --manifest .candidate/output/release/release-manifest.json \
+            --output "$output"
+
+      - name: Create stable candidate gates and paused draft rollout
+        if: ${{ inputs.channel == 'stable' }}
+        env:
+          ECOREX_CONTROL_PLANE_URL: ${{ vars.ECOREX_CONTROL_PLANE_URL }}
+          ECOREX_CONTROL_PLANE_HOSTS: ${{ vars.ECOREX_CONTROL_PLANE_HOSTS }}
+          ECOREX_CONTROL_PLANE_TOKEN: ${{ secrets.ECOREX_CONTROL_PLANE_TOKEN }}
+          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+        run: >-
+          ecorex-release promote
+          --phase prepare
+          --manifest .candidate/output/release/release-manifest.json
+          --evidence .candidate/output/release-evidence-prepare.json
+          --publication-receipt .candidate/output/publication-receipt.json
+          --trusted-key "$KEY_ID=$PUBLIC_KEY"
+          --journal .candidate/output/promotion-journal.json
+          --percentage "${{ inputs.rollout_percentage }}"
+
+      - name: Create or activate canary rollout
+        if: ${{ inputs.channel == 'canary' }}
+        env:
+          ECOREX_CONTROL_PLANE_URL: ${{ vars.ECOREX_CONTROL_PLANE_URL }}
+          ECOREX_CONTROL_PLANE_HOSTS: ${{ vars.ECOREX_CONTROL_PLANE_HOSTS }}
+          ECOREX_CONTROL_PLANE_TOKEN: ${{ secrets.ECOREX_CONTROL_PLANE_TOKEN }}
+          PUBLICATION_MODE: ${{ inputs.publication_mode }}
+          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+        run: |
+          args=(
+            promote --phase auto
+            --manifest .candidate/output/release/release-manifest.json
+            --evidence .candidate/output/release-evidence.json
+            --publication-receipt .candidate/output/publication-receipt.json
+            --trusted-key "$KEY_ID=$PUBLIC_KEY"
+            --journal .candidate/output/promotion-journal.json
+            --percentage "${{ inputs.rollout_percentage }}"
+          )
+          if [[ "$PUBLICATION_MODE" == "create-and-activate" ]]; then args+=(--activate); fi
+          ecorex-release "${args[@]}"
+
+      - name: CAS-activate and publicly read back the stable Bootstrap index
+        if: ${{ inputs.channel == 'stable' && inputs.publication_mode == 'create-and-activate' }}
+        env:
+          ECOREX_BOOTSTRAP_INDEX_TOKEN: ${{ secrets.ECOREX_BOOTSTRAP_INDEX_TOKEN }}
+          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+          PUBLICATION_KEY_ID: ${{ vars.ECOREX_PUBLICATION_SIGNER_KEY_ID }}
+          PUBLICATION_PUBLIC_KEY: ${{ vars.ECOREX_PUBLICATION_SIGNER_PUBLIC_KEY }}
+          BOOTSTRAP_INDEX_PUBLICATION_CONFIG: ${{ vars.ECOREX_BOOTSTRAP_INDEX_PUBLICATION_CONFIG }}
+        run: >-
+          ecorex-release activate-public-bootstrap-index
+          --release-dir .candidate/output/release
+          --publication-receipt .candidate/output/publication-receipt.json
+          --index .candidate/output/public-bootstrap-index.json
+          --stage-receipt .candidate/output/bootstrap-index-stage-receipt.json
+          --publication-config "$BOOTSTRAP_INDEX_PUBLICATION_CONFIG"
+          --receipt .candidate/output/bootstrap-index-publication-receipt.json
+          --trusted-key "$KEY_ID=$PUBLIC_KEY"
+          --trusted-publication-key "$PUBLICATION_KEY_ID=$PUBLICATION_PUBLIC_KEY"
+
+      - name: Assemble stable active-and-readback evidence
+        if: ${{ inputs.channel == 'stable' && inputs.publication_mode == 'create-and-activate' }}
+        run: >-
+          python scripts/assemble-v1-release-evidence.py
+          --phase finalize
+          --receipts-dir .candidate/gates
+          --manifest .candidate/output/release/release-manifest.json
+          --publication-receipt .candidate/output/publication-receipt.json
+          --bootstrap-index-receipt .candidate/output/bootstrap-index-publication-receipt.json
+          --expected-commit ${{ github.sha }}
+          --expected-workflow-run-id ${{ inputs.candidate_run_id }}
+          --output .candidate/output/release-evidence-unsigned.json
+
+      - name: Sign stable active-and-readback gate bundle
+        if: ${{ inputs.channel == 'stable' && inputs.publication_mode == 'create-and-activate' }}
+        env:
+          ECOREX_RELEASE_SIGNER_EXECUTABLE: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE }}
+          ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256 }}
+          ECOREX_RELEASE_SIGNER_ADAPTER: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER }}
+          ECOREX_RELEASE_SIGNER_ADAPTER_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER_SHA256 }}
+          ECOREX_RELEASE_SIGNER_KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          ECOREX_RELEASE_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+        run: >-
+          python scripts/sign-v1-release-gate-bundle.py
+          --unsigned .candidate/output/release-evidence-unsigned.json
+          --manifest .candidate/output/release/release-manifest.json
+          --output .candidate/output/release-evidence.json
+
+      - name: Publish release then activate stable rollout
+        if: ${{ inputs.channel == 'stable' && inputs.publication_mode == 'create-and-activate' }}
+        env:
+          ECOREX_CONTROL_PLANE_URL: ${{ vars.ECOREX_CONTROL_PLANE_URL }}
+          ECOREX_CONTROL_PLANE_HOSTS: ${{ vars.ECOREX_CONTROL_PLANE_HOSTS }}
+          ECOREX_CONTROL_PLANE_TOKEN: ${{ secrets.ECOREX_CONTROL_PLANE_TOKEN }}
+          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+        run: >-
+          ecorex-release promote
+          --phase finalize
+          --manifest .candidate/output/release/release-manifest.json
+          --evidence .candidate/output/release-evidence.json
+          --publication-receipt .candidate/output/publication-receipt.json
+          --bootstrap-index-receipt .candidate/output/bootstrap-index-publication-receipt.json
+          --trusted-key "$KEY_ID=$PUBLIC_KEY"
+          --journal .candidate/output/promotion-journal.json
+          --percentage "${{ inputs.rollout_percentage }}"
+          --activate
+
+      - name: Retain publication receipts, signed evidence and recovery journal
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ecorex-v1-publication-result-${{ inputs.channel }}-${{ github.run_id }}
+          path: .candidate/output
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 90

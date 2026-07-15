@@ -1,0 +1,95 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+const timeline = await readFile(
+  new URL("../src/v1/components/Timeline.tsx", import.meta.url),
+  "utf-8",
+);
+const windowing = await readFile(
+  new URL("../src/v1/state/timelineWindow.ts", import.meta.url),
+  "utf-8",
+);
+const runtimeSession = await readFile(
+  new URL("../src/v1/state/useRuntimeSession.ts", import.meta.url),
+  "utf-8",
+);
+const features = await readFile(
+  new URL("../src/v1/styles/features.css", import.meta.url),
+  "utf-8",
+);
+const richMessage = await readFile(
+  new URL("../src/v1/components/OfficeMarkdown.tsx", import.meta.url),
+  "utf-8",
+);
+const activity = await readFile(
+  new URL("../src/v1/components/TimelineActivity.tsx", import.meta.url),
+  "utf-8",
+);
+const sidebar = await readFile(
+  new URL("../src/v1/components/Sidebar.tsx", import.meta.url),
+  "utf-8",
+);
+
+test("the chat DOM starts with a bounded anchored conversation window", () => {
+  assert.match(windowing, /TIMELINE_WINDOW_SIZE = 120/u);
+  assert.match(windowing, /items\.slice\(startIndex, endIndex\)/u);
+  assert.match(timeline, /selectTimelineWindow\(timelineEntries, historyEndAnchorId\)/u);
+  assert.match(timeline, /messageWindow\.items\.map/u);
+  assert.doesNotMatch(timeline, /\{messages\.map/u);
+  assert.match(timeline, /回到最新消息/u);
+  assert.match(timeline, /anchorMissing[\s\S]*setHistoryEndAnchorId\(null\)/u);
+  assert.match(timeline, /item\.kind === "tool_call" \|\| item\.kind === "checkpoint"/u);
+  assert.doesNotMatch(timeline, /item\.content\.arguments/u);
+  assert.match(timeline, /lazy\(\(\) => import\("\.\/TimelineActivity\.tsx"\)\)/u);
+  assert.doesNotMatch(activity, /content\.(?:arguments|result|path)/u);
+  assert.match(activity, /activity\.display_label/u);
+  assert.match(activity, /工作步骤/u);
+  assert.doesNotMatch(activity, /TOOL_LABELS|function toolLabel/u);
+});
+
+test("streaming deltas batch by frame but terminal facts flush synchronously", () => {
+  assert.match(runtimeSession, /event_type === "item\.delta" \|\| event\.event_type === "reasoning\.delta"/u);
+  assert.match(runtimeSession, /window\.requestAnimationFrame\(flushEvents\)/u);
+  assert.match(runtimeSession, /window\.setTimeout\(flushEvents, 50\)/u);
+  assert.match(runtimeSession, /!isFrameBatchableEvent\(event\) \|\| pendingEvents\.length >= 128/u);
+});
+
+test("completed rows use native rendering containment while the active row stays live", () => {
+  assert.match(timeline, /item\.status === "in_progress"/u);
+  assert.match(features, /\.ex-message:not\(\.is-streaming\)\s*\{[\s\S]*content-visibility:\s*auto/u);
+  assert.match(features, /contain-intrinsic-size:\s*auto 84px/u);
+});
+
+test("assistant office Markdown is lazy, bounded, and cannot load raw HTML or images", () => {
+  assert.match(timeline, /lazy\(\(\) => import\("\.\/OfficeMarkdown\.tsx"\)\)/u);
+  assert.match(timeline, /<Suspense fallback=/u);
+  assert.match(richMessage, /skipHtml/u);
+  assert.match(richMessage, /remarkGfm/u);
+  assert.match(richMessage, /MARKDOWN_PARSE_LIMIT = 256 \* 1024/u);
+  assert.match(richMessage, /SAFE_PROTOCOLS = new Set\(\["http:", "https:", "mailto:"\]\)/u);
+  assert.match(richMessage, /img: \(\{ alt \}\) =>/u);
+  assert.doesNotMatch(richMessage, /dangerouslySetInnerHTML/u);
+});
+
+test("streaming Markdown parsing is rate-limited independently of event batching", () => {
+  assert.match(richMessage, /STREAM_FLUSH_MS = 48/u);
+  assert.match(richMessage, /window\.setTimeout/u);
+  assert.match(richMessage, /useDeferredValue\(buffered\)/u);
+});
+
+test("continuing by task ID keeps the current transcript until the target is verified", () => {
+  assert.match(sidebar, /按任务 ID 继续/u);
+  assert.match(sidebar, /复制任务 ID/u);
+  assert.match(sidebar, /读取并继续/u);
+  const switchStart = runtimeSession.indexOf("const openThread = useCallback");
+  const switchEnd = runtimeSession.indexOf("const pendingThreadRequestId", switchStart);
+  const switchContract = runtimeSession.slice(switchStart, switchEnd);
+  const projectionRead = switchContract.indexOf("await client.projection(targetThreadId");
+  const selectionCommit = switchContract.indexOf("selectedThreadId.current = targetThreadId");
+  const artifactCommit = switchContract.indexOf("clearArtifactView()");
+  assert.ok(projectionRead >= 0, "task projection must be verified");
+  assert.ok(selectionCommit > projectionRead, "selection changes only after projection verification");
+  assert.ok(artifactCommit > projectionRead, "the visible artifact view is retained while verifying");
+  assert.doesNotMatch(switchContract, /clearThreadProjection\(\)/u);
+});

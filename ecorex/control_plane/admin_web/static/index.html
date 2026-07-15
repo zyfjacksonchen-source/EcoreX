@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="referrer" content="no-referrer">
+    <title>EcoreX 管理员</title>
+    <link rel="stylesheet" href="__ADMIN_CSS_URL__" integrity="__ADMIN_CSS_SRI__" crossorigin="anonymous">
+    <script src="__ADMIN_JS_URL__" integrity="__ADMIN_JS_SRI__" crossorigin="anonymous" defer></script>
+  </head>
+  <body>
+    <div class="admin-shell">
+      <aside class="admin-rail" aria-label="EcoreX 管理员导航">
+        <div class="brand-row">
+          <span class="brand-mark" aria-hidden="true">E</span>
+          <div>
+            <strong>EcoreX</strong>
+            <span>管理员</span>
+          </div>
+        </div>
+        <nav class="section-nav">
+          <a href="#users">用户</a>
+          <a href="#usage">用量</a>
+          <a href="#models">模型</a>
+          <a href="#candidate">发布</a>
+        </nav>
+        <div class="session-state">
+          <span>管理员会话</span>
+          <strong id="session-label">未连接</strong>
+          <small>令牌仅保存在当前页面内存中。</small>
+        </div>
+      </aside>
+
+      <main class="workspace" id="main-content">
+        <header class="workspace-header">
+          <div class="workspace-title">
+            <h1>EcoreX 管理员</h1>
+            <p>管理用户与用量、测试并启用托管模型，以及推送新版本。</p>
+          </div>
+          <form class="auth-form" id="auth-form" novalidate>
+            <label for="admin-token">管理员令牌</label>
+            <div class="auth-controls">
+              <input
+                id="admin-token"
+                type="password"
+                autocomplete="off"
+                aria-describedby="token-help"
+                spellcheck="false"
+                minlength="24"
+                maxlength="4096"
+                placeholder="粘贴本次会话令牌"
+                required
+              >
+              <button class="button primary" id="connect-button" type="submit">连接控制面</button>
+              <button class="button" id="refresh-state-button" type="button" disabled>刷新服务端状态</button>
+              <button class="button" id="clear-token-button" type="button" disabled>清除令牌</button>
+            </div>
+            <span class="field-help" id="token-help">令牌只保留在当前页面内存，不会写入 URL、Cookie 或浏览器存储。</span>
+          </form>
+        </header>
+
+        <div class="message" id="global-message" role="status" aria-live="polite" hidden>
+          <span id="global-message-text"></span>
+          <button class="text-button" id="dismiss-message-button" type="button">关闭</button>
+        </div>
+
+        <div class="workspace-content">
+          <section class="work-section" id="users" aria-labelledby="users-title">
+            <header class="section-heading">
+              <div>
+                <h2 id="users-title">用户</h2>
+                <p>筛选、创建和编辑账号，修改当前额度或停用访问。</p>
+              </div>
+              <button class="button primary" id="create-user-button" data-session-control type="button" disabled>创建用户</button>
+            </header>
+            <form class="filter-form" id="user-filter-form" novalidate>
+              <label for="user-query"><span>搜索</span><input id="user-query" type="search" maxlength="128" placeholder="姓名、邮箱或账号 ID"></label>
+              <label for="user-status-filter"><span>状态</span><select id="user-status-filter"><option value="">全部</option><option value="active">正常</option><option value="suspended">已停用</option></select></label>
+              <label for="user-organization-filter"><span>组织 ID</span><input id="user-organization-filter" type="text" maxlength="128" placeholder="全部组织"></label>
+              <button class="button" id="filter-users-button" data-session-control type="submit" disabled>筛选</button>
+            </form>
+            <p class="field-help" id="user-list-summary">连接控制面后读取用户。</p>
+            <div class="table-scroll" tabindex="0" aria-label="用户列表">
+              <table>
+                <thead><tr><th scope="col">用户</th><th scope="col">组织</th><th scope="col">Token</th><th scope="col">图片</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead>
+                <tbody id="user-table-body"><tr><td colspan="6">尚未加载</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="work-section" id="usage" aria-labelledby="usage-title">
+            <header class="section-heading">
+              <div>
+                <h2 id="usage-title">用量</h2>
+                <p>查看 Token 和生图额度的实际消耗；手工校正会留下不可变更的审计记录。</p>
+              </div>
+              <button class="button" id="refresh-usage-button" data-session-control type="button" disabled>刷新用量</button>
+            </header>
+            <div class="metric-grid" aria-live="polite">
+              <div class="metric"><span>活跃用户</span><strong id="usage-users">—</strong></div>
+              <div class="metric"><span>Token 用量</span><strong id="usage-tokens">—</strong></div>
+              <div class="metric"><span>图片用量</span><strong id="usage-images">—</strong></div>
+              <div class="metric"><span>更新时间</span><strong id="usage-captured-at">—</strong></div>
+            </div>
+          </section>
+
+          <section class="work-section" id="models" aria-labelledby="models-title">
+            <header class="section-heading">
+              <div>
+                <h2 id="models-title">托管模型</h2>
+                <p>分别配置主模型、生图模型和精修模型。新 Key 只有测试通过后才会原子生效。</p>
+              </div>
+              <button class="button primary" id="create-model-button" data-session-control type="button" disabled>添加模型</button>
+            </header>
+            <p class="field-help" id="model-list-summary">密钥不会返回页面；列表仅显示短指纹与测试状态。</p>
+            <div class="table-scroll" tabindex="0" aria-label="托管模型列表">
+              <table>
+                <thead><tr><th scope="col">用途</th><th scope="col">页面名称</th><th scope="col">服务端模型</th><th scope="col">Key</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead>
+                <tbody id="model-table-body"><tr><td colspan="6">尚未加载</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="work-section" id="candidate" aria-labelledby="candidate-title">
+            <header class="section-heading">
+              <div>
+                <h2 id="candidate-title">候选与发布门禁</h2>
+                <p>导入签名 Manifest 后，由 API 返回候选状态及全部必需发布门禁。</p>
+              </div>
+              <span class="status-badge" id="candidate-status">尚未创建</span>
+            </header>
+
+            <form class="manifest-form" id="manifest-form" novalidate>
+              <label class="file-field" for="manifest-file">
+                <span>Release Manifest</span>
+                <input id="manifest-file" type="file" accept=".json,application/json" aria-describedby="manifest-help" required>
+              </label>
+              <button class="button primary" id="create-candidate-button" type="submit" disabled>创建候选</button>
+            </form>
+            <p class="field-help" id="manifest-help">仅接受不超过 16 MiB 的 JSON；文件只在本地解析后提交给 Control Plane。</p>
+
+            <dl class="projection-list" id="candidate-projection" hidden>
+              <div><dt>Release ID</dt><dd id="candidate-release-id">—</dd></div>
+              <div><dt>版本</dt><dd id="candidate-version">—</dd></div>
+              <div><dt>通道</dt><dd id="candidate-channel">—</dd></div>
+              <div><dt>Build digest</dt><dd id="candidate-digest">—</dd></div>
+            </dl>
+
+            <div class="gate-region" id="gate-region" hidden>
+              <div class="subsection-heading">
+                <div>
+                  <h3>机器门禁状态</h3>
+                  <p id="gate-summary">等待 API 返回签名门禁包的只读投影。</p>
+                </div>
+                <button class="button primary" id="publish-button" type="button" disabled>发布候选</button>
+              </div>
+              <div class="table-scroll" tabindex="0" aria-label="发布门禁表格">
+                <table>
+                  <thead>
+                    <tr>
+                      <th scope="col">门禁</th>
+                      <th scope="col">当前状态</th>
+                    </tr>
+                  </thead>
+                  <tbody id="gate-table-body"></tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <section class="work-section" id="rollout" aria-labelledby="rollout-title">
+            <header class="section-heading">
+              <div>
+                <h2 id="rollout-title">灰度目标</h2>
+                <p>比例与组织、账号目标一并提交；后端决定最终可激活状态。</p>
+              </div>
+              <span class="status-badge" id="rollout-status">尚未创建</span>
+            </header>
+
+            <form class="rollout-form" id="rollout-form" novalidate>
+              <label for="rollout-mode">
+                <span>推送范围</span>
+                <select id="rollout-mode"><option value="targeted">灰度用户</option><option value="full">全量用户</option></select>
+              </label>
+              <label for="rollout-release-id">
+                <span>Release ID</span>
+                <input id="rollout-release-id" type="text" readonly required>
+              </label>
+              <label for="rollout-percentage">
+                <span>灰度比例</span>
+                <input id="rollout-percentage" type="number" min="1" max="100" value="1" required>
+              </label>
+              <label for="minimum-version">
+                <span>最低兼容版本</span>
+                <input id="minimum-version" type="text" maxlength="128" placeholder="可选，例如 0.9.0">
+              </label>
+              <label for="target-organizations">
+                <span>组织 ID</span>
+                <textarea id="target-organizations" rows="3" placeholder="每行一个，最多 500 个"></textarea>
+              </label>
+              <label for="target-accounts">
+                <span>账号 ID</span>
+                <textarea id="target-accounts" rows="3" placeholder="每行一个，最多 500 个"></textarea>
+              </label>
+              <button class="button primary rollout-submit" id="create-rollout-button" type="submit" disabled>创建灰度</button>
+            </form>
+
+            <dl class="projection-list" id="rollout-projection" hidden>
+              <div><dt>Rollout ID</dt><dd id="rollout-id">—</dd></div>
+              <div><dt>Release ID</dt><dd id="rollout-release">—</dd></div>
+              <div><dt>比例</dt><dd id="rollout-percent">—</dd></div>
+              <div><dt>创建时间</dt><dd id="rollout-created-at">—</dd></div>
+            </dl>
+            <div class="action-row" id="rollout-actions" hidden>
+              <button class="button primary" data-rollout-action="activate" type="button">激活灰度</button>
+              <button class="button" data-rollout-action="pause" type="button">暂停灰度</button>
+              <button class="button danger" data-rollout-action="halt" type="button">终止灰度</button>
+            </div>
+          </section>
+
+          <section class="work-section" id="rollback" aria-labelledby="rollback-title">
+            <header class="section-heading">
+              <div>
+                <h2 id="rollback-title">紧急回滚</h2>
+                <p>只允许回滚到已发布、曾真实灰度且平台矩阵兼容的旧版本；创建后仍需显式激活。</p>
+              </div>
+              <span class="status-badge" id="rollback-status">尚未创建</span>
+            </header>
+
+            <form class="rollout-form" id="rollback-form" novalidate>
+              <label for="rollback-source-release-id">
+                <span>当前 Release ID</span>
+                <input id="rollback-source-release-id" type="text" maxlength="128" placeholder="例如 release-1.0.2-stable" required>
+              </label>
+              <label for="rollback-target-release-id">
+                <span>已知良好目标</span>
+                <input id="rollback-target-release-id" type="text" maxlength="128" placeholder="例如 release-1.0.1-stable" required>
+              </label>
+              <label for="rollback-percentage">
+                <span>回滚比例</span>
+                <input id="rollback-percentage" type="number" min="1" max="100" value="1" required>
+              </label>
+              <label for="rollback-ttl">
+                <span>授权有效期（秒）</span>
+                <input id="rollback-ttl" type="number" min="60" max="900" value="300" required>
+              </label>
+              <label for="rollback-organizations">
+                <span>组织 ID</span>
+                <textarea id="rollback-organizations" rows="3" placeholder="每行一个，最多 500 个"></textarea>
+              </label>
+              <label for="rollback-accounts">
+                <span>账号 ID</span>
+                <textarea id="rollback-accounts" rows="3" placeholder="每行一个，最多 500 个"></textarea>
+              </label>
+              <button class="button danger rollout-submit" id="create-rollback-button" type="submit" disabled>创建回滚</button>
+            </form>
+
+            <dl class="projection-list" id="rollback-projection" hidden>
+              <div><dt>Rollback ID</dt><dd id="rollback-id">—</dd></div>
+              <div><dt>当前版本</dt><dd id="rollback-source">—</dd></div>
+              <div><dt>目标版本</dt><dd id="rollback-target">—</dd></div>
+              <div><dt>比例</dt><dd id="rollback-percent">—</dd></div>
+              <div><dt>授权 TTL</dt><dd id="rollback-auth-ttl">—</dd></div>
+            </dl>
+            <div class="action-row" id="rollback-actions" hidden>
+              <button class="button danger" data-rollback-action="activate" type="button">激活回滚</button>
+              <button class="button" data-rollback-action="pause" type="button">暂停回滚</button>
+              <button class="button" data-rollback-action="halt" type="button">终止回滚</button>
+            </div>
+          </section>
+
+          <section class="work-section" id="channels" aria-labelledby="channels-title">
+            <header class="section-heading">
+              <div>
+                <h2 id="channels-title">通道止损</h2>
+                <p>Kill switch 会停止该通道的活跃灰度；清除后仍由后端重新校验激活条件。</p>
+              </div>
+            </header>
+            <div class="table-scroll" tabindex="0" aria-label="通道止损表格">
+              <table>
+                <thead>
+                  <tr><th scope="col">通道</th><th scope="col">API 返回状态</th><th scope="col">操作</th></tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row">canary</th>
+                    <td id="canary-kill-state">尚未返回</td>
+                    <td class="table-actions">
+                      <button class="button danger" data-channel="canary" data-kill-action="set" type="button">设置 Kill switch</button>
+                      <button class="button" data-channel="canary" data-kill-action="clear" type="button">清除 Kill switch</button>
+                    </td>
+                  </tr>
+                  <tr>
+                    <th scope="row">stable</th>
+                    <td id="stable-kill-state">尚未返回</td>
+                    <td class="table-actions">
+                      <button class="button danger" data-channel="stable" data-kill-action="set" type="button">设置 Kill switch</button>
+                      <button class="button" data-channel="stable" data-kill-action="clear" type="button">清除 Kill switch</button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="work-section" id="distribution" aria-labelledby="distribution-title">
+            <header class="section-heading">
+              <div>
+                <h2 id="distribution-title">客户端版本与更新分布</h2>
+                <p id="distribution-summary">连接控制面后读取当前分布。</p>
+              </div>
+              <button class="button" id="refresh-distribution-button" type="button" disabled>刷新分布</button>
+            </header>
+            <div class="table-scroll" tabindex="0" aria-label="客户端版本与更新分布表格">
+              <table>
+                <thead>
+                  <tr><th scope="col">类别</th><th scope="col">值</th><th scope="col">客户端数</th></tr>
+                </thead>
+                <tbody id="distribution-table-body">
+                  <tr><td colspan="3">尚未加载</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <dialog class="confirm-dialog" id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-description">
+      <div class="dialog-heading">
+        <h2 id="confirm-title">确认操作</h2>
+        <p id="confirm-description">请确认本次变更。</p>
+      </div>
+      <div class="dialog-actions">
+        <button class="button" id="confirm-cancel-button" type="button">取消</button>
+        <button class="button danger" id="confirm-submit-button" type="button">确认执行</button>
+      </div>
+    </dialog>
+
+    <dialog class="editor-dialog" id="user-dialog" aria-labelledby="user-dialog-title">
+      <form id="user-form" novalidate>
+        <div class="dialog-heading"><h2 id="user-dialog-title">创建用户</h2><p id="user-dialog-description">配置账号身份、状态与额度。</p></div>
+        <div class="editor-grid">
+          <label for="user-account-id"><span>账号 ID</span><input id="user-account-id" type="text" maxlength="128" required></label>
+          <label for="user-display-name"><span>用户姓名</span><input id="user-display-name" type="text" maxlength="128" required></label>
+          <label for="user-email"><span>邮箱</span><input id="user-email" type="email" maxlength="254"></label>
+          <label for="user-organization"><span>组织 ID</span><input id="user-organization" type="text" maxlength="128"></label>
+          <label for="user-status"><span>状态</span><select id="user-status"><option value="active">正常</option><option value="suspended">已停用</option></select></label>
+          <label for="user-token-limit"><span>Token 额度</span><input id="user-token-limit" type="number" min="0" max="1000000000000" required></label>
+          <label for="user-image-limit"><span>图片额度</span><input id="user-image-limit" type="number" min="0" max="1000000000" required></label>
+        </div>
+        <div class="dialog-actions"><button class="button" id="user-cancel-button" type="button">取消</button><button class="button primary" id="user-save-button" type="submit">保存用户</button></div>
+      </form>
+    </dialog>
+
+    <dialog class="editor-dialog" id="usage-dialog" aria-labelledby="usage-dialog-title">
+      <form id="usage-form" novalidate>
+        <div class="dialog-heading"><h2 id="usage-dialog-title">校正用量</h2><p id="usage-dialog-description">正数表示增加已用量，负数表示退回。</p></div>
+        <input id="usage-account-id" type="hidden">
+        <input id="usage-user-revision" type="hidden">
+        <div class="editor-grid">
+          <label for="usage-token-delta"><span>Token 变化</span><input id="usage-token-delta" type="number" value="0" required></label>
+          <label for="usage-image-delta"><span>图片变化</span><input id="usage-image-delta" type="number" value="0" required></label>
+          <label class="span-all" for="usage-reason"><span>原因</span><input id="usage-reason" type="text" maxlength="256" placeholder="例如：订单退费" required></label>
+        </div>
+        <div class="dialog-actions"><button class="button" id="usage-cancel-button" type="button">取消</button><button class="button primary" id="usage-save-button" type="submit">记录校正</button></div>
+      </form>
+    </dialog>
+
+    <dialog class="editor-dialog" id="model-dialog" aria-labelledby="model-dialog-title">
+      <form id="model-form" novalidate>
+        <div class="dialog-heading"><h2 id="model-dialog-title">添加模型</h2><p>保存为草稿后，在列表中点击“测试并启用”。</p></div>
+        <input id="model-config-id" type="hidden">
+        <input id="model-active-revision" type="hidden">
+        <div class="editor-grid">
+          <label for="model-modality"><span>用途</span><select id="model-modality"><option value="chat">主模型</option><option value="image_generation">生图模型</option><option value="image_edit">精修模型</option></select></label>
+          <label for="model-local-id"><span>EcoreX 模型位</span><select id="model-local-id"><option value="ecorex-chat">GPT 主模型</option><option value="ecorex-deepseek-v4-pro">DeepSeek</option><option value="ecorex-gemini-3.1-pro">Gemini</option><option value="ecorex-doubao-seed-2.0-pro">豆包</option><option value="gpt-image-2">生图模型</option><option value="gpt-image-2-edit">精修模型</option></select></label>
+          <label for="model-display-name"><span>页面显示名称</span><input id="model-display-name" type="text" maxlength="128" required></label>
+          <label for="model-upstream-id"><span>服务端模型名</span><input id="model-upstream-id" type="text" maxlength="128" required></label>
+          <label for="model-provider"><span>接口类型</span><select id="model-provider"><option value="responses">Responses API</option><option value="openai_compatible_chat">OpenAI 兼容对话</option><option value="openai_compatible_image">OpenAI 兼容图片</option></select></label>
+          <label for="model-api-key"><span>API Key</span><input id="model-api-key" type="password" autocomplete="new-password" minlength="8" maxlength="4096" placeholder="编辑时留空表示保留原 Key"></label>
+          <label class="check-row" for="model-default"><input id="model-default" type="checkbox" checked><span>设为该用途默认模型</span></label>
+          <label class="check-row" for="model-enabled"><input id="model-enabled" type="checkbox" checked><span>启用</span></label>
+        </div>
+        <div class="dialog-actions"><button class="button" id="model-cancel-button" type="button">取消</button><button class="button primary" id="model-save-button" type="submit">保存草稿</button></div>
+      </form>
+    </dialog>
+
+    <noscript>EcoreX 管理员需要启用 JavaScript 才能调用同源管理 API。</noscript>
+  </body>
+</html>

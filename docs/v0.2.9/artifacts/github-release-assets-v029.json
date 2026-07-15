@@ -1,0 +1,53 @@
+{
+  "status": "PASS",
+  "scope": "github-release-assets",
+  "version": "0.2.9",
+  "generatedAt": "2026-07-05T08:35:58.4465773Z",
+  "repository": "zhangyifanjackson-dotcom/EcoreX-installers",
+  "tagName": "v0.2.9",
+  "url": "https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/tag/v0.2.9",
+  "isDraft": false,
+  "isPrerelease": false,
+  "assets": [
+    {
+      "name": "EcoreX_0.2.9-web-linux-service.tar.gz",
+      "size": 4207354,
+      "expectedSize": 4207354,
+      "digest": "sha256:c918f74388a0b9c3c7efd60e9bd028ccf56bb525f95a854c0a1e1073e6368566",
+      "expectedSha256": "C918F74388A0B9C3C7EFD60E9BD028CCF56BB525F95A854C0A1E1073E6368566",
+      "url": "https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.9/EcoreX_0.2.9-web-linux-service.tar.gz",
+      "state": "uploaded",
+      "ok": true
+    },
+    {
+      "name": "EcoreX_0.2.9-web-linux-service.tar.gz.sha256",
+      "size": 105,
+      "expectedSize": 105,
+      "digest": "sha256:252286d2557421d4a02a374bbda5230e2150ee1b90fe14bd01b4b4dc2440ad8c",
+      "expectedSha256": "252286D2557421D4A02A374BBDA5230E2150EE1B90FE14BD01B4B4DC2440AD8C",
+      "url": "https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.9/EcoreX_0.2.9-web-linux-service.tar.gz.sha256",
+      "state": "uploaded",
+      "ok": true
+    },
+    {
+      "name": "EcoreX_0.2.9-webui-macos-universal.zip",
+      "size": 652285633,
+      "expectedSize": 652285633,
+      "digest": "sha256:580e4d2385bca2e53149fc85d65822107ceb08504c2854e269183b674a1b92e4",
+      "expectedSha256": "580E4D2385BCA2E53149FC85D65822107CEB08504C2854E269183B674A1B92E4",
+      "url": "https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.9/EcoreX_0.2.9-webui-macos-universal.zip",
+      "state": "uploaded",
+      "ok": true
+    },
+    {
+      "name": "EcoreX_0.2.9-webui-windows-x64.zip",
+      "size": 550826610,
+      "expectedSize": 550826610,
+      "digest": "sha256:0e7870c5a784f958ef7efb2770adff05a7467c55c2c50d0690444aaafa8147c1",
+      "expectedSha256": "0E7870C5A784F958EF7EFB2770ADFF05A7467C55C2C50D0690444AAAFA8147C1",
+      "url": "https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.9/EcoreX_0.2.9-webui-windows-x64.zip",
+      "state": "uploaded",
+      "ok": true
+    }
+  ]
+}

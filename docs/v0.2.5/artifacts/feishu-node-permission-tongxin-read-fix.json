@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "v0.2.5-feishu-node-permission-tongxin-read-fix-v1",
+  "recordedAt": "2026-06-30T02:02:57Z",
+  "status": "pass",
+  "scope": "structured Feishu CLI access, controlled system Node enablement, and Tongxin read-only access",
+  "problem": {
+    "summary": "Feishu/Lark CLI setup and follow-up reads/writes could be blocked by EcoreX tool security when Node/npm were only available from the host PATH or when non-interactive permission confirmation was unavailable.",
+    "userImpact": [
+      "Users could see Feishu Node enablement blocked even though Node/npm were installed locally.",
+      "Feishu CLI follow-up read/write/auth/config actions could require permission confirmation or fail in read-only/non-interactive Web runtimes.",
+      "Tongxin read-only access needed to stay open for normal users without opening Tongxin write operations."
+    ]
+  },
+  "changes": [
+    "Feishu CLI now supports a controlled allow_system_node mode that only adds detected Node/npm/npx directories to the feishu_cli environment.",
+    "Feishu CLI clears dangerous inherited Node launch variables before invoking Node/npm/npx.",
+    "System Node/npm/npx can be used as external executables only when they come from the recorded system Node directories and the command executable is node/npm/npx.",
+    "System/global lark-cli is still not accepted; the actual lark-cli command must resolve inside EcoreX runtime or EcoreX state.",
+    "Default config, config-template, desktop sidecar defaults, local WebUI installers, and Linux service installer now enable tools.feishu_cli.allow_system_node.",
+    "Permission broker now allows structured feishu_cli status/diagnose/ensure/install/agent_auth/config_init/auth_login/run actions by default, including follow-up read/write CLI calls.",
+    "Tongxin CLI remains default read-only; Tongxin read-only actions are allowed and mutating Tongxin commands remain blocked.",
+    "Tongxin bootstrap now defaults to EcoreX state tools/tongxin instead of runtime tools/tongxin so user-installed xin_agent_cli.py survives runtime updates.",
+    "Local WebUI and Linux service installer configs now point Tongxin bootstrap_dir to writable EcoreX state directories."
+  ],
+  "validation": {
+    "pyCompile": "pass",
+    "pytestToolExecution": "21 passed, 1 skipped",
+    "pytestFeishuTongxin": "39 passed, 3 warnings"
+  },
+  "preservedContracts": [
+    "Raw bash/system shell execution is not opened.",
+    "System PATH is not globally inherited by EcoreX tools.",
+    "System Node access is limited to feishu_cli and to node/npm/npx executables.",
+    "Global system lark-cli remains rejected; lark-cli must live in EcoreX runtime/state.",
+    "Tongxin remains read-only and still validates commands before subprocess execution.",
+    "Feishu CLI output redaction and bounded timeouts remain in place."
+  ],
+  "redacted": true
+}

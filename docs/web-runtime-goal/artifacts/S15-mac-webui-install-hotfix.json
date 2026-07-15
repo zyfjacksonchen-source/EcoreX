@@ -1,0 +1,72 @@
+{
+  "slice": "S15",
+  "version": "0.2.6",
+  "releaseNotesRevision": "2026-07-02-mac-webui-r4",
+  "artifacts": {
+    "webui-windows-x64": {
+      "fileName": "EcoreX_0.2.6-webui-windows-x64.zip",
+      "size": 127048142,
+      "sha256": "D4D042DC61C58E218E45168DCE476D856D807ABC8354A26C0769B9293751410F"
+    },
+    "webui-macos-universal": {
+      "fileName": "EcoreX_0.2.6-webui-macos-universal.zip",
+      "size": 301426417,
+      "sha256": "98591AE7791CB43ED6705F9A88BB73E939843FBE10999444EF5676A243374DE1",
+      "nonAsciiPathCount": 0
+    },
+    "web-linux-service": {
+      "fileName": "EcoreX_0.2.6-web-linux-service.tar.gz",
+      "size": 4072401,
+      "sha256": "A45B3EB16111367DBA45BA8D60AD8F3CA51B351CCF658271B02F94D6074DD800"
+    },
+    "public-release": {
+      "fileName": "EcoreX_0.2.6-public-release.zip",
+      "size": 431522758,
+      "sha256": "A64D9E729721A03EDB98049AA2C86C18C4700AF46B9F74873C16D5E495E88023"
+    }
+  },
+  "checks": [
+    {
+      "name": "pytest sanitizer/install/release-notes contracts",
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_ecorex_web_parallel_backend.py -k \"ReleaseRuntimeSanitizer or version_handler_returns_user_facing_release_notes or webui_install_pages_hide_manifest_and_harden_mac_retry\"",
+      "status": "pass",
+      "selected": 4
+    },
+    {
+      "name": "py_compile sanitizer and release notes",
+      "command": "python -m py_compile scripts/sanitize-ecorex-release-runtime.py common/ecorex_release_notes.py",
+      "status": "pass"
+    },
+    {
+      "name": "webui package zip path audit",
+      "status": "pass",
+      "macNonAsciiPathCount": 0,
+      "windowsNonAsciiPathCount": 0,
+      "combinedNonAsciiPathCount": 0,
+      "frontendBundle": "index-MCWi-RfC.js"
+    },
+    {
+      "name": "public release validation",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-ecorex-public-release.ps1 -Version 0.2.6",
+      "status": "pass"
+    },
+    {
+      "name": "production deploy",
+      "command": "ECOREX_DEPLOY_VERSION=0.2.6 python scripts/deploy-v024-production.py",
+      "status": "pass",
+      "onlineChecks": {
+        "installationManifestVersion": "0.2.6",
+        "publicManifestVersion": "0.2.6",
+        "webServiceVersion": "0.2.6",
+        "webVersionStatus": 200
+      }
+    },
+    {
+      "name": "online manifest/head/version",
+      "status": "pass",
+      "apiVersion": "0.2.6",
+      "apiReleaseNotesRevision": "2026-07-02-mac-webui-r4",
+      "macContentLength": 301426417
+    }
+  ]
+}

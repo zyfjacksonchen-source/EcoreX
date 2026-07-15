@@ -1,0 +1,36 @@
+# EcoreX v0.2.9 Acceptance Checklist
+
+- [x] WebUI-only implementation; no desktop-only product surface added.
+- [x] usage-panel route is available at `/ecorex-agent/usage-panel/`.
+- [x] Runtime audit exposes meaningful user action categories.
+- [x] `imagegen` calls are counted as image processing.
+- [x] Local file processing is not shown as a top-level metric.
+- [x] Unimportant audit metrics are removed from visible usage-panel cards.
+- [x] Effective artifacts are auto-populated from synced runtime/artifact data.
+- [x] Effective artifact rule matches: thumbs up OR no feedback with final artifact.
+- [x] Thumbs-down/invalid artifacts are excluded from effective artifacts.
+- [x] Thumbs-down trace shows marking user and traceable artifact/session link.
+- [x] Knowledge graph is visible in WebUI knowledge/memory area.
+- [x] Default identity uses `小芯`, `同学`, and professional rigorous style.
+- [x] First-run flow does not proactively ask identity-definition questions.
+- [x] Main message flow uses restrained pulse thinking motion.
+- [x] Expanded details use staged thinking icons.
+- [x] Reduced-motion mode disables nonessential animation.
+- [x] Scheduler module shows generated scheduled tasks in a readable visual card layout.
+- [x] Scheduler task status, schedule, next run, last run, content preview, errors, and actions are visually separated.
+- [x] Tencent Docs MCP capability is visible and configurable in WebUI only.
+- [x] Tencent Docs connect/disconnect writes and removes the local `tencent-docs` MCP server and reloads MCP runtime state.
+- [x] Tencent Docs token is never echoed in API responses, UI status, or log summaries.
+- [x] Tencent Docs selector can browse/search documents, multi-select them, and add selected documents to the current conversation/task attachment tray.
+- [x] Tencent Docs remote attachments preserve provider/id/node/url metadata and expose a document preview/open link.
+- [x] Backend message handling treats `provider=tencent-docs` attachments as remote context, not local file paths.
+- [x] Agent context instructs Tencent Docs content reads through discovered MCP tools and does not mutate documents unless explicitly requested.
+- [x] Version metadata is updated to `0.2.9`.
+- [x] v0.2.8 to v0.2.9 online upgrade smoke succeeds.
+- [x] v0.2.9 production deployment is promoted online.
+- [x] Production manifest, install scripts, origin downloads, Web API version, and update-state pass external HTTP smoke.
+- [x] Independent production usage-panel slice at `/ecorex-agent/usage-panel/` is deployed with v0.2.9 audit markers.
+- [x] Independent usage-panel API exposes `/api/runtime-audit` with action counts, user actions, effective artifacts, and feedback traces.
+- [x] GitHub Release `v0.2.9` assets are uploaded and match expected size/SHA metadata.
+- [x] `ghproxy` and GitHub fallback mirror HEAD probes return 200 with matching public artifact sizes.
+- [x] `scripts/真实发布校验.py` was not run.

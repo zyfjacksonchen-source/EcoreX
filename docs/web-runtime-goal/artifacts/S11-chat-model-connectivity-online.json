@@ -1,0 +1,50 @@
+{
+  "schemaVersion": "ecorex.chat-model-connectivity-smoke.v1",
+  "generatedAt": "2026-07-01T18:38:40+0800",
+  "prompt": "minimal OK chat completion smoke",
+  "results": [
+    {
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "ok": true,
+      "status": "ok",
+      "latencyMs": 3942,
+      "responsePreview": "OK",
+      "credentialSource": "admin_policy_cache"
+    },
+    {
+      "provider": "deepseek",
+      "model": "deepseek-v4-pro",
+      "ok": true,
+      "status": "ok",
+      "latencyMs": 921
+    },
+    {
+      "provider": "gemini",
+      "model": "gemini-3.1-pro-preview",
+      "ok": true,
+      "status": "ok",
+      "latencyMs": 3686
+    },
+    {
+      "provider": "doubao",
+      "model": "doubao-seed-2-0-pro-260215",
+      "ok": true,
+      "status": "ok",
+      "latencyMs": 2406,
+      "responsePreview": "OK"
+    }
+  ],
+  "menuModelsPass": [
+    "openai:gpt-5.5",
+    "deepseek:deepseek-v4-pro",
+    "gemini:gemini-3.1-pro-preview",
+    "doubao:doubao-seed-2-0-pro-260215"
+  ],
+  "menuModelsFail": [],
+  "diagnosticOnly": [],
+  "credentialSources": {
+    "openai:gpt-5.5": "admin_policy_cache"
+  },
+  "secretsRedacted": true
+}

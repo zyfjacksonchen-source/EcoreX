@@ -55,6 +55,45 @@ pip install -e .
 cow start
 ```
 
+## EcoreX release validation
+
+For everyday development and release-candidate preflight, run the lightweight
+real-release check:
+
+```bash
+python scripts/真实发布轻量校验.py
+```
+
+After version freeze, generate the multi-agent split plan if several agents
+will collect evidence in parallel:
+
+```bash
+python scripts/真实发布多Agent分工策略.py
+```
+
+If the full gate fails, generate a focused rerun plan before spending time on
+another full pass:
+
+```bash
+python scripts/真实发布失败复验策略.py
+```
+
+After a release candidate has been deployed to the real production server, and
+before public promotion, ask the operator whether to run the full real release
+validation:
+
+```bash
+python scripts/真实发布校验.py
+```
+
+Do not run the full gate automatically: it connects to production and may call
+real models, image generation/editing, and concurrency pressure tests.
+Do not run multiple full gates in parallel; the split plan is for evidence
+collection only, and the final full gate remains the release-blocking source of
+truth.
+Focused reruns are proof-of-fix evidence only; batch fixes and run the final
+full gate once before promotion.
+
 ## Code of conduct
 
 Be respectful and constructive. We want CowAgent to be a welcoming place for

@@ -39,7 +39,12 @@ from models.model_provider_errors import http_error_response, provider_error_res
 from models.model_retry import sleep_for_retry
 from models.session_manager import SessionManager
 from models.model_telemetry import ModelCallSpan
-from models.model_capabilities import get_model_capabilities, sanitize_chat_payload
+from models.model_capabilities import (
+    get_model_capabilities,
+    is_custom_gemini_transport,
+    normalize_openai_compatible_api_base,
+    sanitize_chat_payload,
+)
 from bridge.context import ContextType
 from bridge.reply import Reply, ReplyType
 from common.log import logger
@@ -98,10 +103,35 @@ class ChatGPTBot(Bot, OpenAIImage, OpenAICompatibleBot):
     def _is_custom_route(self) -> bool:
         return self._effective_route_bot_type() == const.CUSTOM
 
+    @staticmethod
+    def _legacy_custom_gemini_transport_configured() -> bool:
+        return is_custom_gemini_transport(
+            conf().get("model", ""),
+            configured_bot_type=const.GEMINI,
+            gemini_api_base=conf().get("gemini_api_base") or "",
+            has_gemini_key=bool(conf().get("gemini_api_key")),
+        )
+
+    @classmethod
+    def _custom_api_key(cls) -> str:
+        if conf().get("custom_api_key"):
+            return conf().get("custom_api_key")
+        if cls._legacy_custom_gemini_transport_configured():
+            return conf().get("gemini_api_key", "")
+        return ""
+
+    @classmethod
+    def _custom_api_base(cls):
+        if conf().get("custom_api_base"):
+            return conf().get("custom_api_base")
+        if cls._legacy_custom_gemini_transport_configured():
+            return normalize_openai_compatible_api_base(conf().get("gemini_api_base")) or None
+        return None
+
     def _configure_http_client_for_route(self) -> None:
         if self._is_custom_route():
-            self._api_key = conf().get("custom_api_key", "")
-            self._api_base = conf().get("custom_api_base") or None
+            self._api_key = self._custom_api_key()
+            self._api_base = self._custom_api_base()
         else:
             self._api_key = conf().get("open_ai_api_key")
             self._api_base = conf().get("open_ai_api_base") or None
@@ -119,8 +149,8 @@ class ChatGPTBot(Bot, OpenAIImage, OpenAICompatibleBot):
         provider = "custom" if is_custom else const.CHATGPTONAZURE if route == const.CHATGPTONAZURE else "openai"
         return {
             'provider': provider,
-            'api_key': conf().get("custom_api_key") if is_custom else conf().get("open_ai_api_key"),
-            'api_base': conf().get("custom_api_base") if is_custom else conf().get("open_ai_api_base"),
+            'api_key': self._custom_api_key() if is_custom else conf().get("open_ai_api_key"),
+            'api_base': self._custom_api_base() if is_custom else conf().get("open_ai_api_base"),
             'model': conf().get("model", "gpt-3.5-turbo"),
             'default_temperature': conf().get("temperature", 0.9),
             'default_top_p': conf().get("top_p", 1.0),
@@ -234,8 +264,8 @@ class ChatGPTBot(Bot, OpenAIImage, OpenAICompatibleBot):
             # Get model and API config
             is_custom = self._is_custom_route()
             model = context.get("gpt_model") or conf().get("model", "gpt-4o")
-            api_key = context.get("openai_api_key") or (conf().get("custom_api_key") if is_custom else conf().get("open_ai_api_key"))
-            api_base = conf().get("custom_api_base") if is_custom else conf().get("open_ai_api_base")
+            api_key = context.get("openai_api_key") or (self._custom_api_key() if is_custom else conf().get("open_ai_api_key"))
+            api_base = self._custom_api_base() if is_custom else conf().get("open_ai_api_base")
             provider = "custom" if is_custom else "openai"
             
             # Build vision request

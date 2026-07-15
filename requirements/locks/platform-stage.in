@@ -1,0 +1,25 @@
+-r runtime.in
+
+# Browser Capability Pack build dependency. This preserves the existing stage
+# version; it is not part of the local Runtime Core dependency closure.
+playwright==1.52.0
+greenlet==3.4.0
+pyee==13.0.1
+
+# OCR Capability Pack. The model and native wheel closure are copied into the
+# signed pack and never installed into Runtime Core on the user machine.
+rapidocr-onnxruntime==1.4.4
+onnxruntime==1.26.0
+# Keep the universal Python 3.11 release lock single-valued.  Without this
+# direct pin uv resolves a second NumPy version for Python >=3.12, while the
+# product Runtime and the lock verifier intentionally support one immutable
+# dependency identity per Candidate.
+numpy==2.4.6
+
+# Office Capability Pack. These libraries are staged as a separate signed
+# dependency closure for document, spreadsheet, presentation and PDF work.
+openpyxl==3.1.5
+python-docx==1.2.0
+python-pptx==1.0.2
+pypdf==6.9.1
+reportlab==4.4.9

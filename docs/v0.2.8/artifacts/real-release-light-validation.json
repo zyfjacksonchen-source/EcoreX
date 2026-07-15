@@ -1,0 +1,1494 @@
+{
+  "status": "PASS",
+  "schemaVersion": "real-release-light-validation-v1",
+  "version": "0.2.8",
+  "scope": "real-release-light-validation",
+  "generatedAt": "2026-07-04T13:11:57.484345+00:00",
+  "durationSeconds": 1.97,
+  "checkCount": 158,
+  "passCount": 158,
+  "failCount": 0,
+  "checks": [
+    {
+      "index": 1,
+      "group": "files",
+      "name": "scripts\\smoke-v026-production-agent-product-acceptance.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "scripts/smoke-v026-production-agent-product-acceptance.py"
+      }
+    },
+    {
+      "index": 2,
+      "group": "files",
+      "name": "scripts\\真实发布校验.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "scripts/真实发布校验.py"
+      }
+    },
+    {
+      "index": 3,
+      "group": "files",
+      "name": "scripts\\smoke-v028-legacy-webui-online-upgrade.ps1 exists",
+      "status": "PASS",
+      "detail": {
+        "path": "scripts/smoke-v028-legacy-webui-online-upgrade.ps1"
+      }
+    },
+    {
+      "index": 4,
+      "group": "files",
+      "name": "scripts\\real-release-multi-agent-strategy.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "scripts/real-release-multi-agent-strategy.py"
+      }
+    },
+    {
+      "index": 5,
+      "group": "files",
+      "name": "scripts\\真实发布多Agent分工策略.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "scripts/真实发布多Agent分工策略.py"
+      }
+    },
+    {
+      "index": 6,
+      "group": "files",
+      "name": "docs\\v0.2.8\\real-release-multi-agent-strategy.md exists",
+      "status": "PASS",
+      "detail": {
+        "path": "docs/v0.2.8/real-release-multi-agent-strategy.md"
+      }
+    },
+    {
+      "index": 7,
+      "group": "files",
+      "name": "scripts\\real-release-rerun-strategy.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "scripts/real-release-rerun-strategy.py"
+      }
+    },
+    {
+      "index": 8,
+      "group": "files",
+      "name": "scripts\\真实发布失败复验策略.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "scripts/真实发布失败复验策略.py"
+      }
+    },
+    {
+      "index": 9,
+      "group": "files",
+      "name": "docs\\v0.2.8\\real-release-rerun-strategy.md exists",
+      "status": "PASS",
+      "detail": {
+        "path": "docs/v0.2.8/real-release-rerun-strategy.md"
+      }
+    },
+    {
+      "index": 10,
+      "group": "files",
+      "name": "scripts\\smoke-v026-production-200-user-behavior.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "scripts/smoke-v026-production-200-user-behavior.py"
+      }
+    },
+    {
+      "index": 11,
+      "group": "files",
+      "name": "scripts\\smoke-v026-production-30-image-ocr-vision-toolchain.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "scripts/smoke-v026-production-30-image-ocr-vision-toolchain.py"
+      }
+    },
+    {
+      "index": 12,
+      "group": "files",
+      "name": "tests\\test_v026_agent_product_acceptance.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "tests/test_v026_agent_product_acceptance.py"
+      }
+    },
+    {
+      "index": 13,
+      "group": "files",
+      "name": "tests\\test_v028_runtime_queue_observation.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "tests/test_v028_runtime_queue_observation.py"
+      }
+    },
+    {
+      "index": 14,
+      "group": "files",
+      "name": "channel\\web\\routes.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "channel/web/routes.py"
+      }
+    },
+    {
+      "index": 15,
+      "group": "files",
+      "name": "channel\\web\\web_channel.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "channel/web/web_channel.py"
+      }
+    },
+    {
+      "index": 16,
+      "group": "files",
+      "name": "channel\\web\\sessions.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "channel/web/sessions.py"
+      }
+    },
+    {
+      "index": 17,
+      "group": "files",
+      "name": "channel\\web\\sse.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "channel/web/sse.py"
+      }
+    },
+    {
+      "index": 18,
+      "group": "files",
+      "name": "channel\\web\\image_jobs.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "channel/web/image_jobs.py"
+      }
+    },
+    {
+      "index": 19,
+      "group": "files",
+      "name": "agent\\protocol\\task_observer.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "agent/protocol/task_observer.py"
+      }
+    },
+    {
+      "index": 20,
+      "group": "files",
+      "name": "agent\\protocol\\run_ledger.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "agent/protocol/run_ledger.py"
+      }
+    },
+    {
+      "index": 21,
+      "group": "files",
+      "name": "agent\\protocol\\runtime_projection.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "agent/protocol/runtime_projection.py"
+      }
+    },
+    {
+      "index": 22,
+      "group": "files",
+      "name": "agent\\protocol\\image_job_service.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "agent/protocol/image_job_service.py"
+      }
+    },
+    {
+      "index": 23,
+      "group": "files",
+      "name": "agent\\protocol\\agent_stream.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "agent/protocol/agent_stream.py"
+      }
+    },
+    {
+      "index": 24,
+      "group": "files",
+      "name": "agent\\memory\\conversation_store.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "agent/memory/conversation_store.py"
+      }
+    },
+    {
+      "index": 25,
+      "group": "files",
+      "name": "agent\\tools\\imagegen\\imagegen.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "agent/tools/imagegen/imagegen.py"
+      }
+    },
+    {
+      "index": 26,
+      "group": "files",
+      "name": "agent\\tools\\ocr\\ocr.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "agent/tools/ocr/ocr.py"
+      }
+    },
+    {
+      "index": 27,
+      "group": "files",
+      "name": "agent\\tools\\vision\\vision.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "agent/tools/vision/vision.py"
+      }
+    },
+    {
+      "index": 28,
+      "group": "files",
+      "name": "agent\\tools\\tongxin_cli\\tongxin_cli.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "agent/tools/tongxin_cli/tongxin_cli.py"
+      }
+    },
+    {
+      "index": 29,
+      "group": "files",
+      "name": "agent\\tools\\ecorex_cli\\ecorex_cli.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "agent/tools/ecorex_cli/ecorex_cli.py"
+      }
+    },
+    {
+      "index": 30,
+      "group": "files",
+      "name": "agent\\tools\\mcp\\mcp_tool.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "agent/tools/mcp/mcp_tool.py"
+      }
+    },
+    {
+      "index": 31,
+      "group": "files",
+      "name": "agent\\skills\\service.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "agent/skills/service.py"
+      }
+    },
+    {
+      "index": 32,
+      "group": "files",
+      "name": "agent\\skills\\manager.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "agent/skills/manager.py"
+      }
+    },
+    {
+      "index": 33,
+      "group": "files",
+      "name": "desktop\\scripts\\stage-runtime-win.ps1 exists",
+      "status": "PASS",
+      "detail": {
+        "path": "desktop/scripts/stage-runtime-win.ps1"
+      }
+    },
+    {
+      "index": 34,
+      "group": "files",
+      "name": "desktop\\scripts\\stage-runtime-mac.sh exists",
+      "status": "PASS",
+      "detail": {
+        "path": "desktop/scripts/stage-runtime-mac.sh"
+      }
+    },
+    {
+      "index": 35,
+      "group": "files",
+      "name": "scripts\\validate-ecorex-release-artifacts.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "scripts/validate-ecorex-release-artifacts.py"
+      }
+    },
+    {
+      "index": 36,
+      "group": "files",
+      "name": "scripts\\scan-session-artifacts-privacy.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "scripts/scan-session-artifacts-privacy.py"
+      }
+    },
+    {
+      "index": 37,
+      "group": "files",
+      "name": "config.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "config.py"
+      }
+    },
+    {
+      "index": 38,
+      "group": "files",
+      "name": "config-template.json exists",
+      "status": "PASS",
+      "detail": {
+        "path": "config-template.json"
+      }
+    },
+    {
+      "index": 39,
+      "group": "files",
+      "name": "deploy\\ecorex-admin-api\\ecorex_admin_api.py exists",
+      "status": "PASS",
+      "detail": {
+        "path": "deploy/ecorex-admin-api/ecorex_admin_api.py"
+      }
+    },
+    {
+      "index": 40,
+      "group": "files",
+      "name": "deploy\\ecorex-site\\nginx\\ecorex-agent.conf.example exists",
+      "status": "PASS",
+      "detail": {
+        "path": "deploy/ecorex-site/nginx/ecorex-agent.conf.example"
+      }
+    },
+    {
+      "index": 41,
+      "group": "files",
+      "name": "deploy\\ecorex-site\\nginx\\ecorex-web.conf.example exists",
+      "status": "PASS",
+      "detail": {
+        "path": "deploy/ecorex-site/nginx/ecorex-web.conf.example"
+      }
+    },
+    {
+      "index": 42,
+      "group": "files",
+      "name": "deploy\\ecorex-site\\caddy\\ecorex-agent.routes.caddy exists",
+      "status": "PASS",
+      "detail": {
+        "path": "deploy/ecorex-site/caddy/ecorex-agent.routes.caddy"
+      }
+    },
+    {
+      "index": 43,
+      "group": "files",
+      "name": "deploy\\ecorex-site\\caddy\\ecorex-web.routes.caddy exists",
+      "status": "PASS",
+      "detail": {
+        "path": "deploy/ecorex-site/caddy/ecorex-web.routes.caddy"
+      }
+    },
+    {
+      "index": 44,
+      "group": "files",
+      "name": "docs\\v0.2.8\\development-log.md exists",
+      "status": "PASS",
+      "detail": {
+        "path": "docs/v0.2.8/development-log.md"
+      }
+    },
+    {
+      "index": 45,
+      "group": "files",
+      "name": "docs\\v0.2.8\\runtime-observability-and-queue-architecture.md exists",
+      "status": "PASS",
+      "detail": {
+        "path": "docs/v0.2.8/runtime-observability-and-queue-architecture.md"
+      }
+    },
+    {
+      "index": 46,
+      "group": "compile",
+      "name": "scripts\\smoke-v026-production-agent-product-acceptance.py compiles",
+      "status": "PASS",
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "index": 47,
+      "group": "compile",
+      "name": "scripts\\真实发布校验.py compiles",
+      "status": "PASS",
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "index": 48,
+      "group": "compile",
+      "name": "scripts\\真实发布轻量校验.py compiles",
+      "status": "PASS",
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "index": 49,
+      "group": "compile",
+      "name": "scripts\\real-release-multi-agent-strategy.py compiles",
+      "status": "PASS",
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "index": 50,
+      "group": "compile",
+      "name": "scripts\\真实发布多Agent分工策略.py compiles",
+      "status": "PASS",
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "index": 51,
+      "group": "compile",
+      "name": "scripts\\real-release-rerun-strategy.py compiles",
+      "status": "PASS",
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "index": 52,
+      "group": "compile",
+      "name": "scripts\\真实发布失败复验策略.py compiles",
+      "status": "PASS",
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "index": 53,
+      "group": "compile",
+      "name": "tests\\test_v026_agent_product_acceptance.py compiles",
+      "status": "PASS",
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "index": 54,
+      "group": "compile",
+      "name": "remote injected real release validation script compiles",
+      "status": "PASS",
+      "detail": {
+        "remoteScriptHash": "3F0A5705850F5E6C",
+        "chars": 129665
+      }
+    },
+    {
+      "index": 55,
+      "group": "compile",
+      "name": "remote focused rerun script compiles",
+      "status": "PASS",
+      "detail": {
+        "remoteScriptHash": "A4BFB92DFE20B14A",
+        "chars": 129736
+      }
+    },
+    {
+      "index": 56,
+      "group": "matrix",
+      "name": "declared new case count is 345",
+      "status": "PASS",
+      "detail": {
+        "newCaseCount": 345,
+        "targetTotalChecks": 577,
+        "minimumEnabledChecks": 400,
+        "p0Count": 307,
+        "p2Count": 38
+      }
+    },
+    {
+      "index": 57,
+      "group": "matrix",
+      "name": "target total check count is 577",
+      "status": "PASS",
+      "detail": {
+        "newCaseCount": 345,
+        "targetTotalChecks": 577,
+        "minimumEnabledChecks": 400,
+        "p0Count": 307,
+        "p2Count": 38
+      }
+    },
+    {
+      "index": 58,
+      "group": "matrix",
+      "name": "minimum enabled check count is 400",
+      "status": "PASS",
+      "detail": {
+        "newCaseCount": 345,
+        "targetTotalChecks": 577,
+        "minimumEnabledChecks": 400,
+        "p0Count": 307,
+        "p2Count": 38
+      }
+    },
+    {
+      "index": 59,
+      "group": "matrix",
+      "name": "P0 hard gates are present",
+      "status": "PASS",
+      "detail": {
+        "newCaseCount": 345,
+        "targetTotalChecks": 577,
+        "minimumEnabledChecks": 400,
+        "p0Count": 307,
+        "p2Count": 38
+      }
+    },
+    {
+      "index": 60,
+      "group": "matrix",
+      "name": "P2 removable cases are present",
+      "status": "PASS",
+      "detail": {
+        "newCaseCount": 345,
+        "targetTotalChecks": 577,
+        "minimumEnabledChecks": 400,
+        "p0Count": 307,
+        "p2Count": 38
+      }
+    },
+    {
+      "index": 61,
+      "group": "matrix",
+      "name": "P0 cases are not removable",
+      "status": "PASS",
+      "detail": {
+        "newCaseCount": 345,
+        "targetTotalChecks": 577,
+        "minimumEnabledChecks": 400,
+        "p0Count": 307,
+        "p2Count": 38
+      }
+    },
+    {
+      "index": 62,
+      "group": "matrix",
+      "name": "P2 cases are removable",
+      "status": "PASS",
+      "detail": {
+        "newCaseCount": 345,
+        "targetTotalChecks": 577,
+        "minimumEnabledChecks": 400,
+        "p0Count": 307,
+        "p2Count": 38
+      }
+    },
+    {
+      "index": 63,
+      "group": "routes",
+      "name": "route /auth/login is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 64,
+      "group": "routes",
+      "name": "route /auth/check is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 65,
+      "group": "routes",
+      "name": "route /message is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 66,
+      "group": "routes",
+      "name": "route /stream is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 67,
+      "group": "routes",
+      "name": "route /cancel is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 68,
+      "group": "routes",
+      "name": "route /api/active-requests is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 69,
+      "group": "routes",
+      "name": "route /api/runtime-projection is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 70,
+      "group": "routes",
+      "name": "route /api/image-jobs is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 71,
+      "group": "routes",
+      "name": "route /api/tool-permissions is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 72,
+      "group": "routes",
+      "name": "route /api/models is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 73,
+      "group": "routes",
+      "name": "route /api/tools is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 74,
+      "group": "routes",
+      "name": "route /api/skills is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 75,
+      "group": "routes",
+      "name": "route /api/sessions is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 76,
+      "group": "routes",
+      "name": "route /api/history is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 77,
+      "group": "routes",
+      "name": "route /api/diagnostics/bundle is declared",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 78,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: Do not use stored memories or prior conversation context.",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 79,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: direct tool probes bypass conversational memory",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 80,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: gpt-image-2-pro",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 81,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: images.generations",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 82,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: images.edits",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 83,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: SkillService",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 84,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: EcoreXCli",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 85,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: list_mcp_status",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 86,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: PRESSURE_USERS_DEFAULT = 20",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 87,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: TARGET_NEW_CHECKS = 345",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 88,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: TARGET_TOTAL_CHECKS = 577",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 89,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: v027-integrated-capabilities",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 90,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: v028-runtime-observability-queue",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 91,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: TaskObserver",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 92,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: QueuedRequestPayloadStore",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 93,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: claim_queued_run",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 94,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: task_observations",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 95,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: queue-action",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 96,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: guide_queue",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 97,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: Image job observer uses 120s per-image baseline with status leases",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 98,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: Image jobs default multi-image work to two bounded lanes",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 99,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: Native imagegen batch runs through bounded parallel executor",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 100,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: continue extend background",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 101,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: modelAliasFamily",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 102,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: isOfficialGeminiProvider",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 103,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: isCustomGeminiEndpoint",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 104,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: contextContinuity",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 105,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: artifactHistoryRefs",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 106,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: custom Gemini switched model produces content",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 107,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: _stream_chunks_from_chat_response",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 108,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: model-switch-divider",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 109,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: model-switch-message",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 110,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: IMAGEGEN_SHELL_SEMANTIC_SIGNAL_REGEXES",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 111,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: _emit_batch_image_ready",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 112,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: session-summary-send-time",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 113,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: admin release page exposes one-click publish controls",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 114,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: mpi_accuracy",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 115,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: cacheFallbackAllowedForMpi",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 116,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: PLAYWRIGHT_BROWSERS_PATH",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 117,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: tools/tongxin/xin_agent_cli.py",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 118,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: public manifest is promoted to current stable version",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 119,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: update-check endpoint exposes WebUI update policy and artifacts",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 120,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: CDP action hit stale connection; reconnecting once",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 121,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: --focus-groups",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 122,
+      "group": "real-release-contract",
+      "name": "heavy gate contains marker: production-agent-product-focused-rerun",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 123,
+      "group": "real-release-contract",
+      "name": "heavy wrapper contains marker: smoke-v028-legacy-webui-online-upgrade.ps1",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 124,
+      "group": "real-release-contract",
+      "name": "heavy wrapper contains marker: --skip-legacy-upgrade",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 125,
+      "group": "real-release-contract",
+      "name": "heavy wrapper contains marker: LEGACY_UPGRADE_TARGET",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 126,
+      "group": "real-release-contract",
+      "name": "legacy upgrade smoke contains marker: legacy-webui-online-upgrade",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 127,
+      "group": "real-release-contract",
+      "name": "legacy upgrade smoke contains marker: current-runtime.txt",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 128,
+      "group": "real-release-contract",
+      "name": "legacy upgrade smoke contains marker: 0.2.7.1",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 129,
+      "group": "real-release-contract",
+      "name": "legacy upgrade smoke contains marker: 0.2.7.2",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 130,
+      "group": "real-release-contract",
+      "name": "legacy upgrade smoke contains marker: legacy runtime receives v0.2.8 update notification",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 131,
+      "group": "real-release-contract",
+      "name": "legacy upgrade smoke contains marker: legacy runtime upgrades online to v0.2.8",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 132,
+      "group": "development-standard",
+      "name": "development standard records: 真实发布校验",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 133,
+      "group": "development-standard",
+      "name": "development standard records: 真实发布轻量校验",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 134,
+      "group": "development-standard",
+      "name": "development standard records: 真实发布多Agent分工策略",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 135,
+      "group": "development-standard",
+      "name": "development standard records: 并发多 Agent 分工策略",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 136,
+      "group": "development-standard",
+      "name": "development standard records: 真实发布失败复验策略",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 137,
+      "group": "development-standard",
+      "name": "development standard records: focused rerun",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 138,
+      "group": "development-standard",
+      "name": "development standard records: 部署后、推广前",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 139,
+      "group": "development-standard",
+      "name": "development standard records: 主动询问用户是否运行真实发布校验",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 140,
+      "group": "development-standard",
+      "name": "development standard records: 最终发布结论仍必须由单次完整",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 141,
+      "group": "v028-local-contract",
+      "name": "queued message surface exposes user-triggered guide action",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 142,
+      "group": "v028-local-contract",
+      "name": "image observation uses 120s baseline and status-driven deadline extensions",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 143,
+      "group": "v028-local-contract",
+      "name": "image generation defaults batch speed to two bounded lanes",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 144,
+      "group": "v028-local-contract",
+      "name": "runtime projection preserves image parallelism default fields",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 145,
+      "group": "v028-local-contract",
+      "name": "session share public URL and reverse-proxy routes avoid bare 404",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 146,
+      "group": "multi-agent-strategy",
+      "name": "multi-agent strategy builds",
+      "status": "PASS",
+      "detail": {
+        "status": "PASS",
+        "feasibility": "FEASIBLE_WITH_FINAL_SERIAL_GATE",
+        "laneCount": 11,
+        "waveCount": 5,
+        "finalGateCaseCount": 577,
+        "validation": {
+          "status": "PASS",
+          "failures": [],
+          "coveredGroupsBySplit": [
+            "auth-first-use",
+            "concurrency-pressure",
+            "context-session",
+            "fresh-env",
+            "multi-model-image-route",
+            "runtime-api",
+            "security-observability",
+            "stream-state-machine",
+            "tool-skill",
+            "ui-ux",
+            "v027-integrated-capabilities",
+            "v028-runtime-observability-queue"
+          ],
+          "coveredGroupsByFinalGate": [
+            "auth-first-use",
+            "concurrency-pressure",
+            "context-session",
+            "fresh-env",
+            "multi-model-image-route",
+            "runtime-api",
+            "security-observability",
+            "stream-state-machine",
+            "tool-skill",
+            "ui-ux",
+            "v027-integrated-capabilities",
+            "v028-runtime-observability-queue"
+          ]
+        }
+      }
+    },
+    {
+      "index": 147,
+      "group": "multi-agent-strategy",
+      "name": "strategy declares final full gate lane",
+      "status": "PASS",
+      "detail": {
+        "status": "PASS",
+        "feasibility": "FEASIBLE_WITH_FINAL_SERIAL_GATE",
+        "laneCount": 11,
+        "waveCount": 5,
+        "finalGateCaseCount": 577,
+        "validation": {
+          "status": "PASS",
+          "failures": [],
+          "coveredGroupsBySplit": [
+            "auth-first-use",
+            "concurrency-pressure",
+            "context-session",
+            "fresh-env",
+            "multi-model-image-route",
+            "runtime-api",
+            "security-observability",
+            "stream-state-machine",
+            "tool-skill",
+            "ui-ux",
+            "v027-integrated-capabilities",
+            "v028-runtime-observability-queue"
+          ],
+          "coveredGroupsByFinalGate": [
+            "auth-first-use",
+            "concurrency-pressure",
+            "context-session",
+            "fresh-env",
+            "multi-model-image-route",
+            "runtime-api",
+            "security-observability",
+            "stream-state-machine",
+            "tool-skill",
+            "ui-ux",
+            "v027-integrated-capabilities",
+            "v028-runtime-observability-queue"
+          ]
+        }
+      }
+    },
+    {
+      "index": 148,
+      "group": "multi-agent-strategy",
+      "name": "strategy declares serial pressure lane",
+      "status": "PASS",
+      "detail": {
+        "status": "PASS",
+        "feasibility": "FEASIBLE_WITH_FINAL_SERIAL_GATE",
+        "laneCount": 11,
+        "waveCount": 5,
+        "finalGateCaseCount": 577,
+        "validation": {
+          "status": "PASS",
+          "failures": [],
+          "coveredGroupsBySplit": [
+            "auth-first-use",
+            "concurrency-pressure",
+            "context-session",
+            "fresh-env",
+            "multi-model-image-route",
+            "runtime-api",
+            "security-observability",
+            "stream-state-machine",
+            "tool-skill",
+            "ui-ux",
+            "v027-integrated-capabilities",
+            "v028-runtime-observability-queue"
+          ],
+          "coveredGroupsByFinalGate": [
+            "auth-first-use",
+            "concurrency-pressure",
+            "context-session",
+            "fresh-env",
+            "multi-model-image-route",
+            "runtime-api",
+            "security-observability",
+            "stream-state-machine",
+            "tool-skill",
+            "ui-ux",
+            "v027-integrated-capabilities",
+            "v028-runtime-observability-queue"
+          ]
+        }
+      }
+    },
+    {
+      "index": 149,
+      "group": "multi-agent-strategy",
+      "name": "strategy uses final serial gate feasibility",
+      "status": "PASS",
+      "detail": {
+        "status": "PASS",
+        "feasibility": "FEASIBLE_WITH_FINAL_SERIAL_GATE",
+        "laneCount": 11,
+        "waveCount": 5,
+        "finalGateCaseCount": 577,
+        "validation": {
+          "status": "PASS",
+          "failures": [],
+          "coveredGroupsBySplit": [
+            "auth-first-use",
+            "concurrency-pressure",
+            "context-session",
+            "fresh-env",
+            "multi-model-image-route",
+            "runtime-api",
+            "security-observability",
+            "stream-state-machine",
+            "tool-skill",
+            "ui-ux",
+            "v027-integrated-capabilities",
+            "v028-runtime-observability-queue"
+          ],
+          "coveredGroupsByFinalGate": [
+            "auth-first-use",
+            "concurrency-pressure",
+            "context-session",
+            "fresh-env",
+            "multi-model-image-route",
+            "runtime-api",
+            "security-observability",
+            "stream-state-machine",
+            "tool-skill",
+            "ui-ux",
+            "v027-integrated-capabilities",
+            "v028-runtime-observability-queue"
+          ]
+        }
+      }
+    },
+    {
+      "index": 150,
+      "group": "rerun-strategy",
+      "name": "failed-report rerun strategy builds",
+      "status": "PASS",
+      "detail": {
+        "status": "PASS",
+        "action": "FOCUSED_RERUN_THEN_FINAL_GATE",
+        "failureGroups": [
+          "stream-state-machine",
+          "context-session"
+        ],
+        "selectedGroups": [
+          "fresh-env",
+          "auth-first-use",
+          "stream-state-machine",
+          "context-session"
+        ],
+        "mustRunFullGateBeforePromotion": true
+      }
+    },
+    {
+      "index": 151,
+      "group": "rerun-strategy",
+      "name": "rerun strategy expands required dependencies",
+      "status": "PASS",
+      "detail": {
+        "status": "PASS",
+        "action": "FOCUSED_RERUN_THEN_FINAL_GATE",
+        "failureGroups": [
+          "stream-state-machine",
+          "context-session"
+        ],
+        "selectedGroups": [
+          "fresh-env",
+          "auth-first-use",
+          "stream-state-machine",
+          "context-session"
+        ],
+        "mustRunFullGateBeforePromotion": true
+      }
+    },
+    {
+      "index": 152,
+      "group": "rerun-strategy",
+      "name": "rerun strategy emits focus-groups command",
+      "status": "PASS",
+      "detail": {
+        "status": "PASS",
+        "action": "FOCUSED_RERUN_THEN_FINAL_GATE",
+        "failureGroups": [
+          "stream-state-machine",
+          "context-session"
+        ],
+        "selectedGroups": [
+          "fresh-env",
+          "auth-first-use",
+          "stream-state-machine",
+          "context-session"
+        ],
+        "mustRunFullGateBeforePromotion": true
+      }
+    },
+    {
+      "index": 153,
+      "group": "rerun-strategy",
+      "name": "rerun strategy requires final full gate before promotion",
+      "status": "PASS",
+      "detail": {
+        "status": "PASS",
+        "action": "FOCUSED_RERUN_THEN_FINAL_GATE",
+        "failureGroups": [
+          "stream-state-machine",
+          "context-session"
+        ],
+        "selectedGroups": [
+          "fresh-env",
+          "auth-first-use",
+          "stream-state-machine",
+          "context-session"
+        ],
+        "mustRunFullGateBeforePromotion": true
+      }
+    },
+    {
+      "index": 154,
+      "group": "commands",
+      "name": "Chinese heavy command delegates to heavy implementation",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 155,
+      "group": "commands",
+      "name": "Chinese light command delegates to light implementation",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 156,
+      "group": "commands",
+      "name": "Chinese multi-agent strategy command delegates to strategy implementation",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 157,
+      "group": "commands",
+      "name": "Chinese failed-rerun strategy command delegates to rerun implementation",
+      "status": "PASS",
+      "detail": {}
+    },
+    {
+      "index": 158,
+      "group": "commands",
+      "name": "light script has no Paramiko dependency",
+      "status": "PASS",
+      "detail": {}
+    }
+  ],
+  "failurePreview": [],
+  "redaction": {
+    "rawPasswordPersisted": false,
+    "rawSecretPersisted": false,
+    "rawUrlPersisted": false,
+    "rawUserPathPersisted": false
+  },
+  "commands": {
+    "light": "python scripts/真实发布轻量校验.py",
+    "strategy": "python scripts/真实发布多Agent分工策略.py",
+    "rerun": "python scripts/真实发布失败复验策略.py",
+    "heavy": "python scripts/真实发布校验.py"
+  }
+}

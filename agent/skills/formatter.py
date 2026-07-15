@@ -2,8 +2,9 @@
 Skill formatter for generating prompts from skills.
 """
 
-from typing import Dict, List
+from typing import Any, Dict, List
 from agent.skills.types import Skill, SkillEntry
+from agent.skills.tool_bridge import resolve_callable_tool_name
 
 
 def format_skills_for_prompt(skills: List[Skill]) -> str:
@@ -33,6 +34,21 @@ def format_skills_for_prompt(skills: List[Skill]) -> str:
         lines.append(f"    <description>{_escape_xml(skill.description)}</description>")
         lines.append(f"    <location>{_escape_xml(skill.file_path)}</location>")
         lines.append(f"    <base_dir>{_escape_xml(skill.base_dir)}</base_dir>")
+        compatibility_id = _frontmatter_scalar(skill.frontmatter, "compatibility-id", "compatibility_id")
+        official_skill = _frontmatter_scalar(skill.frontmatter, "adopts-official-skill", "adopts_official_skill")
+        native_facade = _frontmatter_bool(skill.frontmatter, "ecorex-native-facade", "ecorex_native_facade")
+        quality_gates = _frontmatter_list(skill.frontmatter, "quality-gates", "quality_gates")
+        callable_tool = resolve_callable_tool_name(skill)
+        if compatibility_id:
+            lines.append(f"    <compatibility_id>{_escape_xml(compatibility_id)}</compatibility_id>")
+        if official_skill:
+            lines.append(f"    <adopts_official_skill>{_escape_xml(official_skill)}</adopts_official_skill>")
+        if native_facade is not None:
+            lines.append(f"    <ecorex_native_facade>{str(native_facade).lower()}</ecorex_native_facade>")
+        if quality_gates:
+            lines.append(f"    <quality_gates>{_escape_xml(', '.join(quality_gates))}</quality_gates>")
+        if callable_tool:
+            lines.append(f"    <callable_tool>{_escape_xml(callable_tool)}</callable_tool>")
         lines.append("  </skill>")
     
     lines.append("</available_skills>")
@@ -134,6 +150,49 @@ def _extract_setup_hint(skill: Skill) -> str:
     lines = setup_text.split('\n')
     hint_lines = [l.strip() for l in lines[:6] if l.strip()]
     return ' '.join(hint_lines)[:300]
+
+
+def _frontmatter_scalar(frontmatter: Dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = frontmatter.get(key)
+        if value is None:
+            continue
+        if isinstance(value, (list, tuple)):
+            value = value[0] if value else ""
+        if isinstance(value, dict):
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
+def _frontmatter_bool(frontmatter: Dict[str, Any], *keys: str):
+    for key in keys:
+        value = frontmatter.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+    return None
+
+
+def _frontmatter_list(frontmatter: Dict[str, Any], *keys: str) -> List[str]:
+    for key in keys:
+        value = frontmatter.get(key)
+        if value is None:
+            continue
+        if isinstance(value, (list, tuple)):
+            return [str(item).strip() for item in value if str(item).strip()]
+        text = str(value).strip()
+        if text:
+            return [part.strip() for part in text.split(",") if part.strip()]
+    return []
 
 
 def _escape_xml(text: str) -> str:

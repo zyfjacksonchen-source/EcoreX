@@ -1,0 +1,30 @@
+{
+  "status": "PASS",
+  "generatedAt": "2026-06-27T09:17:38Z",
+  "scope": "installed-runtime-cdp-login-continuation",
+  "checks": {
+    "followupLoginSelectsBrowserSchema": true,
+    "browserIntentInherited": true,
+    "rawCdpBashReroutesToBrowser": true,
+    "navigateStatus": "success",
+    "snapshotStatus": "success",
+    "xiaohongshuLoaded": true,
+    "loggedInSidebarObserved": true
+  },
+  "selectedTools": [
+    "bash",
+    "browser",
+    "host_diagnostics",
+    "read"
+  ],
+  "intentGroups": [
+    "browser",
+    "web"
+  ],
+  "inheritedFollowupIntent": true,
+  "cdpEndpoint": "http://127.0.0.1:9222",
+  "navigatePreview": "redacted: xiaohongshu page loaded with HTTP 200 and snapshot available",
+  "snapshotPreview": "redacted: snapshot contained interactive Xiaohongshu elements and logged-in sidebar marker",
+  "redacted": true,
+  "evidenceMinimized": true
+}

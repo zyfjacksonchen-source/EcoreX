@@ -1,0 +1,14 @@
+{
+  "status": "PASS",
+  "metrics": {
+    "artifactBadgeCount": 1,
+    "toolPanelCount": 1,
+    "failBadgeCount": 2,
+    "artifactRows": 1,
+    "apiCallCount": 22,
+    "hasPdfQaFailedText": true
+  },
+  "leaks": [],
+  "failures": [],
+  "redacted": true
+}

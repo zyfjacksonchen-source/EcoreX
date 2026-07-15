@@ -1,0 +1,72 @@
+{
+  "status": "PASS",
+  "version": "0.3.0",
+  "checkedAt": "2026-07-08T14:01:00+08:00",
+  "publicZip": {
+    "path": "release-artifacts/EcoreX_0.3.0-public-release.zip",
+    "size": 2874502,
+    "sha256": "F1A9E84796E13020EBEF6884F3662FAE5E531F0AB96DF671382295844DF8AB69"
+  },
+  "onlineManifest": {
+    "url": "https://mvdcm.ecoremedia.net/ecorex-agent/manifest.json",
+    "version": "0.3.0",
+    "downloadMode": "github-cn-primary",
+    "mirrors": [
+      {
+        "kind": "github-release-cn-mirror",
+        "baseUrl": "https://ghproxy.net/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.3.0"
+      },
+      {
+        "kind": "github-release-cn-mirror",
+        "baseUrl": "https://ghfast.top/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.3.0"
+      },
+      {
+        "kind": "asset-base",
+        "baseUrl": "https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.3.0"
+      }
+    ]
+  },
+  "mirrorHeadChecks": [
+    {
+      "artifactId": "webui-windows-x64",
+      "fileName": "EcoreX_0.3.0-webui-windows-x64.zip",
+      "expectedSize": 551267218,
+      "checks": [
+        {
+          "baseUrl": "https://ghproxy.net/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.3.0",
+          "status": 200,
+          "contentLength": 551267218
+        },
+        {
+          "baseUrl": "https://ghfast.top/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.3.0",
+          "status": 200,
+          "contentLength": 551267218
+        }
+      ]
+    },
+    {
+      "artifactId": "webui-macos-universal",
+      "fileName": "EcoreX_0.3.0-webui-macos-universal.zip",
+      "expectedSize": 652443004,
+      "checks": [
+        {
+          "baseUrl": "https://ghproxy.net/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.3.0",
+          "status": 200,
+          "contentLength": 652443004
+        },
+        {
+          "baseUrl": "https://ghfast.top/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.3.0",
+          "status": 200,
+          "contentLength": 652443004
+        }
+      ]
+    }
+  ],
+  "productionDeploy": {
+    "status": "PASS",
+    "evidence": "docs/v0.3.0/artifacts/production-deploy-online.json",
+    "webServiceVersion": "0.3.0",
+    "publicManifestVersion": "0.3.0",
+    "installationManifestVersion": "0.3.0"
+  }
+}

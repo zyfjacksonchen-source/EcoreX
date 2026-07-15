@@ -1,0 +1,70 @@
+{
+  "status": "PASS",
+  "generatedAt": "2026-06-29T02:03:00+08:00",
+  "scope": "R24-16 skill callable tool exposure hotfix",
+  "version": "0.2.4",
+  "checks": [
+    {
+      "label": "skill prompt bridge exposes callable tools",
+      "status": "PASS",
+      "evidence": {
+        "callableToolTag": true,
+        "mappedToolCount": 14,
+        "legacyOfficeAliases": true,
+        "imageGenerationAliases": true,
+        "tongxinAliases": true
+      }
+    },
+    {
+      "label": "model tool schema registry includes official-style tool wrappers",
+      "status": "PASS",
+      "evidence": {
+        "officeDocuments": true,
+        "officePresentations": true,
+        "officeSpreadsheets": true,
+        "officePdf": true,
+        "tongxinCli": true,
+        "imagegen": true
+      }
+    },
+    {
+      "label": "extension registry projects callable surface",
+      "status": "PASS",
+      "evidence": {
+        "toolNameProjected": true,
+        "schemaVisibleProjected": true,
+        "toolSchemaCallableProjected": true,
+        "agentSurfaceProjected": true
+      }
+    },
+    {
+      "label": "release package contract covers new exposure path",
+      "status": "PASS",
+      "evidence": {
+        "sourceContract": "native-skill-facades-source-contract.json",
+        "releaseContracts": [
+          "native-skill-facades-release-contract.json",
+          "skill-governance-release-contract.json",
+          "tongxin-cli-release-contract.json",
+          "office-pdf-runtime-release-contract.json"
+        ],
+        "validatorUpdated": true
+      }
+    }
+  ],
+  "verification": {
+    "pyCompile": "PASS",
+    "backendRegression": "395 passed, 26 subtests passed",
+    "focusedHotfixPytest": "50 passed",
+    "typecheck": "PASS",
+    "rendererBuild": "PASS",
+    "releaseValidation": "PASS",
+    "releaseArtifactContracts": "PASS",
+    "installPackagingContracts": "PASS"
+  },
+  "redaction": {
+    "rawPromptPersisted": false,
+    "rawToolResultPersisted": false,
+    "rawLocalPathPersisted": false
+  }
+}

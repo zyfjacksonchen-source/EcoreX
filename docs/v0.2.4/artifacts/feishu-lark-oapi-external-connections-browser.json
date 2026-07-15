@@ -1,0 +1,19 @@
+{
+  "status": "PASS",
+  "durationMs": 1903,
+  "fixtureHash": "hmac:8e5210c326381a48",
+  "screenshot": "",
+  "metrics": {
+    "connectionCards": 2,
+    "externalListCalls": 2,
+    "actionCalls": 1,
+    "hasFeishuLogo": true,
+    "hasSlackLogo": true,
+    "homeChannelActionVisible": true,
+    "homeChannelActionUsable": false,
+    "secretRedactedOnSave": true,
+    "localizedExternalConnectionText": true,
+    "runCenterHidden": true
+  },
+  "consoleErrorCount": 0
+}

@@ -1,0 +1,67 @@
+{
+  "checkedAt": "2026-07-06T09:30:54.7561448Z",
+  "status": "PASS",
+  "scope": "production-cdn-primary-parallel-download",
+  "manifest": {
+    "version": "0.2.9.2",
+    "mode": "cdn-primary",
+    "mirrorCount": 1,
+    "firstMirror": "https://dl.ecoremedia.net/ecorex-agent/downloads",
+    "hasMinimumTargetBytesPerSecond": false,
+    "hasFallback": false
+  },
+  "installers": {
+    "windows": {
+      "status": 200,
+      "defaultBaseIsCdn": true,
+      "hasParallelRange": true,
+      "hasSpeedGuard": false,
+      "usesPrimaryCdnText": true
+    },
+    "macos": {
+      "status": 200,
+      "defaultBaseIsCdn": true,
+      "hasParallelRange": true,
+      "hasSpeedGuard": false,
+      "usesPrimaryCdnText": true
+    }
+  },
+  "rangeChecks": [
+    {
+      "url": "https://dl.ecoremedia.net/ecorex-agent/downloads/EcoreX_0.2.9.2-webui-windows-x64.zip",
+      "curlExit": 0,
+      "status": 206,
+      "size": 1048576,
+      "contentRange": "bytes 0-1048575/550839010",
+      "acceptRanges": "bytes",
+      "cache": "MISS TCP_MISS dirn:-2:-2 mlen:1048576"
+    },
+    {
+      "url": "https://dl.ecoremedia.net/ecorex-agent/downloads/EcoreX_0.2.9.2-webui-macos-universal.zip",
+      "curlExit": 0,
+      "status": 206,
+      "size": 1048576,
+      "contentRange": "bytes 0-1048575/652297365",
+      "acceptRanges": "bytes",
+      "cache": "HIT TCP_MEM_HIT dirn:-2:-2 mlen:0"
+    }
+  ],
+  "deploymentEvidence": "docs/v0.2.9.2/artifacts/production-deploy-online.json",
+  "progressTelemetry": {
+    "checkedAt": "2026-07-06T09:37:54.4399389Z",
+    "status": "PASS",
+    "windows": {
+      "hasProgressLine": true,
+      "hasWriteProgress": true,
+      "hasSpeed": true,
+      "hasEta": true,
+      "hasSpeedGuard": false
+    },
+    "macos": {
+      "hasProgressLine": true,
+      "hasSpeed": true,
+      "hasEta": true,
+      "hasSpeedGuard": false
+    }
+  }
+}

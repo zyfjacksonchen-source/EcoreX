@@ -1,0 +1,66 @@
+{
+  "schemaVersion": "v0.2.5-release-display-version-notes-fix-v1",
+  "version": "0.2.5",
+  "recordedAt": "2026-06-30T00:57:36Z",
+  "scope": "release-display-and-user-facing-notes",
+  "problem": {
+    "summary": "The real release package still exposed stale user-facing version and update-note surfaces even though the public manifest had already been promoted to 0.2.5.",
+    "rootCauses": [
+      "The WebUI top-left version is sourced from /api/version, which reads cli/VERSION; the source runtime still reported 0.2.4.",
+      "common/ecorex_release_notes.py still carried the v0.2.4 release notes payload.",
+      "The public download page kept 0.2.4 HTML fallback text and a 0.2.4 site.js cache-busting query.",
+      "The one-click installer scripts self-reported 0.2.4 even when the manifest version was 0.2.5.",
+      "The admin console fallback version still defaulted to older 0.2.2 display text."
+    ]
+  },
+  "changes": [
+    "Updated cli/VERSION, desktop runtime cli/VERSION, and Python package metadata to 0.2.5.",
+    "Replaced root and staged-runtime release notes with v0.2.5 runtime/tool matrix update notes.",
+    "Updated the public site version fallback, updatedAt fallback, and site.js cache-busting query to 0.2.5.",
+    "Updated Windows and macOS one-click installer script self-reported version and Windows installer User-Agent to 0.2.5.",
+    "Updated admin console fallback version and admin API VERSION to 0.2.5.",
+    "Updated the deployment manifest notes to explicitly describe v0.2.5 display and update-note alignment.",
+    "Adjusted focused backend contract tests for the new release display version."
+  ],
+  "sourceFiles": [
+    "cli/VERSION",
+    "desktop/runtime/ecorex-runtime/cli/VERSION",
+    "pyproject.toml",
+    "desktop/runtime/ecorex-runtime/pyproject.toml",
+    "common/ecorex_release_notes.py",
+    "desktop/runtime/ecorex-runtime/common/ecorex_release_notes.py",
+    "deploy/ecorex-site/index.html",
+    "deploy/ecorex-site/manifest.json",
+    "deploy/ecorex-site/install-webui.ps1",
+    "deploy/ecorex-site/install-webui.sh",
+    "deploy/ecorex-site/admin/index.html",
+    "deploy/ecorex-site/admin/admin.js",
+    "deploy/ecorex-admin-api/ecorex_admin_api.py",
+    "agent/tools/tongxin_cli/tongxin_cli.py",
+    "scripts/update-ecorex-desktop-release-manifest.ps1",
+    "tests/test_ecorex_web_parallel_backend.py"
+  ],
+  "validation": {
+    "pyCompile": "PASS",
+    "manifestJson": "PASS",
+    "versionEndpointProbe": {
+      "cliVersion": "0.2.5",
+      "notesVersion": "0.2.5",
+      "title": "EcoreX 0.2.5 runtime/tool matrix update notes"
+    },
+    "focusedPytest": "3 passed, 396 deselected, 2 warnings",
+    "staleDisplayScan": "Only intentional v0.2.4 references remained in fix text and legacy schema tests; no critical display source matched stale 0.2.4 fallback strings."
+  },
+  "releaseImpact": {
+    "webuiTopLeftVersion": "0.2.5 after /api/version refresh",
+    "releaseNotesPopupVersion": "0.2.5",
+    "publicDownloadPageFallback": "0.2.5",
+    "installerSelfReport": "0.2.5",
+    "adminFallbackVersion": "0.2.5"
+  },
+  "privacy": {
+    "containsServerCredentials": false,
+    "containsRawDeploymentTarget": false,
+    "containsUserPrivatePath": false
+  }
+}

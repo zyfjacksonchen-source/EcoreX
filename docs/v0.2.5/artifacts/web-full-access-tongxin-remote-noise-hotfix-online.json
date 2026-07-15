@@ -1,0 +1,173 @@
+{
+  "schemaVersion": "v0.2.5-web-full-access-tongxin-remote-noise-hotfix-v1",
+  "generatedAt": "2026-06-30T13:47:04.8418698+08:00",
+  "status": "PASS",
+  "scope": "web-only-hotfix-online",
+  "desktopScope": {
+    "nativeDesktopRetired": true,
+    "electronExeDmgBuilt": false,
+    "webRendererBuilt": true,
+    "webuiLocalPackagesBuilt": true,
+    "linuxWebServiceBuilt": true
+  },
+  "logFindings": {
+    "source": "production-admin-db-test-account-redacted",
+    "tongxinRemoteConfig": {
+      "observed": "The latest Test account Tongxin remote-config turn reached auth/bootstrap configuration but the assistant asked the user to provide bootstrap_url and bootstrap_sha256.",
+      "rootCause": "Tongxin auto_configure still preferred local/bootstrap URL fields before treating configured remote auth as the primary path.",
+      "fix": "auto_configure now prefers remote auth/bootstrap when auth_url or remote arguments exist, and returns remote_auth_required with username/password nextAction instead of bootstrap_not_configured."
+    },
+    "deliveryNoise": {
+      "observed": "A completed artifact-delivery turn appended factory/onboarding questions about naming and communication style after the actual task result.",
+      "rootCause": "The bootstrap prompt asked the model to append personalization questions even when the first turn was a concrete task.",
+      "fix": "Bootstrap now suppresses onboarding questions during concrete tasks, and delivery-task style rules require compact outcome/path/verification/next-step replies."
+    }
+  },
+  "sourceChanges": {
+    "permissionModes": [
+      "WebUI exposes only smart-ask as 默认权限 and full-access as 完全访问权限.",
+      "Legacy read-only, always-ask and custom modes are normalized to smart-ask on Web load while backend compatibility remains available for existing tests and hidden migrations."
+    ],
+    "fullAccessRuntime": [
+      "ToolExecutionEnvironment follows full-access permission mode and opt-in env/config flags to expose system PATH, Node/npx, Python and shell dependencies.",
+      "Web service env markers now include ECOREX_INSTALL_ROOT and INSTALL_ROOT so production service runs are not mistaken for isolated unit tests.",
+      "Permission broker treats Web event emitters as interactive, preventing default-deny when the Web stream can display a permission request."
+    ],
+    "tongxinRemoteFirst": [
+      "Tongxin CLI default client event key is v0.2.5.",
+      "status reports remoteBootstrapAvailable and remotePreferred.",
+      "auto_configure prefers remote authenticated bootstrap and asks for username/password when credentials are missing.",
+      "local xin_agent_cli.py remains an explicit fallback only."
+    ],
+    "dependencies": [
+      "install-capability.py now tries the primary PyPI index before fallback indexes.",
+      "production host now has system node/npm/npx installed from the OS package manager for full-access Web service runs."
+    ],
+    "releaseNotes": [
+      "common/ecorex_release_notes.py and deploy/ecorex-site/manifest.json include default/full-access permission modes, system Node/npx/Python access, Tongxin remote auth/bootstrap and compact delivery replies."
+    ]
+  },
+  "localValidation": [
+    {
+      "command": "python -m py_compile common/tool_execution_environment.py common/ecorex_tool_permissions.py common/ecorex_release_notes.py agent/tools/tongxin_cli/tongxin_cli.py agent/tools/optional_abilities/optional_abilities.py agent/prompt/builder.py agent/prompt/workspace.py scripts/install-capability.py tests/test_v024_tongxin_cli_readonly.py tests/test_v025_tool_execution_environment.py tests/test_ecorex_web_parallel_backend.py",
+      "result": "PASS"
+    },
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_v025_tool_execution_environment.py tests/test_v025_runtime_dependencies.py tests/test_v024_tongxin_cli_readonly.py tests/test_ecorex_web_parallel_backend.py::TestAgentHostBoundary -q",
+      "result": "198 passed, 1 skipped, 3 warnings, 4 subtests passed"
+    },
+    {
+      "command": "npm --prefix desktop run typecheck",
+      "result": "PASS"
+    },
+    {
+      "command": "npm --prefix desktop run build:renderer",
+      "result": "PASS"
+    },
+    {
+      "command": "python scripts/validate-ecorex-release-artifacts.py --version 0.2.5",
+      "result": "PASS"
+    }
+  ],
+  "artifacts": {
+    "webuiWindowsX64": {
+      "fileName": "EcoreX_0.2.5-webui-windows-x64.zip",
+      "size": 126774724,
+      "sha256": "439F36794CDAEABFE7EF75D76DBAC088DDF170D49C5C34039A098E0EF87AC487"
+    },
+    "webuiMacosUniversal": {
+      "fileName": "EcoreX_0.2.5-webui-macos-universal.zip",
+      "size": 301011608,
+      "sha256": "91FF4CC6AE3AE2C0373E51A3FD0B476C92E75BBADB75B05B602DBD01F4AAB8B3"
+    },
+    "webLinuxService": {
+      "fileName": "EcoreX_0.2.5-web-linux-service.tar.gz",
+      "size": 3864150,
+      "sha256": "66440CBC6C38C4654ECE7A10DF7361815E8812D6159DA1949C476E8414AADFD4",
+      "includesDesktopArtifacts": false
+    },
+    "publicRelease": {
+      "fileName": "EcoreX_0.2.5-public-release.zip",
+      "size": 430635170,
+      "sha256": "F4299800F2E0BA6D4A15A979FAA411F96AD9E42E82BA0C54D51B2D42D4D4CE34"
+    }
+  },
+  "deployment": {
+    "productionDeployArtifact": "docs/v0.2.5/artifacts/production-deploy-online.json",
+    "status": "PASS",
+    "webServiceVersion": "0.2.5",
+    "installationManifestVersion": "0.2.5",
+    "publicManifestVersion": "0.2.5",
+    "serviceActive": true,
+    "serviceEnabled": true,
+    "webVersionStatus": 200,
+    "webVersionBodyHasExpectedVersion": true
+  },
+  "postDeploySmoke": {
+    "permission": {
+      "initialMode": "smart-ask",
+      "baselineMode": "smart-ask",
+      "finalMode": "smart-ask",
+      "legacyMigrated": false,
+      "webModesOnly": true
+    },
+    "fullAccessProbe": {
+      "includeSystemPath": true,
+      "deps": {
+        "bash": {
+          "available": true,
+          "source": "system-path"
+        },
+        "node": {
+          "available": true,
+          "source": "system-path"
+        },
+        "npx": {
+          "available": true,
+          "source": "system-path"
+        },
+        "python3": {
+          "available": true,
+          "source": "system-path"
+        }
+      }
+    },
+    "productionNodeRuntime": {
+      "installedBy": "dnf install -y nodejs npm",
+      "nodeVersion": "v22.22.0",
+      "npmVersion": "10.9.4",
+      "npxVersion": "10.9.4"
+    },
+    "tongxin": {
+      "configurationState": "remote_auth_required",
+      "configured": false,
+      "remoteBootstrapAvailable": true,
+      "remotePreferred": true,
+      "autoToolStatus": "error",
+      "autoStatus": "error",
+      "autoConfigurationState": "remote_auth_required",
+      "autoNextAction": "auto_configure",
+      "autoRequiresCredentials": true
+    },
+    "releaseNotes": {
+      "version": "0.2.5",
+      "hasFullAccess": true,
+      "hasTongxinRemote": true,
+      "hasCompactDelivery": true
+    },
+    "manifest": {
+      "version": "0.2.5",
+      "notesHasFullAccess": true,
+      "notesHasTongxinRemote": true,
+      "notesHasCompactDelivery": true
+    }
+  },
+  "privacy": {
+    "rawHostPersisted": false,
+    "rawDomainPersisted": false,
+    "rawUsernamePersisted": false,
+    "rawPasswordPersisted": false,
+    "rawTokenPersisted": false,
+    "rawUrlPersisted": false
+  }
+}

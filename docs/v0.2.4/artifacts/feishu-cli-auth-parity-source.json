@@ -1,0 +1,48 @@
+{
+  "status": "PASS",
+  "generatedAt": "2026-06-29T02:03:00+08:00",
+  "scope": "R24-16 Feishu CLI Codex-like auth parity",
+  "version": "0.2.4",
+  "codexParity": {
+    "splitFlowNoWaitJson": true,
+    "qrImageGeneratedFromReturnedUrl": true,
+    "deviceCompletionSupported": true,
+    "stdinCredentialInitSupported": true,
+    "opaqueUrlPreserved": true,
+    "blockingLoginAvoidedOnStart": true
+  },
+  "safeProjection": {
+    "agentCliStatusAttachedToExternalConnectionTest": true,
+    "rawCliOutputPersisted": false,
+    "rawUserDataPersisted": false,
+    "rawCredentialPersisted": false,
+    "displayCommandRedactsSensitiveArgs": true
+  },
+  "realCliVerification": {
+    "statusProbe": {
+      "available": true,
+      "authState": "ready",
+      "authenticated": true
+    },
+    "readOnlyHelpCommand": "PASS",
+    "readOnlyUserScopedCommand": "PASS",
+    "rawCommandOutputPersisted": false
+  },
+  "installedRuntimeVerification": {
+    "feishuCliToolStatus": "success",
+    "available": true,
+    "authState": "ready",
+    "authenticated": true
+  },
+  "verification": {
+    "focusedAuthParityPytest": "PASS",
+    "releaseArtifactContract": "PASS",
+    "productionDeploy": "PASS"
+  },
+  "redaction": {
+    "rawAppIdPersisted": false,
+    "rawDeviceCodePersisted": false,
+    "rawPersonInfoPersisted": false,
+    "rawUrlPersisted": false
+  }
+}

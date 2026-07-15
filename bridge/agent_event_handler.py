@@ -22,7 +22,7 @@ class AgentEventHandler:
         if context:
             self.channel = context.kwargs.get("channel") if hasattr(context, "kwargs") else None
 
-        self.current_content = ""
+        self.current_content_parts: list[str] = []
         self.turn_number = 0
 
         channel_type = ""
@@ -56,26 +56,31 @@ class AgentEventHandler:
 
     def _handle_turn_start(self, data):
         self.turn_number = data.get("turn", 0)
-        self.current_content = ""
+        self.current_content_parts = []
 
     def _handle_message_update(self, data):
         delta = data.get("delta", "")
-        self.current_content += delta
+        if delta:
+            self.current_content_parts.append(delta)
+
+    def _current_content(self) -> str:
+        return "".join(self.current_content_parts)
 
     def _handle_message_end(self, data):
         tool_calls = data.get("tool_calls", [])
+        current_content = self._current_content()
 
         if tool_calls:
-            if self.current_content.strip():
-                logger.info(f"💭 {self.current_content.strip()[:200]}{'...' if len(self.current_content) > 200 else ''}")
-                self._send_to_channel(self.current_content.strip())
+            if current_content.strip():
+                logger.info(f"💭 {current_content.strip()[:200]}{'...' if len(current_content) > 200 else ''}")
+                self._send_to_channel(current_content.strip())
         else:
-            if self.current_content.strip():
-                logger.debug(f"💬 {self.current_content.strip()[:200]}{'...' if len(self.current_content) > 200 else ''}")
+            if current_content.strip():
+                logger.debug(f"💬 {current_content.strip()[:200]}{'...' if len(current_content) > 200 else ''}")
             # Drain weixin buffer before final reply leaves chat_channel
             self._flush_merged_now()
 
-        self.current_content = ""
+        self.current_content_parts = []
 
     def _handle_agent_end(self, data):
         self._flush_merged_now()

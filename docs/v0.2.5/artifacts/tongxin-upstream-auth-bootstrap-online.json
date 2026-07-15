@@ -1,0 +1,85 @@
+{
+  "schemaVersion": "v0.2.5-tongxin-upstream-auth-bootstrap-online-v1",
+  "recordedAt": "2026-06-30T04:53:52Z",
+  "status": "pass",
+  "scope": "Tongxin upstream auth/bootstrap for EcoreX safe-tool xin_agent_cli.py bootstrap",
+  "changes": [
+    "Tongxin Flask service now exposes POST /xin-agent/ecorex/auth for EcoreX Admin API upstream login forwarding.",
+    "Tongxin Flask service now exposes protected GET /xin-agent/ecorex/bootstrap/manifest and GET /xin-agent/ecorex/bootstrap/xin_agent_cli.py.",
+    "Tongxin auth validates existing Tongxin users with models.verify_user, rejects non-read-only requests, rate-limits login attempts, and never returns passwords.",
+    "Bootstrap tokens are short-lived HMAC-signed bearer tokens and are required for both manifest and script download.",
+    "EcoreX Admin API now points to the Tongxin upstream auth endpoint and forwards with a service-to-service bearer token.",
+    "EcoreX Admin API now preserves upstream HTTP error status and JSON payloads for Tongxin auth failures instead of wrapping upstream 401 responses as 500."
+  ],
+  "paths": {
+    "tongxinAuthPathHash": "061E32A7C344C927",
+    "tongxinManifestPathHash": "7091CDC5F7F31230",
+    "tongxinScriptPathHash": "98DD92877E41E4E4"
+  },
+  "targets": {
+    "tongxinDomainHash": "35A21A138574AEAE",
+    "ecorexDomainHash": "A753D877497CBE35",
+    "rawDomainPersisted": false,
+    "rawHostPersisted": false,
+    "rawCredentialPersisted": false,
+    "rawTokenPersisted": false
+  },
+  "deployment": {
+    "tongxin": {
+      "status": "online",
+      "webContainerHealthy": true,
+      "hostSourceUpdated": true,
+      "containerHotPatched": true,
+      "forceRecreatedForGatewayEnv": true,
+      "mcpRestarted": false,
+      "codeHashes": {
+        "appPySha256": "3F6C66BA83AA3D0923F51A91DCED6FF6BA56CF420B110E96D2E6ACEEB61C99F9",
+        "configPySha256": "EFA109ADA70C3B98E66C9B741B03C7CA6F97D1DC938FC2480C4B317FEEBB0A31",
+        "xinAgentCliSha256": "385E48BC640730B947C70492A5BA39CF81FE363452928D0D5EB0FB23A9607172",
+        "testEcorexBootstrapSha256": "BC6E31ED00A13D81CB7A790535F2590DB7CB930D35A1FAD820676E6A0BCC0586"
+      }
+    },
+    "ecorexAdminApi": {
+      "status": "online",
+      "serviceActive": true,
+      "envConfigured": true,
+      "upstreamConfigured": true,
+      "serviceBearerConfigured": true,
+      "codeSha256": "B65E62FBF9B59C2018FD1BD0B00ED9899FC5C1C5EBB11D0C10F75EDCBF6E2CD2"
+    }
+  },
+  "validation": {
+    "tongxinLocalPyCompile": "pass",
+    "tongxinLocalUnitTest": "5 passed",
+    "tongxinContainerUnitTest": "5 passed",
+    "tongxinDirectAuthWithoutGatewayToken": "401 gateway_unauthorized",
+    "tongxinManifestWithoutBootstrapToken": "401 missing token",
+    "tongxinManifestWithBootstrapToken": "200 ok",
+    "tongxinDownloadWithBootstrapToken": "200 ok",
+    "tongxinDownloadShaMatchesManifest": true,
+    "ecorexClientTongxinStatus": {
+      "httpStatus": 200,
+      "configured": true,
+      "upstreamConfigured": true
+    },
+    "ecorexInvalidCredentialForwarding": {
+      "httpStatus": 401,
+      "error": "invalid_credentials"
+    }
+  },
+  "knownOperationalNote": [
+    "A no-deps Docker image rebuild attempt was stopped because it exceeded the interactive command timeout; the production web container was safely force-recreated for env loading and then hot-patched with the updated app.py, config.py, test, and xin_agent_cli.py from the updated host source.",
+    "The project .dockerignore already excludes backups/ and data/; a future full rebuild should be run from a controlled maintenance shell if needed."
+  ],
+  "privacy": {
+    "rawDomainPersisted": false,
+    "rawUrlPersisted": false,
+    "rawSshHostPersisted": false,
+    "rawUserPersisted": false,
+    "rawPasswordPersisted": false,
+    "rawSecretPersisted": false,
+    "rawTokenPersisted": false,
+    "rawCliOutputPersisted": false
+  },
+  "redacted": true
+}

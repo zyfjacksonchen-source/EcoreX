@@ -18,7 +18,6 @@ Provider resolution:
 
 import base64
 import os
-import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -28,6 +27,7 @@ import requests
 from agent.tools.base_tool import BaseTool, ToolResult
 from common import const
 from common.log import logger
+from common.tool_execution_environment import ToolExecutionEnvironment
 from config import conf
 from models.model_telemetry import ModelCallSpan
 
@@ -796,27 +796,34 @@ class Vision(BaseTool):
 
         tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
         tmp.close()
+        executor = ToolExecutionEnvironment(tool_name="vision")
 
         def _try_sips(max_dim: str, quality: str) -> bool:
+            dependency = executor.resolve_executable("sips", native=True)
+            if not dependency.available:
+                return False
             try:
-                subprocess.run(
-                    ["sips", "-Z", max_dim, "-s", "formatOptions", quality,
+                result = executor.run_completed(
+                    [dependency.path, "-Z", max_dim, "-s", "formatOptions", quality,
                      path, "--out", tmp.name],
-                    capture_output=True, check=True,
+                    timeout=30,
                 )
-                return True
-            except (FileNotFoundError, subprocess.CalledProcessError):
+                return result.returncode == 0
+            except Exception:
                 return False
 
         def _try_convert(max_dim: str, quality: str) -> bool:
+            dependency = executor.resolve_executable("convert", native=True)
+            if not dependency.available:
+                return False
             try:
-                subprocess.run(
-                    ["convert", path, "-resize", f"{max_dim}x{max_dim}>",
+                result = executor.run_completed(
+                    [dependency.path, path, "-resize", f"{max_dim}x{max_dim}>",
                      "-quality", quality, tmp.name],
-                    capture_output=True, check=True,
+                    timeout=30,
                 )
-                return True
-            except (FileNotFoundError, subprocess.CalledProcessError):
+                return result.returncode == 0
+            except Exception:
                 return False
 
         attempts = [

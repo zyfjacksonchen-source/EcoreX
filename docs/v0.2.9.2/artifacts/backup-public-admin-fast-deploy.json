@@ -1,0 +1,19 @@
+{
+  "status": "PASS",
+  "version": "0.2.9.2",
+  "hostHash": "77e618ea4562879e",
+  "commands": [
+    {
+      "name": "locate_staging",
+      "code": 0,
+      "stdoutTail": "/tmp/ecorex-v0292-fast-1783388527\n",
+      "stderrTail": ""
+    },
+    {
+      "name": "install_public_admin_fast",
+      "code": 0,
+      "stdoutTail": "{\"current\": \"/srv/ecorex-agent-download/releases/20260707014903-v0.2.9.2-fast\", \"version\": \"0.2.9.2\", \"adminIndex\": true, \"windows\": {\"id\": \"webui-windows-x64\", \"version\": \"0.2.9.2\", \"platform\": \"Windows\", \"variant\": \"WebUI one-click local package\", \"fileName\": \"EcoreX_0.2.9.2-webui-windows-x64.zip\", \"href\": \"downloads/EcoreX_0.2.9.2-webui-windows-x64.zip\", \"size\": 550842181, \"sha256\": \"992C44710543D70AFD5B3F90680097F4745F4DD33E631E0DB1F01747BFA9F17E\", \"status\": \"ready\", \"source\": \"Local v0.2.9.2 WebUI Windows artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.\", \"updatedAt\": \"2026-07-07\"}}\n",
+      "stderrTail": ""
+    }
+  ]
+}

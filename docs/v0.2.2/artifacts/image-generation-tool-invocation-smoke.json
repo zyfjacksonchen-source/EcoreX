@@ -1,0 +1,75 @@
+{
+  "status": "PASS",
+  "generation": {
+    "model": "gpt-image-2",
+    "model_fallback": {
+      "used": true,
+      "from_model": "gpt-image-2-pro",
+      "to_model": "gpt-image-2",
+      "provider": "OpenAI",
+      "reason": "client_error",
+      "message": "model gpt-image-2-pro does not exist or is unavailable"
+    },
+    "image_count": 1,
+    "attempted_models": [
+      "gpt-image-2-pro",
+      "gpt-image-2"
+    ],
+    "duration_ms": 1572
+  },
+  "edit": {
+    "model": "gpt-image-2",
+    "model_fallback": {
+      "used": true,
+      "from_model": "gpt-image-2-pro",
+      "to_model": "gpt-image-2",
+      "provider": "OpenAI",
+      "reason": "client_error",
+      "message": "model gpt-image-2-pro does not exist or is unavailable"
+    },
+    "image_count": 1,
+    "attempted_models": [
+      "gpt-image-2-pro",
+      "gpt-image-2"
+    ],
+    "duration_ms": 2751
+  },
+  "calls": [
+    {
+      "route": "generations",
+      "path": "/v1/images/generations",
+      "model": "gpt-image-2-pro",
+      "prompt": "tool invocation text-to-image fallback smoke",
+      "content_type": "application/json",
+      "has_image_file": false,
+      "authorization_seen": true
+    },
+    {
+      "route": "generations",
+      "path": "/v1/images/generations",
+      "model": "gpt-image-2",
+      "prompt": "tool invocation text-to-image fallback smoke",
+      "content_type": "application/json",
+      "has_image_file": false,
+      "authorization_seen": true
+    },
+    {
+      "route": "edits",
+      "path": "/v1/images/edits",
+      "model": "gpt-image-2-pro",
+      "prompt": "tool invocation edit fallback smoke",
+      "content_type": "multipart/form-data",
+      "has_image_file": true,
+      "authorization_seen": true
+    },
+    {
+      "route": "edits",
+      "path": "/v1/images/edits",
+      "model": "gpt-image-2",
+      "prompt": "tool invocation edit fallback smoke",
+      "content_type": "multipart/form-data",
+      "has_image_file": true,
+      "authorization_seen": true
+    }
+  ]
+}

@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ecorex.example/schemas/release-manifest-v1.json",
+  "title": "EcoreX ReleaseManifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "release_id",
+    "version",
+    "build_digest",
+    "channel",
+    "created_at",
+    "sources",
+    "artifacts",
+    "signature"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "release_id": { "$ref": "#/$defs/safeId" },
+    "version": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "build_digest": { "$ref": "#/$defs/sha256" },
+    "channel": { "enum": ["canary", "stable"] },
+    "created_at": { "type": "string", "format": "date-time" },
+    "sources": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "prefixItems": [
+        { "$ref": "#/$defs/chinaMirror" },
+        { "$ref": "#/$defs/githubRelease" },
+        { "$ref": "#/$defs/ecorexCdn" }
+      ],
+      "items": false
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/artifact" }
+    },
+    "signature": { "$ref": "#/$defs/signature" }
+  },
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "key_id", "value"],
+      "properties": {
+        "algorithm": { "const": "ed25519" },
+        "key_id": { "$ref": "#/$defs/safeId" },
+        "value": { "type": "string", "maxLength": 2048, "contentEncoding": "base64" }
+      }
+    },
+    "sourceBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "kind", "priority", "base_url"],
+      "properties": {
+        "source_id": { "$ref": "#/$defs/safeId" },
+        "kind": { "type": "string" },
+        "priority": { "type": "integer", "minimum": 0 },
+        "base_url": { "type": "string", "maxLength": 2048, "pattern": "^https://" }
+      }
+    },
+    "chinaMirror": {
+      "allOf": [
+        { "$ref": "#/$defs/sourceBase" },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "const": "github-cn-mirror" },
+            "priority": { "const": 0 }
+          }
+        }
+      ]
+    },
+    "githubRelease": {
+      "allOf": [
+        { "$ref": "#/$defs/sourceBase" },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "const": "github-release" },
+            "priority": { "const": 1 }
+          }
+        }
+      ]
+    },
+    "ecorexCdn": {
+      "allOf": [
+        { "$ref": "#/$defs/sourceBase" },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "const": "ecorex-cdn" },
+            "priority": { "const": 2 }
+          }
+        }
+      ]
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "artifact_id": { "pattern": "^capability-pack-" }
+            },
+            "required": ["artifact_id"]
+          },
+          "then": {
+            "properties": {
+              "size_bytes": { "maximum": 524288000 }
+            }
+          },
+          "else": {
+            "properties": {
+              "size_bytes": { "maximum": 157286400 }
+            }
+          }
+        }
+      ],
+      "required": [
+        "artifact_id",
+        "platform",
+        "architecture",
+        "file_name",
+        "size_bytes",
+        "sha256",
+        "signature"
+      ],
+      "properties": {
+        "artifact_id": { "$ref": "#/$defs/safeId" },
+        "platform": { "$ref": "#/$defs/safeId" },
+        "architecture": { "$ref": "#/$defs/safeId" },
+        "file_name": {
+          "type": "string",
+          "maxLength": 120,
+          "minLength": 1,
+          "pattern": "^(?!.*[ .]$)[^<>:\"/\\\\|?*\\u0000-\\u001F]+$"
+        },
+        "size_bytes": { "type": "integer", "minimum": 1, "maximum": 524288000 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "signature": { "$ref": "#/$defs/signature" }
+      }
+    }
+  }
+}

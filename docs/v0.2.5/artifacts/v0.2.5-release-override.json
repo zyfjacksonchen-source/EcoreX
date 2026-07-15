@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "v0.2.5-release-override-v1",
+  "version": "0.2.5",
+  "generatedAt": "2026-06-29T23:32:00.6342688Z",
+  "override": "skip-linux-production-service-user-probe-and-deploy",
+  "requestedBy": "user",
+  "userRequest": "Linux production probe skipped; deploy online directly.",
+  "releaseGateStatus": "local_pass_production_pending",
+  "releaseReady": false,
+  "localGatePassed": true,
+  "productionServiceUserPending": true,
+  "policy": "Do not mark releaseReady true; keep production probe pending in release report and record this as explicit deployment override.",
+  "redacted": true
+}

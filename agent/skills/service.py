@@ -32,6 +32,23 @@ _WINDOWS_RESERVED_NAMES = {
     *(f"LPT{i}" for i in range(1, 10)),
 }
 
+SKILL_SOURCE_GROUP_LABELS = {
+    "external": "外部",
+    "custom": "自建",
+    "builtin": "内置",
+}
+
+SKILL_PURPOSE_GROUP_LABELS = {
+    "system": "系统能力",
+    "office": "办公能力",
+    "image_media": "图像 / 媒体",
+    "collaboration": "协作连接",
+    "data": "数据能力",
+    "development": "开发能力",
+    "automation": "自动化",
+    "general": "通用能力",
+}
+
 
 def _normalize_skill_text(value) -> str:
     return str(value or "").strip().lower()
@@ -55,6 +72,134 @@ def _first_present(row: dict, *keys: str):
         if key in row and row.get(key) is not None:
             return row.get(key)
     return None
+
+
+def _frontmatter_list_value(value) -> List[str]:
+    if isinstance(value, (list, tuple)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if value is None:
+        return []
+    text = str(value).strip()
+    if not text:
+        return []
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def _source_group_for(row: dict) -> str:
+    builtin_catalog = _optional_bool(_first_present(
+        row,
+        "builtin_catalog",
+        "builtinCatalog",
+        "factory_builtin",
+        "factoryBuiltin",
+    ))
+    if builtin_catalog is True:
+        return "builtin"
+    source = _normalize_skill_text(_first_present(row, "source", "origin", "source_group", "sourceGroup"))
+    origin = _normalize_skill_text(row.get("origin"))
+    if source == "builtin" or origin in {"builtin", "first-party", "factory"}:
+        return "builtin"
+    if source in {"custom", "workspace", "user", "user-skill"} or origin in {"workspace", "user"}:
+        return "custom"
+    return "external"
+
+
+def _purpose_group_for(row: dict) -> str:
+    explicit = _normalize_skill_text(_first_present(
+        row,
+        "purpose_group",
+        "purpose-group",
+        "purposeGroup",
+        "category",
+        "mention_category",
+        "mention-category",
+    )).replace("-", "_").replace(" ", "_")
+    explicit_aliases = {
+        "system": "system",
+        "internal": "system",
+        "tooling": "system",
+        "background": "system",
+        "office": "office",
+        "document": "office",
+        "documents": "office",
+        "doc": "office",
+        "pdf": "office",
+        "spreadsheet": "office",
+        "slides": "office",
+        "presentation": "office",
+        "creative": "image_media",
+        "creation": "image_media",
+        "content": "image_media",
+        "media": "image_media",
+        "design": "image_media",
+        "image": "image_media",
+        "image_media": "image_media",
+        "collaboration": "collaboration",
+        "connector": "collaboration",
+        "lark": "collaboration",
+        "feishu": "collaboration",
+        "data": "data",
+        "database": "data",
+        "analytics": "data",
+        "developer": "development",
+        "development": "development",
+        "dev": "development",
+        "coding": "development",
+        "github": "development",
+        "automation": "automation",
+        "browser": "automation",
+        "workflow": "automation",
+        "computer_use": "automation",
+        "general": "general",
+    }
+    if explicit in explicit_aliases:
+        return explicit_aliases[explicit]
+
+    text = " ".join(
+        _normalize_skill_text(row.get(key))
+        for key in ("name", "display_name", "displayName", "description", "source", "origin", "path", "primary_env")
+    )
+    if re.search(r"lark|feishu|飞书|calendar|mail|approval|attendance|contact|wiki|base|minutes|okr|task|协作|日历|邮箱|审批", text):
+        return "collaboration"
+    if re.search(r"office|document|documents|pdf|spreadsheet|slides|presentation|docx|pptx|xlsx|xlsm|文档|表格|幻灯片|办公", text):
+        return "office"
+    if re.search(r"image|vision|media|video|audio|figma|hallmark|remotion|design|creative|生成|图像|图片|视觉|媒体|设计", text):
+        return "image_media"
+    if re.search(r"data|database|sql|csv|analytics|chart|dashboard|base|数据|分析|仪表盘", text):
+        return "data"
+    if re.search(r"github|openai|plugin|skill|codex|cli|developer|swift|xcode|debug|test|开发|调试|测试", text):
+        return "development"
+    if re.search(r"browser|chrome|automation|workflow|computer-use|自动化|浏览器", text):
+        return "automation"
+    if re.search(r"find|knowledge|memory|troubleshooting|a11y|system|系统|记忆|知识|检索|排障", text):
+        return "system"
+    return "general"
+
+
+def _decorate_skill_governance(row: dict) -> None:
+    source_group = _source_group_for(row)
+    purpose_group = _purpose_group_for(row)
+    is_builtin = source_group == "builtin"
+
+    if is_builtin:
+        row["enabled"] = True
+        row["default_enabled"] = True
+
+    row["builtin_catalog"] = is_builtin
+    row["builtinCatalog"] = is_builtin
+    row["source_group"] = source_group
+    row["sourceGroup"] = source_group
+    row["source_label"] = SKILL_SOURCE_GROUP_LABELS[source_group]
+    row["sourceLabel"] = SKILL_SOURCE_GROUP_LABELS[source_group]
+    row["purpose_group"] = purpose_group
+    row["purposeGroup"] = purpose_group
+    row["purpose_label"] = SKILL_PURPOSE_GROUP_LABELS[purpose_group]
+    row["purposeLabel"] = SKILL_PURPOSE_GROUP_LABELS[purpose_group]
+    row["toggleable"] = not is_builtin
+    row["locked"] = is_builtin
+    if is_builtin:
+        row["lock_reason"] = "builtin-default-enabled"
+        row["lockReason"] = "builtin-default-enabled"
 
 
 def _is_lark_cli_skill(row: dict) -> bool:
@@ -122,9 +267,14 @@ def _decorate_mention_metadata(row: dict) -> None:
         mentionable = False
         hidden_reason = hidden_reason or "background-triggered"
     if _is_lark_cli_skill(row):
-        category = "background"
-        mentionable = False
-        hidden_reason = hidden_reason or "lark-cli-triggered"
+        if explicit_mentionable is False or row.get("user_invocable") is False or row.get("disable_model_invocation") is True:
+            category = "background"
+            mentionable = False
+            hidden_reason = hidden_reason or "background-triggered"
+        else:
+            category = "automation"
+            mentionable = True
+            hidden_reason = ""
     if _is_test_fixture_skill(row):
         category = "background"
         mentionable = False
@@ -134,6 +284,52 @@ def _decorate_mention_metadata(row: dict) -> None:
     row["mention_category"] = category if mentionable else "background"
     if hidden_reason:
         row["mention_hidden_reason"] = hidden_reason
+    else:
+        row.pop("mention_hidden_reason", None)
+
+
+def _current_agent_tool_names() -> set[str]:
+    """Return the current ToolManager schema snapshot without starting heavy probes."""
+
+    try:
+        from agent.tools.tool_manager import ToolManager
+
+        manager = ToolManager()
+        if not getattr(manager, "tool_classes", None):
+            manager.load_tools(start_mcp=False)
+        ensure_mcp = getattr(manager, "ensure_mcp_configured_loaded", None)
+        if callable(ensure_mcp):
+            ensure_mcp(wait_seconds=0.0)
+        names = {str(name) for name in getattr(manager, "tool_classes", {}).keys()}
+        names.update(str(name) for name in getattr(manager, "_mcp_tool_instances", {}).keys())
+        return names
+    except Exception as exc:
+        logger.debug(f"[SkillService] tool snapshot unavailable: {exc}")
+        return set()
+
+
+def _skill_enabled(row: dict) -> bool:
+    enabled = _optional_bool(row.get("enabled"))
+    if enabled is not None:
+        return enabled
+    default_enabled = _optional_bool(row.get("default_enabled"))
+    return True if default_enabled is None else bool(default_enabled)
+
+
+def _decorate_tool_binding(row: dict, skill_or_name, tool_names: set[str]) -> None:
+    try:
+        from agent.skills.tool_binding_contract import skill_tool_binding_surface
+
+        surface = skill_tool_binding_surface(skill_or_name, tool_names, enabled=_skill_enabled(row))
+    except Exception as exc:
+        logger.debug(f"[SkillService] tool binding unavailable for {row.get('name')}: {exc}")
+        return
+    row["toolName"] = surface.get("toolName") or surface.get("tool") or ""
+    row["schemaVisible"] = bool(surface.get("schemaVisible"))
+    row["toolSchemaCallable"] = bool(surface.get("toolSchemaCallable"))
+    row["agentSurface"] = surface
+    row["toolBinding"] = surface.get("toolBinding")
+    row["tool_binding"] = surface.get("toolBinding")
 
 
 class SkillService:
@@ -162,18 +358,53 @@ class SkillService:
         self.manager.refresh_skills()
         config = self.manager.get_skills_config()
         result = []
+        tool_names = _current_agent_tool_names()
         for name, item in config.items():
             row = dict(item)
+            is_builtin_catalog = bool(getattr(self.manager, "is_builtin_catalog_skill", lambda _: False)(name))
+            if is_builtin_catalog:
+                row["builtin_catalog"] = True
             entry = self.manager.skills.get(name)
             if entry:
                 row["user_invocable"] = bool(entry.user_invocable)
                 row["disable_model_invocation"] = bool(entry.skill.disable_model_invocation)
                 row["path"] = entry.skill.file_path
+                compatibility_id = _first_present(
+                    entry.skill.frontmatter,
+                    "compatibility-id",
+                    "compatibility_id",
+                )
+                adopts_official_skill = _first_present(
+                    entry.skill.frontmatter,
+                    "adopts-official-skill",
+                    "adopts_official_skill",
+                )
+                native_facade = _first_present(
+                    entry.skill.frontmatter,
+                    "ecorex-native-facade",
+                    "ecorex_native_facade",
+                )
+                quality_gates = _frontmatter_list_value(_first_present(
+                    entry.skill.frontmatter,
+                    "quality-gates",
+                    "quality_gates",
+                ))
+                if compatibility_id:
+                    row["compatibility_id"] = str(compatibility_id)
+                if adopts_official_skill:
+                    row["adopts_official_skill"] = str(adopts_official_skill)
+                if native_facade is not None:
+                    row["ecorex_native_facade"] = _optional_bool(native_facade)
+                if quality_gates:
+                    row["quality_gates"] = quality_gates
                 if entry.metadata:
                     row["always"] = bool(entry.metadata.always)
+                    row["default_enabled"] = bool(entry.metadata.default_enabled)
                     row["primary_env"] = entry.metadata.primary_env
                     row["os"] = list(entry.metadata.os or [])
+            _decorate_skill_governance(row)
             _decorate_mention_metadata(row)
+            _decorate_tool_binding(row, entry.skill if entry else row, tool_names)
             result.append(row)
         logger.info(f"[SkillService] query: {len(result)} skills found")
         return result
@@ -187,7 +418,7 @@ class SkillService:
 
         Supported payload types:
 
-        1. ``type: "url"`` – download individual files::
+        1. ``type: "url"`` – download individual files or write reviewed file contents::
 
             {
                 "name": "web_search",
@@ -195,7 +426,8 @@ class SkillService:
                 "enabled": true,
                 "files": [
                     {"url": "https://...", "path": "README.md"},
-                    {"url": "https://...", "path": "scripts/main.py"}
+                    {"url": "https://...", "path": "scripts/main.py"},
+                    {"path": "SKILL.md", "content": "---\\nname: custom\\n..."}
                 ]
             }
 
@@ -260,12 +492,18 @@ class SkillService:
         try:
             for file_info in files:
                 url = file_info.get("url")
+                content = file_info.get("content")
                 rel_path = file_info.get("path")
-                if not url or not rel_path:
+                if not rel_path or (not url and content is None):
                     logger.warning(f"[SkillService] add: skip invalid file entry {file_info}")
                     continue
                 dest = self._safe_join(tmp_dir, rel_path)
-                self._download_file(url, dest)
+                if content is not None:
+                    os.makedirs(os.path.dirname(dest), exist_ok=True)
+                    with open(dest, "w", encoding="utf-8") as handle:
+                        handle.write(str(content))
+                else:
+                    self._download_file(url, dest)
         except Exception:
             shutil.rmtree(tmp_dir, ignore_errors=True)
             raise
@@ -347,6 +585,8 @@ class SkillService:
         if not name:
             raise ValueError("skill name is required")
         self._validate_skill_name(name)
+        if self._skill_source_group(name) == "builtin":
+            raise PermissionError("Built-in factory skills are always enabled and cannot be disabled.")
         self._ensure_skill_mutation_allowed("close", payload)
         self.manager.set_skill_enabled(name, enabled=False)
         logger.info(f"[SkillService] close: skill '{name}' disabled")
@@ -430,11 +670,33 @@ class SkillService:
 
     def _is_builtin_skill(self, name: str) -> bool:
         try:
+            if self.manager.is_builtin_catalog_skill(name):
+                return True
+        except Exception:
+            pass
+        try:
             candidate = os.path.abspath(os.path.join(self.manager.builtin_dir, name))
             root = os.path.abspath(self.manager.builtin_dir)
             return os.path.commonpath([root, candidate]) == root and os.path.isdir(candidate)
         except Exception:
             return False
+
+    def _skill_source_group(self, name: str) -> str:
+        try:
+            builtin_catalog = bool(self.manager.is_builtin_catalog_skill(name))
+        except Exception:
+            builtin_catalog = False
+        entry = self.manager.skills.get(name)
+        if entry:
+            return _source_group_for({
+                "source": entry.skill.source,
+                "origin": entry.skill.source,
+                "builtin_catalog": builtin_catalog,
+            })
+        config_row = self.manager.skills_config.get(name, {})
+        if builtin_catalog:
+            config_row = {**config_row, "builtin_catalog": True}
+        return _source_group_for(config_row)
 
     def _write_custom_override_marker(self, name: str) -> None:
         marker_path = os.path.join(self._skill_dir(name), CUSTOM_OVERRIDE_MARKER)

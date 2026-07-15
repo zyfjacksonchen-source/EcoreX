@@ -1,0 +1,24 @@
+{
+  "status": "PASS",
+  "durationMs": 3753,
+  "fixtureHash": "hmac:2473aab20c0e11f4",
+  "screenshot": "session-cross-talk-refresh-replay.png",
+  "metrics": {
+    "race": {
+      "staleHistoryIgnored": true,
+      "activeSessionContentStable": true,
+      "mismatchDiagnosticObserved": true,
+      "streamExpectedSessionObserved": true,
+      "historyCallCount": 3,
+      "projectionCallCount": 1,
+      "streamCallCount": 1
+    },
+    "refresh": {
+      "refreshKeptCleanSession": true,
+      "backendHistoryFetched": true,
+      "refreshRejectedLateSession": true,
+      "historyCallCount": 1
+    }
+  },
+  "consoleErrorCount": 0
+}

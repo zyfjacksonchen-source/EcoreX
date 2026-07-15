@@ -3,6 +3,9 @@ Agent Bridge - Integrates Agent system with existing COW bridge
 """
 
 import os
+import hashlib
+import json
+import traceback
 from typing import Any, Dict, Optional, List
 
 from agent.protocol import Agent, LLMModel, LLMRequest, get_cancel_registry
@@ -28,6 +31,70 @@ from models.model_telemetry import chunk_has_model_output, is_model_error_respon
 from models.openai_compatible_bot import OpenAICompatibleBot
 
 
+def _exception_log_summary(value: Any) -> Dict[str, Any]:
+    text = "" if value is None else str(value)
+    return {
+        "redacted": bool(text),
+        "hash": hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:16] if text else "",
+        "chars": len(text),
+        "bytes": len(text.encode("utf-8", errors="replace")),
+        "type": type(value).__name__ if value is not None else "",
+    }
+
+
+def _public_exception_message(prefix: str, value: Any) -> str:
+    summary = _exception_log_summary(value)
+    if not summary["hash"]:
+        return prefix
+    return (
+        f"{prefix} Details redacted "
+        f"(type={summary['type']}, hash={summary['hash']}, "
+        f"chars={summary['chars']}, bytes={summary['bytes']})."
+    )
+
+
+def _exception_diagnostic_snapshot(value: BaseException, *, session_id: str = "", request_id: str = "") -> Dict[str, Any]:
+    frames = []
+    try:
+        extracted = traceback.extract_tb(value.__traceback__)
+        for frame in extracted[-12:]:
+            frames.append({
+                "file": os.path.basename(frame.filename or ""),
+                "line": int(frame.lineno or 0),
+                "name": frame.name or "",
+            })
+    except Exception:
+        frames = []
+    model = ""
+    provider = ""
+    try:
+        model = str(conf().get("model") or "")
+        from models.model_capabilities import infer_provider_id
+
+        provider = infer_provider_id(
+            model,
+            configured_bot_type=str(conf().get("bot_type") or ""),
+            use_linkai=bool(conf().get("use_linkai", False)),
+            has_linkai_key=bool(conf().get("linkai_api_key")),
+            use_azure_chatgpt=bool(conf().get("use_azure_chatgpt", False)),
+            gemini_api_base=conf().get("gemini_api_base") or "",
+            has_gemini_key=bool(conf().get("gemini_api_key")),
+            gemini_api_key=conf().get("gemini_api_key") or "",
+            custom_api_base=conf().get("custom_api_base") or "",
+            custom_api_key=conf().get("custom_api_key") or "",
+        )
+    except Exception:
+        provider = str(conf().get("bot_type") or "")
+    return {
+        **_exception_log_summary(value),
+        "session_id": session_id or "",
+        "request_id": request_id or "",
+        "model": model,
+        "provider": provider,
+        "tracebackFrames": frames,
+    }
+
+
 def _clear_responses_state_for_session(session_id: str) -> None:
     if not session_id:
         return
@@ -38,7 +105,59 @@ def _clear_responses_state_for_session(session_id: str) -> None:
         if removed:
             logger.info(f"[AgentBridge] Cleared Responses state: session={session_id}, removed={removed}")
     except Exception as e:
-        logger.warning(f"[AgentBridge] Failed to clear Responses state for {session_id}: {e}")
+        logger.warning(f"[AgentBridge] Failed to clear Responses state for {session_id}: {_exception_log_summary(e)}")
+
+
+def _assistant_message_text(message: Dict[str, Any]) -> str:
+    if not isinstance(message, dict) or message.get("role") != "assistant":
+        return ""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: List[str] = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text = str(block.get("text") or "").strip()
+                if text:
+                    parts.append(text)
+        return "\n".join(parts).strip()
+    return ""
+
+
+def _ensure_final_response_in_messages(agent: Agent, new_messages: List[Dict[str, Any]], response: str) -> List[Dict[str, Any]]:
+    text = sanitize_assistant_identity((response or "").strip())
+    if not text:
+        return new_messages
+    normalized = text.strip().lower()
+    if normalized in {"_(cancelled)_", "_(cancelled by user)_"} or "cancelled by user" in normalized:
+        return new_messages
+    for message in reversed(new_messages):
+        if sanitize_assistant_identity(_assistant_message_text(message)).strip() == text:
+            return new_messages
+
+    synthetic_message = {
+        "role": "assistant",
+        "content": [{
+            "type": "text",
+            "text": text,
+        }],
+    }
+    new_messages.append(synthetic_message)
+
+    try:
+        with agent.messages_lock:
+            latest_assistant_text = ""
+            for message in reversed(agent.messages):
+                if isinstance(message, dict) and message.get("role") == "assistant":
+                    latest_assistant_text = sanitize_assistant_identity(_assistant_message_text(message)).strip()
+                    break
+            if latest_assistant_text != text:
+                agent.messages.append(dict(synthetic_message))
+    except Exception as exc:
+        logger.warning(f"[AgentBridge] Failed to mirror synthetic final response into memory: {_exception_log_summary(exc)}")
+
+    return new_messages
 
 
 def add_openai_compatible_support(bot_instance):
@@ -111,6 +230,7 @@ class AgentLLMModel(LLMModel):
         self._bot = None
         self._bot_model = None
         self._bot_cache = {}
+        self._bot_type = None
 
     @property
     def model(self):
@@ -130,6 +250,11 @@ class AgentLLMModel(LLMModel):
             use_linkai=bool(conf().get("use_linkai", False)),
             has_linkai_key=bool(conf().get("linkai_api_key")),
             use_azure_chatgpt=bool(conf().get("use_azure_chatgpt", False)),
+            gemini_api_base=conf().get("gemini_api_base") or "",
+            has_gemini_key=bool(conf().get("gemini_api_key")),
+            gemini_api_key=conf().get("gemini_api_key") or "",
+            custom_api_base=conf().get("custom_api_base") or "",
+            custom_api_key=conf().get("custom_api_key") or "",
         )
 
     @property
@@ -142,6 +267,13 @@ class AgentLLMModel(LLMModel):
             self._bot_model = cur_model
             self._bot_type = cur_bot_type
         return self._bot
+
+    def reset_route_cache(self):
+        """Drop cached bot instances while preserving the owning Agent memory."""
+        self._bot = None
+        self._bot_model = None
+        self._bot_type = None
+        self._bot_cache = {}
 
     @staticmethod
     def _create_bot(bot_type: str):
@@ -358,7 +490,7 @@ class AgentLLMModel(LLMModel):
             return self._format_response(last_response)
                 
         except Exception as e:
-            logger.error(f"AgentLLMModel call error: {e}")
+            logger.error(f"AgentLLMModel call error: {_exception_log_summary(e)}")
             raise
     
     def call_stream(self, request: LLMRequest):
@@ -429,7 +561,8 @@ class AgentLLMModel(LLMModel):
                 except Exception as e:
                     error_chunk = {
                         "error": True,
-                        "message": str(e),
+                        "message": _public_exception_message("Model stream failed.", e),
+                        **_exception_log_summary(e),
                         "status_code": 500,
                     }
                     if (
@@ -457,7 +590,7 @@ class AgentLLMModel(LLMModel):
                 return
                 
         except Exception as e:
-            logger.error(f"AgentLLMModel call_stream error: {e}", exc_info=True)
+            logger.error(f"AgentLLMModel call_stream error: {_exception_log_summary(e)}")
             raise
     
     def _format_response(self, response):
@@ -493,7 +626,7 @@ class AgentBridge:
                 if init_scheduler(self):
                     self.scheduler_initialized = True
             except Exception as e:
-                logger.warning(f"[AgentBridge] Eager scheduler init failed: {e}")
+                logger.warning(f"[AgentBridge] Eager scheduler init failed: {_exception_log_summary(e)}")
         else:
             logger.info("[AgentBridge] Scheduler startup skipped; scheduler_enabled is disabled")
 
@@ -502,7 +635,7 @@ class AgentBridge:
                 from agent.evolution.trigger import start_evolution_trigger
                 start_evolution_trigger(self)
             except Exception as e:
-                logger.warning(f"[AgentBridge] Evolution trigger init failed: {e}")
+                logger.warning(f"[AgentBridge] Evolution trigger init failed: {_exception_log_summary(e)}")
         else:
             logger.info("[AgentBridge] Self-evolution startup skipped; self_evolution_enabled is disabled")
 
@@ -538,7 +671,7 @@ class AgentBridge:
                             tool.cwd = workspace_dir
                         tools.append(tool)
                 except Exception as e:
-                    logger.warning(f"[AgentBridge] Failed to load tool {tool_name}: {e}")
+                    logger.warning(f"[AgentBridge] Failed to load tool {tool_name}: {_exception_log_summary(e)}")
         
         # Create agent instance
         agent = Agent(
@@ -595,6 +728,25 @@ class AgentBridge:
         agent = self.initializer.initialize_agent(session_id=session_id)
         self.agents[session_id] = agent
 
+    def reset_model_routes(self) -> int:
+        """Reset LLM route caches for existing agents without clearing messages."""
+        seen_ids = set()
+        reset_count = 0
+        for agent in [self.default_agent, *self.agents.values()]:
+            if agent is None:
+                continue
+            identity = id(agent)
+            if identity in seen_ids:
+                continue
+            seen_ids.add(identity)
+            model = getattr(agent, "model", None)
+            reset = getattr(model, "reset_route_cache", None)
+            if callable(reset):
+                reset()
+                reset_count += 1
+        logger.info(f"[AgentBridge] Reset model route caches for {reset_count} agents")
+        return reset_count
+
     def sync_session_messages_from_store(self, session_id: str) -> int:
         """Reload an agent's in-memory ``messages`` list from the persistent
         conversation store.
@@ -621,7 +773,7 @@ class AgentBridge:
             remaining = store.load_messages(session_id, max_turns=10**6)
         except Exception as e:
             logger.warning(
-                f"[AgentBridge] Failed to load messages for sync (session={session_id}): {e}"
+                f"[AgentBridge] Failed to load messages for sync (session={session_id}): {_exception_log_summary(e)}"
             )
             return -1
         with agent.messages_lock:
@@ -708,7 +860,7 @@ class AgentBridge:
                                 from agent.tools.scheduler.integration import attach_scheduler_to_tool
                                 attach_scheduler_to_tool(tool, context)
                             except Exception as e:
-                                logger.warning(f"[AgentBridge] Failed to attach context to scheduler: {e}")
+                                logger.warning(f"[AgentBridge] Failed to attach context to scheduler: {_exception_log_summary(e)}")
                             break
             
             # Pass context metadata to model for downstream API requests
@@ -718,6 +870,7 @@ class AgentBridge:
 
             # Store session_id on agent so executor can clear DB on fatal errors
             agent._current_session_id = session_id
+            agent._current_request_id = request_id or ""
 
             # Bound the in-memory context for scheduler sessions before each run.
             # Scheduler sessions are stable per-task and append every trigger,
@@ -781,8 +934,14 @@ class AgentBridge:
                             "text": str(context.get("visible_message") or "").strip()
                         }]
                     }
+                new_messages = _ensure_final_response_in_messages(agent, new_messages, response)
                 if new_messages:
-                    self._persist_messages(session_id, list(new_messages), channel_type)
+                    self._persist_messages(
+                        session_id,
+                        list(new_messages),
+                        channel_type,
+                        context.get("project_context_meta") if context else None,
+                    )
                 else:
                     with agent.messages_lock:
                         msg_count = len(agent.messages)
@@ -793,7 +952,7 @@ class AgentBridge:
                             _clear_responses_state_for_session(session_id)
                             logger.info(f"[AgentBridge] Cleared DB for recovered session: {session_id}")
                         except Exception as e:
-                            logger.warning(f"[AgentBridge] Failed to clear DB after recovery: {e}")
+                            logger.warning(f"[AgentBridge] Failed to clear DB after recovery: {_exception_log_summary(e)}")
             
             # Record this user turn for the self-evolution idle trigger. Skip
             # scheduler-injected / scheduled-task sessions so internal runs do
@@ -826,7 +985,11 @@ class AgentBridge:
                 if files_to_send:
                     # Send the first file (for now, handle one file at a time)
                     file_info = files_to_send[0]
-                    logger.info(f"[AgentBridge] Sending file: {file_info.get('path')}")
+                    logger.info(
+                        "[AgentBridge] Sending file attachment: "
+                        f"name={file_info.get('file_name') or os.path.basename(str(file_info.get('path') or ''))}, "
+                        f"type={file_info.get('file_type') or 'file'}"
+                    )
                     
                     # Clear files_to_send for next request
                     agent.stream_executor.files_to_send = []
@@ -837,7 +1000,15 @@ class AgentBridge:
             return Reply(ReplyType.TEXT, response)
             
         except Exception as e:
-            logger.error(f"Agent reply error: {e}")
+            public_error = _public_exception_message("Agent error.", e)
+            logger.error(
+                "Agent reply error diagnostics: "
+                + json.dumps(
+                    _exception_diagnostic_snapshot(e, session_id=session_id or "", request_id=request_id or ""),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
             # If the agent cleared its messages due to format error / overflow,
             # also purge the DB so the next request starts clean.
             if session_id and agent:
@@ -850,14 +1021,14 @@ class AgentBridge:
                         _clear_responses_state_for_session(session_id)
                         logger.info(f"[AgentBridge] Cleared DB for session after error: {session_id}")
                 except Exception as db_err:
-                    logger.warning(f"[AgentBridge] Failed to clear DB after error: {db_err}")
+                    logger.warning(f"[AgentBridge] Failed to clear DB after error: {_exception_log_summary(db_err)}")
             # Release cancel token on error path too (idempotent).
             if cancel_event is not None and (request_id or session_id) and agentbridge_owns_cancel_token:
                 try:
                     get_cancel_registry().unregister(request_id or session_id)
                 except Exception:
                     pass
-            return Reply(ReplyType.ERROR, f"Agent error: {str(e)}")
+            return Reply(ReplyType.ERROR, public_error)
     
     def _schedule_mcp_hot_reload(self, agent):
         """
@@ -866,15 +1037,17 @@ class AgentBridge:
         so any cost (file stat, hash, server boot) never adds to user latency.
         Failures are isolated and never raise into the message pipeline.
         """
-        if not conf().get("mcp_auto_start", False):
-            return
         import threading
         from agent.tools import ToolManager
 
         def _run():
             try:
                 tm = ToolManager()
-                tm.refresh_mcp_if_changed()
+                ensure_mcp = getattr(tm, "ensure_mcp_configured_loaded", None)
+                if callable(ensure_mcp):
+                    ensure_mcp(wait_seconds=0.0)
+                else:
+                    tm.refresh_mcp_if_changed()
                 added, removed = tm.sync_mcp_into_agent(agent)
                 if added or removed:
                     logger.info(
@@ -882,7 +1055,7 @@ class AgentBridge:
                         f"added={added}, removed={removed}"
                     )
             except Exception as e:
-                logger.warning(f"[AgentBridge] MCP hot-reload failed (non-fatal): {e}")
+                logger.warning(f"[AgentBridge] MCP hot-reload failed (non-fatal): {_exception_log_summary(e)}")
 
         threading.Thread(target=_run, daemon=True, name="mcp-hot-reload").start()
 
@@ -964,7 +1137,7 @@ class AgentBridge:
                             key, val = line.split('=', 1)
                             existing_env_vars[key.strip()] = val.strip()
             except Exception as e:
-                logger.warning(f"[AgentBridge] Failed to read .env file: {e}")
+                logger.warning(f"[AgentBridge] Failed to read .env file: {_exception_log_summary(e)}")
         
         # Sync config.json values into .env (add/update/remove)
         updated = False
@@ -1000,7 +1173,7 @@ class AgentBridge:
 
                 logger.info(f"[AgentBridge] Synced API keys from config.json to .env")
             except Exception as e:
-                logger.warning(f"[AgentBridge] Failed to sync API keys: {e}")
+                logger.warning(f"[AgentBridge] Failed to sync API keys: {_exception_log_summary(e)}")
     
     def _pre_persist_user_message(
         self, session_id: str, query: str, context: Context, clear_history: bool
@@ -1016,6 +1189,8 @@ class AgentBridge:
         """
         if not session_id or not query:
             return False
+        if context and context.get("pre_persisted_user_message"):
+            return True
         # Only real user turns: skip scheduler-injected / scheduled-task runs.
         if session_id.startswith("scheduler_") or (
             context and context.get("is_scheduled_task")
@@ -1060,16 +1235,26 @@ class AgentBridge:
                         cleaned.append(item)
                 if cleaned:
                     user_msg["extras"] = {"attachments": cleaned}
-            store.append_messages(session_id, [user_msg], channel_type=channel_type)
+            store.append_messages(
+                session_id,
+                [user_msg],
+                channel_type=channel_type,
+                project_context=context.get("project_context_meta") if context else None,
+            )
             return True
         except Exception as e:
+            if getattr(e, "code", "") == "SESSION_OWNER_CONFLICT":
+                logger.warning(
+                    f"[AgentBridge] Refused to pre-persist user message due to session owner conflict: reason={getattr(e, 'reason', 'unknown')}"
+                )
+                return False
             logger.warning(
-                f"[AgentBridge] Failed to pre-persist user message for session={session_id}: {e}"
+                f"[AgentBridge] Failed to pre-persist user message for session={session_id}: {_exception_log_summary(e)}"
             )
             return False
 
     def _persist_messages(
-        self, session_id: str, new_messages: list, channel_type: str = ""
+        self, session_id: str, new_messages: list, channel_type: str = "", project_context: dict = None
     ) -> None:
         """
         Persist new messages to the conversation store after each agent run.
@@ -1097,11 +1282,19 @@ class AgentBridge:
         try:
             from agent.memory import get_conversation_store
             get_conversation_store().append_messages(
-                session_id, messages_to_store, channel_type=channel_type
+                session_id,
+                messages_to_store,
+                channel_type=channel_type,
+                project_context=project_context,
             )
         except Exception as e:
+            if getattr(e, "code", "") == "SESSION_OWNER_CONFLICT":
+                logger.warning(
+                    f"[AgentBridge] Refused to persist messages due to session owner conflict: reason={getattr(e, 'reason', 'unknown')}"
+                )
+                return
             logger.warning(
-                f"[AgentBridge] Failed to persist messages for session={session_id}: {e}"
+                f"[AgentBridge] Failed to persist messages for session={session_id}: {_exception_log_summary(e)}"
             )
 
     # Marker used to identify scheduler-injected user messages so we can apply
@@ -1172,7 +1365,7 @@ class AgentBridge:
         except Exception as e:
             logger.warning(
                 f"[AgentBridge] Failed to prune scheduled messages "
-                f"for session={session_id}: {e}"
+                f"for session={session_id}: {_exception_log_summary(e)}"
             )
 
         agent = self.agents.get(session_id)
@@ -1184,7 +1377,7 @@ class AgentBridge:
             except Exception as e:
                 logger.warning(
                     f"[AgentBridge] Failed to update in-memory scheduled output "
-                    f"for session={session_id}: {e}"
+                    f"for session={session_id}: {_exception_log_summary(e)}"
                 )
 
     @staticmethod
@@ -1407,4 +1600,4 @@ class AgentBridge:
                 agent.tools = [t for t in agent.tools if t.name != "web_search"]
                 logger.info("[AgentBridge] web_search tool removed (API key no longer available)")
         except Exception as e:
-            logger.debug(f"[AgentBridge] Failed to refresh conditional tools: {e}")
+            logger.debug(f"[AgentBridge] Failed to refresh conditional tools: {_exception_log_summary(e)}")

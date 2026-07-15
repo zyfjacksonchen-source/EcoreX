@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -13,14 +12,59 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from agent.tools.base_tool import BaseTool, ToolResult
+from common.ecorex_capability_policy import apply_policy_to_capability, blocked_install_payload
 from common.log import logger
+from common.runtime_dependencies import SOURCE_ECOREX_BUNDLED, SOURCE_ECOREX_STATE
+from common.tool_execution_environment import ToolExecutionEnvironment, redact_text
 from config import conf
+
+try:
+    from config import DEFAULT_CDP_ENDPOINT as _CONFIG_DEFAULT_CDP_ENDPOINT
+    from config import chrome_devtools_mcp_args as _config_chrome_devtools_mcp_args
+except Exception as exc:
+    logger.warning(
+        "[OptionalAbilities] config.py is missing v0.2.3 CDP symbols; "
+        "using local fallback so core tool registry can still load: %s",
+        exc,
+    )
+    _CONFIG_DEFAULT_CDP_ENDPOINT = "http://127.0.0.1:9222"
+
+    def _config_chrome_devtools_mcp_args(endpoint: str = _CONFIG_DEFAULT_CDP_ENDPOINT) -> list:
+        browser_url = str(endpoint or _CONFIG_DEFAULT_CDP_ENDPOINT)
+        return [
+            "-y",
+            "chrome-devtools-mcp@latest",
+            "--browserUrl",
+            browser_url,
+            "--no-usage-statistics",
+            "--no-performance-crux",
+            "--experimentalPageIdRouting",
+            "--experimentalDevtools",
+            "--experimentalVision",
+            "--experimentalStructuredContent",
+            "--experimentalIncludeAllPages",
+            "--memoryDebugging",
+            "--categoryExperimentalThirdParty",
+            "--categoryExperimentalWebmcp",
+            "--redactNetworkHeaders",
+        ]
+
+DEFAULT_CDP_ENDPOINT = _CONFIG_DEFAULT_CDP_ENDPOINT
+chrome_devtools_mcp_args = _config_chrome_devtools_mcp_args
 
 
 RUNTIME_ROOT = Path(__file__).resolve().parents[3]
 FEISHU_LARK_SOURCE_URL = "https://github.com/larksuite/cli"
 FEISHU_LARK_MIRROR_URLS = ["https://registry.npmmirror.com/@larksuite/cli"]
 FEISHU_LARK_NPM_MIRROR = "https://registry.npmmirror.com"
+TONGXIN_CLI_PACK_ID = "tongxin-cli"
+TONGXIN_CLI_ALIASES = {"tongxin", "tongxin-cli", "xin-agent", "xin-agent-cli", "tx-assistant"}
+TONGXIN_CLI_INSTALL_HINT = (
+    "Tongxin CLI is a default read-only EcoreX capability. Use the structured tongxin_cli tool; "
+    "EcoreX first uses the bundled/trusted local tools/tongxin/xin_agent_cli.py path and records it for the agent; "
+    "authenticated remote bootstrap with SHA256 verification is only a fallback when the bundled/local path is unavailable. "
+    "Do not install it as a generic capability pack."
+)
 
 _LIVE_PROVIDER_CONFIG_KEYS = {
     "model",
@@ -101,19 +145,32 @@ def _update_live_config(data: Dict[str, Any]) -> None:
 
 
 def _which(name: str) -> Optional[str]:
-    found = shutil.which(name)
-    if found:
-        return found
-    if os.name == "nt" and not name.lower().endswith(".cmd"):
-        return shutil.which(f"{name}.cmd")
-    return None
+    dependency = ToolExecutionEnvironment(tool_name="optional_abilities").resolve_executable(name)
+    return dependency.path if dependency.available else None
+
+
+def _is_ecorex_owned_path(path: Path) -> bool:
+    if not path.is_absolute():
+        return False
+    provider = ToolExecutionEnvironment(tool_name="optional_abilities").provider
+    return provider.classify_path(path) in {SOURCE_ECOREX_BUNDLED, SOURCE_ECOREX_STATE}
+
+
+def _owned_path_or_default(value: Optional[str], default: Path, *, label: str) -> Path:
+    if value:
+        candidate = Path(value).expanduser()
+        if _is_ecorex_owned_path(candidate):
+            return candidate
+        logger.warning(f"[OptionalAbilities] ignoring unowned {label}: {candidate}")
+    return default
 
 
 def _state_dir() -> Path:
-    override = os.environ.get("ECOREX_CAPABILITY_STATE_DIR")
-    if override:
-        return Path(override).expanduser()
-    return RUNTIME_ROOT / "capability-state"
+    return _owned_path_or_default(
+        os.environ.get("ECOREX_CAPABILITY_STATE_DIR"),
+        RUNTIME_ROOT / "capability-state",
+        label="capability state dir",
+    )
 
 
 def _safe_pack_dir_name(pack_id: str) -> str:
@@ -122,15 +179,22 @@ def _safe_pack_dir_name(pack_id: str) -> str:
 
 
 def _capability_package_root() -> Path:
-    override = os.environ.get("ECOREX_CAPABILITY_TARGET_DIR")
-    if override:
-        return Path(override).expanduser()
-    return RUNTIME_ROOT / "capability-packages"
+    return _owned_path_or_default(
+        os.environ.get("ECOREX_CAPABILITY_TARGET_DIR"),
+        RUNTIME_ROOT / "capability-packages",
+        label="capability target dir",
+    )
 
 
 def _playwright_browsers_dir() -> Optional[Path]:
     override = os.environ.get("ECOREX_PLAYWRIGHT_BROWSERS_DIR") or os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
-    return Path(override).expanduser() if override else None
+    if not override:
+        return None
+    candidate = Path(override).expanduser()
+    if _is_ecorex_owned_path(candidate):
+        return candidate
+    logger.warning(f"[OptionalAbilities] ignoring unowned playwright browsers dir: {candidate}")
+    return None
 
 
 def _capability_target_dir(pack_id: str) -> Path:
@@ -138,6 +202,9 @@ def _capability_target_dir(pack_id: str) -> Path:
 
 
 def _add_capability_target_to_path(path: Path) -> None:
+    if not _is_ecorex_owned_path(path):
+        logger.warning(f"[OptionalAbilities] ignoring unowned capability target dir: {path}")
+        return
     try:
         resolved = str(path.resolve())
     except Exception:
@@ -147,12 +214,6 @@ def _add_capability_target_to_path(path: Path) -> None:
     existing = {str(Path(item).resolve()) for item in sys.path if item}
     if resolved not in existing:
         sys.path.insert(0, resolved)
-
-    pythonpath = os.environ.get("PYTHONPATH", "")
-    parts = [item for item in pythonpath.split(os.pathsep) if item]
-    normalized = {str(Path(item).resolve()) for item in parts}
-    if resolved not in normalized:
-        os.environ["PYTHONPATH"] = resolved if not pythonpath else resolved + os.pathsep + pythonpath
 
 
 def _apply_installed_capability_paths() -> None:
@@ -175,6 +236,7 @@ def _apply_installed_capability_paths() -> None:
 def _capability_manifest_path() -> Optional[Path]:
     candidates = [
         RUNTIME_ROOT / "capabilities.json",
+        RUNTIME_ROOT / "runtime-packs" / "capabilities.json",
         RUNTIME_ROOT / "desktop" / "runtime-packs" / "capabilities.json",
     ]
     for path in candidates:
@@ -202,23 +264,112 @@ def _capability_pack_ids() -> set[str]:
 
 
 def _capability_state(pack_id: str) -> Dict[str, Any]:
+    builtin = _builtin_capability_state(pack_id)
     status_path = _state_dir() / f"{pack_id}.json"
     if not status_path.exists():
+        if builtin:
+            return builtin
         return {"installed": False, "state": "not-installed"}
     try:
         data = json.loads(status_path.read_text(encoding="utf-8-sig"))
         if isinstance(data, dict):
-            return {
+            state = {
                 "installed": bool(data.get("installed") or data.get("state") == "installed"),
                 "state": data.get("state") or "unknown",
                 "updatedAt": data.get("updatedAt"),
                 "message": data.get("message"),
                 "logPath": data.get("logPath"),
-                "targetDir": data.get("targetDir"),
+                "targetDir": data.get("targetDir") if _is_ecorex_owned_path(Path(str(data.get("targetDir") or ""))) else None,
             }
+            for field in (
+                "available",
+                "configured",
+                "configurationState",
+                "persistedConfig",
+                "builtIn",
+                "configureOnly",
+                "readOnly",
+                "defaultEnabled",
+                "installHint",
+                "configKey",
+                "missingModules",
+                "retryable",
+                "nextAction",
+                "repairAction",
+                "configureAction",
+                "discoveryOnly",
+                "sourceConfigured",
+                "mirrorConfigured",
+            ):
+                if field in data:
+                    state[field] = data[field]
+            if builtin and not state["installed"]:
+                return builtin
+            if builtin and state["installed"]:
+                for field in (
+                    "builtIn",
+                    "configureOnly",
+                    "readOnly",
+                    "defaultEnabled",
+                    "installHint",
+                ):
+                    state.setdefault(field, builtin.get(field))
+            return state
     except Exception as exc:
         logger.warning(f"[OptionalAbilities] failed reading capability state {pack_id}: {exc}")
+    if builtin:
+        return builtin
     return {"installed": False, "state": "unknown"}
+
+
+def _module_available(module_name: str) -> bool:
+    return ToolExecutionEnvironment(tool_name="optional_abilities").provider.resolve_python_package(module_name).available
+
+
+def _builtin_capability_state(pack_id: str) -> Optional[Dict[str, Any]]:
+    normalized = str(pack_id or "").strip().lower().replace("_", "-")
+    if normalized == TONGXIN_CLI_PACK_ID:
+        return {
+            "installed": False,
+            "state": "not-installed",
+            "builtIn": True,
+            "configureOnly": True,
+            "readOnly": True,
+            "defaultEnabled": True,
+            "configured": False,
+            "available": False,
+            "configurationState": "probe-required",
+            "message": (
+                "Tongxin CLI wrapper is built in. Run tongxin_cli status/diagnose or the "
+                "S5 matrix smoke to verify the read-only script and data-layer health."
+            ),
+            "installHint": TONGXIN_CLI_INSTALL_HINT,
+        }
+    if normalized == "browser-automation" and _module_available("playwright"):
+        return {
+            "installed": True,
+            "state": "installed",
+            "builtIn": True,
+            "message": (
+                "browser-automation is built into this runtime through the bundled "
+                "Playwright Python package. CDP can use the user's Chrome/Edge, and "
+                "the Chromium fallback can still be repaired with install_pack if a "
+                "browser binary is missing."
+            ),
+        }
+    if normalized == "fast-ocr" and (
+        _module_available("rapidocr_onnxruntime")
+        or _module_available("rapidocr")
+        or _module_available("pytesseract")
+        or ToolExecutionEnvironment(tool_name="optional_abilities").resolve_executable("tesseract", native=True).available
+    ):
+        return {
+            "installed": True,
+            "state": "installed",
+            "builtIn": True,
+            "message": "fast-ocr is available through a local OCR provider in this runtime.",
+        }
+    return None
 
 
 def _has_chrome_devtools_mcp(config: Dict[str, Any]) -> bool:
@@ -235,25 +386,112 @@ def _has_chrome_devtools_mcp(config: Dict[str, Any]) -> bool:
     return False
 
 
+def _chrome_devtools_mcp_full_args(config: Dict[str, Any]) -> list:
+    browser = ((config.get("tools") or {}).get("browser") or {}) if isinstance(config.get("tools"), dict) else {}
+    endpoint = DEFAULT_CDP_ENDPOINT
+    if isinstance(browser, dict):
+        endpoint = str(browser.get("cdp_endpoint") or DEFAULT_CDP_ENDPOINT)
+    return chrome_devtools_mcp_args(endpoint)
+
+
+def _chrome_devtools_mcp_is_full(config: Dict[str, Any]) -> bool:
+    expected = _chrome_devtools_mcp_full_args(config)
+    for server in config.get("mcp_servers") or []:
+        if not isinstance(server, dict):
+            continue
+        args = server.get("args") if isinstance(server.get("args"), list) else []
+        joined = " ".join(str(item) for item in args)
+        if server.get("name") == "chrome-devtools" or "chrome-devtools-mcp" in joined:
+            return [str(item).strip() for item in args] == expected
+    return False
+
+
 def _ensure_chrome_devtools_mcp(config: Dict[str, Any]) -> None:
     servers = config.get("mcp_servers")
     if not isinstance(servers, list):
         servers = []
         config["mcp_servers"] = servers
+    expected_args = _chrome_devtools_mcp_full_args(config)
+    for server in servers:
+        if not isinstance(server, dict):
+            continue
+        args = server.get("args") if isinstance(server.get("args"), list) else []
+        joined = " ".join(str(item) for item in args)
+        if server.get("name") == "chrome-devtools" or "chrome-devtools-mcp" in joined:
+            server["name"] = "chrome-devtools"
+            server["type"] = "stdio"
+            server["command"] = "npx.cmd" if os.name == "nt" else "npx"
+            server["args"] = expected_args
+            server["timeout"] = max(45, int(server.get("timeout") or 0)) if str(server.get("timeout") or "0").isdigit() else 45
+            return
     if _has_chrome_devtools_mcp(config):
         return
     servers.append({
         "name": "chrome-devtools",
         "type": "stdio",
         "command": "npx.cmd" if os.name == "nt" else "npx",
-        "args": [
-            "chrome-devtools-mcp@latest",
-            "--browserUrl",
-            "http://127.0.0.1:9222",
-            "--no-usage-statistics",
-        ],
-        "timeout": 30,
+        "args": expected_args,
+        "timeout": 45,
     })
+
+
+def _safe_mcp_server_ref(value: Any) -> str:
+    text = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "").strip()).strip(".-")
+    return text[:48] or "server"
+
+
+def _is_feishu_lark_mcp_config(config: Any) -> bool:
+    if not isinstance(config, dict):
+        return False
+    haystack = json.dumps(config, ensure_ascii=False, sort_keys=True).lower()
+    return any(token in haystack for token in ("feishu", "lark", "飞书"))
+
+
+def _feishu_lark_mcp_snapshot() -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "configured": False,
+        "configuredServers": [],
+        "status": {},
+        "toolCount": 0,
+        "callable": False,
+    }
+    try:
+        from agent.tools import ToolManager
+
+        manager = ToolManager()
+        try:
+            configs = manager._load_mcp_configs()
+        except Exception:
+            configs = []
+        configured = [
+            _safe_mcp_server_ref(cfg.get("name"))
+            for cfg in configs
+            if isinstance(cfg, dict) and _is_feishu_lark_mcp_config(cfg)
+        ]
+        status = manager.list_mcp_status()
+        relevant_status = {
+            _safe_mcp_server_ref(name): state
+            for name, state in status.items()
+            if _safe_mcp_server_ref(name) in set(configured)
+            or any(token in str(name).lower() for token in ("feishu", "lark"))
+        }
+        mcp_tools = getattr(manager, "_mcp_tool_instances", {}) or {}
+        tool_count = 0
+        for tool in mcp_tools.values():
+            server_name = _safe_mcp_server_ref(getattr(tool, "server_name", ""))
+            if server_name in set(configured) or any(token in server_name.lower() for token in ("feishu", "lark")):
+                tool_count += 1
+        payload.update({
+            "configured": bool(configured),
+            "configuredServers": configured[:8],
+            "status": relevant_status,
+            "toolCount": tool_count,
+            "callable": bool(tool_count and any(state == "ready" for state in relevant_status.values())),
+        })
+    except Exception as exc:
+        payload["errorType"] = exc.__class__.__name__
+        payload["message"] = "Feishu/Lark MCP status probe failed."
+    return payload
 
 
 def _set_nested(data: Dict[str, Any], *keys: str, value: Any) -> None:
@@ -321,16 +559,16 @@ def _ability_defs() -> Dict[str, Dict[str, Any]]:
             "startupImpact": "high",
             "configKey": "mcp_auto_start",
             "installable": False,
-            "notes": "Uses npx chrome-devtools-mcp@latest after explicit enablement.",
+            "notes": "Uses npx -y chrome-devtools-mcp@latest with CDP-first full-compatible DevTools flags after explicit enablement.",
         },
         "browser-cdp": {
             "label": "Browser CDP auto-launch",
             "kind": "optional-runtime",
-            "defaultPolicy": "discoverable-disabled",
+            "defaultPolicy": "loaded-by-default",
             "startupImpact": "medium",
             "configPath": ["tools", "browser", "cdp_auto_launch"],
             "packId": "browser-automation",
-            "notes": "Keeps browser automation available without starting Chrome/CDP at boot.",
+            "notes": "CDP is first priority and auto-launches Chrome/Edge on first browser use; fallback Chromium is used only when CDP is unavailable.",
         },
         "feishu-cli": {
             "label": "Feishu/Lark CLI connector",
@@ -374,6 +612,14 @@ def _ability_defs() -> Dict[str, Dict[str, Any]]:
             "packId": "browser-automation",
             "notes": "Large pack. Install only when fallback Chromium is required.",
         },
+        "fast-ocr": {
+            "label": "Fast local OCR pack",
+            "kind": "capability-pack",
+            "defaultPolicy": "install-on-demand",
+            "startupImpact": "none-until-used",
+            "packId": "fast-ocr",
+            "notes": "Optional local OCR engine for screenshot text and URL extraction; vision remains the high-quality fallback.",
+        },
         "office-pdf": {
             "label": "Office/PDF parsing pack",
             "kind": "capability-pack",
@@ -381,6 +627,26 @@ def _ability_defs() -> Dict[str, Dict[str, Any]]:
             "startupImpact": "none-until-used",
             "packId": "office-pdf",
             "notes": "Document parsing extras for PDF, Word, Excel, and PowerPoint.",
+        },
+        TONGXIN_CLI_PACK_ID: {
+            "label": "Tongxin Assistant CLI read-only data",
+            "kind": "capability-pack",
+            "defaultPolicy": "default-enabled-read-only",
+            "startupImpact": "none",
+            "packId": TONGXIN_CLI_PACK_ID,
+            "configureOnly": True,
+            "readOnly": True,
+            "defaultEnabled": True,
+            "allowedCommands": [
+                "schema",
+                "account list",
+                "project list",
+                "report summary",
+                "note detail",
+                "realtime summary --xhs-channel all",
+            ],
+            "installHint": TONGXIN_CLI_INSTALL_HINT,
+            "notes": "Default all-user read-only access through the structured tongxin_cli tool; auto-configure a trusted local script or configured remote auth/bootstrap when unavailable.",
         },
         "memory-heavy": {
             "label": "Heavy memory/data pack",
@@ -446,7 +712,7 @@ class OptionalAbilities(BaseTool):
         "properties": {
             "action": {
                 "type": "string",
-                "description": "One of: list, status, enable, disable, install.",
+                "description": "One of: list, status, enable, disable, install, configure.",
             },
             "ability": {
                 "type": "string",
@@ -464,6 +730,14 @@ class OptionalAbilities(BaseTool):
                 "type": "object",
                 "description": "Structured result returned by the built-in find skill/find-skill gate.",
             },
+            "script_path": {
+                "type": "string",
+                "description": "Optional local xin_agent_cli.py path when configuring the Tongxin CLI capability.",
+            },
+            "python_path": {
+                "type": "string",
+                "description": "Optional EcoreX-owned Python executable path used to run xin_agent_cli.py.",
+            },
         },
         "required": ["action"],
     }
@@ -474,9 +748,15 @@ class OptionalAbilities(BaseTool):
         ability = str(args.get("ability") or "").strip().lower().replace("_", "-")
         if action in {"list", "status"}:
             return ToolResult.success(self._list(ability or None))
-        if action in {"enable", "disable", "install"}:
+        if action in {"enable", "disable", "install", "configure"}:
             if not ability:
                 return ToolResult.fail({"status": "error", "message": "ability is required"})
+            script_path = args.get("script_path") or args.get("scriptPath") or args.get("path")
+            python_path = args.get("python_path") or args.get("pythonPath")
+            if action == "configure":
+                if ability in TONGXIN_CLI_ALIASES:
+                    return self._configure_tongxin_cli(ability, script_path=script_path, python_path=python_path)
+                return ToolResult.fail({"status": "error", "message": f"{ability} has no configuration action"})
             if action == "enable":
                 return self._enable(ability)
             if action == "disable":
@@ -486,8 +766,10 @@ class OptionalAbilities(BaseTool):
                 timeout=self._timeout(args.get("timeout")),
                 discovery_source=args.get("discovery_source"),
                 find_skill_result=args.get("find_skill_result") or args.get("findSkillResult"),
+                script_path=script_path,
+                python_path=python_path,
             )
-        return ToolResult.fail({"status": "error", "message": "action must be one of: list, status, enable, disable, install"})
+        return ToolResult.fail({"status": "error", "message": "action must be one of: list, status, enable, disable, install, configure"})
 
     def _list(self, ability: Optional[str] = None) -> Dict[str, Any]:
         config = _read_runtime_config()
@@ -512,9 +794,9 @@ class OptionalAbilities(BaseTool):
             "startupImpact": meta.get("startupImpact"),
             "notes": meta.get("notes"),
             "agentCanEnable": meta.get("kind") == "optional-runtime",
-            "agentCanInstall": bool(meta.get("packId")),
+            "agentCanInstall": bool(meta.get("packId")) and not bool(meta.get("configureOnly")),
         }
-        for field in ("discoveryOnly", "sourceUrl", "mirrorUrls", "installHint"):
+        for field in ("discoveryOnly", "sourceUrl", "mirrorUrls", "installHint", "configureOnly", "readOnly", "defaultEnabled", "allowedCommands"):
             if field in meta:
                 item[field] = meta[field]
         if "enabled" in meta:
@@ -528,14 +810,86 @@ class OptionalAbilities(BaseTool):
 
         if key == "chrome-devtools-mcp":
             item["configured"] = _has_chrome_devtools_mcp(config)
+            item["fullToolset"] = _chrome_devtools_mcp_is_full(config)
             item["npx"] = bool(_which("npx"))
         if key == "feishu-cli":
             item["larkCli"] = bool(_which("lark-cli"))
             item["npm"] = bool(_which("npm"))
+            item["feishuMcp"] = _feishu_lark_mcp_snapshot()
         if meta.get("packId"):
             item["packId"] = meta["packId"]
             item["capabilityState"] = _capability_state(str(meta["packId"]))
-        return item
+        return apply_policy_to_capability(item)
+
+    def _configure_tongxin_cli(self, ability: str, script_path: Any = None, python_path: Any = None) -> ToolResult:
+        from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
+
+        configure_args: Dict[str, Any] = {"action": "configure" if script_path else "auto_configure"}
+        if script_path:
+            configure_args["script_path"] = script_path
+        if python_path:
+            configure_args["python_path"] = python_path
+        result = TongxinCli().execute(configure_args)
+        payload = result.result if isinstance(result.result, dict) else {"result": result.result}
+        fallback_local_bootstrap_state = str(payload.get("configurationState") or "").strip().lower()
+        if (
+            result.status != "success"
+            and not script_path
+            and not bool(payload.get("remoteAuthConfigured"))
+            and fallback_local_bootstrap_state in {"missing", "bootstrap_not_configured", "detected_unconfigured", "detected_untrusted"}
+        ):
+            bootstrap = TongxinCli().execute({"action": "bootstrap"})
+            if bootstrap.status == "success":
+                result = bootstrap
+                payload = result.result if isinstance(result.result, dict) else {"result": result.result}
+        configured = result.status == "success" and bool(payload.get("configured"))
+        available = bool(payload.get("available"))
+        configuration_state = str(payload.get("configurationState") or (
+            "configured" if configured else "detected_unconfigured" if available else "missing"
+        ))
+        state = {
+            "packId": TONGXIN_CLI_PACK_ID,
+            "state": "installed" if configured else "not-installed",
+            "installed": configured,
+            "available": available,
+            "configured": configured,
+            "configurationState": configuration_state,
+            "persistedConfig": bool(payload.get("persistedConfig") or configured),
+            "builtIn": True,
+            "configureOnly": True,
+            "readOnly": True,
+            "defaultEnabled": True,
+            "updatedAt": _now(),
+            "message": payload.get("message") or (
+                "Tongxin CLI read-only capability is ready."
+                if configured else
+                "Tongxin CLI script was not found. Configure an existing xin_agent_cli.py path or authenticated bootstrap settings to enable data reads."
+            ),
+            "installHint": TONGXIN_CLI_INSTALL_HINT,
+            "configKey": "tools.tongxin_cli.script_path",
+        }
+        try:
+            state_dir = _state_dir()
+            state_dir.mkdir(parents=True, exist_ok=True)
+            (state_dir / f"{TONGXIN_CLI_PACK_ID}.json").write_text(
+                json.dumps(state, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logger.warning(f"[OptionalAbilities] failed writing Tongxin CLI state: {exc}")
+
+        merged = {
+            **payload,
+            "status": "success" if configured else "error",
+            "ability": ability,
+            "packId": TONGXIN_CLI_PACK_ID,
+            "configureOnly": True,
+            "readOnly": True,
+            "defaultEnabled": True,
+            "installHint": TONGXIN_CLI_INSTALL_HINT,
+            "capabilityState": state,
+        }
+        return ToolResult.success(merged) if configured else ToolResult.fail(merged)
 
     def _enable(self, ability: str) -> ToolResult:
         defs = _ability_defs()
@@ -624,8 +978,18 @@ class OptionalAbilities(BaseTool):
             ),
         })
 
-    def _install(self, ability: str, timeout: int, discovery_source: Any = None, find_skill_result: Any = None) -> ToolResult:
+    def _install(
+        self,
+        ability: str,
+        timeout: int,
+        discovery_source: Any = None,
+        find_skill_result: Any = None,
+        script_path: Any = None,
+        python_path: Any = None,
+    ) -> ToolResult:
         defs = _ability_defs()
+        if ability in TONGXIN_CLI_ALIASES:
+            return self._configure_tongxin_cli(ability, script_path=script_path, python_path=python_path)
         meta = defs.get(ability)
         if not meta:
             if ability == "feishu-lark":
@@ -642,9 +1006,12 @@ class OptionalAbilities(BaseTool):
             return ToolResult.fail({"status": "error", "message": f"{ability} has no installer"})
         if str(pack_id) == "feishu-lark":
             return self._install_feishu_cli(timeout, discovery_source=discovery_source, find_skill_result=find_skill_result)
-        return self._install_capability_pack(str(pack_id), timeout)
+        return self._install_capability_pack(str(pack_id), timeout, script_path=script_path, python_path=python_path)
 
     def _install_feishu_cli(self, timeout: int, discovery_source: Any = None, find_skill_result: Any = None) -> ToolResult:
+        blocked = blocked_install_payload("feishu-lark", pack_name="Feishu/Lark CLI connector", action="install")
+        if blocked:
+            return ToolResult.fail(blocked)
         from agent.tools.feishu_cli.feishu_cli import FeishuCli
 
         install_args: Dict[str, Any] = {
@@ -687,7 +1054,41 @@ class OptionalAbilities(BaseTool):
         }
         return ToolResult.success(merged) if status == "installed" else ToolResult.fail(merged)
 
-    def _install_capability_pack(self, pack_id: str, timeout: int) -> ToolResult:
+    def _install_capability_pack(self, pack_id: str, timeout: int, script_path: Any = None, python_path: Any = None) -> ToolResult:
+        if str(pack_id or "").strip().lower().replace("_", "-") == TONGXIN_CLI_PACK_ID:
+            return self._configure_tongxin_cli(TONGXIN_CLI_PACK_ID, script_path=script_path, python_path=python_path)
+
+        blocked = blocked_install_payload(pack_id, action="install")
+        if blocked:
+            return ToolResult.fail(blocked)
+
+        builtin = _builtin_capability_state(pack_id)
+        if builtin and builtin.get("installed"):
+            state_dir = _state_dir()
+            state_dir.mkdir(parents=True, exist_ok=True)
+            state = {
+                "packId": pack_id,
+                "state": "installed",
+                "installed": True,
+                "builtIn": True,
+                "updatedAt": _now(),
+                "message": builtin.get("message") or f"{pack_id} is built into this runtime.",
+            }
+            try:
+                (state_dir / f"{pack_id}.json").write_text(
+                    json.dumps(state, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+            except Exception as exc:
+                logger.warning(f"[OptionalAbilities] failed writing built-in capability state: {exc}")
+            return ToolResult.success({
+                "status": "success",
+                "packId": pack_id,
+                "builtIn": True,
+                "capabilityState": state,
+                "message": state["message"],
+            })
+
         manifest = _capability_manifest_path()
         if not manifest:
             return ToolResult.fail({"status": "error", "message": "capability manifest not found"})
@@ -700,8 +1101,14 @@ class OptionalAbilities(BaseTool):
         state_dir = _state_dir()
         state_dir.mkdir(parents=True, exist_ok=True)
         target_dir = _capability_target_dir(pack_id)
+        executor = ToolExecutionEnvironment(tool_name="optional_abilities", cwd=RUNTIME_ROOT)
+        python_dependency = executor.resolve_python()
+        if not python_dependency.available:
+            payload = executor.provider.missing_dependency(python_dependency, required_by="optional_abilities.install_pack")
+            payload["packId"] = pack_id
+            return ToolResult.fail(payload)
         command = [
-            sys.executable,
+            python_dependency.path,
             str(installer),
             "--pack-id",
             pack_id,
@@ -715,6 +1122,8 @@ class OptionalAbilities(BaseTool):
             str(target_dir),
             "--timeout",
             str(timeout),
+            "--primary-index-url",
+            os.environ.get("ECOREX_PIP_PRIMARY_INDEX_URL", "https://pypi.org/simple"),
             "--fallback-index-url",
             os.environ.get("ECOREX_PIP_FALLBACK_INDEX_URL", "https://pypi.tuna.tsinghua.edu.cn/simple"),
         ]
@@ -722,18 +1131,17 @@ class OptionalAbilities(BaseTool):
         if browsers_dir:
             command.extend(["--playwright-browsers-dir", str(browsers_dir)])
         try:
-            result = subprocess.run(
+            env = executor.build_env()
+            env.update({
+                "PYTHONIOENCODING": "utf-8",
+                "ECOREX_CAPABILITY_STATE_DIR": str(_state_dir()),
+                "ECOREX_CAPABILITY_TARGET_DIR": str(_capability_package_root()),
+            })
+            result = executor.run_completed(
                 command,
                 cwd=str(RUNTIME_ROOT),
-                text=True,
-                capture_output=True,
                 timeout=timeout,
-                env={
-                    **os.environ,
-                    "PYTHONIOENCODING": "utf-8",
-                    "ECOREX_CAPABILITY_STATE_DIR": str(_state_dir()),
-                    "ECOREX_CAPABILITY_TARGET_DIR": str(_capability_package_root()),
-                },
+                env=env,
             )
         except subprocess.TimeoutExpired:
             return ToolResult.fail({"status": "error", "message": f"install timed out after {timeout}s", "packId": pack_id})
@@ -749,8 +1157,8 @@ class OptionalAbilities(BaseTool):
             "exitCode": result.returncode,
             "targetDir": str(target_dir),
             "capabilityState": state,
-            "stdout": (result.stdout or "")[-4000:],
-            "stderr": (result.stderr or "")[-4000:],
+            "stdout": redact_text(result.stdout or "")[-4000:],
+            "stderr": redact_text(result.stderr or "")[-4000:],
         }
         return ToolResult.success(payload) if result.returncode == 0 else ToolResult.fail(payload)
 

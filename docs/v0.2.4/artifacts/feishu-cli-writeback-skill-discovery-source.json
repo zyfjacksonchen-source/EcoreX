@@ -1,0 +1,80 @@
+{
+  "status": "PASS_SOURCE",
+  "slice": "R24-17",
+  "generatedAt": "2026-06-29T11:47:00+08:00",
+  "scope": "Web-only Feishu CLI writeback polling, Tongxin gated bootstrap, and Lark skill callable discovery",
+  "changes": {
+    "feishuCliWriteback": [
+      "config_init --new returns the official Feishu/Lark approval URL immediately after it appears",
+      "the blocking lark-cli process is retained in an in-process auth session registry until completion, timeout, or retention cleanup",
+      "config_init_status polls the same sessionId and reports writebackPending/authCompleted/authState without exposing raw logs or sensitive values",
+      "config_init_status only reports authCompleted after auth status is ready/authenticated; process exit alone becomes auth_incomplete when local CLI auth is not ready",
+      "expired or superseded writeback sessions are killed/cancelled and are not rendered as successful",
+      "Web External Connections adds agent_auth_status polling so the page can close after Feishu approval while EcoreX still confirms local CLI writeback"
+    ],
+    "skillDiscovery": [
+      "lark-* and feishu-* external skills remain discoverable as external collaboration skills",
+      "lark-* and feishu-* skills resolve to the feishu_cli callable tool surface",
+      "current machine scan found 26 lark-* skills mapped to feishu_cli"
+    ],
+    "tongxinBootstrap": [
+      "Tongxin CLI can be bootstrapped from configured gated server URLs with SHA256 verification",
+      "config-driven bootstrap is allowed by the permission broker, while explicit URL/inline sensitive arguments remain permission-gated"
+    ],
+    "mcpState": [
+      "EcoreX MCP status is currently empty because no Feishu/Lark MCP server is configured in mcp.json or config mcp_servers",
+      "Codex Feishu workflows in this environment are skill-plus-lark-cli workflows, not an active Feishu MCP server",
+      "optional_abilities now reports feishuMcp configured/status/toolCount/callable so unconfigured MCP is visible instead of silently hidden"
+    ]
+  },
+  "localRuntimeEvidence": {
+    "feishuCli": {
+      "available": true,
+      "authState": "ready",
+      "authenticated": true,
+      "commandPresent": true
+    },
+    "larkSkills": {
+      "count": 26,
+      "sample": [
+        "lark-approval",
+        "lark-apps",
+        "lark-attendance",
+        "lark-base",
+        "lark-calendar",
+        "lark-contact",
+        "lark-doc",
+        "lark-drive"
+      ],
+      "sourceGroup": "external",
+      "purposeGroup": "collaboration",
+      "callableTool": "feishu_cli"
+    },
+    "mcp": {
+      "mcpStatus": {},
+      "mcpToolCount": 0,
+      "feishuMcpConfigured": false,
+      "feishuMcpCallable": false
+    }
+  },
+  "verification": {
+    "pyCompile": "PASS",
+    "jsCheck": "PASS",
+    "feishuAuthPytest": "17 passed, 3 warnings",
+    "focusedPytest": "68 passed, 3 warnings, 10 subtests passed",
+    "subagentReview": "PASS after first-pass lifecycle blockers were fixed and low-risk follow-ups were applied",
+    "releaseArtifactContract": "PASS",
+    "releaseValidation": "PASS",
+    "installPackagingContract": "PASS",
+    "localInstallSmoke": "PASS",
+    "privacyScan": "PASS",
+    "deployment": "PASS"
+  },
+  "releaseArtifacts": {
+    "webuiWindowsSha256": "13535AAB7541E19ECC6DE95D9A13670AEABC78B11784CEB6C99946A39AFE7322",
+    "webuiMacosSha256": "27801CFCAB2C52619ED8A08280301E16F4292A0D0443FCE47BB84E3A2E9D4FBE",
+    "webLinuxServiceSha256": "AA5DF4F7C65E7097D16B08F62C005A529618CFBE995D2BEDF78E748B2EA19D2A",
+    "publicReleaseSha256": "C0167695F6DF52117479046E7CCAE282A778D1C5F1A31C134A01726B3E90463B"
+  },
+  "redacted": true
+}

@@ -1,0 +1,69 @@
+{
+  "artifact": {
+    "artifactId": "web-linux-service",
+    "expectedSha256": "3BEA1EF91C61E9E42235AE7695DDAEBEF25B4A6C5B13B6726240539CC937CCF7",
+    "path": "release-artifacts/EcoreX_0.2.2-web-linux-service.tar.gz",
+    "sha256": "3BEA1EF91C61E9E42235AE7695DDAEBEF25B4A6C5B13B6726240539CC937CCF7",
+    "sha256MatchesExpected": true,
+    "size": 3679009,
+    "version": "0.2.2"
+  },
+  "commandTemplate": "python scripts/smoke-v022-release-target-deploy-rollback.py --package release-artifacts/EcoreX_0.2.2-web-linux-service.tar.gz --ssh-host <target-host> --ssh-user <target-user> --ssh-identity <path-to-private-key> --public-base-url <https://target.example> --confirm-target-environment --artifact docs/v0.2.2/artifacts/release-target-deploy-rollback-smoke.json",
+  "generatedAt": "2026-06-26T05:55:54.876612+00:00",
+  "localInputs": [
+    {
+      "exists": true,
+      "name": "package",
+      "path": "release-artifacts/EcoreX_0.2.2-web-linux-service.tar.gz",
+      "sha256": "3BEA1EF91C61E9E42235AE7695DDAEBEF25B4A6C5B13B6726240539CC937CCF7",
+      "size": 3679009
+    },
+    {
+      "exists": true,
+      "name": "installer",
+      "path": "scripts/install-ecorex-web.sh",
+      "sha256": "C1B4819C7F8D1EA8D03481EE7FC415E398233839E539F243EC25810167B2956A",
+      "size": 19754
+    },
+    {
+      "exists": true,
+      "name": "checker",
+      "path": "scripts/check-ecorex-web-release.sh",
+      "sha256": "F19B5C531C62B2EA3E0F336904436E31186BFE5384B5C03A486567F75C0227D7",
+      "size": 7844
+    }
+  ],
+  "networkUsed": false,
+  "notes": [
+    "The target must already have a v0.2.1 current release so rollback can be verified.",
+    "The operator running this command must have passwordless sudo or an equivalent sudo command configured.",
+    "Do not paste private keys, passwords, API tokens, raw hostnames, or user names into tracked docs or artifacts."
+  ],
+  "optionalTargetInputs": [
+    "--ssh-user <target-user>",
+    "--ssh-port <port>",
+    "--ssh-identity <path-to-private-key>",
+    "--public-base-url <https://target.example>",
+    "--remote-base-url <http://127.0.0.1:9909>",
+    "--sudo-command <sudo -n>"
+  ],
+  "redaction": {
+    "rawCommandsPersisted": false,
+    "rawSecretsPersisted": false,
+    "rawStderrPersisted": false,
+    "rawStdoutPersisted": false,
+    "rawTargetPersisted": false
+  },
+  "requiredTargetInputs": [
+    "--ssh-host <target-host>",
+    "--confirm-target-environment"
+  ],
+  "scope": "target-environment-web-linux-service",
+  "status": "READY_FOR_TARGET_INPUT",
+  "targetExecution": false,
+  "templateArtifact": {
+    "clearsTargetBlocker": false,
+    "path": "docs/v0.2.2/artifacts/release-target-command-template.json",
+    "writesPassEvidence": false
+  }
+}

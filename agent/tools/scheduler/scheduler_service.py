@@ -2,12 +2,40 @@
 Background scheduler service for executing scheduled tasks
 """
 
+import hashlib
 import time
 import threading
 from datetime import datetime, timedelta
 from typing import Callable, Optional
-from croniter import croniter
 from common.log import logger
+from agent.tools.scheduler.cron_compat import croniter
+
+
+def _public_task_name_summary(value) -> dict:
+    text = str(value or "")
+    if not text:
+        return {"redacted": False, "chars": 0, "hash": ""}
+    return {
+        "redacted": True,
+        "chars": len(text),
+        "hash": hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:12],
+    }
+
+
+def _public_scheduler_value_summary(value) -> dict:
+    return _public_task_name_summary(value)
+
+
+def _public_scheduler_error_message(value) -> str:
+    text = str(value or "")
+    if not text:
+        return "Scheduler callback failed."
+    return (
+        "Scheduler callback failed. Details redacted "
+        f"(type={type(value).__name__}, "
+        f"hash={hashlib.sha256(text.encode('utf-8', errors='replace')).hexdigest()[:12]}, "
+        f"chars={len(text)}, bytes={len(text.encode('utf-8', errors='replace'))})."
+    )
 
 
 def _parse_naive_local(iso_str: str) -> datetime:
@@ -41,6 +69,7 @@ class SchedulerService:
         self.running = False
         self.thread = None
         self._lock = threading.Lock()
+        self._stop_event = threading.Event()
     
     def start(self):
         """Start the scheduler service"""
@@ -50,7 +79,8 @@ class SchedulerService:
                 return
             
             self.running = True
-            self.thread = threading.Thread(target=self._run_loop, daemon=True)
+            self._stop_event.clear()
+            self.thread = threading.Thread(target=self._run_loop, daemon=True, name="SchedulerServiceThread")
             self.thread.start()
     
     def stop(self):
@@ -60,8 +90,11 @@ class SchedulerService:
                 return
             
             self.running = False
+            self._stop_event.set()
             if self.thread:
                 self.thread.join(timeout=5)
+                if not self.thread.is_alive():
+                    self.thread = None
             logger.info("[Scheduler] Service stopped")
     
     def _run_loop(self):
@@ -72,9 +105,9 @@ class SchedulerService:
             try:
                 self._check_and_execute_tasks()
             except Exception as e:
-                logger.error(f"[Scheduler] Error in scheduler loop: {e}")
+                logger.error(f"[Scheduler] Error in scheduler loop: {_public_scheduler_error_message(e)}")
 
-            time.sleep(30)
+            self._stop_event.wait(30)
     
     def _check_and_execute_tasks(self):
         """Check for due tasks and execute them"""
@@ -84,7 +117,10 @@ class SchedulerService:
         for task in tasks:
             try:
                 if self._is_task_due(task, now):
-                    logger.info(f"[Scheduler] Executing task: {task['id']} - {task['name']}")
+                    logger.info(
+                        f"[Scheduler] Executing task: {task['id']} "
+                        f"nameSummary={_public_task_name_summary(task.get('name'))}"
+                    )
                     ok = self._execute_task(task)
                     if not ok:
                         # Leave next_run_at as-is so the next loop retries.
@@ -105,7 +141,10 @@ class SchedulerService:
                         self.task_store.delete_task(task['id'])
                         logger.info(f"[Scheduler] One-time task completed and removed: {task['id']}")
             except Exception as e:
-                logger.error(f"[Scheduler] Error processing task {task.get('id')}: {e}")
+                logger.error(
+                    f"[Scheduler] Error processing task {task.get('id')}: "
+                    f"{_public_scheduler_error_message(e)}"
+                )
     
     def _is_task_due(self, task: dict, now: datetime) -> bool:
         """
@@ -165,7 +204,9 @@ class SchedulerService:
         except Exception as e:
             logger.error(
                 f"[Scheduler] Failed to evaluate due-state for task "
-                f"{task.get('id')} (next_run_at={next_run_str!r}): {e}"
+                f"{task.get('id')} "
+                f"nextRunSummary={_public_scheduler_value_summary(next_run_str)} "
+                f"error={_public_scheduler_error_message(e)}"
             )
             return False
     
@@ -193,7 +234,11 @@ class SchedulerService:
                 cron = croniter(expression, from_time)
                 return cron.get_next(datetime)
             except Exception as e:
-                logger.error(f"[Scheduler] Invalid cron expression '{expression}': {e}")
+                logger.error(
+                    "[Scheduler] Invalid cron expression "
+                    f"summary={_public_scheduler_value_summary(expression)} "
+                    f"error={_public_scheduler_error_message(e)}"
+                )
                 return None
         
         elif schedule_type == "interval":
@@ -216,7 +261,8 @@ class SchedulerService:
             except Exception as e:
                 logger.error(
                     f"[Scheduler] Failed to parse once-task run_at "
-                    f"{run_at_str!r}: {e}"
+                    f"summary={_public_scheduler_value_summary(run_at_str)} "
+                    f"error={_public_scheduler_error_message(e)}"
                 )
             return None
         
@@ -235,9 +281,10 @@ class SchedulerService:
             result = self.execute_callback(task)
             return False if result is False else True
         except Exception as e:
-            logger.error(f"[Scheduler] Error executing task {task['id']}: {e}")
+            public_error = _public_scheduler_error_message(e)
+            logger.error(f"[Scheduler] Error executing task {task['id']}: {public_error}")
             self.task_store.update_task(task['id'], {
-                "last_error": str(e),
+                "last_error": public_error,
                 "last_error_at": datetime.now().isoformat()
             })
             return False

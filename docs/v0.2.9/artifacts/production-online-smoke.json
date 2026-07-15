@@ -1,0 +1,120 @@
+{
+  "status": "PASS",
+  "scope": "production-online-light-http-smoke",
+  "version": "0.2.9",
+  "generatedAt": "2026-07-05T08:39:20.709377+00:00",
+  "baseUrl": "https://mvdcm.ecoremedia.net/ecorex-agent",
+  "manifest": {
+    "status": 200,
+    "product": "EcoreX",
+    "version": "0.2.9",
+    "updatedAt": "2026-07-05",
+    "notes": "EcoreX v0.2.9 WebUI release metadata. Usage-panel action projection, effective artifacts, feedback traceability, knowledge graph display, Tencent Docs MCP remote attachments, default Xiaoxin identity, thinking motion, scheduler task readability, ready WebUI packages, installer scripts, /api/version, and update notes are aligned.",
+    "downloadMode": "mirror-first-origin-fallback",
+    "mirrors": [
+      {
+        "id": "asset-mirror-v0.2.9",
+        "kind": "asset-base",
+        "baseUrl": "https://ghproxy.net/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.9",
+        "pathMode": "fileName"
+      },
+      {
+        "id": "github-release-v0.2.9",
+        "kind": "github-release",
+        "baseUrl": "https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/v0.2.9",
+        "pathMode": "fileName"
+      }
+    ]
+  },
+  "downloads": [
+    {
+      "url": "https://mvdcm.ecoremedia.net/ecorex-agent/downloads/EcoreX_0.2.9-webui-windows-x64.zip",
+      "status": 200,
+      "contentLength": 550826610,
+      "acceptRanges": "bytes, bytes",
+      "finalUrlHash": "6E6478D9D7937C7F",
+      "error": "",
+      "artifactId": "webui-windows-x64",
+      "fileName": "EcoreX_0.2.9-webui-windows-x64.zip",
+      "expectedSize": 550826610,
+      "sha256": "0E7870C5A784F958EF7EFB2770ADFF05A7467C55C2C50D0690444AAAFA8147C1",
+      "ok": true,
+      "href": "downloads/EcoreX_0.2.9-webui-windows-x64.zip"
+    },
+    {
+      "url": "https://mvdcm.ecoremedia.net/ecorex-agent/downloads/EcoreX_0.2.9-webui-macos-universal.zip",
+      "status": 200,
+      "contentLength": 652285633,
+      "acceptRanges": "bytes, bytes",
+      "finalUrlHash": "0912D786F4E5C0D4",
+      "error": "",
+      "artifactId": "webui-macos-universal",
+      "fileName": "EcoreX_0.2.9-webui-macos-universal.zip",
+      "expectedSize": 652285633,
+      "sha256": "580E4D2385BCA2E53149FC85D65822107CEB08504C2854E269183B674A1B92E4",
+      "ok": true,
+      "href": "downloads/EcoreX_0.2.9-webui-macos-universal.zip"
+    },
+    {
+      "url": "https://mvdcm.ecoremedia.net/ecorex-agent/downloads/EcoreX_0.2.9-web-linux-service.tar.gz",
+      "status": 200,
+      "contentLength": 4207354,
+      "acceptRanges": "bytes, bytes",
+      "finalUrlHash": "790CC24AAB42C422",
+      "error": "",
+      "artifactId": "web-linux-service",
+      "fileName": "EcoreX_0.2.9-web-linux-service.tar.gz",
+      "expectedSize": 4207354,
+      "sha256": "C918F74388A0B9C3C7EFD60E9BD028CCF56BB525F95A854C0A1E1073E6368566",
+      "ok": true,
+      "href": "downloads/EcoreX_0.2.9-web-linux-service.tar.gz"
+    }
+  ],
+  "endpoints": {
+    "installWebuiPs1": {
+      "status": 200,
+      "hasVersion": true
+    },
+    "installWebuiSh": {
+      "status": 200,
+      "hasVersion": true
+    },
+    "adminAuth": {
+      "status": 401,
+      "expected": 401
+    },
+    "usagePanelAuth": {
+      "status": 401,
+      "expected": 401
+    },
+    "clientModelConfigGate": {
+      "status": 403,
+      "expected": 403
+    },
+    "webApiVersion": {
+      "status": 200,
+      "version": "0.2.9",
+      "updateStateVersion": "0.2.9",
+      "updateStateStatus": "ready"
+    }
+  },
+  "checks": {
+    "manifestStatus": true,
+    "manifestVersion": true,
+    "manifestProduct": true,
+    "mirrorFirstGhproxy": true,
+    "mirrorSecondGithub": true,
+    "downloads": [
+      true,
+      true,
+      true
+    ],
+    "installPs1Version": true,
+    "installShVersion": true,
+    "adminRequiresAuth": true,
+    "usagePanelRequiresAuth": true,
+    "clientGateForbidden": true,
+    "webApiVersion": true,
+    "webApiUpdateStateVersion": true
+  }
+}

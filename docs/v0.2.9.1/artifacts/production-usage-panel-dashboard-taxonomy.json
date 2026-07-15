@@ -1,0 +1,144 @@
+{
+  "scope": "production-usage-panel-dashboard-taxonomy",
+  "status": "PASS",
+  "version": "0.2.9.1",
+  "releaseDir": "/srv/ecorex-agent-usage-panel/releases/20260706044122-v0.2.9.1-dashboard-taxonomy",
+  "files": {
+    "index.html": {
+      "size": 9098,
+      "sha256": "8746AB8F6AEC2D79556E3E005055C83979F8DC35DD9CABBA5C5750D0131037FD"
+    },
+    "styles.css": {
+      "size": 20278,
+      "sha256": "50A8A5F1CBAB0F37FB56860DAF8437B784967D1EC8A673F1F7348DD76AB05CBC"
+    },
+    "app.js": {
+      "size": 93801,
+      "sha256": "CE3B1465E2995B262075EBB0ECBD94F4D72620AB582E762F443BC1FFDF8EF00B"
+    },
+    "data.js": {
+      "size": 492,
+      "sha256": "E035668C51D0DA8A13D3AA24E5ECCF58F3DC301D3175A1C973E65D139B42FF7A"
+    },
+    "usage_panel_api.py": {
+      "size": 30252,
+      "sha256": "5C96B98EF19CB1FBEB01F2EB959075983D74759B08D28E109BFCB6ECDB96F15C"
+    }
+  },
+  "probe": {
+    "version": "0.2.9.1",
+    "healthVersion": "0.2.9.1",
+    "publicStatus": 401,
+    "currentTarget": "/srv/ecorex-agent-usage-panel/releases/20260706044122-v0.2.9.1-dashboard-taxonomy",
+    "markers": {
+      "definitionPanel": true,
+      "auditDetailsDefaultCollapsed": true,
+      "taxonomyText": true,
+      "stoppedTasks": true,
+      "invalidArtifacts": true,
+      "apiVersion": true,
+      "detailsCss": true
+    },
+    "scenarios": [
+      "创作内容",
+      "制作素材",
+      "搜索查询",
+      "处理数据",
+      "编辑文档",
+      "交付通知",
+      "系统维护"
+    ],
+    "hasNewScenarios": true,
+    "sampleRows": 54,
+    "hashes": {
+      "index.html": "8746AB8F6AEC2D79556E3E005055C83979F8DC35DD9CABBA5C5750D0131037FD",
+      "styles.css": "50A8A5F1CBAB0F37FB56860DAF8437B784967D1EC8A673F1F7348DD76AB05CBC",
+      "app.js": "CE3B1465E2995B262075EBB0ECBD94F4D72620AB582E762F443BC1FFDF8EF00B",
+      "data.js": "E035668C51D0DA8A13D3AA24E5ECCF58F3DC301D3175A1C973E65D139B42FF7A",
+      "usage_panel_api.py": "5C96B98EF19CB1FBEB01F2EB959075983D74759B08D28E109BFCB6ECDB96F15C"
+    }
+  },
+  "commands": [
+    {
+      "name": "prepare_usage_panel_release",
+      "argvHash": "803EE6B559331C895102E1CEFCBF32B377573E62F7F5CEE4FBC83D29B5CB0307",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stderrExcerptRedacted": ""
+    },
+    {
+      "name": "upload_index.html",
+      "argvHash": "D0BCC1CE14863A7ED22C0A470AD20E2161612F209F3E49BD0E5AC6371C09023E",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stderrExcerptRedacted": ""
+    },
+    {
+      "name": "upload_styles.css",
+      "argvHash": "81EB1617EB9537A8A5AA4171C749071BE1775C927125D6139EBD9C8255DB344B",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stderrExcerptRedacted": ""
+    },
+    {
+      "name": "upload_app.js",
+      "argvHash": "B4473645B2F409B78EEBE2178E363A94CE40FED9E704579A191E206CCE08FBCB",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stderrExcerptRedacted": ""
+    },
+    {
+      "name": "upload_data.js",
+      "argvHash": "44AB4D6C29CFB4F4286266E3F3DE189B9A2A71E84D4614AACB105890B618E1A6",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stderrExcerptRedacted": ""
+    },
+    {
+      "name": "upload_usage_panel_api.py",
+      "argvHash": "6B0EC4CBD48AB9F16263D1BC4F2380F20EFA340DFE2249AAECD9E9DBC98E5314",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stderrExcerptRedacted": ""
+    },
+    {
+      "name": "promote_usage_panel_static",
+      "argvHash": "3D474043CF53043E91079F048FF3468CDAFC507426714FA068AFFFC6DF2D11E6",
+      "exitCode": 0,
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stderrExcerptRedacted": ""
+    },
+    {
+      "name": "restart_usage_panel_api",
+      "argvHash": "669BF3280AE3203FBD1B5AE5937570A5F0A4E56C3C9B7D2BE790E02BB9543394",
+      "exitCode": 0,
+      "stdoutHash": "0E78B5521A351E898D0ADC354B9D4DFCDE569ECAB40529F8609424DCA362B6A3",
+      "stderrHash": "331A2D472055BD82902304CD8920C8CD83BFB6C9F8DA783695F4072FB99F24FA",
+      "stdoutExcerptRedacted": "{\"ok\":true,\"version\":\"[IP]\",\"service\":\"ecorex-usage-panel-api\"}",
+      "stderrExcerptRedacted": "curl: (7) Failed to connect to [IP] port 18105 after 0 ms: Couldn't connect to server\n"
+    },
+    {
+      "name": "postdeploy_usage_panel_probe",
+      "argvHash": "0000236F9ADA597FFE80DACCFE3A4CD2C77A0B8DA80958E7FBD1BD21E37EDCFB",
+      "exitCode": 0,
+      "stdoutHash": "EF3891B8B302D29C9E26D7E53AB4AFC296E5D9F2FD8F0B67885A7BD2FD2FCD86",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "{\"version\": \"[IP]\", \"healthVersion\": \"[IP]\", \"publicStatus\": 401, \"currentTarget\": \"/srv/ecorex-agent-usage-panel/releases/20260706044122-v0.2.9.1-dashboard-taxonomy\", \"markers\": {\"definitionPanel\": true, \"auditDetailsDefaultCollapsed\": true, \"taxonomyText\": true, \"stoppedTasks\": true, \"invalidArtifacts\": true, \"apiVersion\": true, \"detailsCss\": true}, \"scenarios\": [\"创作内容\", \"制作素材\", \"搜索查询\", \"处理数据\", \"编辑文档\", \"交付通知\", \"系统维护\"], \"hasNewScenarios\": true, \"sampleRows\": 54, \"hashes\": {\"index.html\": \"8746AB8F6AEC2D79556E3E005055C83979F8DC35DD9CABBA5C5750D0131037FD\", \"styles.css\": \"50A8A5F1CBAB0F37FB56860DAF8437B784967D1EC8A673F1F7348DD76AB05CBC\", \"app.js\": \"CE3B1465E2995B262075EBB0ECBD94F4D72620AB582E762F443BC1FFDF8EF00B\", \"data.js\": \"E035668C51D0DA8A13D3AA24E5ECCF58F3DC301D3175A1C973E65D139B42FF7A\", \"usage_panel_api.py\": \"5C96B98EF19CB1FBEB01F2EB959075983D74759B08D28E109BFCB6ECDB96F15C\"}}\n",
+      "stderrExcerptRedacted": ""
+    }
+  ]
+}

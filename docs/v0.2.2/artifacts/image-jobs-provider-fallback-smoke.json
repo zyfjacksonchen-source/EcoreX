@@ -1,0 +1,77 @@
+{
+  "status": "PASS",
+  "generation": {
+    "status": "PASS",
+    "job_id": "image-job-provider-fallback-generation",
+    "request_id": "req-image-provider-fallback-generation",
+    "route": "generations",
+    "attempted_models": [
+      "gpt-image-2-pro",
+      "gpt-image-2"
+    ],
+    "projection": {
+      "fallback_used": true,
+      "fallback_from_model": "gpt-image-2-pro",
+      "fallback_to_model": "gpt-image-2",
+      "last_provider": "OpenAI",
+      "last_model": "gpt-image-2",
+      "artifact_count": 1
+    }
+  },
+  "edit": {
+    "status": "PASS",
+    "job_id": "image-job-provider-fallback-edit",
+    "request_id": "req-image-provider-fallback-edit",
+    "route": "edits",
+    "attempted_models": [
+      "gpt-image-2-pro",
+      "gpt-image-2"
+    ],
+    "projection": {
+      "fallback_used": true,
+      "fallback_from_model": "gpt-image-2-pro",
+      "fallback_to_model": "gpt-image-2",
+      "last_provider": "OpenAI",
+      "last_model": "gpt-image-2",
+      "artifact_count": 1
+    }
+  },
+  "calls": [
+    {
+      "route": "generations",
+      "path": "/v1/images/generations",
+      "model": "gpt-image-2-pro",
+      "prompt": "image job provider fallback generation smoke",
+      "content_type": "application/json",
+      "has_image_file": false,
+      "authorization_seen": true
+    },
+    {
+      "route": "generations",
+      "path": "/v1/images/generations",
+      "model": "gpt-image-2",
+      "prompt": "image job provider fallback generation smoke",
+      "content_type": "application/json",
+      "has_image_file": false,
+      "authorization_seen": true
+    },
+    {
+      "route": "edits",
+      "path": "/v1/images/edits",
+      "model": "gpt-image-2-pro",
+      "prompt": "image job provider fallback edit smoke",
+      "content_type": "multipart/form-data",
+      "has_image_file": true,
+      "authorization_seen": true
+    },
+    {
+      "route": "edits",
+      "path": "/v1/images/edits",
+      "model": "gpt-image-2",
+      "prompt": "image job provider fallback edit smoke",
+      "content_type": "multipart/form-data",
+      "has_image_file": true,
+      "authorization_seen": true
+    }
+  ]
+}

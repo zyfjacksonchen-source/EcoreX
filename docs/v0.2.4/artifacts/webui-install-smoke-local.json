@@ -1,0 +1,30 @@
+{
+  "status": "PASS",
+  "version": "0.2.4",
+  "generatedAt": "2026-06-29T04:31:08.2176933Z",
+  "scope": "local-webui-install-short-path-r24-17",
+  "redacted": true,
+  "webPort": 9931,
+  "artifact": {
+    "id": "webui-windows-x64",
+    "artifactName": "EcoreX_0.2.4-webui-windows-x64.zip",
+    "size": 113925024,
+    "sha256": "13535AAB7541E19ECC6DE95D9A13670AEABC78B11784CEB6C99946A39AFE7322"
+  },
+  "checks": {
+    "serverStarted": true,
+    "appReturned": true,
+    "versionHas024": true,
+    "feishuCliPackaged": true,
+    "webChannelPackaged": true,
+    "publicPayloadPackaged": true,
+    "larkOapiBundled": true,
+    "larkOapiMetadataProbe": true,
+    "localWebAppBuilt": true,
+    "expandArchiveAvoided": true,
+    "robustZipExtractor": true,
+    "firstRunPipSkipped": true,
+    "packagePipNoCompile": true,
+    "feishuMcpObservationPackaged": true
+  }
+}

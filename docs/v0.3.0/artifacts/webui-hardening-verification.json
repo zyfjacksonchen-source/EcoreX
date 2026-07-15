@@ -1,0 +1,115 @@
+{
+  "schema": "ecorex.v0.3.0.webui-hardening-verification.v1",
+  "version": "0.3.0",
+  "generatedAt": "2026-07-08T08:24:00+08:00",
+  "status": "pass-with-environment-gates",
+  "checks": [
+    {
+      "name": "desktop typecheck",
+      "command": "npm run typecheck",
+      "cwd": "desktop",
+      "status": "pass"
+    },
+    {
+      "name": "targeted v0.3.0 source and regression tests",
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=. pytest -q tests/test_v030_webui_hardening.py",
+      "status": "pass",
+      "detail": "22 passed, 1 warning"
+    },
+    {
+      "name": "renderer production build",
+      "command": "npm run build:renderer",
+      "cwd": "desktop",
+      "status": "pass",
+      "detail": "Built assets index-VHJzJbCn.js and index-PsAbIX8T.css"
+    },
+    {
+      "name": "WebUI local package build",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-ecorex-webui-local-release.ps1 -Version 0.3.0",
+      "status": "pass"
+    },
+    {
+      "name": "release orchestrator",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-ecorex-webui-orchestrator.ps1 -Version 0.3.0 -SkipBuild -SkipPackage -AllowDirtyTree -Force",
+      "status": "pass",
+      "evidence": "docs/v0.3.0/artifacts/webui-release-orchestrator-smoke.json"
+    },
+    {
+      "name": "Windows extracted package runtime smoke",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-v030-webui-package-runtime.ps1 -PackagePath release-artifacts/EcoreX_0.3.0-webui-windows-x64.zip -OutputPath docs/v0.3.0/artifacts/webui-package-runtime-smoke.json -SmokeRoot tmp/v030-webui-package-runtime-smoke -ExpectedVersion 0.3.0 -Port 9929",
+      "status": "pass",
+      "evidence": "docs/v0.3.0/artifacts/webui-package-runtime-smoke.json"
+    },
+    {
+      "name": "user online update local smoke",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-v030-webui-online-update-local.ps1 -PackagePath release-artifacts/EcoreX_0.3.0-webui-windows-x64.zip -OutputPath docs/v0.3.0/artifacts/user-online-update-local-smoke.json -SmokeRoot tmp/v030-user-online-update-smoke -Version 0.3.0 -SourcePort 9970 -RuntimePort 9939 -TimeoutSeconds 600",
+      "status": "pass",
+      "detail": "PASS, 7/7 checks",
+      "evidence": "docs/v0.3.0/artifacts/user-online-update-local-smoke.json"
+    },
+    {
+      "name": "packaged WebUI CDP user-path smoke",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-v030-webui-release-cdp.ps1 -PackagePath release-artifacts/EcoreX_0.3.0-webui-windows-x64.zip -OutputPath docs/v0.3.0/artifacts/webui-release-cdp-smoke.json -ScreenshotPath docs/v0.3.0/artifacts/webui-release-cdp-smoke.png -SmokeRoot tmp/v030-webui-release-cdp-smoke -Port 9949 -TimeoutSeconds 300",
+      "status": "pass",
+      "detail": "Covers session show-more, active-turn replace/queue/branch modes, queue cancel action, long composer no-jump, local image previews, and retouch infinite-canvas flow.",
+      "evidence": "docs/v0.3.0/artifacts/webui-release-cdp-smoke.json"
+    },
+    {
+      "name": "site download artifacts mirrored",
+      "command": "copy release-artifacts/EcoreX_0.3.0-webui-*.zip to deploy/ecorex-site/downloads and verify size/hash against manifest plus release-index",
+      "status": "pass",
+      "detail": "deploy/ecorex-site/downloads contains the Windows, macOS, and combined v0.3.0 WebUI packages with sha256 sidecar files. Manifest/release-index package size and SHA256 match the actual site download files."
+    },
+    {
+      "name": "GitHub release primary mirror assets",
+      "command": "gh release create/upload v0.3.0 and HEAD-check ghproxy.net EcoreX-installers release asset URLs",
+      "status": "pass",
+      "detail": "Source release exists in zhangyifanjackson-dotcom/EcoreX. Client primary asset release exists in zhangyifanjackson-dotcom/EcoreX-installers. ghproxy.net HEAD checks returned 200 with expected Content-Length for Windows, macOS, and combined packages.",
+      "evidence": "docs/v0.3.0/artifacts/github-release-v030.json"
+    },
+    {
+      "name": "real external connector catalog and stable MCP discovery",
+      "command": "source implementation in WebUI + /api/external-connections + ToolManager.ensure_mcp_configured_loaded",
+      "status": "pass-with-credentialed-gate",
+      "detail": "Code/build/package policy verification passed. A credentialed packaged connector run is still required before claiming connector survival on a real user's configured tools."
+    },
+    {
+      "name": "architecture/runtime/skill/mcp/product audit",
+      "command": "source inspection and production-grade audit document",
+      "status": "complete",
+      "evidence": "docs/v0.3.0/architecture-runtime-skill-mcp-audit.md"
+    }
+  ],
+  "packages": [
+    {
+      "path": "release-artifacts/EcoreX_0.3.0-webui-windows-x64.zip",
+      "sha256": "3BF9A6546A294C2A96AC32786B7B893848BF3DC6A30897F228AD13CCDC49A48C",
+      "sizeBytes": 551265386,
+      "status": "ready"
+    },
+    {
+      "path": "release-artifacts/EcoreX_0.3.0-webui-macos-universal.zip",
+      "sha256": "1E7EC8295EEE2736A711AD1C152CB7EABF32A12D61C27DF5CC8EF060A211AA28",
+      "sizeBytes": 652441190,
+      "status": "ready"
+    },
+    {
+      "path": "release-artifacts/EcoreX_0.3.0-webui-win-mac.zip",
+      "sha256": "D4E9E0D2EDE0AA200818F9D20E628AB7A9456A962E00EDA1C7DC4A69714543AF",
+      "sizeBytes": 1204953245,
+      "status": "ready"
+    }
+  ],
+  "packagedAcceptance": {
+    "status": "pass-with-environment-gates",
+    "windowsExtractedPackageSmoke": "pass",
+    "userOnlineUpdateSmoke": "pass",
+    "releasePackageCdpSmoke": "pass",
+    "releaseIndexPromoted": true,
+    "noDesktopSigningRequired": true,
+    "credentialedExternalConnectorAcceptance": "pending-real-credentials",
+    "destructiveRollbackAcceptance": "pending-production-like-environment",
+    "productionOcrTextBoxDetection": "pending-ocr-endpoint"
+  },
+  "redacted": true
+}

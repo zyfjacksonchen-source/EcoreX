@@ -1,0 +1,106 @@
+{
+  "schemaVersion": "web-runtime-goal-artifact-v1",
+  "slice": "S9",
+  "status": "passed_with_notes",
+  "title": "Web release gate and long-term trace evidence",
+  "date": "2026-07-01",
+  "changedFiles": [
+    "scripts/generate-web-runtime-release-gate.py",
+    "scripts/install-ecorex-web.sh",
+    "scripts/check-ecorex-web-release.sh",
+    "scripts/prepare-ecorex-web-release.ps1",
+    "cli/VERSION",
+    "pyproject.toml",
+    "common/ecorex_release_notes.py",
+    "deploy/ecorex-site/index.html",
+    "deploy/ecorex-site/install-webui.ps1",
+    "deploy/ecorex-site/install-webui.sh",
+    "deploy/ecorex-site/admin/admin.js",
+    "deploy/ecorex-site/admin/index.html",
+    "runtime-packs/capabilities.json",
+    "desktop/runtime-packs/capabilities.json",
+    "tests/test_web_runtime_goal.py",
+    "docs/web-runtime-goal/slices/S09-release-gate-trace.md",
+    "docs/web-runtime-goal/artifacts/S09-release-gate-tests.json"
+  ],
+  "outputsGeneratedByReleaseGate": [
+    "runtime-baseline.json",
+    "capability-state.json",
+    "permission-matrix.json",
+    "review-consensus.md",
+    "web-release-gate.json"
+  ],
+  "manifestRules": [
+    "repairable packs must declare install-capability --action repair --pack-id <pack-id>",
+    "discoveryOnly packs must declare find-skill --capability <pack-id>",
+    "configureOnly packs must declare configure-capability --pack-id <pack-id>",
+    "camelCase and snake_case private runtime/path manifest fields are blockers"
+  ],
+  "permissionMatrixModes": [
+    "read-only",
+    "smart-ask",
+    "custom",
+    "full-access"
+  ],
+  "tests": [
+    {
+      "command": "python -m py_compile scripts/generate-web-runtime-release-gate.py common/ecorex_tool_permissions.py tests/test_web_runtime_goal.py",
+      "status": "passed",
+      "summary": "syntax compile passed"
+    },
+    {
+      "command": "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_web_runtime_goal.py -q -k \"s9_\"",
+      "status": "passed",
+      "summary": "6 passed, 47 deselected"
+    },
+    {
+      "command": "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_web_runtime_goal.py -q -k \"web_core_baseline or s9_\"",
+      "status": "passed",
+      "summary": "10 passed, 43 deselected"
+    },
+    {
+      "command": "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_web_runtime_goal.py -q",
+      "status": "passed",
+      "summary": "53 passed, 3 warnings"
+    },
+    {
+      "command": "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -q -k \"runtime_projection_api_returns_request_and_session_projection or web_stream_terminal_and_loss_converge_from_runtime_projection or web_history_load_refreshes_session_runtime_projection or image_jobs_api_starts_collects_and_projects_backend_job or web_file_serve_obeys_custom_filesystem_profile or capabilities_api_flattens_policy_capability_packs_for_frontend_contract\"",
+      "status": "passed",
+      "summary": "6 passed, 400 deselected, 2 warnings"
+    },
+    {
+      "command": "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -q -k \"version_handler_returns_user_facing_release_notes\"",
+      "status": "passed",
+      "summary": "1 passed, 405 deselected, 2 warnings"
+    },
+    {
+      "command": "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -q -k \"v020_webui_install_pages or v021_web_deploy_paths\"",
+      "status": "passed",
+      "summary": "2 passed, 404 deselected"
+    },
+    {
+      "command": "bash -n scripts/check-ecorex-web-release.sh; bash -n scripts/install-ecorex-web.sh",
+      "status": "passed",
+      "summary": "bash syntax passed; WSL emitted benign localhost/NAT warnings on stderr"
+    },
+    {
+      "command": "PowerShell scriptblock parse for scripts/prepare-ecorex-web-release.ps1",
+      "status": "passed",
+      "summary": "prepare-script-parse-ok"
+    },
+    {
+      "command": "python scripts/generate-web-runtime-release-gate.py --runtime-root . --state-root <temp>/state --workspace-root <temp>/workspace --output-dir <temp>/out --baseline-input <temp>/baseline.json --strict",
+      "status": "passed",
+      "summary": "generated web-release-gate.json with releaseReady=true, blocking=0, packCount=9; confirmed provided workspace was not mutated"
+    }
+  ],
+  "notes": [
+    "The release gate is read-only for capabilities; it captures state and evaluates broker decisions but does not install, repair, configure, or start runtimes.",
+    "The permission matrix uses a temporary ECOREX_USER_DATA directory and temporary probe workspace so user/admin permission settings and the provided workspace are not mutated.",
+    "The Web installer requires EXPECTED_SHA256 for online release downloads and switches current only after dependency installation, baseline, and release gate pass.",
+    "Failure paths write release-gate artifacts instead of leaving only a traceback.",
+    "Permission summaries/audit entries redact Bearer credentials and JSON token/password/authorization fields.",
+    "Web/runtime visible version surfaces were advanced to v0.2.6; existing manifest artifact URLs remain generated by release packaging.",
+    "The generated review-consensus.md is an automated release artifact; the slice pass record remains docs/web-runtime-goal/reviews/S09-consensus.md after multi-agent review."
+  ]
+}

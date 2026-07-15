@@ -1,0 +1,74 @@
+{
+  "status": "PASS",
+  "renderBackend": "provided-redacted-metadata",
+  "actualRender": {
+    "status": "unavailable",
+    "errorType": "OfficePdfRuntimeError"
+  },
+  "actualRenderAvailable": false,
+  "syntheticRenderRejected": true,
+  "cleanStatus": "fail",
+  "cleanFailedChecks": [
+    "render-docx"
+  ],
+  "expectedCleanNoRenderFailures": [
+    "render-docx"
+  ],
+  "badStatus": "fail",
+  "badFailedChecks": [
+    "design-preset",
+    "redline-preserve",
+    "render-docx",
+    "table-geometry"
+  ],
+  "requiredBadFailures": [
+    "design-preset",
+    "redline-preserve",
+    "render-docx",
+    "table-geometry"
+  ],
+  "cleanSummary": {
+    "paragraphCount": 3,
+    "emptyParagraphCount": 0,
+    "headingParagraphCount": 1,
+    "titleParagraphCount": 1,
+    "listParagraphCount": 0,
+    "tableCount": 1,
+    "tableRowCount": 2,
+    "tableCellCount": 4,
+    "sectionCount": 1,
+    "commentCount": 0,
+    "commentReferenceCount": 0,
+    "commentIdMismatchCount": 0,
+    "trackedInsertCount": 0,
+    "trackedDeleteCount": 0,
+    "tableGridMissingCount": 0,
+    "tableWidthMissingCount": 0,
+    "tableCellWidthMissingCount": 0,
+    "trackedChangeCount": 0,
+    "tableIssueCount": 0
+  },
+  "badSummary": {
+    "paragraphCount": 1,
+    "emptyParagraphCount": 0,
+    "headingParagraphCount": 0,
+    "titleParagraphCount": 0,
+    "listParagraphCount": 0,
+    "tableCount": 1,
+    "tableRowCount": 1,
+    "tableCellCount": 1,
+    "sectionCount": 1,
+    "commentCount": 1,
+    "commentReferenceCount": 0,
+    "commentIdMismatchCount": 1,
+    "trackedInsertCount": 0,
+    "trackedDeleteCount": 0,
+    "tableGridMissingCount": 1,
+    "tableWidthMissingCount": 1,
+    "tableCellWidthMissingCount": 1,
+    "trackedChangeCount": 0,
+    "tableIssueCount": 3
+  },
+  "leakCount": 0,
+  "redacted": true
+}

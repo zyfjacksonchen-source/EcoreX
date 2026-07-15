@@ -1,0 +1,117 @@
+{
+  "version": "0.2.3",
+  "slice": "R23-16P",
+  "scenario": "refresh-replay",
+  "generatedAt": "2026-06-27T01:05:26.655757+00:00",
+  "status": "pass",
+  "metrics": {
+    "durationMs": 7407,
+    "replayP95Ms": 2921.8,
+    "duplicateMessageCount": 0,
+    "duplicateArtifactCount": null,
+    "duplicateArtifactCountMeasured": false,
+    "latestEventIdDelta": null,
+    "latestEventIdDeltaMeasured": false,
+    "reconnectCount": 11,
+    "projectionCallCount": 1,
+    "streamCallCount": 1,
+    "historyProjectionFetchCount": 4,
+    "historyFallbackCallCount": 1,
+    "consoleErrorCount": 0
+  },
+  "scenarios": {
+    "crossTalkRefresh": {
+      "status": "PASS",
+      "durationMs": 2997,
+      "staleHistoryIgnored": true,
+      "activeSessionContentStable": true,
+      "mismatchDiagnosticObserved": true,
+      "streamExpectedSessionObserved": true,
+      "raceHistoryCallCount": 3,
+      "projectionCallCount": 1,
+      "streamCallCount": 1,
+      "refreshKeptCleanSession": true,
+      "backendHistoryFetched": true,
+      "refreshRejectedLateSession": true,
+      "refreshHistoryCallCount": 1,
+      "consoleErrorCount": 0
+    },
+    "runtimeProjectionReconnect": {
+      "status": "PASS",
+      "durationMs": 2245,
+      "groups": {
+        "history": {
+          "botCount": 0,
+          "mediaItemCount": 0,
+          "eventIdPresent": true,
+          "requestFetchCount": 0
+        },
+        "stable": {
+          "botCount": 1,
+          "mediaItemCount": 0,
+          "eventIdPresent": true,
+          "requestFetchCount": 0
+        },
+        "reconnect": {
+          "botCount": 1,
+          "mediaItemCount": 2,
+          "eventIdPresent": true,
+          "requestFetchCount": 1
+        },
+        "pollProjection": {
+          "botCount": 1,
+          "mediaItemCount": 1,
+          "eventIdPresent": true,
+          "requestFetchCount": 0
+        },
+        "nonSse": {
+          "botCount": 1,
+          "mediaItemCount": 1,
+          "eventIdPresent": true,
+          "requestFetchCount": 1
+        }
+      },
+      "historyProjectionFetchCount": 1,
+      "sessionFetchCount": 1,
+      "historyFallbackCallCount": 0,
+      "pollCallCount": 3,
+      "streamUrlCount": 1,
+      "lostStreamUrlCount": 11,
+      "duplicateMessageCount": 0,
+      "consoleErrorCount": 0
+    },
+    "historyPagination": {
+      "status": "PASS",
+      "durationMs": 1787,
+      "pages": {
+        "pageOne": {
+          "botCount": 1,
+          "promptCount": 1,
+          "eventIdPresent": true
+        },
+        "pageTwo": {
+          "botCount": 1,
+          "promptCount": 1,
+          "eventIdPresent": true
+        },
+        "cursorDelta": {
+          "botCount": 1,
+          "promptCount": 0,
+          "eventIdPresent": false
+        }
+      },
+      "historyProjectionFetchCount": 3,
+      "sessionFetchCount": 2,
+      "historyFallbackCallCount": 1,
+      "duplicateMessageCount": 0,
+      "consoleErrorCount": 0
+    }
+  },
+  "failureCodes": [],
+  "redaction": {
+    "containsRawPrompts": false,
+    "containsRawMessageBodies": false,
+    "containsFullPaths": false,
+    "containsSecretShapedValues": false
+  }
+}

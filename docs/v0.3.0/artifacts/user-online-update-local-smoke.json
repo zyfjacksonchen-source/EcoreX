@@ -1,0 +1,168 @@
+{
+    "schema":  "ecorex.v0.3.0.user-online-update-local-smoke.v1",
+    "status":  "PASS",
+    "version":  "0.3.0",
+    "generatedAt":  "2026-07-08T05:09:23.2518686Z",
+    "baseUrl":  "http://127.0.0.1:9970",
+    "sourcePort":  9970,
+    "runtimePort":  9939,
+    "package":  {
+                    "fileName":  "EcoreX_0.3.0-webui-windows-x64.zip",
+                    "size":  551267218,
+                    "sha256":  "B5845638264377BAF1DC685709957E836A0035DF9EE647491524CC31B149BFA8"
+                },
+    "redacted":  true,
+    "sourceProcessId":  6096,
+    "installerProcessId":  37468,
+    "installerWrapperStoppedAfterRuntimeReady":  true,
+    "installExitCode":  -1,
+    "webuiUrl":  "http://127.0.0.1:9939/app/",
+    "currentRuntimeLeaf":  "runtime-0.3.0-127ee687",
+    "updateState":  {
+                        "status":  "installed",
+                        "externalConnections":  {
+                                                    "required":  true,
+                                                    "status":  "not_applicable",
+                                                    "passed":  true,
+                                                    "policy":  "preserve connected and callable external tools across online update; configured-only connectors are recorded for diagnostics",
+                                                    "preservedRoots":  [
+                                                                           "workspace mcp.json",
+                                                                           "state appdata",
+                                                                           "state tools"
+                                                                       ],
+                                                    "before":  {
+                                                                   "status":  "unavailable",
+                                                                   "configuredIds":  [
+
+                                                                                     ],
+                                                                   "connectedIds":  [
+
+                                                                                    ],
+                                                                   "callableIds":  [
+
+                                                                                   ],
+                                                                   "reason":  "base_url_missing",
+                                                                   "redacted":  true
+                                                               },
+                                                    "after":  {
+                                                                  "status":  "pass",
+                                                                  "reason":  "post_update",
+                                                                  "configuredIds":  [
+
+                                                                                    ],
+                                                                  "connectedIds":  [
+
+                                                                                   ],
+                                                                  "callableIds":  [
+
+                                                                                  ],
+                                                                  "checkedAt":  "2026-07-08T05:12:21.2058672Z",
+                                                                  "redacted":  true
+                                                              },
+                                                    "missingIds":  [
+
+                                                                   ],
+                                                    "redacted":  true
+                                                },
+                        "browserAction":  "defer-to-existing-tab-soft-refresh",
+                        "version":  "0.3.0",
+                        "mode":  "background"
+                    },
+    "updateCheck":  {
+                        "latestVersion":  "0.3.0",
+                        "connectorHealthCheckRequired":  true,
+                        "artifactId":  "webui-windows-x64",
+                        "currentVersion":  "0.3.0",
+                        "hasUpdate":  false,
+                        "updateReason":  ""
+                    },
+    "checkCount":  7,
+    "passCount":  7,
+    "failCount":  0,
+    "checks":  [
+                   {
+                       "name":  "installer reaches installed state",
+                       "status":  "PASS",
+                       "detail":  {
+                                      "wrapperStoppedAfterRuntimeReady":  true,
+                                      "exitCode":  -1,
+                                      "status":  "installed"
+                                  }
+                   },
+                   {
+                       "name":  "downloaded package matches manifest",
+                       "status":  "PASS",
+                       "detail":  {
+                                      "sha256":  "B5845638264377BAF1DC685709957E836A0035DF9EE647491524CC31B149BFA8",
+                                      "size":  551267218,
+                                      "exists":  true
+                                  }
+                   },
+                   {
+                       "name":  "installed runtime responds with v0.3.0",
+                       "status":  "PASS",
+                       "detail":  {
+                                      "runtimeLeaf":  "runtime-0.3.0-127ee687",
+                                      "url":  "http://127.0.0.1:9939/api/version",
+                                      "version":  "0.3.0"
+                                  }
+                   },
+                   {
+                       "name":  "update state records background install",
+                       "status":  "PASS",
+                       "detail":  {
+                                      "autoLaunchBrowser":  "never-in-background",
+                                      "status":  "installed",
+                                      "browserAction":  "defer-to-existing-tab-soft-refresh",
+                                      "mode":  "background"
+                                  }
+                   },
+                   {
+                       "name":  "background update does not auto-open browser",
+                       "status":  "PASS",
+                       "detail":  {
+                                      "autoLaunchBrowser":  "never-in-background",
+                                      "processIds":  [
+
+                                                     ],
+                                      "processCount":  0
+                                  }
+                   },
+                   {
+                       "name":  "runtime update-check sees local v0.3.0 manifest",
+                       "status":  "PASS",
+                       "detail":  {
+                                      "latestVersion":  "0.3.0",
+                                      "status":  "success",
+                                      "currentVersion":  "0.3.0",
+                                      "artifactId":  "webui-windows-x64",
+                                      "hasUpdate":  false
+                                  }
+                   },
+                   {
+                       "name":  "update policy preserves external connectors",
+                       "status":  "PASS",
+                       "detail":  {
+                                      "preserve":  [
+                                                       "configured",
+                                                       "connected",
+                                                       "callable"
+                                                   ],
+                                      "failureAction":  "defer-or-rollback",
+                                      "required":  true
+                                  }
+                   }
+               ],
+    "install":  {
+                    "stderrTail":  "\n",
+                    "traceTail":  "[2026-07-08T05:09:20.8155864Z] prepared smoke directories\r\n[2026-07-08T05:09:24.9800181Z] local source ready\r\n[2026-07-08T05:09:24.9845449Z] starting installer\r\n[2026-07-08T05:12:21.5636715Z] installer reached installed state exit=-1 wrapperStopped=True\r\n[2026-07-08T05:12:21.5916708Z] download exists=True size=551267218\r\n[2026-07-08T05:12:22.4556270Z] download hash complete\r\n[2026-07-08T05:12:22.5171686Z] checking version http://127.0.0.1:9939/api/version\r\n[2026-07-08T05:12:22.5588887Z] version ok 0.3.0\r\n[2026-07-08T05:12:22.5648796Z] update-state loaded\r\n[2026-07-08T05:12:22.9386342Z] browser process check count=0\r\n[2026-07-08T05:12:22.9469889Z] checking update endpoint http://127.0.0.1:9939/api/update-check?platform=win32\r\n[2026-07-08T05:12:28.7822153Z] update endpoint ok latest=0.3.0\r\n[2026-07-08T05:12:28.8090497Z] report payload populated\r\n[2026-07-08T05:12:28.8111806Z] entering finally\r\n[2026-07-08T05:12:29.3283149Z] finally complete\r\n",
+                    "stdoutTail":  "Installer output is intentionally not redirected because the installed runtime keeps inherited redirection handles open on Windows. This smoke validates the user path through package hash, update-state, runtime /api/version, and /api/update-check.\n\n",
+                    "sourceStderrTail":  "127.0.0.1 - - [08/Jul/2026 13:09:24] \"GET /manifest.json HTTP/1.1\" 200 -\r\n127.0.0.1 - - [08/Jul/2026 13:09:26] \"GET /manifest.json HTTP/1.1\" 200 -\r\n127.0.0.1 - - [08/Jul/2026 13:09:26] \"HEAD /downloads/EcoreX_0.3.0-webui-windows-x64.zip HTTP/1.1\" 200 -\r\n127.0.0.1 - - [08/Jul/2026 13:09:26] \"GET /downloads/EcoreX_0.3.0-webui-windows-x64.zip HTTP/1.1\" 200 -\r\n127.0.0.1 - - [08/Jul/2026 13:12:22] \"GET /manifest.json HTTP/1.1\" 200 -\r\n"
+                },
+    "smokeRoot":  "C:\\EcoreX-Agent生产版\\tmp\\v030-user-online-update-smoke-hotfix",
+    "smokeRootKept":  false,
+    "cleanup":  {
+                    "reason":  "removed",
+                    "cleaned":  true
+                }
+}

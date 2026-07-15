@@ -1,0 +1,49 @@
+{
+  "schemaVersion": "web-runtime-goal-slice-test-summary-v1",
+  "slice": "S1-config-safety",
+  "status": "pass",
+  "commands": [
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_web_runtime_goal.py -q",
+      "status": "pass",
+      "summary": "7 passed"
+    },
+    {
+      "command": "python -m py_compile config.py scripts/check-web-core-runtime-baseline.py",
+      "status": "pass",
+      "summary": "py_compile completed without errors"
+    },
+    {
+      "command": "python scripts/check-web-core-runtime-baseline.py --no-write --strict",
+      "status": "expected_fail",
+      "summary": "Strict Web core baseline correctly fails because the current workspace lacks coreRequired owned runtime dependencies."
+    },
+    {
+      "command": "python scripts/check-web-core-runtime-baseline.py --no-write --strict --include-system-path",
+      "status": "expected_fail",
+      "summary": "Strict Web release gate correctly rejects system PATH fallback with exit 2."
+    },
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_v025_runtime_dependencies.py tests/test_v025_tool_execution_environment.py tests/test_v025_runtime_manifest.py -q",
+      "status": "pass",
+      "summary": "88 passed, 1 skipped"
+    },
+    {
+      "command": "git check-ignore user_datas.json nested/user_datas.json",
+      "status": "pass",
+      "summary": "JSON user data files are ignored at root and nested paths."
+    }
+  ],
+  "coverage": [
+    "malicious environment override does not execute",
+    "typed environment override parser handles bool, int, and list values",
+    "user data JSON save/load round-trips",
+    "safe primitive legacy pickle migrates to JSON",
+    "malicious legacy pickle is rejected",
+    "Web core baseline reports missing core dependencies as blocking and missing credentials as non-blocking",
+    "Web core baseline refuses system PATH fallback in strict mode",
+    "runtime and state paths are redacted in Web core baseline artifacts",
+    "JSON user data artifacts are excluded from git tracking"
+  ],
+  "redacted": true
+}

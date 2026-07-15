@@ -160,54 +160,36 @@ class Agent:
     def _get_model_context_window(self) -> int:
         """
         Get the model's context window size in tokens.
-        Auto-detect based on model name.
-        
-        Model context windows:
-        - Claude 3.5/3.7 Sonnet: 200K tokens
-        - Claude 3 Opus: 200K tokens
-        - GPT-4 Turbo/128K: 128K tokens
-        - GPT-4: 8K-32K tokens
-        - GPT-3.5: 16K tokens
-        - DeepSeek: 64K tokens
-        
+
+        Uses the shared model capability policy so Web model switching, UI
+        meters, and backend context trimming agree on the same boundary.
+
         :return: Context window size in tokens
         """
-        if self.model and hasattr(self.model, 'model'):
-            model_name = self.model.model.lower()
+        configured = None
+        try:
+            from config import conf
+            configured = int(conf().get("model_context_window") or 0)
+        except Exception:
+            configured = None
+        if configured and configured > 0:
+            return configured
 
-            # Claude models - 200K context
-            if 'claude-3' in model_name or 'claude-sonnet' in model_name:
-                return 200000
+        model_name = ""
+        provider_id = ""
+        try:
+            model_name = self.model.model if self.model and hasattr(self.model, "model") else ""
+            resolver = getattr(self.model, "_resolve_bot_type", None)
+            if callable(resolver):
+                provider_id = resolver(model_name)
+        except Exception:
+            provider_id = ""
+        try:
+            from models.model_capabilities import context_policy_for_model
 
-            # GPT-4 models
-            elif 'gpt-4' in model_name:
-                if 'turbo' in model_name or '128k' in model_name:
-                    return 128000
-                elif '32k' in model_name:
-                    return 32000
-                else:
-                    return 8000
-
-            # GPT-3.5
-            elif 'gpt-3.5' in model_name:
-                if '16k' in model_name:
-                    return 16000
-                else:
-                    return 4000
-
-            # DeepSeek
-            elif 'deepseek' in model_name:
-                return 64000
-            
-            # Gemini models
-            elif 'gemini' in model_name:
-                if '2.0' in model_name or 'exp' in model_name:
-                    return 2000000  # Gemini 2.0: 2M tokens
-                else:
-                    return 1000000  # Gemini 1.5: 1M tokens
-
-        # Default conservative value
-        return 128000
+            return int(context_policy_for_model(model_name, provider_id).context_window_tokens)
+        except Exception:
+            return 258000
 
     def _get_context_reserve_tokens(self) -> int:
         """
@@ -267,25 +249,36 @@ class Agent:
             return max(1, total_tokens)
         return 1
 
-    @staticmethod
-    def _estimate_text_tokens(text: str) -> int:
+    def _estimate_text_tokens(self, text: str) -> int:
         """
         Estimate token count for a text string.
 
-        Chinese / CJK characters typically use ~1.5 tokens each,
-        while ASCII uses ~0.25 tokens per char (4 chars/token).
-        We use a weighted average based on the character mix.
+        This is provider-aware where a local tokenizer is available. It remains
+        a pre-call estimate; provider usage returned after a request is still
+        the source of truth for actual billing tokens.
 
         :param text: Input text
         :return: Estimated token count
         """
-        if not text:
-            return 0
-        # Count non-ASCII characters (CJK, emoji, etc.)
-        non_ascii = sum(1 for c in text if ord(c) > 127)
-        ascii_count = len(text) - non_ascii
-        # CJK chars: ~1.5 tokens each; ASCII: ~0.25 tokens per char
-        return int(non_ascii * 1.5 + ascii_count * 0.25) + 1
+        model_name = ""
+        provider_id = ""
+        try:
+            model_name = self.model.model if self.model and hasattr(self.model, "model") else ""
+            resolver = getattr(self.model, "_resolve_bot_type", None)
+            if callable(resolver):
+                provider_id = resolver(model_name)
+        except Exception:
+            provider_id = ""
+        try:
+            from models.token_estimator import estimate_text_tokens
+
+            return estimate_text_tokens(text, model_name, provider_id)
+        except Exception:
+            if not text:
+                return 0
+            non_ascii = sum(1 for c in text if ord(c) > 127)
+            ascii_count = len(text) - non_ascii
+            return int(non_ascii * 1.2 + ascii_count * 0.27) + 1
 
     def _find_tool(self, tool_name: str):
         """Find and return a tool with the specified name"""

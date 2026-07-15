@@ -1,0 +1,158 @@
+{
+  "checkCount": 17,
+  "exitCode": 0,
+  "failCount": 0,
+  "generatedAt": "2026-07-02T01:53:02.749293+00:00",
+  "passCount": 17,
+  "probe": {
+    "fileSummary": {
+      "allMatch": true,
+      "count": 8,
+      "matchCount": 8,
+      "presentCount": 8
+    },
+    "files": {
+      "tools/tongxin/bili_column_defs.py": {
+        "match": true,
+        "present": true,
+        "sha256": "E7E4314583E967B1CA0A2EC85BE434C4B2B324C9CD1EC96024A855C388C2CBD9"
+      },
+      "tools/tongxin/config.py": {
+        "match": true,
+        "present": true,
+        "sha256": "A1CBE8AC1310840017FAB9CBB20CC4AB1F4B140360E108AB0AA676A887B4FFC1"
+      },
+      "tools/tongxin/database.py": {
+        "match": true,
+        "present": true,
+        "sha256": "905B8B4A741EDFE1DA1B7A506DCEEA7DC070DEC340532832EC89624F938448CB"
+      },
+      "tools/tongxin/models.py": {
+        "match": true,
+        "present": true,
+        "sha256": "9A52CA15E9F2A9235A180D948827A1137FE871799FB0244A3BDBB9334E91349A"
+      },
+      "tools/tongxin/models/__init__.py": {
+        "match": true,
+        "present": true,
+        "sha256": "A64457B1B6BF588C3DB43045DF8896689C5D4087AC4F9E58C5104F2E86EE70EA"
+      },
+      "tools/tongxin/models_init_.py": {
+        "match": true,
+        "present": true,
+        "sha256": "1745042719FDFE22E6191AB5D8768B3300041B46ECF0EB2A72DA2B308DCBB5BF"
+      },
+      "tools/tongxin/mpi.py": {
+        "match": true,
+        "present": true,
+        "sha256": "AA62081E5CAF9C63E34F27352D3D6B7CD0DCDBB6F7E38499D334387BA30B2176"
+      },
+      "tools/tongxin/xin_agent_cli.py": {
+        "match": true,
+        "present": true,
+        "sha256": "D36EBA1FA7A31AC47528464B543A4615ECC580A635FD238C6C976D3D03BE7325"
+      }
+    },
+    "realProbe": {
+      "accountListQueryRef": "CD530A01F221C790",
+      "channelCounts": {
+        "chengfeng": {
+          "code": 0,
+          "ok": true,
+          "rows": 43
+        },
+        "spotlight": {
+          "code": 0,
+          "ok": true,
+          "rows": 43
+        }
+      },
+      "exactRealtimeCostPersisted": false,
+      "numericAccountCount": 42,
+      "rawAccountIdsPersisted": false,
+      "rawAccountListQueryPersisted": false,
+      "rawAccountNamesPersisted": false,
+      "realtimeStatusCounts": {
+        "ok": 3
+      },
+      "sampleRealtimeCostBucket": "250-300",
+      "sampleWrapperRealtime": {
+        "metaAccountResolution": "direct_account_id",
+        "ok": true,
+        "rowCount": 1,
+        "toolStatus": "success",
+        "totalCostBucket": "200-250"
+      },
+      "sampledRealtimeAccountCount": 3
+    },
+    "releaseVersion": "0.2.6",
+    "runtimeModels": {
+      "DatabaseEquals": true,
+      "fileEndsWithModelsPy": true,
+      "hasDATABASE": true,
+      "hasDatabaseAlias": true,
+      "hasGetDb": true,
+      "hasLowercaseDatabase": true,
+      "lowercaseEquals": true
+    },
+    "runtimePath": "/opt/ecorex-web/current/runtime",
+    "schemaExitCode": 0,
+    "schemaOk": true,
+    "stateModels": {
+      "DatabaseEquals": true,
+      "fileEndsWithModelsPy": true,
+      "hasDATABASE": true,
+      "hasDatabaseAlias": true,
+      "hasGetDb": true,
+      "hasLowercaseDatabase": true,
+      "lowercaseEquals": true
+    },
+    "statePath": "/opt/ecorex-web/state",
+    "wrapperStatus": {
+      "autoConfigurable": true,
+      "available": true,
+      "bundledAvailable": true,
+      "bundledPathRef": {
+        "name": "xin_agent_cli.py",
+        "pathHash": "1216b3a60fb60bbd",
+        "present": true
+      },
+      "configurationState": "configured",
+      "configured": true,
+      "configuredScriptPathRef": {
+        "name": "xin_agent_cli.py",
+        "pathHash": "4e59bb980c8fec21",
+        "present": true
+      },
+      "persistedConfig": true,
+      "remoteAuthConfigured": true,
+      "remoteBootstrapAvailable": true,
+      "remotePreferred": false,
+      "scriptPathRef": {
+        "name": "xin_agent_cli.py",
+        "pathHash": "4e59bb980c8fec21",
+        "present": true
+      },
+      "status": "success"
+    }
+  },
+  "redaction": {
+    "rawBusinessIdentifiersPersisted": false,
+    "rawCredentialPersisted": false,
+    "rawOutputPersisted": false,
+    "rawServerPersisted": false
+  },
+  "scope": "production-tongxin-postdeploy-runtime-probe",
+  "server": {
+    "domainRef": "A753D877497CBE35",
+    "hostRef": "CDF1CF905198CA97",
+    "rawHostPersisted": false,
+    "rawPasswordPersisted": false,
+    "rawUserPersisted": false,
+    "userRef": "4813494D137E1631"
+  },
+  "status": "PASS",
+  "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+  "stdoutHash": "264A5FE41DA7D3EFE665E625A627A50287D05A992BDE9BA8F4F8903CC846D646",
+  "version": "0.2.6"
+}

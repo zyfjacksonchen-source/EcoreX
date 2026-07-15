@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "github": {
+    "owner": "replace-me",
+    "repository": "ecorex",
+    "token_env": "ECOREX_GITHUB_TOKEN"
+  },
+  "mirror": {
+    "source_id": "github-cn",
+    "endpoint": "https://mirror-publisher.invalid/api/v1/releases",
+    "allowed_hosts": [
+      "mirror-publisher.invalid"
+    ],
+    "public_hosts": [
+      "mirror-download.invalid"
+    ],
+    "token_env": "ECOREX_MIRROR_TOKEN"
+  },
+  "cdn": {
+    "source_id": "cdn",
+    "endpoint": "https://cdn-publisher.invalid/api/v1/releases",
+    "allowed_hosts": [
+      "cdn-publisher.invalid"
+    ],
+    "public_hosts": [
+      "cdn-download.invalid"
+    ],
+    "token_env": "ECOREX_CDN_TOKEN"
+  }
+}

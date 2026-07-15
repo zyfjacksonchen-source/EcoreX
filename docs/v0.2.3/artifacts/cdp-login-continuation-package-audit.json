@@ -1,0 +1,48 @@
+{
+  "status": "PASS",
+  "checks": [
+    {
+      "artifact": "windows",
+      "agentPath": "runtime/agent/protocol/agent_stream.py",
+      "browserPath": "runtime/agent/tools/browser/browser_tool.py",
+      "agentChecks": {
+        "login confirmation inherits browser": true,
+        "raw cdp bash reroutes to browser": true,
+        "reroute blocks plugin skill file loop": true
+      },
+      "browserChecks": {
+        "browser description continues after login": true,
+        "browser description blocks plugin skill file loop": true
+      }
+    },
+    {
+      "artifact": "macos",
+      "agentPath": "Install EcoreX WebUI.app/Contents/Resources/package/runtime/agent/protocol/agent_stream.py",
+      "browserPath": "Install EcoreX WebUI.app/Contents/Resources/package/runtime/agent/tools/browser/browser_tool.py",
+      "agentChecks": {
+        "login confirmation inherits browser": true,
+        "raw cdp bash reroutes to browser": true,
+        "reroute blocks plugin skill file loop": true
+      },
+      "browserChecks": {
+        "browser description continues after login": true,
+        "browser description blocks plugin skill file loop": true
+      }
+    },
+    {
+      "artifact": "web",
+      "agentPath": "ecorex-web-linux-service-0.2.3/runtime/agent/protocol/agent_stream.py",
+      "browserPath": "ecorex-web-linux-service-0.2.3/runtime/agent/tools/browser/browser_tool.py",
+      "agentChecks": {
+        "login confirmation inherits browser": true,
+        "raw cdp bash reroutes to browser": true,
+        "reroute blocks plugin skill file loop": true
+      },
+      "browserChecks": {
+        "browser description continues after login": true,
+        "browser description blocks plugin skill file loop": true
+      }
+    }
+  ],
+  "redacted": true
+}

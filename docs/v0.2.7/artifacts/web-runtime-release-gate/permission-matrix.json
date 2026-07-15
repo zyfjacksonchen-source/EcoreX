@@ -1,0 +1,590 @@
+{
+  "schemaVersion": "web-permission-matrix-v1",
+  "generatedAt": "2026-07-02T07:43:51.088549+00:00",
+  "modes": [
+    "read-only",
+    "smart-ask",
+    "custom",
+    "full-access"
+  ],
+  "rows": [
+    {
+      "mode": "read-only",
+      "caseId": "optional_abilities.status",
+      "capability": "optional_abilities",
+      "action": "status",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "default-low-risk-optional-ability-status"
+    },
+    {
+      "mode": "read-only",
+      "caseId": "agent_capability.diagnose",
+      "capability": "agent_capability",
+      "action": "diagnose",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "default-low-risk-agent-capability-status"
+    },
+    {
+      "mode": "read-only",
+      "caseId": "scheduler.list",
+      "capability": "scheduler",
+      "action": "list",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "default-low-risk-scheduler-read"
+    },
+    {
+      "mode": "read-only",
+      "caseId": "image_jobs.status",
+      "capability": "image_jobs",
+      "action": "status",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "default-low-risk-image-job-status"
+    },
+    {
+      "mode": "read-only",
+      "caseId": "browser.snapshot",
+      "capability": "browser",
+      "action": "snapshot",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "default-low-risk-browser-snapshot"
+    },
+    {
+      "mode": "read-only",
+      "caseId": "workspace.read",
+      "capability": "workspace",
+      "action": "read",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "filesystem profile allows read"
+    },
+    {
+      "mode": "read-only",
+      "caseId": "artifact.read",
+      "capability": "artifact",
+      "action": "read",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "filesystem profile allows read"
+    },
+    {
+      "mode": "read-only",
+      "caseId": "bash.workspace_write",
+      "capability": "bash",
+      "action": "workspace_write",
+      "allowed": false,
+      "expectedAllowed": false,
+      "matchesExpected": true,
+      "reason": "Current read-only mode blocks local file writes."
+    },
+    {
+      "mode": "read-only",
+      "caseId": "bash.system_shell",
+      "capability": "bash",
+      "action": "system_shell",
+      "allowed": false,
+      "expectedAllowed": false,
+      "matchesExpected": true,
+      "reason": "Current read-only mode blocks local tool execution."
+    },
+    {
+      "mode": "read-only",
+      "caseId": "feishu_cli.run.read",
+      "capability": "feishu_cli",
+      "action": "run",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "default-read-only-feishu-cli-run",
+      "classification": "read"
+    },
+    {
+      "mode": "read-only",
+      "caseId": "feishu_cli.run.write",
+      "capability": "feishu_cli",
+      "action": "run",
+      "allowed": false,
+      "expectedAllowed": false,
+      "matchesExpected": true,
+      "reason": "Current read-only mode blocks Feishu write/admin CLI commands.",
+      "classification": "write"
+    },
+    {
+      "mode": "read-only",
+      "caseId": "feishu_cli.run.admin",
+      "capability": "feishu_cli",
+      "action": "run",
+      "allowed": false,
+      "expectedAllowed": false,
+      "matchesExpected": true,
+      "reason": "Current read-only mode blocks Feishu write/admin CLI commands.",
+      "classification": "admin"
+    },
+    {
+      "mode": "read-only",
+      "caseId": "image_jobs.start.background",
+      "capability": "image_jobs",
+      "action": "start",
+      "allowed": false,
+      "expectedAllowed": false,
+      "matchesExpected": true,
+      "reason": "Current read-only mode blocks image job creation."
+    },
+    {
+      "mode": "read-only",
+      "caseId": "image_jobs.start.user_initiated",
+      "capability": "image_jobs",
+      "action": "start",
+      "allowed": false,
+      "expectedAllowed": false,
+      "matchesExpected": true,
+      "reason": "Current read-only mode blocks image job creation."
+    },
+    {
+      "mode": "smart-ask",
+      "caseId": "optional_abilities.status",
+      "capability": "optional_abilities",
+      "action": "status",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "default-low-risk-optional-ability-status"
+    },
+    {
+      "mode": "smart-ask",
+      "caseId": "agent_capability.diagnose",
+      "capability": "agent_capability",
+      "action": "diagnose",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "default-low-risk-agent-capability-status"
+    },
+    {
+      "mode": "smart-ask",
+      "caseId": "scheduler.list",
+      "capability": "scheduler",
+      "action": "list",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "default-low-risk-scheduler-read"
+    },
+    {
+      "mode": "smart-ask",
+      "caseId": "image_jobs.status",
+      "capability": "image_jobs",
+      "action": "status",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "default-low-risk-image-job-status"
+    },
+    {
+      "mode": "smart-ask",
+      "caseId": "browser.snapshot",
+      "capability": "browser",
+      "action": "snapshot",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "default-low-risk-browser-snapshot"
+    },
+    {
+      "mode": "smart-ask",
+      "caseId": "workspace.read",
+      "capability": "workspace",
+      "action": "read",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "filesystem profile allows read"
+    },
+    {
+      "mode": "smart-ask",
+      "caseId": "artifact.read",
+      "capability": "artifact",
+      "action": "read",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "filesystem profile allows read"
+    },
+    {
+      "mode": "smart-ask",
+      "caseId": "bash.workspace_write",
+      "capability": "bash",
+      "action": "workspace_write",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "filesystem profile allows write"
+    },
+    {
+      "mode": "smart-ask",
+      "caseId": "bash.system_shell",
+      "capability": "bash",
+      "action": "system_shell",
+      "allowed": false,
+      "expectedAllowed": false,
+      "matchesExpected": true,
+      "reason": "Interactive permission confirmation is required before this external capability can start."
+    },
+    {
+      "mode": "smart-ask",
+      "caseId": "feishu_cli.run.read",
+      "capability": "feishu_cli",
+      "action": "run",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "default-read-only-feishu-cli-run",
+      "classification": "read"
+    },
+    {
+      "mode": "smart-ask",
+      "caseId": "feishu_cli.run.write",
+      "capability": "feishu_cli",
+      "action": "run",
+      "allowed": false,
+      "expectedAllowed": false,
+      "matchesExpected": true,
+      "reason": "Interactive permission confirmation is required before this external capability can start."
+    },
+    {
+      "mode": "smart-ask",
+      "caseId": "feishu_cli.run.admin",
+      "capability": "feishu_cli",
+      "action": "run",
+      "allowed": false,
+      "expectedAllowed": false,
+      "matchesExpected": true,
+      "reason": "Interactive permission confirmation is required before this external capability can start."
+    },
+    {
+      "mode": "smart-ask",
+      "caseId": "image_jobs.start.background",
+      "capability": "image_jobs",
+      "action": "start",
+      "allowed": false,
+      "expectedAllowed": false,
+      "matchesExpected": true,
+      "reason": "Interactive permission confirmation is required before this external capability can start."
+    },
+    {
+      "mode": "smart-ask",
+      "caseId": "image_jobs.start.user_initiated",
+      "capability": "image_jobs",
+      "action": "start",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "foreground-user-initiated-image-job-start"
+    },
+    {
+      "mode": "custom",
+      "caseId": "optional_abilities.status",
+      "capability": "optional_abilities",
+      "action": "status",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "default-low-risk-optional-ability-status"
+    },
+    {
+      "mode": "custom",
+      "caseId": "agent_capability.diagnose",
+      "capability": "agent_capability",
+      "action": "diagnose",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "default-low-risk-agent-capability-status"
+    },
+    {
+      "mode": "custom",
+      "caseId": "scheduler.list",
+      "capability": "scheduler",
+      "action": "list",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "default-low-risk-scheduler-read"
+    },
+    {
+      "mode": "custom",
+      "caseId": "image_jobs.status",
+      "capability": "image_jobs",
+      "action": "status",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "default-low-risk-image-job-status"
+    },
+    {
+      "mode": "custom",
+      "caseId": "browser.snapshot",
+      "capability": "browser",
+      "action": "snapshot",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "default-low-risk-browser-snapshot"
+    },
+    {
+      "mode": "custom",
+      "caseId": "workspace.read",
+      "capability": "workspace",
+      "action": "read",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "filesystem profile allows read"
+    },
+    {
+      "mode": "custom",
+      "caseId": "artifact.read",
+      "capability": "artifact",
+      "action": "read",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "filesystem profile allows read"
+    },
+    {
+      "mode": "custom",
+      "caseId": "bash.workspace_write",
+      "capability": "bash",
+      "action": "workspace_write",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "filesystem profile allows write"
+    },
+    {
+      "mode": "custom",
+      "caseId": "bash.system_shell",
+      "capability": "bash",
+      "action": "system_shell",
+      "allowed": false,
+      "expectedAllowed": false,
+      "matchesExpected": true,
+      "reason": "Interactive permission confirmation is required before this external capability can start."
+    },
+    {
+      "mode": "custom",
+      "caseId": "feishu_cli.run.read",
+      "capability": "feishu_cli",
+      "action": "run",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "default-read-only-feishu-cli-run",
+      "classification": "read"
+    },
+    {
+      "mode": "custom",
+      "caseId": "feishu_cli.run.write",
+      "capability": "feishu_cli",
+      "action": "run",
+      "allowed": false,
+      "expectedAllowed": false,
+      "matchesExpected": true,
+      "reason": "Interactive permission confirmation is required before this external capability can start."
+    },
+    {
+      "mode": "custom",
+      "caseId": "feishu_cli.run.admin",
+      "capability": "feishu_cli",
+      "action": "run",
+      "allowed": false,
+      "expectedAllowed": false,
+      "matchesExpected": true,
+      "reason": "Interactive permission confirmation is required before this external capability can start."
+    },
+    {
+      "mode": "custom",
+      "caseId": "image_jobs.start.background",
+      "capability": "image_jobs",
+      "action": "start",
+      "allowed": false,
+      "expectedAllowed": false,
+      "matchesExpected": true,
+      "reason": "Interactive permission confirmation is required before this external capability can start."
+    },
+    {
+      "mode": "custom",
+      "caseId": "image_jobs.start.user_initiated",
+      "capability": "image_jobs",
+      "action": "start",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "foreground-user-initiated-image-job-start"
+    },
+    {
+      "mode": "full-access",
+      "caseId": "optional_abilities.status",
+      "capability": "optional_abilities",
+      "action": "status",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "default-low-risk-optional-ability-status"
+    },
+    {
+      "mode": "full-access",
+      "caseId": "agent_capability.diagnose",
+      "capability": "agent_capability",
+      "action": "diagnose",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "default-low-risk-agent-capability-status"
+    },
+    {
+      "mode": "full-access",
+      "caseId": "scheduler.list",
+      "capability": "scheduler",
+      "action": "list",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "default-low-risk-scheduler-read"
+    },
+    {
+      "mode": "full-access",
+      "caseId": "image_jobs.status",
+      "capability": "image_jobs",
+      "action": "status",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "default-low-risk-image-job-status"
+    },
+    {
+      "mode": "full-access",
+      "caseId": "browser.snapshot",
+      "capability": "browser",
+      "action": "snapshot",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "default-low-risk-browser-snapshot"
+    },
+    {
+      "mode": "full-access",
+      "caseId": "workspace.read",
+      "capability": "workspace",
+      "action": "read",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "full-access"
+    },
+    {
+      "mode": "full-access",
+      "caseId": "artifact.read",
+      "capability": "artifact",
+      "action": "read",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "full-access"
+    },
+    {
+      "mode": "full-access",
+      "caseId": "bash.workspace_write",
+      "capability": "bash",
+      "action": "workspace_write",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "full-access"
+    },
+    {
+      "mode": "full-access",
+      "caseId": "bash.system_shell",
+      "capability": "bash",
+      "action": "system_shell",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "full-access"
+    },
+    {
+      "mode": "full-access",
+      "caseId": "feishu_cli.run.read",
+      "capability": "feishu_cli",
+      "action": "run",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "default-read-only-feishu-cli-run",
+      "classification": "read"
+    },
+    {
+      "mode": "full-access",
+      "caseId": "feishu_cli.run.write",
+      "capability": "feishu_cli",
+      "action": "run",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "full-access",
+      "classification": "write"
+    },
+    {
+      "mode": "full-access",
+      "caseId": "feishu_cli.run.admin",
+      "capability": "feishu_cli",
+      "action": "run",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "full-access",
+      "classification": "admin"
+    },
+    {
+      "mode": "full-access",
+      "caseId": "image_jobs.start.background",
+      "capability": "image_jobs",
+      "action": "start",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "full-access"
+    },
+    {
+      "mode": "full-access",
+      "caseId": "image_jobs.start.user_initiated",
+      "capability": "image_jobs",
+      "action": "start",
+      "allowed": true,
+      "expectedAllowed": true,
+      "matchesExpected": true,
+      "reason": "foreground-user-initiated-image-job-start"
+    }
+  ],
+  "summary": {
+    "total": 56,
+    "allowed": 42,
+    "denied": 14,
+    "blockers": 0
+  },
+  "blockers": [],
+  "probeWorkspace": "temporary-cleaned",
+  "providedWorkspaceMutated": false,
+  "status": "pass"
+}

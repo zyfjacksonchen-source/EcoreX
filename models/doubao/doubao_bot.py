@@ -16,6 +16,7 @@ from models.model_provider_errors import http_error_response, provider_error_res
 from models.session_manager import SessionManager
 from bridge.context import ContextType
 from bridge.reply import Reply, ReplyType
+from common import const
 from common.log import logger
 from config import conf, load_config
 from .doubao_session import DoubaoSession
@@ -25,8 +26,8 @@ from .doubao_session import DoubaoSession
 class DoubaoBot(Bot):
     def __init__(self):
         super().__init__()
-        self.sessions = SessionManager(DoubaoSession, model=conf().get("model") or "doubao-seed-2-0-pro-260215")
-        model = conf().get("model") or "doubao-seed-2-0-pro-260215"
+        self.sessions = SessionManager(DoubaoSession, model=conf().get("model") or const.DOUBAO_SEED_2_PRO)
+        model = conf().get("model") or const.DOUBAO_SEED_2_PRO
         self.args = {
             "model": model,
             "temperature": conf().get("temperature", 0.8),

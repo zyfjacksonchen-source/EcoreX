@@ -1,0 +1,58 @@
+{
+  "scope": "production-admin-open-without-version-update",
+  "status": "PASS",
+  "date": "2026-07-06",
+  "versionChanged": false,
+  "operation": "server-config-only",
+  "summary": "Opened model-config access without publishing a new WEBUI build by adding the current WEBUI client key to the production Admin API environment allow-list.",
+  "serverChanges": {
+    "envPath": "/srv/ecorex-agent-admin/env/ecorex-admin-api.env",
+    "backupPath": "/srv/ecorex-agent-admin/env/ecorex-admin-api.env.bak.20260706142101",
+    "requiredKeysPresent": {
+      "ecorex-web-v0.2.9.1-web.1": true,
+      "ecorex-web-v0.2.9-web.1": true,
+      "ecorex-web-v0.2.7.1-web.1": true
+    },
+    "service": "ecorex-admin-api.service",
+    "serviceActive": "active"
+  },
+  "users": [
+    {
+      "name": "李婧萱",
+      "email": "shlijingxuan@ecoremedia.net",
+      "role": "member",
+      "status": "active",
+      "dailyTokenLimit": 0,
+      "weeklyTokenLimit": 0
+    },
+    {
+      "name": "王静颖",
+      "email": "shwangjingying@ecoremedia.net",
+      "role": "member",
+      "status": "active",
+      "dailyTokenLimit": 0,
+      "weeklyTokenLimit": 0
+    },
+    {
+      "name": "廖邹婧",
+      "email": "shliaozoujing@ecoremedia.net",
+      "role": "member",
+      "status": "active",
+      "dailyTokenLimit": 0,
+      "weeklyTokenLimit": 0
+    }
+  ],
+  "verification": {
+    "modelConfigEndpoint": "https://mvdcm.ecoremedia.net/ecorex-agent/client/model-config",
+    "clientKeys": [
+      "ecorex-web-v0.2.9.1-web.1",
+      "ecorex-web-v0.2.9-web.1",
+      "ecorex-web-v0.2.7.1-web.1"
+    ],
+    "probeResult": "All 9 user/key combinations returned HTTP 200, ok=true, configured=true.",
+    "selectedModel": "gpt-5.5",
+    "selectedProvider": "openai",
+    "credentialCount": 4,
+    "temporaryProbeSessionsRevoked": true
+  }
+}

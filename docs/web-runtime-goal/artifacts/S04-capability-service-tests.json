@@ -1,0 +1,119 @@
+{
+  "schemaVersion": "web-runtime-goal-slice-test-summary-v1",
+  "slice": "S04-capability-service-single-source",
+  "targetRelease": "v0.2.6",
+  "status": "pass",
+  "commands": [
+    {
+      "command": "python -m py_compile agent/runtime_capabilities.py channel/web/web_channel.py agent/tools/agent_capability/agent_capability.py tests/test_web_runtime_goal.py",
+      "status": "pass",
+      "summary": "Python compilation passed"
+    },
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_web_runtime_goal.py -k \"s4_\" -q",
+      "status": "pass",
+      "summary": "6 passed, 19 deselected"
+    },
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_ecorex_web_parallel_backend.py -k \"capabilities_api or agent_capability_safe_diagnostics or AgentCapabilityPermissions or extension_registry_projects_admin_capability_policy\" -q",
+      "status": "pass",
+      "summary": "27 passed, 379 deselected, 9 subtests passed"
+    },
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_web_runtime_goal.py tests/test_v025_skill_tool_binding.py tests/test_v024_tongxin_cli_readonly.py -q",
+      "status": "pass",
+      "summary": "56 passed"
+    },
+    {
+      "command": "CapabilityService live snapshot",
+      "status": "pass",
+      "summary": "source=runtime-capability-service; Feishu/Lark discovery_only/discover; office-pdf and fast-ocr missing_dependency/repair; image-generation visible in skills and extensions; raw logPath/targetDir absent"
+    }
+  ],
+  "coverage": [
+    "RuntimeCapabilityRegistry service exists",
+    "CapabilityService typed action plan contract",
+    "/api/tools reads service projection",
+    "/api/skills reads service projection",
+    "/api/extensions reads service projection with actionPlan enrichment",
+    "/api/capabilities reads service projection",
+    "agent_capability diagnose reads service projection",
+    "Feishu/Lark nextAction=discover",
+    "Tongxin configureOnly nextAction=configure when unconfigured",
+    "office-pdf and fast-ocr missing_dependency nextAction=repair",
+    "image-generation skill/tool/extension binding consistency",
+    "installer status probe merges moduleChecks without install/repair",
+    "logRef and targetRef redact absolute paths",
+    "agent_capability list_packs and diagnose use the same service projection"
+  ],
+  "liveSnapshot": {
+    "source": "runtime-capability-service",
+    "keyPacks": {
+      "feishu-lark": {
+        "state": "discovery_only",
+        "nextAction": "discover"
+      },
+      "office-pdf": {
+        "state": "missing_dependency",
+        "nextAction": "repair",
+        "missingItems": [
+          "pypdf",
+          "pdfminer",
+          "docx",
+          "pptx",
+          "openpyxl",
+          "xlsxwriter",
+          "markdownify",
+          "reportlab",
+          "fitz"
+        ],
+        "logRef": {
+          "present": true,
+          "name": "office-pdf.log",
+          "parentName": "capability-state",
+          "redacted": true
+        },
+        "targetRef": {
+          "present": true,
+          "name": "office-pdf",
+          "parentName": "capability-packages",
+          "redacted": true
+        }
+      },
+      "fast-ocr": {
+        "state": "missing_dependency",
+        "nextAction": "repair",
+        "missingItems": [
+          "rapidocr_onnxruntime",
+          "onnxruntime",
+          "PIL"
+        ],
+        "logRef": {
+          "present": true,
+          "name": "fast-ocr.log",
+          "parentName": "capability-state",
+          "redacted": true
+        },
+        "targetRef": {
+          "present": true,
+          "name": "fast-ocr",
+          "parentName": "capability-packages",
+          "redacted": true
+        }
+      },
+      "tongxin-cli": {
+        "state": "ready",
+        "nextAction": "none"
+      }
+    },
+    "imageGeneration": {
+      "skillVisible": true,
+      "extensionVisible": true
+    }
+  },
+  "redacted": true,
+  "rawPathLeakChecks": {
+    "hasRawLogPathKey": false,
+    "hasRawTargetDirKey": false
+  }
+}

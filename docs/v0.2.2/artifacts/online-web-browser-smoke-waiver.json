@@ -1,0 +1,17 @@
+{
+  "status": "WAIVED",
+  "scope": "production-online-web-browser-smoke",
+  "reason": "operator-requested-skip",
+  "generatedAt": "2026-06-26T06:25:00Z",
+  "operatorInstructionHash": "DC98717360B43CE2420F4E507857599D896FE729C944DA4099E82AF17638A91D",
+  "webTarballSha256": "3BEA1EF91C61E9E42235AE7695DDAEBEF25B4A6C5B13B6726240539CC937CCF7",
+  "publicReleaseSha256": "BFA0DD949907ECE14787FB5C1D32F3163C42E72ABFB9A83EF9A7BE8FE6DD5F7C",
+  "productionDeployArtifact": "docs/v0.2.2/artifacts/production-deploy-online.json",
+  "productionDeployArtifactSha256": "22D888956692B9877DC471FCF4D6636B66757DE68C85BBA0DABD097B756FE18A",
+  "supersedesFailedSmoke": "docs/v0.2.2/artifacts/online-web-browser-smoke.json",
+  "redaction": {
+    "rawInstructionPersisted": false,
+    "rawTargetPersisted": false,
+    "rawSecretsPersisted": false
+  }
+}

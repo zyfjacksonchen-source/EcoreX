@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-11T20:39:03.6832797+08:00",
+  "scope": "control-plane-production-composition",
+  "local_environment": {
+    "platform": "windows-x64",
+    "real_s3_credentials_available": false,
+    "postgresql_control_plane_provider_present": false,
+    "multi_replica_tested": false
+  },
+  "verified": [
+    "single-node SQLite WAL configuration and cross-process lock",
+    "explicit core/audit/share migration and validation",
+    "pre/post migration verified SQLite backups and rollback",
+    "serve performs validation without schema creation",
+    "S3 Share dependency injection with encryption/public-block/write probes",
+    "Ed25519 JWT authentication and release trust separation",
+    "ASGI liveness/readiness/drain/shutdown resource ordering",
+    "secret/path-redacted operator CLI"
+  ],
+  "commands": [
+    {
+      "command": "python -m pytest -q -p no:cacheprovider tests/v1/test_control_plane_production_serve.py",
+      "result": "13 passed"
+    },
+    {
+      "command": "python -m pytest -q -p no:cacheprovider tests/v1/test_control_plane_schema_manager.py tests/v1/test_cloud_audit_schema_manager.py tests/v1/test_cloud_share_schema_manager.py tests/v1/test_server_schema_authority_gate.py tests/v1/test_control_plane_production_serve.py",
+      "result": "43 passed"
+    },
+    {
+      "command": "Control Plane + Cloud Share/Audit + WSS + server authority adjacency",
+      "result": "153 passed"
+    },
+    {
+      "command": "python scripts/check-v1-server-schema-authority.py",
+      "result": "passed; 7 authorities; 0 violations"
+    }
+  ],
+  "not_evidence_for": [
+    "real S3 IAM, KMS, network partition, latency or outage behavior",
+    "PostgreSQL Control Plane metadata storage",
+    "multi-replica or regional HA",
+    "production ingress/TLS/load-balancer drain behavior"
+  ]
+}

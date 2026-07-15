@@ -1,16 +1,8 @@
-#!/bin/bash
-#后台运行Chat_on_webchat执行脚本
+#!/usr/bin/env bash
+set -eu
 
-cd `dirname $0`/..
-export BASE_DIR=`pwd`
-echo $BASE_DIR
-
-# check the nohup.out log output file
-if [ ! -f "${BASE_DIR}/nohup.out" ]; then
-  touch "${BASE_DIR}/nohup.out"
-echo "create file  ${BASE_DIR}/nohup.out"
-fi
-
-nohup python3 "${BASE_DIR}/app.py" & tail -f "${BASE_DIR}/nohup.out"
-
-echo "Chat_on_webchat is starting，you can check the ${BASE_DIR}/nohup.out"
+cat >&2 <<'EOF'
+The v0.3 app.py/WebChannel launcher is retired.
+Launch a signed EcoreX v1 slot through ecorex-bootstrap.
+EOF
+exit 78

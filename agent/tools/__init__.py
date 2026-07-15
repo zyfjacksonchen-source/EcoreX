@@ -1,167 +1,120 @@
-# Import base tool
+"""First-party tool exports for the agent runtime.
+
+Tool discovery imports this package before it can build model-visible schemas.
+One optional tool must never make the whole registry empty, so each concrete
+tool class is imported independently and missing optional dependencies are
+recorded for diagnostics.
+"""
+
+from __future__ import annotations
+
+import importlib
+from typing import Any, Optional
+
 from agent.tools.base_tool import BaseTool
 from agent.tools.tool_manager import ToolManager
+from common.log import logger
 
-# Import file operation tools
-from agent.tools.read.read import Read
-from agent.tools.write.write import Write
-from agent.tools.edit.edit import Edit
-from agent.tools.bash.bash import Bash
-from agent.tools.ecorex_cli.ecorex_cli import EcoreXCli
-from agent.tools.feishu_cli.feishu_cli import FeishuCli
-from agent.tools.host_diagnostics.host_diagnostics import HostDiagnostics
-from agent.tools.optional_abilities.optional_abilities import OptionalAbilities
-from agent.tools.agent_capability.agent_capability import AgentCapabilityTool
-from agent.tools.subagent.subagent import SubagentTool
-from agent.tools.find.find import Find
-from agent.tools.ls.ls import Ls
-from agent.tools.send.send import Send
 
-# Import memory tools
-from agent.tools.memory.memory_search import MemorySearchTool
-from agent.tools.memory.memory_get import MemoryGetTool
+_TOOL_IMPORT_ERRORS: list[dict[str, str]] = []
 
-# Import self-evolution tools
-from agent.tools.evolution_undo.evolution_undo import EvolutionUndoTool
 
-# Import tools with optional dependencies
-def _import_optional_tools():
-    """Import tools that have optional dependencies"""
-    from common.log import logger
-    tools = {}
-    
-    # EnvConfig Tool (requires python-dotenv)
+def _record_import_error(module_name: str, class_name: str, exc: BaseException) -> None:
+    entry = {
+        "module": module_name,
+        "class": class_name,
+        "errorType": exc.__class__.__name__,
+        "message": str(exc),
+    }
+    if entry not in _TOOL_IMPORT_ERRORS:
+        _TOOL_IMPORT_ERRORS.append(entry)
+    logger.warning(
+        "[Tools] %s.%s not loaded: %s: %s",
+        module_name,
+        class_name,
+        exc.__class__.__name__,
+        exc,
+    )
+
+
+def _safe_import(module_name: str, class_name: str) -> Optional[type]:
     try:
-        from agent.tools.env_config.env_config import EnvConfig
-        tools['EnvConfig'] = EnvConfig
-    except ImportError as e:
-        logger.error(
-            f"[Tools] EnvConfig tool not loaded - missing dependency: {e}\n"
-            f"  To enable environment variable management, run:\n"
-            f"    pip install python-dotenv>=1.0.0"
-        )
-    except Exception as e:
-        logger.error(f"[Tools] EnvConfig tool failed to load: {e}")
-    
-    # Scheduler Tool (requires croniter)
-    try:
-        from agent.tools.scheduler.scheduler_tool import SchedulerTool
-        tools['SchedulerTool'] = SchedulerTool
-    except ImportError as e:
-        logger.error(
-            f"[Tools] Scheduler tool not loaded - missing dependency: {e}\n"
-            f"  To enable scheduled tasks, run:\n"
-            f"    pip install croniter>=2.0.0"
-        )
-    except Exception as e:
-        logger.error(f"[Tools] Scheduler tool failed to load: {e}")
-
-    # WebSearch Tool (conditionally loaded based on API key availability at init time)
-    try:
-        from agent.tools.web_search.web_search import WebSearch
-        tools['WebSearch'] = WebSearch
-    except ImportError as e:
-        logger.error(f"[Tools] WebSearch not loaded - missing dependency: {e}")
-    except Exception as e:
-        logger.error(f"[Tools] WebSearch failed to load: {e}")
-
-    # WebFetch Tool
-    try:
-        from agent.tools.web_fetch.web_fetch import WebFetch
-        tools['WebFetch'] = WebFetch
-    except ImportError as e:
-        logger.error(f"[Tools] WebFetch not loaded - missing dependency: {e}")
-    except Exception as e:
-        logger.error(f"[Tools] WebFetch failed to load: {e}")
-
-    # Vision Tool (conditionally loaded based on API key availability)
-    try:
-        from agent.tools.vision.vision import Vision
-        tools['Vision'] = Vision
-    except ImportError as e:
-        logger.error(f"[Tools] Vision not loaded - missing dependency: {e}")
-    except Exception as e:
-        logger.error(f"[Tools] Vision failed to load: {e}")
-
-    return tools
-
-# Load optional tools
-_optional_tools = _import_optional_tools()
-EnvConfig = _optional_tools.get('EnvConfig')
-SchedulerTool = _optional_tools.get('SchedulerTool')
-WebSearch = _optional_tools.get('WebSearch')
-WebFetch = _optional_tools.get('WebFetch')
-Vision = _optional_tools.get('Vision')
-GoogleSearch = _optional_tools.get('GoogleSearch')
-FileSave = _optional_tools.get('FileSave')
-Terminal = _optional_tools.get('Terminal')
-
-
-# BrowserTool (requires playwright)
-def _import_browser_tool():
-    from common.log import logger
-    try:
-        from agent.tools.browser.browser_tool import BrowserTool
-        return BrowserTool
-    except ImportError as e:
-        logger.info(
-            f"[Tools] BrowserTool not loaded - missing dependency: {e}\n"
-            f"  To enable browser tool, run:\n"
-            f"    pip install playwright\n"
-            f"  Only run `playwright install chromium` when CDP fallback is required."
-        )
-        return None
-    except Exception as e:
-        logger.error(f"[Tools] BrowserTool failed to load: {e}")
+        module = importlib.import_module(module_name)
+        cls: Any = getattr(module, class_name)
+        return cls if isinstance(cls, type) else None
+    except Exception as exc:
+        _record_import_error(module_name, class_name, exc)
         return None
 
-BrowserTool = _import_browser_tool()
 
-# MCP Tools (no extra dependencies, loaded on demand)
-def _import_mcp_tools():
-    """导入 MCP 工具模块（无额外依赖，按需加载）"""
-    from common.log import logger
-    try:
-        from agent.tools.mcp.mcp_tool import McpTool
-        from agent.tools.mcp.mcp_client import McpClientRegistry
-        return {'McpTool': McpTool, 'McpClientRegistry': McpClientRegistry}
-    except Exception as e:
-        logger.warning(f"[Tools] MCP tools not loaded: {e}")
-        return {}
+def get_tool_import_errors() -> list[dict[str, str]]:
+    return list(_TOOL_IMPORT_ERRORS)
 
-_mcp_tools = _import_mcp_tools()
-McpTool = _mcp_tools.get('McpTool')
-McpClientRegistry = _mcp_tools.get('McpClientRegistry')
 
-# Export all tools (including optional ones that might be None)
+Read = _safe_import("agent.tools.read.read", "Read")
+Write = _safe_import("agent.tools.write.write", "Write")
+Edit = _safe_import("agent.tools.edit.edit", "Edit")
+Bash = _safe_import("agent.tools.bash.bash", "Bash")
+EcoreXCli = _safe_import("agent.tools.ecorex_cli.ecorex_cli", "EcoreXCli")
+FeishuCli = _safe_import("agent.tools.feishu_cli.feishu_cli", "FeishuCli")
+TongxinCli = _safe_import("agent.tools.tongxin_cli.tongxin_cli", "TongxinCli")
+HostDiagnostics = _safe_import("agent.tools.host_diagnostics.host_diagnostics", "HostDiagnostics")
+OptionalAbilities = _safe_import("agent.tools.optional_abilities.optional_abilities", "OptionalAbilities")
+AgentCapabilityTool = _safe_import("agent.tools.agent_capability.agent_capability", "AgentCapabilityTool")
+SubagentTool = _safe_import("agent.tools.subagent.subagent", "SubagentTool")
+Find = _safe_import("agent.tools.find.find", "Find")
+Ls = _safe_import("agent.tools.ls.ls", "Ls")
+Send = _safe_import("agent.tools.send.send", "Send")
+MemorySearchTool = _safe_import("agent.tools.memory.memory_search", "MemorySearchTool")
+MemoryGetTool = _safe_import("agent.tools.memory.memory_get", "MemoryGetTool")
+EvolutionUndoTool = _safe_import("agent.tools.evolution_undo.evolution_undo", "EvolutionUndoTool")
+EnvConfig = _safe_import("agent.tools.env_config.env_config", "EnvConfig")
+SchedulerTool = _safe_import("agent.tools.scheduler.scheduler_tool", "SchedulerTool")
+WebSearch = _safe_import("agent.tools.web_search.web_search", "WebSearch")
+WebFetch = _safe_import("agent.tools.web_fetch.web_fetch", "WebFetch")
+Vision = _safe_import("agent.tools.vision.vision", "Vision")
+OcrTool = _safe_import("agent.tools.ocr.ocr", "OcrTool")
+BrowserTool = _safe_import("agent.tools.browser.browser_tool", "BrowserTool")
+ImageGenTool = _safe_import("agent.tools.imagegen.imagegen", "ImageGenTool")
+OfficeDocumentsTool = _safe_import("agent.tools.office_artifacts.office_artifacts", "OfficeDocumentsTool")
+OfficePdfTool = _safe_import("agent.tools.office_artifacts.office_artifacts", "OfficePdfTool")
+OfficePresentationsTool = _safe_import("agent.tools.office_artifacts.office_artifacts", "OfficePresentationsTool")
+OfficeSpreadsheetsTool = _safe_import("agent.tools.office_artifacts.office_artifacts", "OfficeSpreadsheetsTool")
+McpTool = _safe_import("agent.tools.mcp.mcp_tool", "McpTool")
+McpClientRegistry = _safe_import("agent.tools.mcp.mcp_client", "McpClientRegistry")
+
+
 __all__ = [
-    'BaseTool',
-    'ToolManager',
-    'Read',
-    'Write',
-    'Edit',
-    'Bash',
-    'EcoreXCli',
-    'FeishuCli',
-    'HostDiagnostics',
-    'OptionalAbilities',
-    'AgentCapabilityTool',
-    'SubagentTool',
-    'Find',
-    'Ls',
-    'Send',
-    'MemorySearchTool',
-    'MemoryGetTool',
-    'EvolutionUndoTool',
-    'EnvConfig',
-    'SchedulerTool',
-    'WebSearch',
-    'WebFetch',
-    'Vision',
-    'BrowserTool',
-    'McpTool',
+    "BaseTool",
+    "ToolManager",
+    "Read",
+    "Write",
+    "Edit",
+    "Bash",
+    "EcoreXCli",
+    "FeishuCli",
+    "TongxinCli",
+    "HostDiagnostics",
+    "OptionalAbilities",
+    "AgentCapabilityTool",
+    "SubagentTool",
+    "Find",
+    "Ls",
+    "Send",
+    "MemorySearchTool",
+    "MemoryGetTool",
+    "EvolutionUndoTool",
+    "EnvConfig",
+    "SchedulerTool",
+    "WebSearch",
+    "WebFetch",
+    "Vision",
+    "OcrTool",
+    "BrowserTool",
+    "ImageGenTool",
+    "OfficeDocumentsTool",
+    "OfficePdfTool",
+    "OfficePresentationsTool",
+    "OfficeSpreadsheetsTool",
+    "McpTool",
 ]
-
-"""
-Tools module for Agent.
-"""

@@ -1,0 +1,99 @@
+{
+  "schemaVersion": "v0.2.7-final-gate-v3",
+  "status": "BLOCKED",
+  "version": "0.2.7",
+  "generatedAt": "2026-07-02T22:10:24.118488+00:00",
+  "reason": "S7 Tongxin MPI accuracy remains fail-closed because the production server still has zero Tongxin data-volume project/sub-account samples after the database path and env override contract was implemented and deployed.",
+  "releaseArtifacts": {
+    "publicZip": {
+      "artifactId": "EcoreX_0.2.7-public-release.zip",
+      "size": 2843811,
+      "sha256": "BB7DC1277DC410F99F20A64885DCFCDCD3F7D12D6B8A99C692B31095B19B5058"
+    },
+    "webLinuxService": {
+      "artifactId": "EcoreX_0.2.7-web-linux-service.tar.gz",
+      "size": 4084416,
+      "sha256": "FF5BF210965A0FF64C8703F36EFB3F14273752EA93A08A3536B54E717A9B6FA4"
+    },
+    "webuiWindows": {
+      "artifactId": "EcoreX_0.2.7-webui-windows-x64.zip",
+      "size": 550736340,
+      "sha256": "40E44D7AF6A2300A41F027FA1059AF6A550542CC8EFBA1F60C43024EDFD62931"
+    },
+    "webuiMacos": {
+      "artifactId": "EcoreX_0.2.7-webui-macos-universal.zip",
+      "size": 652191175,
+      "sha256": "ECC293166217B1C02BB6368BCA289427BE5E66D13039D3066B90A5EB6B621CF7"
+    }
+  },
+  "localGates": {
+    "releaseArtifactValidation": "PASS",
+    "lightRealReleaseValidation": {
+      "status": "PASS",
+      "checkCount": 107,
+      "passCount": 107,
+      "failCount": 0
+    },
+    "focusedUnitSuites": {
+      "status": "PASS",
+      "testCount": 4
+    },
+    "desktopTypecheck": "PASS"
+  },
+  "productionDeployment": {
+    "status": "PASS",
+    "evidence": "docs/v0.2.7/artifacts/production-deploy-online.json",
+    "generatedAt": "2026-07-02T22:04:51.398253+00:00"
+  },
+  "productionAcceptance": {
+    "status": "FAIL",
+    "evidence": "docs/v0.2.7/artifacts/production-agent-product-acceptance.json",
+    "checkCount": 520,
+    "enabledCheckCount": 512,
+    "passCount": 510,
+    "failCount": 2,
+    "skipCount": 8,
+    "durationSeconds": 332.71
+  },
+  "s14Fixes": [
+    "Tongxin per-call database_path now participates in transient tool config.",
+    "Tongxin effective database path priority is per-call/direct config, then admin env, then runtime config default.",
+    "Server installer now persists ECOREX_TONGXIN_DATABASE and writes it into tools.tongxin_cli.database_path when set.",
+    "Release validator now checks the public server installer for ECOREX_TONGXIN_DATABASE."
+  ],
+  "blockingFailures": [
+    {
+      "group": "v027-integrated-capabilities",
+      "name": "Tongxin MPI accuracy action succeeds",
+      "errorType": "tongxin_mpi_accuracy_zero_project_samples",
+      "dataVolume": {
+        "accountCount": 0,
+        "projectCount": 0
+      },
+      "rule": "sampleCount must be greater than zero; cache fallback must not masquerade as MPI"
+    },
+    {
+      "group": "v027-integrated-capabilities",
+      "name": "Tongxin MPI accuracy has samples without fallback or drift",
+      "errorType": "tongxin_mpi_accuracy_zero_project_samples",
+      "dataVolume": {
+        "accountCount": 0,
+        "projectCount": 0
+      },
+      "rule": "sampleCount must be greater than zero before drift can be evaluated"
+    }
+  ],
+  "blockedAudit": {
+    "sameBlockingConditionRepeatedAcrossGoalTurns": true,
+    "blockingCondition": "production Tongxin data-volume has zero project/sub-account samples",
+    "agentCanMakeFurtherMeaningfulProgressWithoutExternalDataVolume": false,
+    "requiredExternalStateChange": "Mount or configure a non-empty read-only Tongxin SQLite data-volume database, then rerun python scripts/真实发布校验.py."
+  },
+  "strictMultiAgentReview": {
+    "status": "NOT_AVAILABLE",
+    "countsAsStrictPass": false,
+    "blocker": "multi-agent spawn was unavailable in this thread because the agent thread limit had already been reached",
+    "fallbackEvidence": "docs/v0.2.7/artifacts/S11-online-update-stability-review.json"
+  },
+  "nextUnblockAction": "Set ECOREX_TONGXIN_DATABASE or tools.tongxin_cli.database_path to a mounted read-only Tongxin SQLite database with at least one project/sub-account sample, restart/reinstall the service, and rerun python scripts/真实发布校验.py."
+}

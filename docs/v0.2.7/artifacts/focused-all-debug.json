@@ -1,0 +1,59 @@
+{
+  "status": "FAIL",
+  "version": "0.2.7",
+  "scope": "production-agent-product-focused-rerun",
+  "generatedAt": "2026-07-02T17:34:14.790102+00:00",
+  "errorType": "RuntimeError",
+  "error": "Remote Agent product acceptance JSON marker missing",
+  "remoteExitCode": 1,
+  "remoteStdoutHash": "90D3DBD0A297A801A4417D356A14B8001C87EC0EA92F4FA233A673B2C6F6767E",
+  "remoteStderrHash": "1994368864AAA1CCE1668689B9A7A73A717BF13B9F326AF2579410C5EDD9116B",
+  "remoteStdoutExcerptRedacted": ", '--memoryDebugging', '--categoryExperimentalThirdParty', '--categoryExperimentalWebmcp', '--redactNetworkHeaders'], 'timeout': 45}], 'character_desc': 'You are EcoreX, the desktop AI Agent for Yixin Advertising. Keep a professional, rigorous, concise tone. Address the user as tongxue. Always identify as EcoreX. Confirm goals and constraints first, then provide executable steps. When using tools, files, web search, Skills, or MCP, clearly explain the reason and result.', 'web_console': True, 'web_port': 9909, 'web_file_serve_[REDACTED]': '[PATH]', 'appdata_dir': '[PATH]', 'ark_base_url': '[URL]', 'bot_type': 'gemini', 'skills': {'image-generation': {'provider': 'openai', 'model': 'gpt-image-2-pro'}}, 'model_context_window': 1048576, 'model_auto_compact_token_limit': 838860}\n[INFO][2026-07-03 01:29:05][config.py:984] - [INIT] ========================================\n[INFO][2026-07-03 01:29:05][config.py:985] - [INIT] System Initialization\n[INFO][2026-07-03 01:29:05][config.py:986] - [INIT] ========================================\n[INFO][2026-07-03 01:29:05][config.py:987] - [INIT] Language: en\n[INFO][2026-07-03 01:29:05][config.py:988] - [INIT] Channel: web\n[INFO][2026-07-03 01:29:05][config.py:989] - [INIT] Model: gemini-3.1-pro-preview\n[INFO][2026-07-03 01:29:05][config.py:994] - [INIT] Mode: Agent (workspace: [PATH]\n[INFO][2026-07-03 01:29:05][config.py:998] - [INIT] Debug: False\n[INFO][2026-07-03 01:29:05][config.py:999] - [INIT] ========================================\n[INFO][2026-07-03 01:29:05][config.py:1058] - [INIT] Synced 11 config values to environment variables\n[INFO][2026-07-03 01:29:37][tool_manager.py:137] - [ToolManager] MCP auto-start disabled; configured MCP servers remain discoverable through optional_abilities\n[INFO][2026-07-03 01:29:37][service.py:406] - [SkillService] query: 14 skills found\n[INFO][2026-07-03 01:29:37][tool_manager.py:137] - [ToolManager] MCP auto-start disabled; configured MCP servers remain discoverable through optional_abilities\n[INFO][2026-07-03 01:29:38][browser_service.py:404] - [Browser] Background thread started\n[INFO][2026-07-03 01:29:38][browser_service.py:582] - [Browser] Connecting to existing Chrome via CDP: [URL]\n[INFO][2026-07-03 01:29:38][browser_service.py:574] - [Browser] Auto-launching Chrome/Edge for CDP at [URL]\n[INFO][2026-07-03 01:29:38][browser_service.py:514] - [Browser] Browser ready\n[INFO][2026-07-03 01:29:39][browser_service.py:675] - [Browser] Browser closed\n[INFO][2026-07-03 01:29:39][browser_service.py:438] - [Browser] Background thread exited\n[INFO][2026-07-03 01:29:39][browser_tool.py:397] - [Browser] BrowserTool closed\n[INFO][2026-07-03 01:29:39][vision.py:252] - [Vision] Trying provider 'Doubao' with model 'doubao-seed-2-0-pro-260215' (1/3)\n[INFO][2026-07-03 01:29:49][vision.py:258] - [Vision] ✅ Success via Doubao (model=doubao-seed-2-0-pro-260215)\n",
+  "remoteStderrExcerptRedacted": "Traceback (most recent call last):\n  File \"[PATH]\", line 1498, in <module>\n    main()\n  File \"[PATH]\", line 1453, in main\n    phase_v027_integrated_capabilities(opener, stream_session_id or (\"accept-stream-\" + RUN_ID))\n  File \"[PATH]\", line 1398, in phase_v027_integrated_capabilities\n    add(\"v027-integrated-capabilities\", \"Tongxin MPI accuracy source policy is strict\", mpi_policy.get(\"factSource\") == \"mpi\" and mpi_policy.get(\"projectAccountSource\") == \"tongxin-data-volume\" and mpi_policy.get(\"cacheFallbackAllowedForMpi\") is False, mpi_policy)\n                                                                                        ^^^^^^^^^^^^^^\nAttributeError: 'NoneType' object has no attribute 'get'\n",
+  "target": {
+    "domainHash": "A753D877497CBE35",
+    "sshHostHash": "CDF1CF905198CA97",
+    "sshUserHash": "4813494D137E1631",
+    "rawTargetPersisted": false
+  },
+  "redaction": {
+    "rawPasswordPersisted": false,
+    "rawSecretPersisted": false,
+    "rawUrlPersisted": false,
+    "rawUserPathPersisted": false
+  },
+  "releaseDecision": "not-authoritative-run-full-real-release-gate-before-promotion",
+  "matrixChangeLog": [
+    {
+      "action": "focused-rerun",
+      "requestedGroups": [
+        "fresh-env",
+        "auth-first-use",
+        "runtime-api",
+        "ui-ux",
+        "stream-state-machine",
+        "context-session",
+        "tool-skill",
+        "multi-model-image-route",
+        "concurrency-pressure",
+        "v027-integrated-capabilities",
+        "security-observability"
+      ],
+      "selectedGroups": [
+        "fresh-env",
+        "auth-first-use",
+        "runtime-api",
+        "ui-ux",
+        "stream-state-machine",
+        "context-session",
+        "tool-skill",
+        "multi-model-image-route",
+        "concurrency-pressure",
+        "v027-integrated-capabilities",
+        "security-observability"
+      ],
+      "releaseBlocking": false,
+      "finalGateRequiredBeforePromotion": true
+    }
+  ]
+}

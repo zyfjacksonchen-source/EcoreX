@@ -1,0 +1,61 @@
+{
+  "schema": "ecorex.v0.2.7.1.download-hotfix.v1",
+  "generatedAt": "2026-07-03T09:35:00Z",
+  "status": "PASS",
+  "changes": {
+    "macInstaller": {
+      "rootCause": "macOS Bash 3.2 with set -u can fail on an empty resume_args array expansion.",
+      "fix": "The installer now uses a scalar should_resume flag and calls curl with -C - only when a partial file exists.",
+      "onlineChecks": {
+        "resumeArgsPresent": false,
+        "shouldResumePresent": true,
+        "assetMirrorEnvPresent": true
+      }
+    },
+    "windowsInstaller": {
+      "fix": "The installer supports concrete candidate download URLs from asset mirrors and origin fallback.",
+      "onlineChecks": {
+        "downloadUrlResolverPresent": true,
+        "assetMirrorEnvPresent": true,
+        "allowEmptyCollectionPresent": true
+      }
+    },
+    "downloadMirror": {
+      "mode": "mirror-first-origin-fallback",
+      "publicMirror": {
+        "kind": "github-release",
+        "repo": "zhangyifanjackson-dotcom/EcoreX-installers",
+        "tag": "v0.2.7.1",
+        "anonymousHeadStatus": 302,
+        "assetCount": 2
+      },
+      "privateRepoFinding": "The main EcoreX repository is private, so its GitHub Release assets are not suitable for public download-page links."
+    },
+    "originFallback": {
+      "nginxLocation": "/ecorex-agent/downloads/",
+      "headers": {
+        "acceptRanges": "bytes",
+        "cacheControl": "public, max-age=31536000, immutable"
+      },
+      "windowsArtifactContentLength": 550746017,
+      "macosArtifactContentLength": 652200851
+    }
+  },
+  "releaseArtifacts": {
+    "publicZipSha256": "33523A75650111E978E05D7D7D6BFCF980FAB46B9885F3668430A796B2D43246",
+    "githubReleaseDigests": {
+      "EcoreX_0.2.7.1-webui-windows-x64.zip": "sha256:25c2f4f8319e4ea8a83c88f5214462b1c055efb5749135a08d137e096c168184",
+      "EcoreX_0.2.7.1-webui-macos-universal.zip": "sha256:5e152d3d9c921b8e310588c5ae1214395353ae344f87cedba555ac20de844417"
+    }
+  },
+  "tests": [
+    "PowerShell parser: deploy/ecorex-site/install-webui.ps1",
+    "PowerShell parser: scripts/prepare-ecorex-public-release.ps1",
+    "Git Bash bash -n: deploy/ecorex-site/install-webui.sh",
+    "node --check: deploy/ecorex-site/site.js",
+    "pytest: tests/test_v025_runtime_manifest.py::test_v027_webui_installers_keep_windows_macos_user_flow_consistent",
+    "pytest: tests/test_ecorex_web_parallel_backend.py::TestWebParallelHandlers::test_v020_webui_install_pages_hide_manifest_and_harden_mac_retry",
+    "production deploy: scripts/deploy-v024-production.py --promote-public-release"
+  ],
+  "realReleaseValidationPy": "not-run-by-user-request"
+}

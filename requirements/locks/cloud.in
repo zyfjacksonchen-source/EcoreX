@@ -1,0 +1,5 @@
+-r runtime.in
+
+# Production cloud compositions. Exact pins mirror both cloud extras.
+boto3==1.38.0
+psycopg[binary,pool]==3.2.1

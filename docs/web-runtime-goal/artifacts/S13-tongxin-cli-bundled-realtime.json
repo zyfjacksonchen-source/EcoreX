@@ -1,0 +1,83 @@
+{
+  "schemaVersion": "S13-tongxin-cli-bundled-realtime-v1",
+  "recordedAt": "2026-07-02T07:41:37+08:00",
+  "status": "pass",
+  "scope": "EcoreX Web runtime Tongxin CLI bundled package and real realtime consumption validation",
+  "server": {
+    "hostRef": "CDF1CF905198CA97",
+    "rawHostPersisted": false,
+    "rawUserPersisted": false,
+    "rawPasswordPersisted": false
+  },
+  "remoteValidation": {
+    "environment": "EcoreX production-test Web server previously used for release/user-behavior tests",
+    "runtimePath": "/opt/ecorex-web/current/runtime",
+    "statePath": "/opt/ecorex-web/state",
+    "installedScriptSha16BeforeLocalScrub": "D36EBA1FA7A31AC4",
+    "accountListQueryRef": "CD530A01F221C790",
+    "rawAccountListQueryPersisted": false,
+    "accountChannelCounts": {
+      "spotlight": {"code": 0, "rows": 43},
+      "chengfeng": {"code": 0, "rows": 43}
+    },
+    "numericAccountCount": 42,
+    "testedRealtimeAccountCount": 42,
+    "realtimeStatusCounts": {"ok": 42},
+    "totalRealtimeCostBucket": "4000-5000",
+    "exactRealtimeCostPersisted": false,
+    "topRealtimeAccounts": [
+      {"accountRef": "584BF18EE3229EE6", "costBucket": "3000-4000"},
+      {"accountRef": "C125D8F388448064", "costBucket": "300-400"},
+      {"accountRef": "AF98014F9F1536CE", "costBucket": "200-300"},
+      {"accountRef": "69DE1C86D8B37BA8", "costBucket": "100-200"},
+      {"accountRef": "CA6D3D844E272305", "costBucket": "50-100"},
+      {"accountRef": "B13F82AA6070EFFB", "costBucket": "50-100"}
+    ],
+    "rawAccountIdsPersisted": false,
+    "rawAccountNamesPersisted": false,
+    "rawCompanyNamesPersisted": false,
+    "metaEvidence": {
+      "accountResolution": "direct_account_id",
+      "source": "mpi_realtime",
+      "cacheStatus": "missing",
+      "cacheDatabaseExists": false
+    },
+    "offlineReportNote": "Offline report summary reached upstream after endpoint correction but current admin/report scope still returned permission/cache fallback, so realtime account-id is the validated live spend path."
+  },
+  "bundledFiles": {
+    "tools/tongxin/xin_agent_cli.py": "D36EBA1FA7A31AC47528464B543A4615ECC580A635FD238C6C976D3D03BE7325",
+    "tools/tongxin/config.py": "A1CBE8AC1310840017FAB9CBB20CC4AB1F4B140360E108AB0AA676A887B4FFC1",
+    "tools/tongxin/models.py": "9A52CA15E9F2A9235A180D948827A1137FE871799FB0244A3BDBB9334E91349A",
+    "tools/tongxin/models_init_.py": "1745042719FDFE22E6191AB5D8768B3300041B46ECF0EB2A72DA2B308DCBB5BF",
+    "tools/tongxin/mpi.py": "AA62081E5CAF9C63E34F27352D3D6B7CD0DCDBB6F7E38499D334387BA30B2176",
+    "tools/tongxin/bili_column_defs.py": "E7E4314583E967B1CA0A2EC85BE434C4B2B324C9CD1EC96024A855C388C2CBD9",
+    "tools/tongxin/models/__init__.py": "A64457B1B6BF588C3DB43045DF8896689C5D4087AC4F9E58C5104F2E86EE70EA",
+    "tools/tongxin/database.py": "905B8B4A741EDFE1DA1B7A506DCEEA7DC070DEC340532832EC89624F938448CB"
+  },
+  "localValidation": {
+    "pyCompile": "pass",
+    "schemaCommand": "pass",
+    "modelsImport": {"fileEndsWith": "tools/tongxin/models.py", "hasDatabase": true, "hasDatabaseAlias": true, "hasLowercaseDatabase": true, "databaseEquals": true, "DatabaseEquals": true, "hasGetDb": true},
+    "runtimeDependencies": {
+      "cryptographyDeclaredInRootRequirements": true,
+      "cryptographyDeclaredInWebCoreRequirements": true,
+      "webAndDesktopCoreRequirementsMatch": true,
+      "runtimeCoreRequirementsSha256": "3676F5F126F5E500852272EA2866666BDDB28F0FB30E4783857FF1BD4A09617F"
+    },
+    "secretScan": {"hitCount": 0},
+    "businessPlaintextScan": {"hitCount": 0},
+    "unitTests": {
+      "tests/test_v024_tongxin_cli_readonly.py": "26 passed",
+      "tests/test_v025_runtime_manifest.py + tests/test_web_runtime_goal.py": "102 passed"
+    },
+    "finalGate": {"script": "scripts/smoke-v026-production-final-gate.py", "status": "PASS", "checkCount": 24, "passCount": 24, "failCount": 0}
+  },
+  "privacy": {
+    "rawCredentialPersisted": false,
+    "rawTokenPersisted": false,
+    "rawBusinessIdentifiersPersisted": false,
+    "rawExactSpendPersisted": false,
+    "rawCliOutputPersisted": false,
+    "redacted": true
+  }
+}

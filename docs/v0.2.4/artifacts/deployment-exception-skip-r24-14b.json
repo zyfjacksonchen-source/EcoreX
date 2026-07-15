@@ -1,0 +1,35 @@
+{
+  "approvedByUserInstruction": true,
+  "decision": "deploy_with_exception",
+  "exceptionId": "v024-skip-r24-14b-real-imagegen-timing",
+  "generatedAt": "2026-06-28T13:32:40.6869477Z",
+  "remainingGateStatus": "PENDING",
+  "scope": "webui-dual-end",
+  "skippedItems": [
+    {
+      "slice": "R24-14B",
+      "item": "real same-prompt EcoreX provider timing"
+    },
+    {
+      "slice": "R24-14B",
+      "item": "filled independent Codex timing result artifact"
+    },
+    {
+      "slice": "R24-14B",
+      "item": "real per-case EcoreX-vs-Codex final usable-image comparison"
+    },
+    {
+      "slice": "R24-15",
+      "item": "final release-completion gate promoted to PASS"
+    }
+  ],
+  "sourceInstruction": "User requested to skip the current blocked timing step and proceed directly to production deployment.",
+  "status": "APPROVED_EXCEPTION",
+  "truthfulnessGuard": {
+    "claimImagegenParity": false,
+    "markR24_14BPass": false,
+    "markR24_15Pass": false,
+    "useFakeProviderAsParityEvidence": false
+  },
+  "version": "0.2.4"
+}

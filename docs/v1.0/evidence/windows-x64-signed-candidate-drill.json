@@ -1,0 +1,1198 @@
+{
+  "bad_digest": {
+    "active_slot_unchanged": true,
+    "corrupt_slot_activated": false,
+    "error_type": "DownloadFailed",
+    "status": "rejected"
+  },
+  "blind_spots": [
+    "no live GH mirror, GitHub Release, CDN or Control Plane origin was contacted",
+    "no external Model/Image Gateway, connector, OTLP or tenant credential was used",
+    "macOS arm64/x64 Core and Pack receipts require protected native runners",
+    "same-version replacement was exercised; no fabricated 1.0.1 cross-version claim",
+    "v0.3 released-schema data was exercised, not an attested real user installation corpus"
+  ],
+  "cleanup": {
+    "temporary_directory_removed": true
+  },
+  "deadline_policy": {
+    "platform_stage_timeout_seconds": 3000.0,
+    "runtime_readiness_timeout_seconds": 900.0,
+    "runtime_readiness_windows": 4,
+    "total_timeout_seconds": 5400.0
+  },
+  "drain_checkpoint": {
+    "call_count": 3,
+    "durable_checkpoint_before_each_activation": true,
+    "real_external_long_job_claimed": false,
+    "receipts": [
+      {
+        "checkpoint_sequence": 1,
+        "inflight_mutation": "none",
+        "job_id": "local-drill-long-job",
+        "new_work_admission": "stopped",
+        "receipt_sha256": "8f8cb6816f6a500d33d8df79a859185e6061c2b3142d7d290990ef58fbef8e83",
+        "schema_version": 1,
+        "state": "checkpointed"
+      },
+      {
+        "checkpoint_sequence": 2,
+        "inflight_mutation": "none",
+        "job_id": "local-drill-long-job",
+        "new_work_admission": "stopped",
+        "receipt_sha256": "368fb8217e73be0a0360568aa33d628a1ba4e3e37510702c824b7d2b525ac9c9",
+        "schema_version": 1,
+        "state": "checkpointed"
+      },
+      {
+        "checkpoint_sequence": 3,
+        "inflight_mutation": "none",
+        "job_id": "local-drill-long-job",
+        "new_work_admission": "stopped",
+        "receipt_sha256": "665abd4077919776619ef2f2fe631e2f6fc187f740cc6c480817a36d4e088acd",
+        "schema_version": 1,
+        "state": "checkpointed"
+      }
+    ]
+  },
+  "elapsed_seconds": 2751.25,
+  "evidence_class": "local-windows-drill",
+  "first_install": {
+    "activation_required_user_confirmation": true,
+    "background_download": true,
+    "bootstrap_http_status": 200,
+    "bootstrap_launches": 2,
+    "core_plus_pack_slot": true,
+    "journal_states": [
+      "resolving",
+      "downloading",
+      "downloading",
+      "downloading",
+      "downloading",
+      "verifying",
+      "staging",
+      "awaiting_user",
+      "draining",
+      "draining",
+      "activating",
+      "activating",
+      "healthchecking",
+      "completed",
+      "completed"
+    ],
+    "prepared_state": "awaiting_user",
+    "registration_authority": "local-contract-fixture-not-external-credential",
+    "registration_pin_released": true,
+    "slot_id": "r-b6264c35d433f3cd81a1ba1cb4aa004769a44757",
+    "terminal_state": "completed"
+  },
+  "migration": {
+    "baseline_release_schema_commit": "f0750d247bfe52ffb95c137cadc9983a03010690",
+    "completion_authority_digest": "be2e4488e8825df8dd660fd1ba4be687462d8f00e25af3696fbdbe78c17e33e3",
+    "copy_on_write": true,
+    "evidence_level": "release_schema_compatible_unattested",
+    "idempotent_restart_without_source": true,
+    "real_installed_v030_user_corpus_claimed": false,
+    "receipt_state": "committed",
+    "restart_after_source_deletion_http_status": 200,
+    "source_deleted_after_commit": true,
+    "source_inventory_digest": "0a940123b9d4f2786fe0228310fb084c8a3618cbb04a276f9cdb946a0cefbd01",
+    "source_version": "0.3.0"
+  },
+  "network": {
+    "artifact_fetcher": "RecordingFailoverFetcher(LocalSourceFetcher)",
+    "external_publication": false,
+    "runtime_live_endpoints": "loopback-only"
+  },
+  "platform_stage": {
+    "bootstrap_minimum_stable": {
+      "config_sha256": "9e2c52b136b87c8625f749000370d62c6d989308209270ebaf715f4fcd1641f7",
+      "key_id": "ecorex-local-candidate-drill",
+      "sequence": 1,
+      "signature_algorithm": "ed25519",
+      "version": "1.0.0"
+    },
+    "caller_pinned_schema2_helper_sha256": "44ddd120d4a41305c16b4dcd770fc4669b10fd369e3841d95c9f47140240f810",
+    "commit_sha": "06f2ec9b2373031d0526e1cbac3633efc573444f",
+    "go_version": "go version go1.26.5 windows/amd64",
+    "local_receipt_count": 8,
+    "local_receipt_sha256": {
+      "bootstrap": "7887cddeba1835c61da08562085e1e260f79971c73189c95304ae2e7fe0223ac",
+      "browser": "34bb8525ce4dbf9c60b8bf39a2ccfd5daff6ac0676e9246d9244468a0f518813",
+      "channels": "5d6cf17fbca76b217ccdb1158789e8c2c808dad547dc8d6323fc6b1cd26a94df",
+      "core": "dedd44e0b5acfbdbce045a99574b7e95fe39e4c4d4c5fd83bfcbec541e20060d",
+      "image": "a4a837e072a3a710a43037b976d53566ae3227aace9b1a8ed6e07c5f90469736",
+      "ocr": "9c1a0029d51059a968514e774be37411fbc9bde3836a6c64eb63c4c336c265f1",
+      "office": "fb05d2534c77f1329573c4a16ddf27f24b145507a50075298c23a7bbf8936071",
+      "sandbox": "9a769ceb5758b99ad5136cf6f1efdefa8fe785c8aac97cffb2653c5fc4a44145"
+    },
+    "native_build_receipt": {
+      "authority_mode": "caller-pinned",
+      "c1xx_authenticode_thumbprint": "1d77a9b9e8fe2075d9ad15123257fb90db0da4a1",
+      "c1xx_sha256": "81445beac37dc619f9847502ab9ab55e1483e16db9ffb513dbb3ca86bd4c754d",
+      "c2_authenticode_thumbprint": "ab172913a2960a224809ee8a0c371cd47a079b72",
+      "c2_sha256": "f9ba51dc69d238d8bdbb087bd6e90cb5a683d9fc6e2dd7a0d1be9cc03310f7a9",
+      "compiler_authenticode_thumbprint": "ab172913a2960a224809ee8a0c371cd47a079b72",
+      "compiler_file_version": "19.44.35227.0",
+      "compiler_sha256": "7a154e5136cc538b42e6944997fc5e3bb49112894e41dd88a70940aaff9aa831",
+      "include_roots_sha256": "7e9e02e35c0f3ee7765ad575cd35fd41cbafe264f1e15efa9043f544be4e425b",
+      "library_roots_sha256": "3fff5a205e7eea960bebcb2bd45698e58436038809cd413341f3da2c5fe2996a",
+      "library_set_sha256": "8110b10b485b71913587d0e10959be6cb891f8089257ec67cf65de66ee9af501",
+      "linker_authenticode_thumbprint": "ab172913a2960a224809ee8a0c371cd47a079b72",
+      "linker_file_version": "14.44.35227.0",
+      "linker_sha256": "359b5861060b8b8899a1ef87385a37b32d8ecb8a81d092866907e7249ab962be",
+      "msvc_root_sha256": "a0fe278657e114cfb8199c74113cb0ec3b5d580b2b495579743239c5bee61e2e",
+      "msvc_tools_version": "14.44.35207",
+      "runtime_launcher_sha256": "c5440ab76291a4f76526b2dbbe126471322486ed09b55f844fef4324c7b187d4",
+      "sandbox_helper_sha256": "44ddd120d4a41305c16b4dcd770fc4669b10fd369e3841d95c9f47140240f810",
+      "schema_version": 2,
+      "source_set_sha256": "f8377ab92a27e8ee2966638c73abc897f39f20e64671c7dcebf0f305c508e6f3",
+      "status": "passed",
+      "target": "windows-x64",
+      "toolchain_manifest_sha256": "b01cfdfd78a651970ae52f541a0c8e121ce3d2096d91163a9bd4f25a63ef0b42",
+      "windows_sdk_root_sha256": "9feb007c546a1612f6384b305558460a0fc326f81ffa5a25d9699d341af94093",
+      "windows_sdk_version": "10.0.26100.0"
+    },
+    "pack_ids": [
+      "browser",
+      "channels",
+      "image",
+      "ocr",
+      "office",
+      "sandbox"
+    ],
+    "protected_clean_runner_claimed": false,
+    "source_pinned_production_stager": true,
+    "stage_ids": [
+      "core-windows-x64",
+      "bootstrap-windows-x64",
+      "browser-windows-x64",
+      "channels-windows-x64",
+      "image-windows-x64",
+      "ocr-windows-x64",
+      "office-windows-x64",
+      "sandbox-windows-x64"
+    ],
+    "worktree_dirty": true
+  },
+  "production_candidate_preflight": {
+    "blockers": [
+      "macos-arm64 protected-runner Core+Bootstrap+6 Pack receipts",
+      "macos-x64 protected-runner Core+Bootstrap+6 Pack receipts",
+      "protected clean-runner provenance is absent from this local workstation drill"
+    ],
+    "fixed_gate_relaxed": false,
+    "fixed_stage_receipt_requirement": 24,
+    "locally_executed_windows_receipts": 8,
+    "macos_cross_build_counted_as_release_gate": false,
+    "missing_count": 16,
+    "missing_protected_runner_receipts": [
+      "core-macos-arm64",
+      "bootstrap-macos-arm64",
+      "browser-macos-arm64",
+      "channels-macos-arm64",
+      "image-macos-arm64",
+      "ocr-macos-arm64",
+      "office-macos-arm64",
+      "sandbox-macos-arm64",
+      "core-macos-x64",
+      "bootstrap-macos-x64",
+      "browser-macos-x64",
+      "channels-macos-x64",
+      "image-macos-x64",
+      "ocr-macos-x64",
+      "office-macos-x64",
+      "sandbox-macos-x64"
+    ],
+    "promotion_claimed": false,
+    "status": "blocked"
+  },
+  "release": {
+    "artifact_count": 15,
+    "artifacts": [
+      {
+        "artifact_id": "bootstrap-windows-x64",
+        "file_name": "ecorex-bootstrap-windows-x64-1.0.0.zip",
+        "sha256": "dfa22fb1c25035ae2b82dd05cec31395095143f9c9cae487c390fffbc2a9c8e3",
+        "size_bytes": 3109085
+      },
+      {
+        "artifact_id": "capability-pack-browser-windows-x64",
+        "file_name": "ecorex-capability-pack-browser-windows-x64-1.0.0.zip",
+        "sha256": "dcb5353bbfab081bbb3a873560f1596ae0d1e39b5cdd2b5ac3acfd85018c1d56",
+        "size_bytes": 190153571
+      },
+      {
+        "artifact_id": "capability-pack-browser-windows-x64-manifest",
+        "file_name": "ecorex-capability-pack-browser-windows-x64-1.0.0.json",
+        "sha256": "451dce4ba981515aa5d5b145533fef320f14a92c0aea3352484cb618d86b422a",
+        "size_bytes": 768
+      },
+      {
+        "artifact_id": "capability-pack-channels-windows-x64",
+        "file_name": "ecorex-capability-pack-channels-windows-x64-1.0.0.zip",
+        "sha256": "4a57122cd66ada4dbd71ab6389712ef5f9cd41d580128b711490896e9c291c31",
+        "size_bytes": 809
+      },
+      {
+        "artifact_id": "capability-pack-channels-windows-x64-manifest",
+        "file_name": "ecorex-capability-pack-channels-windows-x64-1.0.0.json",
+        "sha256": "bd140cdad59d6cd7256788ae91590e3b403a5d26c48c1b3bd36da9967f4064f1",
+        "size_bytes": 664
+      },
+      {
+        "artifact_id": "capability-pack-image-windows-x64",
+        "file_name": "ecorex-capability-pack-image-windows-x64-1.0.0.zip",
+        "sha256": "012f485114cc77ca0c30dbf775303aa94263ae9b561cdae747915e44bef2e370",
+        "size_bytes": 1376
+      },
+      {
+        "artifact_id": "capability-pack-image-windows-x64-manifest",
+        "file_name": "ecorex-capability-pack-image-windows-x64-1.0.0.json",
+        "sha256": "843d20a6b182494e306f7ace7824c11ccb298d1c5d56788f5de41e639d697e83",
+        "size_bytes": 765
+      },
+      {
+        "artifact_id": "capability-pack-ocr-windows-x64",
+        "file_name": "ecorex-capability-pack-ocr-windows-x64-1.0.0.zip",
+        "sha256": "7adf50dd8e796cce53c69db60f8b85a9d56e7b5ce2a55a2f0560f639e1590628",
+        "size_bytes": 94993855
+      },
+      {
+        "artifact_id": "capability-pack-ocr-windows-x64-manifest",
+        "file_name": "ecorex-capability-pack-ocr-windows-x64-1.0.0.json",
+        "sha256": "19c669bcd415f2846465dfe13cf19a4651500d23ea037384c67f6879fd328d44",
+        "size_bytes": 653
+      },
+      {
+        "artifact_id": "capability-pack-office-windows-x64",
+        "file_name": "ecorex-capability-pack-office-windows-x64-1.0.0.zip",
+        "sha256": "f9323262f069732eb191acacaf26c5c8fdf078e523d135f35bf4e5cf678241a4",
+        "size_bytes": 14836807
+      },
+      {
+        "artifact_id": "capability-pack-office-windows-x64-manifest",
+        "file_name": "ecorex-capability-pack-office-windows-x64-1.0.0.json",
+        "sha256": "070d7e899588eaa888ad2d5375a718f04dd66f827826c4affe2ead05a9379742",
+        "size_bytes": 662
+      },
+      {
+        "artifact_id": "capability-pack-sandbox-windows-x64",
+        "file_name": "ecorex-capability-pack-sandbox-windows-x64-1.0.0.zip",
+        "sha256": "34b1b519d6ccfaac4b356e7028886cdb084f541ab14012bd6d1758cf13fcd336",
+        "size_bytes": 7601
+      },
+      {
+        "artifact_id": "capability-pack-sandbox-windows-x64-manifest",
+        "file_name": "ecorex-capability-pack-sandbox-windows-x64-1.0.0.json",
+        "sha256": "a590671bcfc27bf90bd242f29e4cda7ac63118d48e86f26ae2a03ffc5e8ba28e",
+        "size_bytes": 641
+      },
+      {
+        "artifact_id": "core-windows-x64",
+        "file_name": "ecorex-core-windows-x64-1.0.0.zip",
+        "sha256": "bc7ccecd7d64a24cf1b06b5dfa200669d7db1cb68624173bbf2e3f88254a1f5e",
+        "size_bytes": 21469417
+      },
+      {
+        "artifact_id": "web-manifest",
+        "file_name": "web-manifest.json",
+        "sha256": "aa7098b0165641dcccd76cffaf663e3eeaac3e33226894dc379b590c31c6f02d",
+        "size_bytes": 4636
+      }
+    ],
+    "build_digest": "9772a6be6d3e7790ed50a309e9ff56d2e56d1f2d47567c4d9c3f1b2148f32b7d",
+    "core_plus_packs_atomic": true,
+    "core_sha256": "bc7ccecd7d64a24cf1b06b5dfa200669d7db1cb68624173bbf2e3f88254a1f5e",
+    "manifest_sha256": "2104c95890f38080380f536ba33ddda0b48af88815826878f3ee16f89a5c555c",
+    "pack_ids": [
+      "browser",
+      "channels",
+      "image",
+      "ocr",
+      "office",
+      "sandbox"
+    ],
+    "release_id": "release-stable-9772a6be6d3e7790ed50a309",
+    "signature_algorithm": "ed25519",
+    "signature_verified": true,
+    "storage_migration": {
+      "compiled_target_match": true,
+      "manifest_sha256": "531f60a178ccfdbea6441fe8cf3343f32aeae92bd46955156ceba5e313444b85",
+      "schema_version": 2,
+      "target_schema_sha256": "1199a7b3cb6d47bd56b433c15a23543bda0e10a9b52f8c2c4906eb6344bf37cd",
+      "target_schema_version": 1
+    },
+    "version": "1.0.0",
+    "web": {
+      "asset_names_bind_sha256_prefix": true,
+      "entrypoint": "index.html",
+      "file_count": 25,
+      "immutable_asset_count": 24
+    },
+    "web_bundle_sha256": "d59bb1916680b791c7166abe0b1869ce5bb59d30221b5226f06e0f9f32455061",
+    "web_manifest_sha256": "aa7098b0165641dcccd76cffaf663e3eeaac3e33226894dc379b590c31c6f02d"
+  },
+  "rollback": {
+    "bootstrap_http_status": 200,
+    "bootstrap_launches": 2,
+    "cross_version_update_claimed": false,
+    "exercise": "signed_same_version_replacement_pre_data",
+    "fault_preflight_exit_code": 70,
+    "fault_release": {
+      "artifact_count": 15,
+      "artifacts": [
+        {
+          "artifact_id": "bootstrap-windows-x64",
+          "file_name": "ecorex-bootstrap-windows-x64-1.0.0.zip",
+          "sha256": "dfa22fb1c25035ae2b82dd05cec31395095143f9c9cae487c390fffbc2a9c8e3",
+          "size_bytes": 3109085
+        },
+        {
+          "artifact_id": "capability-pack-browser-windows-x64",
+          "file_name": "ecorex-capability-pack-browser-windows-x64-1.0.0.zip",
+          "sha256": "dcb5353bbfab081bbb3a873560f1596ae0d1e39b5cdd2b5ac3acfd85018c1d56",
+          "size_bytes": 190153571
+        },
+        {
+          "artifact_id": "capability-pack-browser-windows-x64-manifest",
+          "file_name": "ecorex-capability-pack-browser-windows-x64-1.0.0.json",
+          "sha256": "451dce4ba981515aa5d5b145533fef320f14a92c0aea3352484cb618d86b422a",
+          "size_bytes": 768
+        },
+        {
+          "artifact_id": "capability-pack-channels-windows-x64",
+          "file_name": "ecorex-capability-pack-channels-windows-x64-1.0.0.zip",
+          "sha256": "4a57122cd66ada4dbd71ab6389712ef5f9cd41d580128b711490896e9c291c31",
+          "size_bytes": 809
+        },
+        {
+          "artifact_id": "capability-pack-channels-windows-x64-manifest",
+          "file_name": "ecorex-capability-pack-channels-windows-x64-1.0.0.json",
+          "sha256": "bd140cdad59d6cd7256788ae91590e3b403a5d26c48c1b3bd36da9967f4064f1",
+          "size_bytes": 664
+        },
+        {
+          "artifact_id": "capability-pack-image-windows-x64",
+          "file_name": "ecorex-capability-pack-image-windows-x64-1.0.0.zip",
+          "sha256": "012f485114cc77ca0c30dbf775303aa94263ae9b561cdae747915e44bef2e370",
+          "size_bytes": 1376
+        },
+        {
+          "artifact_id": "capability-pack-image-windows-x64-manifest",
+          "file_name": "ecorex-capability-pack-image-windows-x64-1.0.0.json",
+          "sha256": "843d20a6b182494e306f7ace7824c11ccb298d1c5d56788f5de41e639d697e83",
+          "size_bytes": 765
+        },
+        {
+          "artifact_id": "capability-pack-ocr-windows-x64",
+          "file_name": "ecorex-capability-pack-ocr-windows-x64-1.0.0.zip",
+          "sha256": "7adf50dd8e796cce53c69db60f8b85a9d56e7b5ce2a55a2f0560f639e1590628",
+          "size_bytes": 94993855
+        },
+        {
+          "artifact_id": "capability-pack-ocr-windows-x64-manifest",
+          "file_name": "ecorex-capability-pack-ocr-windows-x64-1.0.0.json",
+          "sha256": "19c669bcd415f2846465dfe13cf19a4651500d23ea037384c67f6879fd328d44",
+          "size_bytes": 653
+        },
+        {
+          "artifact_id": "capability-pack-office-windows-x64",
+          "file_name": "ecorex-capability-pack-office-windows-x64-1.0.0.zip",
+          "sha256": "f9323262f069732eb191acacaf26c5c8fdf078e523d135f35bf4e5cf678241a4",
+          "size_bytes": 14836807
+        },
+        {
+          "artifact_id": "capability-pack-office-windows-x64-manifest",
+          "file_name": "ecorex-capability-pack-office-windows-x64-1.0.0.json",
+          "sha256": "070d7e899588eaa888ad2d5375a718f04dd66f827826c4affe2ead05a9379742",
+          "size_bytes": 662
+        },
+        {
+          "artifact_id": "capability-pack-sandbox-windows-x64",
+          "file_name": "ecorex-capability-pack-sandbox-windows-x64-1.0.0.zip",
+          "sha256": "34b1b519d6ccfaac4b356e7028886cdb084f541ab14012bd6d1758cf13fcd336",
+          "size_bytes": 7601
+        },
+        {
+          "artifact_id": "capability-pack-sandbox-windows-x64-manifest",
+          "file_name": "ecorex-capability-pack-sandbox-windows-x64-1.0.0.json",
+          "sha256": "a590671bcfc27bf90bd242f29e4cda7ac63118d48e86f26ae2a03ffc5e8ba28e",
+          "size_bytes": 641
+        },
+        {
+          "artifact_id": "core-windows-x64",
+          "file_name": "ecorex-core-windows-x64-1.0.0.zip",
+          "sha256": "e48c32070fc4233ca3e9da99571f036868e0672fc411eef6a2fec503bcd2bfb8",
+          "size_bytes": 21469565
+        },
+        {
+          "artifact_id": "web-manifest",
+          "file_name": "web-manifest.json",
+          "sha256": "328a6530fb183f80f4231ad65a27482cf8782b49f1e5c7853983b4f98f48cc91",
+          "size_bytes": 4636
+        }
+      ],
+      "build_digest": "10165710438b4df4d7fbcd4250ee2182729757ed2745b90a16097f4a6737e629",
+      "core_plus_packs_atomic": true,
+      "core_sha256": "e48c32070fc4233ca3e9da99571f036868e0672fc411eef6a2fec503bcd2bfb8",
+      "manifest_sha256": "b7c770721268b2153cad318ad6071d8060cf22bd08c4d1ed562acb9100b8106b",
+      "pack_ids": [
+        "browser",
+        "channels",
+        "image",
+        "ocr",
+        "office",
+        "sandbox"
+      ],
+      "release_id": "release-stable-10165710438b4df4d7fbcd42",
+      "signature_algorithm": "ed25519",
+      "signature_verified": true,
+      "storage_migration": {
+        "compiled_target_match": true,
+        "manifest_sha256": "531f60a178ccfdbea6441fe8cf3343f32aeae92bd46955156ceba5e313444b85",
+        "schema_version": 2,
+        "target_schema_sha256": "1199a7b3cb6d47bd56b433c15a23543bda0e10a9b52f8c2c4906eb6344bf37cd",
+        "target_schema_version": 1
+      },
+      "version": "1.0.0",
+      "web": {
+        "asset_names_bind_sha256_prefix": true,
+        "entrypoint": "index.html",
+        "file_count": 25,
+        "immutable_asset_count": 24
+      },
+      "web_bundle_sha256": "d59bb1916680b791c7166abe0b1869ce5bb59d30221b5226f06e0f9f32455061",
+      "web_manifest_sha256": "328a6530fb183f80f4231ad65a27482cf8782b49f1e5c7853983b4f98f48cc91"
+    },
+    "fault_slot_discarded": true,
+    "fault_slot_id": "r-5e4cdda113e87fc7aa354640087acc0e903d4c92",
+    "journal_states": [
+      "resolving",
+      "downloading",
+      "downloading",
+      "verifying",
+      "staging",
+      "awaiting_user",
+      "draining",
+      "draining",
+      "activating",
+      "activating",
+      "healthchecking",
+      "rollback"
+    ],
+    "pack_python_manifest_rebound": true,
+    "prepared_state": "awaiting_user",
+    "restored_slot_id": "r-f9a1990f73cf3e3827deb4d227e23ec898069385",
+    "terminal_state": "rollback"
+  },
+  "runtime_dependencies": [
+    {
+      "license": "MIT License",
+      "name": "annotated-types",
+      "version": "0.7.0"
+    },
+    {
+      "license": "MIT",
+      "name": "anyio",
+      "version": "4.13.0"
+    },
+    {
+      "license": "MPL-2.0",
+      "name": "certifi",
+      "version": "2026.2.25"
+    },
+    {
+      "license": "MIT",
+      "name": "cffi",
+      "version": "2.0.0"
+    },
+    {
+      "license": "BSD-3-Clause",
+      "name": "click",
+      "version": "8.4.1"
+    },
+    {
+      "license": "BSD License",
+      "name": "colorama",
+      "version": "0.4.6"
+    },
+    {
+      "license": "Apache-2.0 OR BSD-3-Clause",
+      "name": "cryptography",
+      "version": "46.0.7"
+    },
+    {
+      "license": "MIT License",
+      "name": "fastapi",
+      "version": "0.115.0"
+    },
+    {
+      "license": "MIT",
+      "name": "h11",
+      "version": "0.16.0"
+    },
+    {
+      "license": "BSD-3-Clause",
+      "name": "httpcore",
+      "version": "1.0.9"
+    },
+    {
+      "license": "BSD-3-Clause",
+      "name": "httpx",
+      "version": "0.27.2"
+    },
+    {
+      "license": "BSD-3-Clause",
+      "name": "idna",
+      "version": "3.12"
+    },
+    {
+      "license": "BSD-3-Clause",
+      "name": "pycparser",
+      "version": "3.0"
+    },
+    {
+      "license": "MIT",
+      "name": "pydantic",
+      "version": "2.12.5"
+    },
+    {
+      "license": "MIT",
+      "name": "pydantic_core",
+      "version": "2.41.5"
+    },
+    {
+      "license": "Apache-2.0",
+      "name": "python-multipart",
+      "version": "0.0.26"
+    },
+    {
+      "license": "MIT OR Apache-2.0",
+      "name": "sniffio",
+      "version": "1.3.1"
+    },
+    {
+      "license": "BSD-3-Clause",
+      "name": "starlette",
+      "version": "0.38.6"
+    },
+    {
+      "license": "PSF-2.0",
+      "name": "typing_extensions",
+      "version": "4.15.0"
+    },
+    {
+      "license": "MIT",
+      "name": "typing-inspection",
+      "version": "0.4.2"
+    },
+    {
+      "license": "Apache-2.0",
+      "name": "tzdata",
+      "version": "2026.2"
+    },
+    {
+      "license": "BSD-3-Clause",
+      "name": "uvicorn",
+      "version": "0.30.0"
+    },
+    {
+      "license": "BSD-3-Clause",
+      "name": "websockets",
+      "version": "15.0.1"
+    }
+  ],
+  "sandbox_security": {
+    "attestation_security_policy_sha256": "377bef2c05f3a5e9fc1426d39a5f7aabf84657654d560a9aaa423eca207d53ec",
+    "contract": "windows-appcontainer-stable-provision-v2",
+    "helper_sha256": "44ddd120d4a41305c16b4dcd770fc4669b10fd369e3841d95c9f47140240f810",
+    "permission_domain_sha256": "82d66611d9c735d3c0d7b2811acfe963ffb8c4e5ebfa4b3a0b9d820541feaefd",
+    "read_roots_sha256": "239f59ed55e737c77147cf55ad0c1b030b6d7ee748a7426952f9b852d5a935e5",
+    "root_security_sha256": "dab7bb8c87bf73f818b634130a8be5691c53da83afed0893a88b1c6b5c13c55d",
+    "strict_attestation_before_and_after_runtime": true,
+    "system_python_acl_mutated": false,
+    "temporary_appcontainer_domain_removed": true
+  },
+  "schema_version": 3,
+  "signing": {
+    "algorithm": "ed25519",
+    "key_id": "ecorex-local-candidate-drill",
+    "os_application_signing_used": false,
+    "private_key_persisted": false,
+    "public_key_sha256": "eac203fcf8f9cc76919f688c25df1efabdce6baffb1f7538f2b388074c5206d6"
+  },
+  "source_failover": {
+    "all_replicas_match_signed_digest": true,
+    "artifact_count_per_source": 15,
+    "attempts": [
+      {
+        "artifact_id": "core-windows-x64",
+        "resume_from": 0,
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "core-windows-x64",
+        "resume_from": 0,
+        "source_id": "github"
+      },
+      {
+        "artifact_id": "capability-pack-browser-windows-x64",
+        "resume_from": 0,
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "capability-pack-browser-windows-x64-manifest",
+        "resume_from": 0,
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "capability-pack-channels-windows-x64",
+        "resume_from": 0,
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "capability-pack-channels-windows-x64-manifest",
+        "resume_from": 0,
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "capability-pack-image-windows-x64",
+        "resume_from": 0,
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "capability-pack-image-windows-x64-manifest",
+        "resume_from": 0,
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "capability-pack-ocr-windows-x64",
+        "resume_from": 0,
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "capability-pack-ocr-windows-x64-manifest",
+        "resume_from": 0,
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "capability-pack-office-windows-x64",
+        "resume_from": 0,
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "capability-pack-office-windows-x64-manifest",
+        "resume_from": 0,
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "capability-pack-sandbox-windows-x64",
+        "resume_from": 0,
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "capability-pack-sandbox-windows-x64-manifest",
+        "resume_from": 0,
+        "source_id": "github-cn"
+      }
+    ],
+    "core_attempt_order": [
+      "github-cn",
+      "github"
+    ],
+    "core_resume_offset": 0,
+    "cross_source_partial_reuse_forbidden": true,
+    "injected_outages": [
+      "github-cn"
+    ],
+    "replicas": [
+      {
+        "artifact_id": "bootstrap-windows-x64",
+        "kind": "github-cn-mirror",
+        "priority": 0,
+        "sha256": "dfa22fb1c25035ae2b82dd05cec31395095143f9c9cae487c390fffbc2a9c8e3",
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "capability-pack-browser-windows-x64",
+        "kind": "github-cn-mirror",
+        "priority": 0,
+        "sha256": "dcb5353bbfab081bbb3a873560f1596ae0d1e39b5cdd2b5ac3acfd85018c1d56",
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "capability-pack-browser-windows-x64-manifest",
+        "kind": "github-cn-mirror",
+        "priority": 0,
+        "sha256": "451dce4ba981515aa5d5b145533fef320f14a92c0aea3352484cb618d86b422a",
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "capability-pack-channels-windows-x64",
+        "kind": "github-cn-mirror",
+        "priority": 0,
+        "sha256": "4a57122cd66ada4dbd71ab6389712ef5f9cd41d580128b711490896e9c291c31",
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "capability-pack-channels-windows-x64-manifest",
+        "kind": "github-cn-mirror",
+        "priority": 0,
+        "sha256": "bd140cdad59d6cd7256788ae91590e3b403a5d26c48c1b3bd36da9967f4064f1",
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "capability-pack-image-windows-x64",
+        "kind": "github-cn-mirror",
+        "priority": 0,
+        "sha256": "012f485114cc77ca0c30dbf775303aa94263ae9b561cdae747915e44bef2e370",
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "capability-pack-image-windows-x64-manifest",
+        "kind": "github-cn-mirror",
+        "priority": 0,
+        "sha256": "843d20a6b182494e306f7ace7824c11ccb298d1c5d56788f5de41e639d697e83",
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "capability-pack-ocr-windows-x64",
+        "kind": "github-cn-mirror",
+        "priority": 0,
+        "sha256": "7adf50dd8e796cce53c69db60f8b85a9d56e7b5ce2a55a2f0560f639e1590628",
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "capability-pack-ocr-windows-x64-manifest",
+        "kind": "github-cn-mirror",
+        "priority": 0,
+        "sha256": "19c669bcd415f2846465dfe13cf19a4651500d23ea037384c67f6879fd328d44",
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "capability-pack-office-windows-x64",
+        "kind": "github-cn-mirror",
+        "priority": 0,
+        "sha256": "f9323262f069732eb191acacaf26c5c8fdf078e523d135f35bf4e5cf678241a4",
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "capability-pack-office-windows-x64-manifest",
+        "kind": "github-cn-mirror",
+        "priority": 0,
+        "sha256": "070d7e899588eaa888ad2d5375a718f04dd66f827826c4affe2ead05a9379742",
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "capability-pack-sandbox-windows-x64",
+        "kind": "github-cn-mirror",
+        "priority": 0,
+        "sha256": "34b1b519d6ccfaac4b356e7028886cdb084f541ab14012bd6d1758cf13fcd336",
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "capability-pack-sandbox-windows-x64-manifest",
+        "kind": "github-cn-mirror",
+        "priority": 0,
+        "sha256": "a590671bcfc27bf90bd242f29e4cda7ac63118d48e86f26ae2a03ffc5e8ba28e",
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "core-windows-x64",
+        "kind": "github-cn-mirror",
+        "priority": 0,
+        "sha256": "bc7ccecd7d64a24cf1b06b5dfa200669d7db1cb68624173bbf2e3f88254a1f5e",
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "web-manifest",
+        "kind": "github-cn-mirror",
+        "priority": 0,
+        "sha256": "aa7098b0165641dcccd76cffaf663e3eeaac3e33226894dc379b590c31c6f02d",
+        "source_id": "github-cn"
+      },
+      {
+        "artifact_id": "bootstrap-windows-x64",
+        "kind": "github-release",
+        "priority": 1,
+        "sha256": "dfa22fb1c25035ae2b82dd05cec31395095143f9c9cae487c390fffbc2a9c8e3",
+        "source_id": "github"
+      },
+      {
+        "artifact_id": "capability-pack-browser-windows-x64",
+        "kind": "github-release",
+        "priority": 1,
+        "sha256": "dcb5353bbfab081bbb3a873560f1596ae0d1e39b5cdd2b5ac3acfd85018c1d56",
+        "source_id": "github"
+      },
+      {
+        "artifact_id": "capability-pack-browser-windows-x64-manifest",
+        "kind": "github-release",
+        "priority": 1,
+        "sha256": "451dce4ba981515aa5d5b145533fef320f14a92c0aea3352484cb618d86b422a",
+        "source_id": "github"
+      },
+      {
+        "artifact_id": "capability-pack-channels-windows-x64",
+        "kind": "github-release",
+        "priority": 1,
+        "sha256": "4a57122cd66ada4dbd71ab6389712ef5f9cd41d580128b711490896e9c291c31",
+        "source_id": "github"
+      },
+      {
+        "artifact_id": "capability-pack-channels-windows-x64-manifest",
+        "kind": "github-release",
+        "priority": 1,
+        "sha256": "bd140cdad59d6cd7256788ae91590e3b403a5d26c48c1b3bd36da9967f4064f1",
+        "source_id": "github"
+      },
+      {
+        "artifact_id": "capability-pack-image-windows-x64",
+        "kind": "github-release",
+        "priority": 1,
+        "sha256": "012f485114cc77ca0c30dbf775303aa94263ae9b561cdae747915e44bef2e370",
+        "source_id": "github"
+      },
+      {
+        "artifact_id": "capability-pack-image-windows-x64-manifest",
+        "kind": "github-release",
+        "priority": 1,
+        "sha256": "843d20a6b182494e306f7ace7824c11ccb298d1c5d56788f5de41e639d697e83",
+        "source_id": "github"
+      },
+      {
+        "artifact_id": "capability-pack-ocr-windows-x64",
+        "kind": "github-release",
+        "priority": 1,
+        "sha256": "7adf50dd8e796cce53c69db60f8b85a9d56e7b5ce2a55a2f0560f639e1590628",
+        "source_id": "github"
+      },
+      {
+        "artifact_id": "capability-pack-ocr-windows-x64-manifest",
+        "kind": "github-release",
+        "priority": 1,
+        "sha256": "19c669bcd415f2846465dfe13cf19a4651500d23ea037384c67f6879fd328d44",
+        "source_id": "github"
+      },
+      {
+        "artifact_id": "capability-pack-office-windows-x64",
+        "kind": "github-release",
+        "priority": 1,
+        "sha256": "f9323262f069732eb191acacaf26c5c8fdf078e523d135f35bf4e5cf678241a4",
+        "source_id": "github"
+      },
+      {
+        "artifact_id": "capability-pack-office-windows-x64-manifest",
+        "kind": "github-release",
+        "priority": 1,
+        "sha256": "070d7e899588eaa888ad2d5375a718f04dd66f827826c4affe2ead05a9379742",
+        "source_id": "github"
+      },
+      {
+        "artifact_id": "capability-pack-sandbox-windows-x64",
+        "kind": "github-release",
+        "priority": 1,
+        "sha256": "34b1b519d6ccfaac4b356e7028886cdb084f541ab14012bd6d1758cf13fcd336",
+        "source_id": "github"
+      },
+      {
+        "artifact_id": "capability-pack-sandbox-windows-x64-manifest",
+        "kind": "github-release",
+        "priority": 1,
+        "sha256": "a590671bcfc27bf90bd242f29e4cda7ac63118d48e86f26ae2a03ffc5e8ba28e",
+        "source_id": "github"
+      },
+      {
+        "artifact_id": "core-windows-x64",
+        "kind": "github-release",
+        "priority": 1,
+        "sha256": "bc7ccecd7d64a24cf1b06b5dfa200669d7db1cb68624173bbf2e3f88254a1f5e",
+        "source_id": "github"
+      },
+      {
+        "artifact_id": "web-manifest",
+        "kind": "github-release",
+        "priority": 1,
+        "sha256": "aa7098b0165641dcccd76cffaf663e3eeaac3e33226894dc379b590c31c6f02d",
+        "source_id": "github"
+      },
+      {
+        "artifact_id": "bootstrap-windows-x64",
+        "kind": "ecorex-cdn",
+        "priority": 2,
+        "sha256": "dfa22fb1c25035ae2b82dd05cec31395095143f9c9cae487c390fffbc2a9c8e3",
+        "source_id": "cdn"
+      },
+      {
+        "artifact_id": "capability-pack-browser-windows-x64",
+        "kind": "ecorex-cdn",
+        "priority": 2,
+        "sha256": "dcb5353bbfab081bbb3a873560f1596ae0d1e39b5cdd2b5ac3acfd85018c1d56",
+        "source_id": "cdn"
+      },
+      {
+        "artifact_id": "capability-pack-browser-windows-x64-manifest",
+        "kind": "ecorex-cdn",
+        "priority": 2,
+        "sha256": "451dce4ba981515aa5d5b145533fef320f14a92c0aea3352484cb618d86b422a",
+        "source_id": "cdn"
+      },
+      {
+        "artifact_id": "capability-pack-channels-windows-x64",
+        "kind": "ecorex-cdn",
+        "priority": 2,
+        "sha256": "4a57122cd66ada4dbd71ab6389712ef5f9cd41d580128b711490896e9c291c31",
+        "source_id": "cdn"
+      },
+      {
+        "artifact_id": "capability-pack-channels-windows-x64-manifest",
+        "kind": "ecorex-cdn",
+        "priority": 2,
+        "sha256": "bd140cdad59d6cd7256788ae91590e3b403a5d26c48c1b3bd36da9967f4064f1",
+        "source_id": "cdn"
+      },
+      {
+        "artifact_id": "capability-pack-image-windows-x64",
+        "kind": "ecorex-cdn",
+        "priority": 2,
+        "sha256": "012f485114cc77ca0c30dbf775303aa94263ae9b561cdae747915e44bef2e370",
+        "source_id": "cdn"
+      },
+      {
+        "artifact_id": "capability-pack-image-windows-x64-manifest",
+        "kind": "ecorex-cdn",
+        "priority": 2,
+        "sha256": "843d20a6b182494e306f7ace7824c11ccb298d1c5d56788f5de41e639d697e83",
+        "source_id": "cdn"
+      },
+      {
+        "artifact_id": "capability-pack-ocr-windows-x64",
+        "kind": "ecorex-cdn",
+        "priority": 2,
+        "sha256": "7adf50dd8e796cce53c69db60f8b85a9d56e7b5ce2a55a2f0560f639e1590628",
+        "source_id": "cdn"
+      },
+      {
+        "artifact_id": "capability-pack-ocr-windows-x64-manifest",
+        "kind": "ecorex-cdn",
+        "priority": 2,
+        "sha256": "19c669bcd415f2846465dfe13cf19a4651500d23ea037384c67f6879fd328d44",
+        "source_id": "cdn"
+      },
+      {
+        "artifact_id": "capability-pack-office-windows-x64",
+        "kind": "ecorex-cdn",
+        "priority": 2,
+        "sha256": "f9323262f069732eb191acacaf26c5c8fdf078e523d135f35bf4e5cf678241a4",
+        "source_id": "cdn"
+      },
+      {
+        "artifact_id": "capability-pack-office-windows-x64-manifest",
+        "kind": "ecorex-cdn",
+        "priority": 2,
+        "sha256": "070d7e899588eaa888ad2d5375a718f04dd66f827826c4affe2ead05a9379742",
+        "source_id": "cdn"
+      },
+      {
+        "artifact_id": "capability-pack-sandbox-windows-x64",
+        "kind": "ecorex-cdn",
+        "priority": 2,
+        "sha256": "34b1b519d6ccfaac4b356e7028886cdb084f541ab14012bd6d1758cf13fcd336",
+        "source_id": "cdn"
+      },
+      {
+        "artifact_id": "capability-pack-sandbox-windows-x64-manifest",
+        "kind": "ecorex-cdn",
+        "priority": 2,
+        "sha256": "a590671bcfc27bf90bd242f29e4cda7ac63118d48e86f26ae2a03ffc5e8ba28e",
+        "source_id": "cdn"
+      },
+      {
+        "artifact_id": "core-windows-x64",
+        "kind": "ecorex-cdn",
+        "priority": 2,
+        "sha256": "bc7ccecd7d64a24cf1b06b5dfa200669d7db1cb68624173bbf2e3f88254a1f5e",
+        "source_id": "cdn"
+      },
+      {
+        "artifact_id": "web-manifest",
+        "kind": "ecorex-cdn",
+        "priority": 2,
+        "sha256": "aa7098b0165641dcccd76cffaf663e3eeaac3e33226894dc379b590c31c6f02d",
+        "source_id": "cdn"
+      }
+    ],
+    "selected_core_source": "github",
+    "signed_source_order": [
+      "github-cn",
+      "github",
+      "cdn"
+    ]
+  },
+  "status": "passed",
+  "target": {
+    "architecture": "x64",
+    "platform": "windows"
+  },
+  "update_and_refresh": {
+    "active_slot_unchanged_before_confirmation": true,
+    "background_download": true,
+    "bootstrap_http_status": 200,
+    "bootstrap_launches": 2,
+    "cross_version_update_claimed": false,
+    "current_slot_id": "r-f9a1990f73cf3e3827deb4d227e23ec898069385",
+    "journal_states": [
+      "resolving",
+      "downloading",
+      "downloading",
+      "verifying",
+      "staging",
+      "awaiting_user",
+      "draining",
+      "draining",
+      "activating",
+      "activating",
+      "healthchecking",
+      "completed"
+    ],
+    "prepared_state": "awaiting_user",
+    "refresh_completed": true,
+    "release": {
+      "artifact_count": 15,
+      "artifacts": [
+        {
+          "artifact_id": "bootstrap-windows-x64",
+          "file_name": "ecorex-bootstrap-windows-x64-1.0.0.zip",
+          "sha256": "dfa22fb1c25035ae2b82dd05cec31395095143f9c9cae487c390fffbc2a9c8e3",
+          "size_bytes": 3109085
+        },
+        {
+          "artifact_id": "capability-pack-browser-windows-x64",
+          "file_name": "ecorex-capability-pack-browser-windows-x64-1.0.0.zip",
+          "sha256": "dcb5353bbfab081bbb3a873560f1596ae0d1e39b5cdd2b5ac3acfd85018c1d56",
+          "size_bytes": 190153571
+        },
+        {
+          "artifact_id": "capability-pack-browser-windows-x64-manifest",
+          "file_name": "ecorex-capability-pack-browser-windows-x64-1.0.0.json",
+          "sha256": "451dce4ba981515aa5d5b145533fef320f14a92c0aea3352484cb618d86b422a",
+          "size_bytes": 768
+        },
+        {
+          "artifact_id": "capability-pack-channels-windows-x64",
+          "file_name": "ecorex-capability-pack-channels-windows-x64-1.0.0.zip",
+          "sha256": "4a57122cd66ada4dbd71ab6389712ef5f9cd41d580128b711490896e9c291c31",
+          "size_bytes": 809
+        },
+        {
+          "artifact_id": "capability-pack-channels-windows-x64-manifest",
+          "file_name": "ecorex-capability-pack-channels-windows-x64-1.0.0.json",
+          "sha256": "bd140cdad59d6cd7256788ae91590e3b403a5d26c48c1b3bd36da9967f4064f1",
+          "size_bytes": 664
+        },
+        {
+          "artifact_id": "capability-pack-image-windows-x64",
+          "file_name": "ecorex-capability-pack-image-windows-x64-1.0.0.zip",
+          "sha256": "012f485114cc77ca0c30dbf775303aa94263ae9b561cdae747915e44bef2e370",
+          "size_bytes": 1376
+        },
+        {
+          "artifact_id": "capability-pack-image-windows-x64-manifest",
+          "file_name": "ecorex-capability-pack-image-windows-x64-1.0.0.json",
+          "sha256": "843d20a6b182494e306f7ace7824c11ccb298d1c5d56788f5de41e639d697e83",
+          "size_bytes": 765
+        },
+        {
+          "artifact_id": "capability-pack-ocr-windows-x64",
+          "file_name": "ecorex-capability-pack-ocr-windows-x64-1.0.0.zip",
+          "sha256": "7adf50dd8e796cce53c69db60f8b85a9d56e7b5ce2a55a2f0560f639e1590628",
+          "size_bytes": 94993855
+        },
+        {
+          "artifact_id": "capability-pack-ocr-windows-x64-manifest",
+          "file_name": "ecorex-capability-pack-ocr-windows-x64-1.0.0.json",
+          "sha256": "19c669bcd415f2846465dfe13cf19a4651500d23ea037384c67f6879fd328d44",
+          "size_bytes": 653
+        },
+        {
+          "artifact_id": "capability-pack-office-windows-x64",
+          "file_name": "ecorex-capability-pack-office-windows-x64-1.0.0.zip",
+          "sha256": "f9323262f069732eb191acacaf26c5c8fdf078e523d135f35bf4e5cf678241a4",
+          "size_bytes": 14836807
+        },
+        {
+          "artifact_id": "capability-pack-office-windows-x64-manifest",
+          "file_name": "ecorex-capability-pack-office-windows-x64-1.0.0.json",
+          "sha256": "070d7e899588eaa888ad2d5375a718f04dd66f827826c4affe2ead05a9379742",
+          "size_bytes": 662
+        },
+        {
+          "artifact_id": "capability-pack-sandbox-windows-x64",
+          "file_name": "ecorex-capability-pack-sandbox-windows-x64-1.0.0.zip",
+          "sha256": "34b1b519d6ccfaac4b356e7028886cdb084f541ab14012bd6d1758cf13fcd336",
+          "size_bytes": 7601
+        },
+        {
+          "artifact_id": "capability-pack-sandbox-windows-x64-manifest",
+          "file_name": "ecorex-capability-pack-sandbox-windows-x64-1.0.0.json",
+          "sha256": "a590671bcfc27bf90bd242f29e4cda7ac63118d48e86f26ae2a03ffc5e8ba28e",
+          "size_bytes": 641
+        },
+        {
+          "artifact_id": "core-windows-x64",
+          "file_name": "ecorex-core-windows-x64-1.0.0.zip",
+          "sha256": "90e699e3a03315ab0707e6ee0b6a4fb56e119b798ac3291e102be1d16c2f7e7a",
+          "size_bytes": 21469606
+        },
+        {
+          "artifact_id": "web-manifest",
+          "file_name": "web-manifest.json",
+          "sha256": "30355409203e44ea6d1f06d199fc859c81ac40a7d1f6f637d97d21ac637e90c9",
+          "size_bytes": 4636
+        }
+      ],
+      "build_digest": "01ea89191da7bca57c732b7068d98407b8f5f8c458ac60faabc417062d860cf3",
+      "core_plus_packs_atomic": true,
+      "core_sha256": "90e699e3a03315ab0707e6ee0b6a4fb56e119b798ac3291e102be1d16c2f7e7a",
+      "manifest_sha256": "89c860653407561fbdf664203b6189ff33a489373de9af108e3c969bdcfde70c",
+      "pack_ids": [
+        "browser",
+        "channels",
+        "image",
+        "ocr",
+        "office",
+        "sandbox"
+      ],
+      "release_id": "release-stable-01ea89191da7bca57c732b70",
+      "signature_algorithm": "ed25519",
+      "signature_verified": true,
+      "storage_migration": {
+        "compiled_target_match": true,
+        "manifest_sha256": "531f60a178ccfdbea6441fe8cf3343f32aeae92bd46955156ceba5e313444b85",
+        "schema_version": 2,
+        "target_schema_sha256": "1199a7b3cb6d47bd56b433c15a23543bda0e10a9b52f8c2c4906eb6344bf37cd",
+        "target_schema_version": 1
+      },
+      "version": "1.0.0",
+      "web": {
+        "asset_names_bind_sha256_prefix": true,
+        "entrypoint": "index.html",
+        "file_count": 25,
+        "immutable_asset_count": 24
+      },
+      "web_bundle_sha256": "d59bb1916680b791c7166abe0b1869ce5bb59d30221b5226f06e0f9f32455061",
+      "web_manifest_sha256": "30355409203e44ea6d1f06d199fc859c81ac40a7d1f6f637d97d21ac637e90c9"
+    },
+    "same_version_replacement": true,
+    "terminal_state": "completed",
+    "user_confirmed_activation": true,
+    "web_cache": {
+      "asset_cache_control": "public, max-age=31536000, immutable",
+      "asset_etag_present": true,
+      "asset_path": "assets/index.934b64dcc4966a09.js",
+      "index_cache_control": "no-store"
+    }
+  },
+  "version": "1.0.0"
+}

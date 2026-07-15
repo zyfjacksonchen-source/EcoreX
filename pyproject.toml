@@ -1,19 +1,65 @@
 [build-system]
-requires = ["setuptools>=45.0"]
+requires = ["setuptools==68.0.0", "wheel==0.42.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "ecorex-agent-runtime"
-version = "0.1.19"
+dynamic = ["version"]
 description = "EcoreX local agent runtime"
-requires-python = ">=3.7"
+requires-python = ">=3.11"
 dependencies = [
-    "click>=8.0",
-    "requests>=2.28.2",
+    "cryptography==46.0.7",
+    "fastapi==0.115.0",
+    "httpx==0.27.2",
+    "pydantic==2.12.5",
+    "python-multipart==0.0.26",
+    "tzdata==2026.2",
+    "uvicorn==0.30.0",
+    "websockets==15.0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "jsonschema==4.26.0",
+    "pytest==9.1.1",
+    "ruff==0.15.21",
+]
+image-cloud = [
+    "boto3==1.38.0",
+    "psycopg[binary,pool]==3.2.1",
+]
+control-plane-cloud = [
+    "boto3==1.38.0",
 ]
 
 [project.scripts]
-ecorex = "cli.cli:main"
+ecorex = "ecorex.server.cli:main"
+ecorex-product = "ecorex.server.cli:main"
+ecorex-bootstrap = "ecorex.bootstrap.cli:main"
+ecorex-release = "ecorex.control_plane.cli:main"
+ecorex-control-plane = "ecorex.control_plane.production:main"
+ecorex-image = "ecorex.image_orchestrator.production:main"
+ecorex-gateway = "ecorex.gateway.production:main"
+ecorex-gateway-schema = "ecorex.gateway.schema:main"
+ecorex-share-schema = "ecorex.control_plane.share_schema:main"
 
 [tool.setuptools.packages.find]
-include = ["cli*"]
+include = ["ecorex*"]
+exclude = ["cli*", "agent*", "channel*", "desktop*", "tests*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "ecorex.__version__"}
+
+[tool.pytest.ini_options]
+testpaths = ["tests/v1"]
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+# The v1 baseline fails on syntax/import-order errors, duplicate definitions,
+# undefined names and the rest of Pyflakes. Public package re-exports and the
+# existing unused-variable debt remain explicit exceptions until their APIs are
+# reduced without breaking compatibility.
+select = ["E4", "E7", "E9", "F"]
+ignore = ["F401", "F403", "F841"]

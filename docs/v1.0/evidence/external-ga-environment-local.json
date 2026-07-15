@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-11T16:41:18+08:00",
+  "host": {
+    "platform": "windows",
+    "architecture": "x64"
+  },
+  "checks": {
+    "docker_engine": {
+      "available": false,
+      "reason": "Docker Desktop Linux named pipe was not present"
+    },
+    "postgresql_client": {
+      "available": false,
+      "command": "psql"
+    },
+    "minio_client": {
+      "available": false,
+      "command": "mc"
+    },
+    "minio_server": {
+      "available": false,
+      "command": "minio"
+    }
+  },
+  "consequence": [
+    "Real PostgreSQL multi-process image load cannot be claimed from this host.",
+    "Real S3 or MinIO partition and garbage-collection evidence remains a release-environment gate.",
+    "SQLite and in-memory transport tests are correctness evidence only, not production load evidence."
+  ]
+}

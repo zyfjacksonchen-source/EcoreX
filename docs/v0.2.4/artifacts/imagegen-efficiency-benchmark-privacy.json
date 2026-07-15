@@ -1,0 +1,10 @@
+{
+  "status": "success",
+  "filesScanned": 4,
+  "findingCount": 0,
+  "imageOcrScannedCount": 0,
+  "imageOcrUnavailableCount": 0,
+  "imageOcrErrorCount": 0,
+  "findings": [],
+  "redacted": true
+}

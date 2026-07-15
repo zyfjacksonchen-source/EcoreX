@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "audited_at": "2026-07-11",
+  "browser": "Codex in-app Browser",
+  "scope": "local WebUI and loopback-only public-share fixture",
+  "external_publication": false,
+  "main_webui": {
+    "viewport": [1280, 720],
+    "message_order": ["你", "EcoreX"],
+    "ordinary_button_idle": {
+      "font_size": "13px",
+      "line_height": "20px",
+      "border_color": "rgba(0, 0, 0, 0)",
+      "background_color": "rgba(0, 0, 0, 0)"
+    },
+    "artifact_media_action_rail": {
+      "idle_opacity": "0",
+      "idle_pointer_events": "none",
+      "action_count": 4
+    }
+  },
+  "public_share_desktop": {
+    "viewport": [1280, 720],
+    "message_order": ["你的指令", "EcoreX"],
+    "image_complete": true,
+    "natural_size": [1800, 1100],
+    "rendered_size": [758.65625, 463.625],
+    "object_fit": "contain",
+    "horizontal_overflow_px": 0,
+    "script_count": 0
+  },
+  "public_share_mobile": {
+    "viewport": [390, 844],
+    "rendered_image_size": [364.6458435058594, 222.84375],
+    "horizontal_overflow_px": 0,
+    "workspace_radius": "0px"
+  },
+  "notes": [
+    "The browser run found and fixed an obsolete short GA CSRF token before rendering.",
+    "The browser run found and fixed a font shorthand that overrode the 13/20 control token.",
+    "The browser run found and fixed timestamp/opaque-ID chat sorting in favor of durable event order.",
+    "The public-share fixture uses the real Control Plane renderer and media endpoint; it is not a static HTML substitute."
+  ]
+}

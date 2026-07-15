@@ -40,7 +40,7 @@
                      },
                      {
                          "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-main-light.png",
-                         "bytes":  49106,
+                         "bytes":  48967,
                          "action":  "",
                          "evidenceType":  "screenshot",
                          "metrics":  {
@@ -49,7 +49,7 @@
                      },
                      {
                          "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-settings-light.png",
-                         "bytes":  80170,
+                         "bytes":  80059,
                          "action":  "open-settings",
                          "evidenceType":  "screenshot",
                          "metrics":  {
@@ -58,7 +58,7 @@
                      },
                      {
                          "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-abilities-light.png",
-                         "bytes":  109056,
+                         "bytes":  108938,
                          "action":  "open-abilities",
                          "evidenceType":  "screenshot",
                          "metrics":  {
@@ -67,7 +67,7 @@
                      },
                      {
                          "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-skill-menu-light.png",
-                         "bytes":  70289,
+                         "bytes":  70151,
                          "action":  "skill-menu",
                          "evidenceType":  "screenshot",
                          "metrics":  {
@@ -76,7 +76,7 @@
                      },
                      {
                          "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-skill-lark-hidden-light.png",
-                         "bytes":  54713,
+                         "bytes":  54568,
                          "action":  "lark-hidden",
                          "evidenceType":  "screenshot",
                          "metrics":  {
@@ -85,7 +85,7 @@
                      },
                      {
                          "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-long-markdown-light.png",
-                         "bytes":  114371,
+                         "bytes":  114306,
                          "action":  "long-markdown",
                          "evidenceType":  "screenshot",
                          "metrics":  {
@@ -93,14 +93,14 @@
                                          "beforeNodes":  33,
                                          "afterNodes":  33,
                                          "markdownBlocks":  1,
-                                         "expandMs":  84.40000000596046,
+                                         "expandMs":  61.70000000298023,
                                          "expanded":  true,
                                          "textChars":  4078
                                      }
                      },
                      {
                          "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-stream-long-markdown-light.png",
-                         "bytes":  52250,
+                         "bytes":  52165,
                          "action":  "stream-long",
                          "evidenceType":  "screenshot",
                          "metrics":  {
@@ -109,7 +109,7 @@
                      },
                      {
                          "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-switch-stream-light.png",
-                         "bytes":  57305,
+                         "bytes":  57246,
                          "action":  "switch-stream",
                          "evidenceType":  "screenshot",
                          "metrics":  {
@@ -118,7 +118,7 @@
                      },
                      {
                          "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-switch-race-light.png",
-                         "bytes":  57669,
+                         "bytes":  57606,
                          "action":  "switch-race",
                          "evidenceType":  "screenshot",
                          "metrics":  {
@@ -142,7 +142,7 @@
                      },
                      {
                          "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-postdone-tail-light.png",
-                         "bytes":  57707,
+                         "bytes":  57710,
                          "action":  "postdone-tail",
                          "evidenceType":  "screenshot",
                          "metrics":  {
@@ -151,7 +151,7 @@
                      },
                      {
                          "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-terminal-boundary-light.png",
-                         "bytes":  45240,
+                         "bytes":  45233,
                          "action":  "terminal-boundary",
                          "evidenceType":  "screenshot",
                          "metrics":  {
@@ -160,7 +160,7 @@
                      },
                      {
                          "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-artifact-preview-light.png",
-                         "bytes":  51768,
+                         "bytes":  51746,
                          "action":  "artifact-preview",
                          "evidenceType":  "screenshot",
                          "metrics":  {
@@ -170,7 +170,7 @@
                      },
                      {
                          "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\mobile-artifact-menu-light.png",
-                         "bytes":  39646,
+                         "bytes":  39566,
                          "action":  "artifact-menu-mobile",
                          "evidenceType":  "screenshot",
                          "metrics":  {
@@ -184,7 +184,7 @@
                      },
                      {
                          "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-chat-file-context-light.png",
-                         "bytes":  52539,
+                         "bytes":  52457,
                          "action":  "chat-file-context",
                          "evidenceType":  "screenshot",
                          "metrics":  {
@@ -194,7 +194,7 @@
                      },
                      {
                          "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-send-stability-light.png",
-                         "bytes":  46094,
+                         "bytes":  46005,
                          "action":  "send-stability",
                          "evidenceType":  "screenshot",
                          "metrics":  {
@@ -203,7 +203,7 @@
                      },
                      {
                          "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-main-dark.png",
-                         "bytes":  50294,
+                         "bytes":  50239,
                          "action":  "",
                          "evidenceType":  "screenshot",
                          "metrics":  {
@@ -221,7 +221,7 @@
                      },
                      {
                          "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-abilities-dark.png",
-                         "bytes":  104786,
+                         "bytes":  104787,
                          "action":  "open-abilities",
                          "evidenceType":  "screenshot",
                          "metrics":  {

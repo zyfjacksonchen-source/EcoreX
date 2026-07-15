@@ -1,0 +1,87 @@
+{
+  "schemaVersion": "v0.2.7-slice-review-v1",
+  "slice": "S11-online-update-stability",
+  "status": "PASS_WITH_TOOL_LIMIT_FALLBACK",
+  "generatedAt": "2026-07-03T03:18:00+08:00",
+  "multiAgentAttempt": {
+    "requested": true,
+    "spawned": false,
+    "blockingReason": "multi_agent_v1.spawn_agent returned agent thread limit reached; no list-agent tool was available to close unknown existing agents.",
+    "fallbackMode": "single-agent five-role review plus executable tests",
+    "countsAsStrictMultiAgentPass": false
+  },
+  "decision": {
+    "implementation": "PASS",
+    "releaseGateCanContinue": true,
+    "strictReviewGate": "NOT_STRICT_PASS_DUE_TOOL_LIMIT",
+    "reason": "Executable tests and release artifact validation passed; strict concurrent sub-agent consensus could not be obtained because the agent pool was exhausted."
+  },
+  "roles": [
+    {
+      "role": "runtime-config",
+      "status": "PASS",
+      "evidence": [
+        "/api/version exposes redacted updateState",
+        "background update state reads update-state.json without exposing local paths",
+        "custom Gemini legacy transport migration fixed before bot_type mutation"
+      ]
+    },
+    {
+      "role": "frontend-api",
+      "status": "PASS",
+      "evidence": [
+        "RuntimeSnapshot carries updateState",
+        "existing tabs show a non-forced refresh banner after background install",
+        "reload action records ecorex-background-update-applied before window reload"
+      ]
+    },
+    {
+      "role": "toolchain-packaging",
+      "status": "PASS",
+      "evidence": [
+        "Windows and macOS WebUI installer templates write activationPolicy, autoLaunchBrowser, healthCheck, browserAction",
+        "manifest backgroundUpdate declares idle gate, health check, prompt refresh activation, and no background browser auto-launch",
+        "public release zip remains externalized and small"
+      ]
+    },
+    {
+      "role": "qa-release",
+      "status": "PASS",
+      "evidence": [
+        "py_compile passed",
+        "model handler/capability tests passed",
+        "runtime/update tests passed",
+        "agent product acceptance contract tests passed",
+        "npm typecheck passed",
+        "light real release validation passed 107/107"
+      ]
+    },
+    {
+      "role": "privacy-data",
+      "status": "PASS",
+      "evidence": [
+        "updateState URL is normalized to local origin/path only",
+        "updateState response omits raw state file path",
+        "public diagnostics use hash/count-style evidence"
+      ]
+    }
+  ],
+  "artifacts": {
+    "webLinuxService": {
+      "size": 4083505,
+      "sha256": "37E79AA22818F62B68F3E84A53A5A62678D35E18D43EE3526290398E5BDB81F9"
+    },
+    "webuiWindowsX64": {
+      "size": 550735154,
+      "sha256": "F17A0FAA830B7A9E5A756C105405FB4A54078E2CAAE5C2C31DC59C86EA740AF4"
+    },
+    "webuiMacosUniversal": {
+      "size": 652189988,
+      "sha256": "69F8EB107F9538CE95DB2D16C6776A709A2A3CB6A885CC1168343912708B4CBC"
+    },
+    "publicRelease": {
+      "size": 2843727,
+      "sha256": "0715772C610FDC459F08C46F8D29D18A0A8E02BC03D5E30858DE16F4C6BE5D76"
+    }
+  }
+}

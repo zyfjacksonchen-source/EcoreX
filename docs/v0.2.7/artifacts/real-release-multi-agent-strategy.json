@@ -1,0 +1,456 @@
+{
+  "status": "PASS",
+  "schemaVersion": "real-release-multi-agent-strategy-v1",
+  "version": "0.2.7",
+  "scope": "real-release-multi-agent-strategy",
+  "generatedAt": "2026-07-03T00:28:28.883998+00:00",
+  "feasibility": "FEASIBLE_WITH_FINAL_SERIAL_GATE",
+  "maxParallelAgents": 4,
+  "recommendedParallelAgents": 4,
+  "splitEvidenceCaseCount": 305,
+  "finalGateCaseCount": 537,
+  "finalGateNewCaseCount": 305,
+  "targetTotalChecks": 537,
+  "minimumEnabledChecks": 377,
+  "rules": [
+    "Do not run multiple full real release gates against production at the same time.",
+    "Every lane must use a unique run id and isolated session/project/user markers.",
+    "Disable memory-derived proof: direct APIs, SkillService, MCP status, CLI, SSE ledger, and route evidence are required.",
+    "Image generation and image editing evidence must prove gpt-image-2-pro native routing after every chat provider switch.",
+    "Pressure testing is serial and must run after model/tool/stream evidence lanes.",
+    "The final full real release gate is the only release-blocking source of truth."
+  ],
+  "waves": [
+    {
+      "wave": 0,
+      "laneIds": [
+        "coordinator-light-preflight"
+      ],
+      "recommendedParallelism": 1,
+      "hasSerialLane": false,
+      "exclusiveLockConflicts": []
+    },
+    {
+      "wave": 1,
+      "laneIds": [
+        "agent-a-fresh-runtime-auth",
+        "agent-b-ui-context-session",
+        "agent-c-security-observability"
+      ],
+      "recommendedParallelism": 3,
+      "hasSerialLane": false,
+      "exclusiveLockConflicts": []
+    },
+    {
+      "wave": 2,
+      "laneIds": [
+        "agent-d-stream-state-machine",
+        "agent-e-tool-skill-mcp-cli",
+        "agent-f-multi-model-image-route"
+      ],
+      "recommendedParallelism": 3,
+      "hasSerialLane": false,
+      "exclusiveLockConflicts": []
+    },
+    {
+      "wave": 3,
+      "laneIds": [
+        "agent-g-concurrency-pressure",
+        "agent-h-v027-integrated-capabilities"
+      ],
+      "recommendedParallelism": 0,
+      "hasSerialLane": true,
+      "exclusiveLockConflicts": []
+    },
+    {
+      "wave": 4,
+      "laneIds": [
+        "coordinator-final-real-release-gate"
+      ],
+      "recommendedParallelism": 0,
+      "hasSerialLane": true,
+      "exclusiveLockConflicts": []
+    }
+  ],
+  "lanes": [
+    {
+      "id": "coordinator-light-preflight",
+      "wave": 0,
+      "role": "Coordinator Agent",
+      "focus": "local release contract, matrix, route, documentation, wrapper commands",
+      "groups": [],
+      "legacyScripts": [],
+      "command": "python scripts/真实发布轻量校验.py",
+      "artifact": "docs/v0.2.7/artifacts/real-release-light-validation.json",
+      "exclusiveLocks": [],
+      "dependsOn": [],
+      "estimatedCost": "local-low",
+      "timeoutMinutes": 5,
+      "parallelSafe": true,
+      "evidenceRequired": [
+        "light validation status PASS",
+        "matrix count 305/537/377",
+        "Chinese wrapper commands work"
+      ],
+      "caseCount": 0,
+      "hardGateCount": 0,
+      "removableCaseCount": 0
+    },
+    {
+      "id": "agent-a-fresh-runtime-auth",
+      "wave": 1,
+      "role": "Fresh Runtime Agent",
+      "focus": "fresh user, auth, first-use runtime APIs, terminal state contracts",
+      "groups": [
+        "fresh-env",
+        "auth-first-use",
+        "runtime-api"
+      ],
+      "legacyScripts": [
+        "smoke-v026-production-200-user-behavior.py"
+      ],
+      "command": "focus-run: fresh-env auth-first-use runtime-api, then attach redacted evidence",
+      "artifact": "docs/v0.2.7/artifacts/multi-agent-agent-a-fresh-runtime-auth.json",
+      "exclusiveLocks": [],
+      "dependsOn": [
+        "coordinator-light-preflight"
+      ],
+      "estimatedCost": "online-low",
+      "timeoutMinutes": 25,
+      "parallelSafe": true,
+      "evidenceRequired": [
+        "isolated new-user run id",
+        "auth/check/message/active-requests evidence",
+        "no request left permanently running"
+      ],
+      "caseCount": 64,
+      "hardGateCount": 54,
+      "removableCaseCount": 10
+    },
+    {
+      "id": "agent-b-ui-context-session",
+      "wave": 1,
+      "role": "UX Session Agent",
+      "focus": "desktop/mobile UI, session isolation, project context, compression behavior",
+      "groups": [
+        "ui-ux",
+        "context-session"
+      ],
+      "legacyScripts": [],
+      "command": "focus-run: ui-ux context-session with browser screenshots and ledger evidence",
+      "artifact": "docs/v0.2.7/artifacts/multi-agent-agent-b-ui-context-session.json",
+      "exclusiveLocks": [],
+      "dependsOn": [
+        "coordinator-light-preflight"
+      ],
+      "estimatedCost": "online-low",
+      "timeoutMinutes": 30,
+      "parallelSafe": true,
+      "evidenceRequired": [
+        "no blank buttons or blocking white screens",
+        "session/project context isolation proof",
+        "manual and automatic compression behavior proof"
+      ],
+      "caseCount": 44,
+      "hardGateCount": 30,
+      "removableCaseCount": 14
+    },
+    {
+      "id": "agent-c-security-observability",
+      "wave": 1,
+      "role": "Security Observability Agent",
+      "focus": "redaction, diagnostics, logs, release artifact integrity, admin gates",
+      "groups": [
+        "security-observability"
+      ],
+      "legacyScripts": [
+        "smoke-v026-production-200-user-behavior.py"
+      ],
+      "command": "focus-run: security-observability plus redacted diagnostics bundle review",
+      "artifact": "docs/v0.2.7/artifacts/multi-agent-agent-c-security-observability.json",
+      "exclusiveLocks": [],
+      "dependsOn": [
+        "coordinator-light-preflight"
+      ],
+      "estimatedCost": "online-low",
+      "timeoutMinutes": 20,
+      "parallelSafe": true,
+      "evidenceRequired": [
+        "no sensitive-value/raw URL/raw path leakage",
+        "request/session ids are hashable and actionable",
+        "admin auth gate and artifact manifest evidence"
+      ],
+      "caseCount": 6,
+      "hardGateCount": 4,
+      "removableCaseCount": 2
+    },
+    {
+      "id": "agent-d-stream-state-machine",
+      "wave": 2,
+      "role": "State Machine Agent",
+      "focus": "SSE streaming, replay, cancellation, refresh recovery, run ledger consistency",
+      "groups": [
+        "stream-state-machine"
+      ],
+      "legacyScripts": [],
+      "command": "focus-run: stream-state-machine with unique run id and replay probes",
+      "artifact": "docs/v0.2.7/artifacts/multi-agent-agent-d-stream-state-machine.json",
+      "exclusiveLocks": [
+        "stream-ledger-heavy"
+      ],
+      "dependsOn": [
+        "agent-a-fresh-runtime-auth",
+        "agent-b-ui-context-session"
+      ],
+      "estimatedCost": "model-medium",
+      "timeoutMinutes": 35,
+      "parallelSafe": true,
+      "evidenceRequired": [
+        "SSE first content chunk/final done timing",
+        "cancelled/failed/completed terminal states",
+        "UI pending state matches backend active requests"
+      ],
+      "caseCount": 28,
+      "hardGateCount": 28,
+      "removableCaseCount": 0
+    },
+    {
+      "id": "agent-e-tool-skill-mcp-cli",
+      "wave": 2,
+      "role": "Toolchain Agent",
+      "focus": "Skill discovery, MCP status, CLI, OCR, Vision, browser and file tools",
+      "groups": [
+        "tool-skill"
+      ],
+      "legacyScripts": [
+        "smoke-v026-production-30-image-ocr-vision-toolchain.py"
+      ],
+      "command": "focus-run: tool-skill plus OCR/Vision/toolchain direct probes",
+      "artifact": "docs/v0.2.7/artifacts/multi-agent-agent-e-tool-skill-mcp-cli.json",
+      "exclusiveLocks": [
+        "tool-permission-audit"
+      ],
+      "dependsOn": [
+        "agent-a-fresh-runtime-auth"
+      ],
+      "estimatedCost": "model-medium",
+      "timeoutMinutes": 40,
+      "parallelSafe": true,
+      "evidenceRequired": [
+        "SkillService direct discovery",
+        "MCP status/list/call evidence",
+        "EcoreX CLI safe read-only evidence",
+        "OCR/Vision direct-probe evidence not memory-derived"
+      ],
+      "caseCount": 26,
+      "hardGateCount": 20,
+      "removableCaseCount": 6
+    },
+    {
+      "id": "agent-f-multi-model-image-route",
+      "wave": 2,
+      "role": "Model Route Agent",
+      "focus": "model switching, image generation/edit routing, no fallback drift",
+      "groups": [
+        "multi-model-image-route"
+      ],
+      "legacyScripts": [
+        "smoke-v026-production-30-image-ocr-vision-toolchain.py"
+      ],
+      "command": "focus-run: multi-model-image-route with provider switch matrix",
+      "artifact": "docs/v0.2.7/artifacts/multi-agent-agent-f-multi-model-image-route.json",
+      "exclusiveLocks": [
+        "image-route",
+        "provider-switch"
+      ],
+      "dependsOn": [
+        "agent-a-fresh-runtime-auth"
+      ],
+      "estimatedCost": "image-high",
+      "timeoutMinutes": 50,
+      "parallelSafe": true,
+      "evidenceRequired": [
+        "OpenAI/DeepSeek/Gemini/Doubao switch evidence",
+        "generate route uses gpt-image-2-pro native route",
+        "edit route uses gpt-image-2-pro native route",
+        "no shell/Python/PIL/SVG/canvas fallback evidence"
+      ],
+      "caseCount": 32,
+      "hardGateCount": 32,
+      "removableCaseCount": 0
+    },
+    {
+      "id": "agent-g-concurrency-pressure",
+      "wave": 3,
+      "role": "Pressure Agent",
+      "focus": "20 virtual users, 60 requests, active-request drain, resource recovery",
+      "groups": [
+        "concurrency-pressure"
+      ],
+      "legacyScripts": [],
+      "command": "python scripts/真实发布校验.py --skip-legacy --pressure-users 20 --pressure-turns 3 --output docs/v0.2.7/artifacts/real-release-pressure-focus.json",
+      "artifact": "docs/v0.2.7/artifacts/real-release-pressure-focus.json",
+      "exclusiveLocks": [
+        "production-pressure",
+        "active-requests-drain"
+      ],
+      "dependsOn": [
+        "agent-d-stream-state-machine",
+        "agent-e-tool-skill-mcp-cli",
+        "agent-f-multi-model-image-route"
+      ],
+      "estimatedCost": "stress-high",
+      "timeoutMinutes": 90,
+      "parallelSafe": false,
+      "evidenceRequired": [
+        "active requests return to zero",
+        "no 5xx storm",
+        "CPU/memory peak and recovery values",
+        "no stuck request after pressure"
+      ],
+      "caseCount": 18,
+      "hardGateCount": 12,
+      "removableCaseCount": 6
+    },
+    {
+      "id": "agent-h-v027-integrated-capabilities",
+      "wave": 3,
+      "role": "v0.2.7 Integration Agent",
+      "focus": "custom Gemini routing and generation, context continuity, divider UI, CDP/OCR open-box, Tongxin MPI, imagegen incremental delivery, mac/runtime parity markers, online update success",
+      "groups": [
+        "v027-integrated-capabilities"
+      ],
+      "legacyScripts": [],
+      "command": "focus-run: v027-integrated-capabilities with custom Gemini switch, MPI strict sample, and redacted toolchain evidence",
+      "artifact": "docs/v0.2.7/artifacts/multi-agent-agent-h-v027-integrated-capabilities.json",
+      "exclusiveLocks": [
+        "provider-switch",
+        "tongxin-mpi",
+        "imagegen-route"
+      ],
+      "dependsOn": [
+        "agent-b-ui-context-session",
+        "agent-e-tool-skill-mcp-cli",
+        "agent-f-multi-model-image-route"
+      ],
+      "estimatedCost": "model-high",
+      "timeoutMinutes": 60,
+      "parallelSafe": false,
+      "evidenceRequired": [
+        "custom Gemini provider=custom and modelAliasFamily=gemini",
+        "custom Gemini actual stream returns content and avoids empty fallback apology",
+        "contextContinuity keeps AgentBridge and artifact history refs",
+        "model-switch-divider is contextExcluded, non-sticky, and flows as a normal message row",
+        "CDP/OCR/Vision defaults are discoverable",
+        "Tongxin MPI sample uses MPI fact source and data-volume project/account source",
+        "imagegen multi-image route emits each ready image and avoids shell fallback",
+        "public manifest/admin-gated online update chain succeeds for Win/Mac WebUI artifacts"
+      ],
+      "caseCount": 87,
+      "hardGateCount": 87,
+      "removableCaseCount": 0
+    },
+    {
+      "id": "coordinator-final-real-release-gate",
+      "wave": 4,
+      "role": "Release Coordinator",
+      "focus": "single authoritative full real release validation after all split evidence",
+      "groups": [
+        "fresh-env",
+        "auth-first-use",
+        "runtime-api",
+        "ui-ux",
+        "stream-state-machine",
+        "context-session",
+        "tool-skill",
+        "multi-model-image-route",
+        "concurrency-pressure",
+        "v027-integrated-capabilities",
+        "security-observability"
+      ],
+      "legacyScripts": [
+        "smoke-v026-production-200-user-behavior.py",
+        "smoke-v026-production-30-image-ocr-vision-toolchain.py"
+      ],
+      "command": "python scripts/真实发布校验.py",
+      "artifact": "docs/v0.2.7/artifacts/production-agent-product-acceptance.json",
+      "exclusiveLocks": [
+        "final-release-gate",
+        "production-pressure",
+        "image-route"
+      ],
+      "dependsOn": [
+        "agent-a-fresh-runtime-auth",
+        "agent-b-ui-context-session",
+        "agent-c-security-observability",
+        "agent-d-stream-state-machine",
+        "agent-e-tool-skill-mcp-cli",
+        "agent-f-multi-model-image-route",
+        "agent-g-concurrency-pressure",
+        "agent-h-v027-integrated-capabilities"
+      ],
+      "estimatedCost": "full-high",
+      "timeoutMinutes": 180,
+      "parallelSafe": false,
+      "evidenceRequired": [
+        "P0/P1 100 percent pass",
+        "enabled checks >= 377",
+        "hardGateFailures empty",
+        "redaction violations empty"
+      ],
+      "caseCount": 305,
+      "hardGateCount": 267,
+      "removableCaseCount": 38
+    }
+  ],
+  "mergeContract": {
+    "requiredPerLaneFields": [
+      "laneId",
+      "agentId",
+      "runId",
+      "status",
+      "startedAt",
+      "completedAt",
+      "artifact",
+      "redaction",
+      "checks",
+      "failurePreview"
+    ],
+    "releaseDecision": "Only docs/v0.2.7/artifacts/production-agent-product-acceptance.json can mark the release accepted.",
+    "failFastRules": [
+      "Any P0 lane failure blocks the final gate until fixed.",
+      "Any redaction violation blocks artifact sharing.",
+      "Any active request left running after pressure requires cleanup and rerun."
+    ]
+  },
+  "validation": {
+    "status": "PASS",
+    "failures": [],
+    "coveredGroupsBySplit": [
+      "auth-first-use",
+      "concurrency-pressure",
+      "context-session",
+      "fresh-env",
+      "multi-model-image-route",
+      "runtime-api",
+      "security-observability",
+      "stream-state-machine",
+      "tool-skill",
+      "ui-ux",
+      "v027-integrated-capabilities"
+    ],
+    "coveredGroupsByFinalGate": [
+      "auth-first-use",
+      "concurrency-pressure",
+      "context-session",
+      "fresh-env",
+      "multi-model-image-route",
+      "runtime-api",
+      "security-observability",
+      "stream-state-machine",
+      "tool-skill",
+      "ui-ux",
+      "v027-integrated-capabilities"
+    ]
+  }
+}

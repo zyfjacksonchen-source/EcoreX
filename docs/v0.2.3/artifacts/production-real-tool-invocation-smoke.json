@@ -1,0 +1,33 @@
+{
+  "checks": [
+    {
+      "label": "production bash executes real command",
+      "status": "PASS"
+    },
+    {
+      "label": "production ocr text url returns browser handoff",
+      "status": "PASS"
+    },
+    {
+      "label": "production optional abilities list callable",
+      "status": "PASS"
+    },
+    {
+      "label": "production feishu_cli status callable",
+      "status": "PASS"
+    }
+  ],
+  "generatedAt": "2026-06-27T09:31:51.354867+00:00",
+  "redaction": {
+    "rawPasswordPersisted": false,
+    "rawSecretPersisted": false,
+    "rawTargetPersisted": false,
+    "rawUrlPersisted": false
+  },
+  "scope": "production-real-tool-invocation-smoke",
+  "status": "PASS",
+  "target": {
+    "domainHash": "A753D877497CBE35",
+    "rawTargetPersisted": false
+  }
+}

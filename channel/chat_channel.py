@@ -1,5 +1,6 @@
 import os
 import re
+import hashlib
 import threading
 import time
 from asyncio import CancelledError
@@ -19,6 +20,44 @@ except Exception as e:
     pass
 
 handler_pool = ThreadPoolExecutor(max_workers=8)  # 处理消息的线程池
+
+
+def _summary_hash(value) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:12]
+
+
+def _body_log_summary(value) -> dict:
+    text = "" if value is None else str(value)
+    return {
+        "redacted": bool(text),
+        "hash": _summary_hash(text),
+        "chars": len(text),
+        "bytes": len(text.encode("utf-8", errors="replace")),
+    }
+
+
+def _context_log_summary(context: Context = None) -> dict:
+    if context is None:
+        return {"context": None}
+    return {
+        "type": str(getattr(context, "type", "") or ""),
+        "channel": str(context.get("channel_type", "") or ""),
+        "sessionHash": _summary_hash(context.get("session_id", "")),
+        "receiverHash": _summary_hash(context.get("receiver", "")),
+        "content": _body_log_summary(getattr(context, "content", "")),
+    }
+
+
+def _reply_log_summary(reply: Reply = None) -> dict:
+    if reply is None:
+        return {"reply": None}
+    return {
+        "type": str(getattr(reply, "type", "") or ""),
+        "content": _body_log_summary(getattr(reply, "content", "")),
+    }
 
 
 # 抽象类, 它包含了与消息通道无关的通用处理逻辑
@@ -105,7 +144,7 @@ class ChatChannel(Channel):
         # 消息内容匹配过程，并处理content
         if ctype == ContextType.TEXT:
             if first_in and "」\n- - - - - - -" in content:  # 初次匹配 过滤引用消息
-                logger.debug(content)
+                logger.debug("[chat_channel] reference query skipped content={}".format(_body_log_summary(content)))
                 logger.debug("[chat_channel]reference query skipped")
                 return None
 
@@ -185,11 +224,11 @@ class ChatChannel(Channel):
     def _handle(self, context: Context):
         if context is None or not context.content:
             return
-        logger.debug("[chat_channel] handling context: {}".format(context))
+        logger.debug("[chat_channel] handling context: {}".format(_context_log_summary(context)))
         # reply的构建步骤
         reply = self._generate_reply(context)
 
-        logger.debug("[chat_channel] decorating reply: {}".format(reply))
+        logger.debug("[chat_channel] decorating reply: {}".format(_reply_log_summary(reply)))
 
         # reply的包装步骤
         if reply and reply.content:
@@ -207,7 +246,7 @@ class ChatChannel(Channel):
         )
         reply = e_context["reply"]
         if not e_context.is_pass():
-            logger.debug("[chat_channel] type={}, content={}".format(context.type, context.content))
+            logger.debug("[chat_channel] generate reply for context: {}".format(_context_log_summary(context)))
             if context.type == ContextType.TEXT or context.type == ContextType.IMAGE_CREATE:  # 文字和图片消息
                 context["channel"] = e_context["channel"]
                 reply = super().build_reply_content(context.content, context)
@@ -219,7 +258,7 @@ class ChatChannel(Channel):
                 try:
                     any_to_wav(file_path, wav_path)
                 except Exception as e:  # 转换失败，直接使用mp3，对于某些api，mp3也可以识别
-                    logger.warning("[chat_channel]any to wav error, use raw path. " + str(e))
+                    logger.warning("[chat_channel]any to wav error, use raw path. {}".format(_body_log_summary(e)))
                     wav_path = file_path
                 # 语音识别
                 reply = super().build_voice_to_text(wav_path)
@@ -303,7 +342,12 @@ class ChatChannel(Channel):
             )
             reply = e_context["reply"]
             if not e_context.is_pass() and reply and reply.type:
-                logger.debug("[chat_channel] sending reply: {}, context: {}".format(reply, context))
+                logger.debug(
+                    "[chat_channel] sending reply: {}, context: {}".format(
+                        _reply_log_summary(reply),
+                        _context_log_summary(context),
+                    )
+                )
                 
                 # 如果是文本回复，尝试提取并发送图片
                 # Web channel renders images/videos inline via renderMarkdown,
@@ -370,7 +414,7 @@ class ChatChannel(Channel):
             logger.info(f"[chat_channel] Extracted {len(media_items)} media item(s) from reply")
             
             # Send text first (the frontend will embed video players via renderMarkdown).
-            logger.info(f"[chat_channel] Sending text content before media: {reply.content[:100]}...")
+            logger.info(f"[chat_channel] Sending text content before media: {_reply_log_summary(reply)}")
             self._send(reply, context)
             logger.info(f"[chat_channel] Text sent, now sending {len(media_items)} media item(s)")
             
@@ -390,16 +434,16 @@ class ChatChannel(Channel):
                         else:
                             media_reply = Reply(ReplyType.IMAGE_URL, f"file://{url}")
                     else:
-                        logger.warning(f"[chat_channel] Media file not found or invalid URL: {url}")
+                        logger.warning(f"[chat_channel] Media file not found or invalid URL: {_body_log_summary(url)}")
                         continue
                     
                     if i > 0:
                         time.sleep(0.5)
                     self._send(media_reply, context)
-                    logger.info(f"[chat_channel] Sent {media_type} {i+1}/{len(media_items)}: {url[:50]}...")
+                    logger.info(f"[chat_channel] Sent {media_type} {i+1}/{len(media_items)}: {_body_log_summary(url)}")
                     
                 except Exception as e:
-                    logger.error(f"[chat_channel] Failed to send {media_type} {url}: {e}")
+                    logger.error(f"[chat_channel] Failed to send {media_type} {_body_log_summary(url)}: {_body_log_summary(e)}")
         else:
             # 没有媒体文件，正常发送文本
                 self._send(reply, context)
@@ -408,36 +452,70 @@ class ChatChannel(Channel):
         try:
             self.send(reply, context)
         except Exception as e:
-            logger.error("[chat_channel] sendMsg error: {}".format(str(e)))
+            logger.error("[chat_channel] sendMsg error: {}".format(_body_log_summary(e)))
             if isinstance(e, NotImplementedError):
                 return
-            logger.exception(e)
             if retry_cnt < 2:
                 time.sleep(3 + 3 * retry_cnt)
                 self._send(reply, context, retry_cnt + 1)
 
     def _success_callback(self, session_id, **kwargs):  # 线程正常结束时的回调函数
-        logger.debug("Worker return success, session_id = {}".format(session_id))
+        logger.debug("Worker return success, session_hash = {}".format(_summary_hash(session_id)))
 
     def _fail_callback(self, session_id, exception, **kwargs):  # 线程异常结束时的回调函数
-        logger.exception("Worker return exception: {}".format(exception))
+        logger.error(
+            "Worker return exception, session_hash = {}, error = {}".format(
+                _summary_hash(session_id),
+                _body_log_summary(exception),
+            )
+        )
 
     def _thread_pool_callback(self, session_id, **kwargs):
         def func(worker: Future):
+            context = kwargs.get("context")
             try:
                 worker_exception = worker.exception()
                 if worker_exception:
+                    self._release_context_dedupe_key(context)
                     self._fail_callback(session_id, exception=worker_exception, **kwargs)
                 else:
                     self._success_callback(session_id, **kwargs)
             except CancelledError as e:
-                logger.info("Worker cancelled, session_id = {}".format(session_id))
+                self._release_context_dedupe_key(context)
+                logger.info("Worker cancelled, session_hash = {}".format(_summary_hash(session_id)))
             except Exception as e:
-                logger.exception("Worker raise exception: {}".format(e))
+                self._release_context_dedupe_key(context)
+                logger.error("Worker raise exception: {}".format(_body_log_summary(e)))
             with self.lock:
                 self.sessions[session_id][1].release()
 
         return func
+
+    @staticmethod
+    def _release_context_dedupe_key(context: Context = None) -> None:
+        if context is None:
+            return
+        key = context.get("_adapter_dedupe_key")
+        if not key:
+            return
+        try:
+            gate = context.get("_adapter_dedupe_gate")
+            if gate is not None and hasattr(gate, "forget"):
+                gate.forget(str(key))
+                return
+            from channel.messaging_adapter_contract import DEFAULT_INGRESS_GATE
+
+            DEFAULT_INGRESS_GATE.forget(str(key))
+        except Exception:
+            pass
+
+    def _release_queue_dedupe_keys(self, context_queue) -> None:
+        try:
+            queued = list(getattr(context_queue, "queue", []) or [])
+        except Exception:
+            queued = []
+        for context in queued:
+            self._release_context_dedupe_key(context)
 
     # Chat commands that must bypass the per-session serial queue,
     # otherwise /cancel would queue behind the task it tries to cancel.
@@ -454,16 +532,46 @@ class ChatChannel(Channel):
                 self._handle_cancel_command(context, session_id)
                 return
 
-        with self.lock:
-            if session_id not in self.sessions:
-                self.sessions[session_id] = [
-                    Dequeue(),
-                    threading.BoundedSemaphore(conf().get("concurrency_in_session", 1)),
-                ]
-            if context.type == ContextType.TEXT and context.content.startswith("#"):
-                self.sessions[session_id][0].putleft(context)  # 优先处理管理命令
+        dedupe_key = ""
+        try:
+            from channel.messaging_adapter_contract import DEFAULT_INGRESS_GATE, ingress_dedupe_key
+
+            if context.get("_adapter_dedupe_accepted") is True:
+                dedupe_key = str(context.get("_adapter_dedupe_key") or "")
             else:
-                self.sessions[session_id][0].put(context)
+                dedupe_key = ingress_dedupe_key(context)
+                decision = DEFAULT_INGRESS_GATE.check_and_mark(dedupe_key)
+                if not decision["accepted"]:
+                    logger.info(
+                        "[chat_channel] duplicate inbound context skipped: "
+                        f"session_hash={_summary_hash(session_id)}, channel={context.get('channel_type', '')}"
+                    )
+                    return
+                if dedupe_key:
+                    context["_adapter_dedupe_key"] = dedupe_key
+        except Exception as e:
+            logger.debug(f"[chat_channel] ingress dedupe skipped: {_body_log_summary(e)}")
+
+        with self.lock:
+            try:
+                if session_id not in self.sessions:
+                    self.sessions[session_id] = [
+                        Dequeue(),
+                        threading.BoundedSemaphore(conf().get("concurrency_in_session", 1)),
+                    ]
+                if context.type == ContextType.TEXT and context.content.startswith("#"):
+                    self.sessions[session_id][0].putleft(context)  # 优先处理管理命令
+                else:
+                    self.sessions[session_id][0].put(context)
+            except Exception:
+                if dedupe_key:
+                    try:
+                        from channel.messaging_adapter_contract import DEFAULT_INGRESS_GATE
+
+                        DEFAULT_INGRESS_GATE.forget(dedupe_key)
+                    except Exception:
+                        pass
+                raise
 
     def _handle_cancel_command(self, context: Context, session_id: str) -> None:
         """Cancel any in-flight agent run for *session_id* and reply inline.
@@ -486,12 +594,12 @@ class ChatChannel(Channel):
                 else _t("当前没有可中止的任务。", "Nothing to cancel.")
             )
             logger.info(
-                f"[chat_channel] /cancel fast-path: session={session_id}, "
+                f"[chat_channel] /cancel fast-path: session_hash={_summary_hash(session_id)}, "
                 f"cancelled={cancelled}, subagents={subagent_cancel}"
             )
             self._send_reply(context, Reply(ReplyType.TEXT, text))
         except Exception as e:
-            logger.warning(f"[chat_channel] /cancel fast-path failed: {e}")
+            logger.warning(f"[chat_channel] /cancel fast-path failed: {_body_log_summary(e)}")
 
     # 消费者函数，单独线程，用于从消息队列中取出消息并处理
     def consume(self):
@@ -504,7 +612,7 @@ class ChatChannel(Channel):
                 if semaphore.acquire(blocking=False):  # 等线程处理完毕才能删除
                     if not context_queue.empty():
                         context = context_queue.get()
-                        logger.debug("[chat_channel] consume context: {}".format(context))
+                        logger.debug("[chat_channel] consume context: {}".format(_context_log_summary(context)))
                         future: Future = handler_pool.submit(self._handle, context)
                         future.add_done_callback(self._thread_pool_callback(session_id, context=context))
                         with self.lock:
@@ -524,21 +632,23 @@ class ChatChannel(Channel):
     def cancel_session(self, session_id):
         with self.lock:
             if session_id in self.sessions:
-                for future in self.futures[session_id]:
+                for future in self.futures.get(session_id, []):
                     future.cancel()
                 cnt = self.sessions[session_id][0].qsize()
                 if cnt > 0:
-                    logger.info("Cancel {} messages in session {}".format(cnt, session_id))
+                    logger.info("Cancel {} messages in session_hash {}".format(cnt, _summary_hash(session_id)))
+                self._release_queue_dedupe_keys(self.sessions[session_id][0])
                 self.sessions[session_id][0] = Dequeue()
 
     def cancel_all_session(self):
         with self.lock:
             for session_id in self.sessions:
-                for future in self.futures[session_id]:
+                for future in self.futures.get(session_id, []):
                     future.cancel()
                 cnt = self.sessions[session_id][0].qsize()
                 if cnt > 0:
-                    logger.info("Cancel {} messages in session {}".format(cnt, session_id))
+                    logger.info("Cancel {} messages in session_hash {}".format(cnt, _summary_hash(session_id)))
+                self._release_queue_dedupe_keys(self.sessions[session_id][0])
                 self.sessions[session_id][0] = Dequeue()
 
 

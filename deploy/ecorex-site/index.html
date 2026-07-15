@@ -3,104 +3,129 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>EcoreX 下载中心</title>
+    <meta http-equiv="Cache-Control" content="no-store" />
+    <title>EcoreX v1.0 Bootstrap 下载</title>
     <meta
       name="description"
-      content="EcoreX 面向广告团队的桌面端和本地 WebUI Agent，支持 Windows 与 macOS 下载。"
+      content="EcoreX v1.0 Windows x64、macOS Apple Silicon 与 Intel 的签名 Bootstrap 发布发现页。"
     />
-    <link rel="icon" href="./assets/icon.png" />
-    <link rel="preload" as="image" href="./assets/icon.png" />
-    <link rel="preload" as="image" href="./assets/ecorex-app-preview.png" />
-    <link rel="preload" as="image" href="./assets/ecorex-ecosystem-hub.png" />
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="icon" href="./assets/icon.3a9a24c09a41.png" />
+    <link rel="preload" as="image" href="./assets/ecorex-app-preview.6b606a2eecd4.png" />
+    <link rel="stylesheet" href="./styles.fe77b0f2a5b1.css" />
   </head>
   <body>
     <div class="page-shell">
       <header class="topbar">
-        <a class="brand" href="./" aria-label="EcoreX 下载中心">
-          <img src="./assets/icon.png" alt="" data-fallback="icon" />
+        <a class="brand" href="./" aria-label="EcoreX v1.0">
+          <img src="./assets/icon.3a9a24c09a41.png" alt="" />
           <span>EcoreX</span>
-          <small data-site-version></small>
+          <small data-site-version>v1.0</small>
         </a>
         <nav class="nav-links" aria-label="页面导航">
+          <a href="#trust-chain">验签逻辑</a>
           <a href="#download">下载</a>
-          <a href="#capability">能力</a>
-          <a href="./admin/">管理端</a>
+          <a href="#workflow">更新逻辑</a>
+          <a href="/admin/">管理端</a>
           <button class="icon-button" type="button" data-theme-toggle aria-label="切换明暗模式">
-            <span data-theme-icon>☾</span>
+            <span data-theme-icon>◐</span>
           </button>
         </nav>
       </header>
 
       <main>
-        <section class="hero" aria-label="EcoreX 下载">
-          <img class="hero-media" src="./assets/ecorex-app-preview.png" alt="EcoreX 桌面端界面预览" data-fallback="preview" />
+        <section class="hero" aria-label="EcoreX v1.0 Bootstrap">
+          <img class="hero-media" src="./assets/ecorex-app-preview.6b606a2eecd4.png" alt="EcoreX WebUI 界面预览" />
           <div class="hero-copy">
-            <p class="eyebrow">桌面端 AI Agent</p>
-            <h1>EcoreX</h1>
+            <p class="eyebrow">Signed Bootstrap / Thin WebUI</p>
+            <h1>EcoreX v1.0</h1>
             <p class="lead">
-              面向广告投放、素材创意、数据复盘与客户项目协同的本地工作区。
-              安装完成后即可进入会话、项目和本地文件流。
+              下载页只提供发布发现信息。Bootstrap 使用内置 Ed25519 信任根验签完整发布清单，
+              再按国内 GitHub 镜像 → GitHub Releases → EcoreX CDN 下载同一份 Core。
             </p>
             <div class="hero-actions">
-              <a class="button primary" href="#download">选择系统下载</a>
-              <a class="button ghost" href="./admin/">管理员入口</a>
+              <a class="button primary" href="#download">选择系统</a>
+              <a class="button ghost" href="#trust-chain">了解信任边界</a>
             </div>
           </div>
         </section>
 
-        <section class="release-strip" aria-label="发布状态">
+        <section class="release-strip" aria-label="发布发现状态">
           <div>
-            <span>当前发布</span>
-            <strong data-version>0.1.19</strong>
+            <span>发布版本</span>
+            <strong data-version>尚未发布</strong>
           </div>
           <div>
-            <span>桌面端</span>
-            <strong>Windows / macOS</strong>
+            <span>清单状态</span>
+            <strong data-manifest-check>尚未核对</strong>
           </div>
           <div>
-            <span>网页版</span>
-            <strong>本机一键启动</strong>
+            <span>支持目标</span>
+            <strong>Win x64 / macOS arm64+x64</strong>
           </div>
           <div>
-            <span>更新日期</span>
-            <strong data-updated>2026-06-16</strong>
+            <span>发布日期</span>
+            <strong data-updated>—</strong>
           </div>
         </section>
 
-        <section class="downloads" id="download" aria-label="下载 EcoreX">
+        <section class="install-guide" id="trust-chain" aria-label="EcoreX 发布信任链">
           <div class="section-heading">
-            <p class="eyebrow">下载</p>
-            <h2>选择你的设备</h2>
+            <p class="eyebrow">Trust boundary</p>
+            <h2>下载页不是签名权威</h2>
+          </div>
+          <div class="guide-grid">
+            <article class="guide-panel">
+              <h3>1. 发现发布</h3>
+              <p>页面读取一个 no-store 的静态 pointer，用于展示平台、文件大小、摘要提示和三个下载源。</p>
+            </article>
+            <article class="guide-panel">
+              <h3>2. Bootstrap 验签</h3>
+              <p>Bootstrap 重新下载 exact <code>release-manifest.json</code>，使用内置公钥验证清单和目标制品签名。</p>
+            </article>
+            <article class="guide-panel">
+              <h3>3. 同摘要故障转移</h3>
+              <p>只有当三源 receipt 证明 size 与 SHA-256 完全一致时，公开 pointer 才能从 unpublished 原子切换为 published。</p>
+            </article>
+          </div>
+          <p class="trust-note">
+            浏览器不声称已验签。
+            <a data-manifest-link hidden rel="noopener noreferrer">查看待 Bootstrap 验签的签名清单</a>
+          </p>
+        </section>
+
+        <section class="downloads" id="download" aria-label="下载 EcoreX Bootstrap">
+          <div class="section-heading">
+            <p class="eyebrow">Install / Update</p>
+            <h2>选择预构建的 Bootstrap</h2>
           </div>
           <div class="download-grid" data-downloads>
             <article class="download-card skeleton">
-              <span class="platform-icon">...</span>
-              <h3>正在读取版本</h3>
-              <p>请稍候</p>
+              <span class="platform-icon">···</span>
+              <h3>正在读取发布发现信息</h3>
+              <p>请稍候。</p>
             </article>
           </div>
         </section>
 
-        <section class="capability-band" id="capability" aria-label="能力概览">
-          <img src="./assets/ecorex-ecosystem-hub.png" alt="EcoreX 能力结构预览" data-fallback="hub" />
+        <section class="capability-band" id="workflow" aria-label="EcoreX 更新逻辑">
+          <img src="./assets/ecorex-ecosystem-hub.910fc71c7642.png" alt="EcoreX 能力结构预览" />
           <div>
-            <p class="eyebrow">开箱即用</p>
-            <h2>给广告团队准备的本地 Agent。</h2>
+            <p class="eyebrow">Update policy</p>
+            <h2>后台下载，用户确认后刷新激活。</h2>
             <div class="feature-list">
-              <span title="会话、项目与运行状态会在桌面端左侧清晰呈现。">项目与会话</span>
-              <span title="点击文件后再打开预览，不干扰默认对话。">文件预览</span>
-              <span title="Skill、MCP、办公 CLI 统一收在设置入口。">能力设置</span>
-              <span title="管理员通过网页统一查看用户、用量和错误记录。">企业管理</span>
+              <span title="用户机器不执行 git pull、npm build 或 pip 在线组装。">预构建签名制品</span>
+              <span title="发布清单、Bootstrap 与 Core 均使用 Ed25519 + SHA-256。">密码学验证</span>
+              <span title="国内 GitHub 镜像优先，故障后才切换 GitHub 与 CDN。">三源同摘要</span>
+              <span title="首装和更新共用 InstallCoordinator 锁与 side-by-side slot。">原子激活与回滚</span>
             </div>
           </div>
         </section>
       </main>
 
       <footer class="footer">
-        <span>EcoreX Desktop</span>
+        <span>EcoreX v1.0 Public Bootstrap Discovery</span>
       </footer>
     </div>
-    <script src="./site.js?v=0.1.19-0001"></script>
+    <script type="module" src="./site.c27cf0b2588d.js"></script>
   </body>
 </html>

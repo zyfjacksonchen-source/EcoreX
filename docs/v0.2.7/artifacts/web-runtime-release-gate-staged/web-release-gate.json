@@ -1,0 +1,226 @@
+{
+  "schemaVersion": "web-release-gate-v1",
+  "generatedAt": "2026-07-02T08:35:14.774244+00:00",
+  "runtimeRoot": "%RUNTIME_ROOT%",
+  "stateRoot": "%STATE_ROOT%",
+  "outputDir": "%OUTPUT_DIR%",
+  "summary": {
+    "releaseReady": true,
+    "blocking": 0,
+    "blockingChecks": []
+  },
+  "checks": {
+    "runtimeBaseline": {
+      "status": "pass",
+      "artifact": "runtime-baseline.json",
+      "blocking": false
+    },
+    "capabilityManifest": {
+      "status": "pass",
+      "artifact": "web-release-gate.json#manifestAudit",
+      "blocking": false,
+      "blockers": [],
+      "warnings": [],
+      "packCount": 9
+    },
+    "capabilityState": {
+      "status": "pass",
+      "artifact": "capability-state.json",
+      "blocking": false
+    },
+    "permissionMatrix": {
+      "status": "pass",
+      "artifact": "permission-matrix.json",
+      "blocking": false,
+      "blockers": []
+    }
+  },
+  "manifestAudit": {
+    "schemaVersion": "web-capability-manifest-audit-v1",
+    "manifestPath": "%RUNTIME_ROOT%/capabilities.json",
+    "packCount": 9,
+    "packs": [
+      {
+        "id": "tongxin-cli",
+        "installMode": "user-or-admin",
+        "configureOnly": true,
+        "discoveryOnly": false,
+        "repairable": false,
+        "repairAction": "",
+        "discoverAction": "",
+        "configureAction": "configure-capability --pack-id tongxin-cli",
+        "requirements": [],
+        "moduleChecks": []
+      },
+      {
+        "id": "feishu-lark",
+        "installMode": "user-or-admin",
+        "configureOnly": false,
+        "discoveryOnly": true,
+        "repairable": false,
+        "repairAction": "install-capability --action repair --pack-id feishu-lark",
+        "discoverAction": "find-skill --capability feishu-lark",
+        "configureAction": "",
+        "requirements": [
+          "@larksuite/cli@1.0.56"
+        ],
+        "moduleChecks": [
+          "lark-cli"
+        ]
+      },
+      {
+        "id": "office-pdf",
+        "installMode": "user-or-admin",
+        "configureOnly": false,
+        "discoveryOnly": false,
+        "repairable": true,
+        "repairAction": "install-capability --action repair --pack-id office-pdf",
+        "discoverAction": "",
+        "configureAction": "",
+        "requirements": [
+          "pypdf",
+          "pdfminer.six",
+          "python-docx",
+          "python-pptx",
+          "openpyxl",
+          "xlsxwriter",
+          "markdownify",
+          "reportlab",
+          "PyMuPDF"
+        ],
+        "moduleChecks": [
+          "pypdf",
+          "pdfminer",
+          "docx",
+          "pptx",
+          "openpyxl",
+          "xlsxwriter",
+          "markdownify",
+          "reportlab",
+          "fitz"
+        ]
+      },
+      {
+        "id": "browser-automation",
+        "installMode": "admin-recommended",
+        "configureOnly": false,
+        "discoveryOnly": false,
+        "repairable": true,
+        "repairAction": "install-capability --action repair --pack-id browser-automation",
+        "discoverAction": "",
+        "configureAction": "",
+        "requirements": [
+          "playwright"
+        ],
+        "moduleChecks": [
+          "playwright"
+        ]
+      },
+      {
+        "id": "fast-ocr",
+        "installMode": "user-or-admin",
+        "configureOnly": false,
+        "discoveryOnly": false,
+        "repairable": true,
+        "repairAction": "install-capability --action repair --pack-id fast-ocr",
+        "discoverAction": "",
+        "configureAction": "",
+        "requirements": [
+          "rapidocr-onnxruntime"
+        ],
+        "moduleChecks": [
+          "rapidocr_onnxruntime",
+          "onnxruntime",
+          "PIL"
+        ]
+      },
+      {
+        "id": "voice",
+        "installMode": "user-or-admin",
+        "configureOnly": false,
+        "discoveryOnly": false,
+        "repairable": true,
+        "repairAction": "install-capability --action repair --pack-id voice",
+        "discoverAction": "",
+        "configureAction": "",
+        "requirements": [
+          "SpeechRecognition",
+          "websocket-client>=1.4.0"
+        ],
+        "moduleChecks": [
+          "speech_recognition",
+          "websocket"
+        ]
+      },
+      {
+        "id": "im-channels",
+        "installMode": "admin-recommended",
+        "configureOnly": false,
+        "discoveryOnly": false,
+        "repairable": true,
+        "repairAction": "install-capability --action repair --pack-id im-channels",
+        "discoverAction": "",
+        "configureAction": "",
+        "requirements": [
+          "wechatpy",
+          "dingtalk_stream",
+          "websocket-client>=1.4.0",
+          "pycryptodome",
+          "python-telegram-bot",
+          "slack_bolt",
+          "discord.py"
+        ],
+        "moduleChecks": [
+          "wechatpy",
+          "dingtalk_stream",
+          "websocket",
+          "Crypto",
+          "telegram",
+          "slack_bolt",
+          "discord"
+        ]
+      },
+      {
+        "id": "memory-heavy",
+        "installMode": "admin-recommended",
+        "configureOnly": false,
+        "discoveryOnly": false,
+        "repairable": true,
+        "repairAction": "install-capability --action repair --pack-id memory-heavy",
+        "discoverAction": "",
+        "configureAction": "",
+        "requirements": [
+          "numpy",
+          "pandas"
+        ],
+        "moduleChecks": [
+          "numpy",
+          "pandas"
+        ]
+      },
+      {
+        "id": "model-connectors",
+        "installMode": "user-or-admin",
+        "configureOnly": false,
+        "discoveryOnly": false,
+        "repairable": true,
+        "repairAction": "install-capability --action repair --pack-id model-connectors",
+        "discoverAction": "",
+        "configureAction": "",
+        "requirements": [
+          "dashscope",
+          "zai-sdk",
+          "google-generativeai"
+        ],
+        "moduleChecks": [
+          "dashscope",
+          "zai",
+          "google.generativeai"
+        ]
+      }
+    ],
+    "blockers": [],
+    "warnings": [],
+    "status": "pass"
+  }
+}

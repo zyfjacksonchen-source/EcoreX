@@ -1,0 +1,51 @@
+# EcoreX v0.3.0 Acceptance Checklist
+
+- [x] WebUI-only implementation boundary is preserved.
+- [x] Version metadata visible to WebUI install/update/release flow is `0.3.0`.
+- [x] Release notes title is `EcoreX 0.3.0 生产级任务控制与在线更新稳定性版本`.
+- [x] A running same-session task receives a new message as `update_current_task` by default.
+- [x] Explicit queue is available only through a visible secondary action.
+- [x] Explicit branch action is visible as a separate user choice.
+- [x] Legacy "引导" action is removed from the primary queue flow or reduced to diagnostics.
+- [x] Backend accepts `interrupt_mode: replace/amend/queue/branch`, defaulting to `replace`.
+- [x] CDP/browser calls recover after a disconnected action result.
+- [x] Task cancellation does not poison the next browser call.
+- [x] `imagegen` tool layer decides semantic image generation/precise retouch; bash is deterministic post-processing only after imagegen success.
+- [x] Image artifacts sort by `(task_index, artifact_index)` across single-task two-image and batch jobs.
+- [x] New-session first-message pending state remains visible before runtime stream attaches.
+- [x] Final `done` packets do not truncate richer streamed output.
+- [x] `精准修图` and single-character image text edits route to imagegen intent discovery/enablement, not bash/Python/PIL local editing.
+- [x] Long text input does not jump while typing.
+- [x] Pause/stop preserves scroll position.
+- [x] Conversation/session list supports `查看更多(N)`.
+- [x] Shared sessions render image attachments/artifacts instead of broken payload placeholders.
+- [x] Sharing a media-heavy session avoids `payload too large` by using bounded share payloads.
+- [x] Chat composer boundary with session summary/project list has a completed top divider and rounded top corners.
+- [x] Office-agent artifact shelf hides code/implementation files while keeping Markdown locally openable.
+- [x] Tool/process icons, project add-folder icon, runtime status, and account status use lower-noise icon presentation.
+- [x] WebUI release orchestrator creates immutable release metadata.
+- [x] Manifest includes signature, channel, rollout, kill-switch, rollback metadata.
+- [x] Online update state machine covers available, downloading, verified, staged, deferred, installed, activated, rollback.
+- [x] UI exposes downloading, deferred, failed, retry, switch-now, and log-view states.
+- [x] Admin release page exposes release-index trust, rollout, kill-switch, rollback, risks, and validation failures.
+- [x] Admin promotion blocks candidates without trusted release-index, smoke evidence, hash match, and required signatures.
+- [x] Admin release notification does not mutate immutable v0.3.0 manifest/release-index packages.
+- [x] Packaged or installed WebUI path is smoke-tested, not only dev server.
+- [x] User-side online update path is smoke-tested through public install script, manifest download, package hash validation, background install, runtime health, and update-check.
+- [x] Packaged WebUI CDP browser path validates image artifact shelf, precise retouch entry, multi-image canvas selection, text/rectangle/lasso/upload annotations, and composer imagegen-only draft.
+- [x] Download source order uses domestic GitHub mirror first and origin CDN fallback second.
+- [x] Systemic architecture/runtime/state machine/skill/MCP audit is recorded for v0.3.0.
+- [x] External connectors expose only implemented real connectors in the quick panel; no planned/front-end-only connector shells are shown.
+- [x] Configured MCP connectors are discoverable across new sessions, capability snapshots, skill/extension binding, and Tencent Docs attachment flows.
+- [x] Online update state includes external connector preservation health and blocks switching when previously connected/callable tools disappear.
+- [ ] External connector quick panel is validated in a packaged WebUI browser path with configured credentials/MCP.
+- [x] Packaged CDP running-task conflict insertion is tested: default active-turn send uses `interrupt_mode: replace`.
+- [ ] Real running-task amendment is tested: supplement is merged or clearly restarts.
+- [x] Explicit queue is tested in packaged CDP: `排队稍后执行` uses `interrupt_mode: queue` and can cancel.
+- [ ] CDP repeated browser path is tested with reconnect behavior.
+- [x] Image generation ordering is tested for one request with two images and multi-task batch.
+- [x] Long input and stop/pause no-jump behavior is tested in packaged CDP.
+- [ ] Online update defers during active request and rolls back on failed service or external-connector health check in a destructive/credentialed environment test.
+- [x] Retouch/infinite canvas supports rectangle selection, lasso/circle selection, uploaded image reference layers, multi-image edit submission, and T text-edit prompt flow with original-style preservation instructions.
+- [x] Markdown/local image paths in assistant replies are promoted to actionable image artifacts and remain available for preview/retouch when a preview source exists.
+- [ ] Retouch/infinite canvas automatic OCR text-box detection is backed by a production OCR endpoint.

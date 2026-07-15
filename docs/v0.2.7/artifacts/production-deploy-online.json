@@ -1,0 +1,276 @@
+{
+  "artifacts": {
+    "publicDownloadsSource": {
+      "EcoreX_0.2.7-web-linux-service.tar.gz": {
+        "artifactId": "EcoreX_0.2.7-web-linux-service.tar.gz",
+        "sha256": "59A037E149819C37AC4D9AFE10DE53A14287F8D269CF90523FD3D9DF25099F58",
+        "size": 4090918
+      },
+      "EcoreX_0.2.7-webui-macos-universal.zip": {
+        "artifactId": "EcoreX_0.2.7-webui-macos-universal.zip",
+        "sha256": "A13D51C279C4052708EFC29A208E4DD914251BC5BF9E666D1DC5DB2A9FC90D4C",
+        "size": 652196946
+      },
+      "EcoreX_0.2.7-webui-windows-x64.zip": {
+        "artifactId": "EcoreX_0.2.7-webui-windows-x64.zip",
+        "sha256": "C10F472779662FF827912AB3D3DBB04024BEFA7B358011945AEB830B03A39349",
+        "size": 550742111
+      }
+    },
+    "publicZip": {
+      "artifactId": "EcoreX_0.2.7-public-release.zip",
+      "sha256": "0757EA585FC8AB2CD87A1398663D1EA878D14F8852CDCDEDB4F998318E142859",
+      "size": 2847705
+    },
+    "webTarball": {
+      "artifactId": "EcoreX_0.2.7-web-linux-service.tar.gz",
+      "sha256": "59A037E149819C37AC4D9AFE10DE53A14287F8D269CF90523FD3D9DF25099F58",
+      "size": 4090918
+    }
+  },
+  "commands": [
+    {
+      "argvHash": "621C990ACB9B78D646CD00145B8C360D00C776B3EA5C83EB37DEBD5406C26C68",
+      "exitCode": 0,
+      "name": "prepare_remote_dir",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "C6F4F161F7FC15F21D36EE8F996B09C671961C0962DC7F7907D2D3BDA4718A79",
+      "exitCode": 0,
+      "name": "upload_web_tar",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "679D1AAD17239ED696BBB884A0F9B5843171D9ED60BF994ABD1DCF47CE6023C6",
+      "exitCode": 0,
+      "name": "upload_public_zip",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "45BFE87A267C0CCC75D570552BC5213AE544AEFC6EE83F46FFBBB1BD0572F1F3",
+      "exitCode": 0,
+      "name": "upload_install_web",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "35D8ABB6818D935C859B7AAE56FB8625E679B1C46EDA7B283D52947AC4988B8D",
+      "exitCode": 0,
+      "name": "upload_check_web",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "A4228A6912653BC4294FA29947E5426888124A09625AC40C62B8F3C66CE015ED",
+      "exitCode": 0,
+      "name": "upload_install_public",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "BAC43053985D425D3307CBCA8212BECBD3CBFBA3658B84514A287C9921097897",
+      "exitCode": 0,
+      "name": "upload_check_server",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "6E6C58164EA1CA9A90EA766E5BCA6C463C45657190147D66739A3B1CC3AE4402",
+      "exitCode": 17,
+      "name": "webui_windows_download_cache_probe",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "cache-miss\n",
+      "stdoutHash": "50C7B6C58A9BBA8521BFE2005EF791C89E3716F25EF4995A47BD93254FEDA390"
+    },
+    {
+      "argvHash": "CCB9D982087651DE130322049AB7BFB1F97CD2AF27A75ACE0F14012C5DA0218C",
+      "exitCode": 0,
+      "name": "webui_windows_download_cache_upload",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "32D5EB5686DF3A8BE40C7ACD346D2421AE8EA206BD1C64B1689E9687AE9B64EA",
+      "exitCode": 0,
+      "name": "webui_windows_download_cache_promote",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "uploaded-cache-hit\n",
+      "stdoutHash": "959CBA6D497F47C3CB4CB3CE30C9D662F5BFD2F118A6BA022FBBE35D5E723420"
+    },
+    {
+      "argvHash": "6BDABA085E08A512E091C10CAD38BD31C4A797038BE3F6A01A7952ED57DEA3C3",
+      "exitCode": 17,
+      "name": "webui_macos_download_cache_probe",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "cache-miss\n",
+      "stdoutHash": "50C7B6C58A9BBA8521BFE2005EF791C89E3716F25EF4995A47BD93254FEDA390"
+    },
+    {
+      "argvHash": "42BC46311C45D58B1361EC58CC58AF513B725597C5C4E6F8D4A0D9D6EECF8C9E",
+      "exitCode": 0,
+      "name": "webui_macos_download_cache_upload",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "A050E34E2E4789513C4A1D1A7763154B120703895ACDF149D9D0702AA7A7E3DF",
+      "exitCode": 0,
+      "name": "webui_macos_download_cache_promote",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "uploaded-cache-hit\n",
+      "stdoutHash": "959CBA6D497F47C3CB4CB3CE30C9D662F5BFD2F118A6BA022FBBE35D5E723420"
+    },
+    {
+      "argvHash": "153AF81C341935ADC19ACFCB925973F5FB3F9570D1528BD10CF266BD9F1F2390",
+      "exitCode": 0,
+      "name": "stage_web_tar_download_source",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "38B25B4FB3B8D38E603D860F9270958ABF9151CBD428CE601D783DCD8CA4A0BE",
+      "exitCode": 0,
+      "name": "chmod_release_scripts",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "A4515ADE1C6A7AD22ADDAE7E51AE07444DC9C1A1FCBB9AD5C14949F1F984E1DD",
+      "exitCode": 0,
+      "name": "capture_pre_state",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "{\"currentArtifact\": \"web-linux-service\", \"currentVersion\": \"0.2.7\", \"installationManifestVersion\": \"0.2.7\", \"publicManifestVersion\": \"0.2.7\", \"serviceActive\": true, \"serviceEnabled\": true, \"stagedPublicManifestVersion\": \"0.2.7\", \"webVersionBodyHasExpectedVersion\": true, \"webVersionStatus\": 200}\n",
+      "stdoutHash": "2D20835026CD9BEE1D903A2490BC2DF8246A2CF36C7EEAADCA734F3489E028EB"
+    },
+    {
+      "argvHash": "1C3D9022E095A242C8E7F83F9E962888A4FEEDF0921E661EEBE5B16A62186E85",
+      "exitCode": 0,
+      "name": "install_web_service",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "Looking in indexes: [URL]\nRequirement already satisfied: pip in /opt/ecorex-web/venv/lib64/python3.11/site-packages (26.1.2)\nRequirement already satisfied: setuptools in /opt/ecorex-web/venv/lib64/python3.11/site-packages (82.0.1)\nRequirement already satisfied: wheel in /opt/ecorex-web/venv/lib64/python3.11/site-packages (0.47.0)\nRequirement already satisfied: packaging>=24.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from wheel) (26.2)\nLooking in indexes: [URL]\nIgnoring legacy-cgi: markers 'python_version >= \"3.13\"' don't match your environment\nRequirement already satisfied: numpy>=1.21 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260703050223-v0.2.7/runtime/requirements.txt (line 1)) (2.4.6)\nRequirement already satisfied: aiohttp<3.10,>=3.8.6 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260703050223-v0.2.7/runtime/requirements.txt (line 2)) (3.9.5)\nRequirement already satisfied: requests>=2.28.2 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260703050223-v0.2.7/runtime/requirements.txt (line 3)) (2.34.2)\nRequirement already satisfied: chardet>=5.1.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260703050223-v0.2.7/runtime/requirements.txt (line 4)) (7.4.3)\nRequirement already satisfied: Pillow in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260703050223-v0.2.7/runtime/requirements.txt (line 5)) (12.2.0)\nRequirement already satisfied: rapidocr-onnxruntime in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260703050223-v0.2.7/runtime/requirements.txt (line 6)) (1.4.4)\nRequirement already satisfied: python-dotenv>=1.0.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260703050223-v0.2.7/runtime/requirements.txt (line 7)) (1.2.2)\nRequirement already satisfied: PyYAML>=6.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260703050223-v0.2.7/runtime/requirements.txt (line 8)) (6.0.3)\nRequirement already satisfied: croniter>=2.0.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260703050223-v0.2.7/runtime/requirements.txt (line 9)) (6.2.2)\nRequirement already satisfied: click>=8.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260703050223-v0.2.7/runtime/requirements.txt (line 10)) (8.4.1)\nRequirement already satisfied: qrcode in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260703050223-v0.2.7/runtime/requirements.txt (line 11)) (8.2)\nRequirement already satisfied: json-repair in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260703050223-v0.2.7/runtime/requirements.txt (line 12)) (0.61.0)\nRequirement already satisfied: playwrig",
+      "stdoutHash": "F42281D5EC41F520D8415C726CA6495547C1778F0066862CEBC13D141D41B358"
+    },
+    {
+      "argvHash": "01E2673D130811AE73A789A01E99412E5BA7FFFD800E7B23403BD6FB5C6C3B8D",
+      "exitCode": 0,
+      "name": "check_web_service",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "PASS package contains */runtime/app.py\nPASS package contains */runtime/requirements.txt\nPASS package contains */runtime/core-requirements.txt\nPASS package contains */runtime/runtime-manifest.json\nPASS package contains */runtime/scripts/check-web-core-runtime-baseline.py\nPASS package contains */runtime/scripts/generate-web-runtime-release-gate.py\nPASS package contains */runtime/channel/web/chat.html\nPASS package contains */runtime/channel/web/static/app/index.html\nPASS package contains */scripts/install-ecorex-web.sh\nPASS package contains */scripts/check-ecorex-web-release.sh\nPASS package contains */service/caddy/ecorex-agent.routes.caddy\nPASS package contains */service/nginx/ecorex-agent.conf.example\nPASS package contains */service/systemd/ecorex-web.service.example\nPASS package contains */SHA256SUMS.txt\nPASS package contains */checksums.json\nPASS package contains */release.json\nPASS dir /opt/ecorex-web\nPASS dir /opt/ecorex-web/current\nPASS file /opt/ecorex-web/current/runtime/app.py\nPASS file /opt/ecorex-web/current/runtime/requirements.txt\nPASS file /opt/ecorex-web/current/runtime/core-requirements.txt\nPASS file /opt/ecorex-web/current/runtime/runtime-manifest.json\nPASS file /opt/ecorex-web/current/runtime/scripts/check-web-core-runtime-baseline.py\nPASS file /opt/ecorex-web/current/runtime/scripts/generate-web-runtime-release-gate.py\nPASS file /opt/ecorex-web/current/runtime/channel/web/chat.html\nPASS file /opt/ecorex-web/current/runtime/channel/web/static/app/index.html\nPASS file /opt/ecorex-web/node/bin/node\nPASS file /opt/ecorex-web/node/bin/npm\nPASS file /opt/ecorex-web/node/bin/npx\nPASS file /opt/ecorex-web/state/config.json\nruntime-baseline-ok\nPASS runtime baseline releaseReady\nPASS file /opt/ecorex-web/state/capability-state.json\nPASS file /opt/ecorex-web/state/permission-matrix.json\nPASS file /opt/ecorex-web/state/review-consensus.md\nPASS file /opt/ecorex-web/state/web-release-gate.json\nrelease-gate-ok\nPASS web release gate artifacts\nPASS file /etc/ecorex-web/ecorex-web.env\nPASS dir /srv/ecorex-agent-workspace\nmanifest-ok\nPASS installation manifest webui-linux-service\nPASS systemd enabled ecorex-web.service\nPASS systemd active ecorex-web.service\nPASS http login [URL]\nPASS http app [URL] -> 200\nPASS http auth-check [URL] -> 200\nPASS http version [URL] -> 200\nPASS sse [URL] returns event-stream data\nEcoreX WebUI release check passed.\n",
+      "stdoutHash": "7DEFB381A3C73EE4AE8AE7B53A7AA2E40129EE46C8D0875976F7A4BC3AC82140"
+    },
+    {
+      "argvHash": "8D883C6FA21CDACD0F58DCE751026CBAB57300124D42483FE74430CDC5E13816",
+      "exitCode": 0,
+      "name": "install_public_site_admin",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "EcoreX public release installed.\nversion: 0.2.7\nzipSha256: 0757EA585FC8AB2CD87A1398663D1EA878D14F8852CDCDEDB4F998318E142859\nreleaseDir: /srv/ecorex-agent-download/releases/20260703050230-v0.2.7\npromotion: staged\nstaged: /srv/ecorex-agent-download/staged-v0.2.7\ncurrent: /srv/ecorex-agent-download/current\nadminApp: /srv/ecorex-agent-admin/app\nadminEnv: /srv/ecorex-agent-admin/env/ecorex-admin-api.env\nadminComposeContext: /opt/xhs-report/_ecorex_admin_api\nserverHelpers: /srv/ecorex-agent-admin/server\n",
+      "stdoutHash": "0EC1FA5C9CD253602259B9CBA62A7FCFFE3A65678BBEDF112A41DD77DD3F82EA"
+    },
+    {
+      "argvHash": "AE3135023DBE7F530B09E810485BDE84AC2162D591D0FBB5698AA6CC92F041E2",
+      "exitCode": 0,
+      "name": "check_public_site_admin_skipped",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "3877EEB7F95B1FB252AEE4BCC1F9B992D5DF596116B1525587D38F6460D83BC8",
+      "exitCode": 0,
+      "name": "capture_post_state",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "{\"currentArtifact\": \"web-linux-service\", \"currentVersion\": \"0.2.7\", \"installationManifestVersion\": \"0.2.7\", \"publicManifestVersion\": \"0.2.7\", \"serviceActive\": true, \"serviceEnabled\": true, \"stagedPublicManifestVersion\": \"0.2.7\", \"webVersionBodyHasExpectedVersion\": true, \"webVersionStatus\": 200}\n",
+      "stdoutHash": "2D20835026CD9BEE1D903A2490BC2DF8246A2CF36C7EEAADCA734F3489E028EB"
+    }
+  ],
+  "generatedAt": "2026-07-03T05:03:04.334595+00:00",
+  "onlineChecks": {
+    "installationManifestVersion": "0.2.7",
+    "publicManifestVersion": "0.2.7",
+    "serviceActive": true,
+    "serviceEnabled": true,
+    "stagedPublicManifestVersion": "0.2.7",
+    "webServiceVersion": "0.2.7",
+    "webVersionBodyHasExpectedVersion": true,
+    "webVersionStatus": 200
+  },
+  "postState": {
+    "currentArtifact": "web-linux-service",
+    "currentVersion": "0.2.7",
+    "installationManifestVersion": "0.2.7",
+    "publicManifestVersion": "0.2.7",
+    "serviceActive": true,
+    "serviceEnabled": true,
+    "stagedPublicManifestVersion": "0.2.7",
+    "webVersionBodyHasExpectedVersion": true,
+    "webVersionStatus": 200
+  },
+  "preState": {
+    "currentArtifact": "web-linux-service",
+    "currentVersion": "0.2.7",
+    "installationManifestVersion": "0.2.7",
+    "publicManifestVersion": "0.2.7",
+    "serviceActive": true,
+    "serviceEnabled": true,
+    "stagedPublicManifestVersion": "0.2.7",
+    "webVersionBodyHasExpectedVersion": true,
+    "webVersionStatus": 200
+  },
+  "publicReleasePromotion": {
+    "adminTriggerRequired": true,
+    "mode": "staged",
+    "promoted": false
+  },
+  "redaction": {
+    "rawOutputPersisted": false,
+    "rawPasswordPersisted": false,
+    "rawSecretPersisted": false,
+    "rawTargetPersisted": false,
+    "rawUrlPersisted": false
+  },
+  "scope": "production-online-web-and-admin",
+  "status": "PASS",
+  "target": {
+    "domainHash": "A753D877497CBE35",
+    "rawTargetPersisted": false,
+    "sshHostHash": "CDF1CF905198CA97",
+    "sshUserHash": "4813494D137E1631"
+  },
+  "version": "0.2.7"
+}

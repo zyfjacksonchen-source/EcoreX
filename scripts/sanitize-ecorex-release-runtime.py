@@ -34,6 +34,15 @@ VOLATILE_DIR_NAMES = {"capability-state"}
 VOLATILE_FILE_SUFFIXES = {".log"}
 WINDOWS_PYTHON_LAUNCHER_DIR = pathlib.PurePosixPath("python/Scripts")
 SITE_PACKAGES_PARTS = {"site-packages", "dist-packages"}
+VENDOR_TEXT_SCAN_SKIP_PARTS = {
+    "node",
+    "node_modules",
+    "playwright-browsers",
+    "site-packages",
+    "dist-packages",
+    "wheelhouse",
+}
+MAX_TEXT_SCAN_BYTES = 2 * 1024 * 1024
 
 
 def _s(*parts: str) -> str:
@@ -97,6 +106,29 @@ def is_text_candidate(path: pathlib.Path) -> bool:
     return path.name in TEXT_NAMES or path.suffix.lower() in TEXT_SUFFIXES
 
 
+def is_vendor_path(path: pathlib.Path, root: pathlib.Path) -> bool:
+    try:
+        rel_parts = set(path.relative_to(root).parts)
+    except ValueError:
+        return False
+    return bool(rel_parts.intersection(VENDOR_TEXT_SCAN_SKIP_PARTS))
+
+
+def should_scan_text_file(path: pathlib.Path, root: pathlib.Path) -> bool:
+    if not is_text_candidate(path):
+        return False
+    if path.name in TEXT_NAMES or path.name == "runtime-manifest.json":
+        return True
+    if is_vendor_path(path, root):
+        return False
+    try:
+        if path.stat().st_size > MAX_TEXT_SCAN_BYTES:
+            return False
+    except OSError:
+        return False
+    return True
+
+
 def sanitize_text(text: str) -> str:
     replacements = (
         (LEGACY_CLI_PLUGIN_UPPER, "ECOREX_CLI"),
@@ -148,6 +180,28 @@ def sanitize_paths(root: pathlib.Path) -> list[pathlib.Path]:
     return changed
 
 
+def is_portable_release_path(path: pathlib.Path, root: pathlib.Path) -> bool:
+    rel = path.relative_to(root).as_posix()
+    return all(ord(char) < 128 for char in rel)
+
+
+def remove_non_portable_paths(root: pathlib.Path) -> list[pathlib.Path]:
+    removed: list[pathlib.Path] = []
+    for path in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+        if is_portable_release_path(path, root):
+            continue
+        if path.is_file() or path.is_symlink():
+            path.unlink(missing_ok=True)
+            removed.append(path)
+        elif path.is_dir():
+            try:
+                path.rmdir()
+            except OSError:
+                continue
+            removed.append(path)
+    return removed
+
+
 def sanitize_runtime_manifest(path: pathlib.Path) -> None:
     try:
         data = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -164,6 +218,7 @@ def sanitize_runtime_manifest(path: pathlib.Path) -> None:
 
 def sanitize_tree(root: pathlib.Path) -> list[pathlib.Path]:
     changed: list[pathlib.Path] = []
+    changed.extend(remove_non_portable_paths(root))
     for path in sorted(root.rglob("*"), reverse=True):
         rel_parts = set(path.relative_to(root).parts)
         if path.is_dir() and path.name in {"test", "tests"} and rel_parts.intersection(SITE_PACKAGES_PARTS):
@@ -195,7 +250,7 @@ def sanitize_tree(root: pathlib.Path) -> list[pathlib.Path]:
         sanitize_runtime_manifest(root / "runtime-manifest.json")
         changed.append(root / "runtime-manifest.json")
     for path in root.rglob("*"):
-        if not path.is_file() or not is_text_candidate(path):
+        if not path.is_file() or not should_scan_text_file(path, root):
             continue
         try:
             original = path.read_text(encoding="utf-8-sig")
@@ -213,14 +268,24 @@ def sanitize_tree(root: pathlib.Path) -> list[pathlib.Path]:
     return changed
 
 
+def find_non_portable_paths(root: pathlib.Path) -> list[str]:
+    hits: list[str] = []
+    for path in root.rglob("*"):
+        if not is_portable_release_path(path, root):
+            hits.append(path.relative_to(root).as_posix())
+    return hits
+
+
 def find_forbidden(root: pathlib.Path) -> list[str]:
     hits: list[str] = []
     for path in root.rglob("*"):
+        if is_vendor_path(path, root):
+            continue
         rel = path.relative_to(root).as_posix()
         if FORBIDDEN_RE.search(rel):
             hits.append(rel)
             continue
-        if not path.is_file() or not is_text_candidate(path):
+        if not path.is_file() or not should_scan_text_file(path, root):
             continue
         try:
             text = path.read_text(encoding="utf-8-sig")
@@ -250,6 +315,14 @@ def main(argv: list[str]) -> int:
         raise SystemExit(f"runtime root not found: {root}")
     if not args.check:
         sanitize_tree(root)
+    non_portable = find_non_portable_paths(root)
+    if non_portable:
+        print("Non-portable release paths remain:", file=sys.stderr)
+        for hit in non_portable[:80]:
+            print(f"  {hit}", file=sys.stderr)
+        if len(non_portable) > 80:
+            print(f"  ... {len(non_portable) - 80} more", file=sys.stderr)
+        return 1
     hits = find_forbidden(root)
     if hits:
         print("Forbidden legacy/private release strings remain:", file=sys.stderr)

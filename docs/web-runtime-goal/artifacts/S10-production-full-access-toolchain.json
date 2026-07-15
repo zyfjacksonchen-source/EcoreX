@@ -1,0 +1,91 @@
+{
+  "schemaVersion": "ecorex.web-runtime-goal.slice-artifact.v1",
+  "slice": "S10-production-full-access-toolchain",
+  "generatedAt": "2026-07-01T13:49:01+0800",
+  "environment": {
+    "surface": "production-web",
+    "baseUrl": "https://mvdcm.ecoremedia.net/ecorex-agent",
+    "runtime": "/opt/ecorex-web/releases/20260701033334-v0.2.6/runtime",
+    "os": "Alibaba Cloud Linux 4.0.3",
+    "secretsRedacted": true
+  },
+  "dependencyRepair": {
+    "artifactDir": "/root/ecorex-deploy-smoke-20260701133641-runtime-deps",
+    "installed": [
+      "libGL.so.1 and related Chromium/OCR runtime libraries",
+      "Playwright Chromium v1223"
+    ],
+    "postRepairImportSmoke": {
+      "rapidocr_onnxruntime": true,
+      "onnxruntime": true,
+      "PIL.Image": true,
+      "playwright": true
+    }
+  },
+  "fullAccessSmoke": {
+    "artifactDir": "/root/ecorex-deploy-smoke-20260701134901-full-access-strict",
+    "ok": true,
+    "checks": {
+      "auth": true,
+      "fullAccess": true,
+      "discovery": true,
+      "runtime": true,
+      "imageChain": true
+    },
+    "runtimeChecks": {
+      "python": true,
+      "node": true,
+      "npm": true,
+      "npx": true,
+      "ocr": true,
+      "vision": true,
+      "browserDiagnostic": true,
+      "browserInvoke": true
+    },
+    "permission": {
+      "mode": "full-access",
+      "auditPathPresent": true
+    },
+    "discoveryMarkers": {
+      "imagegen": true,
+      "ocr": true,
+      "vision": true,
+      "browser": true,
+      "feishu": true,
+      "office-pdf": true
+    },
+    "runtime": {
+      "pythonSource": "ecorex-state",
+      "nodeVersion": "v22.22.0",
+      "npmVersion": "10.9.4",
+      "npxVersion": "10.9.4",
+      "ocrProvider": "rapidocr_onnxruntime",
+      "ocrTextSample": "ECOREXOCR",
+      "visionProvider": "Doubao",
+      "browserInvoke": "success"
+    },
+    "imageChain": {
+      "status": "ok",
+      "realImagegenRequired": true,
+      "editInputSource": "server_local_image_job_artifact_path",
+      "generate": {
+        "status": "completed",
+        "providerModel": "OpenAI/gpt-image-2-pro",
+        "fallbackUsed": false
+      },
+      "edit": {
+        "status": "completed",
+        "providerModel": "OpenAI/gpt-image-2-pro",
+        "fallbackUsed": false
+      }
+    }
+  },
+  "previousFailuresFixed": [
+    "Tool smoke did not initialize deployed config, causing false Python/Node/Vision negatives.",
+    "OCR rapidocr import failed because libGL.so.1 was missing.",
+    "Browser fallback was unavailable because Playwright Chromium was not installed.",
+    "Image edit data URL exceeded request-size limits; server-local artifact chaining is used instead.",
+    "Smoke now fails production acceptance if real imagegen is skipped or OCR does not read the expected sample text."
+  ],
+  "result": "PASS_WITH_NOTES"
+}

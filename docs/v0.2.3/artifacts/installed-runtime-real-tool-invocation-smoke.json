@@ -1,0 +1,66 @@
+{
+  "status": "PASS",
+  "generatedAt": "2026-06-27T08:40:46Z",
+  "scenario": "real-tool-invocation-smoke",
+  "checks": [
+    {
+      "label": "shell alias executes bash",
+      "status": "PASS",
+      "requestedTool": "shell",
+      "executedTool": "bash",
+      "toolExecutionStatus": "success",
+      "firstSchemaContains": true,
+      "schemaToolCount": 1,
+      "eventCount": 17,
+      "finalHash": "e8d05b6a7e14",
+      "resultSummary": {}
+    },
+    {
+      "label": "ocr text url extraction",
+      "status": "PASS",
+      "requestedTool": "ocr",
+      "executedTool": "ocr",
+      "toolExecutionStatus": "success",
+      "firstSchemaContains": true,
+      "schemaToolCount": 1,
+      "eventCount": 17,
+      "finalHash": "9470a09bd514",
+      "resultSummary": {
+        "status": "success",
+        "urlCount": 1
+      }
+    },
+    {
+      "label": "optional abilities list",
+      "status": "PASS",
+      "requestedTool": "optional_abilities",
+      "executedTool": "optional_abilities",
+      "toolExecutionStatus": "success",
+      "firstSchemaContains": true,
+      "schemaToolCount": 1,
+      "eventCount": 17,
+      "finalHash": "55d38c00fcf4",
+      "resultSummary": {
+        "status": "success"
+      }
+    },
+    {
+      "label": "feishu status structured",
+      "status": "PASS",
+      "requestedTool": "feishu_cli",
+      "executedTool": "feishu_cli",
+      "toolExecutionStatus": "success",
+      "firstSchemaContains": true,
+      "schemaToolCount": 1,
+      "eventCount": 17,
+      "finalHash": "4ee78d2bf476",
+      "resultSummary": {
+        "status": "success",
+        "available": true,
+        "authState": "ready"
+      }
+    }
+  ],
+  "failed": [],
+  "redacted": true
+}

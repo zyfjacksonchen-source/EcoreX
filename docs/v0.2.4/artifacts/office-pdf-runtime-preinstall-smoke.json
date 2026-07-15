@@ -1,0 +1,165 @@
+{
+  "status": "pass",
+  "version": "0.2.4",
+  "generatedAt": "2026-06-27T13:47:41Z",
+  "changeIds": [
+    "OFFICE-001"
+  ],
+  "checks": [
+    {
+      "name": "office-documents builtin loaded",
+      "status": "pass",
+      "evidence": "skills/office-documents/SKILL.md"
+    },
+    {
+      "name": "office-documents mention metadata",
+      "status": "pass",
+      "evidence": "{\"enabled\": true, \"mention_category\": \"document\", \"mentionable\": true, \"source\": \"builtin\", \"user_invocable\": true}"
+    },
+    {
+      "name": "office-documents office routing terms",
+      "status": "pass",
+      "evidence": "missing=[]"
+    },
+    {
+      "name": "office-documents EcoreX-native facade metadata",
+      "status": "pass",
+      "evidence": "{\"adopts_official_skill\": \"documents\", \"compatibility_id\": \"office-documents\", \"ecorex_native_facade\": true, \"quality_gates\": [\"design-preset\", \"render-docx\", \"table-geometry\", \"visual-inspection\", \"redline-preserve\"]}"
+    },
+    {
+      "name": "office-spreadsheets builtin loaded",
+      "status": "pass",
+      "evidence": "skills/office-spreadsheets/SKILL.md"
+    },
+    {
+      "name": "office-spreadsheets mention metadata",
+      "status": "pass",
+      "evidence": "{\"enabled\": true, \"mention_category\": \"document\", \"mentionable\": true, \"source\": \"builtin\", \"user_invocable\": true}"
+    },
+    {
+      "name": "office-spreadsheets office routing terms",
+      "status": "pass",
+      "evidence": "missing=[]"
+    },
+    {
+      "name": "office-spreadsheets EcoreX-native facade metadata",
+      "status": "pass",
+      "evidence": "{\"adopts_official_skill\": \"Spreadsheets\", \"compatibility_id\": \"office-spreadsheets\", \"ecorex_native_facade\": true, \"quality_gates\": [\"typed-values\", \"formula-audit\", \"chart-render\", \"visual-inspection\", \"export-verify\"]}"
+    },
+    {
+      "name": "office-presentations builtin loaded",
+      "status": "pass",
+      "evidence": "skills/office-presentations/SKILL.md"
+    },
+    {
+      "name": "office-presentations mention metadata",
+      "status": "pass",
+      "evidence": "{\"enabled\": true, \"mention_category\": \"document\", \"mentionable\": true, \"source\": \"builtin\", \"user_invocable\": true}"
+    },
+    {
+      "name": "office-presentations office routing terms",
+      "status": "pass",
+      "evidence": "missing=[]"
+    },
+    {
+      "name": "office-presentations EcoreX-native facade metadata",
+      "status": "pass",
+      "evidence": "{\"adopts_official_skill\": \"Presentations\", \"compatibility_id\": \"office-presentations\", \"ecorex_native_facade\": true, \"quality_gates\": [\"story-flow\", \"artifact-tool-authoring\", \"render-preview\", \"overlap-check\", \"visual-inspection\"]}"
+    },
+    {
+      "name": "office-pdf builtin loaded",
+      "status": "pass",
+      "evidence": "skills/office-pdf/SKILL.md"
+    },
+    {
+      "name": "office-pdf mention metadata",
+      "status": "pass",
+      "evidence": "{\"enabled\": true, \"mention_category\": \"document\", \"mentionable\": true, \"source\": \"builtin\", \"user_invocable\": true}"
+    },
+    {
+      "name": "office-pdf office routing terms",
+      "status": "pass",
+      "evidence": "missing=[]"
+    },
+    {
+      "name": "office-pdf EcoreX-native facade metadata",
+      "status": "pass",
+      "evidence": "{\"adopts_official_skill\": \"pdf\", \"compatibility_id\": \"office-pdf\", \"ecorex_native_facade\": true, \"quality_gates\": [\"text-orientation\", \"page-render\", \"layout-inspection\", \"table-structure\", \"generation-verify\"]}"
+    },
+    {
+      "name": "office-pdf capability manifest",
+      "status": "pass",
+      "evidence": "desktop/runtime-packs/capabilities.json"
+    },
+    {
+      "name": "office-pdf capability modules",
+      "status": "pass",
+      "evidence": "missing=[] discoveryOnly=None"
+    },
+    {
+      "name": "Windows staging defaults office-pdf",
+      "status": "pass",
+      "evidence": "stage-runtime-win.ps1"
+    },
+    {
+      "name": "macOS staging defaults office-pdf",
+      "status": "pass",
+      "evidence": "stage-runtime-mac.sh"
+    },
+    {
+      "name": "office-documents staged runtime skill",
+      "status": "pass",
+      "evidence": "runtime/ecorex-runtime/skills/office-documents/SKILL.md"
+    },
+    {
+      "name": "office-documents staged runtime facade metadata",
+      "status": "pass",
+      "evidence": "runtime/ecorex-runtime/skills/office-documents/SKILL.md"
+    },
+    {
+      "name": "office-spreadsheets staged runtime skill",
+      "status": "pass",
+      "evidence": "runtime/ecorex-runtime/skills/office-spreadsheets/SKILL.md"
+    },
+    {
+      "name": "office-spreadsheets staged runtime facade metadata",
+      "status": "pass",
+      "evidence": "runtime/ecorex-runtime/skills/office-spreadsheets/SKILL.md"
+    },
+    {
+      "name": "office-presentations staged runtime skill",
+      "status": "pass",
+      "evidence": "runtime/ecorex-runtime/skills/office-presentations/SKILL.md"
+    },
+    {
+      "name": "office-presentations staged runtime facade metadata",
+      "status": "pass",
+      "evidence": "runtime/ecorex-runtime/skills/office-presentations/SKILL.md"
+    },
+    {
+      "name": "office-pdf staged runtime skill",
+      "status": "pass",
+      "evidence": "runtime/ecorex-runtime/skills/office-pdf/SKILL.md"
+    },
+    {
+      "name": "office-pdf staged runtime facade metadata",
+      "status": "pass",
+      "evidence": "runtime/ecorex-runtime/skills/office-pdf/SKILL.md"
+    },
+    {
+      "name": "runtime manifest preinstalled office-pdf",
+      "status": "pass",
+      "evidence": "[\"office-pdf\"]"
+    },
+    {
+      "name": "office-pdf capability preinstall recorded",
+      "status": "pass",
+      "evidence": "sanitized release runtime has no capability-state file; runtime-manifest preinstalledPacks=['office-pdf']"
+    },
+    {
+      "name": "office-pdf runtime module imports",
+      "status": "pass",
+      "evidence": "{\"missing\": []}"
+    }
+  ]
+}

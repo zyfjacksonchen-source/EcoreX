@@ -2,16 +2,19 @@
 Browser service - Playwright wrapper managing browser lifecycle and page operations.
 
 All Playwright calls run on a dedicated background thread so that callers from
-any worker thread can safely use the service.  An idle-timeout mechanism
-automatically shuts down the browser (and its thread) after a configurable
-period of inactivity to free resources.
+any worker thread can safely use the service.  Non-CDP browsers still use an
+idle timeout to free resources; CDP mode keeps a persistent client by default
+and sends a light keepalive so long browser tasks survive quiet periods.
 """
+
+from __future__ import annotations
 
 import os
 import sys
 import uuid
 import queue
 import json
+import base64
 import subprocess
 import threading
 import time
@@ -21,6 +24,12 @@ from typing import Optional, Dict, Any, List, Callable
 
 from common.log import logger
 from common.utils import expand_path, is_cloud_deployment
+from agent.tools.browser.browser_automation_service import (
+    cdp_is_reachable,
+    cdp_version_url,
+    ensure_cdp_browser,
+    find_chrome_executable,
+)
 
 
 _DEFAULT_USER_DATA_DIR = "~/.cow/browser_profile"
@@ -238,6 +247,21 @@ def _is_browser_dead_error(err: Exception) -> bool:
     return any(h in msg for h in _BROWSER_DEAD_HINTS)
 
 
+def _is_browser_dead_result(value: Any) -> bool:
+    """Return True when an action returned a structured stale-browser error."""
+    if isinstance(value, dict):
+        candidates = [
+            value.get("error"),
+            value.get("message"),
+            value.get("error_message"),
+            value.get("details"),
+        ]
+        return any(any(h in str(item).lower() for h in _BROWSER_DEAD_HINTS) for item in candidates if item)
+    if isinstance(value, str) and ("error" in value.lower() or "failed" in value.lower()):
+        return any(h in value.lower() for h in _BROWSER_DEAD_HINTS)
+    return False
+
+
 def _should_use_headless() -> bool:
     """Decide headless mode: headless on Linux servers without display, headed elsewhere."""
     if sys.platform in ("win32", "darwin"):
@@ -304,8 +328,9 @@ class BrowserService:
 
     All Playwright operations are dispatched to a single long-lived thread via
     a task queue.  Callers from *any* worker thread can use the public API
-    safely.  An idle timer automatically shuts the browser down after
-    ``idle_timeout`` seconds of inactivity (default 300 = 5 min).
+    safely.  Non-CDP browsers shut down after ``idle_timeout`` seconds of
+    inactivity (default 300 = 5 min). CDP sessions stay alive by default and
+    reconnect once if the DevTools socket is closed while idle.
     """
 
     _IDLE_TIMEOUT_DEFAULT = 300  # seconds
@@ -341,7 +366,13 @@ class BrowserService:
 
         self._cdp_endpoint: str = cdp_endpoint.strip() if isinstance(cdp_endpoint, str) else ""
         self._cdp_fallback: bool = self._config.get("cdp_fallback", True) is not False
-        self._cdp_auto_launch: bool = self._config.get("cdp_auto_launch", False) is True
+        self._cdp_auto_launch: bool = self._config.get("cdp_auto_launch", True) is True
+        self._cdp_persist_session: bool = self._config.get("cdp_persist_session", True) is not False
+        keepalive_cfg = self._config.get("cdp_keepalive_interval")
+        self._cdp_keepalive_interval: float = float(keepalive_cfg) if keepalive_cfg is not None else 60.0
+        if self._cdp_keepalive_interval < 0:
+            self._cdp_keepalive_interval = 0.0
+        self._last_cdp_keepalive = 0.0
         self._cdp_user_data_dir: str = expand_path(str(self._config.get("cdp_user_data_dir") or _DEFAULT_CDP_USER_DATA_DIR))
         self._cdp_process: Optional[subprocess.Popen] = None
         if self._cdp_endpoint:
@@ -356,7 +387,10 @@ class BrowserService:
 
         # Idle auto-release
         idle_cfg = self._config.get("idle_timeout")
-        self._idle_timeout: float = float(idle_cfg) if idle_cfg is not None else self._IDLE_TIMEOUT_DEFAULT
+        if idle_cfg is None and self._launch_mode == "cdp" and self._cdp_persist_session:
+            self._idle_timeout = 0.0
+        else:
+            self._idle_timeout = float(idle_cfg) if idle_cfg is not None else self._IDLE_TIMEOUT_DEFAULT
         self._idle_timer: Optional[threading.Timer] = None
 
         # Set when the browser / page is detected to have died externally
@@ -407,6 +441,7 @@ class BrowserService:
             try:
                 task = self._task_queue.get(timeout=1.0)
             except queue.Empty:
+                self._maybe_cdp_keepalive()
                 continue
             if task is None:
                 break
@@ -489,8 +524,9 @@ class BrowserService:
                 if not self._cdp_fallback:
                     raise
                 logger.warning(f"[Browser] CDP unavailable ({e}); falling back to Playwright persistent browser")
-                self._launch_mode = "persistent" if self._user_data_dir else "fresh"
-                self._shutdown_browser()
+                fallback_launch_mode = "persistent" if self._user_data_dir else "fresh"
+                self._shutdown_browser(force_cdp_process_cleanup=True)
+                self._launch_mode = fallback_launch_mode
                 self._playwright = sync_playwright().start()
                 if self._launch_mode == "persistent":
                     self._launch_persistent(launch_args, viewport, user_agent)
@@ -550,82 +586,26 @@ class BrowserService:
         self._wire_close_listeners()
 
     def _cdp_version_url(self, endpoint: str) -> str:
-        return endpoint.rstrip("/") + "/json/version"
+        return cdp_version_url(endpoint)
 
     def _cdp_is_reachable(self, endpoint: str) -> bool:
-        try:
-            with urllib.request.urlopen(self._cdp_version_url(endpoint), timeout=1.5) as response:
-                payload = json.loads(response.read().decode("utf-8", errors="replace") or "{}")
-                return bool(payload.get("webSocketDebuggerUrl") or payload.get("Browser"))
-        except Exception:
-            return False
+        return cdp_is_reachable(endpoint)
 
     def _find_chrome_executable(self) -> str:
-        configured = str(self._config.get("chrome_executable") or "").strip()
-        candidates: List[str] = [configured] if configured else []
-        if sys.platform.startswith("win"):
-            local_app = os.environ.get("LOCALAPPDATA", "")
-            candidates.extend([
-                os.path.join(os.environ.get("PROGRAMFILES", r"C:\Program Files"), "Google", "Chrome", "Application", "chrome.exe"),
-                os.path.join(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"), "Google", "Chrome", "Application", "chrome.exe"),
-                os.path.join(local_app, "Google", "Chrome", "Application", "chrome.exe"),
-                os.path.join(os.environ.get("PROGRAMFILES", r"C:\Program Files"), "Microsoft", "Edge", "Application", "msedge.exe"),
-                os.path.join(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"), "Microsoft", "Edge", "Application", "msedge.exe"),
-            ])
-        elif sys.platform == "darwin":
-            candidates.extend([
-                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-                "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-                "/Applications/Chromium.app/Contents/MacOS/Chromium",
-            ])
-        else:
-            candidates.extend(["google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "microsoft-edge"])
-
-        for candidate in candidates:
-            if not candidate:
-                continue
-            if os.path.isabs(candidate):
-                if os.path.exists(candidate):
-                    return candidate
-            else:
-                return candidate
-        return ""
+        return find_chrome_executable(self._config)
 
     def _ensure_cdp_browser(self, endpoint: str) -> None:
         if self._cdp_is_reachable(endpoint) or not self._cdp_auto_launch:
             return
-        chrome = self._find_chrome_executable()
-        if not chrome:
-            raise RuntimeError("No Chrome/Edge executable found for CDP auto-launch")
-
-        port = endpoint.rsplit(":", 1)[-1].split("/", 1)[0]
-        if not port.isdigit():
-            port = "9222"
-        os.makedirs(self._cdp_user_data_dir, exist_ok=True)
-        args = [
-            chrome,
-            f"--remote-debugging-port={port}",
-            f"--user-data-dir={self._cdp_user_data_dir}",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "about:blank",
-        ]
-        logger.info(f"[Browser] Auto-launching Chrome for CDP on port {port}")
-        self._cdp_process = subprocess.Popen(
-            args,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        deadline = time.time() + 8
-        while time.time() < deadline:
-            if self._cdp_is_reachable(endpoint):
-                return
-            time.sleep(0.25)
-        raise RuntimeError(f"Chrome CDP did not become ready at {endpoint}")
+        logger.info(f"[Browser] Auto-launching Chrome/Edge for CDP at {endpoint}")
+        process = ensure_cdp_browser(self._config, endpoint)
+        if process is not None:
+            self._cdp_process = process
 
     def _connect_cdp(self, viewport: Dict[str, int]):
         """Attach to an existing Chrome started with --remote-debugging-port."""
         endpoint = self._cdp_endpoint
+        self._default_viewport = dict(viewport or {})
         logger.info(f"[Browser] Connecting to existing Chrome via CDP: {endpoint}")
         self._ensure_cdp_browser(endpoint)
         try:
@@ -651,6 +631,46 @@ class BrowserService:
         self._page = pages[0] if pages else self._context.new_page()
         self._wire_close_listeners()
 
+    def _ensure_live_cdp_page(self) -> None:
+        if self._launch_mode != "cdp":
+            return
+        if not self._browser or not self._cdp_is_reachable(self._cdp_endpoint):
+            self._needs_restart = True
+            raise RuntimeError("Chrome CDP session is not reachable; reconnect required")
+        contexts = self._browser.contexts
+        if contexts:
+            self._context = contexts[0]
+        elif self._default_viewport:
+            self._context = self._browser.new_context(viewport=self._default_viewport)
+        else:
+            self._context = self._browser.new_context()
+        pages = self._context.pages
+        page = self._page
+        if page not in pages:
+            page = pages[0] if pages else self._context.new_page()
+        self._page = page
+        self._wire_close_listeners()
+
+    def _maybe_cdp_keepalive(self) -> None:
+        if (
+            self._launch_mode != "cdp"
+            or not self._cdp_persist_session
+            or self._cdp_keepalive_interval <= 0
+            or self._needs_restart
+        ):
+            return
+        now = time.time()
+        if now - self._last_cdp_keepalive < self._cdp_keepalive_interval:
+            return
+        self._last_cdp_keepalive = now
+        try:
+            self._ensure_live_cdp_page()
+            if self._page:
+                self._page.evaluate("() => document.readyState")
+        except Exception as e:
+            self._needs_restart = True
+            logger.info(f"[Browser] CDP keepalive failed; will reconnect on next request: {e}")
+
     def _wire_close_listeners(self):
         """Mark needs_restart whenever the browser / context / page dies externally."""
         def _on_dead(_obj=None):
@@ -666,7 +686,7 @@ class BrowserService:
         except Exception as e:
             logger.debug(f"[Browser] Failed to wire close listeners: {e}")
 
-    def _shutdown_browser(self):
+    def _shutdown_browser(self, *, force_cdp_process_cleanup: bool = False):
         """Shut down Playwright resources on the background thread.
 
         Mode-specific behavior:
@@ -685,11 +705,22 @@ class BrowserService:
                     self._browser.close()
             except Exception as e:
                 logger.debug(f"[Browser] cdp disconnect error: {e}")
-            if self._cdp_process:
+            if self._cdp_process and (force_cdp_process_cleanup or not self._cdp_persist_session):
                 try:
                     self._cdp_process.terminate()
+                    try:
+                        self._cdp_process.wait(timeout=5)
+                    except Exception:
+                        try:
+                            self._cdp_process.kill()
+                            self._cdp_process.wait(timeout=2)
+                        except Exception as kill_error:
+                            logger.debug(f"[Browser] cdp auto-launched Chrome kill error: {kill_error}")
                 except Exception as e:
                     logger.debug(f"[Browser] cdp auto-launched Chrome terminate error: {e}")
+                self._cdp_process = None
+            elif self._cdp_process:
+                logger.debug("[Browser] leaving persistent auto-launched CDP browser running")
                 self._cdp_process = None
         else:
             for obj, label in [
@@ -713,41 +744,52 @@ class BrowserService:
         self._playwright = None
         logger.info("[Browser] Browser closed")
 
-    def _submit(self, fn: Callable, *args, **kwargs):
+    def _submit(self, fn: Callable, *args, cancel_event=None, **kwargs):
         """Submit *fn* to the background thread and block until it completes."""
-        # If the browser died externally (e.g. user closed the window), tear
-        # down the stale thread first so _start_thread() will relaunch fresh.
-        if self._needs_restart:
-            logger.info("[Browser] Restarting after detecting closed browser")
-            self.close()
-            self._needs_restart = False
+        for attempt in range(2):
+            # If the browser died externally (e.g. user closed the window), tear
+            # down the stale thread first so _start_thread() will relaunch fresh.
+            if self._needs_restart:
+                logger.info("[Browser] Restarting after detecting closed browser")
+                self.close()
+                self._needs_restart = False
 
-        self._start_thread()
+            self._start_thread()
 
-        if not self._alive:
-            raise RuntimeError("Browser is not available")
+            if not self._alive:
+                raise RuntimeError("Browser is not available")
 
-        self._reset_idle_timer()
+            self._reset_idle_timer()
 
-        result_slot: Dict[str, Any] = {"event": threading.Event()}
-        self._task_queue.put((fn, args, kwargs, result_slot))
+            result_slot: Dict[str, Any] = {"event": threading.Event()}
+            self._task_queue.put((fn, args, kwargs, result_slot))
 
-        # Timeout prevents permanent hang if the background thread crashes
-        deadline = time.time() + 120
-        cancel_event = getattr(self, "cancel_event", None)
-        while not result_slot["event"].wait(timeout=0.25):
-            if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
-                result_slot["error"] = RuntimeError("Browser operation cancelled by user")
-                result_slot["event"].set()
-                self._request_thread_stop(join_timeout=1)
-                raise result_slot["error"]
-            if time.time() >= deadline:
-                self._request_thread_stop(join_timeout=1)
-                raise TimeoutError("Browser operation timed out (120s)")
+            # Timeout prevents permanent hang if the background thread crashes
+            deadline = time.time() + 120
+            active_cancel_event = cancel_event if cancel_event is not None else getattr(self, "cancel_event", None)
+            while not result_slot["event"].wait(timeout=0.25):
+                if active_cancel_event is not None and getattr(active_cancel_event, "is_set", lambda: False)():
+                    result_slot["error"] = RuntimeError("Browser operation cancelled by user")
+                    result_slot["event"].set()
+                    self._request_thread_stop(join_timeout=1)
+                    raise result_slot["error"]
+                if time.time() >= deadline:
+                    self._request_thread_stop(join_timeout=1)
+                    raise TimeoutError("Browser operation timed out (120s)")
 
-        if "error" in result_slot:
-            raise result_slot["error"]
-        return result_slot.get("value")
+            if "error" not in result_slot:
+                value = result_slot.get("value")
+                if self._launch_mode == "cdp" and attempt == 0 and _is_browser_dead_result(value):
+                    self._needs_restart = True
+                    logger.info(f"[Browser] CDP action returned stale connection; reconnecting once: {value}")
+                    continue
+                return value
+            error = result_slot["error"]
+            if self._launch_mode == "cdp" and attempt == 0 and _is_browser_dead_error(error):
+                self._needs_restart = True
+                logger.info(f"[Browser] CDP action hit stale connection; reconnecting once: {error}")
+                continue
+            raise error
 
     # ------------------------------------------------------------------
     # Idle auto-release
@@ -801,8 +843,8 @@ class BrowserService:
     # Actions  (each method is dispatched to the background thread)
     # ------------------------------------------------------------------
 
-    def navigate(self, url: str, timeout: int = 30000) -> Dict[str, Any]:
-        return self._submit(self._do_navigate, url, timeout)
+    def navigate(self, url: str, timeout: int = 30000, cancel_event=None) -> Dict[str, Any]:
+        return self._submit(self._do_navigate, url, timeout, cancel_event=cancel_event)
 
     def _do_navigate(self, url: str, timeout: int) -> Dict[str, Any]:
         page = self._page
@@ -829,8 +871,8 @@ class BrowserService:
 
         return {"url": current_url, "title": title, "status": status}
 
-    def snapshot(self, selector: Optional[str] = None) -> str:
-        return self._submit(self._do_snapshot, selector)
+    def snapshot(self, selector: Optional[str] = None, cancel_event=None) -> str:
+        return self._submit(self._do_snapshot, selector, cancel_event=cancel_event)
 
     def _do_snapshot(self, selector: Optional[str] = None) -> str:
         page = self._page
@@ -861,21 +903,53 @@ class BrowserService:
 
         return f"{header}\n{body}"
 
-    def screenshot(self, full_page: bool = False, cwd: str = "") -> str:
-        return self._submit(self._do_screenshot, full_page, cwd)
+    def screenshot(self, full_page: bool = False, cwd: str = "", cancel_event=None) -> str:
+        return self._submit(self._do_screenshot, full_page, cwd, cancel_event=cancel_event)
 
     def _do_screenshot(self, full_page: bool = False, cwd: str = "") -> str:
         page = self._page
         save_dir = self._get_screenshot_dir(cwd)
         filename = f"screenshot_{uuid.uuid4().hex[:8]}.png"
         filepath = os.path.join(save_dir, filename)
-        page.screenshot(path=filepath, full_page=full_page)
+        try:
+            page.screenshot(path=filepath, full_page=full_page, animations="disabled")
+        except Exception as exc:
+            if self._launch_mode != "cdp":
+                raise
+            logger.warning(f"[Browser] Playwright screenshot failed in CDP mode, falling back to native CDP capture: {exc}")
+            self._capture_screenshot_via_cdp(page, filepath, full_page=full_page)
         logger.info(f"[Browser] Screenshot saved: {filepath}")
         return filepath
 
+    def _capture_screenshot_via_cdp(self, page: Page, filepath: str, *, full_page: bool = False) -> None:
+        session = page.context.new_cdp_session(page)
+        try:
+            params: Dict[str, Any] = {
+                "format": "png",
+                "fromSurface": True,
+                "captureBeyondViewport": bool(full_page),
+            }
+            if full_page:
+                metrics = session.send("Page.getLayoutMetrics")
+                content = metrics.get("contentSize") or {}
+                width = max(1, int(float(content.get("width") or 1)))
+                height = max(1, int(float(content.get("height") or 1)))
+                params["clip"] = {"x": 0, "y": 0, "width": width, "height": height, "scale": 1}
+            payload = session.send("Page.captureScreenshot", params)
+            image_data = payload.get("data")
+            if not image_data:
+                raise RuntimeError("CDP Page.captureScreenshot returned no image data")
+            with open(filepath, "wb") as handle:
+                handle.write(base64.b64decode(image_data))
+        finally:
+            try:
+                session.detach()
+            except Exception:
+                pass
+
     def click(self, ref: Optional[int] = None, selector: Optional[str] = None,
-              timeout: int = 5000) -> Dict[str, Any]:
-        return self._submit(self._do_click, ref, selector, timeout)
+              timeout: int = 5000, cancel_event=None) -> Dict[str, Any]:
+        return self._submit(self._do_click, ref, selector, timeout, cancel_event=cancel_event)
 
     def _do_click(self, ref, selector, timeout) -> Dict[str, Any]:
         page = self._page
@@ -902,8 +976,8 @@ class BrowserService:
             return {"error": f"Click failed: {e}"}
 
     def fill(self, text: str, ref: Optional[int] = None,
-             selector: Optional[str] = None, timeout: int = 5000) -> Dict[str, Any]:
-        return self._submit(self._do_fill, text, ref, selector, timeout)
+             selector: Optional[str] = None, timeout: int = 5000, cancel_event=None) -> Dict[str, Any]:
+        return self._submit(self._do_fill, text, ref, selector, timeout, cancel_event=cancel_event)
 
     def _do_fill(self, text, ref, selector, timeout) -> Dict[str, Any]:
         page = self._page
@@ -931,8 +1005,8 @@ class BrowserService:
             return {"error": f"Fill failed: {e}"}
 
     def select(self, value: str, ref: Optional[int] = None,
-               selector: Optional[str] = None, timeout: int = 5000) -> Dict[str, Any]:
-        return self._submit(self._do_select, value, ref, selector, timeout)
+               selector: Optional[str] = None, timeout: int = 5000, cancel_event=None) -> Dict[str, Any]:
+        return self._submit(self._do_select, value, ref, selector, timeout, cancel_event=cancel_event)
 
     def _do_select(self, value, ref, selector, timeout) -> Dict[str, Any]:
         page = self._page
@@ -957,8 +1031,8 @@ class BrowserService:
         except Exception as e:
             return {"error": f"Select failed: {e}"}
 
-    def scroll(self, direction: str = "down", amount: int = 500) -> Dict[str, Any]:
-        return self._submit(self._do_scroll, direction, amount)
+    def scroll(self, direction: str = "down", amount: int = 500, cancel_event=None) -> Dict[str, Any]:
+        return self._submit(self._do_scroll, direction, amount, cancel_event=cancel_event)
 
     def _do_scroll(self, direction, amount) -> Dict[str, Any]:
         page = self._page
@@ -985,8 +1059,8 @@ class BrowserService:
             return {"error": f"Scroll failed: {e}"}
 
     def wait(self, selector: Optional[str] = None, timeout: int = 5000,
-             state: str = "visible") -> Dict[str, Any]:
-        return self._submit(self._do_wait, selector, timeout, state)
+             state: str = "visible", cancel_event=None) -> Dict[str, Any]:
+        return self._submit(self._do_wait, selector, timeout, state, cancel_event=cancel_event)
 
     def _do_wait(self, selector, timeout, state) -> Dict[str, Any]:
         page = self._page
@@ -1000,8 +1074,8 @@ class BrowserService:
         except Exception as e:
             return {"error": f"Wait failed: {e}"}
 
-    def go_back(self) -> Dict[str, Any]:
-        return self._submit(self._do_go_back)
+    def go_back(self, cancel_event=None) -> Dict[str, Any]:
+        return self._submit(self._do_go_back, cancel_event=cancel_event)
 
     def _do_go_back(self) -> Dict[str, Any]:
         page = self._page
@@ -1019,8 +1093,8 @@ class BrowserService:
         except Exception as e:
             return {"error": f"Go back failed: {e}"}
 
-    def go_forward(self) -> Dict[str, Any]:
-        return self._submit(self._do_go_forward)
+    def go_forward(self, cancel_event=None) -> Dict[str, Any]:
+        return self._submit(self._do_go_forward, cancel_event=cancel_event)
 
     def _do_go_forward(self) -> Dict[str, Any]:
         page = self._page
@@ -1038,8 +1112,8 @@ class BrowserService:
         except Exception as e:
             return {"error": f"Go forward failed: {e}"}
 
-    def get_text(self, selector: str) -> Dict[str, Any]:
-        return self._submit(self._do_get_text, selector)
+    def get_text(self, selector: str, cancel_event=None) -> Dict[str, Any]:
+        return self._submit(self._do_get_text, selector, cancel_event=cancel_event)
 
     def _do_get_text(self, selector) -> Dict[str, Any]:
         page = self._page
@@ -1049,8 +1123,8 @@ class BrowserService:
         except Exception as e:
             return {"error": f"Get text failed: {e}"}
 
-    def evaluate(self, script: str) -> Dict[str, Any]:
-        return self._submit(self._do_evaluate, script)
+    def evaluate(self, script: str, cancel_event=None) -> Dict[str, Any]:
+        return self._submit(self._do_evaluate, script, cancel_event=cancel_event)
 
     def _do_evaluate(self, script) -> Dict[str, Any]:
         page = self._page
@@ -1060,8 +1134,8 @@ class BrowserService:
         except Exception as e:
             return {"error": f"Evaluate failed: {e}"}
 
-    def press(self, key: str) -> Dict[str, Any]:
-        return self._submit(self._do_press, key)
+    def press(self, key: str, cancel_event=None) -> Dict[str, Any]:
+        return self._submit(self._do_press, key, cancel_event=cancel_event)
 
     def _do_press(self, key) -> Dict[str, Any]:
         page = self._page
