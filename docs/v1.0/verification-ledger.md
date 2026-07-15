@@ -1821,5 +1821,6 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Browser matrix | 0 | Fresh corrected-source Chromium run passes 45/45 in 2.6 minutes across both themes and all locked viewports, with zero axe violations. Focus rings, compact completion copy, v0.3 “查看更多”, reasoning, image/Retouch, Skills and administrator operations remain functional. |
 | Static/source gates | 0 | Ruff, Python compilation, design debt all-zero, nine-authority server schema, 675-file source admission and `git diff --check` pass. |
 | Current-source supply chain | 0 | npm audit reports zero vulnerabilities. 23 Runtime packages and 282 npm packages are license-accounted; 483 production files pass secret scanning. Inventory `9320f611...77ae19`; ignored 21,857-byte report SHA-256 `39696bfd...deed1e`. |
-| Hosted correction status | pending | The corrected commit and its complete Ubuntu/Windows/macOS/byte-stability matrix have not yet completed; prior platform successes are not relabelled as corrected-source evidence. |
+| Exact hosted correction | 0 | Run `29435356727` on exact source `f3142be9545c87ec461a9478f6c1771c14ea9266` passed Ubuntu quality, Windows x64, macOS arm64/x64 and Cross-runner byte stability; all five Jobs succeeded. |
+| Draft PR state | 0 | PR #2 remains Draft, CLEAN and MERGEABLE with the five exact-head checks successful. |
 | Publication | blocked | No protected Candidate, managed provider/CDP receipt, publication, rollout or installed-user update was attempted. |

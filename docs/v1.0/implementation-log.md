@@ -5281,7 +5281,11 @@ packages and 483 production files; inventory SHA-256 is
 `9320f611ff9881daa01cf4dc4902197361c4f4d058e742457a3cf7c6ff77ae19`
 and the ignored 21,857-byte report SHA-256 is
 `39696bfdd07b68128d6928cfc82b7c9e56c3a98eac8e11d2679b7c1e7cdeed1e`.
-The corrected hosted matrix is still pending and no Candidate, publication or
+The corrected hosted matrix then passed on exact source
+`f3142be9545c87ec461a9478f6c1771c14ea9266`: run `29435356727` completed
+Ubuntu quality, Windows x64, macOS arm64/x64 and Cross-runner byte stability
+with all five Jobs successful. Draft PR #2 remained CLEAN and MERGEABLE. This
+is still read-only source evidence; no protected Candidate, publication or
 rollout is claimed.
 
 A fresh post-correction Chromium run also passes 45/45 in 2.6 minutes. It
