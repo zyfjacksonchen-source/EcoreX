@@ -1841,3 +1841,19 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Exact hosted hardening | 0 | Draft PR #3 run `29438953446` on `f49f187d3a114aeb4312f62dfb0a5867221257bd` passed Ubuntu quality, Windows x64, macOS arm64/x64 and Cross-runner byte stability; all five Jobs succeeded. |
 | v0.3 view-more retention | 0 | Existing 45/45 browser evidence continues to cover independent general/project 8 → all → 8 expansion and operational inclusion of an old running Thread. |
 | Publication | blocked | Protected Candidate, live provider/CDP acceptance, release publication, rollout and installed-user update were not attempted. |
+
+## Current-main Windows full-Pack Candidate drill - 2026-07-16
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Exact main | 0 | PR #3 merged as `701aa4228635acb9584703592110193412dce600`; main run `29439964797` passed Ubuntu quality, Windows x64, macOS arm64/x64 and Cross-runner byte stability. |
+| Exact-main quality | 0 | Hosted Ubuntu completed 1,931 Python tests / 32 explicit skips, 180/180 Web tests, the 24-chunk build at 459.76 KiB raw / 146.20 KiB gzip initial JS, and all static gates. |
+| Post-merge governance audit | 2 | Action `none`; exactly six missing Environments plus four unavailable Runner roles. Environment and Runner inventories are empty. Report is 2,669 bytes, SHA-256 `c411da41...6d48`. |
+| Clean Candidate input | 0 | Detached exact-main worktree remained clean after locked Web dependency install/typecheck/build; the user's `.artifacts/` was neither copied nor modified. |
+| Windows platform stage | 0 | Go 1.26.5, MSVC 14.44/compiler 19.44 and Windows SDK 10.0.26100.0 produced eight source-pinned Core/Bootstrap/browser/channels/image/OCR/Office/sandbox receipts. Native-build receipt schema 2 passed. |
+| Local signed Candidate | 0 | Full drill passed in 3,051.188s. Core is 21,526,655 bytes, Bootstrap 3,109,078, browser Pack 190,153,571, OCR Pack 94,993,855 and Office Pack 14,836,807; every signed artifact remained under its identity-specific limit. |
+| Install/migration/update | 0 | First install and healthy replacement completed with HTTP 200; CoW migration receipt committed and restarted without its source; three durable drain checkpoints preceded activation; refresh completed. |
+| Failure recovery | 0 | Mirror outage fell through to GitHub with zero cross-source partial reuse. Bad digest was rejected without activation. Fault replacement ended in rollback, prior Runtime returned HTTP 200 and the fault slot was discarded. |
+| Evidence hygiene | 0 | Private signing key persisted=false, external publication=false and temporary candidate directory removed=true. Redacted report is 43,536 bytes, SHA-256 `3fd04faf...02cf3c`; tracked 3,716-byte summary SHA-256 is `3635925c...f800453`. |
+| Focused regression | 0 | 71 Candidate/ReleaseBuilder/Updater/activation tests pass with one explicit environment skip; Ruff/compile, JSON, diff and 675-file source gates pass. A parallel pytest/compileall `.pyc` race produced WinError 5, then the same gates passed serially without relaxation. |
+| Protected provenance boundary | blocked | Local evidence has 8/24 receipts. Sixteen macOS arm64/x64 receipts, protected clean-runner identity, real installed v0.3 corpus and live endpoints remain absent; promotion/publication/rollout were not claimed. |

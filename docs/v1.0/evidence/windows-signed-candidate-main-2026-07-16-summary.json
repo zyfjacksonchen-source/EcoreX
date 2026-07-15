@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "evidence_class": "local-windows-drill-summary",
+  "source_commit": "701aa4228635acb9584703592110193412dce600",
+  "version": "1.0.0",
+  "source_worktree_dirty": false,
+  "elapsed_seconds": 3051.188,
+  "full_redacted_report": {
+    "retention": "operator-local",
+    "size_bytes": 43536,
+    "sha256": "3fd04faf117a0a2c535bf1ec5aa12a0e615364c6b50df44c695ef179ac02cf3c"
+  },
+  "web": {
+    "content_addressed_asset_count": 25,
+    "chunk_count": 24,
+    "initial_javascript_kib": 459.76,
+    "initial_javascript_gzip_kib": 146.20,
+    "deferred_javascript_kib": 136.30
+  },
+  "platform_stage": {
+    "target": "windows-x64",
+    "go_version": "go version go1.26.5 windows/amd64",
+    "msvc_tools_version": "14.44.35207",
+    "compiler_file_version": "19.44.35227.0",
+    "windows_sdk_version": "10.0.26100.0",
+    "toolchain_manifest_sha256": "b01cfdfd78a651970ae52f541a0c8e121ce3d2096d91163a9bd4f25a63ef0b42",
+    "native_build_receipt_status": "passed",
+    "local_receipt_count": 8,
+    "receipt_sha256": {
+      "bootstrap": "e25bcb166a2a44b50676688bbda9d8f4fd145f6ad677fce7f9ea4a106f579c33",
+      "browser": "f310f2d7dedb8e30258d07b84ee5c226e9b71c675a640fd46dd16e98488e6a3a",
+      "channels": "b8a8503bdd580cc70f1f6f6993f8b5a24b562c16278914bb0a10c166976f9299",
+      "core": "05c6627f2fd36a46909540c806bf7b23a02e3a229e27b2e2f3d42585da7f1a5e",
+      "image": "123bb40e24a1efc8be02f922569397921a7c959a2d1a6eb6351b4bc606f67a47",
+      "ocr": "11d9877b9365303456487d00e4260b631c0459de277926ea3e4312b91f800a20",
+      "office": "ca9ccf46d35353853df009af2f941707c53a1e8aa057cf18277abbcbdc475b0a",
+      "sandbox": "000dad9d7132ffa8a8c4f681efa03f0acb3b515de2458fe2b4c6d2efd16281eb"
+    }
+  },
+  "signed_artifacts": {
+    "bootstrap_windows_x64": {
+      "size_bytes": 3109078,
+      "sha256": "d35cd4ab6986ae268e8cdc5df619926079731c493c9bbdf692adb1f663e23fb1"
+    },
+    "browser_pack_windows_x64": {
+      "size_bytes": 190153571,
+      "sha256": "dcb5353bbfab081bbb3a873560f1596ae0d1e39b5cdd2b5ac3acfd85018c1d56"
+    },
+    "ocr_pack_windows_x64": {
+      "size_bytes": 94993855,
+      "sha256": "7adf50dd8e796cce53c69db60f8b85a9d56e7b5ce2a55a2f0560f639e1590628"
+    },
+    "office_pack_windows_x64": {
+      "size_bytes": 14836807,
+      "sha256": "f9323262f069732eb191acacaf26c5c8fdf078e523d135f35bf4e5cf678241a4"
+    },
+    "core_windows_x64": {
+      "size_bytes": 21526655,
+      "sha256": "045c2e78e7027810fcafb81cabc24b581726d50f6caa8d25ef2638edc85f9bfd"
+    }
+  },
+  "acceptance": {
+    "first_install_terminal_state": "completed",
+    "first_install_http_status": 200,
+    "migration_copy_on_write": true,
+    "migration_receipt_state": "committed",
+    "update_terminal_state": "completed",
+    "update_http_status": 200,
+    "refresh_completed": true,
+    "rollback_terminal_state": "rollback",
+    "rollback_http_status": 200,
+    "fault_slot_discarded": true,
+    "bad_digest_rejected": true,
+    "corrupt_slot_activated": false,
+    "drain_checkpoint_count": 3,
+    "signed_source_order": ["github-cn", "github", "cdn"],
+    "private_key_persisted": false,
+    "temporary_directory_removed": true
+  },
+  "production_candidate_preflight": {
+    "status": "blocked",
+    "fixed_stage_receipt_requirement": 24,
+    "local_windows_receipt_count": 8,
+    "missing_protected_receipt_count": 16,
+    "protected_clean_runner_claimed": false,
+    "promotion_claimed": false,
+    "external_publication": false,
+    "blockers": [
+      "macos-arm64 protected-runner Core+Bootstrap+6 Pack receipts",
+      "macos-x64 protected-runner Core+Bootstrap+6 Pack receipts",
+      "protected clean-runner provenance is absent from this local workstation drill"
+    ]
+  }
+}

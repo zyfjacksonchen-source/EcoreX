@@ -8,10 +8,12 @@ blocked until they run in the named environment.
 Status vocabulary: `verified`, `implemented-awaiting-integration`,
 `in-progress`, `not-started`, `real-environment-blocker`.
 
-Local evidence boundary: Go/gofmt is not installed on this machine, so
-Bootstrap Go verification still requires the protected runner. Protected
-Windows/macOS provenance, KMS/private-bucket evidence and live provider,
-connector, OTLP and release-origin endpoints remain external evidence.
+Local evidence boundary: pinned Go 1.26.5, MSVC 14.44/compiler 19.44 and
+Windows SDK 10.0.26100.0 are now available and exact-main local staging has
+compiled the Windows Bootstrap/launcher/sandbox helper. This is not protected
+runner provenance. Protected Windows/macOS identity, KMS/private-bucket
+evidence and live provider, connector, OTLP and release-origin endpoints remain
+external evidence.
 
 | Product slice | Status | Current evidence | Remaining GA condition |
 | --- | --- | --- | --- |
@@ -52,23 +54,20 @@ connector, OTLP and release-origin endpoints remain external evidence.
 | Public Bootstrap discovery/download site | implemented-awaiting-integration | exact manifest-byte + three-origin receipt/signature gate, atomic pointer, strict schema/runtime/browser parsing, canonical unpublished checkout, content-addressed assets, no-store/immutable server policy and dedicated static/JS tests | publish one real signed stable candidate; verify live CORS manifest byte checks and Windows/macOS Bootstrap install paths across mirror/GitHub/CDN outage |
 | v0.3.0 copy-on-write migration | implemented-awaiting-integration | released-DDL run/event/branch/queue/scheduler/permission/UI-cache mapping, 16 focused tests, live-WAL/source/pinned-file immutability and fail-closed provenance evidence | real installed-user corpus plus activation/rollback drill; historical archive bytes are not locally attested |
 | Legacy WebChannel/chat/Electron removal | verified | 66-file WebChannel/chat/copied-bundle cutoff, Electron/workflow removal, both inherited CowAgent Docker publishers permanently retired, exit-78 source tombstones, strict static gate, isolated zero-legacy wheel, read-only migration boundary and separate v1 public-site cutoff | merge under governance, then rerun both legacy and public-site strict gates against the immutable signed candidate |
-| Windows x64 signed WebUI Runtime archive | implemented-awaiting-integration | local Ed25519 compatibility candidate completed download/activation/refresh/fault rollback; Core+six required Pack atomic tests pass; `stable-provision-v2` verifies immutable payload identity plus mutable workspace AppContainer/Low-Integrity/reparse policy and survives first-boot Outputs creation | rebuild from tracked current source on a protected clean runner, bind compiled AppContainer/Job provenance, cross-version migration, scale and live-origin update drill |
+| Windows x64 signed WebUI Runtime archive | implemented-awaiting-integration | exact main `701aa422...dce600` rebuilt from a clean detached worktree with Go 1.26.5, MSVC 14.44/compiler 19.44 and SDK 10.0.26100.0; eight local Core/Bootstrap/six-Pack receipts, signed three-source failover, first install, CoW migration, update+refresh, bad-digest rejection and fault rollback passed in 3,051.188s; redacted report SHA-256 `3fd04faf...02cf3c` | repeat on the protected exact-toolchain Windows runner, bind protected identity plus 16 native macOS receipts, real cross-version migration, scale and live-origin update drill |
 | macOS arm64/x64 signed WebUI Runtime archive | real-environment-blocker | portable archive contract plus `macos-15` arm64 and `macos-15-intel` x64 compatibility jobs defined; no hosted archive/signing result claimed | build/Ed25519-sign/install/update/rollback and Keychain test on both hosts; no native app/DMG/notarization gate |
-| Full quiescent v1 suite | verified | current Python tree: 1,922 passed, 17 named platform/environment skips and zero failures/errors; latest Web typecheck/164 tests/36 Playwright/19 content-addressed assets and 18 chunks, with 147.05 KiB initial JS gzip and 33.67 KiB deferred feature gzip; lint, Runtime/server schema authorities, design/legacy/dependency/public/diff and 656-file source gates are green; same-tick durable ordering has two clock tests and 20/20 Live Replay restart repetitions | build and manually accept the immutable local full-Pack Candidate, then execute the protected platform workflow and rerun against the signed release candidate |
+| Full quiescent v1 suite | verified | exact main hosted quality completed 1,931 Python tests with 32 named platform/environment skips, 180 Web tests and all static gates; latest Windows full run completed 1,942/17; Chromium passed 45/45; the 24-chunk build is 459.76 KiB raw / 146.20 KiB gzip initial JS and 136.30 KiB deferred; current-main local full-Pack Candidate startup/migration/update/rollback is accepted | execute the protected platform workflow and rerun the complete acceptance matrix against the signed 24-receipt release candidate |
 | Browser visual/accessibility matrix | implemented-awaiting-integration | final in-app Browser exercised the production-hashed workspace, Artifact task, full fitted preview and 390px menu; exact 1440/1024/768/390 light+dark matrix passed 8/8 with zero overflow and axe zero violations; direct production page had zero error/warn; source gates cover forced-colors, reduced-motion and clipboard denial | real keyboard/coarse-touch hardware, forced-colors, reduced-motion, clipboard-denial and screen-reader paths on the immutable candidate |
 
 ## Current critical path
 
-1. Assemble a fresh local Candidate from the now Git-admitted authoritative v1
-   bytes, verify its startup/health contract and complete manual acceptance;
-   do not reuse the pre-`gpt-5.6-sol` cached wheel.
-2. Produce protected-runner Windows/macOS Core+Bootstrap+six-Pack archives,
+1. Produce protected-runner Windows/macOS Core+Bootstrap+six-Pack archives,
    bind all 24 fixed stage receipts, and execute native sandbox/browser probes
    plus cross-version install/update/rollback.
-3. Complete keyboard/coarse-touch, Clipboard, forced-colors, reduced-motion,
+2. Complete keyboard/coarse-touch, Clipboard, forced-colors, reduced-motion,
    screen-reader and slow-network paths on those immutable candidates.
-4. Run real PostgreSQL/S3 image load plus credentialed Feishu/Tencent Docs,
+3. Run real PostgreSQL/S3 image load plus credentialed Feishu/Tencent Docs,
    Model/Image Gateway, OTLP, public Share, GitHub/domestic-mirror/CDN and
    Control Plane deployment tests.
-5. Execute the real v0.3.0 corpus migration, provider outage soak, long-task
+4. Execute the real v0.3.0 corpus migration, provider outage soak, long-task
    checkpoint recovery and roll-forward schema repair drills.

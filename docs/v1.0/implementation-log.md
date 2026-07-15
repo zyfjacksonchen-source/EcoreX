@@ -5336,3 +5336,51 @@ The remaining ten blockers are the six named protected Environments and four
 distinct online role-labelled Runners. The v0.3 “查看更多” behavior remains an
 independent browser-tested v1 contract: eight collapsed rows per general or
 project scope, with current, pinned and running sessions always included.
+
+## 2026-07-16 - Current-main Windows full-Pack Candidate drill
+
+PR #3 was squash-merged as exact main
+`701aa4228635acb9584703592110193412dce600`. Main run `29439964797`
+passed all five required Jobs. Its Ubuntu quality Job completed 1,931 Python
+tests with 32 explicit platform/environment skips, all 180 Web contracts, the
+24-chunk production build and every static gate. A fresh read-only repository
+audit remained fail-closed at exactly ten findings and action `none`; its
+2,669-byte report SHA-256 is
+`c411da41c9ac289a4f84acaeb0345d2494cbf54e933172759db65846ff7c6d48`.
+
+The current-main local Candidate prerequisite was then rebuilt in a detached,
+clean temporary worktree so the user's untracked `.artifacts/` could neither
+be modified nor make source provenance dirty. `npm ci`, generated-contract
+freshness, TypeScript and the production Web build passed before staging. The
+source-pinned Windows stager used Go 1.26.5, MSVC tools 14.44.35207/compiler
+19.44.35227.0 and Windows SDK 10.0.26100.0, produced Core, Bootstrap and all
+six required Pack receipts, and kept `worktree_dirty=false`.
+
+The zero-publication signed-candidate drill passed in 3,051.188 seconds. First
+install and healthy replacement both completed with HTTP 200; the v0.3
+released-schema fixture migrated copy-on-write to a committed receipt and
+restarted after source removal. Three durable drain checkpoints preceded
+activation. The signed source order was domestic mirror, GitHub and CDN; an
+injected mirror outage resumed from zero on GitHub. Bad digest bytes were
+rejected without changing the active slot. A faulted replacement rolled back,
+returned HTTP 200 on the prior slot and discarded the fault slot. Private keys
+were not persisted, no external endpoint was contacted and the 3+ GiB
+disposable install/candidate root was removed.
+
+The redacted 43,536-byte full report has SHA-256
+`3fd04faf117a0a2c535bf1ec5aa12a0e615364c6b50df44c695ef179ac02cf3c`;
+its tracked review summary is
+`evidence/windows-signed-candidate-main-2026-07-16-summary.json` (3,716 bytes,
+SHA-256 `3635925c8569b59a17922969251546cbb1f938ef1a79243e4dea1b1c5f800453`). The report
+explicitly remains `local-windows-drill`: only 8 of the fixed 24 platform
+receipts were locally produced, 16 protected macOS receipts are absent, the
+real user v0.3 corpus was not claimed and no Candidate promotion, publication
+or rollout occurred.
+
+Seventy-one Candidate/ReleaseBuilder/Updater/activation contract tests pass
+with one explicit environment skip. Ruff, Python compilation, both JSON files,
+diff and the 675-file source gate pass. An initial parallel test/compile launch
+made pytest imports and `compileall` replace the same Windows `.pyc` and
+produced WinError 5; the orphaned test was allowed to finish, then tests and
+compile were rerun serially. The serial evidence replaces that tooling race;
+no production source or gate was relaxed.

@@ -179,12 +179,15 @@ image 包括 managed bridge 与 provider 拒绝；OCR/Office 分别实际执行�
 与四类办公格式生成/读取；sandbox 包括真实平台边界和 process-tree
 containment。
 
-当前 Windows 开发机可以运行协议、安装、篡改和静态边界测试，但没有
-MSVC/clang 工具链，因而不能声称 Windows helper 或 macOS launcher 已在
-本机编译通过。对应二进制、Seatbelt/AppContainer 行为与可重定位 Python
-必须以三个受保护 Environment 下 GitHub 托管作业的原始 receipt 为 GA 证据。
-本次非发布权威的原始本地观察值记录在
-`evidence/platform-pack-local-2026-07-11.json`。
+当前 Windows 开发机现已具备固定 Go 1.26.5、MSVC tools 14.44.35207
+（compiler 19.44.35227.0）和 Windows SDK 10.0.26100.0。精确 main
+`701aa422...dce600` 的本地演练实际编译了 Windows launcher/AppContainer
+helper，并完成 Core、Bootstrap 和六 Pack 的八份本地 receipt；摘要见
+`evidence/windows-signed-candidate-main-2026-07-16-summary.json`。这只证明
+工具链和产品路径在该工作站可执行，不证明 protected clean-runner 身份，
+也不提供 macOS launcher、Seatbelt 或三平台固定二十四 receipt。对应 GA
+证据仍必须来自受保护 Environment 的原始 receipt；旧的非发布观察值继续
+保留在 `evidence/platform-pack-local-2026-07-11.json` 供追溯。
 
 当前聚焦回归命令：
 
