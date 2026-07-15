@@ -281,3 +281,10 @@ Starlette's upstream `python_multipart` pending-deprecation notice.
   files with inventory `a7b2ff6f...31a8d5a`.
 - This is local evidence only. Exact-source hosted CI, repository governance,
   protected Candidate, publication and rollout remain separate gates.
+- Hosted run `29390253811` independently passed Ubuntu quality, Windows x64,
+  macOS arm64/x64 and Cross-runner byte stability on exact source
+  `ee8a7f8cc77830b66358af3acc9206f95cb5923b`; all five checks have zero
+  annotations and zero Node 20/deprecated-Action log warnings.
+- PR #2 remains Draft, CLEAN and MERGEABLE. The read-only repository audit is
+  byte-identical at 17 blockers (`d9eb1f47...38a2c8`, action `none`), so no
+  protected Candidate, governance mutation, publication or rollout occurred.
