@@ -18,7 +18,11 @@ from ecorex.image_orchestrator.dynamic_provider import (
     AdminImageModelConfigurationResolver,
     DynamicManagedImageProvider,
 )
+from ecorex.image_orchestrator.cas import ImageContentStore
 from ecorex.image_orchestrator.models import ImageOperation, ImageSubmitRequest
+from ecorex.image_orchestrator.openai_provider import (
+    OpenAICompatibleImageProvider,
+)
 from ecorex.image_orchestrator.provider import ProviderResult, ProviderState
 from ecorex.image_orchestrator.service import ImageOrchestrationService
 from ecorex.image_orchestrator.sqlite_schema import SQLiteImageSchemaManager
@@ -299,3 +303,37 @@ def test_image_model_stage_rejects_chat_provider_preset(tmp_path: Path) -> None:
         assert "does not match" in str(error)
     else:
         raise AssertionError("image model accepted a chat provider preset")
+
+
+def test_default_dynamic_provider_uses_cloud_direct_adapter_and_shared_inputs(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path)
+    _activate_new(
+        repository,
+        local_model_id="gpt-image-2",
+        modality="image_generation",
+        upstream_model_id="provider-image-v1",
+        api_key="sk-image-version-one",
+        request_suffix="image-direct-adapter",
+    )
+    content = ImageContentStore(tmp_path / "image-cas")
+    dynamic = DynamicManagedImageProvider(
+        repository,
+        provider_id="managed-image",
+        origins={"openai_compatible_image": "https://images.ecorex.example"},
+        timeout_seconds=120,
+        connect_timeout_seconds=5,
+        max_image_bytes=64 * 1024 * 1024,
+        max_connections=8,
+        max_concurrency=4,
+        input_store=content,
+    )
+    configuration = repository.active_model(modality="image_generation")
+    provider = dynamic._create_provider(
+        configuration, "https://images.ecorex.example"
+    )
+    assert isinstance(provider, OpenAICompatibleImageProvider)
+    assert provider.input_store is content
+    assert provider.allowed_models == frozenset({"provider-image-v1"})
+    asyncio.run(provider.aclose())

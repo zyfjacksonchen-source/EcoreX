@@ -263,7 +263,7 @@ class ImageProductionConfig:
     postgres_pool_max: int = 32
     postgres_pool_timeout_seconds: float = 10.0
     worker_concurrency: int = 8
-    worker_memory_envelope_bytes: int = 2 * 1024 * 1024 * 1024
+    worker_memory_envelope_bytes: int = 4 * 1024 * 1024 * 1024
     api_blob_memory_envelope_bytes: int = 512 * 1024 * 1024
     provider_max_connections: int = 32
     provider_max_concurrency: int = 16
@@ -336,7 +336,9 @@ class ImageProductionConfig:
             or not 0.1 <= self.postgres_pool_timeout_seconds <= 120.0
             or not 1 <= self.worker_concurrency <= 256
             or not 128 * 1024 * 1024 <= self.worker_memory_envelope_bytes <= 64 * 1024**3
-            or self.worker_concurrency * self.max_image_bytes * 3
+            or self.worker_concurrency
+            * self.max_image_bytes
+            * (6 if self.admin_management_enabled else 3)
             > self.worker_memory_envelope_bytes
             or not 32 * 1024 * 1024 <= self.api_blob_memory_envelope_bytes <= 16 * 1024**3
             or self.api_blob_memory_envelope_bytes < self.max_image_bytes * 2
@@ -498,7 +500,7 @@ class ImageProductionConfig:
             postgres_pool_max=_integer(values, "ECOREX_IMAGE_POSTGRES_POOL_MAX", minimum=1, maximum=128, default=32),
             postgres_pool_timeout_seconds=_float(values, "ECOREX_IMAGE_POSTGRES_POOL_TIMEOUT_SECONDS", minimum=0.1, maximum=120.0, default=10.0),
             worker_concurrency=worker_concurrency,
-            worker_memory_envelope_bytes=_integer(values, "ECOREX_IMAGE_WORKER_MEMORY_ENVELOPE_BYTES", minimum=128 * 1024 * 1024, maximum=64 * 1024**3, default=2 * 1024**3),
+            worker_memory_envelope_bytes=_integer(values, "ECOREX_IMAGE_WORKER_MEMORY_ENVELOPE_BYTES", minimum=128 * 1024 * 1024, maximum=64 * 1024**3, default=4 * 1024**3),
             api_blob_memory_envelope_bytes=_integer(values, "ECOREX_IMAGE_API_BLOB_MEMORY_ENVELOPE_BYTES", minimum=32 * 1024 * 1024, maximum=16 * 1024**3, default=512 * 1024**2),
             provider_max_connections=_integer(values, "ECOREX_IMAGE_PROVIDER_MAX_CONNECTIONS", minimum=1, maximum=256, default=32),
             provider_max_concurrency=_integer(values, "ECOREX_IMAGE_PROVIDER_MAX_CONCURRENCY", minimum=1, maximum=256, default=16),
@@ -1048,6 +1050,16 @@ class PostgresS3ManagedImageProvider:
                     max_image_bytes=config.max_image_bytes,
                     max_connections=config.provider_max_connections,
                     max_concurrency=config.provider_max_concurrency,
+                    input_store=S3ImageContentStore(
+                        BotoS3ObjectTransport(
+                            s3.client,
+                            server_side_encryption=config.s3_encryption,
+                            kms_key_id=config.s3_kms_key_id,
+                        ),
+                        bucket=config.s3_bucket,
+                        prefix=config.s3_prefix,
+                        max_bytes=config.max_image_bytes,
+                    ),
                 )
                 resolver: ImageModelConfigurationResolver | None = (
                     AdminImageModelConfigurationResolver(repository)

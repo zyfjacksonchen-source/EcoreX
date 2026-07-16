@@ -41,6 +41,31 @@ ecorex-image all
 所以后续换 Key/模型不会改变正在重试或恢复的任务；详细流程见
 `admin-management-runbook.md`。
 
+管理员热配置使用云端直连适配器，不会把 Key 或上游 origin 暴露给本地
+Runtime。生成固定调用 `POST /v1/images/generations`；精修从共享 CAS 校验并
+读取底图、最多 15 张附加图片和可选 PNG 遮罩，再调用 multipart
+`POST /v1/images/edits`。所有输入加总不得超过 `ECOREX_IMAGE_MAX_BYTES`。
+只接受有界内联 `b64_json`，不下载或跟随 Provider 返回的 URL。
+精修遮罩在云端转换为与第一张底图完全同尺寸的 RGBA PNG；EcoreX 内部
+“255 表示选中区域”的语义会转换为 Provider 所需的透明 alpha。带遮罩时，
+非 PNG 底图在像素和内存上限内转为同尺寸 PNG，避免格式不匹配导致精修
+漂移或上游拒绝。JPEG 会先应用 EXIF 方向再转换，保证竖拍图片的蒙版仍使用
+用户看到的坐标。图像编解码依赖只存在于 `image-cloud` 制品，不进入本地
+Runtime Core。
+大图的内部 ROI 蒙版仍保持确定性的 ≤2048px/4,194,304 像素上限；云适配
+边界会依据原始 edit surface 和结构化标注重新编译并逐字节核对该蒙版，再由
+Provider 适配器最近邻还原到第一张底图。它不会要求有界 ROI 文件本身等于
+4K 底图尺寸，也不会接受与标注、覆盖率或像素区域不一致的替换蒙版。
+结构化精修任务同时从不可变 edit surface 冻结原图宽高，Provider 输出必须
+保持该画幅；不支持的尺寸在出站前明确失败，禁止静默回落到 1024×1024。
+
+`gpt-image-2` 自定义输出尺寸在出站前按官方约束验证：两边必须 16px 对齐，
+最长边不超过 3840px，长短边比例不超过 3:1，总像素必须位于
+655,360–8,294,400；解码后的 RGBA 像素预算也不得超过
+`ECOREX_IMAGE_MAX_BYTES`。不满足时任务在本地明确失败，不能把已知非法或
+可能导致进程内存越界的请求发送给 Provider。约束来源见 OpenAI 官方
+[Image generation guide](https://developers.openai.com/api/docs/guides/image-generation#size-and-quality-options)。
+
 任意 DSN、S3、Provider origin/allowlist、Provider 凭证、JWT 公钥环或模型白名单缺失时，进程 fail-closed。生产建议由 Vault sidecar 或 workload identity 实现 `ImageSecretProvider`；不要把凭证放到 CLI 参数、日志或发布清单。
 
 ## 3. 首次上线顺序
@@ -80,7 +105,11 @@ ecorex-image all
 - 每个 worker 进程还有本地有界并发，必须满足：
 
   ```text
+  # 托管 EcoreX Image Service 模式（原生二进制结果）
   worker_concurrency * max_image_bytes * 3 <= worker_memory_envelope_bytes
+
+  # 管理员 OpenAI-compatible 直连模式（输入 + Base64 JSON 解码峰值）
+  worker_concurrency * max_image_bytes * 6 <= worker_memory_envelope_bytes
   postgres_pool_max >= worker_concurrency + 4
   provider_max_connections >= provider_max_concurrency >= worker_concurrency
   s3_max_connections >= max(worker_concurrency, api_blob_slots)
@@ -97,7 +126,10 @@ ecorex-image all
 - 用户 API 仅接受短期 Ed25519/EdDSA access JWT，issuer、audience、token lifetime 和账户声明均在服务端校验。
 - `account_id` 只来自已验证 JWT，不从请求体接受；Provider 响应必须回显相同 account/job identity。
 - 模型白名单在 application service 和 Provider adapter 双重校验。
-- Provider 响应 JSON 上限 128 KiB，图片字节上限由 `ECOREX_IMAGE_MAX_BYTES` 决定；Content-Length、MIME 和 SHA-256 必须全部匹配。
+- 托管 EcoreX Image Service 的控制 JSON 上限 128 KiB；管理员直连 Images API
+  的 Base64 JSON 上限按 `4 * ceil(max_image_bytes / 3) + 64 KiB` 计算。两种
+  模式的解码图片上限都由 `ECOREX_IMAGE_MAX_BYTES` 决定，MIME、文件签名和
+  SHA-256 必须一致。
 - Uvicorn access log 关闭，CLI 失败只输出错误类型，不输出 SDK 错误、DSN、URL、bearer 或 provider request ID。
 
 ## 7. GA 外部门禁（不得用 mock 代替）
@@ -115,7 +147,7 @@ ecorex-image all
 
 ```text
 python -m pytest -q tests/v1/test_image_concurrency_stability.py
-python -m pytest -q tests/v1/test_image_orchestrator.py tests/v1/test_image_orchestrator_production_storage.py tests/v1/test_image_orchestrator_production_runtime.py tests/v1/test_managed_image_integration.py tests/v1/test_image_sqlite_schema_manager.py tests/v1/test_image_concurrency_stability.py
+python -m pytest -q tests/v1/test_openai_compatible_image_provider.py tests/v1/test_dynamic_image_model_configuration.py tests/v1/test_image_orchestrator.py tests/v1/test_image_orchestrator_production_storage.py tests/v1/test_image_orchestrator_production_runtime.py tests/v1/test_managed_image_integration.py tests/v1/test_image_sqlite_schema_manager.py tests/v1/test_image_concurrency_stability.py
 ```
 
 第一条使用受控假 Provider/SQLite 故障注入，覆盖过期队列释放、

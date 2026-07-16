@@ -129,6 +129,7 @@ def test_dev_toolchain_is_pinned_and_lint_has_a_cross_platform_entrypoint() -> N
 
     assert project["project"]["optional-dependencies"]["dev"] == [
         "jsonschema==4.26.0",
+        "Pillow==12.3.0",
         "pytest==9.1.1",
         "ruff==0.15.21",
     ]

@@ -17,16 +17,16 @@
     },
     {
       "input": "cloud.in",
-      "input_sha256": "34a96fd5d0ff896e946a463abeec3ff83770eae8589b55ecef2218f7b14e7211",
+      "input_sha256": "28e611e5801a50c9a3ef1b907b6d1f6317856879cc865a7f1f8cc5d6f532060e",
       "lock": "cloud.lock",
-      "lock_sha256": "e1eeebd47585ee01d04a6b108569c743c81257cf62df2c65402424715841fd6c",
+      "lock_sha256": "e759946bd63fc5a3c1d627a220014b8029630e7a9473565adbc348aee5caeb50",
       "profile": "cloud"
     },
     {
       "input": "dev.in",
-      "input_sha256": "21b479cd441f6fb4aed2d9e8412ef1886415171a5060e9b6a8667926eb8ed990",
+      "input_sha256": "c369a1cfca4bf4ba3ca844cecbf8a3a6b386bfec90fde18e02e3c185238a2546",
       "lock": "dev.lock",
-      "lock_sha256": "513552eae4b8d4935d8d8cb484fd9c6a4ff2063ed866661193351d37a6050903",
+      "lock_sha256": "605fbdfb1c005e77a07d4dd506698ecca58cc4b72525cf9d795a0eff31df8eec",
       "profile": "dev"
     },
     {
