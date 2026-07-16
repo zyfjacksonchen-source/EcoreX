@@ -9,8 +9,8 @@
     "dirty_worktree_preserved": true
   },
   "current_milestone": "direct_production_publication",
-  "current_batch": "PR run 29522376431 removed all prior Linux failures but correctly withheld merge on one connector late-success ownership race. Active provider fences now make idempotent Runtime retries wait for the original completion owner; expired/inactive fences still fail closed. The deterministic barrier/recovery correction is local and awaits a new commit/full hosted rerun. Old production traffic remains active and failed-run artifacts are not reusable.",
-  "last_verified_batch": "Evidence on 2026-07-17: run 29522376431 passed Windows x64 and macOS arm64/x64; Ubuntu reached 2,178 passed/35 skipped with one connector late-success failure, so byte stability was skipped and no merge/publication occurred. The fixed state machine classifies outcome_unknown plus a live exclusive provider fence as in_progress, derives recovery delivery from durable late_provider_result staging, never redispatches, and keeps expired/inactive fences uncertain. All Connector regression passes 132; result-artifact coverage passes 19 on Windows and 19 on WSL Ubuntu/Python 3.11.9. Ruff/compile/diff pass. A new hosted head remains mandatory.",
+  "current_batch": "PR run 29524461343 verified the connector correction but correctly withheld merge on one Linux product update-lock race after 2,180 passes/35 skips; Windows x64 and both macOS jobs passed. ProductFileLock now serializes different worker threads by deadline, preserves same-thread re-entry and fail-fast timeout zero, and production explicitly uses an unbounded trusted-worker lock. Deterministic identity/readiness barriers plus cleanup fault injection pass locally; commit and a new full hosted matrix are next. Old production traffic remains active and failed-run artifacts are not reusable.",
+  "last_verified_batch": "Evidence on 2026-07-17: run 29524461343 passed Windows x64 and macOS arm64/x64; Ubuntu had one LockUnavailable failure with 2,180 passed/35 skipped, so byte stability was skipped and no merge/publication occurred. The root fix uses a single Condition reservation/deadline, completes backend unlock/stream close before handoff and always clears state/notifies after injected failures. WSL Ubuntu/Python 3.11.9 update composition plus durability passes 23; focused lock/product barriers pass 18; deterministic race repeated 20/20 and thread stress 250/250. Ruff/compile/diff pass and independent review found no P0/P1. A new hosted head remains mandatory.",
   "recovery_document": "docs/v1.0/implementation-log.md",
   "verification_document": "docs/v1.0/verification-ledger.md",
   "milestones": [
@@ -23,7 +23,7 @@
     {"id": "migration_ga_gates", "status": "in_progress"}
   ],
   "remaining_local_work": [
-    "complete independent review, Ruff/compile/static gates, commit and push the transaction-closure source without touching the user-owned .artifacts tree",
+    "commit and push the reviewed product-lock correction without touching the user-owned .artifacts tree",
     "rerun PR #12 Ubuntu quality, Windows x64, macOS arm64/x64 and cross-runner canonical-byte stability at the new exact head, then merge to main",
     "run one exact-main Windows/macOS platform stage, assemble the single Web build and produce signed client receipts",
     "build the exact-main Linux aarch64 cloud artifact, sign it with the Windows DPAPI release key and attach/verify it on Linux",

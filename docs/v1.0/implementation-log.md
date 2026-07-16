@@ -5985,3 +5985,38 @@ recovery item/event and zero final leases.  Connector coverage passes 132
 tests; result-artifact coverage passes 19 on Windows and the same 19 on WSL
 Ubuntu/Python 3.11.9.  Ruff, compilation and whitespace checks pass.  A new
 hosted head is still required before merge.
+
+## 2026-07-17 - Product update lock ownership correction
+
+PR run `29524461343` verified the connector correction and again passed Windows
+x64 plus macOS arm64/x64, but correctly stopped promotion after one Ubuntu
+failure with 2,180 tests passed and 35 skipped.  The failing audit-lifespan test
+exposed a product startup race rather than audit corruption: the newly started
+update poll read `current_release_identity` on one worker thread while the
+Runtime readiness recorder called `mark_runtime_ready` on another.  Both use
+the same `InstallCoordinator` and `ProductFileLock`; the old implementation
+treated any different-thread owner as immediately unavailable even when the
+product intended to wait.  Cross-runner byte stability was skipped and no
+release or production switch occurred.
+
+`ProductFileLock` now reserves a single in-process acquisition and uses a
+condition variable.  The owning thread retains re-entrancy, while another
+thread waits according to one deadline covering both the in-process and OS
+lock phases.  A zero timeout remains fail-fast; the production update
+composition explicitly selects `timeout=None` so its trusted background
+workers serialize instead of failing the Runtime lifespan.  Ownership is not
+transferred until backend unlock and descriptor close finish.  Backend or
+stream exceptions always clear the acquisition reservation/owner state and
+wake waiters, preventing a failed cleanup from permanently wedging updates.
+
+The regression uses observable condition barriers, not sleeps.  It fixes an
+identity reader inside the critical section, proves the readiness recorder is
+waiting, then releases the first owner and verifies both operations complete
+without dual ownership.  Finite timeout, non-owner release, backend failure,
+stream-close failure, re-entrancy and process exclusion remain covered.  On
+WSL Ubuntu with exact Python 3.11.9, update composition plus durability pass all
+23 tests; the focused lock/product barrier set passes all 18 tests.  The
+implementing agent additionally repeated the deterministic race 20 times and
+the thread stress 250 times.  Ruff, compilation and whitespace checks pass.
+Independent review found no remaining P0/P1.  A new hosted full matrix is still
+mandatory before merge.

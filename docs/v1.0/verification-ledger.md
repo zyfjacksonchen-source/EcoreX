@@ -2033,3 +2033,16 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Durable recovery delivery | 0 | `completion_path=late_provider_result` is authoritative even if the waiter finalizes the stage first. Recovery Tool Item/event, result and provider dispatch are exact-once; leases end at zero. |
 | Deterministic regression | 0 | Explicit waiter-entry barrier replaces sleep/call_later. Result suite passes 19 on Windows and 19 on WSL Ubuntu/Python 3.11.9; all Connector regression passes 132. Ruff/compile/diff pass. |
 | Promotion | pending | New commit and hosted full-suite/cross-runner rerun are mandatory. |
+
+## Product update lock ownership correction - 2026-07-17
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| PR run `29524461343` | 1 expected | Connector correction passed; Windows x64 and macOS arm64/x64 passed. Ubuntu reached 2,180 passed / 35 skipped and exposed one product update-lock thread race; cross-runner stability was skipped. No merge, artifact promotion or public cutover occurred. |
+| Root cause | 0 | Update polling read `current_release_identity` while Runtime startup recorded `mark_runtime_ready` on another worker thread. The same lock instance incorrectly rejected normal cross-thread ownership even when product serialization was required. |
+| Lock contract | 0 | Same-thread re-entry remains depth-counted. Other threads use one condition/deadline across instance and OS acquisition. `timeout=0` stays fail-fast; production update composition explicitly uses `timeout=None`. Backend unlock and stream close complete before ownership handoff. |
+| Failure cleanup | 0 | Injected backend-acquire, backend-release and stream-close failures always clear reservation/owner/stream state and notify waiters. Non-owner release is rejected without changing the live owner. |
+| Deterministic race | 0 | Observable barriers fix the update identity reader inside the critical section and prove the readiness recorder waits before handoff; no sleeps or scheduler guesses are used. Implementing-agent evidence: 20/20 race repetitions and 250/250 thread stress repetitions. |
+| WSL Ubuntu Python 3.11.9 | 0 | `test_update_composition.py` plus `test_update_durability.py`: 23 passed. Focused lock/product-barrier set: 18 passed. Ruff, compileall and `git diff --check` pass. |
+| Independent review | 0 | No remaining P0/P1 in locking, production wiring or regression coverage. The original Linux full-suite path must still pass on a new PR head. |
+| Promotion | pending | Commit/push and a new five-job hosted matrix are mandatory before protected-main merge or any production mutation. |

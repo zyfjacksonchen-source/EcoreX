@@ -23,6 +23,16 @@ class Credentials:
         return "control-plane-token-1234567890"
 
 
+class ObservableCondition(threading.Condition):
+    def __init__(self, waiting: threading.Event) -> None:
+        super().__init__()
+        self.waiting = waiting
+
+    def wait(self, timeout: float | None = None) -> bool:
+        self.waiting.set()
+        return super().wait(timeout)
+
+
 def _settings(tmp_path):
     private_key = Ed25519PrivateKey.generate()
     public_key = private_key.public_key().public_bytes(
@@ -79,6 +89,80 @@ def test_product_composition_wires_real_trust_transport_install_and_restart(tmp_
     asyncio.run(composition.stop())
     with pytest.raises(UpdateServiceError, match="closed"):
         asyncio.run(composition.start())
+
+
+def test_product_lifecycle_readiness_waits_for_update_identity_reader(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fix the update-poll/readiness race seen in the full product lifespan."""
+
+    composition = build_product_update_composition(_settings(tmp_path))
+    coordinator = composition.coordinator
+    identity_provider = composition.feed.current_identity_provider
+    assert identity_provider is not None
+    assert coordinator.lock.timeout is None
+
+    identity_holds_lock = threading.Event()
+    release_identity = threading.Event()
+    readiness_waiting = threading.Event()
+    readiness_finished = threading.Event()
+    failures: list[BaseException] = []
+    identities: list[object] = []
+    readiness_results: list[object] = []
+    coordinator.lock._guard = ObservableCondition(readiness_waiting)
+    original_pointers = coordinator.slots.pointers
+
+    def blocked_pointers():
+        identity_holds_lock.set()
+        assert release_identity.wait(timeout=5.0)
+        return original_pointers()
+
+    monkeypatch.setattr(coordinator.slots, "pointers", blocked_pointers)
+
+    def read_current_identity() -> None:
+        try:
+            identities.append(identity_provider())
+        except BaseException as error:
+            failures.append(error)
+
+    def record_runtime_readiness() -> None:
+        try:
+            readiness_results.append(coordinator.mark_runtime_ready(None))
+        except BaseException as error:
+            failures.append(error)
+        finally:
+            readiness_finished.set()
+
+    identity_thread = threading.Thread(
+        target=read_current_identity,
+        name="product-update-current-identity",
+    )
+    readiness_thread = threading.Thread(
+        target=record_runtime_readiness,
+        name="product-runtime-ready-recorder",
+    )
+    identity_thread.start()
+    try:
+        assert identity_holds_lock.wait(timeout=5.0)
+        readiness_thread.start()
+        assert readiness_waiting.wait(timeout=5.0)
+        assert readiness_finished.is_set() is False
+        release_identity.set()
+        identity_thread.join(timeout=5.0)
+        readiness_thread.join(timeout=5.0)
+    finally:
+        release_identity.set()
+        identity_thread.join(timeout=5.0)
+        if readiness_thread.ident is not None:
+            readiness_thread.join(timeout=5.0)
+        asyncio.run(composition.stop())
+
+    assert identity_thread.is_alive() is False
+    assert readiness_thread.is_alive() is False
+    assert failures == []
+    assert identities == [None]
+    assert readiness_results == [False]
 
 
 def _update_rows(path) -> tuple[tuple[str, tuple[tuple, ...]], ...]:
