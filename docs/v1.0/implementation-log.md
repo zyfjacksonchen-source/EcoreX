@@ -5483,3 +5483,39 @@ unchanged Starlette warning. Ruff, Python compilation, JSON validation, diff
 check and the 676-file source admission gate pass. This proves preservation and
 non-resurrection at planning/import authority; installed signed-v1 activation
 and health checking remain a separate release gate.
+
+## 2026-07-16 - Real v0.2.9.2 commit-mode import and idempotent replay
+
+After PR #5 passed all five hosted jobs and merged as exact main
+`e1d874c51e6bd6f7d05844ed4c12ad40b9b57962`, the same installed v0.2.9.2
+corpus was imported into an isolated disposable v1 target with an ephemeral
+quarantine key. This was a real commit-mode copy-on-write import rather than a
+dry-run. It did not replace or stop the installed legacy Runtime.
+
+Exact-main hosted run `29461021847` subsequently passed Ubuntu quality,
+Windows x64, macOS arm64/x64 and Cross-runner byte stability. All five Jobs
+completed successfully on the merge commit.
+
+The published temporary target contained exactly 54 Threads, 54 legacy-session
+mappings, 1,029 message Items, 54 summaries, 580 Turns, two Projects, three live
+Project bindings, 247 legacy runs and 38,073 run events. SQLite
+`integrity_check` returned `ok`. The migration report recorded 93 cache-only
+session IDs excluded and zero previously deleted sessions restored. A second
+execution against the same target returned the completed report as an
+idempotent replay and retained a single migration-run row.
+
+The first verification attempt had already completed the import but used the
+nonexistent verifier column `items.item_type`; the resulting read-only query
+failed and the temporary target was automatically removed. The verifier was
+corrected to the schema-authoritative `items.kind` column and the complete
+import/replay was rerun from a clean target. No product code or gate was changed
+to hide the verifier error.
+
+Both successful import runs used source inventory SHA-256
+`7bd10f200ff9917204b6edd2b7a33f908674ec95e0960da12870b3572b8156cf`.
+The final target and ephemeral key were removed after verification; source data
+was not mutated. The aggregate-only evidence is
+`evidence/v0292-real-user-data-import-e1d874c5-2026-07-16.json` (1,622 bytes,
+SHA-256 `60a7e8d8de54bfd51b0d84dd37e4d0cef1bb45d2044a5ee80ef6521144ce892f`). Signed-v1
+side-by-side activation and post-health count verification remain separate
+release gates.

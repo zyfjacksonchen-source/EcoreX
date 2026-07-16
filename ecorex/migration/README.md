@@ -48,6 +48,10 @@ or different target is never overwritten.
 - the canonical conversation DB is the deletion authority. WebUI cache may
   enrich an existing session's title, pin, or missing messages, but a cache-only
   session ID is excluded and can never resurrect a deleted conversation.
+- commit-mode verification must compare the target Thread/session mapping count
+  with the authoritative database count and the reported cache-exclusion count.
+  A successful dry-run alone is not accepted as proof that deleted sessions
+  stayed absent from the published target.
 - `config.json` / `mcp.json` secret fields are encrypted with AES-GCM into a
   local quarantine. The key must come from an external credential vault and is
   never stored in the target.
@@ -80,7 +84,7 @@ the migration process. If neither a release marker nor a recognized released
 data schema exists, migration fails closed.
 
 Installers call `migrate_legacy_to_v1(..., source_version=...)`; the former
-`migrate_v030_to_v1(...)` entry point remains a v0.3-compatible alias. The target contains
-`migration-report.json`, `source-inventory.json`, `backup-manifest.json`, and a
-secret-free JSONL stage trace. Remaining adapter work is listed in every report
-instead of being silently treated as migrated.
+`migrate_v030_to_v1(...)` entry point remains a v0.3-compatible alias. The
+target contains `migration-report.json`, `source-inventory.json`,
+`backup-manifest.json`, and a secret-free JSONL stage trace. Remaining adapter
+work is listed in every report instead of being silently treated as migrated.

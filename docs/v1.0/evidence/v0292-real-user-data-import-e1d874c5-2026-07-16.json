@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "real_installed_legacy_copy_on_write_import",
+  "recorded_at": "2026-07-16",
+  "product_target": "1.0.0",
+  "source_version": "0.2.9.2",
+  "source_commit": "e1d874c51e6bd6f7d05844ed4c12ad40b9b57962",
+  "status": "completed",
+  "source_inventory_digest": "7bd10f200ff9917204b6edd2b7a33f908674ec95e0960da12870b3572b8156cf",
+  "target_database": {
+    "integrity_check": "ok",
+    "threads": 54,
+    "mapped_legacy_sessions": 54,
+    "messages": 1029,
+    "session_summaries": 54,
+    "projects": 2,
+    "project_bindings": 3,
+    "turns": 580,
+    "legacy_runs": 247,
+    "legacy_run_events": 38073
+  },
+  "deletion_authority": {
+    "authority": "canonical_legacy_sessions_database",
+    "ui_cache_may_enrich_surviving_sessions_only": true,
+    "ui_cache_only_session_ids_excluded": 93,
+    "previously_deleted_sessions_restored": 0
+  },
+  "idempotency": {
+    "second_execution_status": "completed",
+    "second_execution_recognized_as_replay": true,
+    "migration_run_rows_after_replay": 1
+  },
+  "secret_quarantine": {
+    "entries": 5,
+    "ephemeral_key_only": true,
+    "plaintext_persisted": false
+  },
+  "cleanup": {
+    "isolated_target_removed": true,
+    "installed_runtime_replaced": false,
+    "source_mutated": false
+  },
+  "boundaries": {
+    "candidate_bound": false,
+    "signed_v1_activation_performed": false,
+    "publication_attempted": false,
+    "rollout_attempted": false,
+    "privacy": "Only aggregate counts and cryptographic digests are retained; no conversation content, raw identifiers, user paths, provider origins or secrets are included."
+  }
+}

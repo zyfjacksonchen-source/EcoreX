@@ -1886,3 +1886,16 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Regression | 0 | Focused v0.2.9.2 tests pass 2/2; full migration/activation/quarantine/storage set passes 68 with two explicit environment skips. Ruff, compile, JSON, diff and 676-file source gates pass. |
 | Redacted evidence | 0 | `evidence/v0292-real-user-data-dry-run-0916bd04-2026-07-16.json` is 1,829 bytes with SHA-256 `ca606a5c...c066b8`; it stores aggregate counts and digests only, is not Candidate-bound and does not claim installed-v1 activation. |
 | Release boundary | pending | Run the same authority during signed-v1 side-by-side installation, then verify activation health and post-activation counts before rollout. |
+
+## Real v0.2.9.2 commit-mode import and replay - 2026-07-16
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Exact main | 0 | PR #5 passed all five hosted Jobs and merged as `e1d874c51e6bd6f7d05844ed4c12ad40b9b57962`; exact-main push run `29461021847` independently passed Ubuntu quality, Windows x64, macOS arm64/x64 and Cross-runner byte stability. |
+| Commit-mode import | 0 | The real installed v0.2.9.2 corpus was copy-on-write imported into a disposable v1 target using an ephemeral quarantine key; this was not a dry-run and did not replace the installed Runtime. |
+| Target integrity | 0 | SQLite `integrity_check=ok`; target contains 54 Threads/session mappings, 1,029 messages, 54 summaries, 580 Turns, two Projects, three live bindings, 247 runs and 38,073 run events. |
+| Deleted sessions | 0 | Report count `deleted_session_cache_excluded=93`; target contains only the 54 database-authoritative sessions and restores zero deleted sessions. |
+| Idempotent replay | 0 | A second execution against the same target returns completed with `idempotent_replay=true` and retains one migration-run row. |
+| Verifier correction | 1 then 0 | Initial post-import read-only check referenced nonexistent `items.item_type`; automatic temporary cleanup succeeded. The clean rerun used schema-authoritative `items.kind` and passed without changing product behavior. |
+| Cleanup and privacy | 0 | Disposable target and ephemeral key were removed; source inventory digest remained `7bd10f20...15b6cf`. The 1,622-byte evidence SHA-256 is `60a7e8d8...ce892f` and contains no conversation content, raw IDs, user paths or secrets. |
+| Activation boundary | pending | The import is proven, but signed-v1 slot activation, health check and post-activation count verification are still required before rollout. |
