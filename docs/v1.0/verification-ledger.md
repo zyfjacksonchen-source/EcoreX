@@ -2022,3 +2022,14 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Windows affected domains | 0 | 81 passed / 12 explicit Linux-conditioned skips / zero failures. |
 | WSL Ubuntu Python 3.11.9 | 0 | 93 passed / zero failures across cloud sidecar, Provider TLS Bridge and public-site deployment in 19.52 seconds. |
 | Static correction gates | 0 | Ruff, Python compilation and `git diff --check` pass. Full hosted rerun remains pending. |
+
+## Connector late-success ownership correction - 2026-07-17
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| PR run `29522376431` | 1 expected | Earlier 14 Linux failures were gone. Ubuntu completed with one connector late-success failure (2,178 passed / 35 skipped); Windows and both macOS jobs passed. Cross-runner stability was skipped and no artifact was promoted. |
+| Root cause | 0 | Fixed sleep was nondeterministic and revealed that `outcome_unknown` ignored an active exclusive provider-completion lease, sending a safe retry directly to manual reconciliation. |
+| Reservation/polling contract | 0 | Non-expired active provider fence returns `in_progress` and waits without redispatch. Expired or inactive fence remains `uncertain`; no unsafe retry was introduced. |
+| Durable recovery delivery | 0 | `completion_path=late_provider_result` is authoritative even if the waiter finalizes the stage first. Recovery Tool Item/event, result and provider dispatch are exact-once; leases end at zero. |
+| Deterministic regression | 0 | Explicit waiter-entry barrier replaces sleep/call_later. Result suite passes 19 on Windows and 19 on WSL Ubuntu/Python 3.11.9; all Connector regression passes 132. Ruff/compile/diff pass. |
+| Promotion | pending | New commit and hosted full-suite/cross-runner rerun are mandatory. |

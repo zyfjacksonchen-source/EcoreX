@@ -2752,6 +2752,7 @@ class SQLiteConnectorRepository:
             return InvocationReservation("reserved", record.invocation_id)
         with self._write() as connection:
             self._assert_operation_lease(connection, operation_lease)
+            self._mark_expired_operation_leases_unknown(connection)
             if retain_on_uncertainty:
                 self._set_manual_reconciliation_policy(
                     connection, operation_lease
@@ -2811,6 +2812,12 @@ class SQLiteConnectorRepository:
                     return InvocationReservation(
                         "in_progress", str(existing["invocation_id"])
                     )
+                if self._invocation_has_active_completion_owner(
+                    connection, str(existing["invocation_id"])
+                ):
+                    return InvocationReservation(
+                        "in_progress", str(existing["invocation_id"])
+                    )
                 return InvocationReservation("uncertain", str(existing["invocation_id"]))
             self._insert_invocation(
                 connection,
@@ -2866,8 +2873,27 @@ class SQLiteConnectorRepository:
             if stage is not None:
                 return InvocationReservation("staged", invocation_id)
             if invocation["status"] == "outcome_unknown":
+                if self._invocation_has_active_completion_owner(
+                    connection, invocation_id
+                ):
+                    return InvocationReservation("in_progress", invocation_id)
                 return InvocationReservation("uncertain", invocation_id)
             return InvocationReservation("in_progress", invocation_id)
+
+    @staticmethod
+    def _invocation_has_active_completion_owner(
+        connection: sqlite3.Connection,
+        invocation_id: str,
+    ) -> bool:
+        return connection.execute(
+            "SELECT 1 FROM connector_invocations AS invocation "
+            "JOIN connector_operation_leases AS lease "
+            "ON lease.operation_id=invocation.operation_id "
+            "AND lease.instance_id=invocation.instance_id "
+            "WHERE invocation.invocation_id=? AND lease.status='active' "
+            "AND lease.expires_at > ?",
+            (invocation_id, _iso(_utcnow())),
+        ).fetchone() is not None
 
     @staticmethod
     def _set_manual_reconciliation_policy(

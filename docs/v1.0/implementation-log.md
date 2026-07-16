@@ -5957,3 +5957,31 @@ passes 81 tests with 12 Linux-conditioned skips, and WSL Ubuntu with exact
 Python 3.11.9 passes all 93 tests with zero skips/failures.  Ruff, compilation
 and whitespace checks pass.  A new PR head and full hosted matrix are still
 required before merge.
+
+## 2026-07-17 - Connector late-success ownership correction
+
+PR run `29522376431` proved that all 14 earlier Linux failures were removed:
+Windows x64 and macOS arm64/x64 passed, while Ubuntu completed 2,178 tests and
+failed only `test_late_inline_success_always_creates_recovery_delivery_item`.
+The failure was not hidden with a workflow rerun.  The old test used a fixed
+300 ms sleep, but the load-sensitive failure exposed a real state-machine gap:
+an idempotent retry that observed `outcome_unknown` immediately returned manual
+reconciliation even when the original provider completion lease was still
+active and exclusively owned by its late-result watcher.
+
+The repository now normalizes expired operation leases before classifying an
+idempotency reservation.  `outcome_unknown` with a non-expired active provider
+fence is `in_progress`, so a Runtime caller waits for the original owner; an
+expired or inactive fence remains fail-closed `uncertain`.  Completion polling
+uses the same contract.  Recovery delivery is derived from the durable result
+stage's `completion_path=late_provider_result`, so a retry that wins local
+finalization cannot suppress the one recovery Tool Item/event.
+
+The regression no longer guesses scheduling with sleep or `call_later`.  A
+barrier proves the retry entered `_await_invocation_completion` before the
+gated provider result is released.  Tests also cover watcher failure after
+staging, expired/inactive fences, three later replays, one provider call, one
+recovery item/event and zero final leases.  Connector coverage passes 132
+tests; result-artifact coverage passes 19 on Windows and the same 19 on WSL
+Ubuntu/Python 3.11.9.  Ruff, compilation and whitespace checks pass.  A new
+hosted head is still required before merge.
