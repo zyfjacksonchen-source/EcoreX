@@ -14,6 +14,8 @@ from .responses_provider import (
     ManagedHTTPSResponsesProvider,
     ResponsesProviderUnavailable,
 )
+from .chat_completions_provider import ManagedHTTPSChatCompletionsProvider
+from .handoff import ChatHandoffAuthority, ChatModelRevision
 
 
 class ActiveModelSource(Protocol):
@@ -26,7 +28,7 @@ class ActiveModelSource(Protocol):
 
 @dataclass(slots=True)
 class _ProviderEntry:
-    provider: ManagedHTTPSResponsesProvider
+    provider: ManagedHTTPSResponsesProvider | ManagedHTTPSChatCompletionsProvider
     local_model_id: str
     active_count: int = 0
     retired: bool = False
@@ -40,6 +42,8 @@ class DynamicManagedResponsesProvider:
         source: ActiveModelSource,
         *,
         origins: Mapping[str, str],
+        handoff_authority: ChatHandoffAuthority,
+        chat_handoff_ttl_seconds: int = 3600,
         connect_timeout_seconds: float = 5.0,
         read_timeout_seconds: float = 30.0,
         total_timeout_seconds: float = 240.0,
@@ -48,6 +52,8 @@ class DynamicManagedResponsesProvider:
     ) -> None:
         self.source = source
         self.origins = dict(origins)
+        self.handoff_authority = handoff_authority
+        self.chat_handoff_ttl_seconds = chat_handoff_ttl_seconds
         self.connect_timeout_seconds = connect_timeout_seconds
         self.read_timeout_seconds = read_timeout_seconds
         self.total_timeout_seconds = total_timeout_seconds
@@ -106,13 +112,15 @@ class DynamicManagedResponsesProvider:
 
     async def _acquire(self, configuration: ActiveModelConfiguration):
         key = (configuration.config_id, configuration.revision)
-        close_after: list[ManagedHTTPSResponsesProvider] = []
+        close_after: list[
+            ManagedHTTPSResponsesProvider | ManagedHTTPSChatCompletionsProvider
+        ] = []
         async with self._lock:
             if self._closed:
                 raise ResponsesProviderUnavailable("managed provider is closed")
             entry = self._entries.get(key)
             if entry is None:
-                origin = self.origins.get(configuration.provider_preset)
+                origin = self.origins.get(configuration.provider_origin_preset)
                 if origin is None:
                     raise ResponsesProviderUnavailable(
                         "managed provider origin is unavailable"
@@ -121,21 +129,45 @@ class DynamicManagedResponsesProvider:
                 policy = base_policy.model_copy(
                     update={"upstream_model_id": configuration.upstream_model_id}
                 )
-                provider = ManagedHTTPSResponsesProvider(
-                    origin=origin,
-                    allowed_origins=frozenset(self.origins.values()),
-                    model_mapping={
+                common = {
+                    "origin": origin,
+                    "allowed_origins": frozenset(self.origins.values()),
+                    "model_mapping": {
                         configuration.local_model_id: configuration.upstream_model_id
                     },
-                    model_policies={configuration.local_model_id: policy},
-                    allow_dynamic_mapping=True,
-                    bearer_token=lambda value=configuration.api_key: value,
-                    connect_timeout_seconds=self.connect_timeout_seconds,
-                    read_timeout_seconds=self.read_timeout_seconds,
-                    total_timeout_seconds=self.total_timeout_seconds,
-                    max_concurrency=self.max_concurrency,
-                    max_connections=self.max_connections,
-                )
+                    "model_policies": {configuration.local_model_id: policy},
+                    "bearer_token": lambda value=configuration.api_key: value,
+                    "connect_timeout_seconds": self.connect_timeout_seconds,
+                    "read_timeout_seconds": self.read_timeout_seconds,
+                    "total_timeout_seconds": self.total_timeout_seconds,
+                    "max_concurrency": self.max_concurrency,
+                    "max_connections": self.max_connections,
+                }
+                if configuration.provider_preset == "responses":
+                    provider = ManagedHTTPSResponsesProvider(
+                        **common,
+                        allow_dynamic_mapping=True,
+                    )
+                elif configuration.provider_preset == "openai_compatible_chat":
+                    provider = ManagedHTTPSChatCompletionsProvider(
+                        **common,
+                        handoff_authority=self.handoff_authority,
+                        model_revision=ChatModelRevision(
+                            config_id=configuration.config_id,
+                            revision=configuration.revision,
+                            local_model_id=configuration.local_model_id,
+                            upstream_model_id=configuration.upstream_model_id,
+                            provider_protocol=configuration.provider_preset,
+                            provider_origin_preset=(
+                                configuration.provider_origin_preset
+                            ),
+                        ),
+                        handoff_ttl_seconds=self.chat_handoff_ttl_seconds,
+                    )
+                else:
+                    raise ResponsesProviderUnavailable(
+                        "managed chat provider protocol is unavailable"
+                    )
                 entry = _ProviderEntry(
                     provider=provider,
                     local_model_id=configuration.local_model_id,

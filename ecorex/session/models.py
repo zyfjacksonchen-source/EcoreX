@@ -208,7 +208,9 @@ class ManagedSessionLeaseClaims:
         if isinstance(self.schema_version, bool) or self.schema_version != 1:
             raise LeaseValidationError("unsupported managed session lease schema")
         object.__setattr__(self, "lease_id", _required_id(self.lease_id, "lease_id"))
-        object.__setattr__(self, "account_id", _required_id(self.account_id, "account_id"))
+        object.__setattr__(
+            self, "account_id", _required_id(self.account_id, "account_id")
+        )
         object.__setattr__(
             self,
             "organization_id",
@@ -373,7 +375,9 @@ class SignedManagedSessionLease:
         try:
             raw = json.loads(encoded.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
-            raise LeaseValidationError("signed managed session lease is invalid") from None
+            raise LeaseValidationError(
+                "signed managed session lease is invalid"
+            ) from None
         if not isinstance(raw, Mapping):
             raise LeaseValidationError("signed managed session lease is invalid")
         return cls.from_dict(raw)
@@ -463,6 +467,21 @@ class SessionRecoveryReport:
 
 
 @dataclass(frozen=True, slots=True)
+class SessionRefreshContext:
+    lease: SignedManagedSessionLease
+    access_expires_at: datetime
+    refresh_token: str
+
+    def __repr__(self) -> str:
+        return (
+            "<SessionRefreshContext "
+            f"lease_id={self.lease.claims.lease_id!r} "
+            f"access_expires_at={self.access_expires_at.isoformat()!r} "
+            "refresh_token=<redacted>>"
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class SessionAuditRecord:
     sequence: int
     event_type: str
@@ -506,6 +525,7 @@ __all__ = [
     "SessionLeaseSignature",
     "SessionLogoutReceipt",
     "SessionRecoveryReport",
+    "SessionRefreshContext",
     "SessionRestartRequired",
     "SessionUnavailable",
     "SessionVaultError",

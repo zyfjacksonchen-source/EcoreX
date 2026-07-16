@@ -103,13 +103,17 @@ def test_admin_web_is_content_addressed_allowlisted_and_security_headered() -> N
         digest = hashlib.sha256(response.content).hexdigest()
         assert digest.startswith(prefix)
         assert b64decode(sri_value) == bytes.fromhex(digest)
-        assert response.headers["cache-control"] == "public, max-age=31536000, immutable"
+        assert (
+            response.headers["cache-control"] == "public, max-age=31536000, immutable"
+        )
         assert response.headers["etag"] == f'"sha256-{digest}"'
         assert response.headers["cross-origin-resource-policy"] == "same-origin"
         assert response.headers["content-type"].startswith(
             "text/css" if suffix == "css" else "text/javascript"
         )
-        cached = client.get(asset_url, headers={"If-None-Match": response.headers["etag"]})
+        cached = client.get(
+            asset_url, headers={"If-None-Match": response.headers["etag"]}
+        )
         assert cached.status_code == 304
         assert cached.content == b""
 
@@ -119,12 +123,16 @@ def test_admin_web_is_content_addressed_allowlisted_and_security_headered() -> N
     assert "/admin" not in app.openapi()["paths"]
 
 
-def test_asset_verifier_fails_closed_for_tamper_extra_files_and_bad_prefix(tmp_path) -> None:
+def test_asset_verifier_fails_closed_for_tamper_extra_files_and_bad_prefix(
+    tmp_path,
+) -> None:
     copied = tmp_path / "static"
     shutil.copytree(STATIC, copied)
     bundle = AdminWebAssets.load(copied)
     assert len(bundle.assets) == 2
-    assert all(re.fullmatch(r"admin\.[0-9a-f]{64}\.(?:css|js)", name) for name in bundle.assets)
+    assert all(
+        re.fullmatch(r"admin\.[0-9a-f]{64}\.(?:css|js)", name) for name in bundle.assets
+    )
     with pytest.raises(AdminWebAssetError, match="URL prefix"):
         bundle.render_index("https://example.invalid/admin/assets")
 
@@ -143,7 +151,9 @@ def test_asset_verifier_fails_closed_for_tamper_extra_files_and_bad_prefix(tmp_p
         create_admin_web_router(prefix="//unsafe")
 
 
-def test_asset_verifier_reads_signed_resources_through_zipimport(tmp_path: Path) -> None:
+def test_asset_verifier_reads_signed_resources_through_zipimport(
+    tmp_path: Path,
+) -> None:
     archive = tmp_path / "admin-resources.zip"
     source = (
         Path(__file__).resolve().parents[2]
@@ -178,9 +188,7 @@ def test_asset_verifier_reads_signed_resources_through_zipimport(tmp_path: Path)
         timeout=30,
         check=False,
     )
-    assert completed.returncode == 0, completed.stderr.decode(
-        "utf-8", errors="replace"
-    )
+    assert completed.returncode == 0, completed.stderr.decode("utf-8", errors="replace")
 
 
 def test_admin_dom_and_script_contract_are_csp_safe_and_ephemeral() -> None:
@@ -194,12 +202,19 @@ def test_admin_dom_and_script_contract_are_csp_safe_and_ephemeral() -> None:
     assert parser.inline_scripts == 0
     assert len(parser.ids) == len(set(parser.ids))
     assert parser.buttons
-    assert all(button.get("type") == "button" or button.get("type") == "submit" for button in parser.buttons)
+    assert all(
+        button.get("type") == "button" or button.get("type") == "submit"
+        for button in parser.buttons
+    )
     assert "<style" not in html.casefold()
     assert "<base" not in html.casefold()
     assert 'type="password"' in html
     assert 'autocomplete="off"' in html
     assert 'id="refresh-state-button"' in html
+    assert 'id="device-login-button"' in html
+    assert 'id="device-login-state"' in html
+    assert 'id="manual-token-fallback"' in html
+    assert "访问令牌和刷新令牌仅保留在当前页面内存" in html
     assert "全部必需发布门禁" in html
     assert "签名门禁包的只读投影" in html
     assert "activate" in html and "pause" in html and "halt" in html
@@ -225,7 +240,7 @@ def test_admin_dom_and_script_contract_are_csp_safe_and_ephemeral() -> None:
         "new Function",
     )
     assert all(value not in script for value in forbidden_script)
-    assert 'Authorization: `Bearer ${adminToken}`' in script
+    assert "Authorization: `Bearer ${adminToken}`" in script
     assert 'redirect: "error"' in script
     assert 'cache: "no-store"' in script
     assert 'credentials: "same-origin"' in script
@@ -233,31 +248,39 @@ def test_admin_dom_and_script_contract_are_csp_safe_and_ephemeral() -> None:
     assert 'crypto.subtle.digest("SHA-256", bytes)' in script
     assert "manifest_sha256: manifestSha256" in script
     assert "const requestIds = new Map()" in script
-    assert "adminToken = \"\"" in script
+    assert 'adminToken = ""' in script
     assert "beforeunload" in script
+    assert 'client_id: "ecorex-admin-web"' in script
+    assert 'grant_type: "refresh_token"' in script
+    assert '"/v1/device/authorize"' in script
+    assert '"/v1/device/token"' in script
+    assert "const refreshPromise" not in script
+    assert "let refreshPromise = null" in script
+    assert "elements.deviceLoginButton.addEventListener" in script
+    assert 'adminRefreshToken = ""' in script
     assert "showModal()" in script
     assert script.count("askConfirmation({") >= 5
     for contract in (
         'apiRequest("/releases"',
-        '/publish',
+        "/publish",
         'apiRequest("/rollouts"',
-        '/rollouts/${rolloutId}/${action}',
+        "/rollouts/${rolloutId}/${action}",
         'apiRequest("/rollbacks"',
-        '/rollbacks/${rollbackId}/${action}',
-        '/channels/${safeSegment(channel)}/${suffix}',
+        "/rollbacks/${rollbackId}/${action}",
+        "/channels/${safeSegment(channel)}/${suffix}",
         'apiRequest("/resume")',
         'apiRequest("/distribution"',
         'apiRequest("/users"',
         'apiRequest("/usage/summary"',
         'apiRequest("/models"',
-        '/test-and-activate',
-        '/usage-adjustments',
+        "/test-and-activate",
+        "/usage-adjustments",
     ):
         assert contract in script
     assert 'elements.modelApiKey.value = ""' in script
     assert "full ? 100" in script
     assert "full ? []" in script
-    assert '/gates/${gate}' not in script
+    assert "/gates/${gate}" not in script
     assert "/gate-bundle" not in script
     assert ".gate-action" not in script
     assert "gate-status" not in script
@@ -357,7 +380,9 @@ def _resume_data() -> dict:
             {
                 "channel_kill_switches": [
                     KillSwitchProjection(
-                        channel="stable", halted_rollout_ids=[], kill_switch_active=False
+                        channel="stable",
+                        halted_rollout_ids=[],
+                        kill_switch_active=False,
                     ),
                     KillSwitchProjection(
                         channel="stable", halted_rollout_ids=[], kill_switch_active=True
@@ -415,7 +440,9 @@ def test_resume_router_is_read_only_authenticated_and_no_store() -> None:
 
     def release_admin(request: Request) -> str:
         if request.headers.get("authorization") != "Bearer test-release-admin":
-            raise HTTPException(status_code=401, detail="release administrator required")
+            raise HTTPException(
+                status_code=401, detail="release administrator required"
+            )
         return "release-admin"
 
     router = create_admin_resume_router(

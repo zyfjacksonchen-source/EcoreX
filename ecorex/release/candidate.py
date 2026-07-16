@@ -1332,10 +1332,19 @@ def _release_sources(
         base_url = raw.get("base_url")
         parsed = urlsplit(base_url if isinstance(base_url, str) else "")
         channel_suffix = channel.value
-        expected_suffix = (
-            "/releases/download"
+        expected_suffixes = (
+            ("/releases/download",)
             if expected_kind is SourceKind.GITHUB_RELEASE
-            else f"/v{__version__}/{channel_suffix}"
+            else (
+                # A GitHub CN accelerator is a read-through proxy, not an
+                # uploadable replica.  Its root therefore mirrors the GitHub
+                # ``releases/download`` namespace and is resolved to the same
+                # immutable tag as the GitHub origin by ReleaseBuilder.
+                # Dedicated EcoreX mirrors keep the release-id namespace.
+                ("/releases/download", f"/v{__version__}/{channel_suffix}")
+                if expected_kind is SourceKind.GITHUB_CN_MIRROR
+                else (f"/v{__version__}/{channel_suffix}",)
+            )
         )
         if (
             parsed.scheme != "https"
@@ -1345,7 +1354,10 @@ def _release_sources(
             or parsed.password
             or parsed.query
             or parsed.fragment
-            or not parsed.path.rstrip("/").endswith(expected_suffix)
+            or not any(
+                parsed.path.rstrip("/").endswith(suffix)
+                for suffix in expected_suffixes
+            )
         ):
             raise CandidateBuildError("candidate_sources_invalid")
         try:

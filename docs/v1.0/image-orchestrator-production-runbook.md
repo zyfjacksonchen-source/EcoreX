@@ -16,7 +16,7 @@ ecorex-image all
 - `worker`：只执行图片任务，仍提供 `/health/live` 和 `/health/ready`。
 - `all`：小规模部署可在一个有界进程中同时运行 API 和 worker。
 - 正式多副本部署建议分开 `serve` 与 `worker`，各自调整副本数。
-- 生产只允许 PostgreSQL 15+ 作为任务、租约、事件和用量事实源，只允许私有加密 S3 作为共享 CAS。SQLite 仅保留给 local/test，生产 CLI 会直接拒绝。
+- 生产只允许 PostgreSQL 15+ 作为任务、租约、事件和用量事实源。图片 CAS 显式选择私有加密 S3 或 `attested-encrypted-local-cas`；后者仅允许同一主机、`replica_count=1`，不声称多机 HA。SQLite 仅保留给 local/test。
 - `serve`/`worker`/`all` 启动路径只校验 schema，永不执行 DDL。DDL 只能由 `schema migrate` 显式执行。
 
 ## 2. 必需配置
@@ -26,6 +26,7 @@ ecorex-image all
 | 进程 | `ECOREX_IMAGE_STORAGE_BACKEND=postgresql` 、`ECOREX_IMAGE_INSTANCE_ID` |
 | PostgreSQL | `ECOREX_IMAGE_POSTGRES_DSN`、`ECOREX_IMAGE_POSTGRES_POOL_MIN/MAX`、`ECOREX_IMAGE_POSTGRES_POOL_TIMEOUT_SECONDS` |
 | S3 | `ECOREX_IMAGE_S3_BUCKET`、`ECOREX_IMAGE_S3_PREFIX`、`ECOREX_IMAGE_S3_REGION`、`ECOREX_IMAGE_S3_ENCRYPTION`，可选 `ECOREX_IMAGE_S3_KMS_KEY_ID` 和 HTTPS `ECOREX_IMAGE_S3_ENDPOINT_URL` |
+| 单机加密 CAS | `ECOREX_IMAGE_CONTENT_STORAGE_MODE=attested-encrypted-local-cas`，以及同一 root/attestation SHA-256/volume ID/machine ID/quota/min-free/GID；`REPLICA_COUNT=1` |
 | 用户身份 | `ECOREX_IMAGE_AUTH_ISSUER`、`ECOREX_IMAGE_AUTH_AUDIENCE`、`ECOREX_IMAGE_AUTH_PUBLIC_KEYS_JSON` |
 | 模型 | `ECOREX_IMAGE_MODEL_ALLOWLIST_JSON` |
 | 托管 Provider | `ECOREX_IMAGE_PROVIDER_ID`、`ECOREX_IMAGE_PROVIDER_ORIGIN`、`ECOREX_IMAGE_PROVIDER_ALLOWED_ORIGINS_JSON` |
@@ -66,7 +67,7 @@ Provider 适配器最近邻还原到第一张底图。它不会要求有界 ROI 
 可能导致进程内存越界的请求发送给 Provider。约束来源见 OpenAI 官方
 [Image generation guide](https://developers.openai.com/api/docs/guides/image-generation#size-and-quality-options)。
 
-任意 DSN、S3、Provider origin/allowlist、Provider 凭证、JWT 公钥环或模型白名单缺失时，进程 fail-closed。生产建议由 Vault sidecar 或 workload identity 实现 `ImageSecretProvider`；不要把凭证放到 CLI 参数、日志或发布清单。
+任意 DSN、已选存储模式的完整证据、Provider origin/allowlist、Provider 凭证、JWT 公钥环或模型白名单缺失时，进程 fail-closed。生产建议由 Vault sidecar 或 workload identity 实现 `ImageSecretProvider`；不要把凭证放到 CLI 参数、日志或发布清单。
 
 ## 3. 首次上线顺序
 

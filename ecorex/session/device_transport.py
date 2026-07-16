@@ -24,6 +24,10 @@ _SAFE_CLIENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _MAX_RESPONSE_BYTES = 256 * 1024
 
 
+class DeviceRefreshInvalidGrant(DeviceAuthorizationUnavailable):
+    """The refresh credential is terminal and device login is required."""
+
+
 class HTTPSDeviceAuthorizationBroker:
     """Calls only two fixed same-origin endpoints and never follows redirects."""
 
@@ -115,7 +119,9 @@ class HTTPSDeviceAuthorizationBroker:
         try:
             status = BrokerPollStatus(_text(body, "status"))
         except ValueError:
-            raise DeviceAuthorizationUnavailable("device broker status is invalid") from None
+            raise DeviceAuthorizationUnavailable(
+                "device broker status is invalid"
+            ) from None
         if status is BrokerPollStatus.AUTHORIZED:
             _exact(
                 body,
@@ -132,13 +138,58 @@ class HTTPSDeviceAuthorizationBroker:
                     refresh_token=_text(body, "refresh_token"),
                 )
             except (TypeError, ValueError):
-                raise DeviceAuthorizationUnavailable("device broker grant is invalid") from None
+                raise DeviceAuthorizationUnavailable(
+                    "device broker grant is invalid"
+                ) from None
             return BrokerPollResult(status=status, grant=grant)
         _exact(body, {"schema_version", "status", "retry_after_seconds"})
         retry = body.get("retry_after_seconds")
-        if retry is not None and (isinstance(retry, bool) or not isinstance(retry, int)):
-            raise DeviceAuthorizationUnavailable("device broker retry interval is invalid")
+        if retry is not None and (
+            isinstance(retry, bool) or not isinstance(retry, int)
+        ):
+            raise DeviceAuthorizationUnavailable(
+                "device broker retry interval is invalid"
+            )
         return BrokerPollResult(status=status, retry_after_seconds=retry)
+
+    async def refresh(
+        self,
+        *,
+        lease_id: str,
+        refresh_token: str,
+        idempotency_key: str,
+    ) -> BrokerDeviceGrant:
+        body = await self._request(
+            "/v1/device/token",
+            {
+                "schema_version": 1,
+                "client_id": self.client_id,
+                "grant_type": "refresh_token",
+                "lease_id": lease_id,
+                "refresh_token": refresh_token,
+            },
+            idempotency_key=idempotency_key,
+            allow_invalid_grant=True,
+        )
+        _exact(
+            body,
+            {"schema_version", "status", "lease", "access_token", "refresh_token"},
+        )
+        if body.get("schema_version") != 1 or body.get("status") != "authorized":
+            raise DeviceAuthorizationUnavailable("device refresh response is invalid")
+        raw_lease = body.get("lease")
+        if not isinstance(raw_lease, Mapping):
+            raise DeviceAuthorizationUnavailable("device refresh lease is invalid")
+        try:
+            return BrokerDeviceGrant(
+                lease=SignedManagedSessionLease.from_dict(raw_lease),
+                access_token=_text(body, "access_token"),
+                refresh_token=_text(body, "refresh_token"),
+            )
+        except (TypeError, ValueError):
+            raise DeviceAuthorizationUnavailable(
+                "device refresh grant is invalid"
+            ) from None
 
     async def aclose(self) -> None:
         if self._owned:
@@ -150,6 +201,7 @@ class HTTPSDeviceAuthorizationBroker:
         body: Mapping[str, Any],
         *,
         idempotency_key: str,
+        allow_invalid_grant: bool = False,
     ) -> Mapping[str, Any]:
         if not _SAFE_CLIENT.fullmatch(idempotency_key.replace(":", "-")):
             raise DeviceAuthorizationUnavailable("device request identity is invalid")
@@ -172,8 +224,13 @@ class HTTPSDeviceAuthorizationBroker:
                 follow_redirects=False,
             ) as response:
                 if response.is_redirect:
-                    raise DeviceAuthorizationUnavailable("device broker redirects are forbidden")
-                if response.status_code not in {200, 201}:
+                    raise DeviceAuthorizationUnavailable(
+                        "device broker redirects are forbidden"
+                    )
+                response_status = response.status_code
+                if response_status not in {200, 201} and not (
+                    allow_invalid_grant and response_status == 401
+                ):
                     raise DeviceAuthorizationUnavailable(
                         f"device broker returned HTTP {response.status_code}"
                     )
@@ -182,7 +239,9 @@ class HTTPSDeviceAuthorizationBroker:
                     not content_length.isdigit()
                     or int(content_length) > _MAX_RESPONSE_BYTES
                 ):
-                    raise DeviceAuthorizationUnavailable("device broker response is oversized")
+                    raise DeviceAuthorizationUnavailable(
+                        "device broker response is oversized"
+                    )
                 payload = bytearray()
                 async for chunk in response.aiter_bytes():
                     payload.extend(chunk)
@@ -199,28 +258,48 @@ class HTTPSDeviceAuthorizationBroker:
         try:
             value = json.loads(bytes(payload).decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
-            raise DeviceAuthorizationUnavailable("device broker response is invalid") from None
+            raise DeviceAuthorizationUnavailable(
+                "device broker response is invalid"
+            ) from None
         if not isinstance(value, Mapping):
             raise DeviceAuthorizationUnavailable("device broker response is invalid")
+        if response_status == 401:
+            detail = value.get("detail")
+            if (
+                isinstance(detail, Mapping)
+                and detail.get("code") == "invalid_grant"
+                and set(detail) == {"code", "message"}
+                and set(value) == {"detail"}
+            ):
+                raise DeviceRefreshInvalidGrant(
+                    "managed session requires reauthorization"
+                )
+            raise DeviceAuthorizationUnavailable("device refresh authentication failed")
         return value
 
 
 def _exact(value: Mapping[str, Any], keys: set[str]) -> None:
     if set(value) != keys:
-        raise DeviceAuthorizationUnavailable("device broker response contract is invalid")
+        raise DeviceAuthorizationUnavailable(
+            "device broker response contract is invalid"
+        )
 
 
 def _text(value: Mapping[str, Any], key: str) -> str:
     item = value.get(key)
     if not isinstance(item, str) or not item or len(item) > 128 * 1024:
-        raise DeviceAuthorizationUnavailable("device broker response contains invalid text")
+        raise DeviceAuthorizationUnavailable(
+            "device broker response contains invalid text"
+        )
     return item
 
 
 def _integer(value: Mapping[str, Any], key: str) -> int:
     item = value.get(key)
     if isinstance(item, bool) or not isinstance(item, int):
-        raise DeviceAuthorizationUnavailable("device broker response contains invalid integer")
+        raise DeviceAuthorizationUnavailable(
+            "device broker response contains invalid integer"
+        )
     return item
 
 
@@ -229,10 +308,12 @@ def _timestamp(value: Mapping[str, Any], key: str) -> datetime:
     try:
         parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
-        raise DeviceAuthorizationUnavailable("device broker timestamp is invalid") from None
+        raise DeviceAuthorizationUnavailable(
+            "device broker timestamp is invalid"
+        ) from None
     if parsed.tzinfo is None:
         raise DeviceAuthorizationUnavailable("device broker timestamp is invalid")
     return parsed
 
 
-__all__ = ["HTTPSDeviceAuthorizationBroker"]
+__all__ = ["DeviceRefreshInvalidGrant", "HTTPSDeviceAuthorizationBroker"]

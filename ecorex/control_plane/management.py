@@ -28,6 +28,8 @@ from .management_models import (
     StageModelConfigurationRequest,
     UpdateAdminUserRequest,
     UsageSummaryProjection,
+    provider_origin_preset_for_slot,
+    provider_protocol_for_slot,
 )
 from .management_schema import AdminManagementSchemaManager
 from .models import ControlPrincipal
@@ -485,8 +487,9 @@ class AdminManagementRepository:
                 "INSERT INTO admin_ops_model_revisions("
                 "config_id,revision,display_name,upstream_model_id,provider_preset,"
                 "is_default,enabled,status,secret_id,key_fingerprint,test_id,test_status,"
-                "test_error_code,tested_at,actor_subject,created_at,updated_at"
-                ") VALUES(?,?,?,?,?,?,?,?,?,?,NULL,'not_tested',NULL,NULL,?,?,?)",
+                "test_error_code,tested_at,actor_subject,created_at,updated_at,"
+                "provider_origin_preset"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,NULL,'not_tested',NULL,NULL,?,?,?,?)",
                 (
                     config_id,
                     1,
@@ -501,6 +504,7 @@ class AdminManagementRepository:
                     actor.subject,
                     now,
                     now,
+                    provider_origin_preset_for_slot(request.local_model_id),
                 ),
             )
         except sqlite3.IntegrityError:
@@ -566,13 +570,8 @@ class AdminManagementRepository:
         if config is None:
             raise AdminManagementNotFound("model configuration does not exist")
         modality = str(config["modality"])
-        if (
-            modality == "chat"
-            and request.provider_preset == "openai_compatible_image"
-        ) or (
-            modality != "chat"
-            and request.provider_preset != "openai_compatible_image"
-        ):
+        local_model_id = str(config["local_model_id"])
+        if request.provider_preset != provider_protocol_for_slot(local_model_id):
             raise AdminManagementConflict(
                 "model provider preset does not match the configured modality"
             )
@@ -618,8 +617,8 @@ class AdminManagementRepository:
             "INSERT INTO admin_ops_model_revisions("
             "config_id,revision,display_name,upstream_model_id,provider_preset,is_default,"
             "enabled,status,secret_id,key_fingerprint,test_id,test_status,test_error_code,"
-            "tested_at,actor_subject,created_at,updated_at"
-            ") VALUES(?,?,?,?,?,?,?,'draft',?,?,NULL,'not_tested',NULL,NULL,?,?,?)",
+            "tested_at,actor_subject,created_at,updated_at,provider_origin_preset"
+            ") VALUES(?,?,?,?,?,?,?,'draft',?,?,NULL,'not_tested',NULL,NULL,?,?,?,?)",
             (
                 config_id,
                 revision,
@@ -633,6 +632,7 @@ class AdminManagementRepository:
                 actor.subject,
                 now,
                 now,
+                provider_origin_preset_for_slot(local_model_id),
             ),
         )
         connection.execute(
@@ -752,6 +752,7 @@ class AdminManagementRepository:
                 display_name=str(row["display_name"]),
                 upstream_model_id=str(row["upstream_model_id"]),
                 provider_preset=str(row["provider_preset"]),  # type: ignore[arg-type]
+                provider_origin_preset=str(row["provider_origin_preset"]),  # type: ignore[arg-type]
                 is_default=bool(row["is_default"]),
                 api_key=secret,
             )
@@ -963,6 +964,7 @@ class AdminManagementRepository:
                 display_name=str(row["display_name"]),
                 upstream_model_id=str(row["upstream_model_id"]),
                 provider_preset=str(row["provider_preset"]),  # type: ignore[arg-type]
+                provider_origin_preset=str(row["provider_origin_preset"]),  # type: ignore[arg-type]
                 is_default=bool(row["is_default"]),
                 api_key=self._read_secret(connection, str(row["secret_id"])),
             )
@@ -997,6 +999,7 @@ class AdminManagementRepository:
                 display_name=str(row["display_name"]),
                 upstream_model_id=str(row["upstream_model_id"]),
                 provider_preset=str(row["provider_preset"]),  # type: ignore[arg-type]
+                provider_origin_preset=str(row["provider_origin_preset"]),  # type: ignore[arg-type]
                 is_default=bool(row["is_default"]),
                 api_key=self._read_secret(connection, str(row["secret_id"])),
             )

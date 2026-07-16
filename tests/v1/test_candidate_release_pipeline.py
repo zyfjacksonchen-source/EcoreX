@@ -1279,3 +1279,56 @@ def test_recipe_assembler_uses_release_scoped_channel_roots(tmp_path: Path) -> N
     assert recipe["sources"][0]["base_url"].endswith("/v1.0.0/canary")
     assert recipe["sources"][1]["base_url"].endswith("/releases/download")
     assert recipe["sources"][2]["base_url"].endswith("/v1.0.0/canary")
+
+
+def test_recipe_assembler_preserves_github_cn_proxy_namespace(tmp_path: Path) -> None:
+    repository = Path(__file__).resolve().parents[2]
+    for platform, architecture in (
+        ("windows", "x64"),
+        ("macos", "arm64"),
+        ("macos", "x64"),
+    ):
+        target = f"{platform}-{architecture}"
+        (tmp_path / f"stages/{target}/core").mkdir(parents=True)
+        (tmp_path / f"stages/{target}/bootstrap").mkdir(parents=True)
+        for pack_id in PACK_TOOLS:
+            (tmp_path / f"stages/{target}/packs/{pack_id}").mkdir(parents=True)
+        receipts = tmp_path / "receipts" / target
+        receipts.mkdir(parents=True)
+        for name in ("core", "bootstrap", *PACK_TOOLS):
+            (receipts / f"{name}.json").write_text("{}", encoding="utf-8")
+    output = tmp_path / "proxy-recipe.json"
+    proxy_root = (
+        "https://ghproxy.net/https://github.com/"
+        "zhangyifanjackson-dotcom/EcoreX-installers/releases/download"
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(repository / "scripts/assemble-v1-candidate-recipe.py"),
+            "--input-root",
+            str(tmp_path),
+            "--output",
+            str(output),
+            "--channel",
+            "stable",
+            "--created-at",
+            "2026-07-16T12:00:00+08:00",
+            "--repository",
+            "zhangyifanjackson-dotcom/EcoreX-installers",
+        ],
+        capture_output=True,
+        check=False,
+        env={
+            **os.environ,
+            "ECOREX_RELEASE_MIRROR_BASE_URL": proxy_root,
+            "ECOREX_RELEASE_CDN_BASE_URL": (
+                "https://dl.ecoremedia.net/ecorex-agent/releases/v1.0.0"
+            ),
+        },
+    )
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+    recipe = json.loads(output.read_text())
+    assert recipe["sources"][0]["base_url"] == proxy_root
+    assert recipe["sources"][1]["base_url"].endswith("/releases/download")
+    assert recipe["sources"][2]["base_url"].endswith("/v1.0.0/stable")

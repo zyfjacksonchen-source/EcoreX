@@ -42,6 +42,23 @@ from .product import (
     write_product_migration_plan,
 )
 from .quarantine import MigrationQuarantineService, QuarantineProjection
+from .legacy_identity_export import (
+    LegacyIdentityExportError,
+    LegacyIdentityExportReport,
+    export_v0292_legacy_identities,
+)
+
+
+def __getattr__(name: str):
+    if name in {
+        "LegacyAdminManagementImportError",
+        "LegacyAdminManagementImportReport",
+        "import_v0292_admin_management",
+    }:
+        from . import legacy_admin_management
+
+        return getattr(legacy_admin_management, name)
+    raise AttributeError(name)
 
 __all__ = [
     "BACKUP_MANIFEST_NAME",
@@ -50,6 +67,10 @@ __all__ = [
     "INVENTORY_NAME",
     "LegacyDatabaseError",
     "LegacySchemaError",
+    "LegacyIdentityExportError",
+    "LegacyIdentityExportReport",
+    "LegacyAdminManagementImportError",
+    "LegacyAdminManagementImportReport",
     "MigrationError",
     "MigrationOptions",
     "MigrationReport",
@@ -76,6 +97,8 @@ __all__ = [
     "decrypt_quarantine",
     "create_migration_quarantine_router",
     "inventory_source",
+    "export_v0292_legacy_identities",
+    "import_v0292_admin_management",
     "load_quarantine_key",
     "migrate_legacy_to_v1",
     "migrate_v030_to_v1",

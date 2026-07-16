@@ -1,0 +1,38 @@
+[Unit]
+Description=EcoreX v1 Model Gateway (%i slot)
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/var/lib/ecorex
+
+[Service]
+Type=simple
+User=ecorex-cloud
+Group=ecorex-cloud
+UMask=0077
+EnvironmentFile=/etc/ecorex/cloud/config/gateway.env
+EnvironmentFile=/var/lib/ecorex/secrets/gateway.secret.env
+EnvironmentFile=/etc/ecorex/cloud/slots/%i/gateway.env
+ExecStart=/opt/ecorex/cloud/slots/%i/current/venv/bin/python3.11 -m ecorex.gateway.production serve
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=150s
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/ecorex/gateway /var/lib/ecorex/control-plane
+
+[Install]
+WantedBy=multi-user.target

@@ -121,14 +121,18 @@ def _logical_database_snapshot(path: Path) -> tuple:
 
 def _filesystem_snapshot(root: Path) -> tuple[tuple[str, str, str], ...]:
     records = []
-    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
+    for path in sorted(
+        root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()
+    ):
         relative = path.relative_to(root).as_posix()
         if path.is_symlink():
             records.append((relative, "link", str(path.readlink())))
         elif path.is_dir():
             records.append((relative, "directory", ""))
         else:
-            records.append((relative, "file", hashlib.sha256(path.read_bytes()).hexdigest()))
+            records.append(
+                (relative, "file", hashlib.sha256(path.read_bytes()).hexdigest())
+            )
     return tuple(records)
 
 
@@ -158,9 +162,7 @@ def _startup_convergence_snapshot(path: Path) -> tuple:
         "runtime_update_state",
     }
     return tuple(
-        record
-        for record in _logical_database_snapshot(path)
-        if record[0] in selected
+        record for record in _logical_database_snapshot(path) if record[0] in selected
     )
 
 
@@ -177,9 +179,7 @@ def _placeholder(key_id: str) -> SignatureEnvelope:
     )
 
 
-def _sign(
-    private: Ed25519PrivateKey, key_id: str, payload: bytes
-) -> SignatureEnvelope:
+def _sign(private: Ed25519PrivateKey, key_id: str, payload: bytes) -> SignatureEnvelope:
     return SignatureEnvelope(
         "ed25519", key_id, base64.b64encode(private.sign(payload)).decode("ascii")
     )
@@ -199,9 +199,7 @@ def _sources() -> tuple[ReleaseSource, ...]:
             1,
             "https://github.example/releases",
         ),
-        ReleaseSource(
-            "cdn", SourceKind.ECOREX_CDN, 2, "https://cdn.example/releases"
-        ),
+        ReleaseSource("cdn", SourceKind.ECOREX_CDN, 2, "https://cdn.example/releases"),
     )
 
 
@@ -218,7 +216,7 @@ def _web(
         "<!doctype html><html><head>"
         "<!--__ECOREX_RUNTIME_CONFIG__-->"
         f'<script type="module" src="/{javascript_path}"></script>'
-        "</head><body><div id=\"root\"></div></body></html>"
+        '</head><body><div id="root"></div></body></html>'
     ).encode("utf-8")
     files = (
         WebFileRecord(
@@ -246,9 +244,7 @@ def _web(
     )
     manifest = replace(
         unsigned,
-        signature=_sign(
-            release_private, "release-key", unsigned.canonical_payload()
-        ),
+        signature=_sign(release_private, "release-key", unsigned.canonical_payload()),
     )
     return index, javascript, javascript_path, manifest.to_json().encode("utf-8")
 
@@ -350,7 +346,8 @@ def _write_core(
             info.date_time = (1980, 1, 1, 0, 0, 0)
             info.external_attr = (
                 0o755
-                if name in {
+                if name
+                in {
                     "bin/ecorex.exe",
                     "bin/ecorex",
                     "bin/ecorex-sandbox-host.exe",
@@ -566,11 +563,15 @@ def _stage_product(tmp_path: Path, *, config_mutator=None):
             "payload_preparer": lambda slot, payload: sandbox_security.prepare(
                 slot, payload, package, manifest, core
             ),
-            "payload_attester": lambda slot, payload, preparation: sandbox_security.attest(
-                slot, payload, package, manifest, core, preparation
+            "payload_attester": lambda slot, payload, preparation: (
+                sandbox_security.attest(
+                    slot, payload, package, manifest, core, preparation
+                )
             ),
-            "payload_cleanup": lambda slot, payload, preparation: sandbox_security.cleanup_failed(
-                slot, payload, manifest, core, preparation
+            "payload_cleanup": lambda slot, payload, preparation: (
+                sandbox_security.cleanup_failed(
+                    slot, payload, manifest, core, preparation
+                )
             ),
         }
     slot_path = slots.stage(
@@ -719,6 +720,18 @@ class _DeviceBroker:
             ),
         )
 
+    async def refresh(
+        self,
+        *,
+        lease_id: str,
+        refresh_token: str,
+        idempotency_key: str,
+    ) -> BrokerDeviceGrant:
+        assert lease_id
+        assert refresh_token == REFRESH
+        assert idempotency_key.startswith("session-refresh:")
+        return BrokerDeviceGrant(_session_lease(self.product), ACCESS, REFRESH)
+
     async def aclose(self) -> None:
         self.close_count += 1
 
@@ -801,18 +814,13 @@ def test_product_critical_entry_remains_projection_only_for_process_lifetime(
         assert app.state.extension_service.startup_converged is False
         assert _logical_database_snapshot(product["database"]) == database_before
         assert (
-            _startup_filesystem_snapshot(product["install_root"])
-            == filesystem_before
+            _startup_filesystem_snapshot(product["install_root"]) == filesystem_before
         )
 
         with TestClient(app, base_url=ORIGIN) as client:
             response = client.get(
                 "/api/v1/system/health?technical=true",
-                headers={
-                    "Authorization": (
-                        f"Bearer {app.state.runtime_bearer_token}"
-                    )
-                },
+                headers={"Authorization": (f"Bearer {app.state.runtime_bearer_token}")},
             )
             assert response.status_code == 200
             assert response.json()["overall"] == "critical"
@@ -822,7 +830,9 @@ def test_product_critical_entry_remains_projection_only_for_process_lifetime(
                 == filesystem_before
             )
         assert _logical_database_snapshot(product["database"]) == database_before
-        assert _startup_filesystem_snapshot(product["install_root"]) == filesystem_before
+        assert (
+            _startup_filesystem_snapshot(product["install_root"]) == filesystem_before
+        )
     finally:
         composition.close_unstarted()
 
@@ -907,9 +917,7 @@ def test_real_signed_slot_builds_product_app_and_uvicorn_config(tmp_path: Path) 
 def test_windows_sandbox_receipt_matches_invariant_unicode_path_identity(
     tmp_path: Path,
 ) -> None:
-    product = _stage_product(
-        tmp_path / "Straße-STRAẞE-Iİıi-École-中日韩-MiXeD"
-    )
+    product = _stage_product(tmp_path / "Straße-STRAẞE-Iİıi-École-中日韩-MiXeD")
     install_root = product["install_root"]
     slots = SlotStore(install_root)
     slot = product["slot_path"]
@@ -1190,9 +1198,7 @@ def test_release_builder_embeds_the_signed_web_payload_in_product_core(
     target_platform = "windows" if os.name == "nt" else "macos"
     target_architecture = "x64"
     artifact_id = f"core-{target_platform}-{target_architecture}"
-    launcher_name = (
-        "bin/ecorex.exe" if target_platform == "windows" else "bin/ecorex"
-    )
+    launcher_name = "bin/ecorex.exe" if target_platform == "windows" else "bin/ecorex"
     release_private = Ed25519PrivateKey.generate()
     session_private = Ed25519PrivateKey.generate()
     core = tmp_path / "core"
@@ -1227,9 +1233,7 @@ def test_release_builder_embeds_the_signed_web_payload_in_product_core(
         "</head><body></body></html>",
         encoding="utf-8",
     )
-    result = ReleaseBuilder(
-        Ed25519MemorySigner("release-key", release_private)
-    ).build(
+    result = ReleaseBuilder(Ed25519MemorySigner("release-key", release_private)).build(
         ReleaseBuildSpec(
             channel=ReleaseChannel.STABLE,
             created_at="2026-07-10T00:00:00+00:00",
@@ -1246,7 +1250,10 @@ def test_release_builder_embeds_the_signed_web_payload_in_product_core(
             ),
             web_bundle=WebBundleBuildInput(dist),
             dependency_lock_sha256=hashlib.sha256(
-                (Path(__file__).resolve().parents[2] / "requirements/locks/manifest.json").read_bytes()
+                (
+                    Path(__file__).resolve().parents[2]
+                    / "requirements/locks/manifest.json"
+                ).read_bytes()
             ).hexdigest(),
         ),
         tmp_path / "release",
@@ -1293,11 +1300,15 @@ def test_release_builder_embeds_the_signed_web_payload_in_product_core(
             "payload_preparer": lambda slot, payload: sandbox_security.prepare(
                 slot, payload, package, result.manifest, artifact
             ),
-            "payload_attester": lambda slot, payload, preparation: sandbox_security.attest(
-                slot, payload, package, result.manifest, artifact, preparation
+            "payload_attester": lambda slot, payload, preparation: (
+                sandbox_security.attest(
+                    slot, payload, package, result.manifest, artifact, preparation
+                )
             ),
-            "payload_cleanup": lambda slot, payload, preparation: sandbox_security.cleanup_failed(
-                slot, payload, result.manifest, artifact, preparation
+            "payload_cleanup": lambda slot, payload, preparation: (
+                sandbox_security.cleanup_failed(
+                    slot, payload, result.manifest, artifact, preparation
+                )
             ),
         }
     slot_path = slots.stage(
@@ -1419,9 +1430,7 @@ def test_expired_signed_session_keeps_local_shell_but_not_model_worker(
     )
     bootstrap = TestClient(server.app, base_url=ORIGIN).get(
         "/api/v1/bootstrap",
-        headers={
-            "Authorization": f"Bearer {server.app.state.runtime_bearer_token}"
-        },
+        headers={"Authorization": f"Bearer {server.app.state.runtime_bearer_token}"},
     )
     assert bootstrap.status_code == 200
     assert bootstrap.json()["login"]["authenticated"] is False
@@ -1521,7 +1530,9 @@ def test_invalid_release_signature_fails_before_session_or_network_use(
         _loader(product, vault)(host="127.0.0.1", port=8765)
 
 
-def test_config_rejects_credentials_unknown_fields_and_unsafe_paths(tmp_path: Path) -> None:
+def test_config_rejects_credentials_unknown_fields_and_unsafe_paths(
+    tmp_path: Path,
+) -> None:
     product = _stage_product(tmp_path)
     raw = json.loads(product["config"].read_text(encoding="utf-8"))
     raw["gateway"]["bearer_token"] = "must-never-be-accepted"
@@ -1757,9 +1768,7 @@ def test_optional_service_endpoints_are_fixed_https_443_contracts(
             json.dumps(base, sort_keys=True, separators=(",", ":")).encode()
         )
 
-    base["connectors"]["endpoint"] = (
-        "https://connectors.example/api/v1/connectors"
-    )
+    base["connectors"]["endpoint"] = "https://connectors.example/api/v1/connectors"
     base["connectors"]["enabled_connectors"] = ["unknown"]
     with pytest.raises(ProductRuntimeConfigurationError, match="stable connector"):
         ProductRuntimeConfig.from_bytes(

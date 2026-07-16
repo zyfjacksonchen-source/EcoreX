@@ -180,6 +180,8 @@ from ecorex.session import (
     ManagedDeviceAuthorizationService,
     ManagedSessionError,
     ManagedSessionService,
+    ManagedSessionRefreshService,
+    ManagedSessionRefreshSupervisor,
     ManagedSessionSnapshot,
     SessionConflict,
     SessionRestartRequired,
@@ -228,13 +230,13 @@ class RuntimeSettings:
     managed_session_service: ManagedSessionService | None = field(
         default=None, repr=False
     )
+    managed_session_refresh_service: ManagedSessionRefreshService | None = field(
+        default=None, repr=False
+    )
+    managed_session_refresh_poll_seconds: float = 30.0
     session_reload_requester: Any | None = field(default=None, repr=False)
-    first_install_registration_recorder: Any | None = field(
-        default=None, repr=False
-    )
-    first_install_runtime_ready_recorder: Any | None = field(
-        default=None, repr=False
-    )
+    first_install_registration_recorder: Any | None = field(default=None, repr=False)
+    first_install_runtime_ready_recorder: Any | None = field(default=None, repr=False)
     device_authorization_service: ManagedDeviceAuthorizationService | None = field(
         default=None, repr=False
     )
@@ -259,17 +261,15 @@ class RuntimeSettings:
     disabled_capability_tools: Mapping[str, str] = field(
         default_factory=dict, repr=False
     )
-    capability_sandbox_profile_availability: Mapping[
-        str, Mapping[str, str | None]
-    ] = field(default_factory=dict, repr=False)
+    capability_sandbox_profile_availability: Mapping[str, Mapping[str, str | None]] = (
+        field(default_factory=dict, repr=False)
+    )
     connected_connectors: frozenset[str] = frozenset()
     online: bool = True
     artifact_root: str | Path | None = None
     output_roots: Mapping[str, str | Path] | None = field(default=None, repr=False)
     output_default_location: str = "workspace"
-    artifact_action_launcher: ArtifactLauncher | None = field(
-        default=None, repr=False
-    )
+    artifact_action_launcher: ArtifactLauncher | None = field(default=None, repr=False)
     model_gateway: ModelGateway | None = field(default=None, repr=False)
     image_orchestration_client: ManagedImageOrchestrationClient | None = field(
         default=None, repr=False
@@ -304,9 +304,7 @@ class RuntimeSettings:
     share_worker_retry_seconds: int = 2
     share_worker_max_attempts: int = 3
     share_operation_deadline_seconds: int = 3600
-    retouch_adapter: CloudImageRetouchAdapter | None = field(
-        default=None, repr=False
-    )
+    retouch_adapter: CloudImageRetouchAdapter | None = field(default=None, repr=False)
     retouch_worker_concurrency: int = 1
     retouch_worker_poll_seconds: float = 0.25
     retouch_worker_shutdown_seconds: float = 5.0
@@ -380,15 +378,11 @@ def _filter_model_catalog(
     }
     for modality in ModelModality:
         eligible = sorted(
-            model.model_id
-            for model in models.values()
-            if modality in model.modalities
+            model.model_id for model in models.values() if modality in model.modalities
         )
         if eligible and modality not in defaults:
             selected = eligible[0]
-            replacements[selected] = frozenset(
-                {*replacements[selected], modality}
-            )
+            replacements[selected] = frozenset({*replacements[selected], modality})
     return ManagedModelCatalog(
         replace(model, default_for=replacements[model.model_id])
         for model in models.values()
@@ -398,14 +392,17 @@ def _filter_model_catalog(
 def _empty_model_catalog(snapshot: ManagedSessionSnapshot | None) -> ModelCatalog:
     snapshot_id = None
     if snapshot is not None:
-        snapshot_id = "models_" + hashlib.sha256(
-            (
-                "ecorex-managed-model-deny-v1\n"
-                + snapshot.lease_digest
-                + "\n"
-                + "\n".join(snapshot.allowed_model_ids)
-            ).encode("utf-8")
-        ).hexdigest()
+        snapshot_id = (
+            "models_"
+            + hashlib.sha256(
+                (
+                    "ecorex-managed-model-deny-v1\n"
+                    + snapshot.lease_digest
+                    + "\n"
+                    + "\n".join(snapshot.allowed_model_ids)
+                ).encode("utf-8")
+            ).hexdigest()
+        )
     return ModelCatalog(snapshot_id=snapshot_id)
 
 
@@ -437,7 +434,9 @@ def _overlay_cloud_model_catalog(
             if item is None or item.get("modality") not in modalities:
                 continue
             updates: dict[str, object] = {
-                "display_name": str(item.get("display_name") or descriptor.display_name),
+                "display_name": str(
+                    item.get("display_name") or descriptor.display_name
+                ),
                 "is_default": bool(item.get("is_default")),
             }
             upstream = item.get("upstream_model_id")
@@ -459,9 +458,7 @@ def _overlay_cloud_model_catalog(
     return ModelCatalog(
         snapshot_id="models_cloud_" + digest,
         chat=project(base.chat, modalities=frozenset({"chat"})),
-        image=project(
-            base.image, modalities=frozenset({"image_generation"})
-        ),
+        image=project(base.image, modalities=frozenset({"image_generation"})),
         vision=project(base.vision, modalities=frozenset({"chat"})),
         audio=project(base.audio, modalities=frozenset({"audio"})),
         embedding=project(base.embedding, modalities=frozenset({"embedding"})),
@@ -469,22 +466,17 @@ def _overlay_cloud_model_catalog(
 
 
 class RuntimeUpdateController(Protocol):
-    def snapshot(self) -> UpdateSnapshot:
-        ...
+    def snapshot(self) -> UpdateSnapshot: ...
 
-    async def start(self) -> None:
-        ...
+    async def start(self) -> None: ...
 
-    async def stop(self) -> None:
-        ...
+    async def stop(self) -> None: ...
 
-    async def check_now(self) -> UpdateSnapshot:
-        ...
+    async def check_now(self) -> UpdateSnapshot: ...
 
     async def activate(
         self, *, transaction_id: str, client_request_id: str
-    ) -> ActivateUpdateResponse:
-        ...
+    ) -> ActivateUpdateResponse: ...
 
     async def activate_verified_local(
         self,
@@ -492,8 +484,7 @@ class RuntimeUpdateController(Protocol):
         transaction_id: str,
         client_request_id: str,
         execution_guard: Callable[[], None],
-    ) -> ActivateUpdateResponse:
-        ...
+    ) -> ActivateUpdateResponse: ...
 
 
 class _AsyncResourceCloser:
@@ -581,9 +572,7 @@ def _bootstrap(
                 managed_session.organization_id if managed_session else None
             ),
             roles=(list(managed_session.roles) if managed_session else []),
-            session_revision=(
-                managed_session.revision if managed_session else None
-            ),
+            session_revision=(managed_session.revision if managed_session else None),
             session_lease_digest=(
                 managed_session.lease_digest if managed_session else None
             ),
@@ -714,7 +703,9 @@ def _durable_bootstrap(
                         lease_id=stored["lease_id"],
                     )
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
-                raise RuntimeError("durable bootstrap security snapshot is invalid") from error
+                raise RuntimeError(
+                    "durable bootstrap security snapshot is invalid"
+                ) from error
         snapshot = _bootstrap(
             settings,
             models=models,
@@ -801,7 +792,13 @@ def _decode_thread_cursor(
         if not parsed["thread_id"] or len(parsed["thread_id"]) > 256:
             raise ValueError
         return updated_at.astimezone(timezone.utc), parsed["thread_id"]
-    except (ValueError, TypeError, KeyError, json.JSONDecodeError, binascii.Error) as error:
+    except (
+        ValueError,
+        TypeError,
+        KeyError,
+        json.JSONDecodeError,
+        binascii.Error,
+    ) as error:
         raise ValueError("thread cursor is invalid") from error
 
 
@@ -893,8 +890,7 @@ def _has_encrypted_audit_rows(kernel: RuntimeKernel) -> bool:
         if "payload_format" not in columns:
             return False
         row = connection.execute(
-            "SELECT 1 FROM observability_audit_outbox "
-            "WHERE payload_format = ? LIMIT 1",
+            "SELECT 1 FROM observability_audit_outbox WHERE payload_format = ? LIMIT 1",
             (AuditPayloadCipher.FORMAT,),
         ).fetchone()
         if row is not None:
@@ -998,11 +994,11 @@ def _resolve_audit_encryption_key(
         stored = credential_vault.get(reference)
     try:
         encoded = stored["aes256_gcm_key"]
-        material = base64.b64decode(
-            str(encoded), altchars=b"-_", validate=True
-        )
+        material = base64.b64decode(str(encoded), altchars=b"-_", validate=True)
     except (KeyError, TypeError, ValueError):
-        raise RuntimeError("OS credential vault returned an invalid audit key") from None
+        raise RuntimeError(
+            "OS credential vault returned an invalid audit key"
+        ) from None
     if len(material) != 32:
         raise RuntimeError("OS credential vault returned an invalid audit key")
     return material
@@ -1039,11 +1035,10 @@ def create_app(
         raise ValueError("CSRF token must contain at least 32 characters")
     if settings.event_poll_interval_seconds <= 0:
         raise ValueError("event poll interval must be positive")
-    if (
-        settings.event_idle_poll_interval_seconds
-        < settings.event_poll_interval_seconds
-    ):
-        raise ValueError("idle event poll interval cannot be shorter than active polling")
+    if settings.event_idle_poll_interval_seconds < settings.event_poll_interval_seconds:
+        raise ValueError(
+            "idle event poll interval cannot be shorter than active polling"
+        )
     if (
         settings.event_notification_fallback_seconds
         < settings.event_idle_poll_interval_seconds
@@ -1081,9 +1076,8 @@ def create_app(
         raise ValueError("retouch worker shutdown timeout is invalid")
     if settings.share_publisher is not None and not settings.share_public_hosts:
         raise ValueError("configured share publisher requires a public host allowlist")
-    if (
-        settings.session_reload_requester is not None
-        and not callable(settings.session_reload_requester)
+    if settings.session_reload_requester is not None and not callable(
+        settings.session_reload_requester
     ):
         raise ValueError("session reload requester must be callable")
     for callback, label in (
@@ -1100,9 +1094,8 @@ def create_app(
             raise ValueError(f"{label} must be callable")
     if not 0.05 <= settings.device_authorization_poll_seconds <= 30:
         raise ValueError("device authorization poll interval is invalid")
-    if (
-        settings.retouch_adapter is not None
-        and not _retouch_capability_available(settings)
+    if settings.retouch_adapter is not None and not _retouch_capability_available(
+        settings
     ):
         raise ValueError(
             "configured retouch adapter requires the verified image capability pack"
@@ -1120,8 +1113,20 @@ def create_app(
             or parsed.query
             or parsed.fragment
         ):
-            raise ValueError(f"WebUI origin must be an exact loopback origin: {origin!r}")
+            raise ValueError(
+                f"WebUI origin must be an exact loopback origin: {origin!r}"
+            )
     managed_session = settings.managed_session_service
+    session_refresh_service = settings.managed_session_refresh_service
+    if session_refresh_service is not None and (
+        managed_session is None
+        or session_refresh_service.session is not managed_session
+    ):
+        raise ValueError(
+            "managed session refresh must rotate the configured managed session"
+        )
+    if not 1 <= settings.managed_session_refresh_poll_seconds <= 300:
+        raise ValueError("managed session refresh poll interval is invalid")
     if settings.device_authorization_service is not None and (
         managed_session is None
         or settings.device_authorization_service.session is not managed_session
@@ -1134,9 +1139,7 @@ def create_app(
         and managed_session is None
         and not settings.allow_unmanaged_model_gateway_for_testing
     ):
-        raise ValueError(
-            "a production Model Gateway requires a managed signed session"
-        )
+        raise ValueError("a production Model Gateway requires a managed signed session")
     if (
         isinstance(settings.model_gateway, ManagedModelGatewayClient)
         and managed_session is not None
@@ -1146,10 +1149,14 @@ def create_app(
         raise ValueError(
             "ManagedModelGatewayClient credentials must be the ManagedSessionService"
         )
-    if settings.image_orchestration_client is not None and (
-        managed_session is None
-        or settings.image_orchestration_client.session is not managed_session
-    ) and not settings.allow_unmanaged_model_gateway_for_testing:
+    if (
+        settings.image_orchestration_client is not None
+        and (
+            managed_session is None
+            or settings.image_orchestration_client.session is not managed_session
+        )
+        and not settings.allow_unmanaged_model_gateway_for_testing
+    ):
         raise ValueError(
             "managed image orchestration must use the exact ManagedSessionService"
         )
@@ -1176,11 +1183,14 @@ def create_app(
     if managed_session is not None:
         try:
             if startup_convergence_allowed:
-                with runtime_execution_gate.new_admission(
-                    scope="session_startup",
-                    subject="managed_session_convergence",
-                ) as permit, transaction_commit_guard(
-                    lambda: runtime_execution_gate.assert_permit(permit)
+                with (
+                    runtime_execution_gate.new_admission(
+                        scope="session_startup",
+                        subject="managed_session_convergence",
+                    ) as permit,
+                    transaction_commit_guard(
+                        lambda: runtime_execution_gate.assert_permit(permit)
+                    ),
                 ):
                     converge_session = getattr(
                         managed_session,
@@ -1190,6 +1200,8 @@ def create_app(
                     if callable(converge_session):
                         converge_session()
                     managed_session.recover()
+                    if session_refresh_service is not None:
+                        session_refresh_service.converge_startup()
                     startup_session = managed_session.snapshot()
             else:
                 startup_session = managed_session.read_snapshot()
@@ -1225,17 +1237,18 @@ def create_app(
     if device_authorization_service is not None:
         device_authorization_service.bind_execution_gate(runtime_execution_gate)
         if startup_convergence_allowed:
-            with runtime_execution_gate.new_admission(
-                scope="device_startup",
-                subject="device_authorization_convergence",
-            ) as permit, transaction_commit_guard(
-                lambda: runtime_execution_gate.assert_permit(permit)
+            with (
+                runtime_execution_gate.new_admission(
+                    scope="device_startup",
+                    subject="device_authorization_convergence",
+                ) as permit,
+                transaction_commit_guard(
+                    lambda: runtime_execution_gate.assert_permit(permit)
+                ),
             ):
                 device_authorization_service.converge_startup()
     startup_session_binding = (
-        _session_binding(startup_data_scope)
-        if startup_data_scope is not None
-        else None
+        _session_binding(startup_data_scope) if startup_data_scope is not None else None
     )
     managed_runtime_state = {"logged_out": False}
 
@@ -1328,9 +1341,7 @@ def create_app(
             # ASGI test clients do not expose a real callback authority. Keep
             # the production contract loopback-only instead of allowlisting
             # their synthetic host.
-            oauth_return_uri = (
-                "http://127.0.0.1:8765/api/v1/connectors/oauth/callback"
-            )
+            oauth_return_uri = "http://127.0.0.1:8765/api/v1/connectors/oauth/callback"
     connector_vault = settings.connector_vault
     if connector_vault is None:
         try:
@@ -1376,11 +1387,14 @@ def create_app(
     if startup_convergence_allowed:
         converge_extensions = getattr(extension_service, "converge_startup", None)
         if callable(converge_extensions):
-            with runtime_execution_gate.new_admission(
-                scope="extension_startup",
-                subject="extension_authority_convergence",
-            ) as permit, transaction_commit_guard(
-                lambda: runtime_execution_gate.assert_permit(permit)
+            with (
+                runtime_execution_gate.new_admission(
+                    scope="extension_startup",
+                    subject="extension_authority_convergence",
+                ) as permit,
+                transaction_commit_guard(
+                    lambda: runtime_execution_gate.assert_permit(permit)
+                ),
             ):
                 converge_extensions()
     initial_extensions = ExtensionCatalogSnapshot.model_validate(
@@ -1399,32 +1413,43 @@ def create_app(
         connector_registry,
         connector_catalog,
     )
-    connected_connectors = frozenset(
-        {
-            item.definition.connector_id
-            for item in connector_catalog
-            if any(instance.health.value == "connected" for instance in item.instances)
-        }
-    ) | settings.connected_connectors
+    connected_connectors = (
+        frozenset(
+            {
+                item.definition.connector_id
+                for item in connector_catalog
+                if any(
+                    instance.health.value == "connected" for instance in item.instances
+                )
+            }
+        )
+        | settings.connected_connectors
+    )
 
     def current_availability() -> RuntimeAvailability:
         catalog = connector_composition.service.catalog()
-        connected = frozenset(
-            {
-                item.definition.connector_id
-                for item in catalog
-                if any(
-                    instance.health.value == "connected"
-                    for instance in item.instances
-                )
-            }
-        ) | settings.connected_connectors
+        connected = (
+            frozenset(
+                {
+                    item.definition.connector_id
+                    for item in catalog
+                    if any(
+                        instance.health.value == "connected"
+                        for instance in item.instances
+                    )
+                }
+            )
+            | settings.connected_connectors
+        )
         disabled_tools = dict(settings.disabled_capability_tools)
         active_permission = permission_authority.current()
         sandbox_profile = (
             "danger-full-access" if active_permission.full_access else "workspace-write"
         )
-        for tool_id, profiles in settings.capability_sandbox_profile_availability.items():
+        for (
+            tool_id,
+            profiles,
+        ) in settings.capability_sandbox_profile_availability.items():
             reason = profiles.get(sandbox_profile)
             if reason:
                 disabled_tools[str(tool_id)] = str(reason)
@@ -1442,14 +1467,12 @@ def create_app(
             disabled_tools=disabled_tools,
             online=settings.online,
         )
+
     signed_chat_available = bool(model_projection.chat)
     model_worker_enabled = bool(
         settings.model_gateway is not None
         and (
-            (
-                startup_session is not None
-                and signed_chat_available
-            )
+            (startup_session is not None and signed_chat_available)
             if managed_mode
             else True
         )
@@ -1488,11 +1511,14 @@ def create_app(
     if update_service is not None and startup_convergence_allowed:
         converge_update = getattr(update_service, "converge_startup", None)
         if callable(converge_update):
-            with runtime_execution_gate.new_admission(
-                scope="update_startup",
-                subject="update_authority_convergence",
-            ) as permit, transaction_commit_guard(
-                lambda: runtime_execution_gate.assert_permit(permit)
+            with (
+                runtime_execution_gate.new_admission(
+                    scope="update_startup",
+                    subject="update_authority_convergence",
+                ) as permit,
+                transaction_commit_guard(
+                    lambda: runtime_execution_gate.assert_permit(permit)
+                ),
             ):
                 converge_update()
     update_projection = (
@@ -1501,7 +1527,9 @@ def create_app(
         else UpdateSnapshot(current_version=settings.product_version, state="idle")
     )
     if update_projection.current_version != settings.product_version:
-        raise ValueError("update service current version does not match the product bundle")
+        raise ValueError(
+            "update service current version does not match the product bundle"
+        )
     if managed_mode:
         if startup_session is None:
             retouch_projection = ModelServiceSnapshot(
@@ -1575,9 +1603,7 @@ def create_app(
         connector_composition.repository,
         account_id=settings.account_id,
     )
-    connector_composition.service.bind_result_coordinator(
-        connector_result_coordinator
-    )
+    connector_composition.service.bind_result_coordinator(connector_result_coordinator)
     if settings.output_roots is None:
         configured_output_roots: Mapping[str, str | Path] = {
             "workspace": Path(settings.database_path).expanduser().resolve().parent
@@ -1621,13 +1647,9 @@ def create_app(
         permission_mutation_lock=permission_authority.mutation_lock,
         availability_provider=current_availability,
         output_policy_provider=(
-            (
-                lambda: output_service.current_policy().output_policy_snapshot_id
-            )
+            (lambda: output_service.current_policy().output_policy_snapshot_id)
             if startup_convergence_allowed
-            else (
-                lambda: output_service.project_preference().output_policy_snapshot_id
-            )
+            else (lambda: output_service.project_preference().output_policy_snapshot_id)
         ),
         extension_service=extension_service,
         extension_governance_enabled=extension_governance_enabled,
@@ -1656,9 +1678,7 @@ def create_app(
         Path(settings.database_path).expanduser().resolve().parent
     )
     app.state.migration_quarantine_service = migration_quarantine_service
-    app.include_router(
-        create_migration_quarantine_router(migration_quarantine_service)
-    )
+    app.include_router(create_migration_quarantine_router(migration_quarantine_service))
     register_extension_routes(app, extension_service)
     replay_service = ReplayService(kernel, composition=composition)
     trace_projector = TraceProjector(
@@ -1801,7 +1821,9 @@ def create_app(
     connector_adapter_lifecycles = (
         tuple(
             _AsyncResourceCloser(adapter)
-            for adapter in {id(value): value for value in settings.connector_adapters.values()}.values()
+            for adapter in {
+                id(value): value for value in settings.connector_adapters.values()
+            }.values()
         )
         if settings.close_connector_adapters_on_shutdown
         else ()
@@ -1849,22 +1871,17 @@ def create_app(
     composition.capability_service.bind_invocation_backend(image_tool_backend)
     app.state.image_tool_backend = image_tool_backend
     retouch_supervisor: RetouchWorkerSupervisor | None = None
-    if (
-        settings.retouch_adapter is not None
-        and _retouch_capability_available(settings)
-    ):
+    if settings.retouch_adapter is not None and _retouch_capability_available(settings):
         retouch_bridge = RuntimeRetouchBridge(
             kernel,
             snapshot_context_provider=(
-                lambda **values: composition.prepare_turn(
-                    values["turn_request"]
-                ).snapshot_context
+                lambda **values: (
+                    composition.prepare_turn(values["turn_request"]).snapshot_context
+                )
             ),
             permission_mutation_lock=composition.permission_mutation_lock,
         )
-        retouch_coordinator: Any = RetouchCoordinator(
-            artifact_service, retouch_bridge
-        )
+        retouch_coordinator: Any = RetouchCoordinator(artifact_service, retouch_bridge)
         retouch_supervisor = RetouchWorkerSupervisor(
             RetouchWorker(retouch_coordinator, settings.retouch_adapter),
             concurrency=settings.retouch_worker_concurrency,
@@ -1922,6 +1939,7 @@ def create_app(
     app.state.share_worker_supervisor = share_supervisor
     device_authorization_supervisor: DeviceAuthorizationSupervisor | None = None
     if settings.device_authorization_service is not None:
+
         def device_authenticated() -> bool:
             if managed_session is None:
                 return bool(settings.authenticated)
@@ -1980,6 +1998,14 @@ def create_app(
         )
     app.state.device_authorization_service = settings.device_authorization_service
     app.state.device_authorization_supervisor = device_authorization_supervisor
+    session_refresh_supervisor: ManagedSessionRefreshSupervisor | None = None
+    if session_refresh_service is not None:
+        session_refresh_supervisor = ManagedSessionRefreshSupervisor(
+            session_refresh_service,
+            poll_seconds=settings.managed_session_refresh_poll_seconds,
+        )
+    app.state.managed_session_refresh_service = session_refresh_service
+    app.state.managed_session_refresh_supervisor = session_refresh_supervisor
 
     def system_worker_metrics() -> dict[str, Any]:
         if worker_supervisor is None:
@@ -2002,7 +2028,9 @@ def create_app(
             "completed_runs": snapshot.completed_runs,
             "failed_runs": snapshot.failed_runs,
             "last_outcome": (
-                snapshot.last_outcome.value if snapshot.last_outcome is not None else None
+                snapshot.last_outcome.value
+                if snapshot.last_outcome is not None
+                else None
             ),
             "has_last_error": snapshot.last_error is not None,
         }
@@ -2020,9 +2048,7 @@ def create_app(
         }
 
     def system_lifecycle_metrics() -> dict[str, Any]:
-        failures = tuple(
-            getattr(app.state, "logout_shutdown_failures", ())
-        )
+        failures = tuple(getattr(app.state, "logout_shutdown_failures", ()))
         return {
             "state": "degraded" if failures else "ready",
             "failure_count": len(failures),
@@ -2125,9 +2151,9 @@ def create_app(
             audit_dispatcher.last_error_code if audit_dispatcher is not None else None
         )
         return {
-            "state": "degraded" if dispatcher_error else (
-                "ready" if audit_dispatcher is not None else "paused"
-            ),
+            "state": "degraded"
+            if dispatcher_error
+            else ("ready" if audit_dispatcher is not None else "paused"),
             "publisher_configured": settings.audit_publisher is not None,
             "dispatcher_running": (
                 audit_dispatcher.running if audit_dispatcher is not None else False
@@ -2148,9 +2174,9 @@ def create_app(
             trace_dispatcher.last_error_code if trace_dispatcher is not None else None
         )
         return {
-            "state": "degraded" if dispatcher_error else (
-                "ready" if trace_dispatcher is not None else "paused"
-            ),
+            "state": "degraded"
+            if dispatcher_error
+            else ("ready" if trace_dispatcher is not None else "paused"),
             "exporter_configured": settings.trace_exporter is not None,
             "dispatcher_running": (
                 trace_dispatcher.running if trace_dispatcher is not None else False
@@ -2164,16 +2190,18 @@ def create_app(
             return {"state": "disabled", "running": False}
         snapshot = share_supervisor.snapshot
         return {
-            "state": "degraded" if snapshot.last_error else (
-                "ready" if snapshot.running else "paused"
-            ),
+            "state": "degraded"
+            if snapshot.last_error
+            else ("ready" if snapshot.running else "paused"),
             "running": snapshot.running,
             "concurrency": snapshot.concurrency,
             "completed_runs": snapshot.completed_runs,
             "retry_runs": snapshot.retry_runs,
             "failed_runs": snapshot.failed_runs,
             "last_outcome": (
-                snapshot.last_outcome.value if snapshot.last_outcome is not None else None
+                snapshot.last_outcome.value
+                if snapshot.last_outcome is not None
+                else None
             ),
             "has_last_error": snapshot.last_error is not None,
         }
@@ -2183,16 +2211,18 @@ def create_app(
             return {"state": "disabled", "running": False}
         snapshot = retouch_supervisor.snapshot()
         return {
-            "state": "degraded" if snapshot.last_error else (
-                "ready" if snapshot.running else "paused"
-            ),
+            "state": "degraded"
+            if snapshot.last_error
+            else ("ready" if snapshot.running else "paused"),
             "running": snapshot.running,
             "concurrency": snapshot.concurrency,
             "completed_runs": snapshot.completed_runs,
             "retry_runs": snapshot.retry_runs,
             "failed_runs": snapshot.failed_runs,
             "last_outcome": (
-                snapshot.last_outcome.value if snapshot.last_outcome is not None else None
+                snapshot.last_outcome.value
+                if snapshot.last_outcome is not None
+                else None
             ),
             "has_last_error": snapshot.last_error is not None,
         }
@@ -2211,6 +2241,22 @@ def create_app(
                 device_authorization_supervisor.max_concurrent_polls
             ),
             "broker_closed": device_authorization_supervisor.broker_closed,
+        }
+
+    def system_session_refresh_metrics() -> dict[str, Any]:
+        if session_refresh_service is None:
+            return {"state": "disabled", "running": False, "attempt": 0}
+        projection = session_refresh_service.repository.projection()
+        return {
+            "state": projection.status,
+            "running": bool(
+                session_refresh_supervisor and session_refresh_supervisor.running
+            ),
+            "attempt": projection.attempt,
+            "reauthorization_required": (
+                projection.status == "reauthorization_required"
+            ),
+            "has_error": projection.error_code is not None,
         }
 
     def system_image_metrics() -> dict[str, Any]:
@@ -2234,11 +2280,14 @@ def create_app(
 
     @contextmanager
     def system_observability_persistence_scope():
-        with runtime_execution_gate.new_admission(
-            scope="system_observability",
-            subject="health_sample",
-        ) as permit, transaction_commit_guard(
-            lambda: runtime_execution_gate.assert_permit(permit)
+        with (
+            runtime_execution_gate.new_admission(
+                scope="system_observability",
+                subject="health_sample",
+            ) as permit,
+            transaction_commit_guard(
+                lambda: runtime_execution_gate.assert_permit(permit)
+            ),
         ):
             yield
 
@@ -2260,6 +2309,7 @@ def create_app(
             "shares": system_share_metrics,
             "retouch": system_retouch_metrics,
             "device_authorization": system_device_authorization_metrics,
+            "managed_session_refresh": system_session_refresh_metrics,
             "images": system_image_metrics,
         },
         persistence_allowed=lambda: runtime_execution_gate.snapshot().healthy,
@@ -2308,6 +2358,7 @@ def create_app(
             (4, "share_publisher", share_publisher_lifecycle),
             (1, "share_worker", share_supervisor),
             (1, "device_authorization", device_authorization_supervisor),
+            (1, "managed_session_refresh", session_refresh_supervisor),
             (1, "system_observability", system_observability_supervisor),
         ]
     )
@@ -2355,14 +2406,11 @@ def create_app(
                         owned_for_shutdown.append(
                             (shutdown_phase, service_name, service)
                         )
-                        if (
-                            not runtime_execution_gate.snapshot().healthy
-                            and all(
-                                service is not candidate
-                                for candidate in (
-                                    invariant_supervisor,
-                                    system_observability_supervisor,
-                                )
+                        if not runtime_execution_gate.snapshot().healthy and all(
+                            service is not candidate
+                            for candidate in (
+                                invariant_supervisor,
+                                system_observability_supervisor,
                             )
                         ):
                             continue
@@ -2406,9 +2454,7 @@ def create_app(
             headers={"Cache-Control": "no-store"},
         )
 
-    recovery_mutation_scopes: dict[
-        tuple[str, str], RecoveryExecutionScope
-    ] = {
+    recovery_mutation_scopes: dict[tuple[str, str], RecoveryExecutionScope] = {
         ("POST", "/api/v1/session/logout"): "session_logout",
         ("POST", "/api/v1/update/activate"): "update_activate",
     }
@@ -2465,8 +2511,7 @@ def create_app(
                 ):
                     return security_error(401, "runtime bearer token is required")
             mutation_request = (
-                request.method not in {"GET", "HEAD", "OPTIONS"}
-                or oauth_callback
+                request.method not in {"GET", "HEAD", "OPTIONS"} or oauth_callback
             )
             device_login_mutation = (
                 request.method == "POST"
@@ -2480,9 +2525,7 @@ def create_app(
                     is not None
                 )
             )
-            local_artifact_action_mutation = is_local_artifact_action_mutation(
-                request
-            )
+            local_artifact_action_mutation = is_local_artifact_action_mutation(request)
             local_verified_update_activation = recovery_scope == "update_activate"
             if mutation_request and not (
                 device_login_mutation
@@ -2514,7 +2557,9 @@ def create_app(
             if request.method not in {"GET", "HEAD", "OPTIONS"}:
                 origin = request.headers.get("origin")
                 if origin not in settings.webui_origins:
-                    return security_error(403, "request origin is not the configured WebUI")
+                    return security_error(
+                        403, "request origin is not the configured WebUI"
+                    )
                 csrf = request.headers.get("x-ecorex-csrf", "")
                 if not csrf or not secrets.compare_digest(
                     csrf, settings.csrf_token or ""
@@ -2545,8 +2590,7 @@ def create_app(
                     recovery_permit = recovery_execution_gate.issue_permit(
                         scope=recovery_scope,
                         subject=(
-                            f"{request.method.casefold()}:"
-                            f"{secrets.token_hex(16)}"
+                            f"{request.method.casefold()}:{secrets.token_hex(16)}"
                         ),
                     )
                 except RecoveryExecutionDenied:
@@ -2569,8 +2613,7 @@ def create_app(
                     permit = runtime_execution_gate.issue_permit(
                         scope="http_mutation",
                         subject=(
-                            f"{request.method.casefold()}:"
-                            f"{secrets.token_hex(16)}"
+                            f"{request.method.casefold()}:{secrets.token_hex(16)}"
                         ),
                     )
                 except RuntimeExecutionDenied:
@@ -2585,6 +2628,7 @@ def create_app(
                         },
                         headers={"Cache-Control": "no-store"},
                     )
+
                 def validate_commit() -> None:
                     runtime_execution_gate.assert_permit(permit)
 
@@ -2647,9 +2691,7 @@ def create_app(
             {
                 "type": safe_text(item.get("type"), "validation_error"),
                 "loc": [
-                    value
-                    if isinstance(value, int)
-                    else safe_text(value, "unknown")
+                    value if isinstance(value, int) else safe_text(value, "unknown")
                     for value in item.get("loc", ())
                 ],
                 "msg": safe_text(item.get("msg"), "Request validation failed"),
@@ -2936,7 +2978,9 @@ def create_app(
     @app.post("/api/v1/update/check", response_model=CheckUpdateResponse)
     async def check_update(http_request: Request) -> CheckUpdateResponse:
         if update_service is None:
-            raise HTTPException(status_code=503, detail="update service is not configured")
+            raise HTTPException(
+                status_code=503, detail="update service is not configured"
+            )
         runtime_permit = getattr(
             http_request.state,
             "runtime_execution_permit",
@@ -2964,7 +3008,9 @@ def create_app(
         http_request: Request,
     ) -> ActivateUpdateResponse:
         if update_service is None:
-            raise HTTPException(status_code=503, detail="update service is not configured")
+            raise HTTPException(
+                status_code=503, detail="update service is not configured"
+            )
         recovery_permit = require_recovery_permit(
             http_request,
             "update_activate",
@@ -3064,7 +3110,9 @@ def create_app(
     ) -> InputAttachmentProjection:
         filename = str(file.filename or "").strip()
         if not filename:
-            raise HTTPException(status_code=422, detail="attachment filename is required")
+            raise HTTPException(
+                status_code=422, detail="attachment filename is required"
+            )
         chunks: list[bytes] = []
         total = 0
         try:
@@ -3161,7 +3209,9 @@ def create_app(
             try:
                 status_value = ThreadStatus(status)
             except ValueError as error:
-                raise HTTPException(status_code=422, detail="thread status filter is invalid") from error
+                raise HTTPException(
+                    status_code=422, detail="thread status filter is invalid"
+                ) from error
         before_updated_at = None
         before_thread_id = None
         if cursor is not None:
@@ -3172,7 +3222,9 @@ def create_app(
                     secret=settings.runtime_bearer_token or "",
                 )
             except ValueError as error:
-                raise HTTPException(status_code=400, detail="thread cursor is invalid") from error
+                raise HTTPException(
+                    status_code=400, detail="thread cursor is invalid"
+                ) from error
         items, has_more = kernel.list_threads(
             status=status_value,
             limit=limit,
@@ -3196,9 +3248,7 @@ def create_app(
         "/api/v1/threads/{thread_id}",
         response_model=ThreadProjection,
     )
-    def rename_thread(
-        thread_id: str, request: RenameThreadRequest
-    ) -> ThreadProjection:
+    def rename_thread(thread_id: str, request: RenameThreadRequest) -> ThreadProjection:
         try:
             return kernel.rename_thread(
                 thread_id,
@@ -3248,9 +3298,7 @@ def create_app(
         status_code=202,
         response_model=TurnMutationResponse,
     )
-    def create_turn(
-        thread_id: str, request: CreateTurnRequest
-    ) -> TurnMutationResponse:
+    def create_turn(thread_id: str, request: CreateTurnRequest) -> TurnMutationResponse:
         require_model_task_service()
         try:
             request = bind_input_attachments(request)
@@ -3275,9 +3323,7 @@ def create_app(
         status_code=202,
         response_model=TurnMutationResponse,
     )
-    def steer_turn(
-        turn_id: str, request: SteerTurnRequest
-    ) -> TurnMutationResponse:
+    def steer_turn(turn_id: str, request: SteerTurnRequest) -> TurnMutationResponse:
         require_model_task_service()
         try:
             request = bind_steer_attachments(request)
@@ -3305,9 +3351,7 @@ def create_app(
         status_code=202,
         response_model=TurnMutationResponse,
     )
-    def queue_turn(
-        thread_id: str, request: QueueTurnRequest
-    ) -> TurnMutationResponse:
+    def queue_turn(thread_id: str, request: QueueTurnRequest) -> TurnMutationResponse:
         require_model_task_service()
         try:
             turn_request = bind_input_attachments(
@@ -3334,9 +3378,7 @@ def create_app(
         status_code=202,
         response_model=ReplaceTurnResponse,
     )
-    def replace_turn(
-        turn_id: str, request: ReplaceTurnRequest
-    ) -> ReplaceTurnResponse:
+    def replace_turn(turn_id: str, request: ReplaceTurnRequest) -> ReplaceTurnResponse:
         require_model_task_service()
         try:
             turn_request = bind_input_attachments(
@@ -3376,9 +3418,7 @@ def create_app(
         status_code=201,
         response_model=ThreadProjection,
     )
-    def fork_thread(
-        thread_id: str, request: ForkThreadRequest
-    ) -> ThreadProjection:
+    def fork_thread(thread_id: str, request: ForkThreadRequest) -> ThreadProjection:
         return kernel.fork_thread(thread_id, request)
 
     @app.post(
@@ -3494,9 +3534,7 @@ def create_app(
     async def begin_connector_login_interaction(
         interaction_id: str,
     ) -> ConnectorLoginBeginResponse:
-        interaction = await asyncio.to_thread(
-            kernel.interactions.get, interaction_id
-        )
+        interaction = await asyncio.to_thread(kernel.interactions.get, interaction_id)
         if (
             interaction.kind is not InteractionKind.CONNECTOR_LOGIN
             or interaction.status is not InteractionStatus.PENDING
@@ -3513,7 +3551,9 @@ def create_app(
             action.action_type is InteractionActionType.CONNECTOR_BEGIN_LOGIN
             for action in interaction.contract.actions
         ):
-            raise HTTPException(status_code=409, detail="connector login action is unavailable")
+            raise HTTPException(
+                status_code=409, detail="connector login action is unavailable"
+            )
         connector_id = interaction.contract.connector.connector_id
         definition = connector_registry.definition(connector_id)
         if ConnectorAuthKind.OAUTH2 in definition.auth_kinds:
@@ -3526,9 +3566,7 @@ def create_app(
                     "message": "当前版本尚不支持该连接器的交互式登录",
                 },
             )
-        catalog = await asyncio.to_thread(
-            connector_composition.service.catalog
-        )
+        catalog = await asyncio.to_thread(connector_composition.service.catalog)
         item = next(
             (
                 candidate
@@ -3572,9 +3610,7 @@ def create_app(
                 or existing_binding.completed_instance_id
             )
         elif reauthorize:
-            required_actions = set(
-                interaction.contract.connector.required_action_ids
-            )
+            required_actions = set(interaction.contract.connector.required_action_ids)
             unavailable_instances = [
                 instance
                 for instance in item.instances
@@ -3730,17 +3766,24 @@ def create_app(
         interaction_id: str,
         http_response: Response,
     ) -> ConnectorLoginCheckResponse:
-        interaction = await asyncio.to_thread(
-            kernel.interactions.get, interaction_id
-        )
+        interaction = await asyncio.to_thread(kernel.interactions.get, interaction_id)
         if interaction.kind is not InteractionKind.CONNECTOR_LOGIN:
-            raise HTTPException(status_code=409, detail="interaction is not connector login")
+            raise HTTPException(
+                status_code=409, detail="interaction is not connector login"
+            )
         if interaction.contract.connector is None:
-            raise HTTPException(status_code=409, detail="connector login context is missing")
+            raise HTTPException(
+                status_code=409, detail="connector login context is missing"
+            )
         connector_id = interaction.contract.connector.connector_id
         if interaction.status is InteractionStatus.RESOLVED:
-            if interaction.response is None or interaction.response.action_id != "check_status":
-                raise HTTPException(status_code=409, detail="connector login was not completed")
+            if (
+                interaction.response is None
+                or interaction.response.action_id != "check_status"
+            ):
+                raise HTTPException(
+                    status_code=409, detail="connector login was not completed"
+                )
             revisions = await asyncio.to_thread(
                 kernel.turn_inputs.list_for_turn,
                 str(interaction.turn_id),
@@ -3771,12 +3814,16 @@ def create_app(
                 mutation=mutation,
             )
         if interaction.status is not InteractionStatus.PENDING:
-            raise HTTPException(status_code=409, detail="connector login is not pending")
+            raise HTTPException(
+                status_code=409, detail="connector login is not pending"
+            )
         if not any(
             action.action_type is InteractionActionType.CONNECTOR_CHECK_STATUS
             for action in interaction.contract.actions
         ):
-            raise HTTPException(status_code=409, detail="connector status action is unavailable")
+            raise HTTPException(
+                status_code=409, detail="connector status action is unavailable"
+            )
         await asyncio.to_thread(
             connector_composition.repository.recover_expired_interaction_logins
         )
@@ -3892,9 +3939,7 @@ def create_app(
         available_actions = set(
             completed_instance.to_projection(definition).available_actions
         )
-        required_actions = set(
-            interaction.contract.connector.required_action_ids
-        )
+        required_actions = set(interaction.contract.connector.required_action_ids)
         if required_actions and not required_actions.issubset(available_actions):
             await asyncio.to_thread(
                 connector_composition.repository.mark_interaction_reauthorization_required,
@@ -3918,9 +3963,10 @@ def create_app(
         if interaction.turn_id is None:
             raise HTTPException(status_code=409, detail="connector login has no Turn")
         turn = await asyncio.to_thread(kernel.get_turn, interaction.turn_id)
-        refresh_client_id = "connector_refresh_" + hashlib.sha256(
-            interaction_id.encode("utf-8")
-        ).hexdigest()
+        refresh_client_id = (
+            "connector_refresh_"
+            + hashlib.sha256(interaction_id.encode("utf-8")).hexdigest()
+        )
         refresh_request = SteerTurnRequest(
             input=(
                 f"{interaction.contract.connector.display_name}连接器授权已完成，"
@@ -3938,9 +3984,11 @@ def create_app(
             },
             client_message_id=refresh_client_id,
         )
-        response_client_id = "connector_check_" + hashlib.sha256(
-            interaction_id.encode("utf-8")
-        ).hexdigest()
+        response_client_id = (
+            "connector_check_"
+            + hashlib.sha256(interaction_id.encode("utf-8")).hexdigest()
+        )
+
         def resolve_under_permission_lock():
             with composition.permission_mutation_lock:
                 return kernel.resolve_connector_login_interaction(
@@ -3950,9 +3998,7 @@ def create_app(
                     client_request_id=response_client_id,
                 )
 
-        mutation, revision_id = await asyncio.to_thread(
-            resolve_under_permission_lock
-        )
+        mutation, revision_id = await asyncio.to_thread(resolve_under_permission_lock)
         return ConnectorLoginCheckResponse(
             interaction_id=interaction_id,
             connector_id=connector_id,
@@ -3974,21 +4020,31 @@ def create_app(
             interaction_id,
         )
         if interaction.kind is not InteractionKind.CONNECTOR_LOGIN:
-            raise HTTPException(status_code=409, detail="interaction is not connector login")
-        if interaction.contract.connector is None:
-            raise HTTPException(status_code=409, detail="connector login context is missing")
-        if interaction.status is InteractionStatus.RESOLVED:
-            if interaction.response is None or interaction.response.action_id != "cancel":
-                raise HTTPException(status_code=409, detail="connector login already completed")
-        elif interaction.status is InteractionStatus.PENDING:
-            await connector_composition.service.cancel_interaction_login(
-                interaction_id
+            raise HTTPException(
+                status_code=409, detail="interaction is not connector login"
             )
+        if interaction.contract.connector is None:
+            raise HTTPException(
+                status_code=409, detail="connector login context is missing"
+            )
+        if interaction.status is InteractionStatus.RESOLVED:
+            if (
+                interaction.response is None
+                or interaction.response.action_id != "cancel"
+            ):
+                raise HTTPException(
+                    status_code=409, detail="connector login already completed"
+                )
+        elif interaction.status is InteractionStatus.PENDING:
+            await connector_composition.service.cancel_interaction_login(interaction_id)
         else:
-            raise HTTPException(status_code=409, detail="connector login cannot be cancelled")
-        request_id = "connector_cancel_" + hashlib.sha256(
-            interaction_id.encode("utf-8")
-        ).hexdigest()
+            raise HTTPException(
+                status_code=409, detail="connector login cannot be cancelled"
+            )
+        request_id = (
+            "connector_cancel_"
+            + hashlib.sha256(interaction_id.encode("utf-8")).hexdigest()
+        )
         mutation = await asyncio.to_thread(
             kernel.cancel_connector_login_interaction,
             interaction_id,
@@ -4005,9 +4061,7 @@ def create_app(
         "/api/v1/interactions/{interaction_id}/respond",
         response_model=InteractionMutationResponse,
     )
-    def respond_interaction(
-        interaction_id: str, request: RespondInteractionRequest
-    ):
+    def respond_interaction(interaction_id: str, request: RespondInteractionRequest):
         require_model_task_service()
         interaction = kernel.interactions.get(interaction_id)
         if interaction.kind is InteractionKind.CONNECTOR_LOGIN:
@@ -4033,7 +4087,9 @@ def create_app(
                     raise ValueError
                 return max(after_seq, parsed)
             except ValueError:
-                raise HTTPException(status_code=400, detail="Last-Event-ID must be non-negative")
+                raise HTTPException(
+                    status_code=400, detail="Last-Event-ID must be non-negative"
+                )
         return after_seq
 
     async def validate_cursor(thread_id: str, cursor: int) -> JSONResponse | None:
@@ -4164,15 +4220,12 @@ def create_app(
             ) as permit:
                 artifact_service.recover_interrupted_retouch_workspace_submissions(
                     account_id=settings.account_id,
-                    before_commit=lambda: runtime_execution_gate.assert_permit(
-                        permit
-                    ),
+                    before_commit=lambda: runtime_execution_gate.assert_permit(permit),
                 )
         except BaseException as error:
             runtime_execution_gate.mark_critical(
                 error_code=(
-                    "interaction_maintenance_failed:"
-                    f"{type(error).__name__.casefold()}"
+                    f"interaction_maintenance_failed:{type(error).__name__.casefold()}"
                 )
             )
         if runtime_execution_gate.snapshot().healthy:

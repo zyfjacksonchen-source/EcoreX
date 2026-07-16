@@ -127,6 +127,43 @@ def test_builder_is_deterministic_and_uses_the_single_version_source(tmp_path: P
     assert "private" not in repr(signer).lower()
 
 
+def test_release_scoped_builder_resolves_cn_proxy_to_github_tag(tmp_path: Path) -> None:
+    signer, _, _ = _signer()
+    sources = (
+        ReleaseSource(
+            "github-cn",
+            SourceKind.GITHUB_CN_MIRROR,
+            0,
+            "https://ghproxy.net/https://github.com/ecorex/installers/releases/download",
+        ),
+        ReleaseSource(
+            "github",
+            SourceKind.GITHUB_RELEASE,
+            1,
+            "https://github.com/ecorex/installers/releases/download",
+        ),
+        ReleaseSource(
+            "cdn",
+            SourceKind.ECOREX_CDN,
+            2,
+            "https://cdn.example/ecorex/v1.0.0/stable",
+        ),
+    )
+    spec = ReleaseBuildSpec(
+        channel=ReleaseChannel.STABLE,
+        created_at="2026-07-16T12:00:00+08:00",
+        sources=sources,
+        artifacts=(_input(_source_tree(tmp_path / "source")),),
+        release_scoped_sources=True,
+    )
+    built = ReleaseBuilder(signer).build(spec, tmp_path / "release")
+    assert built.manifest.sources[0].base_url.endswith("/releases/download/v1.0.0")
+    assert built.manifest.sources[1].base_url.endswith("/releases/download/v1.0.0")
+    assert built.manifest.sources[2].base_url.endswith(
+        f"/stable/{built.manifest.release_id}"
+    )
+
+
 def test_build_identity_binds_the_signed_source_roots(tmp_path: Path) -> None:
     signer, _public, _private = _signer()
     first_spec = _spec(_input(_source_tree(tmp_path / "source-a")))

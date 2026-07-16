@@ -1,10 +1,10 @@
 """Production composition and operator CLI for Image Orchestrator.
 
-Production is intentionally one storage shape: PostgreSQL is the authoritative
-job/event/lease store and private encrypted S3 is the shared CAS.  API and
-workers may be scaled independently because neither process owns schema DDL or
-process-local durable state.  SQLite remains available to local/test code but
-is rejected by this entry point.
+PostgreSQL is the authoritative job/event/lease store.  Image bytes use either
+private encrypted S3 or the attested encrypted local CAS.  The local CAS is a
+formal single-host/one-replica mode only; it does not claim multi-host HA.
+SQLite remains available to local/test code but is rejected by this entry
+point.
 """
 
 from __future__ import annotations
@@ -31,8 +31,15 @@ from fastapi.responses import JSONResponse
 
 from ecorex.control_plane.management import AdminManagementRepository
 from ecorex.control_plane.management_schema import AdminManagementSchemaManager
+from ecorex.storage.attested_local_cas import (
+    AttestedEncryptedLocalCAS,
+    AttestedEncryptedLocalVolume,
+    AttestedLocalCASError,
+)
 
 from .api import create_image_orchestration_router
+from .attested_local_cas import AttestedLocalImageContentStore
+from .cas import ImageContentAddressedStore
 from .managed_provider import (
     ManagedHTTPSImageProvider,
     ManagedImageProviderConfigurationError,
@@ -64,6 +71,18 @@ _SECRET_NAMES = {
     "managed-provider-bearer": "ECOREX_IMAGE_PROVIDER_BEARER_TOKEN",
     "model-config-encryption-key": "ECOREX_IMAGE_MODEL_CONFIG_ENCRYPTION_KEY_B64",
 }
+_S3_SETTING_NAMES = frozenset(
+    {
+        "ECOREX_IMAGE_S3_BUCKET",
+        "ECOREX_IMAGE_S3_PREFIX",
+        "ECOREX_IMAGE_S3_REGION",
+        "ECOREX_IMAGE_S3_ENDPOINT_URL",
+        "ECOREX_IMAGE_S3_ADDRESSING_STYLE",
+        "ECOREX_IMAGE_S3_MAX_CONNECTIONS",
+        "ECOREX_IMAGE_S3_ENCRYPTION",
+        "ECOREX_IMAGE_S3_KMS_KEY_ID",
+    }
+)
 
 
 class ImageProductionConfigurationError(RuntimeError):
@@ -119,6 +138,19 @@ class ImageS3ClientFactory(Protocol):
 
 
 @runtime_checkable
+class ImageStorageDependency(Protocol):
+    def validate_controls(self, *, write_probe: bool) -> None: ...
+
+    def close(self) -> None: ...
+
+
+class ImageLocalCASFactory(Protocol):
+    def create(
+        self, config: "ImageProductionConfig"
+    ) -> tuple[ImageStorageDependency, ImageContentAddressedStore]: ...
+
+
+@runtime_checkable
 class ProductionImageProvider(ImageProvider, Protocol):
     async def health(self) -> None: ...
 
@@ -160,6 +192,51 @@ class Boto3ImageS3ClientFactory:
                 pass
             raise ImageProductionConfigurationError("S3 client contract is unavailable")
         return client
+
+
+class AttestedLocalImageCASFactory:
+    """Construct the production single-host CAS from digest-fenced settings."""
+
+    def create(
+        self, config: "ImageProductionConfig"
+    ) -> tuple[ImageStorageDependency, ImageContentAddressedStore]:
+        try:
+            if (
+                config.local_cas_root is None
+                or config.local_cas_attestation_path is None
+                or config.local_cas_attestation_sha256 is None
+                or config.local_cas_volume_id is None
+                or config.local_cas_machine_id_sha256 is None
+                or config.local_cas_owner_gid is None
+            ):
+                raise ImageProductionConfigurationError(
+                    "attested image CAS configuration is incomplete"
+                )
+            volume = AttestedEncryptedLocalVolume(
+                cas_root=config.local_cas_root,
+                attestation_path=config.local_cas_attestation_path,
+                expected_attestation_sha256=config.local_cas_attestation_sha256,
+                expected_volume_id=config.local_cas_volume_id,
+                expected_machine_id_sha256=config.local_cas_machine_id_sha256,
+                replica_count=config.local_cas_replica_count,
+                quota_bytes=config.local_cas_quota_bytes,
+                minimum_free_bytes=config.local_cas_minimum_free_bytes,
+                owner_gid=config.local_cas_owner_gid,
+            )
+            store = AttestedLocalImageContentStore(
+                AttestedEncryptedLocalCAS(
+                    volume,
+                    namespace="image",
+                    max_blob_bytes=config.max_image_bytes,
+                )
+            )
+            return _AttestedLocalCASDependency(store), store
+        except ImageProductionConfigurationError:
+            raise
+        except AttestedLocalCASError:
+            raise ImageProductionConfigurationError(
+                "attested image CAS could not start"
+            ) from None
 
 
 def _json_string_set(
@@ -240,6 +317,7 @@ class ImageProductionConfig:
     storage_backend: str
     postgres_dsn: str = field(repr=False)
     instance_id: str
+    content_storage_mode: str
     s3_bucket: str
     s3_prefix: str
     s3_region: str
@@ -248,6 +326,15 @@ class ImageProductionConfig:
     s3_max_connections: int
     s3_encryption: str
     s3_kms_key_id: str | None
+    local_cas_root: Path | None
+    local_cas_attestation_path: Path | None
+    local_cas_attestation_sha256: str | None = field(repr=False)
+    local_cas_volume_id: str | None
+    local_cas_machine_id_sha256: str | None = field(repr=False)
+    local_cas_replica_count: int
+    local_cas_quota_bytes: int
+    local_cas_minimum_free_bytes: int
+    local_cas_owner_gid: int | None
     max_image_bytes: int
     auth_issuer: str
     auth_audience: str
@@ -300,22 +387,7 @@ class ImageProductionConfig:
             or not isinstance(self.postgres_dsn, str)
             or not _valid_postgres_dsn(self.postgres_dsn)
             or _SAFE_ID.fullmatch(self.instance_id) is None
-            or _BUCKET.fullmatch(self.s3_bucket) is None
-            or _PREFIX.fullmatch(self.s3_prefix) is None
-            or any(part in {"", ".", ".."} for part in self.s3_prefix.split("/"))
-            or not isinstance(self.s3_region, str)
-            or not self.s3_region
-            or self.s3_addressing_style not in {"virtual", "path"}
-            or not 8 <= self.s3_max_connections <= 256
-            or self.s3_max_connections < max(self.worker_concurrency, api_blob_slots)
-            or self.s3_encryption not in {"AES256", "aws:kms"}
-            or (self.s3_encryption == "aws:kms" and not self.s3_kms_key_id)
-            or (self.s3_encryption == "AES256" and self.s3_kms_key_id is not None)
-            or (self.s3_kms_key_id is not None and (
-                len(self.s3_kms_key_id) > 2048
-                or any(ord(character) < 32 for character in self.s3_kms_key_id)
-            ))
-            or not _valid_s3_endpoint(self.s3_endpoint_url)
+            or not self._content_storage_is_valid(api_blob_slots)
             or not 1024 <= self.max_image_bytes <= 256 * 1024 * 1024
             or not isinstance(self.auth_issuer, str)
             or not _valid_issuer(self.auth_issuer)
@@ -373,7 +445,7 @@ class ImageProductionConfig:
                 normalized_dynamic = {
                     preset: normalize_https_origin(origin)
                     for preset, origin in dynamic_origins.items()
-                    if preset == "openai_compatible_image"
+                    if preset == "ecorex_image"
                 }
             except (ManagedImageProviderConfigurationError, TypeError):
                 raise ImageProductionConfigurationError(
@@ -392,6 +464,81 @@ class ImageProductionConfig:
             raise ImageProductionConfigurationError(
                 "image administrator model source requires explicit enablement"
             )
+
+    def _content_storage_is_valid(self, api_blob_slots: int) -> bool:
+        local_values = (
+            self.local_cas_root,
+            self.local_cas_attestation_path,
+            self.local_cas_attestation_sha256,
+            self.local_cas_volume_id,
+            self.local_cas_machine_id_sha256,
+            self.local_cas_owner_gid,
+        )
+        if self.content_storage_mode == "s3":
+            return bool(
+                _BUCKET.fullmatch(self.s3_bucket)
+                and _PREFIX.fullmatch(self.s3_prefix)
+                and not any(
+                    part in {"", ".", ".."} for part in self.s3_prefix.split("/")
+                )
+                and isinstance(self.s3_region, str)
+                and self.s3_region
+                and self.s3_addressing_style in {"virtual", "path"}
+                and 8 <= self.s3_max_connections <= 256
+                and self.s3_max_connections
+                >= max(self.worker_concurrency, api_blob_slots)
+                and self.s3_encryption in {"AES256", "aws:kms"}
+                and not (
+                    self.s3_encryption == "aws:kms" and not self.s3_kms_key_id
+                )
+                and not (
+                    self.s3_encryption == "AES256"
+                    and self.s3_kms_key_id is not None
+                )
+                and (
+                    self.s3_kms_key_id is None
+                    or (
+                        len(self.s3_kms_key_id) <= 2048
+                        and not any(
+                            ord(character) < 32
+                            for character in self.s3_kms_key_id
+                        )
+                    )
+                )
+                and _valid_s3_endpoint(self.s3_endpoint_url)
+                and all(value is None for value in local_values)
+                and self.local_cas_replica_count == 1
+                and self.local_cas_quota_bytes == 0
+                and self.local_cas_minimum_free_bytes == 0
+            )
+        if self.content_storage_mode != "attested-encrypted-local-cas":
+            return False
+        return bool(
+            self.s3_bucket == ""
+            and self.s3_prefix == ""
+            and self.s3_region == ""
+            and self.s3_endpoint_url is None
+            and self.s3_kms_key_id is None
+            and isinstance(self.local_cas_root, Path)
+            and self.local_cas_root.is_absolute()
+            and isinstance(self.local_cas_attestation_path, Path)
+            and self.local_cas_attestation_path.is_absolute()
+            and re.fullmatch(
+                r"[0-9a-f]{64}", str(self.local_cas_attestation_sha256)
+            )
+            and _SAFE_ID.fullmatch(str(self.local_cas_volume_id))
+            and re.fullmatch(
+                r"[0-9a-f]{64}", str(self.local_cas_machine_id_sha256)
+            )
+            and self.local_cas_replica_count == 1
+            and 1024 * 1024
+            <= self.local_cas_minimum_free_bytes
+            <= self.local_cas_quota_bytes
+            <= 8 * 1024**4
+            and isinstance(self.local_cas_owner_gid, int)
+            and not isinstance(self.local_cas_owner_gid, bool)
+            and 0 <= self.local_cas_owner_gid <= 2**31 - 1
+        )
 
     @classmethod
     def from_environment(
@@ -430,6 +577,19 @@ class ImageProductionConfig:
         worker_concurrency = _integer(
             values, "ECOREX_IMAGE_WORKER_CONCURRENCY", minimum=1, maximum=256, default=8
         )
+        content_storage_mode = values.get(
+            "ECOREX_IMAGE_CONTENT_STORAGE_MODE", "s3"
+        )
+        if content_storage_mode not in {"s3", "attested-encrypted-local-cas"}:
+            raise ImageProductionConfigurationError(
+                "image content storage mode is invalid"
+            )
+        if content_storage_mode == "attested-encrypted-local-cas" and any(
+            name in values for name in _S3_SETTING_NAMES
+        ):
+            raise ImageProductionConfigurationError(
+                "image content storage configuration is ambiguous"
+            )
         limits = ImageLimits(
             max_queued_jobs=_integer(values, "ECOREX_IMAGE_MAX_QUEUED_JOBS", minimum=1, maximum=10_000_000, default=10_000),
             max_queued_weight=_integer(values, "ECOREX_IMAGE_MAX_QUEUED_WEIGHT", minimum=1, maximum=100_000_000, default=100_000),
@@ -440,7 +600,11 @@ class ImageProductionConfig:
             max_model_running=_integer(values, "ECOREX_IMAGE_MAX_MODEL_RUNNING", minimum=1, maximum=100_000, default=64),
             max_operation_running=_integer(values, "ECOREX_IMAGE_MAX_OPERATION_RUNNING", minimum=1, maximum=100_000, default=96),
         )
-        endpoint = values.get("ECOREX_IMAGE_S3_ENDPOINT_URL") or None
+        endpoint = (
+            values.get("ECOREX_IMAGE_S3_ENDPOINT_URL") or None
+            if content_storage_mode == "s3"
+            else None
+        )
         management_enabled = _boolean(
             values, "ECOREX_IMAGE_ADMIN_MANAGEMENT_ENABLED", default=False
         )
@@ -477,14 +641,76 @@ class ImageProductionConfig:
             storage_backend=backend,
             postgres_dsn=dsn,
             instance_id=_required(values, "ECOREX_IMAGE_INSTANCE_ID"),
-            s3_bucket=_required(values, "ECOREX_IMAGE_S3_BUCKET"),
-            s3_prefix=_required(values, "ECOREX_IMAGE_S3_PREFIX").strip("/"),
-            s3_region=_required(values, "ECOREX_IMAGE_S3_REGION"),
+            content_storage_mode=content_storage_mode,
+            s3_bucket=(
+                _required(values, "ECOREX_IMAGE_S3_BUCKET")
+                if content_storage_mode == "s3"
+                else ""
+            ),
+            s3_prefix=(
+                _required(values, "ECOREX_IMAGE_S3_PREFIX").strip("/")
+                if content_storage_mode == "s3"
+                else ""
+            ),
+            s3_region=(
+                _required(values, "ECOREX_IMAGE_S3_REGION")
+                if content_storage_mode == "s3"
+                else ""
+            ),
             s3_endpoint_url=endpoint,
             s3_addressing_style=values.get("ECOREX_IMAGE_S3_ADDRESSING_STYLE", "virtual"),
-            s3_max_connections=_integer(values, "ECOREX_IMAGE_S3_MAX_CONNECTIONS", minimum=8, maximum=256, default=64),
+            s3_max_connections=(
+                _integer(values, "ECOREX_IMAGE_S3_MAX_CONNECTIONS", minimum=8, maximum=256, default=64)
+                if content_storage_mode == "s3"
+                else 0
+            ),
             s3_encryption=values.get("ECOREX_IMAGE_S3_ENCRYPTION", "AES256"),
             s3_kms_key_id=values.get("ECOREX_IMAGE_S3_KMS_KEY_ID") or None,
+            local_cas_root=(
+                _absolute_path(values, "ECOREX_IMAGE_LOCAL_CAS_ROOT")
+                if content_storage_mode == "attested-encrypted-local-cas"
+                else None
+            ),
+            local_cas_attestation_path=(
+                _absolute_path(values, "ECOREX_IMAGE_LOCAL_CAS_ATTESTATION_PATH")
+                if content_storage_mode == "attested-encrypted-local-cas"
+                else None
+            ),
+            local_cas_attestation_sha256=(
+                _required(values, "ECOREX_IMAGE_LOCAL_CAS_ATTESTATION_SHA256")
+                if content_storage_mode == "attested-encrypted-local-cas"
+                else None
+            ),
+            local_cas_volume_id=(
+                _required(values, "ECOREX_IMAGE_LOCAL_CAS_VOLUME_ID")
+                if content_storage_mode == "attested-encrypted-local-cas"
+                else None
+            ),
+            local_cas_machine_id_sha256=(
+                _required(values, "ECOREX_IMAGE_LOCAL_CAS_MACHINE_ID_SHA256")
+                if content_storage_mode == "attested-encrypted-local-cas"
+                else None
+            ),
+            local_cas_replica_count=(
+                _integer(values, "ECOREX_IMAGE_LOCAL_CAS_REPLICA_COUNT", minimum=1, maximum=1, default=1)
+                if content_storage_mode == "attested-encrypted-local-cas"
+                else 1
+            ),
+            local_cas_quota_bytes=(
+                _integer(values, "ECOREX_IMAGE_LOCAL_CAS_QUOTA_BYTES", minimum=1024 * 1024, maximum=8 * 1024**4, default=256 * 1024**3)
+                if content_storage_mode == "attested-encrypted-local-cas"
+                else 0
+            ),
+            local_cas_minimum_free_bytes=(
+                _integer(values, "ECOREX_IMAGE_LOCAL_CAS_MINIMUM_FREE_BYTES", minimum=1024 * 1024, maximum=8 * 1024**4, default=10 * 1024**3)
+                if content_storage_mode == "attested-encrypted-local-cas"
+                else 0
+            ),
+            local_cas_owner_gid=(
+                _integer(values, "ECOREX_IMAGE_LOCAL_CAS_OWNER_GID", minimum=0, maximum=2**31 - 1, default=-1)
+                if content_storage_mode == "attested-encrypted-local-cas"
+                else None
+            ),
             max_image_bytes=max_image_bytes,
             auth_issuer=_required(values, "ECOREX_IMAGE_AUTH_ISSUER"),
             auth_audience=_required(values, "ECOREX_IMAGE_AUTH_AUDIENCE"),
@@ -525,7 +751,9 @@ class ImageProductionConfig:
 class ImageProductionReport:
     schema_version: int
     storage_backend: str
+    content_storage_mode: str
     migration: PostgresImageSchemaReceipt
+    storage_checked: bool
     s3_checked: bool
     provider_checked: bool
     auth_checked: bool
@@ -534,7 +762,9 @@ class ImageProductionReport:
         return {
             "schema_version": self.schema_version,
             "storage_backend": self.storage_backend,
+            "content_storage_mode": self.content_storage_mode,
             "migration": self.migration.to_dict(),
+            "storage_checked": self.storage_checked,
             "s3_checked": self.s3_checked,
             "provider_checked": self.provider_checked,
             "auth_checked": self.auth_checked,
@@ -655,11 +885,47 @@ class _S3Dependency:
             ) from None
 
 
+class _AttestedLocalCASDependency:
+    def __init__(self, store: AttestedLocalImageContentStore) -> None:
+        if not isinstance(store, AttestedLocalImageContentStore):
+            raise TypeError("attested image CAS store is invalid")
+        self.store = store
+        self._closed = False
+
+    def validate_controls(self, *, write_probe: bool) -> None:
+        if self._closed:
+            raise ImageProductionConfigurationError(
+                "attested image CAS dependency is closed"
+            )
+        try:
+            receipt = self.store.health_probe(
+                write_probe=write_probe,
+                deep=False,
+            )
+        except Exception:
+            raise ImageProductionConfigurationError(
+                "attested image CAS dependency is unavailable"
+            ) from None
+        if (
+            receipt.get("status") != "passed"
+            or receipt.get("backend") != "attested-encrypted-local-cas"
+            or receipt.get("availability_scope") != "single-host"
+            or receipt.get("multi_host_ha") is not False
+            or receipt.get("replica_count") != 1
+        ):
+            raise ImageProductionConfigurationError(
+                "attested image CAS health contract is invalid"
+            )
+
+    def close(self) -> None:
+        self._closed = True
+
+
 @dataclass(slots=True)
 class ImageProductionBundle:
     config: ImageProductionConfig
     store: PostgresImageJobStore
-    content_store: S3ImageContentStore
+    content_store: ImageContentAddressedStore
     provider: ProductionImageProvider
     service: ImageOrchestrationService
     authenticator: Ed25519ImageJWTAuthenticator
@@ -676,13 +942,13 @@ class ImageProductionLifecycle:
         *,
         config: ImageProductionConfig,
         store: PostgresImageJobStore,
-        s3: _S3Dependency,
+        storage: ImageStorageDependency,
         provider: ProductionImageProvider,
         supervisor: ImageWorkerSupervisor | None,
     ) -> None:
         self.config = config
         self.store = store
-        self.s3 = s3
+        self.storage = storage
         self.provider = provider
         self.supervisor = supervisor
         self._accepting = False
@@ -706,7 +972,7 @@ class ImageProductionLifecycle:
         await asyncio.wait_for(
             asyncio.gather(
                 asyncio.to_thread(self.store.ping),
-                asyncio.to_thread(self.s3.validate_controls, write_probe=True),
+                asyncio.to_thread(self.storage.validate_controls, write_probe=True),
                 self.provider.health(),
             ),
             timeout=self.config.dependency_timeout_seconds * 4,
@@ -731,7 +997,9 @@ class ImageProductionLifecycle:
                 await asyncio.wait_for(
                     asyncio.gather(
                         asyncio.to_thread(self.store.ping),
-                        asyncio.to_thread(self.s3.validate_controls, write_probe=False),
+                        asyncio.to_thread(
+                            self.storage.validate_controls, write_probe=False
+                        ),
                         self.provider.health(),
                     ),
                     timeout=self.config.dependency_timeout_seconds * 4,
@@ -766,7 +1034,7 @@ class ImageProductionLifecycle:
                 try:
                     await asyncio.to_thread(self.store.close)
                 finally:
-                    await asyncio.to_thread(self.s3.close)
+                    await asyncio.to_thread(self.storage.close)
 
     async def force_close(self) -> None:
         await self.shutdown()
@@ -873,10 +1141,16 @@ def create_image_production_app(
 
 
 class PostgresS3ManagedImageProvider:
-    """First-party production provider; runtime paths are validate-only."""
+    """First-party PostgreSQL provider with explicit content storage mode."""
 
-    def __init__(self, *, s3_factory: ImageS3ClientFactory | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        s3_factory: ImageS3ClientFactory | None = None,
+        local_cas_factory: ImageLocalCASFactory | None = None,
+    ) -> None:
         self.s3_factory = s3_factory or Boto3ImageS3ClientFactory()
+        self.local_cas_factory = local_cas_factory or AttestedLocalImageCASFactory()
 
     def migrate(
         self,
@@ -885,13 +1159,24 @@ class PostgresS3ManagedImageProvider:
     ) -> ImageProductionReport:
         self._static_dependencies(config, secrets)
         receipt = PostgresImageSchemaManager(config.postgres_dsn).migrate()
-        s3, provider, _resolver = self._external_dependencies(config, secrets)
+        storage, _content_store, provider, _resolver = self._external_dependencies(
+            config, secrets
+        )
         try:
-            s3.validate_controls(write_probe=True)
+            storage.validate_controls(write_probe=True)
             asyncio.run(_probe_and_close_provider(provider))
         finally:
-            s3.close()
-        return ImageProductionReport(1, config.storage_backend, receipt, True, True, True)
+            storage.close()
+        return ImageProductionReport(
+            1,
+            config.storage_backend,
+            config.content_storage_mode,
+            receipt,
+            True,
+            config.content_storage_mode == "s3",
+            True,
+            True,
+        )
 
     def check(
         self,
@@ -900,13 +1185,24 @@ class PostgresS3ManagedImageProvider:
     ) -> ImageProductionReport:
         self._static_dependencies(config, secrets)
         receipt = PostgresImageSchemaManager(config.postgres_dsn).validate()
-        s3, provider, _resolver = self._external_dependencies(config, secrets)
+        storage, _content_store, provider, _resolver = self._external_dependencies(
+            config, secrets
+        )
         try:
-            s3.validate_controls(write_probe=True)
+            storage.validate_controls(write_probe=True)
             asyncio.run(_probe_and_close_provider(provider))
         finally:
-            s3.close()
-        return ImageProductionReport(1, config.storage_backend, receipt, True, True, True)
+            storage.close()
+        return ImageProductionReport(
+            1,
+            config.storage_backend,
+            config.content_storage_mode,
+            receipt,
+            True,
+            config.content_storage_mode == "s3",
+            True,
+            True,
+        )
 
     def compose(
         self,
@@ -918,7 +1214,9 @@ class PostgresS3ManagedImageProvider:
         if mode not in {"serve", "worker", "all"}:
             raise ImageProductionConfigurationError("image process mode is invalid")
         authenticator = self._static_dependencies(config, secrets)
-        s3, provider, model_resolver = self._external_dependencies(config, secrets)
+        storage, content_store, provider, model_resolver = self._external_dependencies(
+            config, secrets
+        )
         store: PostgresImageJobStore | None = None
         try:
             store = PostgresImageJobStore(
@@ -927,16 +1225,6 @@ class PostgresS3ManagedImageProvider:
                 pool_min_size=config.postgres_pool_min,
                 pool_max_size=config.postgres_pool_max,
                 pool_timeout_seconds=config.postgres_pool_timeout_seconds,
-            )
-            content_store = S3ImageContentStore(
-                BotoS3ObjectTransport(
-                    s3.client,
-                    server_side_encryption=config.s3_encryption,
-                    kms_key_id=config.s3_kms_key_id,
-                ),
-                bucket=config.s3_bucket,
-                prefix=config.s3_prefix,
-                max_bytes=config.max_image_bytes,
             )
             supervisor = None
             if mode in {"worker", "all"}:
@@ -975,7 +1263,7 @@ class PostgresS3ManagedImageProvider:
             lifecycle = ImageProductionLifecycle(
                 config=config,
                 store=store,
-                s3=s3,
+                storage=storage,
                 provider=provider,
                 supervisor=supervisor,
             )
@@ -996,7 +1284,7 @@ class PostgresS3ManagedImageProvider:
                 asyncio.run(provider.aclose())
             except Exception:
                 pass
-            s3.close()
+            storage.close()
             raise
     @staticmethod
     def _static_dependencies(
@@ -1023,13 +1311,14 @@ class PostgresS3ManagedImageProvider:
         config: ImageProductionConfig,
         secrets: ImageSecretProvider,
     ) -> tuple[
-        _S3Dependency,
+        ImageStorageDependency,
+        ImageContentAddressedStore,
         ProductionImageProvider,
         ImageModelConfigurationResolver | None,
     ]:
-        s3: _S3Dependency | None = None
+        storage: ImageStorageDependency | None = None
         try:
-            s3 = _S3Dependency(self.s3_factory.create(config), config)
+            storage, content_store = self._content_storage(config)
             if config.admin_management_enabled:
                 database_path = config.admin_management_database_path
                 assert database_path is not None
@@ -1050,16 +1339,7 @@ class PostgresS3ManagedImageProvider:
                     max_image_bytes=config.max_image_bytes,
                     max_connections=config.provider_max_connections,
                     max_concurrency=config.provider_max_concurrency,
-                    input_store=S3ImageContentStore(
-                        BotoS3ObjectTransport(
-                            s3.client,
-                            server_side_encryption=config.s3_encryption,
-                            kms_key_id=config.s3_kms_key_id,
-                        ),
-                        bucket=config.s3_bucket,
-                        prefix=config.s3_prefix,
-                        max_bytes=config.max_image_bytes,
-                    ),
+                    input_store=content_store,
                 )
                 resolver: ImageModelConfigurationResolver | None = (
                     AdminImageModelConfigurationResolver(repository)
@@ -1078,13 +1358,39 @@ class PostgresS3ManagedImageProvider:
                     max_concurrency=config.provider_max_concurrency,
                 )
                 resolver = None
-            return s3, provider, resolver
+            return storage, content_store, provider, resolver
         except BaseException:
-            if s3 is not None:
+            if storage is not None:
                 try:
-                    s3.close()
+                    storage.close()
                 except Exception:
                     pass
+            raise
+
+    def _content_storage(
+        self, config: ImageProductionConfig
+    ) -> tuple[ImageStorageDependency, ImageContentAddressedStore]:
+        if config.content_storage_mode == "attested-encrypted-local-cas":
+            return self.local_cas_factory.create(config)
+        if config.content_storage_mode != "s3":
+            raise ImageProductionConfigurationError(
+                "image content storage mode is invalid"
+            )
+        dependency = _S3Dependency(self.s3_factory.create(config), config)
+        try:
+            store = S3ImageContentStore(
+                BotoS3ObjectTransport(
+                    dependency.client,
+                    server_side_encryption=config.s3_encryption,
+                    kms_key_id=config.s3_kms_key_id,
+                ),
+                bucket=config.s3_bucket,
+                prefix=config.s3_prefix,
+                max_bytes=config.max_image_bytes,
+            )
+            return dependency, store
+        except BaseException:
+            dependency.close()
             raise
 
 
@@ -1292,6 +1598,7 @@ if __name__ == "__main__":  # pragma: no cover - deployment entry point
 
 
 __all__ = [
+    "AttestedLocalImageCASFactory",
     "Boto3ImageS3ClientFactory",
     "EnvironmentImageSecretProvider",
     "ImageProductionBundle",
@@ -1300,8 +1607,10 @@ __all__ = [
     "ImageProductionLifecycle",
     "ImageProductionReport",
     "ImageProductionS3Client",
+    "ImageLocalCASFactory",
     "ImageS3ClientFactory",
     "ImageSecretProvider",
+    "ImageStorageDependency",
     "PostgresS3ManagedImageProvider",
     "create_image_production_app",
     "main",

@@ -29,6 +29,7 @@ from fastapi import FastAPI
 from ecorex.managed_model_policy import require_managed_chat_mapping
 from ecorex.control_plane.management import AdminManagementRepository
 from ecorex.control_plane.management_schema import AdminManagementSchemaManager
+from ecorex.control_plane.management_models import MANAGED_MODEL_ORIGIN_PRESETS
 
 from .production_auth import (
     Ed25519GatewayJWTAuthenticator,
@@ -157,6 +158,7 @@ class GatewayProductionConfig:
     admin_management_enabled: bool = False
     admin_management_database_path: Path | None = None
     model_provider_origins: Mapping[str, str] = field(default_factory=dict)
+    chat_handoff_ttl_seconds: int = 3600
 
     def __post_init__(self) -> None:
         try:
@@ -224,6 +226,7 @@ class GatewayProductionConfig:
             or (not address.is_loopback and not self.allow_trusted_ingress_http)
             or not 16 <= self.limit_concurrency <= 4096
             or not 16 <= self.backlog <= 8192
+            or not 300 <= self.chat_handoff_ttl_seconds <= 86_400
         ):
             raise GatewayProductionConfigurationError(
                 "gateway production configuration is invalid"
@@ -242,12 +245,7 @@ class GatewayProductionConfig:
                 normalized_dynamic = {
                     preset: normalize_https_origin(origin)
                     for preset, origin in origins.items()
-                    if preset
-                    in {
-                        "responses",
-                        "openai_compatible_chat",
-                        "openai_compatible_image",
-                    }
+                    if preset in set(MANAGED_MODEL_ORIGIN_PRESETS.values())
                 }
             except (ResponsesProviderConfigurationError, TypeError):
                 raise GatewayProductionConfigurationError(
@@ -477,6 +475,13 @@ class GatewayProductionConfig:
             admin_management_enabled=management_enabled,
             admin_management_database_path=management_database,
             model_provider_origins=dynamic_origins,
+            chat_handoff_ttl_seconds=_integer(
+                values,
+                "ECOREX_GATEWAY_CHAT_HANDOFF_TTL_SECONDS",
+                minimum=300,
+                maximum=86_400,
+                default=3600,
+            ),
         )
 
 
@@ -725,7 +730,9 @@ class SingleNodeSQLiteResponsesProvider:
             receipt = GatewaySchemaManager(config.database_path).validate()
             validate_gateway_sqlite_health(config.database_path, full=True)
             self._authenticator(config)
-            provider = self._provider(config, secrets)
+            provider = self._provider(
+                config, secrets, handoff_authority=SQLiteGatewayStore(config.database_path)
+            )
             if not isinstance(provider, ProductionResponsesProvider):
                 raise GatewayProductionConfigurationError(
                     "gateway provider contract is unavailable"
@@ -758,7 +765,7 @@ class SingleNodeSQLiteResponsesProvider:
             validate_gateway_sqlite_health(config.database_path, full=True)
             store = SQLiteGatewayStore(config.database_path)
             authenticator = self._authenticator(config)
-            provider = self._provider(config, secrets)
+            provider = self._provider(config, secrets, handoff_authority=store)
             if not isinstance(provider, ProductionResponsesProvider):
                 raise GatewayProductionConfigurationError(
                     "gateway provider contract is unavailable"
@@ -805,6 +812,8 @@ class SingleNodeSQLiteResponsesProvider:
         self,
         config: GatewayProductionConfig,
         secrets: GatewaySecretProvider,
+        *,
+        handoff_authority: SQLiteGatewayStore,
     ) -> ProductionResponsesProvider:
         if not config.admin_management_enabled:
             return self.responses_factory.create(config, secrets)
@@ -820,6 +829,8 @@ class SingleNodeSQLiteResponsesProvider:
         return DynamicManagedResponsesProvider(
             repository,
             origins=config.model_provider_origins,
+            handoff_authority=handoff_authority,
+            chat_handoff_ttl_seconds=config.chat_handoff_ttl_seconds,
             connect_timeout_seconds=config.provider_connect_timeout_seconds,
             read_timeout_seconds=config.provider_read_timeout_seconds,
             total_timeout_seconds=config.provider_total_timeout_seconds,

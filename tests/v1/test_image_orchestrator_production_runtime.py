@@ -29,6 +29,7 @@ from ecorex.image_orchestrator.production import (
     ImageProductionConfig,
     ImageProductionConfigurationError,
     ImageProductionLifecycle,
+    PostgresS3ManagedImageProvider,
     _S3Dependency,
     create_image_production_app,
     main as image_main,
@@ -127,6 +128,28 @@ def _environment() -> dict[str, str]:
     }
 
 
+def _local_environment(tmp_path: Path) -> dict[str, str]:
+    values = _environment()
+    for name in tuple(values):
+        if name.startswith("ECOREX_IMAGE_S3_"):
+            del values[name]
+    values.update(
+        ECOREX_IMAGE_CONTENT_STORAGE_MODE="attested-encrypted-local-cas",
+        ECOREX_IMAGE_LOCAL_CAS_ROOT=str((tmp_path / "volume" / "cas").resolve()),
+        ECOREX_IMAGE_LOCAL_CAS_ATTESTATION_PATH=str(
+            (tmp_path / "attestation.json").resolve()
+        ),
+        ECOREX_IMAGE_LOCAL_CAS_ATTESTATION_SHA256="a" * 64,
+        ECOREX_IMAGE_LOCAL_CAS_VOLUME_ID="ecorex-volume-production",
+        ECOREX_IMAGE_LOCAL_CAS_MACHINE_ID_SHA256="b" * 64,
+        ECOREX_IMAGE_LOCAL_CAS_REPLICA_COUNT="1",
+        ECOREX_IMAGE_LOCAL_CAS_QUOTA_BYTES=str(256 * 1024**3),
+        ECOREX_IMAGE_LOCAL_CAS_MINIMUM_FREE_BYTES=str(10 * 1024**3),
+        ECOREX_IMAGE_LOCAL_CAS_OWNER_GID="1001",
+    )
+    return values
+
+
 def _job(tmp_path: Path):
     database = tmp_path / "image-provider.db"
     SQLiteImageSchemaManager(database).migrate()
@@ -202,7 +225,7 @@ def test_production_config_is_postgres_only_and_bounds_process_memory() -> None:
             (Path.cwd() / "admin-management.db").resolve()
         ),
         ECOREX_IMAGE_MODEL_PROVIDER_ORIGINS_JSON=(
-            '{"openai_compatible_image":"https://image.ecorex.invalid"}'
+            '{"ecorex_image":"https://image.ecorex.invalid"}'
         ),
         ECOREX_IMAGE_WORKER_MEMORY_ENVELOPE_BYTES=str(2 * 1024**3),
     )
@@ -210,6 +233,27 @@ def test_production_config_is_postgres_only_and_bounds_process_memory() -> None:
         ImageProductionConfig.from_environment(admin_undersized)
     admin_undersized["ECOREX_IMAGE_WORKER_MEMORY_ENVELOPE_BYTES"] = str(4 * 1024**3)
     assert ImageProductionConfig.from_environment(admin_undersized).admin_management_enabled
+
+
+def test_attested_local_cas_config_is_explicit_single_host_and_not_mixed(
+    tmp_path: Path,
+) -> None:
+    values = _local_environment(tmp_path)
+    config = ImageProductionConfig.from_environment(values)
+
+    assert config.content_storage_mode == "attested-encrypted-local-cas"
+    assert config.local_cas_replica_count == 1
+    assert config.local_cas_root == (tmp_path / "volume" / "cas").resolve()
+    assert config.s3_bucket == ""
+    assert "a" * 64 not in repr(config)
+
+    mixed = dict(values, ECOREX_IMAGE_S3_BUCKET="must-not-be-accepted")
+    with pytest.raises(ImageProductionConfigurationError, match="ambiguous"):
+        ImageProductionConfig.from_environment(mixed)
+
+    wrong_replica = dict(values, ECOREX_IMAGE_LOCAL_CAS_REPLICA_COUNT="2")
+    with pytest.raises(ImageProductionConfigurationError):
+        ImageProductionConfig.from_environment(wrong_replica)
 
 
 def test_production_config_rejects_ssrf_and_missing_auth_or_provider_secret() -> None:
@@ -540,7 +584,7 @@ def test_worker_lifecycle_probes_dependencies_drains_and_closes() -> None:
         lifecycle = ImageProductionLifecycle(
             config=config,
             store=store,  # type: ignore[arg-type]
-            s3=s3,  # type: ignore[arg-type]
+            storage=s3,  # type: ignore[arg-type]
             provider=provider,  # type: ignore[arg-type]
             supervisor=supervisor,  # type: ignore[arg-type]
         )
@@ -555,6 +599,30 @@ def test_worker_lifecycle_probes_dependencies_drains_and_closes() -> None:
         assert s3.probes[0] is True
 
     asyncio.run(scenario())
+
+
+def test_local_cas_mode_never_constructs_s3(tmp_path: Path) -> None:
+    config = ImageProductionConfig.from_environment(_local_environment(tmp_path))
+    dependency = _LifecycleS3()
+    content = ImageContentStore(tmp_path / "fake-local-cas")
+
+    class LocalFactory:
+        def create(self, received):
+            assert received is config
+            return dependency, content
+
+    class RejectS3Factory:
+        def create(self, _config):
+            raise AssertionError("S3 must not be constructed in local CAS mode")
+
+    provider = PostgresS3ManagedImageProvider(
+        s3_factory=RejectS3Factory(),  # type: ignore[arg-type]
+        local_cas_factory=LocalFactory(),  # type: ignore[arg-type]
+    )
+    selected_dependency, selected_content = provider._content_storage(config)
+
+    assert selected_dependency is dependency
+    assert selected_content is content
 
 
 class _SupervisorStore:

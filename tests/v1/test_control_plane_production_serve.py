@@ -132,6 +132,7 @@ def _material(tmp_path: Path):
     auth_private, auth_public = _key()
     _release_private, release_public = _key()
     _publication_private, publication_public = _key()
+    _rollback_private, rollback_public = _key()
     database_root = tmp_path / "database"
     backups = tmp_path / "backups"
     spool = tmp_path / "spool"
@@ -151,17 +152,30 @@ def _material(tmp_path: Path):
         backup_retain_count=4,
         public_share_base_url="https://share.ecorex.test/s",
         share_spool_directory=spool.absolute(),
+        share_storage_mode="s3",
         s3_bucket="private-ecorex-test",
         s3_prefix="ecorex/share/v1",
         s3_region="cn-test-1",
         s3_endpoint_url="https://s3.ecorex.test",
         s3_addressing_style="path",
         s3_max_connections=8,
+        local_cas_root=None,
+        local_cas_attestation_path=None,
+        local_cas_attestation_sha256=None,
+        local_cas_volume_id=None,
+        local_cas_machine_id_sha256=None,
+        local_cas_replica_count=1,
+        local_cas_quota_bytes=0,
+        local_cas_minimum_free_bytes=0,
+        local_cas_owner_gid=None,
+        local_cas_max_object_bytes=0,
+        local_cas_max_open_streams=0,
         auth_issuer="https://identity.ecorex.test",
         auth_audience="ecorex-control-plane",
         auth_public_keys_json=json.dumps({"auth-v1": auth_public}),
         release_public_keys_json=json.dumps({"release-v1": release_public}),
         publication_public_keys_json=json.dumps({"publication-v1": publication_public}),
+        rollback_signer_public_keys_json=json.dumps({"rollback-v1": rollback_public}),
         public_bootstrap_index_path=(
             tmp_path / "public" / "public-bootstrap-index.json"
         ).absolute(),
@@ -300,6 +314,72 @@ def test_single_node_lock_and_pg_multi_replica_fail_closed(tmp_path: Path) -> No
         ControlPlaneProductionConfig.from_environment(environment)
 
 
+def test_attested_share_cas_mode_is_explicit_single_host_and_never_opens_s3(
+    tmp_path: Path,
+) -> None:
+    base, _secrets, _private = _material(tmp_path)
+    local = replace(
+        base,
+        share_storage_mode="attested-encrypted-local-cas",
+        s3_bucket="",
+        s3_prefix="",
+        s3_region="",
+        s3_endpoint_url=None,
+        s3_max_connections=0,
+        local_cas_root=(tmp_path / "encrypted" / "cas").resolve(),
+        local_cas_attestation_path=(tmp_path / "attestation.json").resolve(),
+        local_cas_attestation_sha256="a" * 64,
+        local_cas_volume_id=base.storage_volume_id,
+        local_cas_machine_id_sha256="b" * 64,
+        local_cas_replica_count=1,
+        local_cas_quota_bytes=256 * 1024**3,
+        local_cas_minimum_free_bytes=10 * 1024**3,
+        local_cas_owner_gid=1001,
+        local_cas_max_object_bytes=64 * 1024 * 1024,
+        local_cas_max_open_streams=32,
+    )
+    parsed = ControlPlaneProductionConfig.from_environment(_environment(local))
+    assert parsed.share_storage_mode == "attested-encrypted-local-cas"
+    assert parsed.local_cas_replica_count == 1
+    assert parsed.s3_bucket == ""
+    assert "a" * 64 not in repr(parsed)
+
+    mixed = _environment(local)
+    mixed["ECOREX_CP_S3_BUCKET"] = "must-not-be-accepted"
+    with pytest.raises(ProductionConfigurationError, match="ambiguous"):
+        ControlPlaneProductionConfig.from_environment(mixed)
+
+    class Dependency:
+        def validate_controls(self, *, write_probe: bool) -> None:
+            del write_probe
+
+        def ping(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    dependency = Dependency()
+    object_store = object()
+
+    class LocalFactory:
+        def create(self, received):
+            assert received is parsed
+            return dependency, object_store
+
+    class RejectS3Factory:
+        def create(self, _config):
+            raise AssertionError("S3 must not open in attested local CAS mode")
+
+    provider = SingleNodeSQLiteS3Provider(
+        RejectS3Factory(),  # type: ignore[arg-type]
+        local_cas_factory=LocalFactory(),  # type: ignore[arg-type]
+    )
+    selected_dependency, selected_store = provider._share_storage(parsed)
+    assert selected_dependency is dependency
+    assert selected_store is object_store
+
+
 def test_publication_signer_configuration_is_complete_and_digest_pinned(
     tmp_path: Path,
 ) -> None:
@@ -308,6 +388,10 @@ def test_publication_signer_configuration_is_complete_and_digest_pinned(
         ProductionConfigurationError, match="signer configuration is incomplete"
     ):
         replace(config, publication_signer_key_id="publication-v1")
+    with pytest.raises(
+        ProductionConfigurationError, match="rollback signer configuration is incomplete"
+    ):
+        replace(config, rollback_signer_key_id="rollback-v1")
     with pytest.raises(ProductionConfigurationError, match="configuration is invalid"):
         replace(config, bootstrap_freshness_lease_seconds=299)
     with pytest.raises(ProductionConfigurationError, match="configuration is invalid"):
@@ -327,10 +411,24 @@ def test_publication_signer_configuration_is_complete_and_digest_pinned(
                 {"publication-alias": release_material}
             ),
         )
+    publication_material = next(
+        iter(json.loads(config.publication_public_keys_json).values())
+    )
+    with pytest.raises(ProductionConfigurationError, match="distinct keys"):
+        replace(
+            config,
+            rollback_signer_public_keys_json=json.dumps(
+                {"rollback-alias": publication_material}
+            ),
+        )
 
     executable = Path(sys.executable).resolve(strict=True)
     adapter = (tmp_path / "kms-publication-adapter.py").absolute()
     adapter.write_text(
+        "raise SystemExit('not invoked by composition test')\n", encoding="utf-8"
+    )
+    rollback_adapter = (tmp_path / "kms-rollback-adapter.py").absolute()
+    rollback_adapter.write_text(
         "raise SystemExit('not invoked by composition test')\n", encoding="utf-8"
     )
 
@@ -345,6 +443,11 @@ def test_publication_signer_configuration_is_complete_and_digest_pinned(
             "ECOREX_CP_PUBLICATION_SIGNER_ADAPTER": str(adapter),
             "ECOREX_CP_PUBLICATION_SIGNER_ADAPTER_SHA256": digest(adapter),
             "ECOREX_CP_PUBLICATION_SIGNER_KEY_ID": "publication-v1",
+            "ECOREX_CP_ROLLBACK_SIGNER_EXECUTABLE": str(executable),
+            "ECOREX_CP_ROLLBACK_SIGNER_EXECUTABLE_SHA256": digest(executable),
+            "ECOREX_CP_ROLLBACK_SIGNER_ADAPTER": str(rollback_adapter),
+            "ECOREX_CP_ROLLBACK_SIGNER_ADAPTER_SHA256": digest(rollback_adapter),
+            "ECOREX_CP_ROLLBACK_SIGNER_KEY_ID": "rollback-v1",
             "ECOREX_CP_BOOTSTRAP_FRESHNESS_LEAD_SECONDS": str(8 * 60 * 60),
             "ECOREX_CP_BOOTSTRAP_FRESHNESS_CHECK_INTERVAL_SECONDS": str(60 * 60),
             "ECOREX_CP_BOOTSTRAP_FRESHNESS_LEASE_SECONDS": str(10 * 60),
@@ -357,6 +460,9 @@ def test_publication_signer_configuration_is_complete_and_digest_pinned(
     bundle = provider.compose(configured, secrets)
     assert bundle.bootstrap_freshness_refresher.signer is not None
     assert bundle.bootstrap_freshness_refresher.signer.key_id == "publication-v1"
+    assert bundle.rollback_signer is not None
+    assert bundle.rollback_signer.key_id == "rollback-v1"
+    assert bundle.rollback_signer is not bundle.bootstrap_freshness_refresher.signer
     bundle.lifecycle.force_close()
 
 
@@ -654,7 +760,7 @@ def test_cli_serve_runner_cannot_leak_the_process_lock(
 
 
 def _environment(config: ControlPlaneProductionConfig) -> dict[str, str]:
-    return {
+    values = {
         "ECOREX_CP_STORAGE_BACKEND": config.storage_backend,
         "ECOREX_CP_REPLICA_COUNT": str(config.replica_count),
         "ECOREX_CP_DATABASE_PATH": str(config.database_path),
@@ -663,6 +769,7 @@ def _environment(config: ControlPlaneProductionConfig) -> dict[str, str]:
         "ECOREX_CP_STORAGE_VOLUME_ID": config.storage_volume_id,
         "ECOREX_CP_STORAGE_ENCRYPTION_AT_REST": "true",
         "ECOREX_CP_PUBLIC_SHARE_BASE_URL": config.public_share_base_url,
+        "ECOREX_CP_SHARE_STORAGE_MODE": config.share_storage_mode,
         "ECOREX_CP_S3_ENDPOINT_URL": config.s3_endpoint_url or "",
         "ECOREX_CP_S3_BUCKET": config.s3_bucket,
         "ECOREX_CP_S3_PREFIX": config.s3_prefix,
@@ -673,6 +780,9 @@ def _environment(config: ControlPlaneProductionConfig) -> dict[str, str]:
         "ECOREX_CP_AUTH_PUBLIC_KEYS_JSON": config.auth_public_keys_json,
         "ECOREX_CP_RELEASE_PUBLIC_KEYS_JSON": config.release_public_keys_json,
         "ECOREX_CP_PUBLICATION_PUBLIC_KEYS_JSON": (config.publication_public_keys_json),
+        "ECOREX_CP_ROLLBACK_SIGNER_PUBLIC_KEYS_JSON": (
+            config.rollback_signer_public_keys_json
+        ),
         "ECOREX_CP_PUBLIC_BOOTSTRAP_INDEX_PATH": str(
             config.public_bootstrap_index_path
         ),
@@ -694,3 +804,39 @@ def _environment(config: ControlPlaneProductionConfig) -> dict[str, str]:
             config.model_activation_timeout_seconds
         ),
     }
+    if config.share_storage_mode == "attested-encrypted-local-cas":
+        for name in tuple(values):
+            if name.startswith("ECOREX_CP_S3_"):
+                del values[name]
+        assert config.local_cas_root is not None
+        assert config.local_cas_attestation_path is not None
+        assert config.local_cas_attestation_sha256 is not None
+        assert config.local_cas_volume_id is not None
+        assert config.local_cas_machine_id_sha256 is not None
+        assert config.local_cas_owner_gid is not None
+        values.update(
+            ECOREX_CP_LOCAL_CAS_ROOT=str(config.local_cas_root),
+            ECOREX_CP_LOCAL_CAS_ATTESTATION_PATH=str(
+                config.local_cas_attestation_path
+            ),
+            ECOREX_CP_LOCAL_CAS_ATTESTATION_SHA256=(
+                config.local_cas_attestation_sha256
+            ),
+            ECOREX_CP_LOCAL_CAS_VOLUME_ID=config.local_cas_volume_id,
+            ECOREX_CP_LOCAL_CAS_MACHINE_ID_SHA256=(
+                config.local_cas_machine_id_sha256
+            ),
+            ECOREX_CP_LOCAL_CAS_REPLICA_COUNT=str(config.local_cas_replica_count),
+            ECOREX_CP_LOCAL_CAS_QUOTA_BYTES=str(config.local_cas_quota_bytes),
+            ECOREX_CP_LOCAL_CAS_MINIMUM_FREE_BYTES=str(
+                config.local_cas_minimum_free_bytes
+            ),
+            ECOREX_CP_LOCAL_CAS_OWNER_GID=str(config.local_cas_owner_gid),
+            ECOREX_CP_LOCAL_CAS_MAX_OBJECT_BYTES=str(
+                config.local_cas_max_object_bytes
+            ),
+            ECOREX_CP_LOCAL_CAS_MAX_OPEN_STREAMS=str(
+                config.local_cas_max_open_streams
+            ),
+        )
+    return values

@@ -8,7 +8,7 @@ EcoreX has four deliberately separate migration authorities:
 | --- | --- | --- |
 | Local WebUI Runtime | one SQLite WAL database plus Artifact CAS | signed local release candidate and `InstallCoordinator` |
 | Control Plane / public Share | server database plus object storage | explicit core, audit and share deployment migration jobs |
-| Image Orchestrator | PostgreSQL 15+ metadata/leases plus S3 CAS | explicit image-service migration command |
+| Image Orchestrator | PostgreSQL 15+ metadata/leases plus selected S3 or attested single-host encrypted CAS | explicit image-service migration command |
 | v0.3.0 import | untouched legacy source plus copy-on-write v1 target | one-time offline importer using the current local schema |
 
 The client candidate migration must never mutate Control Plane, Gateway or

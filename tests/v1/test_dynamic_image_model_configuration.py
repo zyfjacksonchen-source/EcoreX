@@ -234,7 +234,7 @@ def test_image_jobs_freeze_tested_revision_and_cache_is_bounded(tmp_path: Path) 
     dynamic = DynamicManagedImageProvider(
         repository,
         provider_id="managed-image",
-        origins={"openai_compatible_image": "https://images.ecorex.example"},
+        origins={"ecorex_image": "https://images.ecorex.example"},
         timeout_seconds=120,
         connect_timeout_seconds=5,
         max_image_bytes=64 * 1024 * 1024,
@@ -321,7 +321,7 @@ def test_default_dynamic_provider_uses_cloud_direct_adapter_and_shared_inputs(
     dynamic = DynamicManagedImageProvider(
         repository,
         provider_id="managed-image",
-        origins={"openai_compatible_image": "https://images.ecorex.example"},
+        origins={"ecorex_image": "https://images.ecorex.example"},
         timeout_seconds=120,
         connect_timeout_seconds=5,
         max_image_bytes=64 * 1024 * 1024,

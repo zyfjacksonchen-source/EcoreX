@@ -23,18 +23,18 @@ if (-not $outputItem.PSIsContainer -or
     (($outputItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) {
   throw 'native_output_directory_invalid'
 }
-$publishedTargets = @(
+$script:publishedTargets = @(
   (Join-Path $output 'native-build-receipt.json'),
   (Join-Path $output 'ecorex.exe'),
   (Join-Path $output 'ecorex-sandbox-host.exe')
 )
-foreach ($target in $publishedTargets) {
+foreach ($target in $script:publishedTargets) {
   if ([System.IO.Path]::GetDirectoryName([System.IO.Path]::GetFullPath($target)) -cne $output) {
     throw 'native_output_target_escaped'
   }
 }
-function Remove-PublishedNativeOutputs {
-  foreach ($target in $publishedTargets) {
+function script:Remove-PublishedNativeOutputs {
+  foreach ($target in $script:publishedTargets) {
     try {
       if ([System.IO.File]::Exists($target)) {
         [System.IO.File]::Delete($target)
@@ -45,7 +45,14 @@ function Remove-PublishedNativeOutputs {
 }
 Remove-PublishedNativeOutputs
 trap {
-  Remove-PublishedNativeOutputs
+  foreach ($target in $script:publishedTargets) {
+    try {
+      if ([System.IO.File]::Exists($target)) {
+        [System.IO.File]::Delete($target)
+      }
+    }
+    catch { }
+  }
   throw $_
 }
 

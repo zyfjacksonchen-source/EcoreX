@@ -10,8 +10,13 @@ from pathlib import Path
 import sqlite3
 
 
-CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION = 1
-ADMIN_MANAGEMENT_MIGRATION_NAME = "initial-admin-management"
+CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION = 2
+ADMIN_MANAGEMENT_MIGRATION_NAME = "managed-model-origin-presets"
+
+_INITIAL_MIGRATION_NAME = "initial-admin-management"
+_INITIAL_MIGRATION_CHECKSUM = (
+    "ceeb871fe920bc47afe58032a461b464220f707a56633deed1ce8b4e45afc72d"
+)
 
 
 ADMIN_MANAGEMENT_SCHEMA_SQL = """
@@ -194,9 +199,27 @@ END;
 
 
 ADMIN_MANAGEMENT_MIGRATION_CHECKSUM = hashlib.sha256(
-    b"ecorex-admin-management-schema-v1\0"
-    + ADMIN_MANAGEMENT_SCHEMA_SQL.encode("utf-8")
+    b"ecorex-admin-management-schema-v2\0managed-model-origin-presets"
 ).hexdigest()
+
+ADMIN_MANAGEMENT_SCHEMA_V2_SQL = """
+ALTER TABLE admin_ops_model_revisions
+ADD COLUMN provider_origin_preset TEXT NOT NULL DEFAULT 'ecorex_chat'
+CHECK(provider_origin_preset IN (
+    'ecorex_chat','deepseek_chat','gemini_chat','doubao_chat','ecorex_image'
+));
+UPDATE admin_ops_model_revisions
+SET provider_origin_preset = CASE (
+    SELECT local_model_id FROM admin_ops_model_configs configs
+    WHERE configs.config_id=admin_ops_model_revisions.config_id
+)
+    WHEN 'ecorex-chat' THEN 'ecorex_chat'
+    WHEN 'ecorex-deepseek-v4-pro' THEN 'deepseek_chat'
+    WHEN 'ecorex-gemini-3.1-pro' THEN 'gemini_chat'
+    WHEN 'ecorex-doubao-seed-2.0-pro' THEN 'doubao_chat'
+    ELSE 'ecorex_image'
+END;
+"""
 
 
 class AdminManagementSchemaError(RuntimeError):
@@ -236,6 +259,7 @@ def _expected_shape() -> str:
     try:
         connection.execute("PRAGMA foreign_keys=ON")
         connection.executescript(ADMIN_MANAGEMENT_SCHEMA_SQL)
+        connection.executescript(ADMIN_MANAGEMENT_SCHEMA_V2_SQL)
         return _managed_shape(connection)
     finally:
         connection.close()
@@ -275,10 +299,44 @@ class AdminManagementSchemaManager:
                 )
             }
             if names:
-                receipt = self._validate_connection(connection)
-                connection.commit()
-                return receipt
-            _execute_sql(connection, ADMIN_MANAGEMENT_SCHEMA_SQL)
+                rows = connection.execute(
+                    "SELECT version,migration_name,migration_checksum "
+                    "FROM admin_ops_schema_migrations ORDER BY version"
+                ).fetchall()
+                if len(rows) == 2:
+                    receipt = self._validate_connection(connection)
+                    connection.commit()
+                    return receipt
+                if len(rows) != 1 or tuple(rows[0]) != (
+                    1,
+                    _INITIAL_MIGRATION_NAME,
+                    _INITIAL_MIGRATION_CHECKSUM,
+                ):
+                    raise AdminManagementSchemaError(
+                        "admin management schema history is invalid"
+                    )
+            else:
+                _execute_sql(connection, ADMIN_MANAGEMENT_SCHEMA_SQL)
+                initial_at = datetime.now(UTC).isoformat()
+                connection.execute(
+                    "INSERT INTO admin_ops_schema_migrations("
+                    "version,migration_name,migration_checksum,installed_at"
+                    ") VALUES(1,?,?,?)",
+                    (_INITIAL_MIGRATION_NAME, _INITIAL_MIGRATION_CHECKSUM, initial_at),
+                )
+            unknown_slots = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM admin_ops_model_configs WHERE local_model_id "
+                    "NOT IN ('ecorex-chat','ecorex-deepseek-v4-pro',"
+                    "'ecorex-gemini-3.1-pro','ecorex-doubao-seed-2.0-pro',"
+                    "'gpt-image-2','gpt-image-2-edit')"
+                ).fetchone()[0]
+            )
+            if unknown_slots:
+                raise AdminManagementSchemaError(
+                    "admin management contains an unknown managed model slot"
+                )
+            _execute_sql(connection, ADMIN_MANAGEMENT_SCHEMA_V2_SQL)
             installed_at = datetime.now(UTC).isoformat()
             connection.execute(
                 "INSERT INTO admin_ops_schema_migrations("
@@ -330,12 +388,16 @@ class AdminManagementSchemaManager:
             "SELECT version,migration_name,migration_checksum,installed_at "
             "FROM admin_ops_schema_migrations ORDER BY version"
         ).fetchall()
-        if len(row) != 1:
+        if len(row) != 2:
             raise AdminManagementSchemaError(
                 "admin management schema history is invalid"
             )
-        value = row[0]
+        initial, value = row
         if (
+            int(initial[0]) != 1
+            or str(initial[1]) != _INITIAL_MIGRATION_NAME
+            or str(initial[2]) != _INITIAL_MIGRATION_CHECKSUM
+            or
             int(value[0]) != CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION
             or str(value[1]) != ADMIN_MANAGEMENT_MIGRATION_NAME
             or str(value[2]) != ADMIN_MANAGEMENT_MIGRATION_CHECKSUM
@@ -355,6 +417,7 @@ __all__ = [
     "ADMIN_MANAGEMENT_MIGRATION_CHECKSUM",
     "ADMIN_MANAGEMENT_MIGRATION_NAME",
     "ADMIN_MANAGEMENT_SCHEMA_SHA256",
+    "ADMIN_MANAGEMENT_SCHEMA_V2_SQL",
     "AdminManagementSchemaError",
     "AdminManagementSchemaManager",
     "AdminManagementSchemaReceipt",

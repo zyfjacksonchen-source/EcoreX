@@ -61,6 +61,30 @@ from .models import (
     RolloutProjection,
 )
 from .admin_management_router import create_admin_management_router
+from .device_identity import (
+    DeviceAccountDirectory,
+    DeviceAccountIdentity,
+    DeviceChallenge,
+    DeviceIdentityConflict,
+    DeviceIdentityError,
+    DeviceIdentityNotFound,
+    DeviceRefreshRequired,
+    DeviceIdentitySecrets,
+    DeviceIdentityUnauthorized,
+    DeviceIdentityUnavailable,
+    DeviceTokenResult,
+    ManagedDeviceIdentityBroker,
+)
+from .device_identity_management import AdminManagementDeviceAccountDirectory
+from .device_identity_router import create_device_identity_router
+from .device_identity_schema import (
+    CURRENT_DEVICE_IDENTITY_SCHEMA_VERSION,
+    DEVICE_IDENTITY_OBJECTS_SHA256,
+    DEVICE_IDENTITY_SCHEMA_SHA256,
+    DeviceIdentitySchemaError,
+    DeviceIdentitySchemaManager,
+    DeviceIdentitySchemaReceipt,
+)
 from .management import (
     AdminManagementConflict,
     AdminManagementError,

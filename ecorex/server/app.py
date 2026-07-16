@@ -30,7 +30,11 @@ from ecorex.integration import ManagedImageOrchestrationClient
 from ecorex.observability import ManagedOTLPHTTPTraceExporter
 from ecorex.runtime import RuntimeSettings
 from ecorex.runtime.api import create_app as register_runtime
-from ecorex.session import ManagedDeviceAuthorizationService, ManagedSessionService
+from ecorex.session import (
+    ManagedDeviceAuthorizationService,
+    ManagedSessionRefreshService,
+    ManagedSessionService,
+)
 from ecorex.update import Ed25519SignatureVerifier
 
 from .bundle import RUNTIME_CONFIG_MARKER, VerifiedWebBundle, load_verified_web_bundle
@@ -82,12 +86,18 @@ class ProductServerSettings:
     platform: str = field(default_factory=platform_module.system)
     architecture: str = field(default_factory=platform_module.machine)
     web_manifest_artifact_id: str = "web-manifest"
-    secret_factory: SecretFactory | None = field(default=None, repr=False, compare=False)
+    secret_factory: SecretFactory | None = field(
+        default=None, repr=False, compare=False
+    )
     full_access: bool = False
     admin_hard_denies: tuple[str, ...] = ()
     managed_session_service: ManagedSessionService | None = field(
         default=None, repr=False, compare=False
     )
+    managed_session_refresh_service: ManagedSessionRefreshService | None = field(
+        default=None, repr=False, compare=False
+    )
+    managed_session_refresh_poll_seconds: float = 30.0
     device_authorization_service: ManagedDeviceAuthorizationService | None = field(
         default=None, repr=False, compare=False
     )
@@ -157,19 +167,27 @@ class ProductServerSettings:
             or not isinstance(self.port, int)
             or not 1 <= self.port <= 65535
         ):
-            raise ServerConfigurationError("production server port must be between 1 and 65535")
-        if not isinstance(self.trusted_public_keys, Mapping) or not self.trusted_public_keys:
-            raise ServerConfigurationError("at least one trusted release public key is required")
+            raise ServerConfigurationError(
+                "production server port must be between 1 and 65535"
+            )
+        if (
+            not isinstance(self.trusted_public_keys, Mapping)
+            or not self.trusted_public_keys
+        ):
+            raise ServerConfigurationError(
+                "at least one trusted release public key is required"
+            )
         if (
             not isinstance(self.platform, str)
             or not _SAFE_ID.fullmatch(self.platform)
             or not isinstance(self.architecture, str)
             or not _SAFE_ID.fullmatch(self.architecture)
         ):
-            raise ServerConfigurationError("product platform and architecture are invalid")
-        if (
-            not isinstance(self.web_manifest_artifact_id, str)
-            or not _SAFE_ID.fullmatch(self.web_manifest_artifact_id)
+            raise ServerConfigurationError(
+                "product platform and architecture are invalid"
+            )
+        if not isinstance(self.web_manifest_artifact_id, str) or not _SAFE_ID.fullmatch(
+            self.web_manifest_artifact_id
         ):
             raise ServerConfigurationError("web manifest artifact id is invalid")
         copied_keys: dict[str, bytes] = {}
@@ -255,9 +273,8 @@ class ProductServerSettings:
             raise ServerConfigurationError(
                 "production OTLP trace export requires the exact managed session"
             )
-        if (
-            self.session_reload_requester is not None
-            and not callable(self.session_reload_requester)
+        if self.session_reload_requester is not None and not callable(
+            self.session_reload_requester
         ):
             raise ServerConfigurationError("session reload requester must be callable")
         for callback, label in (
@@ -276,21 +293,15 @@ class ProductServerSettings:
             raise ServerConfigurationError(
                 "device authorization poll interval is invalid"
             )
-        if (
-            self.device_authorization_service is not None
-            and (
-                self.managed_session_service is None
-                or self.device_authorization_service.session
-                is not self.managed_session_service
-            )
+        if self.device_authorization_service is not None and (
+            self.managed_session_service is None
+            or self.device_authorization_service.session
+            is not self.managed_session_service
         ):
             raise ServerConfigurationError(
                 "device authorization must install into the configured managed session"
             )
-        if (
-            not isinstance(self.workspace_roots, tuple)
-            or not self.workspace_roots
-        ):
+        if not isinstance(self.workspace_roots, tuple) or not self.workspace_roots:
             raise ServerConfigurationError(
                 "production server requires at least one explicit workspace root"
             )
@@ -329,7 +340,9 @@ class ProductServerSettings:
             try:
                 root = Path(raw_root).expanduser()
             except (TypeError, ValueError):
-                raise ServerConfigurationError("output location root is invalid") from None
+                raise ServerConfigurationError(
+                    "output location root is invalid"
+                ) from None
             if not root.is_absolute():
                 raise ServerConfigurationError("output location root must be absolute")
             normalized_output_roots[alias] = Path(os.path.abspath(root))
@@ -543,10 +556,12 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
             settings.allow_unmanaged_session_for_testing
         ),
         managed_session_service=settings.managed_session_service,
-        device_authorization_service=settings.device_authorization_service,
-        device_authorization_poll_seconds=(
-            settings.device_authorization_poll_seconds
+        managed_session_refresh_service=settings.managed_session_refresh_service,
+        managed_session_refresh_poll_seconds=(
+            settings.managed_session_refresh_poll_seconds
         ),
+        device_authorization_service=settings.device_authorization_service,
+        device_authorization_poll_seconds=(settings.device_authorization_poll_seconds),
         close_device_authorization_broker_on_shutdown=(
             settings.close_device_authorization_broker_on_shutdown
         ),
@@ -618,7 +633,9 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
         response = await call_next(request)
         return _apply_security_headers(response)
 
-    @app.api_route("/{requested_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
+    @app.api_route(
+        "/{requested_path:path}", methods=["GET", "HEAD"], include_in_schema=False
+    )
     async def web(request: Request, requested_path: str):
         folded_path = requested_path.casefold()
         if folded_path == "api" or folded_path.startswith("api/"):

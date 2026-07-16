@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+attestation_file=/var/lib/ecorex/secrets/encryption-attestation.sha256
+attestation=$(tr -d '\r\n' < "$attestation_file")
+case "$attestation" in
+  *[!0-9a-f]*|'') exit 1 ;;
+esac
+[ "${#attestation}" -eq 64 ] || exit 1
+
+exec /usr/sbin/runuser --user ecorex-cloud -- /usr/bin/env \
+  ECOREX_SERVER_SIGNER_KEY_ROOT=/var/lib/ecorex/signing-keys \
+  ECOREX_SERVER_SIGNER_ENCRYPTION_ATTESTATION_SHA256="$attestation" \
+  /opt/ecorex/cloud/current/venv/bin/python3.11 \
+  /opt/ecorex/cloud/current/deployment/signers/ecorex-v1-server-sign-publication.py

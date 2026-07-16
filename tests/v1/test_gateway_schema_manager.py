@@ -15,9 +15,16 @@ from ecorex.gateway import (
     SQLiteGatewayStore,
 )
 from ecorex.gateway.schema import (
+    EMPTY_GATEWAY_SCHEMA_SHA256,
     GATEWAY_SCHEMA_HISTORY_SQL,
     GATEWAY_SCHEMA_SHA256,
+    GATEWAY_SCHEMA_V1_SHA256,
+    GATEWAY_SCHEMA_V1_SQL,
+    GATEWAY_SCHEMA_RECEIPT_VERSION,
     LEGACY_GATEWAY_SCHEMA_SQL,
+    MIGRATION_001_CHECKSUM,
+    MIGRATION_001_NAME,
+    GatewaySchemaReceipt,
     main as gateway_schema_main,
 )
 
@@ -54,7 +61,7 @@ def test_gateway_schema_migration_is_explicit_versioned_and_idempotent(
     store = SQLiteGatewayStore(database)
 
     assert second == first == store.schema_receipt
-    assert first.migration_version == 1
+    assert first.migration_version == 2
     assert first.target_schema_sha256 == GATEWAY_SCHEMA_SHA256
     assert first.transformed_rows == 0
     with sqlite3.connect(database) as connection:
@@ -75,11 +82,56 @@ def test_gateway_schema_deployment_cli_migrates_then_validates(
 
     assert gateway_schema_main(["migrate", str(database)]) == 0
     migrated = json.loads(capsys.readouterr().out)
-    assert migrated["migration_version"] == 1
+    assert migrated["migration_version"] == 2
     assert gateway_schema_main(["validate", str(database)]) == 0
     validated = json.loads(capsys.readouterr().out)
 
     assert validated == migrated
+
+
+def test_existing_v1_gateway_is_upgraded_without_losing_ledger(tmp_path) -> None:
+    database = tmp_path / "gateway-v1.sqlite3"
+    installed_at = datetime.now(UTC).isoformat()
+    receipt = GatewaySchemaReceipt(
+        schema_version=GATEWAY_SCHEMA_RECEIPT_VERSION,
+        migration_version=1,
+        migration_name=MIGRATION_001_NAME,
+        migration_checksum=MIGRATION_001_CHECKSUM,
+        source_schema_sha256=EMPTY_GATEWAY_SCHEMA_SHA256,
+        target_schema_sha256=GATEWAY_SCHEMA_V1_SHA256,
+        transformed_rows=0,
+        event_chain_sha256=hashlib.sha256(b"[]").hexdigest(),
+        installed_at=installed_at,
+    )
+    encoded = _canonical(receipt.to_dict())
+    with sqlite3.connect(database) as connection:
+        connection.executescript(GATEWAY_SCHEMA_V1_SQL)
+        connection.execute(
+            "INSERT INTO gateway_schema_migrations VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                1,
+                MIGRATION_001_NAME,
+                MIGRATION_001_CHECKSUM,
+                EMPTY_GATEWAY_SCHEMA_SHA256,
+                GATEWAY_SCHEMA_V1_SHA256,
+                0,
+                encoded,
+                hashlib.sha256(encoded.encode()).hexdigest(),
+                installed_at,
+            ),
+        )
+
+    upgraded = GatewaySchemaManager(database).migrate()
+    assert upgraded.migration_version == 2
+    with sqlite3.connect(database) as connection:
+        versions = connection.execute(
+            "SELECT version FROM gateway_schema_migrations ORDER BY version"
+        ).fetchall()
+        handoff_table = connection.execute(
+            "SELECT 1 FROM sqlite_schema WHERE name='gateway_chat_handoffs'"
+        ).fetchone()
+    assert versions == [(1,), (2,)]
+    assert handoff_table == (1,)
 
 
 def test_gateway_store_rejects_tampered_object_without_repair(tmp_path) -> None:
@@ -124,7 +176,7 @@ def test_gateway_store_rejects_future_schema_history_without_writing(tmp_path) -
             "INSERT INTO gateway_schema_migrations("
             "version,migration_name,migration_checksum,source_schema_sha256,"
             "target_schema_sha256,transformed_rows,receipt_json,receipt_sha256,"
-            "installed_at) VALUES(2,?,?,?,?,?,?,?,?)",
+            "installed_at) VALUES(3,?,?,?,?,?,?,?,?)",
             (
                 "future-gateway-schema",
                 "f" * 64,
@@ -144,7 +196,7 @@ def test_gateway_store_rejects_future_schema_history_without_writing(tmp_path) -
         versions = connection.execute(
             "SELECT version FROM gateway_schema_migrations ORDER BY version"
         ).fetchall()
-    assert versions == [(1,), (2,)]
+    assert versions == [(1,), (2,), (3,)]
 
 
 def test_explicit_gateway_migration_backfills_known_legacy_event_chain(
@@ -201,7 +253,8 @@ def test_explicit_gateway_migration_backfills_known_legacy_event_chain(
             row[1] for row in connection.execute("PRAGMA table_info(gateway_events)")
         }
         history = connection.execute(
-            "SELECT transformed_rows,receipt_json FROM gateway_schema_migrations"
+            "SELECT transformed_rows,receipt_json FROM gateway_schema_migrations "
+            "WHERE version=2"
         ).fetchone()
     assert {"previous_digest", "entry_digest"} <= columns
     assert history[0] == 1

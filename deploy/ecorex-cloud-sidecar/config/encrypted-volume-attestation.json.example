@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "provider": "alibaba-cloud-kms",
+  "volume_id": "REPLACE_WITH_CLOUD_DISK_ID",
+  "mount_root": "/var/lib/ecorex",
+  "encrypted": false,
+  "evidence_reference": "REPLACE_WITH_ALIBABA_CLOUD_ENCRYPTED_DISK_EVIDENCE_REFERENCE",
+  "evidence_sha256": "REPLACE_WITH_64_LOWERCASE_HEX"
+}

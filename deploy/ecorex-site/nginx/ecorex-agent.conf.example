@@ -8,26 +8,27 @@ location = /ecorex-agent {
 }
 
 location = /ecorex-agent/admin {
-    return 308 /admin/;
+    return 308 /ecorex-agent/admin/;
 }
 
 location ^~ /ecorex-agent/admin/ {
-    return 308 /admin/;
-}
-
-location = /admin {
-    return 301 /admin/;
-}
-
-# The Control Plane itself serves content-addressed /admin assets and validates
-# the in-memory administrator bearer on every /api/v1/admin mutation.
-location ^~ /admin/ {
+    rewrite ^/ecorex-agent/admin/(.*)$ /admin/$1 break;
     proxy_pass $ecorex_control_plane;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_buffering off;
+}
+
+location = /admin {
+    return 308 /ecorex-agent/admin/;
+}
+
+# The Control Plane itself serves content-addressed /admin assets and validates
+# the in-memory administrator bearer on every /api/v1/admin mutation.
+location ^~ /admin/ {
+    return 308 /ecorex-agent/admin/;
 }
 
 location = /api/v1/admin {
@@ -78,6 +79,21 @@ location ~ ^/ecorex-agent/(?<ecorex_public_asset>(?:site|styles)\.[0-9a-f]{12}\.
     autoindex off;
     add_header Cache-Control "public, max-age=31536000, immutable" always;
     add_header X-Content-Type-Options "nosniff" always;
+}
+
+# Immutable signed Candidate bytes. The release-id directory is populated in
+# the same staging tree before the ``current`` symlink is switched, so the CDN
+# origin and public pointer become visible atomically.
+location ~ ^/ecorex-agent/releases/(?<ecorex_release_asset>v1\.0\.0/(?:stable|canary)/release-(?:stable|canary)-[0-9a-f]{24}/[A-Za-z0-9][A-Za-z0-9._-]{0,255})$ {
+    alias /srv/ecorex-agent-download/v1-artifacts/$ecorex_release_asset;
+    autoindex off;
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    add_header Accept-Ranges bytes always;
+    add_header Cache-Control "public, max-age=31536000, immutable" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    default_type application/octet-stream;
 }
 
 location ^~ /ecorex-agent/downloads/ {

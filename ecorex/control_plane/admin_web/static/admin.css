@@ -176,6 +176,30 @@ dialog:focus-visible {
   gap: var(--space-2);
 }
 
+#device-login-state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+#device-login-state[hidden] {
+  display: none;
+}
+
+#device-login-code {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+
+#manual-token-fallback {
+  color: var(--color-ink-muted);
+}
+
+#manual-token-fallback summary {
+  cursor: pointer;
+}
+
 .brand-mark {
   width: 2rem;
   height: 2rem;

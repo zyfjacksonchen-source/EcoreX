@@ -178,7 +178,8 @@ def main() -> int:
         errors,
     )
     _require(
-        "handle /admin*" in caddy
+        "handle /ecorex-agent/admin/*" in caddy
+        and "uri strip_prefix /ecorex-agent" in caddy
         and "handle /api/v1/admin*" in caddy
         and "reverse_proxy 127.0.0.1:18084" in caddy
         and "127.0.0.1:9909" not in caddy

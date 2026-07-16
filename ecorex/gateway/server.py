@@ -25,7 +25,13 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
-from .models import GatewayEvent, GatewayEventType, ModelGatewayRequest
+from .models import (
+    GatewayEvent,
+    GatewayEventType,
+    GatewayFunctionCallOutputInput,
+    ModelGatewayRequest,
+)
+from .handoff import ChatModelRevision, DurableChatHandoff
 from .schema import GatewaySchemaManager, GatewaySchemaReceipt
 
 
@@ -34,6 +40,7 @@ _MAX_REQUEST_BYTES = 4 * 1024 * 1024
 _MAX_EVENT_BYTES = 1024 * 1024
 _MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 _MAX_EVENTS = 10_000
+_MAX_ACTIVE_CHAT_HANDOFFS_PER_ACCOUNT = 256
 _ZERO_DIGEST = "0" * 64
 
 
@@ -169,7 +176,9 @@ class RejectingGatewayAuthenticator:
 
 
 class GatewayStoreError(RuntimeError):
-    pass
+    # Durable identity/lease/handoff failures are never an instruction to
+    # submit another possibly billable provider POST.
+    retryable = False
 
 
 class GatewayRequestConflict(GatewayStoreError):
@@ -383,6 +392,320 @@ class SQLiteGatewayStore:
         finally:
             connection.close()
 
+    def bind_chat_model_attempt(
+        self,
+        request: ModelGatewayRequest,
+        revision: ChatModelRevision,
+        *,
+        ttl_seconds: int,
+    ) -> None:
+        if not 300 <= ttl_seconds <= 86_400:
+            raise ValueError("chat handoff TTL is invalid")
+        if revision.provider_protocol != "openai_compatible_chat":
+            raise GatewayStoreError("chat handoff protocol is invalid")
+        now = _utcnow()
+        values = (
+            request.request_id,
+            request.thread_id,
+            request.turn_id,
+            revision.config_id,
+            revision.revision,
+            revision.local_model_id,
+            revision.upstream_model_id,
+            revision.provider_protocol,
+            revision.provider_origin_preset,
+            _iso(now + timedelta(seconds=ttl_seconds)),
+            _iso(now),
+        )
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT status,model_id FROM gateway_requests WHERE request_id=?",
+                (request.request_id,),
+            ).fetchone()
+            if row is None or row["status"] != "active" or row["model_id"] != request.model_id:
+                raise GatewayRequestConflict("gateway model attempt is not active")
+            existing = connection.execute(
+                "SELECT * FROM gateway_model_attempts WHERE request_id=?",
+                (request.request_id,),
+            ).fetchone()
+            if existing is not None:
+                identity = tuple(existing[key] for key in (
+                    "request_id", "thread_id", "turn_id", "model_config_id",
+                    "model_config_revision", "local_model_id", "upstream_model_id",
+                    "provider_protocol", "provider_origin_preset",
+                ))
+                if identity != values[:9]:
+                    raise GatewayRequestConflict("gateway model revision changed")
+                connection.commit()
+                return
+            account = connection.execute(
+                "SELECT account_id FROM gateway_requests WHERE request_id=?",
+                (request.request_id,),
+            ).fetchone()
+            active_handoffs = connection.execute(
+                "SELECT COUNT(*) FROM gateway_chat_handoffs handoffs "
+                "JOIN gateway_requests requests "
+                "ON requests.request_id=handoffs.source_request_id "
+                "WHERE requests.account_id=? AND handoffs.state IN ('pending','available') "
+                "AND handoffs.expires_at>?",
+                (account["account_id"], _iso(now)),
+            ).fetchone()[0]
+            if int(active_handoffs) >= _MAX_ACTIVE_CHAT_HANDOFFS_PER_ACCOUNT:
+                raise GatewayQuotaExceeded("chat handoff quota is exhausted")
+            connection.execute(
+                "INSERT INTO gateway_model_attempts("
+                "request_id,thread_id,turn_id,model_config_id,model_config_revision,"
+                "local_model_id,upstream_model_id,provider_protocol,"
+                "provider_origin_preset,expires_at,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                values,
+            )
+            connection.commit()
+        except GatewayStoreError:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        except (OSError, sqlite3.Error):
+            if connection.in_transaction:
+                connection.rollback()
+            raise GatewayStoreError("gateway handoff state is unavailable") from None
+        finally:
+            connection.close()
+
+    def stage_chat_handoff(
+        self,
+        request: ModelGatewayRequest,
+        revision: ChatModelRevision,
+        event: GatewayEvent,
+        *,
+        provider_tool_name: str,
+        arguments_json: str,
+    ) -> None:
+        if event.event_type is not GatewayEventType.TOOL_CALL_REQUESTED:
+            raise GatewayStoreError("chat handoff event is invalid")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", provider_tool_name):
+            raise GatewayStoreError("chat handoff tool identity is invalid")
+        try:
+            arguments = json.loads(arguments_json)
+        except (TypeError, json.JSONDecodeError):
+            raise GatewayStoreError("chat handoff arguments are invalid") from None
+        canonical = _canonical(arguments).decode("utf-8")
+        if canonical != arguments_json or len(canonical.encode("utf-8")) > 1024 * 1024:
+            raise GatewayStoreError("chat handoff arguments are invalid")
+        now = _utcnow()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            attempt = connection.execute(
+                "SELECT * FROM gateway_model_attempts WHERE request_id=?",
+                (request.request_id,),
+            ).fetchone()
+            self._validate_attempt(attempt, request, revision)
+            existing = connection.execute(
+                "SELECT * FROM gateway_chat_handoffs WHERE source_request_id=?",
+                (request.request_id,),
+            ).fetchone()
+            identity = (
+                event.response_id,
+                event.tool_call_id,
+                provider_tool_name,
+                canonical,
+                hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+            )
+            if existing is not None:
+                current = tuple(existing[key] for key in (
+                    "response_id", "tool_call_id", "provider_tool_name",
+                    "arguments_json", "arguments_sha256",
+                ))
+                if current != identity:
+                    raise GatewayRequestConflict("chat handoff identity changed")
+                connection.commit()
+                return
+            connection.execute(
+                "INSERT INTO gateway_chat_handoffs("
+                "source_request_id,response_id,tool_call_id,provider_tool_name,"
+                "arguments_json,arguments_sha256,state,expires_at,created_at) "
+                "VALUES(?,?,?,?,?,?,'pending',?,?)",
+                (
+                    request.request_id,
+                    *identity,
+                    attempt["expires_at"],
+                    _iso(now),
+                ),
+            )
+            connection.commit()
+        except GatewayStoreError:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        except (OSError, sqlite3.Error):
+            if connection.in_transaction:
+                connection.rollback()
+            raise GatewayStoreError("gateway handoff state is unavailable") from None
+        finally:
+            connection.close()
+
+    def consume_chat_handoff(
+        self,
+        request: ModelGatewayRequest,
+        revision: ChatModelRevision,
+        *,
+        now: datetime | None = None,
+    ) -> DurableChatHandoff | None:
+        outputs = [
+            item
+            for item in request.ordered_input_items()
+            if isinstance(item, GatewayFunctionCallOutputInput)
+        ]
+        if not outputs:
+            return None
+        if request.previous_response_id is None or len(outputs) != 1:
+            raise GatewayRequestConflict("chat handoff continuation is invalid")
+        now = now or _utcnow()
+        if now.tzinfo is None:
+            raise ValueError("gateway handoff time must be timezone-aware")
+        now = now.astimezone(timezone.utc)
+        connection = self._connect()
+        failure: GatewayStoreError | None = None
+        result: DurableChatHandoff | None = None
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            target = connection.execute(
+                "SELECT * FROM gateway_requests WHERE request_id=?",
+                (request.request_id,),
+            ).fetchone()
+            row = connection.execute(
+                "SELECT handoffs.*,attempts.thread_id,attempts.turn_id,"
+                "attempts.model_config_id,attempts.model_config_revision,"
+                "attempts.local_model_id,attempts.upstream_model_id,"
+                "attempts.provider_protocol,attempts.provider_origin_preset,"
+                "requests.account_id AS source_account_id "
+                "FROM gateway_chat_handoffs handoffs "
+                "JOIN gateway_model_attempts attempts "
+                "ON attempts.request_id=handoffs.source_request_id "
+                "JOIN gateway_requests requests "
+                "ON requests.request_id=handoffs.source_request_id "
+                "WHERE handoffs.response_id=?",
+                (request.previous_response_id,),
+            ).fetchone()
+            if target is None or target["status"] != "active" or row is None:
+                raise GatewayRequestConflict("chat handoff is unavailable")
+            try:
+                expiry = datetime.fromisoformat(str(row["expires_at"]))
+            except (TypeError, ValueError):
+                expiry = datetime.min.replace(tzinfo=timezone.utc)
+                connection.execute(
+                    "UPDATE gateway_chat_handoffs SET state='corrupt' "
+                    "WHERE source_request_id=? AND state!='consumed'",
+                    (row["source_request_id"],),
+                )
+                failure = GatewayStoreError("chat handoff is corrupt")
+            if failure is None and (
+                expiry.tzinfo is None or expiry <= now
+            ):
+                connection.execute(
+                    "UPDATE gateway_chat_handoffs SET state='expired' "
+                    "WHERE source_request_id=? AND state IN ('pending','available')",
+                    (row["source_request_id"],),
+                )
+                failure = GatewayRequestConflict("chat handoff expired")
+            digest = hashlib.sha256(str(row["arguments_json"]).encode("utf-8")).hexdigest()
+            try:
+                decoded = json.loads(str(row["arguments_json"]))
+                canonical = _canonical(decoded).decode("utf-8")
+            except (TypeError, json.JSONDecodeError):
+                canonical = ""
+            if failure is None and (
+                digest != row["arguments_sha256"]
+                or canonical != row["arguments_json"]
+            ):
+                connection.execute(
+                    "UPDATE gateway_chat_handoffs SET state='corrupt' "
+                    "WHERE source_request_id=? AND state!='consumed'",
+                    (row["source_request_id"],),
+                )
+                failure = GatewayStoreError("chat handoff is corrupt")
+            expected_identity = (
+                request.thread_id,
+                request.turn_id,
+                revision.config_id,
+                revision.revision,
+                revision.local_model_id,
+                revision.upstream_model_id,
+                revision.provider_protocol,
+                revision.provider_origin_preset,
+                target["account_id"],
+            )
+            actual_identity = tuple(row[key] for key in (
+                "thread_id", "turn_id", "model_config_id", "model_config_revision",
+                "local_model_id", "upstream_model_id", "provider_protocol",
+                "provider_origin_preset", "source_account_id",
+            ))
+            if failure is None and (
+                actual_identity != expected_identity
+                or target["model_id"] != revision.local_model_id
+                or request.model_id != revision.local_model_id
+            ):
+                failure = GatewayRequestConflict("chat handoff configuration changed")
+            if failure is None and (
+                row["state"] != "available"
+                or row["tool_call_id"] != outputs[0].tool_call_id
+            ):
+                failure = GatewayRequestConflict("chat handoff was already consumed")
+            if failure is None:
+                updated = connection.execute(
+                    "UPDATE gateway_chat_handoffs SET state='consumed',"
+                    "consumed_by_request_id=?,consumed_at=? "
+                    "WHERE source_request_id=? AND state='available'",
+                    (request.request_id, _iso(now), row["source_request_id"]),
+                )
+                if updated.rowcount != 1:
+                    raise GatewayRequestConflict("chat handoff was already consumed")
+                result = DurableChatHandoff(
+                    response_id=str(row["response_id"]),
+                    tool_call_id=str(row["tool_call_id"]),
+                    provider_tool_name=str(row["provider_tool_name"]),
+                    arguments_json=str(row["arguments_json"]),
+                )
+            connection.commit()
+        except GatewayStoreError:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        except (OSError, sqlite3.Error):
+            if connection.in_transaction:
+                connection.rollback()
+            raise GatewayStoreError("gateway handoff state is unavailable") from None
+        finally:
+            connection.close()
+        if failure is not None:
+            raise failure
+        return result
+
+    @staticmethod
+    def _validate_attempt(
+        attempt: sqlite3.Row | None,
+        request: ModelGatewayRequest,
+        revision: ChatModelRevision,
+    ) -> None:
+        if attempt is None or tuple(attempt[key] for key in (
+            "thread_id", "turn_id", "model_config_id", "model_config_revision",
+            "local_model_id", "upstream_model_id", "provider_protocol",
+            "provider_origin_preset",
+        )) != (
+            request.thread_id,
+            request.turn_id,
+            revision.config_id,
+            revision.revision,
+            revision.local_model_id,
+            revision.upstream_model_id,
+            revision.provider_protocol,
+            revision.provider_origin_preset,
+        ):
+            raise GatewayRequestConflict("gateway model revision changed")
+
     def append(
         self,
         request_id: str,
@@ -431,6 +754,8 @@ class SQLiteGatewayStore:
         try:
             connection.execute("BEGIN IMMEDIATE")
             self._append_in_transaction(connection, request_id, lease_token, event, now)
+            if event.event_type is GatewayEventType.TOOL_CALL_REQUESTED:
+                self._promote_chat_handoff(connection, request_id, event, now)
             self._complete_in_transaction(connection, request_id, lease_token, event, now)
             connection.commit()
         except GatewayStoreError:
@@ -447,6 +772,48 @@ class SQLiteGatewayStore:
             raise
         finally:
             connection.close()
+
+    @staticmethod
+    def _promote_chat_handoff(
+        connection: sqlite3.Connection,
+        request_id: str,
+        event: GatewayEvent,
+        now: datetime,
+    ) -> None:
+        attempt = connection.execute(
+            "SELECT provider_protocol FROM gateway_model_attempts WHERE request_id=?",
+            (request_id,),
+        ).fetchone()
+        if attempt is None:
+            # Responses tool handoffs use provider-side previous_response_id and
+            # do not require a Chat Completions reconstruction record.
+            return
+        if attempt["provider_protocol"] != "openai_compatible_chat":
+            raise GatewayStoreError("gateway handoff protocol is invalid")
+        row = connection.execute(
+            "SELECT * FROM gateway_chat_handoffs WHERE source_request_id=?",
+            (request_id,),
+        ).fetchone()
+        if (
+            row is None
+            or row["state"] != "pending"
+            or row["response_id"] != event.response_id
+            or row["tool_call_id"] != event.tool_call_id
+        ):
+            raise GatewayStoreError("durable chat handoff is missing")
+        try:
+            expiry = datetime.fromisoformat(str(row["expires_at"]))
+        except (TypeError, ValueError):
+            raise GatewayStoreError("durable chat handoff is corrupt") from None
+        if expiry.tzinfo is None or expiry <= now:
+            raise GatewayStoreError("durable chat handoff expired before commit")
+        updated = connection.execute(
+            "UPDATE gateway_chat_handoffs SET state='available',available_at=? "
+            "WHERE source_request_id=? AND state='pending'",
+            (_iso(now), request_id),
+        )
+        if updated.rowcount != 1:
+            raise GatewayRequestConflict("durable chat handoff changed")
 
     def _append_in_transaction(
         self,

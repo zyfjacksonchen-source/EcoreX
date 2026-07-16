@@ -19,6 +19,13 @@ ModelRevisionStatus = Literal[
 ProviderPreset = Literal[
     "responses", "openai_compatible_chat", "openai_compatible_image"
 ]
+ProviderOriginPreset = Literal[
+    "ecorex_chat",
+    "deepseek_chat",
+    "gemini_chat",
+    "doubao_chat",
+    "ecorex_image",
+]
 
 MANAGED_MODEL_SLOTS: Mapping[str, str] = MappingProxyType(
     {
@@ -27,6 +34,46 @@ MANAGED_MODEL_SLOTS: Mapping[str, str] = MappingProxyType(
         "gpt-image-2-edit": "image_edit",
     }
 )
+
+# API protocol and egress authority are deliberately different concepts.  The
+# administrator may rotate a key and upstream model identity, but cannot turn a
+# tested model revision into an arbitrary-origin SSRF primitive.  Every public
+# EcoreX slot has one product-owned protocol and one deployment-owned origin
+# preset.
+MANAGED_MODEL_PROVIDER_PROTOCOLS: Mapping[str, ProviderPreset] = MappingProxyType(
+    {
+        "ecorex-chat": "responses",
+        "ecorex-deepseek-v4-pro": "openai_compatible_chat",
+        "ecorex-gemini-3.1-pro": "openai_compatible_chat",
+        "ecorex-doubao-seed-2.0-pro": "openai_compatible_chat",
+        "gpt-image-2": "openai_compatible_image",
+        "gpt-image-2-edit": "openai_compatible_image",
+    }
+)
+MANAGED_MODEL_ORIGIN_PRESETS: Mapping[str, ProviderOriginPreset] = MappingProxyType(
+    {
+        "ecorex-chat": "ecorex_chat",
+        "ecorex-deepseek-v4-pro": "deepseek_chat",
+        "ecorex-gemini-3.1-pro": "gemini_chat",
+        "ecorex-doubao-seed-2.0-pro": "doubao_chat",
+        "gpt-image-2": "ecorex_image",
+        "gpt-image-2-edit": "ecorex_image",
+    }
+)
+
+
+def provider_protocol_for_slot(local_model_id: str) -> ProviderPreset:
+    try:
+        return MANAGED_MODEL_PROVIDER_PROTOCOLS[local_model_id]
+    except KeyError:
+        raise ValueError("model ID is not a managed EcoreX model slot") from None
+
+
+def provider_origin_preset_for_slot(local_model_id: str) -> ProviderOriginPreset:
+    try:
+        return MANAGED_MODEL_ORIGIN_PRESETS[local_model_id]
+    except KeyError:
+        raise ValueError("model ID is not a managed EcoreX model slot") from None
 
 
 class ManagementModel(BaseModel):
@@ -196,10 +243,8 @@ class CreateModelConfigurationRequest(ManagementModel):
     def _provider_matches_modality(self) -> "CreateModelConfigurationRequest":
         if MANAGED_MODEL_SLOTS.get(self.local_model_id) != self.modality:
             raise ValueError("model ID is not a managed EcoreX model slot")
-        if self.modality == "chat" and self.provider_preset == "openai_compatible_image":
-            raise ValueError("chat model provider preset is invalid")
-        if self.modality != "chat" and self.provider_preset != "openai_compatible_image":
-            raise ValueError("image model provider preset is invalid")
+        if self.provider_preset != provider_protocol_for_slot(self.local_model_id):
+            raise ValueError("model provider protocol is fixed by its EcoreX slot")
         return self
 
 
@@ -251,6 +296,7 @@ class ActiveModelConfiguration:
     provider_preset: ProviderPreset
     is_default: bool
     api_key: str
+    provider_origin_preset: ProviderOriginPreset = "ecorex_chat"
 
 
 __all__ = [
@@ -262,12 +308,17 @@ __all__ = [
     "CreateModelConfigurationRequest",
     "ModelConfigurationProjection",
     "MANAGED_MODEL_SLOTS",
+    "MANAGED_MODEL_ORIGIN_PRESETS",
+    "MANAGED_MODEL_PROVIDER_PROTOCOLS",
     "ModelModality",
     "ModelRevisionProjection",
     "ModelTestProjection",
     "ProviderPreset",
+    "ProviderOriginPreset",
     "StageModelConfigurationRequest",
     "TestAndActivateModelRequest",
     "UpdateAdminUserRequest",
     "UsageSummaryProjection",
+    "provider_origin_preset_for_slot",
+    "provider_protocol_for_slot",
 ]

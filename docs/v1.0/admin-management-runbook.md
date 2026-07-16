@@ -37,17 +37,17 @@ Control Plane 数据库是用户、用量和模型配置的唯一事实源。三
 正式部署应由 Vault、KMS sidecar 或 workload identity 提供密钥。环境变量只是固定
 逻辑名的部署适配，密钥不能进入 WebUI、发布清单、命令行、日志或备份说明。
 
-Provider 地址仍由部署者固定允许，管理员只能选择预置接口类型，不能在页面输入
-任意 URL：
+Provider 地址和 API 协议均由产品模型槽位固定；管理员只能更换页面名称、
+上游模型名和 Key，不能在页面输入 origin 或切换协议：
 
 ```text
 ECOREX_CP_MODEL_PROVIDER_ORIGINS_JSON=
-  {"responses":"https://...","openai_compatible_chat":"https://...","openai_compatible_image":"https://..."}
+  {"ecorex_chat":"https://...","deepseek_chat":"https://...","gemini_chat":"https://...","doubao_chat":"https://...","ecorex_image":"https://..."}
 ECOREX_CP_MODEL_ACTIVATION_TIMEOUT_SECONDS=180
 ECOREX_GATEWAY_MODEL_PROVIDER_ORIGINS_JSON=
-  {"responses":"https://...","openai_compatible_chat":"https://..."}
+  {"ecorex_chat":"https://...","deepseek_chat":"https://...","gemini_chat":"https://...","doubao_chat":"https://..."}
 ECOREX_IMAGE_MODEL_PROVIDER_ORIGINS_JSON=
-  {"openai_compatible_image":"https://..."}
+  {"ecorex_image":"https://..."}
 ```
 
 值必须是无凭据、无 path/query/fragment、443 端口的 HTTPS origin。Control
@@ -59,7 +59,7 @@ readiness 或后台探活。生产配置原有的模型 allowlist、鉴权、公
 ## 4. 模型更换闭环
 
 1. 管理员选择固定的 EcoreX 模型位：主模型、DeepSeek、Gemini、豆包、生图或
-   精修；填写页面名称、上游模型名、接口类型和新 API Key。
+   精修；填写页面名称、上游模型名和新 API Key。
 2. 保存只创建不可执行草稿。API Key 立即 AES-GCM 加密，页面和列表只返回短
    指纹，不允许读回明文。
 3. 点击“测试并启用”。Control Plane 使用草稿的冻结 revision 先读取模型目录，

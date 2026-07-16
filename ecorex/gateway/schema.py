@@ -20,7 +20,7 @@ import stat
 from typing import Any, Mapping, Sequence
 
 
-CURRENT_GATEWAY_SCHEMA_VERSION = 1
+CURRENT_GATEWAY_SCHEMA_VERSION = 2
 GATEWAY_SCHEMA_RECEIPT_VERSION = 1
 MAX_LEGACY_EVENTS = 100_000
 MAX_LEGACY_EVENT_BYTES = 64 * 1024 * 1024
@@ -153,9 +153,82 @@ END;
 """
 
 
-GATEWAY_SCHEMA_SQL = (
+GATEWAY_SCHEMA_V1_SQL = (
     GATEWAY_SCHEMA_HISTORY_SQL + GATEWAY_REQUEST_SCHEMA_SQL + GATEWAY_EVENT_SCHEMA_SQL
 )
+
+GATEWAY_CHAT_HANDOFF_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS gateway_model_attempts (
+    request_id TEXT PRIMARY KEY REFERENCES gateway_requests(request_id),
+    thread_id TEXT NOT NULL,
+    turn_id TEXT NOT NULL,
+    model_config_id TEXT NOT NULL,
+    model_config_revision INTEGER NOT NULL CHECK(model_config_revision > 0),
+    local_model_id TEXT NOT NULL,
+    upstream_model_id TEXT NOT NULL,
+    provider_protocol TEXT NOT NULL CHECK(provider_protocol IN (
+        'responses','openai_compatible_chat'
+    )),
+    provider_origin_preset TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS gateway_model_attempts_immutable
+BEFORE UPDATE ON gateway_model_attempts BEGIN
+    SELECT RAISE(ABORT, 'gateway model attempt identity is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS gateway_model_attempts_no_delete
+BEFORE DELETE ON gateway_model_attempts BEGIN
+    SELECT RAISE(ABORT, 'gateway model attempt identity is immutable');
+END;
+
+CREATE TABLE IF NOT EXISTS gateway_chat_handoffs (
+    source_request_id TEXT PRIMARY KEY REFERENCES gateway_model_attempts(request_id),
+    response_id TEXT NOT NULL UNIQUE,
+    tool_call_id TEXT NOT NULL,
+    provider_tool_name TEXT NOT NULL,
+    arguments_json TEXT NOT NULL,
+    arguments_sha256 TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN (
+        'pending','available','consumed','expired','corrupt'
+    )),
+    consumed_by_request_id TEXT UNIQUE REFERENCES gateway_requests(request_id),
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    available_at TEXT,
+    consumed_at TEXT,
+    CHECK(
+        (state='pending' AND available_at IS NULL AND consumed_by_request_id IS NULL AND consumed_at IS NULL)
+        OR (state='available' AND available_at IS NOT NULL AND consumed_by_request_id IS NULL AND consumed_at IS NULL)
+        OR (state='consumed' AND available_at IS NOT NULL AND consumed_by_request_id IS NOT NULL AND consumed_at IS NOT NULL)
+        OR (state IN ('expired','corrupt'))
+    )
+);
+
+CREATE INDEX IF NOT EXISTS gateway_chat_handoffs_expiry
+ON gateway_chat_handoffs(state, expires_at);
+
+CREATE TRIGGER IF NOT EXISTS gateway_chat_handoffs_identity_immutable
+BEFORE UPDATE ON gateway_chat_handoffs
+WHEN NEW.source_request_id != OLD.source_request_id
+  OR NEW.response_id != OLD.response_id
+  OR NEW.tool_call_id != OLD.tool_call_id
+  OR NEW.provider_tool_name != OLD.provider_tool_name
+  OR NEW.arguments_json != OLD.arguments_json
+  OR NEW.arguments_sha256 != OLD.arguments_sha256
+  OR NEW.expires_at != OLD.expires_at
+  OR NEW.created_at != OLD.created_at
+BEGIN
+    SELECT RAISE(ABORT, 'gateway chat handoff identity is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS gateway_chat_handoffs_no_delete
+BEFORE DELETE ON gateway_chat_handoffs BEGIN
+    SELECT RAISE(ABORT, 'gateway chat handoffs are retained');
+END;
+"""
+
+GATEWAY_SCHEMA_SQL = GATEWAY_SCHEMA_V1_SQL + GATEWAY_CHAT_HANDOFF_SCHEMA_SQL
 PRE_AUTHORITY_GATEWAY_SCHEMA_SQL = GATEWAY_REQUEST_SCHEMA_SQL + GATEWAY_EVENT_SCHEMA_SQL
 LEGACY_GATEWAY_SCHEMA_SQL = (
     GATEWAY_REQUEST_SCHEMA_SQL + LEGACY_GATEWAY_EVENT_SCHEMA_SQL
@@ -241,12 +314,18 @@ LEGACY_GATEWAY_SCHEMA_SHA256 = _compiled_schema_digest(LEGACY_GATEWAY_SCHEMA_SQL
 PRE_AUTHORITY_GATEWAY_SCHEMA_SHA256 = _compiled_schema_digest(
     PRE_AUTHORITY_GATEWAY_SCHEMA_SQL
 )
+GATEWAY_SCHEMA_V1_SHA256 = _compiled_schema_digest(GATEWAY_SCHEMA_V1_SQL)
 GATEWAY_SCHEMA_SHA256 = _compiled_schema_digest(GATEWAY_SCHEMA_SQL)
 MIGRATION_001_NAME = "initial-versioned-gateway-ledger"
 MIGRATION_001_CHECKSUM = _digest(
     b"ecorex-gateway-schema-migration-v1\0"
-    + GATEWAY_SCHEMA_SQL.encode("utf-8")
+    + GATEWAY_SCHEMA_V1_SQL.encode("utf-8")
     + b"\0legacy-event-chain-rebuild-v1"
+)
+MIGRATION_002_NAME = "durable-chat-tool-handoffs"
+MIGRATION_002_CHECKSUM = _digest(
+    b"ecorex-gateway-schema-migration-v2\0"
+    + GATEWAY_CHAT_HANDOFF_SCHEMA_SQL.encode("utf-8")
 )
 
 
@@ -263,12 +342,16 @@ class GatewaySchemaReceipt:
     installed_at: str
 
     def __post_init__(self) -> None:
+        expected = {
+            1: (MIGRATION_001_NAME, MIGRATION_001_CHECKSUM, GATEWAY_SCHEMA_V1_SHA256),
+            2: (MIGRATION_002_NAME, MIGRATION_002_CHECKSUM, GATEWAY_SCHEMA_SHA256),
+        }.get(self.migration_version)
         if (
             self.schema_version != GATEWAY_SCHEMA_RECEIPT_VERSION
-            or self.migration_version != CURRENT_GATEWAY_SCHEMA_VERSION
-            or self.migration_name != MIGRATION_001_NAME
-            or self.migration_checksum != MIGRATION_001_CHECKSUM
-            or self.target_schema_sha256 != GATEWAY_SCHEMA_SHA256
+            or expected is None
+            or self.migration_name != expected[0]
+            or self.migration_checksum != expected[1]
+            or self.target_schema_sha256 != expected[2]
             or not 0 <= self.transformed_rows <= MAX_LEGACY_EVENTS
         ):
             raise GatewaySchemaError("gateway schema migration receipt is invalid")
@@ -322,26 +405,56 @@ class GatewaySchemaManager:
             source_digest = _schema_digest(connection)
             names = {record["name"] for record in _schema_records(connection)}
             if "gateway_schema_migrations" in names:
-                receipt = self._validate_connection(connection)
-                connection.commit()
-                self._activate_wal(connection)
-                return receipt
-            if source_digest == EMPTY_GATEWAY_SCHEMA_SHA256:
-                _execute_sql(connection, GATEWAY_SCHEMA_SQL)
-                transformed_rows = 0
-                event_chain_digest = _digest(_canonical([]))
-            elif source_digest == PRE_AUTHORITY_GATEWAY_SCHEMA_SHA256:
-                _execute_sql(connection, GATEWAY_SCHEMA_HISTORY_SQL)
-                transformed_rows = 0
-                event_chain_digest = self._existing_chain_digest(connection)
-            elif source_digest == LEGACY_GATEWAY_SCHEMA_SHA256:
-                transformed_rows, event_chain_digest = self._migrate_legacy_events(
-                    connection
-                )
-                _execute_sql(connection, GATEWAY_SCHEMA_HISTORY_SQL)
+                if source_digest == GATEWAY_SCHEMA_SHA256:
+                    receipt = self._validate_connection(connection)
+                    connection.commit()
+                    self._activate_wal(connection)
+                    return receipt
+                if source_digest != GATEWAY_SCHEMA_V1_SHA256:
+                    raise GatewaySchemaError("gateway schema source shape is unknown")
+                rows = connection.execute(
+                    "SELECT * FROM gateway_schema_migrations ORDER BY version"
+                ).fetchall()
+                if len(rows) != 1 or int(rows[0]["version"]) != 1:
+                    raise GatewaySchemaError(
+                        "gateway schema migration history is invalid"
+                    )
+                prior = self._validate_receipt_row(rows[0], version=1)
+                transformed_rows = prior.transformed_rows
+                event_chain_digest = prior.event_chain_sha256
             else:
-                raise GatewaySchemaError("gateway schema source shape is unknown")
+                initial_source = source_digest
+                if source_digest == EMPTY_GATEWAY_SCHEMA_SHA256:
+                    _execute_sql(connection, GATEWAY_SCHEMA_V1_SQL)
+                    transformed_rows = 0
+                    event_chain_digest = _digest(_canonical([]))
+                elif source_digest == PRE_AUTHORITY_GATEWAY_SCHEMA_SHA256:
+                    _execute_sql(connection, GATEWAY_SCHEMA_HISTORY_SQL)
+                    transformed_rows = 0
+                    event_chain_digest = self._existing_chain_digest(connection)
+                elif source_digest == LEGACY_GATEWAY_SCHEMA_SHA256:
+                    transformed_rows, event_chain_digest = self._migrate_legacy_events(
+                        connection
+                    )
+                    _execute_sql(connection, GATEWAY_SCHEMA_HISTORY_SQL)
+                else:
+                    raise GatewaySchemaError("gateway schema source shape is unknown")
+                if _schema_digest(connection) != GATEWAY_SCHEMA_V1_SHA256:
+                    raise GatewaySchemaError("gateway schema migration target drifted")
+                receipt_v1 = GatewaySchemaReceipt(
+                    schema_version=GATEWAY_SCHEMA_RECEIPT_VERSION,
+                    migration_version=1,
+                    migration_name=MIGRATION_001_NAME,
+                    migration_checksum=MIGRATION_001_CHECKSUM,
+                    source_schema_sha256=initial_source,
+                    target_schema_sha256=GATEWAY_SCHEMA_V1_SHA256,
+                    transformed_rows=transformed_rows,
+                    event_chain_sha256=event_chain_digest,
+                    installed_at=datetime.now(UTC).isoformat(),
+                )
+                self._insert_receipt(connection, receipt_v1)
 
+            _execute_sql(connection, GATEWAY_CHAT_HANDOFF_SCHEMA_SQL)
             target_digest = _schema_digest(connection)
             if target_digest != GATEWAY_SCHEMA_SHA256:
                 raise GatewaySchemaError("gateway schema migration target drifted")
@@ -355,32 +468,15 @@ class GatewaySchemaManager:
             receipt = GatewaySchemaReceipt(
                 schema_version=GATEWAY_SCHEMA_RECEIPT_VERSION,
                 migration_version=CURRENT_GATEWAY_SCHEMA_VERSION,
-                migration_name=MIGRATION_001_NAME,
-                migration_checksum=MIGRATION_001_CHECKSUM,
-                source_schema_sha256=source_digest,
+                migration_name=MIGRATION_002_NAME,
+                migration_checksum=MIGRATION_002_CHECKSUM,
+                source_schema_sha256=GATEWAY_SCHEMA_V1_SHA256,
                 target_schema_sha256=target_digest,
                 transformed_rows=transformed_rows,
                 event_chain_sha256=event_chain_digest,
                 installed_at=installed_at,
             )
-            receipt_json = _canonical(receipt.to_dict()).decode("utf-8")
-            connection.execute(
-                "INSERT INTO gateway_schema_migrations("
-                "version,migration_name,migration_checksum,source_schema_sha256,"
-                "target_schema_sha256,transformed_rows,receipt_json,receipt_sha256,"
-                "installed_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                (
-                    receipt.migration_version,
-                    receipt.migration_name,
-                    receipt.migration_checksum,
-                    receipt.source_schema_sha256,
-                    receipt.target_schema_sha256,
-                    receipt.transformed_rows,
-                    receipt_json,
-                    _digest(receipt_json.encode("utf-8")),
-                    receipt.installed_at,
-                ),
-            )
+            self._insert_receipt(connection, receipt)
             self._validate_connection(connection)
             connection.commit()
             # WAL is a deployment topology choice committed only after a known,
@@ -431,19 +527,48 @@ class GatewaySchemaManager:
             raise GatewaySchemaError("gateway schema is newer than this process")
         if versions != list(range(1, CURRENT_GATEWAY_SCHEMA_VERSION + 1)):
             raise GatewaySchemaError("gateway schema migration history is incomplete")
+        for expected_version, history_row in enumerate(rows, start=1):
+            self._validate_receipt_row(history_row, version=expected_version)
         row = rows[-1]
+        receipt = self._validate_receipt_row(
+            row, version=CURRENT_GATEWAY_SCHEMA_VERSION
+        )
+        violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise GatewaySchemaError("gateway schema foreign keys are invalid")
+        return receipt
+
+    @staticmethod
+    def _validate_receipt_row(
+        row: sqlite3.Row, *, version: int
+    ) -> GatewaySchemaReceipt:
         receipt_json = str(row["receipt_json"])
         source_schema_sha256 = str(row["source_schema_sha256"])
+        expected = {
+            1: (
+                MIGRATION_001_NAME,
+                MIGRATION_001_CHECKSUM,
+                GATEWAY_SCHEMA_V1_SHA256,
+                {
+                    EMPTY_GATEWAY_SCHEMA_SHA256,
+                    LEGACY_GATEWAY_SCHEMA_SHA256,
+                    PRE_AUTHORITY_GATEWAY_SCHEMA_SHA256,
+                },
+            ),
+            2: (
+                MIGRATION_002_NAME,
+                MIGRATION_002_CHECKSUM,
+                GATEWAY_SCHEMA_SHA256,
+                {GATEWAY_SCHEMA_V1_SHA256},
+            ),
+        }.get(version)
         if (
-            row["migration_name"] != MIGRATION_001_NAME
-            or row["migration_checksum"] != MIGRATION_001_CHECKSUM
-            or row["target_schema_sha256"] != GATEWAY_SCHEMA_SHA256
-            or source_schema_sha256
-            not in {
-                EMPTY_GATEWAY_SCHEMA_SHA256,
-                LEGACY_GATEWAY_SCHEMA_SHA256,
-                PRE_AUTHORITY_GATEWAY_SCHEMA_SHA256,
-            }
+            expected is None
+            or int(row["version"]) != version
+            or row["migration_name"] != expected[0]
+            or row["migration_checksum"] != expected[1]
+            or row["target_schema_sha256"] != expected[2]
+            or source_schema_sha256 not in expected[3]
             or row["receipt_sha256"] != _digest(receipt_json.encode("utf-8"))
         ):
             raise GatewaySchemaError("gateway schema migration history is invalid")
@@ -471,10 +596,30 @@ class GatewaySchemaManager:
             or receipt.installed_at != str(row["installed_at"])
         ):
             raise GatewaySchemaError("gateway schema migration receipt is inconsistent")
-        violations = connection.execute("PRAGMA foreign_key_check").fetchall()
-        if violations:
-            raise GatewaySchemaError("gateway schema foreign keys are invalid")
         return receipt
+
+    @staticmethod
+    def _insert_receipt(
+        connection: sqlite3.Connection, receipt: GatewaySchemaReceipt
+    ) -> None:
+        receipt_json = _canonical(receipt.to_dict()).decode("utf-8")
+        connection.execute(
+            "INSERT INTO gateway_schema_migrations("
+            "version,migration_name,migration_checksum,source_schema_sha256,"
+            "target_schema_sha256,transformed_rows,receipt_json,receipt_sha256,"
+            "installed_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                receipt.migration_version,
+                receipt.migration_name,
+                receipt.migration_checksum,
+                receipt.source_schema_sha256,
+                receipt.target_schema_sha256,
+                receipt.transformed_rows,
+                receipt_json,
+                _digest(receipt_json.encode("utf-8")),
+                receipt.installed_at,
+            ),
+        )
 
     def _migrate_legacy_events(
         self, connection: sqlite3.Connection

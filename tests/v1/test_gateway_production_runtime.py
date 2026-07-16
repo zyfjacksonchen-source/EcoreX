@@ -139,6 +139,38 @@ def _request(request_id: str = "request-1") -> ModelGatewayRequest:
     )
 
 
+def test_gateway_dynamic_origin_presets_and_handoff_ttl_are_deployment_fixed(
+    tmp_path: Path,
+) -> None:
+    _private, keyring, _public = _key()
+    environment = _environment(tmp_path, keyring)
+    environment.update(
+        {
+            "ECOREX_GATEWAY_ADMIN_MANAGEMENT_ENABLED": "true",
+            "ECOREX_GATEWAY_ADMIN_MANAGEMENT_DATABASE_PATH": str(
+                (tmp_path / "control-plane.sqlite3").resolve()
+            ),
+            "ECOREX_GATEWAY_MODEL_PROVIDER_ORIGINS_JSON": json.dumps(
+                {
+                    "ecorex_chat": "https://gpt.ecorex.invalid",
+                    "deepseek_chat": "https://deepseek.ecorex.invalid",
+                    "gemini_chat": "https://gemini.ecorex.invalid",
+                    "doubao_chat": "https://doubao.ecorex.invalid",
+                }
+            ),
+            "ECOREX_GATEWAY_CHAT_HANDOFF_TTL_SECONDS": "7200",
+        }
+    )
+    config = GatewayProductionConfig.from_environment(environment)
+    assert config.chat_handoff_ttl_seconds == 7200
+    assert set(config.model_provider_origins) == {
+        "ecorex_chat",
+        "deepseek_chat",
+        "gemini_chat",
+        "doubao_chat",
+    }
+
+
 def test_gateway_request_carries_the_authoritative_chat_model_policy() -> None:
     request = _request()
 

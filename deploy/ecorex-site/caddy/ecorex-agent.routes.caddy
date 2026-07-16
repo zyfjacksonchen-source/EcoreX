@@ -12,23 +12,30 @@ header @ecorex_public_mutable Content-Security-Policy "default-src 'self'; scrip
 header @ecorex_public_hashed Cache-Control "public, max-age=31536000, immutable"
 header @ecorex_public_hashed X-Content-Type-Options "nosniff"
 
-@ecorex_release_assets path /ecorex-agent/downloads/*
+@ecorex_release_assets path /ecorex-agent/downloads/* /ecorex-agent/releases/*
 header @ecorex_release_assets Cache-Control "public, max-age=31536000, immutable"
+header @ecorex_release_assets X-Content-Type-Options "nosniff"
 
 redir /ecorex-agent /ecorex-agent/
-redir /ecorex-agent/admin /admin/
-redir /ecorex-agent/admin/* /admin/
-redir /admin /admin/
+redir /ecorex-agent/admin /ecorex-agent/admin/
+redir /admin /ecorex-agent/admin/
+redir /admin/* /ecorex-agent/admin/
 
 # The v1 Control Plane serves the content-addressed administrator WebUI at
 # /admin and owns every /api/v1/admin mutation. There is no parallel static
 # v0.3 management console or public proxy to the user's local Agent Runtime.
-handle /admin* {
+handle /ecorex-agent/admin/* {
+    uri strip_prefix /ecorex-agent
     reverse_proxy 127.0.0.1:18084
 }
 
 handle /api/v1/admin* {
     reverse_proxy 127.0.0.1:18084
+}
+
+handle_path /ecorex-agent/releases/* {
+    root * /srv/ecorex-agent-download/v1-artifacts
+    file_server
 }
 
 handle_path /ecorex-agent/* {

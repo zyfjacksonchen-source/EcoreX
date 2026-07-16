@@ -28,7 +28,7 @@ from ecorex.gateway.responses_provider import (
 )
 from ecorex.gateway.models import ecorex_chat_gateway_policy
 
-from .management_models import ActiveModelConfiguration
+from .management_models import ActiveModelConfiguration, MANAGED_MODEL_ORIGIN_PRESETS
 
 
 _CATALOG_LIMIT = 2 * 1024 * 1024
@@ -106,7 +106,9 @@ class HTTPSModelConnectionTester:
     ) -> None:
         normalized: dict[str, str] = {}
         for preset, origin in origins.items():
-            if preset not in {
+            if preset not in set(MANAGED_MODEL_ORIGIN_PRESETS.values()) | {
+                # Read-only compatibility for a v1 database while its
+                # deployment origins are being migrated.
                 "responses",
                 "openai_compatible_chat",
                 "openai_compatible_image",
@@ -145,7 +147,13 @@ class HTTPSModelConnectionTester:
     async def test(
         self, configuration: ActiveModelConfiguration
     ) -> ModelConnectionTestResult:
-        origin = self.origins.get(configuration.provider_preset)
+        origin = self.origins.get(configuration.provider_origin_preset)
+        # Transitional compatibility is intentionally read-only: existing
+        # single-origin deployments can test an old revision before their
+        # deployment config is migrated, while all new slot configs persist a
+        # dedicated origin preset.
+        if origin is None:
+            origin = self.origins.get(configuration.provider_preset)
         if origin is None:
             return ModelConnectionTestResult(
                 passed=False, error_code="provider_test_unconfigured"

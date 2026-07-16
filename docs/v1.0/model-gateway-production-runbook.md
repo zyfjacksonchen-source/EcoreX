@@ -46,6 +46,25 @@ v1 内置存储实现只支持：
 `ECOREX_GATEWAY_MODEL_CONFIG_ENCRYPTION_KEY_B64`。此模式下新请求按已测试的活动
 revision 即时换模型/Key，已开始的流继续使用冻结 revision；详细上线和回退顺序见
 `admin-management-runbook.md`。
+可用 `ECOREX_GATEWAY_CHAT_HANDOFF_TTL_SECONDS` 配置 Chat Completions 工具交接
+的有效期（300–86400 秒，默认 3600）。
+
+动态模式的 origin key 不是 API 协议名，而是每个模型槽位的独立部署出口：
+`ecorex_chat` / `deepseek_chat` / `gemini_chat` / `doubao_chat`（及图片服务的
+`ecorex_image`）。活动 revision 仍冻结 `responses` 或
+`openai_compatible_chat` 协议，Gateway 据此选择安全适配器，不允许管理
+请求提供 URL。Chat Completions 流和非流响应都转换为统一
+`GatewayEvent`；并行工具调用、未知工具、超限响应和提交后不确定结果
+均 fail-closed，不会透明重试 POST。
+
+Chat Completions 不具备 Responses `previous_response_id` 语义，因此 Gateway
+使用同一 SQLite WAL 保存限界工具交接。模型尝试在请求发出前绑定
+`request/thread/turn/tool_call/config_id/revision`；上游工具调用先写为
+`pending`，仅在 `tool_call.requested` 与 Gateway request 终态同事务提交
+后转为 `available`。续跑请求必须在发起任何新的外部 POST 前原子消费：
+重启可恢复，但双消费、过期、账户/会话/模型 revision 漂移和哈希损坏均
+fail-closed。已消费后的进程崩溃按目标 request 的不确定终态收敛，不会
+再消费交接或重提 Provider。每账户同时最多保留 256 个未消费交接。
 
 超时变量分为 connect、read 和 total deadline。`gateway_lease_seconds` 必须至少比 Provider total deadline 长 30 秒，保证服务自己在租约内完成终态事实。HTTP 客户端强制关闭 redirect、环境代理和响应压缩；Provider URL 不能来自请求或模型输出。
 

@@ -1,0 +1,11 @@
+listen_addresses = '127.0.0.1'
+port = 5432
+ssl = on
+ssl_min_protocol_version = 'TLSv1.2'
+password_encryption = 'scram-sha-256'
+data_directory = '/var/lib/ecorex/postgres/15/data'
+unix_socket_directories = '/run/postgresql'
+log_connections = off
+log_disconnections = off
+log_statement = 'none'
+shared_preload_libraries = ''

@@ -12,6 +12,7 @@ from .models import (
     SessionLeaseSignature,
     SessionLogoutReceipt,
     SessionRecoveryReport,
+    SessionRefreshContext,
     SessionRestartRequired,
     SessionUnavailable,
     SessionVaultError,
@@ -45,8 +46,17 @@ from .device import (
     DeviceFlowStatus,
     ManagedDeviceAuthorizationService,
 )
-from .device_transport import HTTPSDeviceAuthorizationBroker
+from .device_transport import DeviceRefreshInvalidGrant, HTTPSDeviceAuthorizationBroker
 from .api import create_device_authorization_router
+from .refresh import (
+    ManagedSessionRefreshBroker,
+    ManagedSessionRefreshRepository,
+    ManagedSessionRefreshService,
+    ManagedSessionRefreshSupervisor,
+    SessionReauthorizationRequired,
+    SessionRefreshError,
+    SessionRefreshProjection,
+)
 from .verification import (
     Ed25519SessionLeaseVerifier,
     RejectingSessionLeaseVerifier,
@@ -64,6 +74,10 @@ __all__ = [
     "ManagedSessionLeaseClaims",
     "ManagedSessionRepository",
     "ManagedSessionService",
+    "ManagedSessionRefreshBroker",
+    "ManagedSessionRefreshRepository",
+    "ManagedSessionRefreshService",
+    "ManagedSessionRefreshSupervisor",
     "ManagedDeviceAuthorizationService",
     "BrokerDeviceChallenge",
     "BrokerDeviceGrant",
@@ -77,6 +91,7 @@ __all__ = [
     "DeviceAuthorizationUnavailable",
     "DeviceFlowProjection",
     "DeviceFlowStatus",
+    "DeviceRefreshInvalidGrant",
     "HTTPSDeviceAuthorizationBroker",
     "create_device_authorization_router",
     "ManagedSessionSnapshot",
@@ -88,6 +103,10 @@ __all__ = [
     "SessionLeaseVerifier",
     "SessionLogoutReceipt",
     "SessionRecoveryReport",
+    "SessionReauthorizationRequired",
+    "SessionRefreshError",
+    "SessionRefreshProjection",
+    "SessionRefreshContext",
     "SessionRestartRequired",
     "SessionStateRecord",
     "SessionUnavailable",

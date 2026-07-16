@@ -85,6 +85,7 @@ from ecorex.session import (
     Ed25519SessionLeaseVerifier,
     HTTPSDeviceAuthorizationBroker,
     ManagedDeviceAuthorizationService,
+    ManagedSessionRefreshService,
     ManagedSessionService,
 )
 from ecorex.sharing import HTTPSSharePublisher
@@ -373,9 +374,7 @@ class ProductRuntimeConfig:
                 "Runtime state cannot be stored inside the managed workspace directory"
             )
         try:
-            PurePosixPath(paths.web_manifest).relative_to(
-                PurePosixPath(paths.web_root)
-            )
+            PurePosixPath(paths.web_manifest).relative_to(PurePosixPath(paths.web_root))
         except ValueError:
             pass
         else:
@@ -581,9 +580,7 @@ class ProductRuntimeConfig:
             },
             "device_authorization": {
                 "base_url": self.device_authorization.base_url,
-                "allowed_hosts": sorted(
-                    self.device_authorization.allowed_hosts
-                ),
+                "allowed_hosts": sorted(self.device_authorization.allowed_hosts),
                 "client_id": self.device_authorization.client_id,
                 "timeout_seconds": (
                     int(self.device_authorization.timeout_seconds)
@@ -819,9 +816,7 @@ def load_product_runtime(
         config.identity.platform != host_platform
         or config.identity.architecture != host_architecture
     ):
-        raise ProductRuntimeTrustError(
-            "Runtime configuration targets a different host"
-        )
+        raise ProductRuntimeTrustError("Runtime configuration targets a different host")
 
     release_verifier = Ed25519SignatureVerifier(config.release_public_keys)
     try:
@@ -895,8 +890,8 @@ def load_product_runtime(
     )
     sandbox_security: WindowsSandboxSlotSecurity | None = None
     if host_platform == "windows":
-        security_marker = SlotStore(install_root).marker(selected.slot_id).get(
-            "security_provision"
+        security_marker = (
+            SlotStore(install_root).marker(selected.slot_id).get("security_provision")
         )
         if not isinstance(security_marker, Mapping):
             raise ProductRuntimeTrustError(
@@ -1107,7 +1102,7 @@ def load_product_runtime(
         cleanup.append(device_broker)
         if any(
             not callable(getattr(device_broker, method, None))
-            for method in ("begin", "poll", "aclose")
+            for method in ("begin", "poll", "refresh", "aclose")
         ):
             raise ProductRuntimeConfigurationError(
                 "Managed device authorization could not be composed"
@@ -1117,6 +1112,13 @@ def load_product_runtime(
             database_path,
             session=managed_session,
             vault=vault,
+            broker=device_broker,
+            initialize=False,
+        )
+        composition_stage = "managed_session_refresh"
+        session_refresh = ManagedSessionRefreshService(
+            database_path,
+            session=managed_session,
             broker=device_broker,
             initialize=False,
         )
@@ -1167,9 +1169,7 @@ def load_product_runtime(
             image_orchestration_client is not None
             and "image" in pack_runtime.installed_pack_ids
         ):
-            retouch_adapter = ManagedImageRetouchAdapter(
-                image_orchestration_client
-            )
+            retouch_adapter = ManagedImageRetouchAdapter(image_orchestration_client)
         audit_publisher: ManagedHTTPSAuditPublisher | None = None
         if config.audit is not None:
             composition_stage = "audit_publisher"
@@ -1220,10 +1220,10 @@ def load_product_runtime(
             platform=config.identity.platform,
             architecture=config.identity.architecture,
             managed_session_service=managed_session,
+            managed_session_refresh_service=session_refresh,
+            managed_session_refresh_poll_seconds=30.0,
             device_authorization_service=device_authorization,
-            device_authorization_poll_seconds=(
-                device_settings.supervisor_poll_seconds
-            ),
+            device_authorization_poll_seconds=(device_settings.supervisor_poll_seconds),
             close_device_authorization_broker_on_shutdown=True,
             session_reload_requester=reload_callback,
             first_install_registration_recorder=(
@@ -1260,14 +1260,10 @@ def load_product_runtime(
             ),
             trace_exporter=trace_exporter,
             trace_dispatch_seconds=(
-                config.tracing.dispatch_seconds
-                if config.tracing is not None
-                else 5.0
+                config.tracing.dispatch_seconds if config.tracing is not None else 5.0
             ),
             trace_max_spans_per_batch=(
-                config.tracing.max_spans_per_batch
-                if config.tracing is not None
-                else 64
+                config.tracing.max_spans_per_batch if config.tracing is not None else 64
             ),
             trace_max_request_bytes=(
                 config.tracing.max_request_bytes
@@ -1275,9 +1271,7 @@ def load_product_runtime(
                 else 1024 * 1024
             ),
             trace_retention_days=(
-                config.tracing.retention_days
-                if config.tracing is not None
-                else 7
+                config.tracing.retention_days if config.tracing is not None else 7
             ),
         )
     except ProductRuntimeConfigurationError as exc:
@@ -1290,8 +1284,7 @@ def load_product_runtime(
     except Exception:
         _close_unstarted_resources(reversed(cleanup))
         raise ProductRuntimeConfigurationError(
-            "Product Runtime dependency composition failed at "
-            f"{composition_stage}",
+            f"Product Runtime dependency composition failed at {composition_stage}",
             stage_code=composition_stage,
         ) from None
     except BaseException:
@@ -1492,15 +1485,17 @@ def _build_update(
             architecture=architecture,
             health_checker=_candidate_health_check,
             drainer=lambda: _runtime_is_drained(database_path),
-            migration_dry_run=lambda candidate: _migration_dry_run(
-                database_path,
-                candidate,
-                config=config,
-                install_root=install_root,
-                platform=platform,
-                architecture=architecture,
-            )
-            and legacy_migration.dry_run(candidate),
+            migration_dry_run=lambda candidate: (
+                _migration_dry_run(
+                    database_path,
+                    candidate,
+                    config=config,
+                    install_root=install_root,
+                    platform=platform,
+                    architecture=architecture,
+                )
+                and legacy_migration.dry_run(candidate)
+            ),
             migration_prepare=lambda candidate, transaction_id: legacy_migration.commit(
                 candidate,
                 transaction_id,
@@ -1514,7 +1509,9 @@ def _build_update(
                 sandbox_security.attest if sandbox_security is not None else None
             ),
             payload_security_cleanup=(
-                sandbox_security.cleanup_failed if sandbox_security is not None else None
+                sandbox_security.cleanup_failed
+                if sandbox_security is not None
+                else None
             ),
             payload_security_orphan_cleanup=(
                 sandbox_security.cleanup_abandoned
@@ -1555,7 +1552,9 @@ def _runtime_is_drained(database_path: Path) -> bool:
 
 def _candidate_health_check(slot_path: Path) -> bool:
     try:
-        payload = _resolve_existing_directory(slot_path, "payload", label="candidate payload")
+        payload = _resolve_existing_directory(
+            slot_path, "payload", label="candidate payload"
+        )
         _read_stable_file(
             payload / RUNTIME_CONFIG_FILE_NAME,
             max_bytes=MAX_RUNTIME_CONFIG_BYTES,
@@ -1603,11 +1602,14 @@ def _migration_dry_run(
         verify_manifest_signature(manifest, verifier)
         artifact = manifest.artifact(f"core-{platform}-{architecture}")
         verify_artifact_signature(manifest, artifact, verifier)
-        if slots.validate_receipt(
-            slot_id=slot_id,
-            manifest=manifest,
-            artifact=artifact,
-        ).resolve(strict=True) != candidate:
+        if (
+            slots.validate_receipt(
+                slot_id=slot_id,
+                manifest=manifest,
+                artifact=artifact,
+            ).resolve(strict=True)
+            != candidate
+        ):
             return False
         migration_manifest = _load_storage_migration_manifest_from_payload(
             candidate / "payload",
@@ -1791,7 +1793,9 @@ def _discover_payload_root(value: str | os.PathLike[str] | None) -> Path:
     except (OSError, TypeError, ValueError):
         raise ProductRuntimeTrustError("Runtime payload root is unavailable") from None
     if absolute.name != "payload" or not stat_module.S_ISDIR(metadata.st_mode):
-        raise ProductRuntimeTrustError("Runtime payload root is outside the slot layout")
+        raise ProductRuntimeTrustError(
+            "Runtime payload root is outside the slot layout"
+        )
     return absolute
 
 
@@ -1833,7 +1837,9 @@ def _join_under(root: Path, relative: str, *, label: str) -> Path:
     try:
         candidate.absolute().relative_to(root.resolve(strict=True))
     except (OSError, ValueError):
-        raise ProductRuntimeConfigurationError(f"{label} escapes its trusted root") from None
+        raise ProductRuntimeConfigurationError(
+            f"{label} escapes its trusted root"
+        ) from None
     return candidate
 
 
@@ -1865,8 +1871,7 @@ def _read_stable_file(
         len(payload) != before.st_size
         or (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
         != identity
-        or (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-        != identity
+        or (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != identity
         or (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns)
         != identity
     ):
@@ -2043,12 +2048,16 @@ def _validate_relative(value: str, label: str) -> None:
         or "\x00" in value
         or ":" in value
     ):
-        raise ProductRuntimeConfigurationError(f"{label} is not a portable relative path")
+        raise ProductRuntimeConfigurationError(
+            f"{label} is not a portable relative path"
+        )
     path = PurePosixPath(value)
     if path.is_absolute() or any(
         part in {"", ".", ".."} or part.startswith(".") for part in path.parts
     ):
-        raise ProductRuntimeConfigurationError(f"{label} is not a portable relative path")
+        raise ProductRuntimeConfigurationError(
+            f"{label} is not a portable relative path"
+        )
 
 
 def _optional_share_service(value: Any) -> ShareServiceConfig | None:
@@ -2243,7 +2252,9 @@ def _optional_connector_service(value: Any) -> ConnectorServiceConfig | None:
     if (
         not isinstance(raw_enabled, list)
         or not 1 <= len(raw_enabled) <= len(supported)
-        or any(not isinstance(item, str) or item not in supported for item in raw_enabled)
+        or any(
+            not isinstance(item, str) or item not in supported for item in raw_enabled
+        )
         or raw_enabled != sorted(raw_enabled)
         or len(raw_enabled) != len(set(raw_enabled))
     ):
@@ -2260,7 +2271,9 @@ def _optional_connector_service(value: Any) -> ConnectorServiceConfig | None:
 def _hosts(value: Mapping[str, Any], key: str) -> frozenset[str]:
     raw = value.get(key)
     if not isinstance(raw, list) or not 1 <= len(raw) <= 32:
-        raise ProductRuntimeConfigurationError(f"{key} must be a non-empty bounded array")
+        raise ProductRuntimeConfigurationError(
+            f"{key} must be a non-empty bounded array"
+        )
     hosts: set[str] = set()
     for item in raw:
         if (
@@ -2341,7 +2354,9 @@ def _public_keys(value: Mapping[str, Any], key: str) -> Mapping[str, bytes]:
         if not isinstance(key_id, str) or not _SAFE_ID.fullmatch(key_id):
             raise ProductRuntimeConfigurationError(f"{key} contains an unsafe key id")
         if not isinstance(encoded, str) or len(encoded) > 128:
-            raise ProductRuntimeConfigurationError(f"{key} contains an invalid public key")
+            raise ProductRuntimeConfigurationError(
+                f"{key} contains an invalid public key"
+            )
         try:
             public_key = base64.b64decode(encoded, validate=True)
         except ValueError:

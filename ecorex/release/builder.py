@@ -1365,7 +1365,10 @@ def _manifest_sources(
         return spec.sources
     resolved: list[ReleaseSource] = []
     for source in spec.sources:
-        if source.kind is SourceKind.GITHUB_RELEASE:
+        if source.kind is SourceKind.GITHUB_RELEASE or (
+            source.kind is SourceKind.GITHUB_CN_MIRROR
+            and source.base_url.endswith("/releases/download")
+        ):
             if not source.base_url.endswith("/releases/download"):
                 raise ReleaseBuildError(
                     "release-scoped GitHub source must end with /releases/download"

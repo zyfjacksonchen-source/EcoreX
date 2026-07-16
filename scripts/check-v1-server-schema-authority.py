@@ -25,6 +25,7 @@ SCHEMA_AUTHORITIES = frozenset(
     {
         "ecorex/control_plane/audit_schema.py",
         "ecorex/control_plane/bootstrap_index_schema.py",
+        "ecorex/control_plane/device_identity_schema.py",
         "ecorex/control_plane/management_schema.py",
         "ecorex/control_plane/schema.py",
         "ecorex/control_plane/share_media_migration.py",

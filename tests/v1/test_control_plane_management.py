@@ -323,3 +323,34 @@ def test_management_schema_rejects_drift(tmp_path: Path) -> None:
         connection.close()
     with pytest.raises(Exception, match="schema drifted"):
         manager.validate()
+
+
+def test_management_schema_migrates_v1_model_origin_presets(tmp_path: Path) -> None:
+    from ecorex.control_plane.management_schema import ADMIN_MANAGEMENT_SCHEMA_SQL
+
+    path = tmp_path / "control-plane-v1.db"
+    connection = sqlite3.connect(path)
+    try:
+        connection.executescript(ADMIN_MANAGEMENT_SCHEMA_SQL)
+        connection.execute(
+            "INSERT INTO admin_ops_schema_migrations VALUES(1,?,?,?)",
+            (
+                "initial-admin-management",
+                "ceeb871fe920bc47afe58032a461b464220f707a56633deed1ce8b4e45afc72d",
+                "2026-07-16T00:00:00+00:00",
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    receipt = AdminManagementSchemaManager(path).migrate()
+    assert receipt.migration_version == 2
+    connection = sqlite3.connect(path)
+    try:
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(admin_ops_model_revisions)")
+        }
+    finally:
+        connection.close()
+    assert "provider_origin_preset" in columns

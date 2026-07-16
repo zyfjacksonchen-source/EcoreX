@@ -66,6 +66,8 @@ from .responses_provider import (
     ResponsesProviderUnavailable,
     normalize_https_origin,
 )
+from .chat_completions_provider import ManagedHTTPSChatCompletionsProvider
+from .handoff import ChatHandoffAuthority, ChatModelRevision, DurableChatHandoff
 
 __all__ = [
     "GatewayAuthenticationError",
@@ -117,6 +119,10 @@ __all__ = [
     "GatewayAuthenticationConfigurationError",
     "parse_ed25519_public_keyring",
     "ManagedHTTPSResponsesProvider",
+    "ManagedHTTPSChatCompletionsProvider",
+    "ChatHandoffAuthority",
+    "ChatModelRevision",
+    "DurableChatHandoff",
     "ResponsesProviderConfigurationError",
     "ResponsesProviderProtocolError",
     "ResponsesProviderRejected",

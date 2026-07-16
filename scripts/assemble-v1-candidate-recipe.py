@@ -38,6 +38,20 @@ def _environment(name: str) -> str:
     return value.rstrip("/")
 
 
+def _mirror_channel_root(base_url: str, channel: ReleaseChannel) -> str:
+    """Resolve either an uploadable mirror or a GitHub read-through proxy.
+
+    ``ghproxy``/``ghfast`` style services preserve the complete GitHub URL
+    after their own host.  Appending ``stable`` would create a path that can
+    never exist; the Candidate builder instead appends the same immutable tag
+    used by the GitHub source.  Dedicated mirrors retain the v1 channel root.
+    """
+
+    if base_url.endswith("/releases/download"):
+        return base_url
+    return f"{base_url}/{channel.value}"
+
+
 def run(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
@@ -65,7 +79,7 @@ def run(argv: list[str] | None = None) -> int:
                     }
                 )
         channel = ReleaseChannel(args.channel)
-        channel_suffix = channel.value
+        mirror_base_url = _environment("ECOREX_RELEASE_MIRROR_BASE_URL")
         value = {
             "schema_version": 1,
             "channel": args.channel,
@@ -74,10 +88,7 @@ def run(argv: list[str] | None = None) -> int:
                 {
                     "source_id": "github-cn",
                     "kind": "github-cn-mirror",
-                    "base_url": (
-                        _environment("ECOREX_RELEASE_MIRROR_BASE_URL")
-                        + f"/{channel_suffix}"
-                    ),
+                    "base_url": _mirror_channel_root(mirror_base_url, channel),
                 },
                 {
                     "source_id": "github",
@@ -91,7 +102,7 @@ def run(argv: list[str] | None = None) -> int:
                     "kind": "ecorex-cdn",
                     "base_url": (
                         _environment("ECOREX_RELEASE_CDN_BASE_URL")
-                        + f"/{channel_suffix}"
+                        + f"/{channel.value}"
                     ),
                 },
             ],

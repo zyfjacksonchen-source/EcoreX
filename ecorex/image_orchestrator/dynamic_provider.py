@@ -219,7 +219,7 @@ class DynamicManagedImageProvider:
                 raise ProviderUnavailable("managed image provider is closed")
             entry = self._entries.get(key)
             if entry is None:
-                origin = self.origins.get(configuration.provider_preset)
+                origin = self.origins.get(configuration.provider_origin_preset)
                 if origin is None:
                     raise ProviderUnavailable("managed image origin is unavailable")
                 entry = _Entry(

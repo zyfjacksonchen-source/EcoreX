@@ -7,6 +7,11 @@
   const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,255}$/;
 
   let adminToken = "";
+  let adminRefreshToken = "";
+  let adminLeaseId = "";
+  let adminAccessExpiresAt = 0;
+  let authGeneration = 0;
+  let refreshPromise = null;
   let manifest = null;
   let manifestSha256 = null;
   let candidate = null;
@@ -42,6 +47,10 @@
 
   const elements = {
     authForm: byId("auth-form"),
+    deviceLoginButton: byId("device-login-button"),
+    deviceLoginState: byId("device-login-state"),
+    deviceLoginCode: byId("device-login-code"),
+    deviceLoginLink: byId("device-login-link"),
     tokenInput: byId("admin-token"),
     connectButton: byId("connect-button"),
     refreshStateButton: byId("refresh-state-button"),
@@ -512,8 +521,148 @@
     return { message: fallback, code: null };
   };
 
+  const deviceRequest = async (path, body, idempotencyKey) => {
+    const response = await fetch(path, {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      redirect: "error",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "Idempotency-Key": idempotencyKey,
+      },
+      body: JSON.stringify(body),
+    });
+    const text = await response.text();
+    if (text.length > MAX_RESPONSE_BYTES) throw new Error("设备登录响应超过大小限制。");
+    let payload;
+    try { payload = JSON.parse(text); } catch { throw new Error("设备登录返回无效 JSON。"); }
+    if (!response.ok) {
+      const parsed = parseApiError(payload, response.status);
+      throw new AdminApiError(parsed.message, response.status, parsed.code);
+    }
+    return payload;
+  };
+
+  const accessExpiry = (token) => {
+    try {
+      const segments = token.split(".");
+      if (segments.length !== 3 || segments[1].length > 16384) throw new Error();
+      const normalized = segments[1].replaceAll("-", "+").replaceAll("_", "/");
+      const claims = JSON.parse(atob(normalized + "=".repeat((4 - normalized.length % 4) % 4)));
+      if (!Number.isSafeInteger(claims.exp) || claims.exp <= 0) throw new Error();
+      return claims.exp * 1000;
+    } catch {
+      throw new Error("Control Plane access token 缺少有效到期时间。");
+    }
+  };
+
+  const installDeviceGrant = (payload) => {
+    if (!isRecord(payload) || payload.status !== "authorized" || !isRecord(payload.lease)
+      || !isRecord(payload.lease.claims) || typeof payload.access_token !== "string"
+      || typeof payload.refresh_token !== "string" || typeof payload.lease.claims.lease_id !== "string") {
+      throw new Error("Control Plane 设备授权结果无效。");
+    }
+    adminToken = payload.access_token;
+    adminRefreshToken = payload.refresh_token;
+    adminLeaseId = payload.lease.claims.lease_id;
+    adminAccessExpiresAt = accessExpiry(adminToken);
+  };
+
+  const refreshDeviceGrant = async () => {
+    if (!adminRefreshToken || !adminLeaseId) return;
+    if (refreshPromise) return refreshPromise;
+    const generation = authGeneration;
+    refreshPromise = (async () => {
+      try {
+        const payload = await deviceRequest(
+          "/v1/device/token",
+          {
+            schema_version: 1,
+            client_id: "ecorex-admin-web",
+            grant_type: "refresh_token",
+            lease_id: adminLeaseId,
+            refresh_token: adminRefreshToken,
+          },
+          `admin-refresh:${adminLeaseId}`,
+        );
+        if (generation !== authGeneration) return;
+        installDeviceGrant(payload);
+      } catch (error) {
+        if (generation === authGeneration && error instanceof AdminApiError
+          && (error.code === "invalid_grant" || error.status === 401)) {
+          clearSession();
+          showMessage("error", "管理员会话已失效，请重新登录。");
+        }
+        throw error;
+      } finally {
+        refreshPromise = null;
+      }
+    })();
+    return refreshPromise;
+  };
+
+  const ensureFreshToken = async () => {
+    if (adminRefreshToken && adminAccessExpiresAt - Date.now() <= 60_000) {
+      await refreshDeviceGrant();
+    }
+  };
+
+  const beginDeviceLogin = async () => {
+    const generation = ++authGeneration;
+    clearSession({ clearWorkflow: false, preserveGeneration: true });
+    const beginId = `admin-device-begin:${globalThis.crypto.randomUUID().replaceAll("-", "")}`;
+    const challenge = await deviceRequest(
+      "/v1/device/authorize",
+      { schema_version: 1, client_id: "ecorex-admin-web" },
+      beginId,
+    );
+    if (generation !== authGeneration) return;
+    if (typeof challenge.user_code !== "string" || typeof challenge.verification_url !== "string"
+      || typeof challenge.provider_flow_id !== "string" || typeof challenge.device_code !== "string") {
+      throw new Error("Control Plane 设备登录挑战无效。");
+    }
+    const verification = new URL(challenge.verification_url, window.location.origin);
+    const expiresAt = Date.parse(challenge.expires_at);
+    if (verification.protocol !== "https:" || verification.origin !== window.location.origin
+      || !Number.isSafeInteger(challenge.poll_interval_seconds)
+      || challenge.poll_interval_seconds < 1 || challenge.poll_interval_seconds > 60
+      || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+      throw new Error("Control Plane 设备登录挑战无效。");
+    }
+    elements.deviceLoginCode.textContent = `验证码 ${challenge.user_code}`;
+    elements.deviceLoginLink.href = verification.href;
+    elements.deviceLoginState.hidden = false;
+    window.open(verification.href, "_blank", "noopener,noreferrer");
+    let attempt = 0;
+    while (generation === authGeneration && Date.now() < expiresAt) {
+      await new Promise((resolve) => globalThis.setTimeout(resolve, Math.max(1000, challenge.poll_interval_seconds * 1000)));
+      if (generation !== authGeneration) return;
+      const payload = await deviceRequest(
+        "/v1/device/token",
+        {
+          schema_version: 1,
+          client_id: "ecorex-admin-web",
+          provider_flow_id: challenge.provider_flow_id,
+          device_code: challenge.device_code,
+        },
+        `admin-device-poll:${challenge.provider_flow_id}:${++attempt}`,
+      );
+      if (payload.status === "pending" || payload.status === "slow_down") continue;
+      if (payload.status !== "authorized") throw new Error("管理员设备授权未完成。");
+      installDeviceGrant(payload);
+      elements.deviceLoginState.hidden = true;
+      await refreshResume(elements.deviceLoginButton);
+      syncControls();
+      return;
+    }
+    if (generation === authGeneration) throw new Error("管理员设备登录已过期，请重试。");
+  };
+
   const apiRequest = async (path, options = {}) => {
     if (!adminToken) throw new AdminApiError("管理员令牌未连接。请先连接控制面。", 401);
+    await ensureFreshToken();
     if (typeof path !== "string" || !path.startsWith("/") || path.includes("?") || path.includes("#")) {
       throw new Error("管理台拒绝了无效 API 路径。");
     }
@@ -675,12 +824,20 @@
     }
   };
 
-  const clearSession = ({ clearWorkflow = true } = {}) => {
+  const clearSession = ({ clearWorkflow = true, preserveGeneration = false } = {}) => {
+    if (!preserveGeneration) authGeneration += 1;
     adminToken = "";
+    adminRefreshToken = "";
+    adminLeaseId = "";
+    adminAccessExpiresAt = 0;
+    refreshPromise = null;
     sessionConnected = false;
     requestIds.clear();
     elements.tokenInput.value = "";
     elements.sessionLabel.textContent = "未连接";
+    elements.deviceLoginState.hidden = true;
+    elements.deviceLoginLink.removeAttribute("href");
+    elements.deviceLoginCode.textContent = "";
     if (clearWorkflow) {
       manifest = null;
       manifestSha256 = null;
@@ -701,6 +858,7 @@
     const hasToken = adminToken.length > 0;
     const connected = hasToken && sessionConnected;
     elements.connectButton.disabled = busy;
+    elements.deviceLoginButton.disabled = busy;
     elements.refreshStateButton.disabled = !hasToken || busy;
     elements.tokenInput.disabled = busy;
     elements.manifestFile.disabled = busy;
@@ -1205,6 +1363,10 @@
     syncControls();
   });
 
+  elements.deviceLoginButton.addEventListener("click", () => {
+    void withBusy(elements.deviceLoginButton, "等待授权", beginDeviceLogin);
+  });
+
   elements.refreshStateButton.addEventListener("click", () => {
     void refreshResume();
   });
@@ -1327,6 +1489,14 @@
     "gpt-image-2": "image_generation",
     "gpt-image-2-edit": "image_edit",
   };
+  const modelSlotProtocols = {
+    "ecorex-chat": "responses",
+    "ecorex-deepseek-v4-pro": "openai_compatible_chat",
+    "ecorex-gemini-3.1-pro": "openai_compatible_chat",
+    "ecorex-doubao-seed-2.0-pro": "openai_compatible_chat",
+    "gpt-image-2": "openai_compatible_image",
+    "gpt-image-2-edit": "openai_compatible_image",
+  };
   const syncModelProvider = () => {
     const modality = elements.modelModality.value;
     for (const option of elements.modelLocalId.options) {
@@ -1336,16 +1506,10 @@
       const first = Array.from(elements.modelLocalId.options).find((option) => !option.disabled);
       if (first) elements.modelLocalId.value = first.value;
     }
-    const isImage = modality !== "chat";
-    if (isImage) elements.modelProvider.value = "openai_compatible_image";
-    else if (elements.modelProvider.value === "openai_compatible_image") elements.modelProvider.value = "responses";
-    for (const option of elements.modelProvider.options) {
-      option.disabled = isImage
-        ? option.value !== "openai_compatible_image"
-        : option.value === "openai_compatible_image";
-    }
+    elements.modelProvider.value = modelSlotProtocols[elements.modelLocalId.value];
   };
   elements.modelModality.addEventListener("change", syncModelProvider);
+  elements.modelLocalId.addEventListener("change", syncModelProvider);
 
   elements.modelForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -1699,6 +1863,11 @@
 
   window.addEventListener("beforeunload", () => {
     adminToken = "";
+    adminRefreshToken = "";
+    adminLeaseId = "";
+    adminAccessExpiresAt = 0;
+    authGeneration += 1;
+    refreshPromise = null;
     requestIds.clear();
   });
 

@@ -2,8 +2,10 @@
 
 The built-in v1 provider is intentionally a *single-node* SQLite WAL service.
 It requires an exclusive process lock, a persistent-volume identity, verified
-backups, S3-backed Share media, encrypted Cloud Audit and short-lived Ed25519
-JWTs.  It never runs DDL during ``serve`` and refuses PostgreSQL/multi-replica
+backups, private Share media, encrypted Cloud Audit and short-lived Ed25519
+JWTs. Share media uses either private S3 or an attested encrypted local CAS
+whose availability boundary is one host and one replica. It never runs DDL
+during ``serve`` and refuses PostgreSQL/multi-replica
 configuration until a separately reviewed HA provider implements the typed
 dependency contract.
 """
@@ -30,6 +32,11 @@ from urllib.parse import urlsplit
 import uuid
 
 from ecorex.observability.audit import AuditRetentionPolicy
+from ecorex.storage.attested_local_cas import (
+    AttestedEncryptedLocalCAS,
+    AttestedEncryptedLocalVolume,
+    AttestedLocalCASError,
+)
 from ecorex.release import (
     DigestPinnedExternalSigner,
     PUBLIC_BOOTSTRAP_AUTHORITY_FUTURE_SKEW_SECONDS,
@@ -74,6 +81,12 @@ from .management_schema import (
     CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION,
     AdminManagementSchemaManager,
 )
+from .device_identity import ManagedDeviceIdentityBroker
+from .device_identity_production import (
+    DeviceIdentityProductionConfig,
+    DeviceIdentitySecretProvider,
+)
+from .device_identity_schema import DeviceIdentitySchemaManager
 from .repository import ControlPlaneRepository
 from .schema import (
     CONTROL_PLANE_SCHEMA_SHA256,
@@ -82,6 +95,8 @@ from .schema import (
     ControlPlaneSchemaManager,
 )
 from .share_s3_objects import S3ShareObjectStore
+from .share_attested_local_objects import AttestedLocalShareObjectStore
+from .share_objects import ShareObjectStore
 from .share_schema import (
     CLOUD_SHARE_SCHEMA_SHA256,
     CURRENT_CLOUD_SHARE_SCHEMA_VERSION,
@@ -101,7 +116,19 @@ _SECRET_NAMES = {
     "audit-encryption-key": "ECOREX_CP_AUDIT_ENCRYPTION_KEY_B64",
     "audit-integrity-key": "ECOREX_CP_AUDIT_INTEGRITY_KEY_B64",
     "model-config-encryption-key": "ECOREX_CP_MODEL_CONFIG_ENCRYPTION_KEY_B64",
+    "device-derivation-key": "ECOREX_CP_DEVICE_DERIVATION_KEY_B64",
+    "device-legacy-credential-pepper": "ECOREX_CP_DEVICE_LEGACY_PEPPER_B64",
 }
+_S3_SETTING_NAMES = frozenset(
+    {
+        "ECOREX_CP_S3_BUCKET",
+        "ECOREX_CP_S3_PREFIX",
+        "ECOREX_CP_S3_REGION",
+        "ECOREX_CP_S3_ENDPOINT_URL",
+        "ECOREX_CP_S3_ADDRESSING_STYLE",
+        "ECOREX_CP_S3_MAX_CONNECTIONS",
+    }
+)
 
 
 class ProductionConfigurationError(RuntimeError):
@@ -133,6 +160,25 @@ class EnvironmentSecretProvider:
         return value
 
 
+class _ControlPlaneDeviceIdentitySecrets(DeviceIdentitySecretProvider):
+    """Decode two fixed secrets supplied by the Control Plane secret backend."""
+
+    def __init__(self, provider: SecretProvider) -> None:
+        self.provider = provider
+
+    def read(self, logical_name: str) -> bytes:
+        names = {
+            "derivation-key": "device-derivation-key",
+            "legacy-credential-pepper": "device-legacy-credential-pepper",
+        }
+        target = names.get(logical_name)
+        if target is None:
+            raise ProductionConfigurationError("unknown device identity secret")
+        return _secret_bytes(
+            self.provider.read(target), minimum_length=32, maximum_length=64
+        )
+
+
 @runtime_checkable
 class ProductionS3Client(Protocol):
     def put_object(self, **kwargs: Any) -> Mapping[str, Any]: ...
@@ -154,6 +200,21 @@ class ProductionS3Client(Protocol):
 
 class S3ClientFactory(Protocol):
     def create(self, config: "ControlPlaneProductionConfig") -> ProductionS3Client: ...
+
+
+@runtime_checkable
+class ShareStorageDependency(Protocol):
+    def validate_controls(self, *, write_probe: bool) -> None: ...
+
+    def ping(self) -> None: ...
+
+    def close(self) -> None: ...
+
+
+class ControlPlaneLocalCASFactory(Protocol):
+    def create(
+        self, config: "ControlPlaneProductionConfig"
+    ) -> tuple[ShareStorageDependency, ShareObjectStore]: ...
 
 
 class Boto3S3ClientFactory:
@@ -190,6 +251,52 @@ class Boto3S3ClientFactory:
         return client
 
 
+class AttestedLocalControlPlaneCASFactory:
+    """Construct the production single-host Share CAS."""
+
+    def create(
+        self, config: "ControlPlaneProductionConfig"
+    ) -> tuple[ShareStorageDependency, ShareObjectStore]:
+        try:
+            if (
+                config.local_cas_root is None
+                or config.local_cas_attestation_path is None
+                or config.local_cas_attestation_sha256 is None
+                or config.local_cas_volume_id is None
+                or config.local_cas_machine_id_sha256 is None
+                or config.local_cas_owner_gid is None
+            ):
+                raise ProductionConfigurationError(
+                    "attested Share CAS configuration is incomplete"
+                )
+            volume = AttestedEncryptedLocalVolume(
+                cas_root=config.local_cas_root,
+                attestation_path=config.local_cas_attestation_path,
+                expected_attestation_sha256=config.local_cas_attestation_sha256,
+                expected_volume_id=config.local_cas_volume_id,
+                expected_machine_id_sha256=config.local_cas_machine_id_sha256,
+                replica_count=config.local_cas_replica_count,
+                quota_bytes=config.local_cas_quota_bytes,
+                minimum_free_bytes=config.local_cas_minimum_free_bytes,
+                owner_gid=config.local_cas_owner_gid,
+            )
+            store = AttestedLocalShareObjectStore(
+                AttestedEncryptedLocalCAS(
+                    volume,
+                    namespace="share",
+                    max_blob_bytes=config.local_cas_max_object_bytes,
+                ),
+                max_open_streams=config.local_cas_max_open_streams,
+            )
+            return _AttestedLocalShareDependency(store), store
+        except ProductionConfigurationError:
+            raise
+        except AttestedLocalCASError:
+            raise ProductionConfigurationError(
+                "attested Share CAS could not start"
+            ) from None
+
+
 @dataclass(frozen=True, slots=True)
 class ControlPlaneProductionConfig:
     storage_backend: str
@@ -204,17 +311,30 @@ class ControlPlaneProductionConfig:
     backup_retain_count: int
     public_share_base_url: str
     share_spool_directory: Path
+    share_storage_mode: str
     s3_bucket: str
     s3_prefix: str
     s3_region: str
     s3_endpoint_url: str | None
     s3_addressing_style: str
     s3_max_connections: int
+    local_cas_root: Path | None
+    local_cas_attestation_path: Path | None
+    local_cas_attestation_sha256: str | None = field(repr=False)
+    local_cas_volume_id: str | None
+    local_cas_machine_id_sha256: str | None = field(repr=False)
+    local_cas_replica_count: int
+    local_cas_quota_bytes: int
+    local_cas_minimum_free_bytes: int
+    local_cas_owner_gid: int | None
+    local_cas_max_object_bytes: int
+    local_cas_max_open_streams: int
     auth_issuer: str
     auth_audience: str
     auth_public_keys_json: str = field(repr=False)
     release_public_keys_json: str = field(repr=False)
     publication_public_keys_json: str = field(repr=False)
+    rollback_signer_public_keys_json: str = field(repr=False)
     public_bootstrap_index_path: Path
     public_bootstrap_index_url: str
     public_bootstrap_readback_hosts: tuple[str, ...]
@@ -245,9 +365,17 @@ class ControlPlaneProductionConfig:
     publication_signer_adapter_sha256: str | None = None
     publication_signer_key_id: str | None = None
     publication_signer_timeout_seconds: int = 30
+    rollback_signer_executable: Path | None = None
+    rollback_signer_executable_sha256: str | None = None
+    rollback_signer_adapter: Path | None = None
+    rollback_signer_adapter_sha256: str | None = None
+    rollback_signer_key_id: str | None = None
+    rollback_signer_timeout_seconds: int = 30
     admin_management_enabled: bool = False
     model_provider_origins: Mapping[str, str] = field(default_factory=dict)
     model_activation_timeout_seconds: int = 180
+    device_identity_enabled: bool = False
+    device_identity: DeviceIdentityProductionConfig | None = None
 
     def __post_init__(self) -> None:
         try:
@@ -258,7 +386,6 @@ class ControlPlaneProductionConfig:
             ) from None
         parsed_public = urlsplit(self.public_share_base_url)
         parsed_bootstrap = urlsplit(self.public_bootstrap_index_url)
-        endpoint = urlsplit(self.s3_endpoint_url) if self.s3_endpoint_url else None
         if (
             self.storage_backend != "sqlite-wal"
             or self.replica_count != 1
@@ -284,18 +411,7 @@ class ControlPlaneProductionConfig:
             or parsed_public.query
             or parsed_public.fragment
             or parsed_public.path.rstrip("/") != "/s"
-            or _BUCKET.fullmatch(self.s3_bucket) is None
-            or _PREFIX.fullmatch(self.s3_prefix) is None
-            or any(part in {"", ".", ".."} for part in self.s3_prefix.split("/"))
-            or not isinstance(self.s3_region, str)
-            or not self.s3_region
-            or self.s3_addressing_style not in {"virtual", "path"}
-            or not 4 <= self.s3_max_connections <= 256
-            or (endpoint is not None and endpoint.scheme != "https")
-            or (endpoint is not None and not endpoint.hostname)
-            or (endpoint is not None and endpoint.username is not None)
-            or (endpoint is not None and endpoint.password is not None)
-            or (endpoint is not None and bool(endpoint.query or endpoint.fragment))
+            or not self._share_storage_is_valid()
             or not isinstance(self.auth_issuer, str)
             or not self.auth_issuer
             or not isinstance(self.auth_audience, str)
@@ -306,6 +422,8 @@ class ControlPlaneProductionConfig:
             or not self.release_public_keys_json
             or not isinstance(self.publication_public_keys_json, str)
             or not self.publication_public_keys_json
+            or not isinstance(self.rollback_signer_public_keys_json, str)
+            or not self.rollback_signer_public_keys_json
             or not isinstance(self.public_bootstrap_index_path, Path)
             or not self.public_bootstrap_index_path.is_absolute()
             or self.public_bootstrap_index_path.name != "public-bootstrap-index.json"
@@ -360,27 +478,34 @@ class ControlPlaneProductionConfig:
             + PUBLIC_BOOTSTRAP_AUTHORITY_FUTURE_SKEW_SECONDS
             >= self.bootstrap_freshness_lead_seconds
             or not 1 <= self.publication_signer_timeout_seconds <= 120
+            or not 1 <= self.rollback_signer_timeout_seconds <= 120
             or not 30 <= self.model_activation_timeout_seconds <= 600
         ):
             raise ProductionConfigurationError(
                 "Control Plane production configuration is invalid"
             )
-        parse_ed25519_public_keyring(self.auth_public_keys_json)
+        auth_keys = parse_ed25519_public_keyring(self.auth_public_keys_json)
         release_keys = parse_ed25519_public_keyring(self.release_public_keys_json)
         publication_keys = parse_ed25519_public_keyring(
             self.publication_public_keys_json
         )
-        release_fingerprints = {
-            hashlib.sha256(material).digest() for material in release_keys.values()
-        }
-        publication_fingerprints = {
-            hashlib.sha256(material).digest() for material in publication_keys.values()
-        }
-        if set(release_keys) & set(publication_keys) or (
-            release_fingerprints & publication_fingerprints
+        rollback_keys = parse_ed25519_public_keyring(
+            self.rollback_signer_public_keys_json
+        )
+        keyrings = (release_keys, publication_keys, rollback_keys)
+        key_ids = [set(keys) for keys in keyrings]
+        fingerprints = [
+            {hashlib.sha256(material).digest() for material in keys.values()}
+            for keys in keyrings
+        ]
+        if any(
+            key_ids[left] & key_ids[right]
+            or fingerprints[left] & fingerprints[right]
+            for left in range(len(keyrings))
+            for right in range(left + 1, len(keyrings))
         ):
             raise ProductionConfigurationError(
-                "release and publication trust roles must use distinct keys"
+                "release, publication and rollback trust roles must use distinct keys"
             )
         signer_required = (
             self.publication_signer_executable,
@@ -426,12 +551,58 @@ class ControlPlaneProductionConfig:
             raise ProductionConfigurationError(
                 "publication freshness signer trust binding is invalid"
             )
+        rollback_required = (
+            self.rollback_signer_executable,
+            self.rollback_signer_executable_sha256,
+            self.rollback_signer_key_id,
+        )
+        if any(value is not None for value in rollback_required) and any(
+            value is None for value in rollback_required
+        ):
+            raise ProductionConfigurationError(
+                "rollback signer configuration is incomplete"
+            )
+        if (
+            (self.rollback_signer_adapter is None)
+            != (self.rollback_signer_adapter_sha256 is None)
+            or (
+                self.rollback_signer_executable is not None
+                and not self.rollback_signer_executable.is_absolute()
+            )
+            or (
+                self.rollback_signer_executable_sha256 is not None
+                and re.fullmatch(
+                    r"[0-9a-f]{64}", self.rollback_signer_executable_sha256
+                )
+                is None
+            )
+            or (
+                self.rollback_signer_adapter is not None
+                and not self.rollback_signer_adapter.is_absolute()
+            )
+            or (
+                self.rollback_signer_adapter_sha256 is not None
+                and re.fullmatch(
+                    r"[0-9a-f]{64}", self.rollback_signer_adapter_sha256
+                )
+                is None
+            )
+            or (
+                self.rollback_signer_key_id is not None
+                and self.rollback_signer_key_id not in rollback_keys
+            )
+        ):
+            raise ProductionConfigurationError(
+                "rollback signer trust binding is invalid"
+            )
         origins = dict(self.model_provider_origins)
         if self.admin_management_enabled:
             allowed_presets = {
-                "responses",
-                "openai_compatible_chat",
-                "openai_compatible_image",
+                "ecorex_chat",
+                "deepseek_chat",
+                "gemini_chat",
+                "doubao_chat",
+                "ecorex_image",
             }
             if not origins or any(
                 preset not in allowed_presets
@@ -451,7 +622,95 @@ class ControlPlaneProductionConfig:
             raise ProductionConfigurationError(
                 "managed model origins require administrator management"
             )
+        if self.device_identity_enabled != (self.device_identity is not None):
+            raise ProductionConfigurationError(
+                "managed device identity configuration is incomplete"
+            )
+        if self.device_identity_enabled and not self.admin_management_enabled:
+            raise ProductionConfigurationError(
+                "managed device identity requires administrator management"
+            )
+        if (
+            self.device_identity is not None
+            and self.device_identity.database_path != self.database_path
+        ):
+            raise ProductionConfigurationError(
+                "managed device identity must share Control Plane storage"
+            )
+        if self.device_identity is not None and (
+            self.device_identity.issuer != self.auth_issuer
+            or self.device_identity.audience != self.auth_audience
+            or auth_keys.get(self.device_identity.access_signer.key_id)
+            != self.device_identity.access_signer.public_key
+        ):
+            raise ProductionConfigurationError(
+                "managed device identity access tokens are not trusted by Control Plane"
+            )
         object.__setattr__(self, "model_provider_origins", dict(origins))
+
+    def _share_storage_is_valid(self) -> bool:
+        local_values = (
+            self.local_cas_root,
+            self.local_cas_attestation_path,
+            self.local_cas_attestation_sha256,
+            self.local_cas_volume_id,
+            self.local_cas_machine_id_sha256,
+            self.local_cas_owner_gid,
+        )
+        if self.share_storage_mode == "s3":
+            endpoint = urlsplit(self.s3_endpoint_url) if self.s3_endpoint_url else None
+            return bool(
+                _BUCKET.fullmatch(self.s3_bucket)
+                and _PREFIX.fullmatch(self.s3_prefix)
+                and not any(
+                    part in {"", ".", ".."} for part in self.s3_prefix.split("/")
+                )
+                and isinstance(self.s3_region, str)
+                and self.s3_region
+                and self.s3_addressing_style in {"virtual", "path"}
+                and 4 <= self.s3_max_connections <= 256
+                and (endpoint is None or endpoint.scheme == "https")
+                and (endpoint is None or bool(endpoint.hostname))
+                and (endpoint is None or endpoint.username is None)
+                and (endpoint is None or endpoint.password is None)
+                and (endpoint is None or not bool(endpoint.query or endpoint.fragment))
+                and all(value is None for value in local_values)
+                and self.local_cas_replica_count == 1
+                and self.local_cas_quota_bytes == 0
+                and self.local_cas_minimum_free_bytes == 0
+                and self.local_cas_max_object_bytes == 0
+                and self.local_cas_max_open_streams == 0
+            )
+        if self.share_storage_mode != "attested-encrypted-local-cas":
+            return False
+        return bool(
+            self.s3_bucket == ""
+            and self.s3_prefix == ""
+            and self.s3_region == ""
+            and self.s3_endpoint_url is None
+            and isinstance(self.local_cas_root, Path)
+            and self.local_cas_root.is_absolute()
+            and isinstance(self.local_cas_attestation_path, Path)
+            and self.local_cas_attestation_path.is_absolute()
+            and re.fullmatch(
+                r"[0-9a-f]{64}", str(self.local_cas_attestation_sha256)
+            )
+            and _SAFE_ID.fullmatch(str(self.local_cas_volume_id))
+            and self.local_cas_volume_id == self.storage_volume_id
+            and re.fullmatch(
+                r"[0-9a-f]{64}", str(self.local_cas_machine_id_sha256)
+            )
+            and self.local_cas_replica_count == self.replica_count == 1
+            and 1024 * 1024
+            <= self.local_cas_minimum_free_bytes
+            <= self.local_cas_quota_bytes
+            <= 8 * 1024**4
+            and isinstance(self.local_cas_owner_gid, int)
+            and not isinstance(self.local_cas_owner_gid, bool)
+            and 0 <= self.local_cas_owner_gid <= 2**31 - 1
+            and 1024 <= self.local_cas_max_object_bytes <= 256 * 1024 * 1024
+            and 1 <= self.local_cas_max_open_streams <= 1024
+        )
 
     @classmethod
     def from_environment(
@@ -523,8 +782,21 @@ class ControlPlaneProductionConfig:
                 "public Bootstrap index configuration is invalid"
             )
 
-        endpoint = values.get("ECOREX_CP_S3_ENDPOINT_URL") or None
-        if endpoint is not None:
+        share_storage_mode = values.get("ECOREX_CP_SHARE_STORAGE_MODE", "s3")
+        if share_storage_mode not in {"s3", "attested-encrypted-local-cas"}:
+            raise ProductionConfigurationError("Share storage mode is invalid")
+        if share_storage_mode == "attested-encrypted-local-cas" and any(
+            name in values for name in _S3_SETTING_NAMES
+        ):
+            raise ProductionConfigurationError(
+                "Share storage configuration is ambiguous"
+            )
+        endpoint = (
+            values.get("ECOREX_CP_S3_ENDPOINT_URL") or None
+            if share_storage_mode == "s3"
+            else None
+        )
+        if share_storage_mode == "s3" and endpoint is not None:
             parsed_endpoint = urlsplit(endpoint)
             if (
                 parsed_endpoint.scheme != "https"
@@ -537,17 +809,24 @@ class ControlPlaneProductionConfig:
                 raise ProductionConfigurationError(
                     "S3 endpoint configuration is invalid"
                 )
-        bucket = _required(values, "ECOREX_CP_S3_BUCKET")
-        prefix = _required(values, "ECOREX_CP_S3_PREFIX").strip("/")
-        if (
+        bucket = (
+            _required(values, "ECOREX_CP_S3_BUCKET")
+            if share_storage_mode == "s3"
+            else ""
+        )
+        prefix = (
+            _required(values, "ECOREX_CP_S3_PREFIX").strip("/")
+            if share_storage_mode == "s3"
+            else ""
+        )
+        addressing = values.get("ECOREX_CP_S3_ADDRESSING_STYLE", "virtual")
+        if share_storage_mode == "s3" and (
             _BUCKET.fullmatch(bucket) is None
             or _PREFIX.fullmatch(prefix) is None
             or any(part in {"", ".", ".."} for part in prefix.split("/"))
+            or addressing not in {"virtual", "path"}
         ):
             raise ProductionConfigurationError("S3 namespace configuration is invalid")
-        addressing = values.get("ECOREX_CP_S3_ADDRESSING_STYLE", "virtual")
-        if addressing not in {"virtual", "path"}:
-            raise ProductionConfigurationError("S3 addressing configuration is invalid")
 
         bind_host = values.get("ECOREX_CP_BIND_HOST", "127.0.0.1")
         try:
@@ -596,6 +875,9 @@ class ControlPlaneProductionConfig:
         management_enabled = _boolean(
             values, "ECOREX_CP_ADMIN_MANAGEMENT_ENABLED", default=False
         )
+        device_identity_enabled = _boolean(
+            values, "ECOREX_CP_DEVICE_IDENTITY_ENABLED", default=False
+        )
         origins: dict[str, str] = {}
         raw_origins = values.get("ECOREX_CP_MODEL_PROVIDER_ORIGINS_JSON")
         if raw_origins:
@@ -643,17 +925,81 @@ class ControlPlaneProductionConfig:
             ),
             public_share_base_url=public_url,
             share_spool_directory=spool,
+            share_storage_mode=share_storage_mode,
             s3_bucket=bucket,
             s3_prefix=prefix,
-            s3_region=_required(values, "ECOREX_CP_S3_REGION"),
+            s3_region=(
+                _required(values, "ECOREX_CP_S3_REGION")
+                if share_storage_mode == "s3"
+                else ""
+            ),
             s3_endpoint_url=endpoint,
             s3_addressing_style=addressing,
-            s3_max_connections=_integer(
-                values,
-                "ECOREX_CP_S3_MAX_CONNECTIONS",
-                minimum=4,
-                maximum=256,
-                default=32,
+            s3_max_connections=(
+                _integer(
+                    values,
+                    "ECOREX_CP_S3_MAX_CONNECTIONS",
+                    minimum=4,
+                    maximum=256,
+                    default=32,
+                )
+                if share_storage_mode == "s3"
+                else 0
+            ),
+            local_cas_root=(
+                _absolute_path(values, "ECOREX_CP_LOCAL_CAS_ROOT")
+                if share_storage_mode == "attested-encrypted-local-cas"
+                else None
+            ),
+            local_cas_attestation_path=(
+                _absolute_path(values, "ECOREX_CP_LOCAL_CAS_ATTESTATION_PATH")
+                if share_storage_mode == "attested-encrypted-local-cas"
+                else None
+            ),
+            local_cas_attestation_sha256=(
+                _required(values, "ECOREX_CP_LOCAL_CAS_ATTESTATION_SHA256")
+                if share_storage_mode == "attested-encrypted-local-cas"
+                else None
+            ),
+            local_cas_volume_id=(
+                _required(values, "ECOREX_CP_LOCAL_CAS_VOLUME_ID")
+                if share_storage_mode == "attested-encrypted-local-cas"
+                else None
+            ),
+            local_cas_machine_id_sha256=(
+                _required(values, "ECOREX_CP_LOCAL_CAS_MACHINE_ID_SHA256")
+                if share_storage_mode == "attested-encrypted-local-cas"
+                else None
+            ),
+            local_cas_replica_count=(
+                _integer(values, "ECOREX_CP_LOCAL_CAS_REPLICA_COUNT", minimum=1, maximum=1, default=1)
+                if share_storage_mode == "attested-encrypted-local-cas"
+                else 1
+            ),
+            local_cas_quota_bytes=(
+                _integer(values, "ECOREX_CP_LOCAL_CAS_QUOTA_BYTES", minimum=1024 * 1024, maximum=8 * 1024**4, default=256 * 1024**3)
+                if share_storage_mode == "attested-encrypted-local-cas"
+                else 0
+            ),
+            local_cas_minimum_free_bytes=(
+                _integer(values, "ECOREX_CP_LOCAL_CAS_MINIMUM_FREE_BYTES", minimum=1024 * 1024, maximum=8 * 1024**4, default=10 * 1024**3)
+                if share_storage_mode == "attested-encrypted-local-cas"
+                else 0
+            ),
+            local_cas_owner_gid=(
+                _integer(values, "ECOREX_CP_LOCAL_CAS_OWNER_GID", minimum=0, maximum=2**31 - 1, default=-1)
+                if share_storage_mode == "attested-encrypted-local-cas"
+                else None
+            ),
+            local_cas_max_object_bytes=(
+                _integer(values, "ECOREX_CP_LOCAL_CAS_MAX_OBJECT_BYTES", minimum=1024, maximum=256 * 1024 * 1024, default=64 * 1024 * 1024)
+                if share_storage_mode == "attested-encrypted-local-cas"
+                else 0
+            ),
+            local_cas_max_open_streams=(
+                _integer(values, "ECOREX_CP_LOCAL_CAS_MAX_OPEN_STREAMS", minimum=1, maximum=1024, default=32)
+                if share_storage_mode == "attested-encrypted-local-cas"
+                else 0
             ),
             auth_issuer=_required(values, "ECOREX_CP_AUTH_ISSUER"),
             auth_audience=_required(values, "ECOREX_CP_AUTH_AUDIENCE"),
@@ -663,6 +1009,9 @@ class ControlPlaneProductionConfig:
             ),
             publication_public_keys_json=_required(
                 values, "ECOREX_CP_PUBLICATION_PUBLIC_KEYS_JSON"
+            ),
+            rollback_signer_public_keys_json=_required(
+                values, "ECOREX_CP_ROLLBACK_SIGNER_PUBLIC_KEYS_JSON"
             ),
             public_bootstrap_index_path=_absolute_path(
                 values, "ECOREX_CP_PUBLIC_BOOTSTRAP_INDEX_PATH"
@@ -798,6 +1147,28 @@ class ControlPlaneProductionConfig:
                 maximum=120,
                 default=30,
             ),
+            rollback_signer_executable=_optional_absolute_path(
+                values, "ECOREX_CP_ROLLBACK_SIGNER_EXECUTABLE"
+            ),
+            rollback_signer_executable_sha256=(
+                values.get("ECOREX_CP_ROLLBACK_SIGNER_EXECUTABLE_SHA256") or None
+            ),
+            rollback_signer_adapter=_optional_absolute_path(
+                values, "ECOREX_CP_ROLLBACK_SIGNER_ADAPTER"
+            ),
+            rollback_signer_adapter_sha256=(
+                values.get("ECOREX_CP_ROLLBACK_SIGNER_ADAPTER_SHA256") or None
+            ),
+            rollback_signer_key_id=(
+                values.get("ECOREX_CP_ROLLBACK_SIGNER_KEY_ID") or None
+            ),
+            rollback_signer_timeout_seconds=_integer(
+                values,
+                "ECOREX_CP_ROLLBACK_SIGNER_TIMEOUT_SECONDS",
+                minimum=1,
+                maximum=120,
+                default=30,
+            ),
             admin_management_enabled=management_enabled,
             model_provider_origins=origins,
             model_activation_timeout_seconds=_integer(
@@ -806,6 +1177,12 @@ class ControlPlaneProductionConfig:
                 minimum=30,
                 maximum=600,
                 default=180,
+            ),
+            device_identity_enabled=device_identity_enabled,
+            device_identity=(
+                DeviceIdentityProductionConfig.from_environment(values)
+                if device_identity_enabled
+                else None
             ),
         )
 
@@ -906,6 +1283,45 @@ class _S3Dependency:
         self.client.close()
 
 
+class _AttestedLocalShareDependency:
+    def __init__(self, store: AttestedLocalShareObjectStore) -> None:
+        if not isinstance(store, AttestedLocalShareObjectStore):
+            raise TypeError("attested Share CAS store is invalid")
+        self.store = store
+        self._closed = False
+
+    def validate_controls(self, *, write_probe: bool) -> None:
+        receipt = self._health(write_probe=write_probe)
+        if (
+            receipt.get("status") != "passed"
+            or receipt.get("backend") != "attested-encrypted-local-cas"
+            or receipt.get("availability_scope") != "single-host"
+            or receipt.get("multi_host_ha") is not False
+            or receipt.get("replica_count") != 1
+        ):
+            raise ProductionConfigurationError(
+                "attested Share CAS health contract is invalid"
+            )
+
+    def ping(self) -> None:
+        self._health(write_probe=False)
+
+    def _health(self, *, write_probe: bool) -> Mapping[str, object]:
+        if self._closed:
+            raise ProductionConfigurationError(
+                "attested Share CAS dependency is closed"
+            )
+        try:
+            return self.store.health_probe(write_probe=write_probe, deep=False)
+        except Exception:
+            raise ProductionConfigurationError(
+                "attested Share CAS dependency is unavailable"
+            ) from None
+
+    def close(self) -> None:
+        self._closed = True
+
+
 @dataclass(slots=True)
 class ControlPlaneProductionBundle:
     repository: ControlPlaneRepository
@@ -917,6 +1333,7 @@ class ControlPlaneProductionBundle:
     rollback_signer: ReleaseSigner | None
     management_repository: AdminManagementRepository | None
     model_connection_tester: HTTPSModelConnectionTester | None
+    device_identity_broker: ManagedDeviceIdentityBroker | None
     lifecycle: "SingleNodeControlPlaneLifecycle"
     config: ControlPlaneProductionConfig
 
@@ -936,6 +1353,7 @@ class ControlPlaneProductionBundle:
             rollback_signer=self.rollback_signer,
             management_repository=self.management_repository,
             model_connection_tester=self.model_connection_tester,
+            device_identity_broker=self.device_identity_broker,
         )
 
 
@@ -948,7 +1366,7 @@ class SingleNodeControlPlaneLifecycle(ControlPlaneServiceLifecycle):
         volume: PersistentVolumeGuard,
         backup: SQLiteBackupManager,
         keyring: CloudShareKeyRing,
-        s3: _S3Dependency,
+        storage: ShareStorageDependency,
         audit_repository: CloudAuditRepository,
         share_repository: CloudShareRepository,
         bootstrap_index_service: BootstrapIndexPublicationService,
@@ -958,7 +1376,7 @@ class SingleNodeControlPlaneLifecycle(ControlPlaneServiceLifecycle):
         self.volume = volume
         self.backup = backup
         self.keyring = keyring
-        self.s3 = s3
+        self.storage = storage
         self.audit_repository = audit_repository
         self.share_repository = share_repository
         self.bootstrap_index_service = bootstrap_index_service
@@ -1040,7 +1458,7 @@ class SingleNodeControlPlaneLifecycle(ControlPlaneServiceLifecycle):
             await asyncio.to_thread(self.bootstrap_index_service.close)
         finally:
             try:
-                await asyncio.to_thread(self.s3.close)
+                await asyncio.to_thread(self.storage.close)
             finally:
                 self.instance_lock.release()
 
@@ -1055,7 +1473,7 @@ class SingleNodeControlPlaneLifecycle(ControlPlaneServiceLifecycle):
                 self.bootstrap_index_service.close()
             finally:
                 try:
-                    self.s3.close()
+                    self.storage.close()
                 finally:
                     self.instance_lock.release()
 
@@ -1068,6 +1486,8 @@ class SingleNodeControlPlaneLifecycle(ControlPlaneServiceLifecycle):
                 self.config.database_path, keyring=self.keyring
             ).validate()
             AdminManagementSchemaManager(self.config.database_path).validate()
+            if self.config.device_identity_enabled:
+                DeviceIdentitySchemaManager(self.config.database_path).validate()
         else:
             _validate_runtime_schema_receipts(self.config.database_path)
         if (
@@ -1090,9 +1510,9 @@ class SingleNodeControlPlaneLifecycle(ControlPlaneServiceLifecycle):
             else:
                 raise
         if write_s3:
-            self.s3.validate_controls(write_probe=True)
+            self.storage.validate_controls(write_probe=True)
         else:
-            self.s3.ping()
+            self.storage.ping()
 
     async def _backup_loop(self) -> None:
         delay = self.config.backup_interval_seconds
@@ -1189,9 +1609,48 @@ def _configured_publication_signer(
     return signer
 
 
+def _configured_rollback_signer(
+    config: ControlPlaneProductionConfig,
+    release_keys: Mapping[str, bytes],
+    publication_keys: Mapping[str, bytes],
+    rollback_keys: Mapping[str, bytes],
+) -> ReleaseSigner | None:
+    if config.rollback_signer_executable is None:
+        return None
+    assert config.rollback_signer_executable_sha256 is not None
+    assert config.rollback_signer_key_id is not None
+    signer = DigestPinnedExternalSigner(
+        key_id=config.rollback_signer_key_id,
+        public_key=rollback_keys[config.rollback_signer_key_id],
+        executable_path=config.rollback_signer_executable,
+        executable_sha256=config.rollback_signer_executable_sha256,
+        adapter_path=config.rollback_signer_adapter,
+        adapter_sha256=config.rollback_signer_adapter_sha256,
+        environment=os.environ,
+        timeout_seconds=config.rollback_signer_timeout_seconds,
+    )
+    fingerprint = hashlib.sha256(signer.public_key_bytes).digest()
+    if fingerprint in {
+        hashlib.sha256(material).digest()
+        for material in (*release_keys.values(), *publication_keys.values())
+    }:
+        raise ProductionConfigurationError(
+            "rollback signer aliases release or publication trust"
+        )
+    return signer
+
+
 class SingleNodeSQLiteS3Provider:
-    def __init__(self, s3_factory: S3ClientFactory | None = None) -> None:
+    def __init__(
+        self,
+        s3_factory: S3ClientFactory | None = None,
+        *,
+        local_cas_factory: ControlPlaneLocalCASFactory | None = None,
+    ) -> None:
         self.s3_factory = s3_factory or Boto3S3ClientFactory()
+        self.local_cas_factory = (
+            local_cas_factory or AttestedLocalControlPlaneCASFactory()
+        )
 
     def migrate(
         self,
@@ -1218,6 +1677,8 @@ class SingleNodeSQLiteS3Provider:
                 management = AdminManagementSchemaManager(
                     config.database_path
                 ).migrate()
+                if config.device_identity_enabled:
+                    DeviceIdentitySchemaManager(config.database_path).migrate()
                 volume.install_or_validate()
                 volume.validate_wal()
                 post_backup = backup.create(reason="post-migration")
@@ -1256,6 +1717,8 @@ class SingleNodeSQLiteS3Provider:
             config.database_path, keyring=keyring
         ).validate()
         management = AdminManagementSchemaManager(config.database_path).validate()
+        if config.device_identity_enabled:
+            DeviceIdentitySchemaManager(config.database_path).validate()
         receipt = backup.latest(full_digest=True)
         _require_recent_backup(receipt, config.maximum_backup_age_seconds)
         audit_encryption = _secret_bytes(
@@ -1265,9 +1728,7 @@ class SingleNodeSQLiteS3Provider:
             secrets.read("audit-integrity-key"), minimum_length=32, maximum_length=64
         )
         management_key = (
-            _secret_bytes(
-                secrets.read("model-config-encryption-key"), exact_length=32
-            )
+            _secret_bytes(secrets.read("model-config-encryption-key"), exact_length=32)
             if config.admin_management_enabled
             else None
         )
@@ -1275,18 +1736,17 @@ class SingleNodeSQLiteS3Provider:
         publication_keys = parse_ed25519_public_keyring(
             config.publication_public_keys_json
         )
+        rollback_keys = parse_ed25519_public_keyring(
+            config.rollback_signer_public_keys_json
+        )
         auth_keys = parse_ed25519_public_keyring(config.auth_public_keys_json)
         _configured_publication_signer(config, release_keys, publication_keys)
-        s3 = self._s3(config)
+        _configured_rollback_signer(
+            config, release_keys, publication_keys, rollback_keys
+        )
+        storage, object_store = self._share_storage(config)
         try:
-            s3.validate_controls(write_probe=True)
-            object_store = S3ShareObjectStore(
-                s3.client,
-                bucket=config.s3_bucket,
-                prefix=config.s3_prefix,
-                max_open_streams=min(64, config.s3_max_connections),
-                spool_directory=str(config.share_spool_directory),
-            )
+            storage.validate_controls(write_probe=True)
             verifier = Ed25519SignatureVerifier(release_keys)
             publication_verifier = Ed25519SignatureVerifier(publication_keys)
             Ed25519JWTAuthenticator(
@@ -1316,12 +1776,23 @@ class SingleNodeSQLiteS3Provider:
                     aggregate_days=config.audit_aggregate_days,
                 ),
             )
+            management_repository = None
             if management_key is not None:
-                AdminManagementRepository(
+                management_repository = AdminManagementRepository(
                     config.database_path, encryption_key=management_key
                 )
+            if config.device_identity is not None:
+                if management_repository is None:
+                    raise ProductionConfigurationError(
+                        "managed device identity has no account directory"
+                    )
+                config.device_identity.compose(
+                    management_repository,
+                    secrets=_ControlPlaneDeviceIdentitySecrets(secrets),
+                    initialize=False,
+                )
         finally:
-            s3.close()
+            storage.close()
         return ProductionSchemaReport(
             schema_version=1,
             storage_backend=config.storage_backend,
@@ -1346,9 +1817,7 @@ class SingleNodeSQLiteS3Provider:
             secrets.read("audit-integrity-key"), minimum_length=32, maximum_length=64
         )
         management_key = (
-            _secret_bytes(
-                secrets.read("model-config-encryption-key"), exact_length=32
-            )
+            _secret_bytes(secrets.read("model-config-encryption-key"), exact_length=32)
             if config.admin_management_enabled
             else None
         )
@@ -1356,11 +1825,14 @@ class SingleNodeSQLiteS3Provider:
         publication_keys = parse_ed25519_public_keyring(
             config.publication_public_keys_json
         )
+        rollback_keys = parse_ed25519_public_keyring(
+            config.rollback_signer_public_keys_json
+        )
         auth_keys = parse_ed25519_public_keyring(config.auth_public_keys_json)
         volume, backup = _storage(config)
         instance_lock = ControlPlaneInstanceLock(config.database_path)
         instance_lock.acquire()
-        s3: _S3Dependency | None = None
+        storage: ShareStorageDependency | None = None
         bootstrap_index_service: BootstrapIndexPublicationService | None = None
         model_connection_tester: HTTPSModelConnectionTester | None = None
         try:
@@ -1369,17 +1841,10 @@ class SingleNodeSQLiteS3Provider:
             CloudAuditSchemaManager(config.database_path).validate()
             CloudShareSchemaManager(config.database_path, keyring=keyring).validate()
             AdminManagementSchemaManager(config.database_path).validate()
+            if config.device_identity_enabled:
+                DeviceIdentitySchemaManager(config.database_path).validate()
             backup.latest(full_digest=True)
-            s3 = self._s3(config)
-            object_store = S3ShareObjectStore(
-                s3.client,
-                bucket=config.s3_bucket,
-                prefix=config.s3_prefix,
-                max_open_streams=min(64, config.s3_max_connections),
-                max_total_spool_bytes=256 * 1024 * 1024,
-                memory_spool_bytes=256 * 1024,
-                spool_directory=str(config.share_spool_directory),
-            )
+            storage, object_store = self._share_storage(config)
             verifier = Ed25519SignatureVerifier(release_keys)
             authenticator = Ed25519JWTAuthenticator(
                 auth_keys,
@@ -1391,6 +1856,9 @@ class SingleNodeSQLiteS3Provider:
             publication_verifier = Ed25519SignatureVerifier(publication_keys)
             online_authorization_signer = _configured_publication_signer(
                 config, release_keys, publication_keys
+            )
+            rollback_signer = _configured_rollback_signer(
+                config, release_keys, publication_keys, rollback_keys
             )
             repository = ControlPlaneRepository(
                 config.database_path,
@@ -1451,13 +1919,23 @@ class SingleNodeSQLiteS3Provider:
                 if management_repository is not None
                 else None
             )
+            device_identity_broker = (
+                config.device_identity.compose(
+                    management_repository,
+                    secrets=_ControlPlaneDeviceIdentitySecrets(secrets),
+                    initialize=False,
+                )
+                if config.device_identity is not None
+                and management_repository is not None
+                else None
+            )
             lifecycle = SingleNodeControlPlaneLifecycle(
                 config=config,
                 instance_lock=instance_lock,
                 volume=volume,
                 backup=backup,
                 keyring=keyring,
-                s3=s3,
+                storage=storage,
                 audit_repository=audit_repository,
                 share_repository=share_repository,
                 bootstrap_index_service=bootstrap_index_service,
@@ -1469,9 +1947,10 @@ class SingleNodeSQLiteS3Provider:
                 share_repository=share_repository,
                 audit_repository=audit_repository,
                 authenticator=authenticator,
-                rollback_signer=online_authorization_signer,
+                rollback_signer=rollback_signer,
                 management_repository=management_repository,
                 model_connection_tester=model_connection_tester,
+                device_identity_broker=device_identity_broker,
                 lifecycle=lifecycle,
                 config=config,
             )
@@ -1483,8 +1962,8 @@ class SingleNodeSQLiteS3Provider:
                     pass
             if bootstrap_index_service is not None:
                 bootstrap_index_service.close()
-            if s3 is not None:
-                s3.close()
+            if storage is not None:
+                storage.close()
             instance_lock.release()
             raise
 
@@ -1514,6 +1993,29 @@ class SingleNodeSQLiteS3Provider:
     def _s3(self, config: ControlPlaneProductionConfig) -> _S3Dependency:
         client = self.s3_factory.create(config)
         return _S3Dependency(client, config)
+
+    def _share_storage(
+        self, config: ControlPlaneProductionConfig
+    ) -> tuple[ShareStorageDependency, ShareObjectStore]:
+        if config.share_storage_mode == "attested-encrypted-local-cas":
+            return self.local_cas_factory.create(config)
+        if config.share_storage_mode != "s3":
+            raise ProductionConfigurationError("Share storage mode is invalid")
+        dependency = self._s3(config)
+        try:
+            store = S3ShareObjectStore(
+                dependency.client,
+                bucket=config.s3_bucket,
+                prefix=config.s3_prefix,
+                max_open_streams=min(64, config.s3_max_connections),
+                max_total_spool_bytes=256 * 1024 * 1024,
+                memory_spool_bytes=256 * 1024,
+                spool_directory=str(config.share_spool_directory),
+            )
+            return dependency, store
+        except BaseException:
+            dependency.close()
+            raise
 
     @staticmethod
     def _require_supported(config: ControlPlaneProductionConfig) -> None:
@@ -1879,6 +2381,12 @@ def main(
     backup_commands = backup.add_subparsers(dest="action", required=True)
     backup_commands.add_parser("create", help="create one verified operator backup")
     backup_commands.add_parser("check", help="verify the newest backup")
+    device = commands.add_parser("device", help="manage device identity migration")
+    device_commands = device.add_subparsers(dest="action", required=True)
+    device_commands.add_parser(
+        "legacy-import",
+        help="import v0.2.9.2 credential mappings from bounded NDJSON stdin",
+    )
     args = parser.parse_args(argv)
     values = os.environ if environment is None else environment
     secrets = secret_provider or EnvironmentSecretProvider(values)
@@ -1900,6 +2408,51 @@ def main(
                 else selected.backup_check(config, secrets)
             )
             _json_output(receipt.to_dict())
+            return 0
+        if args.area == "device":
+            if config.device_identity is None:
+                raise ProductionConfigurationError(
+                    "managed device identity is not configured"
+                )
+            payload = sys.stdin.buffer.read(8 * 1024 * 1024 + 1)
+            if len(payload) > 8 * 1024 * 1024:
+                raise ProductionConfigurationError(
+                    "legacy credential import is oversized"
+                )
+            try:
+                records = [
+                    json.loads(line)
+                    for line in payload.decode("utf-8").splitlines()
+                    if line.strip()
+                ]
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                raise ProductionConfigurationError(
+                    "legacy credential import is invalid"
+                ) from None
+            if not 1 <= len(records) <= 100_000 or any(
+                not isinstance(item, dict) for item in records
+            ):
+                raise ProductionConfigurationError(
+                    "legacy credential import is invalid"
+                )
+            management_key = _secret_bytes(
+                secrets.read("model-config-encryption-key"), exact_length=32
+            )
+            broker = config.device_identity.compose(
+                AdminManagementRepository(
+                    config.database_path, encryption_key=management_key
+                ),
+                secrets=_ControlPlaneDeviceIdentitySecrets(secrets),
+                initialize=False,
+            )
+            report = broker.import_legacy_credentials(records)
+            _json_output(
+                {
+                    "schema_version": 1,
+                    "source_version": "0.2.9.2",
+                    **report,
+                }
+            )
             return 0
         bundle = selected.compose(config, secrets)
         try:
@@ -1926,7 +2479,9 @@ if __name__ == "__main__":  # pragma: no cover - deployment entry point
 
 
 __all__ = [
+    "AttestedLocalControlPlaneCASFactory",
     "Boto3S3ClientFactory",
+    "ControlPlaneLocalCASFactory",
     "ControlPlaneProductionBundle",
     "ControlPlaneProductionConfig",
     "ControlPlaneProductionProvider",
@@ -1936,6 +2491,7 @@ __all__ = [
     "ProductionSchemaReport",
     "S3ClientFactory",
     "SecretProvider",
+    "ShareStorageDependency",
     "SingleNodeControlPlaneLifecycle",
     "SingleNodeSQLiteS3Provider",
     "main",

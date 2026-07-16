@@ -1,0 +1,36 @@
+[Unit]
+Description=Private EcoreX MinIO S3 endpoint
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/var/lib/ecorex
+
+[Service]
+Type=notify
+User=ecorex-storage
+Group=ecorex-storage
+UMask=0077
+EnvironmentFile=/var/lib/ecorex/secrets/minio.secret.env
+ExecStart=/opt/ecorex/platform/minio/minio server --address 127.0.0.1:19000 --console-address 127.0.0.1:19001 --certs-dir /etc/ecorex/cloud/minio/certs /var/lib/ecorex/minio/data
+Restart=always
+RestartSec=5s
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+ReadOnlyPaths=/etc/ecorex/cloud/minio/certs
+ReadWritePaths=/var/lib/ecorex/minio
+
+[Install]
+WantedBy=multi-user.target

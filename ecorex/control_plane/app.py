@@ -57,6 +57,8 @@ from .admin_web import (
     create_admin_web_router,
 )
 from .admin_management_router import create_admin_management_router
+from .device_identity import ManagedDeviceIdentityBroker
+from .device_identity_router import create_device_identity_router
 from .management import (
     AdminManagementConflict,
     AdminManagementError,
@@ -527,6 +529,7 @@ def create_control_plane_app(
     rollback_signer: ReleaseSigner | None = None,
     management_repository: AdminManagementRepository | None = None,
     model_connection_tester: ModelConnectionTester | None = None,
+    device_identity_broker: ManagedDeviceIdentityBroker | None = None,
 ) -> FastAPI:
     hub = UpdateSignalHub()
     resolved_model_tester = (
@@ -596,6 +599,7 @@ def create_control_plane_app(
     app.state.bootstrap_freshness_refresher = bootstrap_freshness_refresher
     app.state.rollback_signer = rollback_signer
     app.state.management_repository = management_repository
+    app.state.device_identity_broker = device_identity_broker
 
     def principal(request: Request) -> ControlPrincipal:
         try:
@@ -653,6 +657,13 @@ def create_control_plane_app(
                 model_tester=resolved_model_tester,
                 user_admin_dependency=user_admin,
                 model_admin_dependency=model_admin,
+            )
+        )
+    if device_identity_broker is not None:
+        app.include_router(
+            create_device_identity_router(
+                device_identity_broker,
+                admin_dependency=user_admin,
             )
         )
     if audit_repository is not None:

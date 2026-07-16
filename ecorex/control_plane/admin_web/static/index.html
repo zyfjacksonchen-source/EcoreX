@@ -37,9 +37,22 @@
             <h1>EcoreX 管理员</h1>
             <p>管理用户与用量、测试并启用托管模型，以及推送新版本。</p>
           </div>
-          <form class="auth-form" id="auth-form" novalidate>
-            <label for="admin-token">管理员令牌</label>
+          <div class="auth-form" aria-labelledby="admin-login-title">
+            <strong id="admin-login-title">管理员登录</strong>
             <div class="auth-controls">
+              <button class="button primary" id="device-login-button" type="button">登录控制面</button>
+              <button class="button" id="refresh-state-button" type="button" disabled>刷新服务端状态</button>
+              <button class="button" id="clear-token-button" type="button" disabled>退出</button>
+            </div>
+            <div id="device-login-state" class="field-help" hidden>
+              <span id="device-login-code"></span>
+              <a id="device-login-link" href="#" target="_blank" rel="noopener noreferrer">打开验证页面</a>
+            </div>
+            <details id="manual-token-fallback">
+              <summary>运维令牌兜底</summary>
+              <form id="auth-form" novalidate>
+                <label for="admin-token">管理员令牌</label>
+                <div class="auth-controls">
               <input
                 id="admin-token"
                 type="password"
@@ -52,11 +65,12 @@
                 required
               >
               <button class="button primary" id="connect-button" type="submit">连接控制面</button>
-              <button class="button" id="refresh-state-button" type="button" disabled>刷新服务端状态</button>
-              <button class="button" id="clear-token-button" type="button" disabled>清除令牌</button>
-            </div>
-            <span class="field-help" id="token-help">令牌只保留在当前页面内存，不会写入 URL、Cookie 或浏览器存储。</span>
-          </form>
+                </div>
+                <span class="field-help" id="token-help">仅用于应急运维；令牌只保留在当前页面内存。</span>
+              </form>
+            </details>
+            <span class="field-help">访问令牌和刷新令牌仅保留在当前页面内存，不写入 URL、Cookie 或浏览器存储。</span>
+          </div>
         </header>
 
         <div class="message" id="global-message" role="status" aria-live="polite" hidden>
@@ -377,7 +391,7 @@
           <label for="model-local-id"><span>EcoreX 模型位</span><select id="model-local-id"><option value="ecorex-chat">GPT 主模型</option><option value="ecorex-deepseek-v4-pro">DeepSeek</option><option value="ecorex-gemini-3.1-pro">Gemini</option><option value="ecorex-doubao-seed-2.0-pro">豆包</option><option value="gpt-image-2">生图模型</option><option value="gpt-image-2-edit">精修模型</option></select></label>
           <label for="model-display-name"><span>页面显示名称</span><input id="model-display-name" type="text" maxlength="128" required></label>
           <label for="model-upstream-id"><span>服务端模型名</span><input id="model-upstream-id" type="text" maxlength="128" required></label>
-          <label for="model-provider"><span>接口类型</span><select id="model-provider"><option value="responses">Responses API</option><option value="openai_compatible_chat">OpenAI 兼容对话</option><option value="openai_compatible_image">OpenAI 兼容图片</option></select></label>
+          <input id="model-provider" type="hidden" value="responses">
           <label for="model-api-key"><span>API Key</span><input id="model-api-key" type="password" autocomplete="new-password" minlength="8" maxlength="4096" placeholder="编辑时留空表示保留原 Key"></label>
           <label class="check-row" for="model-default"><input id="model-default" type="checkbox" checked><span>设为该用途默认模型</span></label>
           <label class="check-row" for="model-enabled"><input id="model-enabled" type="checkbox" checked><span>启用</span></label>

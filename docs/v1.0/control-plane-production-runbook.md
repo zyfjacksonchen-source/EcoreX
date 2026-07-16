@@ -3,8 +3,9 @@
 ## Supported deployment boundary
 
 The built-in v1 Control Plane composition is a **single-node SQLite WAL**
-service with S3-backed public Share media. It is suitable for one production
-process on one encrypted persistent volume. A process/file lock prevents a
+service with private Share media backed by S3 or the attested encrypted local
+CAS. The local CAS is suitable only for one production host and one replica.
+A process/file lock prevents a
 second server or an online migration from opening the same database.
 
 This is not a PostgreSQL/HA implementation. Setting the storage backend to
@@ -23,10 +24,9 @@ migration, creates a bucket, or falls back to local Share object storage.
 - One pre-created database directory, one distinct backup directory and one
   bounded Share spool directory. Database and backup volumes must be encrypted
   at rest by the deployment platform.
-- One private S3 bucket with default AES-256 or KMS encryption and all four
-  Block Public Access controls enabled. SDK credentials come from workload
-  identity/the standard boto credential chain; EcoreX has no access-key CLI
-  option.
+- One selected Share backend: either a private S3 bucket with default AES-256
+  or KMS encryption and all four Block Public Access controls enabled, or the
+  single-host contract in `attested-encrypted-local-cas.md`.
 - Short-lived JWTs issued by the managed identity service. Tokens use EdDSA,
   include `kid`, `iss`, `aud`, `iat`, `nbf`, `exp`, `token_use=access`, `sub`,
   `client_id`, `account_id`, optional `organization_id`, and bounded `roles`.
@@ -55,10 +55,13 @@ Required non-secret settings:
 | `ECOREX_CP_PUBLIC_SHARE_BASE_URL` | credential-free HTTPS URL ending in `/s` |
 | `ECOREX_CP_S3_BUCKET` / `ECOREX_CP_S3_PREFIX` | private CAS namespace |
 | `ECOREX_CP_S3_REGION` | SDK region |
+| `ECOREX_CP_SHARE_STORAGE_MODE` | `s3` or `attested-encrypted-local-cas` |
+| `ECOREX_CP_LOCAL_CAS_*` | digest-fenced root, attestation, volume/machine identity, quota and storage GID for single-host mode |
 | `ECOREX_CP_AUTH_ISSUER` / `ECOREX_CP_AUTH_AUDIENCE` | exact JWT trust policy |
 | `ECOREX_CP_AUTH_PUBLIC_KEYS_JSON` | `key_id -> canonical base64 raw Ed25519 public key` |
 | `ECOREX_CP_RELEASE_PUBLIC_KEYS_JSON` | release-signing public-key ring |
 | `ECOREX_CP_PUBLICATION_PUBLIC_KEYS_JSON` | distinct online pointer-freshness public-key ring; neither key IDs nor SHA-256 fingerprints of raw Ed25519 keys may overlap release keys |
+| `ECOREX_CP_ROLLBACK_SIGNER_PUBLIC_KEYS_JSON` | independent server rollback key ring; key IDs and public-key fingerprints must be disjoint from release and publication roles |
 | `ECOREX_CP_PUBLIC_BOOTSTRAP_INDEX_PATH` | absolute shared-web-tier path ending in `public-bootstrap-index.json` |
 | `ECOREX_CP_PUBLIC_BOOTSTRAP_INDEX_URL` | exact credential-free HTTPS readback URL for that object |
 | `ECOREX_CP_PUBLIC_BOOTSTRAP_READBACK_HOSTS` | comma-separated allowlist containing the readback URL host |
@@ -94,6 +97,12 @@ untouched until its signed expiry; it never creates or activates a rollout.
 Configuration also proves that lead plus allowed clock skew remains below the
 24-hour signed TTL and that one check, lease, signer timeout and skew fit inside
 the lead window.
+
+Rollback authorization uses a separate digest-pinned external signer configured
+with `ECOREX_CP_ROLLBACK_SIGNER_EXECUTABLE`, its SHA-256, optional paired
+adapter/digest, `ECOREX_CP_ROLLBACK_SIGNER_KEY_ID`, and a 1–120 second timeout.
+The rollback signer is passed only to rollback authorization; Bootstrap
+freshness continues to use the publication signer.
 
 Secret-provider values (the default provider maps these fixed logical secrets
 to environment variables; a Vault/KMS sidecar may implement the same narrow

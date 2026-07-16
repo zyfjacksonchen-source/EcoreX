@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+import base64
 from datetime import UTC, datetime
+import json
 from pathlib import Path
 
 from ecorex.connectors.vault import CredentialVault
@@ -16,6 +18,7 @@ from .models import (
     SessionConflict,
     SessionLogoutReceipt,
     SessionRecoveryReport,
+    SessionRefreshContext,
     SessionRestartRequired,
     SessionUnavailable,
     SessionVaultError,
@@ -150,7 +153,9 @@ class ManagedSessionService:
         except Exception:
             self._abort(intent, "vault_write_failed")
             self._process_cleanup()
-            raise SessionVaultError("managed session credential installation failed") from None
+            raise SessionVaultError(
+                "managed session credential installation failed"
+            ) from None
 
         # A crash here is recoverable because the durable staged row names the
         # vault reference and commits only signed token hashes.
@@ -252,9 +257,7 @@ class ManagedSessionService:
 
         return self._data_scope_snapshot(record_audit=False)
 
-    def _data_scope_snapshot(
-        self, *, record_audit: bool
-    ) -> ManagedSessionSnapshot:
+    def _data_scope_snapshot(self, *, record_audit: bool) -> ManagedSessionSnapshot:
         active = self.repository.active(require_quiescent=True)
         access_token, refresh_token = self._read_credentials(
             active.intent.credential_ref
@@ -311,6 +314,24 @@ class ManagedSessionService:
         if not self.repository.identity_is_current(active):
             raise SessionConflict("managed session changed during bearer validation")
         return access_token
+
+    def refresh_context(self) -> SessionRefreshContext:
+        """Return credential-bearing state only to the refresh coordinator.
+
+        The access token is first committed by and verified against the signed
+        lease. Only its bounded ``exp`` claim is decoded; token material is
+        never returned or persisted by this projection.
+        """
+
+        active, access_token, refresh_token = self._validated_active()
+        expires_at = _access_token_expiry(access_token)
+        if not self.repository.identity_is_current(active):
+            raise SessionConflict("managed session changed during refresh projection")
+        return SessionRefreshContext(
+            lease=active.intent.lease,
+            access_expires_at=expires_at,
+            refresh_token=refresh_token,
+        )
 
     def logout(
         self,
@@ -407,8 +428,7 @@ class ManagedSessionService:
                 )
             if (
                 self._runtime_binding is not None
-                and _lease_runtime_binding(active.intent.lease)
-                != self._runtime_binding
+                and _lease_runtime_binding(active.intent.lease) != self._runtime_binding
             ):
                 raise SessionRestartRequired(
                     "managed account or signed policy changed; restart is required"
@@ -467,16 +487,22 @@ class ManagedSessionService:
         except KeyError:
             raise
         except Exception:
-            raise SessionVaultError("managed session credential vault is unavailable") from None
+            raise SessionVaultError(
+                "managed session credential vault is unavailable"
+            ) from None
         if not isinstance(material, Mapping) or set(material) != {
             "access_token",
             "refresh_token",
         }:
-            raise SessionVaultError("managed session credential vault returned invalid data")
+            raise SessionVaultError(
+                "managed session credential vault returned invalid data"
+            )
         access_token = material.get("access_token")
         refresh_token = material.get("refresh_token")
         if not isinstance(access_token, str) or not isinstance(refresh_token, str):
-            raise SessionVaultError("managed session credential vault returned invalid data")
+            raise SessionVaultError(
+                "managed session credential vault returned invalid data"
+            )
         return access_token, refresh_token
 
     def _abort(self, intent: SessionInstallIntent, reason_code: str) -> bool:
@@ -587,6 +613,24 @@ def _runtime_binding(snapshot: ManagedSessionSnapshot) -> tuple[object, ...]:
         frozenset(snapshot.model_allowlist),
         frozenset(snapshot.admin_denies),
     )
+
+
+def _access_token_expiry(access_token: str) -> datetime:
+    try:
+        segments = access_token.split(".")
+        if len(segments) != 3 or len(segments[1]) > 16 * 1024:
+            raise ValueError
+        payload = base64.urlsafe_b64decode(segments[1] + "=" * (-len(segments[1]) % 4))
+        claims = json.loads(payload.decode("utf-8"))
+        expires = claims.get("exp")
+        if isinstance(expires, bool) or not isinstance(expires, int):
+            raise ValueError
+        result = datetime.fromtimestamp(expires, UTC)
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError, OSError):
+        raise LeaseValidationError(
+            "managed session access token expiry is invalid"
+        ) from None
+    return result
 
 
 __all__ = ["ManagedSessionService"]

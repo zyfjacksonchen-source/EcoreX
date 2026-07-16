@@ -108,6 +108,30 @@ BEFORE DELETE ON managed_session_audit
 BEGIN
     SELECT RAISE(ABORT, 'managed session audit is append-only');
 END;
+
+CREATE TABLE IF NOT EXISTS managed_session_refresh_state (
+    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+    status TEXT NOT NULL CHECK(status IN (
+        'idle','refreshing','retry_scheduled','reauthorization_required'
+    )),
+    source_lease_digest TEXT,
+    request_hash TEXT,
+    attempt INTEGER NOT NULL DEFAULT 0 CHECK(attempt >= 0),
+    claim_token TEXT,
+    claim_expires_at TEXT,
+    next_attempt_at TEXT,
+    error_code TEXT,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS managed_session_refresh_identity_guard
+BEFORE UPDATE ON managed_session_refresh_state
+WHEN OLD.status='reauthorization_required'
+ AND NEW.source_lease_digest=OLD.source_lease_digest
+ AND NEW.status!='reauthorization_required'
+BEGIN
+    SELECT RAISE(ABORT, 'managed session reauthorization is terminal for a lease');
+END;
 """
 
 
@@ -127,6 +151,8 @@ MANAGED_SESSION_SCHEMA_FRAGMENT = SchemaFragment(
         "managed_session_audit",
         "managed_session_audit_no_update",
         "managed_session_audit_no_delete",
+        "managed_session_refresh_state",
+        "managed_session_refresh_identity_guard",
     ),
 )
 

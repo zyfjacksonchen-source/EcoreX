@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-07-16",
+  "scope": "alibaba-cloud-linux-4-aarch64-single-node-cloud-sidecar-deployer",
+  "implementation": {
+    "default_mode": "dry-run",
+    "target": {
+      "os_id": "alinux",
+      "os_major": "4",
+      "architecture": "aarch64",
+      "python_version": "3.11.9",
+      "postgresql_major": "15"
+    },
+    "storage": {
+      "control_plane": "sqlite-wal-single-process",
+      "gateway": "sqlite-wal-single-process",
+      "image": "postgresql-15",
+      "objects": "attested-encrypted-local-cas-single-host-with-s3-contract-retained"
+    },
+    "activation": "blue-green-code-slots-single-writer-drain-health-nginx-atomic-switch",
+    "rollback": "code-and-traffic-only-no-schema-downgrade",
+    "secret_logging": "child-output-captured-and-never-rendered"
+  },
+  "local_verification": {
+    "command": "python -m pytest -q tests/v1/test_image_orchestrator_production_runtime.py tests/v1/test_image_orchestrator_production_storage.py tests/v1/test_control_plane_production_serve.py tests/v1/test_attested_encrypted_local_cas.py tests/v1/test_cloud_sidecar_deployer.py",
+    "result": "110 passed, 1 skipped",
+    "ruff": "passed",
+    "python_compile": "passed",
+    "git_diff_check": "passed"
+  },
+  "production_gates": {
+    "encrypted_volume_attestation": "blocked-until-real-evidence-is-pinned",
+    "attested_local_cas_contract": "passed-locally-real-volume-attestation-pending",
+    "s3_exact_api_contract": "retained-but-not-selected-for-this-single-host-rollout",
+    "postgresql_runtime": "not-run",
+    "provider_runtime": "not-run",
+    "nginx_switch": "not-run"
+  },
+  "external_mutation": false,
+  "production_deployment_claimed": false
+}
