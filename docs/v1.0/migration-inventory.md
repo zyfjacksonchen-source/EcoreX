@@ -1,4 +1,4 @@
-# v0.3.0 to v1.0 migration inventory
+# v0.2.9.2 / v0.3.0 to v1.0 migration inventory
 
 ## Baseline hazards
 
@@ -16,6 +16,11 @@
   attributed to a particular archive from its folder name alone.
 
 ## Audited release-data baseline
+
+The product migration contract supports both `0.2.9.2` and `0.3.0`. The
+installer records the selected version in its immutable plan, source inventory,
+migration report and completion authority. A release marker that declares a
+different version fails closed.
 
 The canonical migration adapters are derived from commit
 `f0750d247bfe52ffb95c137cadc9983a03010690`, the commit recorded as the source
@@ -63,12 +68,19 @@ unless the original release archive itself is available and verified.
 
 ## Migration safety
 
-1. Identify the actual v0.3.0 release commit or artifact.
+1. Identify the installed supported release and pin its runtime manifest.
 2. Inventory and hash source data without mutation.
 3. Copy into a new v1 database and content-addressed artifact store.
 4. Validate counts, relationships, hashes, and representative previews.
 5. Activate only after runtime and Web bundle health checks pass.
-6. Keep the v0.3.0 source untouched for rollback before v1 accepts traffic.
+6. Keep the legacy source untouched for rollback before v1 accepts traffic.
+
+The legacy database is the conversation-deletion authority. Session IDs found
+only in `.ecorex/ui-state.json` are stale cache and are not imported. For live
+database sessions, UI state may restore the latest summary/title, pin and an
+otherwise missing local message cache. Reused v0.2.9.2 request IDs are
+deterministically marked ambiguous rather than causing migration failure or
+misbinding one run row to multiple Turns.
 
 The v1 `jobs` table must remain empty for migrated legacy work. This is an
 acceptance invariant, not an implementation detail: a v1 Runtime start may not

@@ -5384,3 +5384,102 @@ made pytest imports and `compileall` replace the same Windows `.pyc` and
 produced WinError 5; the orphaned test was allowed to finish, then tests and
 compile were rerun serially. The serial evidence replaces that tooling race;
 no production source or gate was relaxed.
+
+## 2026-07-16 - User-deferred protected infrastructure and local live-preflight continuation
+
+The user explicitly deferred provisioning the six protected GitHub
+Environments and four isolated role-labelled Runners so useful local work could
+continue. This does not waive, satisfy or relabel the protected provenance
+contract: a local result cannot create an official Candidate-bound
+`live-model`, `live-image` or `cdp-acceptance` receipt, and no publication or
+rollout was authorized through the deferral.
+
+The reviewed evidence batch is now merged to exact `main`
+`84aeed15a81463ff9bfcdd7dceeda992ee692708`; hosted run `29445710112` passed
+Ubuntu quality, Windows x64, macOS arm64/x64 and Cross-runner byte stability.
+A fresh local WebUI preflight on that exact source passed all 45 Chromium tests
+in 167.3 seconds. It covers both themes and all locked viewports, Codex density,
+model selection and vendor icons, quota/context display, completion timing and
+copy feedback, task pinning/continuation, independent general/project v0.3
+“查看更多”, Skills, full-access revocation, sticky reasoning replacement,
+retry/reconnect, persisted HITL, connector login, queue reachability, share
+copy, fit-first image preview, structured precise-retouch, forced colours,
+reduced motion and touch actions.
+
+The matching local Runtime preflight passed 226 focused tests in 172.4 seconds.
+It exercises GPT-5.6 SOL medium/272,000 policy projection, managed model
+catalogue and dynamic image revisions, ranked non-exclusive image intent,
+progressive `tool_search`/`tool_describe` disclosure without hiding read,
+fetch, vision, CDP, shell or imagegen, the 128-concurrent idempotent image
+admission case, lease fencing, provider uncertainty/restart recovery, shared
+generate/retouch scheduling, Retouch concurrency linearization, crash recovery,
+stable retry identity and late-result rejection. These are deterministic local
+product checks; real managed-provider connectivity remains separate
+live-preflight work.
+
+The new repository-owned local CDP driver was then committed as
+`622921fbcc2be16d73209bfad2b7ff0cea19afc7`. It launches the machine-installed
+Google Chrome with a fresh temporary profile and explicit loopback remote
+debugging port, connects with `connectOverCDP`, blocks public network access,
+runs the fixed 18-scenario matrix and four locked viewports, hashes every
+screenshot in memory, and cleans the Browser, GA Runtime and profile in a
+bounded `finally` path. An initial driver run exposed three harness defects:
+the total timeout lost its scenario identity, animation sampling occurred
+before the 160 ms hover transition settled, and navigation-cancelled SSE was
+misclassified as a failed request. Per-scenario deadlines, stable progress
+identifiers, animation convergence and the exact `/events/stream` navigation
+exception corrected those root causes without hiding any other request error.
+
+The exact committed driver passed against Chrome `150.0.7871.115` in 24.261
+seconds: 18/18 scenarios, four viewports and 131 assertions, with zero console,
+page, local-request or external-request failures. Chrome process count and
+owned temporary-profile count were both zero after exit. The 2,981-byte
+redacted evidence is tracked at
+`evidence/local-live-preflight-622921fb-2026-07-16.json`; its SHA-256 is
+`7d67be5f37216bcae18f98715747c2dc24dcd18fcf358f97fa8be8edd38020d1`.
+It explicitly declares `candidate_bound=false`,
+`protected_provenance_claimed=false` and
+`runtime_source=local-ga-contract-runtime`: native Chrome/UI behavior is now
+locally proven, while an installed signed Runtime plus real managed Model/Image
+transports are not.
+
+## 2026-07-16 - Real v0.2.9.2 preservation and deletion-authority drill
+
+The migration authority now accepts an explicit legacy source version and
+supports both `0.2.9.2` and `0.3.0` without weakening the release-marker and
+schema checks. The compatibility `migrate_v030_to_v1` entry remains available,
+while the product, CLI, Bootstrap, inventory, completion receipt and target
+authority all carry the selected source version. Source version is included in
+the migration identity, preventing a receipt for one legacy version from being
+replayed against another.
+
+The canonical legacy `sessions` database is the deletion authority. UI cache
+may enrich the title, summary and pin state only for a session that still exists
+in that database. A cache-only session is treated as previously deleted and is
+never recreated as a v1 Thread. The real installed v0.2.9.2 corpus contained 93
+such stale cache IDs; all 93 were excluded and zero deleted sessions were
+restored. The same plan preserves 54 live sessions, 1,029 messages, 54 session
+summaries, two projects and three live project bindings.
+
+The real corpus also exposed 42 request IDs reused across 169 Turn occurrences.
+The migrator now retains every conversation Turn and marks the ambiguity in its
+metadata, but never binds one legacy run ledger row to multiple Turns. This
+fixes the historical identifier defect without dropping conversation content or
+inventing execution relationships.
+
+Exact commit `0916bd04465a23504e989bbccf7960273827eadf` completed a read-only,
+copy-on-write dry-run over 897 source entries / 459,541,787 bytes. It planned 54
+Threads, 1,029 messages, 580 Turns, 580 input revisions, 247 legacy runs and
+38,073 run events; five secret-bearing entries were quarantined. The inventory
+SHA-256 is `7bd10f200ff9917204b6edd2b7a33f908674ec95e0960da12870b3572b8156cf`.
+Source inventory was unchanged before and after, no target was published and no
+content, path or secret was persisted. The redacted evidence is
+`evidence/v0292-real-user-data-dry-run-0916bd04-2026-07-16.json` (1,829 bytes,
+SHA-256 `ca606a5c7fd820279ebfc259b31a814e196ce99750e57b2d58c5f87637c066b8`).
+
+Focused v0.2.9.2 tests pass 2/2. The complete migration, activation, quarantine
+and storage set passes 68 tests with two explicit environment skips and one
+unchanged Starlette warning. Ruff, Python compilation, JSON validation, diff
+check and the 676-file source admission gate pass. This proves preservation and
+non-resurrection at planning/import authority; installed signed-v1 activation
+and health checking remain a separate release gate.

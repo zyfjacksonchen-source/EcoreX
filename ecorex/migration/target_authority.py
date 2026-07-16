@@ -1,4 +1,4 @@
-"""Cross-file authority for one published v0.3 import generation."""
+"""Cross-file authority for one published legacy import generation."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from typing import Any, Iterable, Mapping
 
 from .cas_authority import CAS_AUTHORITY_NAME, validate_cas_authority
 from .errors import MigrationError, MigrationVerificationError
+from .inventory import SUPPORTED_SOURCE_VERSIONS
 from .migrator import BACKUP_MANIFEST_NAME, INVENTORY_NAME
 from .path_security import secure_directory, stable_read_bytes, stable_sha256_file
 from .quarantine import MigrationQuarantineService
@@ -150,7 +151,8 @@ def _verify_inventory(target: Path, report: Mapping[str, Any]) -> str:
         normalized.append(dict(entry))
     inventory_digest = hashlib.sha256(_canonical(normalized)).hexdigest()
     if (
-        value.get("source_version") != "0.3.0"
+        value.get("source_version") not in SUPPORTED_SOURCE_VERSIONS
+        or value.get("source_version") != report.get("source_version")
         or value.get("digest") != report.get("source_inventory_digest")
         or value.get("digest") != inventory_digest
         or value.get("file_count") != len(normalized)

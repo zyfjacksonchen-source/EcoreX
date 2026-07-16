@@ -1,4 +1,4 @@
-"""Standalone CLI for the v0.3.0 copy-on-write migration."""
+"""Standalone CLI for released-data copy-on-write migration."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Sequence
 
 from .crypto import load_quarantine_key
-from .inventory import inventory_source
-from .migrator import migrate_v030_to_v1
+from .inventory import DEFAULT_SOURCE_VERSION, SUPPORTED_SOURCE_VERSIONS, inventory_source
+from .migrator import migrate_legacy_to_v1
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -20,12 +20,22 @@ def _parser() -> argparse.ArgumentParser:
         "inventory", help="read-only inventory and SHA-256 manifest"
     )
     inventory.add_argument("source", type=Path)
+    inventory.add_argument(
+        "--source-version",
+        choices=sorted(SUPPORTED_SOURCE_VERSIONS),
+        default=DEFAULT_SOURCE_VERSION,
+    )
 
     migrate = subparsers.add_parser(
         "migrate", help="stage, verify, and atomically publish a new v1 target"
     )
     migrate.add_argument("source", type=Path)
     migrate.add_argument("target", type=Path)
+    migrate.add_argument(
+        "--source-version",
+        choices=sorted(SUPPORTED_SOURCE_VERSIONS),
+        default=DEFAULT_SOURCE_VERSION,
+    )
     migrate.add_argument("--dry-run", action="store_true")
     migrate.add_argument(
         "--quarantine-key-file",
@@ -46,7 +56,7 @@ def _parser() -> argparse.ArgumentParser:
     migrate.add_argument(
         "--release-evidence-file",
         type=Path,
-        help="v0.3.0 release.json/runtime-manifest.json supplied by the old install",
+        help="release.json/runtime-manifest.json supplied by the old install",
     )
     migrate.add_argument("--sample-size", type=int, default=3)
     return parser
@@ -55,16 +65,19 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "inventory":
-        payload = inventory_source(args.source).to_dict()
+        payload = inventory_source(
+            args.source, source_version=args.source_version
+        ).to_dict()
     else:
         key = (
             load_quarantine_key(args.quarantine_key_file)
             if args.quarantine_key_file
             else None
         )
-        report = migrate_v030_to_v1(
+        report = migrate_legacy_to_v1(
             args.source,
             args.target,
+            source_version=args.source_version,
             dry_run=bool(args.dry_run),
             quarantine_key=key,
             conversation_database=args.conversation_database,

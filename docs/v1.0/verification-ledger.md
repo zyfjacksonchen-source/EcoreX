@@ -1857,3 +1857,32 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Evidence hygiene | 0 | Private signing key persisted=false, external publication=false and temporary candidate directory removed=true. Redacted report is 43,536 bytes, SHA-256 `3fd04faf...02cf3c`; tracked 3,716-byte summary SHA-256 is `3635925c...f800453`. |
 | Focused regression | 0 | 71 Candidate/ReleaseBuilder/Updater/activation tests pass with one explicit environment skip; Ruff/compile, JSON, diff and 675-file source gates pass. A parallel pytest/compileall `.pyc` race produced WinError 5, then the same gates passed serially without relaxation. |
 | Protected provenance boundary | blocked | Local evidence has 8/24 receipts. Sixteen macOS arm64/x64 receipts, protected clean-runner identity, real installed v0.3 corpus and live endpoints remain absent; promotion/publication/rollout were not claimed. |
+
+## Deferred protected infrastructure; continued local live preflight - 2026-07-16
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| User decision | 0 | Six protected Environments and four isolated Runner roles are deferred for this iteration. The official provenance requirement remains visible and unsatisfied; no local evidence is renamed as protected evidence. |
+| Exact source | 0 | Main is `84aeed15a81463ff9bfcdd7dceeda992ee692708`; hosted run `29445710112` passed all five required Jobs. |
+| Browser preflight | 0 | Fresh Chromium run passed 45/45 in 167.3s. Both themes, 1440x900/1024x768/768x900/390x844/320x568, axe, forced colours, reduced motion, model/permission/reasoning/queue/Skills/view-more/share/image-preview/Retouch paths passed. |
+| Runtime routing and concurrency | 0 | 226/226 focused tests passed in 172.4s with one unchanged upstream Starlette warning. Coverage includes GPT-5.6 SOL medium + 272k projection, progressive tool disclosure, ranked non-exclusive image routing, 128 concurrent image replay dedupe, lease/restart recovery and structured Retouch concurrency/crash fencing. |
+| Installed v1 discovery | 0 | The machine has no existing v1 signed slot. The only active EcoreX process is the legacy `runtime-0.2.9.2-b909303a` WebUI Runtime; it is not accepted as v1 evidence and was not modified. |
+| Native Chrome CDP | 0 | Repository driver commit `622921fbcc2be16d73209bfad2b7ff0cea19afc7` passed Chrome 150 via explicit `connectOverCDP`: fixed 18/18 scenarios, four viewports, 131 assertions, 24.261s and zero console/page/local-request/external-request failures. All 18 screenshots are represented only by SHA-256. |
+| Driver failure/cleanup | 1 then 0 | First run exposed lost timeout identity; later runs exposed premature hover sampling and navigation-cancelled SSE misclassification. Per-scenario bounds and exact lifecycle handling fixed the harness. Final Chrome process and owned temporary-profile counts are zero. |
+| Redacted evidence | 0 | `evidence/local-live-preflight-622921fb-2026-07-16.json` is 2,981 bytes, SHA-256 `7d67be5f...8020d1`, and explicitly denies Candidate binding/protected provenance. |
+| Live boundary | pending | The same matrix against an installed signed v1 Runtime, real managed Model/Image Gateway connectivity, four provider-backed image completions and provider-backed Retouch precision scoring remain to be run. |
+| Publication | blocked | No protected Candidate receipt, release publication, grey rollout or user update was created. |
+
+## Real v0.2.9.2 migration and deleted-session exclusion - 2026-07-16
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Exact source | 0 | Commit `0916bd04465a23504e989bbccf7960273827eadf` generalizes the versioned legacy authority to v0.2.9.2 and v0.3.0 while retaining the v0.3 compatibility entry point. |
+| Real read-only corpus | 0 | Copy-on-write dry-run verified 897 entries / 459,541,787 bytes and source inventory SHA-256 `7bd10f20...15b6cf`; source inventory was unchanged before and after. |
+| User data preservation | 0 | 54 live sessions, 1,029 messages, 54 summaries, two projects, three live project bindings, 580 Turns, 247 runs and 38,073 run events are present in the migration plan. |
+| Deleted-session authority | 0 | The canonical legacy sessions database is authoritative. Ninety-three UI-cache-only session IDs were excluded; zero previously deleted sessions are restored. Cache titles, summaries and pins may enrich surviving sessions only. |
+| Historical request IDs | 0 | Forty-two request IDs were reused across 169 Turn occurrences. All conversation Turns remain; ambiguity is explicit and no legacy run row is falsely bound to multiple Turns. |
+| Secret boundary | 0 | Five secret-bearing entries are quarantined; the dry-run persisted no content, raw paths or secrets and published no target. |
+| Regression | 0 | Focused v0.2.9.2 tests pass 2/2; full migration/activation/quarantine/storage set passes 68 with two explicit environment skips. Ruff, compile, JSON, diff and 676-file source gates pass. |
+| Redacted evidence | 0 | `evidence/v0292-real-user-data-dry-run-0916bd04-2026-07-16.json` is 1,829 bytes with SHA-256 `ca606a5c...c066b8`; it stores aggregate counts and digests only, is not Candidate-bound and does not claim installed-v1 activation. |
+| Release boundary | pending | Run the same authority during signed-v1 side-by-side installation, then verify activation health and post-activation counts before rollout. |

@@ -1,4 +1,4 @@
-"""Product activation bridge for the one-time v0.3 copy-on-write import.
+"""Product activation bridge for the one-time released-data copy-on-write import.
 
 The standalone migrator deliberately publishes a complete data directory.  A
 product install already has an empty ``state`` directory, so this bridge adds a
@@ -34,6 +34,7 @@ from .migrator import (
     TARGET_DATABASE_NAME,
     migrate_v030_to_v1,
 )
+from .inventory import DEFAULT_SOURCE_VERSION, SUPPORTED_SOURCE_VERSIONS
 from .models import MigrationReport
 from .path_security import (
     is_within,
@@ -85,6 +86,7 @@ class ProductMigrationError(MigrationError):
 class ProductMigrationPlan:
     source_root: str
     source_root_identity_sha256: str
+    source_version: str = DEFAULT_SOURCE_VERSION
     conversation_database: str | None = None
     memory_database: str | None = None
     config_file: str | None = None
@@ -97,7 +99,7 @@ class ProductMigrationPlan:
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": 1,
-            "source_version": "0.3.0",
+            "source_version": self.source_version,
             "target_version": "1.0.0",
             "source_root": self.source_root,
             "source_root_identity_sha256": self.source_root_identity_sha256,
@@ -131,7 +133,7 @@ class ProductMigrationPlan:
         if (
             set(raw) != expected
             or raw.get("schema_version") != 1
-            or raw.get("source_version") != "0.3.0"
+            or raw.get("source_version") not in SUPPORTED_SOURCE_VERSIONS
             or raw.get("target_version") != "1.0.0"
         ):
             raise ProductMigrationError("legacy migration plan contract is invalid")
@@ -166,6 +168,7 @@ class ProductMigrationPlan:
             return cls(
                 source_root=source_root,
                 source_root_identity_sha256=source_identity,
+                source_version=str(raw["source_version"]),
                 conversation_database=raw.get("conversation_database"),
                 memory_database=raw.get("memory_database"),
                 config_file=raw.get("config_file"),
@@ -282,6 +285,8 @@ def _target_authority(value: Mapping[str, Any]) -> dict[str, str | None] | None:
 def write_product_migration_plan(
     install_root: str | Path,
     source_root: str | Path,
+    *,
+    source_version: str = DEFAULT_SOURCE_VERSION,
     **metadata_paths: str | Path | None,
 ) -> Path:
     """Persist the installer-owned plan before a first v1 candidate is admitted."""
@@ -296,6 +301,8 @@ def write_product_migration_plan(
     # the plan, violating the copy-on-write boundary before dry-run begins.
     if is_within(root, source) or is_within(source, root):
         raise ProductMigrationError("legacy source and v1 install root overlap")
+    if source_version not in SUPPORTED_SOURCE_VERSIONS:
+        raise ProductMigrationError("legacy source version is unsupported")
     allowed = {
         "conversation_database",
         "memory_database",
@@ -315,6 +322,7 @@ def write_product_migration_plan(
     plan = ProductMigrationPlan(
         source_root=str(source),
         source_root_identity_sha256=_source_root_identity(source),
+        source_version=source_version,
         **normalized,
     )
     destination = root / PRODUCT_MIGRATION_PLAN_NAME
@@ -409,6 +417,7 @@ class ProductLegacyMigrationCoordinator:
     @staticmethod
     def _migration_kwargs(plan: ProductMigrationPlan) -> dict[str, Any]:
         return {
+            "source_version": plan.source_version,
             "conversation_database": plan.conversation_database,
             "memory_database": plan.memory_database,
             "config_file": plan.config_file,
@@ -551,6 +560,7 @@ class ProductLegacyMigrationCoordinator:
         ):
             raise ProductMigrationError("migration activation identity is invalid")
         if isinstance(report, MigrationReport):
+            report_source_version = report.source_version
             migration_id = report.migration_id
             source_digest = report.source_inventory_digest
             quarantine_count = report.quarantine_entry_count
@@ -562,6 +572,14 @@ class ProductLegacyMigrationCoordinator:
             )
             target_authority = None
         else:
+            report_source_version = str(
+                report.get("source_version")
+                or (
+                    plan.source_version
+                    if "storage_schema_version" not in report
+                    else ""
+                )
+            )
             migration_id = str(report["migration_id"])
             source_digest = str(report["source_inventory_digest"])
             quarantine = report.get("quarantine")
@@ -590,6 +608,8 @@ class ProductLegacyMigrationCoordinator:
                         "migration receipt schema identity is invalid"
                     ) from error
             target_authority = _target_authority(report)
+        if report_source_version != plan.source_version:
+            raise ProductMigrationError("migration report source version differs from its plan")
         if _MIGRATION_ID.fullmatch(migration_id) is None:
             raise ProductMigrationError("migration report identity is invalid")
         _atomic_json(
@@ -655,7 +675,7 @@ class ProductLegacyMigrationCoordinator:
             set(value) != expected_fields
             or value.get("schema_version") != 1
             or value.get("state") != "completed"
-            or value.get("source_version") != "0.3.0"
+            or value.get("source_version") not in SUPPORTED_SOURCE_VERSIONS
             or value.get("target_version") != "1.0.0"
             or not isinstance(value.get("slot_id"), str)
             or _SAFE_SLOT.fullmatch(value["slot_id"]) is None
@@ -761,6 +781,10 @@ class ProductLegacyMigrationCoordinator:
         allowed_states: set[str],
         transaction_id: str | None,
     ) -> dict[str, Any]:
+        if report.get("source_version") != plan.source_version:
+            raise ProductMigrationError(
+                "migrated Runtime state differs from its source-version plan"
+            )
         if receipt is None or receipt.get("state") not in allowed_states:
             raise ProductMigrationError(
                 "migrated Runtime state has no matching activation receipt"
@@ -811,7 +835,7 @@ class ProductLegacyMigrationCoordinator:
         value: dict[str, Any] = {
             "schema_version": 1,
             "state": "completed",
-            "source_version": "0.3.0",
+            "source_version": plan.source_version,
             "target_version": "1.0.0",
             "slot_id": receipt["slot_id"],
             "transaction_id": receipt.get("transaction_id"),
@@ -852,6 +876,10 @@ class ProductLegacyMigrationCoordinator:
                 "migration completion has no committed activation receipt"
             )
         projected = self._identity_projection(report)
+        if report.get("source_version") != completion.get("source_version"):
+            raise ProductMigrationError(
+                "migration completion differs from the imported source version"
+            )
         expected = {
             **projected,
             "source_root_identity_sha256": completion["source_root_identity_sha256"],
@@ -937,7 +965,7 @@ class ProductLegacyMigrationCoordinator:
         if (
             _TARGET_AUTHORITY_KEY in report
             or report.get("status") != "completed"
-            or report.get("source_version") != "0.3.0"
+            or report.get("source_version") not in SUPPORTED_SOURCE_VERSIONS
             or report.get("target_version") != "1.0.0"
             or not isinstance(migration_id, str)
             or _MIGRATION_ID.fullmatch(migration_id) is None

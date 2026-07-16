@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "evidence_type": "ecorex-local-live-preflight",
+  "status": "passed",
+  "commit_sha": "622921fbcc2be16d73209bfad2b7ff0cea19afc7",
+  "candidate_bound": false,
+  "protected_provenance_claimed": false,
+  "runtime_source": "local-ga-contract-runtime",
+  "browser": {
+    "engine": "chrome",
+    "version": "150.0.7871.115",
+    "protocol": "cdp",
+    "isolated_profile": true
+  },
+  "scenarios": [
+    "new-composer-centered",
+    "normal-composer-bottom",
+    "model-before-first-message",
+    "model-switch-chat-image",
+    "image-intent-routing",
+    "tool-progressive-disclosure",
+    "steer-queue-replace",
+    "reasoning-sticky-replacement",
+    "permission-default-full",
+    "artifact-hover-actions",
+    "image-fit-preview",
+    "precise-retouch",
+    "share-chat-image",
+    "share-role-separation",
+    "project-session",
+    "office-document-flow",
+    "connector-catalog",
+    "memory-reset-output-path"
+  ],
+  "viewports": [
+    "1440x900",
+    "1024x768",
+    "768x900",
+    "390x844"
+  ],
+  "assertions": 131,
+  "diagnostics": {
+    "console_errors": 0,
+    "page_errors": 0,
+    "failed_requests": 0,
+    "external_requests": 0
+  },
+  "screenshot_sha256": {
+    "new-composer-centered": "8c72acf74dadf956a5885150e81e5b65dee118a7d49a7f62173019584f120d72",
+    "normal-composer-bottom": "221ebac89c3a3d098d1d01f5d8d50fce32edb40ed3be15e8dd01367e7a8d8358",
+    "model-before-first-message": "f6ac57a1f62919afb957aadfa15b1c4e7ed3ee0305d765709889ebd67bc22f85",
+    "model-switch-chat-image": "7a23eda81ede29e0ec80c1b8a90a5c99c15bb7ba296a316d8d1f94932b5798e6",
+    "image-intent-routing": "d5f1683a7cdbd1b96630c94cb0499c53d54dc922e39604f58923f997e8462e5a",
+    "tool-progressive-disclosure": "e06ec2622a92dd5e6cf95f465882d0043fa5c1d8fcc44ac74cf26b86c67f99ee",
+    "steer-queue-replace": "930604eb0510791f647505887640cb91df55abee46813f3c3b0449f98ac36b81",
+    "reasoning-sticky-replacement": "5a8c7e342ba32a9688558c707b5cce8f57964b5ec7be36f41683fdb4632ab4e9",
+    "permission-default-full": "9e287b5eaf20f93829ef213bf151be527f11c36ef55fb4e90e92ac33e09dcd37",
+    "artifact-hover-actions": "6387b6b13591ffb24af0df5b5222528fc541e4b0dc6ba4220fb08267681cbee0",
+    "image-fit-preview": "5712427d8e3580ba33d681f287ded95a827c2a1ce0b8287d43502b8000d55dd2",
+    "precise-retouch": "6509a8c0585436723126b60df3fe4012b534879b8a404ace69b86ec61b0a5c2a",
+    "share-chat-image": "3aa41f1fc7a53d8430c4890e27e09312e7e44a3de28caff2331238b02cebf183",
+    "share-role-separation": "221ebac89c3a3d098d1d01f5d8d50fce32edb40ed3be15e8dd01367e7a8d8358",
+    "project-session": "b3917be67775b262b85a9fdd8ede220748548ecfd4c2649a9e8c82ad7a585e4e",
+    "office-document-flow": "41d1fe06ed33b506ca80b0c8a9a736fd4e7d60f11134e44b81b76babdd0ed252",
+    "connector-catalog": "2f337b015989f96b7f9377eb89d54613c882c95150f9d1fa6a62ebefac102faa",
+    "memory-reset-output-path": "1bb4d7b42850a27463aa48cc28d4af0cdd096f605e19c7e360350e466298fab1"
+  },
+  "duration_milliseconds": 24261
+}

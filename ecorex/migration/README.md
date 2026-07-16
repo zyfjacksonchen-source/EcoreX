@@ -1,4 +1,4 @@
-# v0.3.0 -> v1.0 copy-on-write migration
+# v0.2.9.2 / v0.3.0 -> v1.0 copy-on-write migration
 
 This package is the standalone migration boundary. It does not mutate or
 checkpoint the legacy workspace. A run performs these durable stages:
@@ -33,6 +33,9 @@ or different target is never overwritten.
   historical facts. Runs with a matching conversation Turn keep model and
   terminal state; branch lineage is restored only when the child and parent
   request IDs prove it.
+- v0.2.9.2 request IDs reused across multiple conversation Turns are retained
+  on every Turn as ambiguous provenance. The one run-ledger row is not falsely
+  attached to several Turns, and no message is discarded.
 - active/queued v0.3 work becomes a redacted recovery draft with
   `requires_user_confirmation`. It is never inserted into the v1 `jobs` table
   and cannot restart merely because the Runtime starts.
@@ -42,9 +45,9 @@ or different target is never overwritten.
 - the old permission mode is reduced to the v1 `default`/`full_access` intent
   and staged for account binding. Remembered grants and filesystem paths are
   not activated automatically.
-- WebUI-only history in `.ecorex/ui-state.json` is imported only when the
-  canonical conversation DB has no messages for that session, matching the
-  released v0.3 one-time hydration rule.
+- the canonical conversation DB is the deletion authority. WebUI cache may
+  enrich an existing session's title, pin, or missing messages, but a cache-only
+  session ID is excluded and can never resurrect a deleted conversation.
 - `config.json` / `mcp.json` secret fields are encrypted with AES-GCM into a
   local quarantine. The key must come from an external credential vault and is
   never stored in the target.
@@ -52,15 +55,17 @@ or different target is never overwritten.
 ## Entry points
 
 ```text
-python -m ecorex.migration inventory <legacy-root>
-python -m ecorex.migration migrate <legacy-root> <new-v1-root> --dry-run
+python -m ecorex.migration inventory <legacy-root> --source-version 0.2.9.2
 python -m ecorex.migration migrate <legacy-root> <new-v1-root> \
+  --source-version 0.2.9.2 --dry-run
+python -m ecorex.migration migrate <legacy-root> <new-v1-root> \
+  --source-version 0.2.9.2 \
   --quarantine-key-file <vault-exported-key-file> \
   --permission-file <old-user-data>/permissions.json \
   --release-evidence-file <old-runtime>/runtime-manifest.json
 ```
 
-When the v0.3 installation `config.json` is outside its Agent workspace, pass
+When the legacy installation `config.json` is outside its Agent workspace, pass
 it with `--config-file` (and likewise `--mcp-file`). Explicit external metadata
 files are pinned into the same before/after SHA-256 inventory under opaque
 labels, so their absolute paths are not written to the report. Conversation and
@@ -74,7 +79,8 @@ called asset-attested because the original archive bytes are not available to
 the migration process. If neither a release marker nor a recognized released
 data schema exists, migration fails closed.
 
-Installers may call `migrate_v030_to_v1(...)` directly. The target contains
+Installers call `migrate_legacy_to_v1(..., source_version=...)`; the former
+`migrate_v030_to_v1(...)` entry point remains a v0.3-compatible alias. The target contains
 `migration-report.json`, `source-inventory.json`, `backup-manifest.json`, and a
 secret-free JSONL stage trace. Remaining adapter work is listed in every report
 instead of being silently treated as migrated.

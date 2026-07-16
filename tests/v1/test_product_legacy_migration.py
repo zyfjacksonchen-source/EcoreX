@@ -38,7 +38,7 @@ from tests.v1.test_update_coordinator import (
 )
 
 
-def _product(tmp_path: Path):
+def _product(tmp_path: Path, *, source_version: str = "0.3.0"):
     install = tmp_path / "install"
     state = install / "state"
     candidate = install / "slots" / "candidate-v1"
@@ -51,7 +51,7 @@ def _product(tmp_path: Path):
     (state / "migration-receipts" / "admission.json").write_text(
         "{}\n", encoding="utf-8"
     )
-    write_product_migration_plan(install, source)
+    write_product_migration_plan(install, source, source_version=source_version)
     return install, state, candidate, source
 
 
@@ -75,6 +75,26 @@ def test_bootstrap_accepts_an_installer_selected_legacy_source() -> None:
         ]
     )
     assert arguments.legacy_v030_source == "legacy"
+
+
+def test_bootstrap_accepts_versioned_v0292_upgrade_source() -> None:
+    arguments = bootstrap_parser().parse_args(
+        [
+            "--install-root",
+            "install",
+            "--trusted-public-key",
+            "release-key=release.pub",
+            "--legacy-source",
+            "legacy-workspace",
+            "--legacy-source-version",
+            "0.2.9.2",
+            "--legacy-release-evidence",
+            "old-runtime/runtime-manifest.json",
+        ]
+    )
+    assert arguments.legacy_source == "legacy-workspace"
+    assert arguments.legacy_source_version == "0.2.9.2"
+    assert arguments.legacy_release_evidence.endswith("runtime-manifest.json")
 
 
 def test_product_import_dry_runs_then_swaps_verified_state(tmp_path: Path) -> None:
@@ -109,6 +129,30 @@ def test_product_import_dry_runs_then_swaps_verified_state(tmp_path: Path) -> No
     assert not (install / PRODUCT_MIGRATION_PLAN_NAME).exists()
     assert migration.cleanup_prior_state() is True
     assert not list((install / "migration").glob("v030-prior-state-*"))
+
+
+def test_product_upgrade_preserves_v0292_generation_identity(tmp_path: Path) -> None:
+    install, state, candidate, source = _product(
+        tmp_path, source_version="0.2.9.2"
+    )
+    migration = ProductLegacyMigrationCoordinator(
+        install,
+        state / TARGET_DATABASE_NAME,
+        vault=InMemoryCredentialVault(),
+    )
+
+    assert migration.dry_run(candidate, "v0292-dry-run") is True
+    assert migration.commit(candidate, "v0292-commit") is True
+
+    completion = migration.completion_authority()
+    assert completion is not None
+    assert completion["source_version"] == "0.2.9.2"
+    report = json.loads(
+        (state / "migration-report.json").read_text(encoding="utf-8")
+    )
+    assert report["source_version"] == "0.2.9.2"
+    assert _count(state / TARGET_DATABASE_NAME, "threads") == 1
+    assert _count(state / TARGET_DATABASE_NAME, "project_thread_bindings") == 1
 
 
 def test_source_change_after_dry_run_cannot_replace_live_state(tmp_path: Path) -> None:

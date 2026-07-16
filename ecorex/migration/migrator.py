@@ -1,4 +1,4 @@
-"""Copy-on-write v0.3.0 -> v1.0 migration service.
+"""Copy-on-write released EcoreX -> v1.0 migration service.
 
 The migrator never opens a legacy database in write mode.  It builds a new
 Runtime database and CAS under a disposable staging directory, verifies both,
@@ -53,7 +53,8 @@ from .errors import (
     TargetConflictError,
 )
 from .inventory import (
-    SOURCE_VERSION,
+    DEFAULT_SOURCE_VERSION,
+    SUPPORTED_SOURCE_VERSIONS,
     assert_disjoint_roots,
     inventory_index,
     inventory_source,
@@ -184,6 +185,7 @@ _SENSITIVE_TEXT_PATTERNS = (
 class MigrationOptions:
     source_root: str | Path
     target_root: str | Path
+    source_version: str = DEFAULT_SOURCE_VERSION
     dry_run: bool = False
     quarantine_key: bytes | None = None
     conversation_database: str | Path | None = None
@@ -543,6 +545,8 @@ def _legacy_turn_input_contract_errors(
 
 class V030ToV1Migrator:
     def __init__(self, options: MigrationOptions):
+        if options.source_version not in SUPPORTED_SOURCE_VERSIONS:
+            raise SourceLayoutError("legacy source version is unsupported")
         self.options = options
         self.warnings: list[MigrationWarning] = []
         self.backups: list[BackupRecord] = []
@@ -592,7 +596,10 @@ class V030ToV1Migrator:
 
     @staticmethod
     def _migration_id(inventory: SourceInventory) -> str:
-        return f"mig_{inventory.digest[:26]}"
+        identity = hashlib.sha256(
+            f"{inventory.source_version}\0{inventory.digest}".encode("utf-8")
+        ).hexdigest()
+        return f"mig_{identity[:26]}"
 
     def _existing_report(
         self, source: Path, target: Path, inventory: SourceInventory
@@ -610,7 +617,7 @@ class V030ToV1Migrator:
             payload.get("status") != "completed"
             or payload.get("source_inventory_digest") != inventory.digest
             or payload.get("migration_id") != self._migration_id(inventory)
-            or payload.get("source_version") != SOURCE_VERSION
+            or payload.get("source_version") != inventory.source_version
             or payload.get("target_version") != TARGET_VERSION
         ):
             raise TargetConflictError("v1 target belongs to a different or incomplete migration")
@@ -714,7 +721,7 @@ class V030ToV1Migrator:
             status="completed",
             dry_run=False,
             idempotent_replay=idempotent_replay,
-            source_version=SOURCE_VERSION,
+            source_version=str(payload["source_version"]),
             target_version=TARGET_VERSION,
             storage_schema_version=int(payload.get("storage_schema_version") or 0),
             import_layout_version=int(payload.get("import_layout_version") or 0),
@@ -861,7 +868,7 @@ class V030ToV1Migrator:
 
     def _make_staging(self, target: Path) -> tuple[Path, tempfile.TemporaryDirectory[str] | None]:
         if self.options.dry_run:
-            temporary = tempfile.TemporaryDirectory(prefix="ecorex-v030-dry-run-")
+            temporary = tempfile.TemporaryDirectory(prefix="ecorex-legacy-dry-run-")
             staging = Path(temporary.name) / "target"
             staging.mkdir()
             return staging, temporary
@@ -870,7 +877,9 @@ class V030ToV1Migrator:
         # whose user-data root is already near MAX_PATH.  mkdtemp still gives
         # atomic collision handling; the marker below is the deletion authority.
         staging = Path(tempfile.mkdtemp(prefix=".ecx-", dir=target.parent))
-        (staging / ".ecorex-migration-staging").write_text("v0.3.0-to-v1.0\n", encoding="ascii")
+        (staging / ".ecorex-migration-staging").write_text(
+            "released-to-v1.0\n", encoding="ascii"
+        )
         return staging, None
 
     @staticmethod
@@ -886,7 +895,7 @@ class V030ToV1Migrator:
             marker_ok = (
                 marker.is_file()
                 and not marker.is_symlink()
-                and marker.read_text(encoding="ascii") == "v0.3.0-to-v1.0\n"
+                and marker.read_text(encoding="ascii") == "released-to-v1.0\n"
             )
         except (OSError, UnicodeDecodeError):
             marker_ok = False
@@ -895,7 +904,7 @@ class V030ToV1Migrator:
             and resolved.name.startswith(".ecx-")
             and marker_ok
         )
-        dry_name_ok = resolved.parent.name.startswith("ecorex-v030-dry-run-")
+        dry_name_ok = resolved.parent.name.startswith("ecorex-legacy-dry-run-")
         if not (real_name_ok or dry_name_ok):
             raise SourceLayoutError("refusing to remove an unexpected migration staging path")
         shutil.rmtree(resolved)
@@ -957,6 +966,7 @@ class V030ToV1Migrator:
         marker_label = "@pinned/release-evidence" if marker is not None else None
         self.source_evidence = read_release_evidence(
             source,
+            expected_source_version=self.options.source_version,
             marker_override=marker,
             marker_label=marker_label,
             schema_fingerprint=schema_digest,
@@ -965,7 +975,7 @@ class V030ToV1Migrator:
         if self.source_evidence.evidence_level == "release_schema_compatible_unattested":
             self._warn(
                 "release_evidence_unattested",
-                "v0.3.0",
+                self.options.source_version,
                 "released data schema matches, but the installed package commit cannot be proven from this workspace",
             )
         return conversations, memories, runtime
@@ -1104,11 +1114,8 @@ class V030ToV1Migrator:
         conversations: LegacyConversations,
         ui_state: Mapping[str, Any],
     ) -> LegacyConversations:
-        """Mirror the released WebUI's one-time DB hydration, deterministically."""
+        """Enrich canonical sessions without reviving deleted WebUI cache rows."""
 
-        raw_session_state = ui_state.get("sessionUiState")
-        if not isinstance(raw_session_state, Mapping):
-            return conversations
         sessions = {str(row["session_id"]): dict(row) for row in conversations.sessions}
         messages = [dict(row) for row in conversations.messages]
         message_counts: dict[str, int] = defaultdict(int)
@@ -1117,10 +1124,57 @@ class V030ToV1Migrator:
         warnings: list[LegacyWarning] = []
         session_titles = ui_state.get("sessionTitles")
         session_titles = session_titles if isinstance(session_titles, Mapping) else {}
-        session_projects = ui_state.get("sessionProjects")
-        session_projects = session_projects if isinstance(session_projects, Mapping) else {}
-        session_bindings = ui_state.get("sessionProjectBindings")
-        session_bindings = session_bindings if isinstance(session_bindings, Mapping) else {}
+        pinned_sessions = ui_state.get("pinnedSessions")
+        pinned_sessions = pinned_sessions if isinstance(pinned_sessions, Mapping) else {}
+        pinned_times = ui_state.get("pinnedSessionTimes")
+        pinned_times = pinned_times if isinstance(pinned_times, Mapping) else {}
+        enriched_titles = 0
+        pinned_count = 0
+        for session_id, session in sessions.items():
+            cached_title = str(session_titles.get(session_id) or "").strip()
+            if cached_title and not bool(session.get("title_locked")):
+                if str(session.get("title") or "") != cached_title:
+                    enriched_titles += 1
+                session["title"] = cached_title
+            session["pinned"] = bool(pinned_sessions.get(session_id))
+            session["pinned_at"] = pinned_times.get(session_id)
+            if session["pinned"]:
+                pinned_count += 1
+        self.counts["session_summaries"] = sum(
+            bool(str(session.get("title") or "").strip()) for session in sessions.values()
+        )
+        self.counts["session_titles_enriched"] = enriched_titles
+        self.counts["pinned_threads"] = pinned_count
+
+        deleted_cache_ids = (
+            set(str(key) for key in session_titles)
+            | set(str(key) for key in (ui_state.get("sessionUiState") or {}))
+        ) - set(sessions)
+        if deleted_cache_ids:
+            self.counts["deleted_session_cache_excluded"] = len(deleted_cache_ids)
+            warnings.append(
+                LegacyWarning(
+                    "deleted_session_cache_excluded",
+                    "WebUI session cache",
+                    "cached session ids absent from the canonical database were not restored",
+                )
+            )
+
+        raw_session_state = ui_state.get("sessionUiState")
+        if not isinstance(raw_session_state, Mapping):
+            return LegacyConversations(
+                sessions=tuple(
+                    sorted(
+                        sessions.values(),
+                        key=lambda row: (
+                            _legacy_timestamp(row.get("created_at")),
+                            str(row["session_id"]),
+                        ),
+                    )
+                ),
+                messages=tuple(messages),
+                warnings=tuple(warnings),
+            )
 
         entries = list(raw_session_state.items())
         if len(entries) > 200:
@@ -1131,7 +1185,6 @@ class V030ToV1Migrator:
                     "only the first 200 cached sessions supported by the released runtime were considered",
                 )
             )
-        imported_sessions = 0
         imported_messages = 0
         for raw_session_id, raw_cached in entries[:200]:
             session_id = str(raw_session_id or "").strip()
@@ -1148,6 +1201,10 @@ class V030ToV1Migrator:
                         "malformed cached session was skipped",
                     )
                 )
+                continue
+            if session_id not in sessions:
+                # The database is the deletion authority. UI cache is allowed
+                # to enrich a surviving row, never to resurrect an absent one.
                 continue
             # The released v0.3 hydrator never overwrote canonical DB history.
             if message_counts.get(session_id, 0) > 0:
@@ -1209,46 +1266,16 @@ class V030ToV1Migrator:
                 )
             if not converted:
                 continue
-            if session_id not in sessions:
-                binding = session_bindings.get(session_id)
-                binding = binding if isinstance(binding, Mapping) else {}
-                project_id = str(
-                    binding.get("projectId")
-                    or binding.get("project_id")
-                    or session_projects.get(session_id)
-                    or raw_cached.get("projectId")
-                    or ""
-                ).strip()
-                created_at = min(int(row["created_at"]) for row in converted)
-                last_active = max(int(row["created_at"]) for row in converted)
-                sessions[session_id] = {
-                    "session_id": session_id,
-                    "channel_type": "web",
-                    "title": str(session_titles.get(session_id) or raw_cached.get("title") or ""),
-                    "title_locked": 0,
-                    "context_start_seq": int(raw_cached.get("contextStartSeq") or 0),
-                    "project_id": project_id,
-                    "project_name": str(binding.get("projectName") or binding.get("project_name") or ""),
-                    "project_path": str(binding.get("projectPath") or binding.get("project_path") or ""),
-                    "project_memory_path": str(binding.get("memoryPath") or binding.get("memory_path") or ""),
-                    "project_dreams_path": str(binding.get("dreamsPath") or binding.get("dreams_path") or ""),
-                    "metadata_json": json_dumps({"migration_source": "ui-state-hydration"}),
-                    "created_at": created_at,
-                    "last_active": last_active,
-                    "msg_count": len(converted),
-                }
-                imported_sessions += 1
             messages.extend(converted)
             message_counts[session_id] = len(converted)
             imported_messages += len(converted)
-        if imported_sessions or imported_messages:
-            self.counts["ui_history_sessions"] += imported_sessions
+        if imported_messages:
             self.counts["ui_history_messages"] += imported_messages
             warnings.append(
                 LegacyWarning(
                     "ui_history_hydrated",
                     "sessionUiState",
-                    "cached WebUI history absent from the canonical conversation DB was imported",
+                    "cached WebUI history for surviving empty database sessions was imported",
                 )
             )
         return LegacyConversations(
@@ -1295,7 +1322,11 @@ class V030ToV1Migrator:
         self._pinned_paths = pinned
 
     def _inventory_source(self, source: Path) -> SourceInventory:
-        return inventory_source(source, pinned_files=self._pinned_paths)
+        return inventory_source(
+            source,
+            pinned_files=self._pinned_paths,
+            source_version=self.options.source_version,
+        )
 
     @staticmethod
     def _has_symlink_component(source: Path, candidate: Path) -> bool:
@@ -1648,6 +1679,32 @@ class V030ToV1Migrator:
         messages_by_session: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for message in conversations.messages:
             messages_by_session[str(message["session_id"])].append(message)
+        groups_by_session = {
+            session_id: self._message_groups(messages)
+            for session_id, messages in messages_by_session.items()
+        }
+        request_occurrences: dict[str, int] = defaultdict(int)
+        for groups in groups_by_session.values():
+            for group in groups:
+                request_id = self._group_request_id(group)
+                if request_id:
+                    request_occurrences[request_id] += 1
+        ambiguous_request_ids = {
+            request_id
+            for request_id, count in request_occurrences.items()
+            if count > 1
+        }
+        if ambiguous_request_ids:
+            self.counts["ambiguous_legacy_request_ids"] = len(ambiguous_request_ids)
+            self.counts["ambiguous_legacy_request_occurrences"] = sum(
+                request_occurrences[request_id]
+                for request_id in ambiguous_request_ids
+            )
+            self._warn(
+                "ambiguous_legacy_request_identity",
+                "conversation history",
+                "reused legacy request ids were preserved on every Turn but left unbound from the run ledger",
+            )
         thread_ids: dict[str, str] = {}
         runs_by_id = {str(row["request_id"]): row for row in runtime.runs}
 
@@ -1662,12 +1719,14 @@ class V030ToV1Migrator:
                     session.get("metadata_json"), fallback_to_text=False
                 )
                 metadata = {
+                    "pinned": bool(session.get("pinned")),
                     "migration": {
-                        "source_version": SOURCE_VERSION,
+                        "source_version": inventory.source_version,
                         "legacy_session_id": legacy_session_id,
                         "channel_type": str(session.get("channel_type") or ""),
                         "context_start_seq": int(session.get("context_start_seq") or 0),
                         "source_inventory_digest": inventory.digest,
+                        "legacy_pinned_at": session.get("pinned_at"),
                     },
                     "legacy_metadata": _without_secrets(legacy_metadata),
                 }
@@ -1711,7 +1770,7 @@ class V030ToV1Migrator:
                 )
                 self.counts["threads"] += 1
 
-                groups = self._message_groups(messages_by_session.get(legacy_session_id, []))
+                groups = groups_by_session.get(legacy_session_id, [])
                 for group_index, group in enumerate(groups):
                     start_seq = int(group[0]["seq"])
                     turn_id = _stable_id("trn", inventory.digest, legacy_session_id, start_seq)
@@ -1731,7 +1790,15 @@ class V030ToV1Migrator:
                     turn_created = _legacy_datetime(group[0].get("created_at"))
                     turn_updated = max(_legacy_datetime(item.get("created_at")) for item in group)
                     legacy_request_id = self._group_request_id(group)
-                    legacy_run = runs_by_id.get(legacy_request_id or "")
+                    request_identity_ambiguous = bool(
+                        legacy_request_id
+                        and legacy_request_id in ambiguous_request_ids
+                    )
+                    legacy_run = (
+                        None
+                        if request_identity_ambiguous
+                        else runs_by_id.get(legacy_request_id or "")
+                    )
                     imported_status = "completed"
                     terminal_reason = "legacy_import"
                     terminal_event_type = "turn.completed"
@@ -1748,10 +1815,16 @@ class V030ToV1Migrator:
                         )
                     turn_metadata = {
                         "migration": {
-                            "source_version": SOURCE_VERSION,
+                            "source_version": inventory.source_version,
                             "legacy_start_seq": start_seq,
                             "legacy_group_index": group_index,
                             "legacy_request_id": legacy_request_id,
+                            "legacy_request_id_ambiguous": request_identity_ambiguous,
+                            "legacy_request_occurrence_count": (
+                                request_occurrences.get(legacy_request_id, 0)
+                                if legacy_request_id
+                                else 0
+                            ),
                             "legacy_run_status": (
                                 str(legacy_run.get("status")) if legacy_run is not None else None
                             ),
@@ -1849,11 +1922,11 @@ class V030ToV1Migrator:
                         (str(start_seq), turn_id, legacy_session_id),
                     )
                     self.counts["turns"] += 1
-                    if legacy_request_id:
+                    if legacy_request_id and not request_identity_ambiguous:
                         existing_turn = self._turn_by_request_id.get(legacy_request_id)
                         if existing_turn is not None and existing_turn != turn_id:
-                            raise DuplicateLegacyIdError(
-                                f"legacy request {legacy_request_id!r} maps to multiple conversation turns"
+                            raise MigrationVerificationError(
+                                "legacy request identity analysis became inconsistent"
                             )
                         self._turn_by_request_id[legacy_request_id] = turn_id
 
@@ -3304,7 +3377,7 @@ class V030ToV1Migrator:
                     """,
                     (
                         migration_id,
-                        SOURCE_VERSION,
+                        before.source_version,
                         TARGET_VERSION,
                         before.digest,
                         _iso_now(),
@@ -3402,7 +3475,7 @@ class V030ToV1Migrator:
                 status=status,
                 dry_run=self.options.dry_run,
                 idempotent_replay=False,
-                source_version=SOURCE_VERSION,
+                source_version=before.source_version,
                 target_version=TARGET_VERSION,
                 storage_schema_version=(
                     schema_identity.target_storage_schema_version
@@ -3472,6 +3545,7 @@ def migrate_v030_to_v1(
     source_root: str | Path,
     target_root: str | Path,
     *,
+    source_version: str = DEFAULT_SOURCE_VERSION,
     dry_run: bool = False,
     quarantine_key: bytes | None = None,
     conversation_database: str | Path | None = None,
@@ -3490,6 +3564,7 @@ def migrate_v030_to_v1(
         MigrationOptions(
             source_root=source_root,
             target_root=target_root,
+            source_version=source_version,
             dry_run=dry_run,
             quarantine_key=quarantine_key,
             conversation_database=conversation_database,
@@ -3503,3 +3578,20 @@ def migrate_v030_to_v1(
             sample_size=sample_size,
         )
     ).run()
+
+
+def migrate_legacy_to_v1(
+    source_root: str | Path,
+    target_root: str | Path,
+    *,
+    source_version: str,
+    **options: Any,
+) -> MigrationReport:
+    """Version-explicit entry point for supported released installations."""
+
+    return migrate_v030_to_v1(
+        source_root,
+        target_root,
+        source_version=source_version,
+        **options,
+    )

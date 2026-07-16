@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "real_installed_legacy_copy_on_write_dry_run",
+  "recorded_at": "2026-07-16",
+  "product_target": "1.0.0",
+  "source_version": "0.2.9.2",
+  "source_commit": "0916bd04465a23504e989bbccf7960273827eadf",
+  "migration_id": "mig_ba2833ff2543a8070ad8765994",
+  "status": "dry_run_verified",
+  "source_inventory": {
+    "digest_sha256": "7bd10f200ff9917204b6edd2b7a33f908674ec95e0960da12870b3572b8156cf",
+    "entries": 897,
+    "bytes": 459541787,
+    "unchanged_during_run": true
+  },
+  "preserved_records": {
+    "threads": 54,
+    "messages": 1029,
+    "session_summaries": 54,
+    "projects": 2,
+    "live_project_bindings": 3,
+    "turns": 580,
+    "turn_input_revisions": 580,
+    "legacy_runs": 247,
+    "legacy_run_events": 38073
+  },
+  "deletion_authority": {
+    "authority": "canonical_legacy_sessions_database",
+    "ui_cache_may_enrich_surviving_sessions_only": true,
+    "ui_cache_only_session_ids_excluded": 93,
+    "previously_deleted_sessions_restored": 0
+  },
+  "ambiguity_handling": {
+    "reused_request_ids": 42,
+    "turn_occurrences": 169,
+    "conversation_turns_retained": true,
+    "legacy_run_rows_bound_more_than_once": false
+  },
+  "secret_quarantine": {
+    "entries": 5,
+    "plaintext_persisted": false
+  },
+  "source_evidence": {
+    "level": "release_marker_and_schema",
+    "declared_version": "0.2.9.2"
+  },
+  "artifact_sampling": {
+    "sampled": 3
+  },
+  "boundaries": {
+    "candidate_bound": false,
+    "activation_performed": false,
+    "target_published": false,
+    "source_mutated": false,
+    "content_persisted": false,
+    "paths_persisted": false,
+    "secrets_persisted": false,
+    "privacy": "Only aggregate counts and cryptographic digests are retained; no conversation content, raw identifiers, user paths or secrets are included."
+  }
+}

@@ -1,4 +1,4 @@
-"""Public v0.3.0 -> v1.0 migration API."""
+"""Public released EcoreX -> v1.0 migration API."""
 
 from .crypto import decrypt_quarantine, load_quarantine_key
 from .api import create_migration_quarantine_router
@@ -14,7 +14,11 @@ from .errors import (
     SourceLayoutError,
     TargetConflictError,
 )
-from .inventory import inventory_source
+from .inventory import (
+    DEFAULT_SOURCE_VERSION,
+    SUPPORTED_SOURCE_VERSIONS,
+    inventory_source,
+)
 from .migrator import (
     BACKUP_MANIFEST_NAME,
     INVENTORY_NAME,
@@ -24,6 +28,7 @@ from .migrator import (
     TARGET_DATABASE_NAME,
     MigrationOptions,
     V030ToV1Migrator,
+    migrate_legacy_to_v1,
     migrate_v030_to_v1,
 )
 from .models import MigrationReport, SourceInventory
@@ -41,6 +46,7 @@ from .quarantine import MigrationQuarantineService, QuarantineProjection
 __all__ = [
     "BACKUP_MANIFEST_NAME",
     "DuplicateLegacyIdError",
+    "DEFAULT_SOURCE_VERSION",
     "INVENTORY_NAME",
     "LegacyDatabaseError",
     "LegacySchemaError",
@@ -62,6 +68,7 @@ __all__ = [
     "SourceChangedError",
     "SourceInventory",
     "SourceLayoutError",
+    "SUPPORTED_SOURCE_VERSIONS",
     "TARGET_ARTIFACT_ROOT_NAME",
     "TARGET_DATABASE_NAME",
     "TargetConflictError",
@@ -70,6 +77,7 @@ __all__ = [
     "create_migration_quarantine_router",
     "inventory_source",
     "load_quarantine_key",
+    "migrate_legacy_to_v1",
     "migrate_v030_to_v1",
     "MigrationQuarantineService",
     "write_product_migration_plan",

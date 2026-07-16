@@ -23,6 +23,7 @@ from ecorex.migration import (
     V030ToV1Migrator,
     decrypt_quarantine,
     inventory_source,
+    migrate_legacy_to_v1,
     migrate_v030_to_v1,
 )
 from ecorex.runtime.schema_fragments.memory import MEMORY_SCHEMA_FRAGMENT
@@ -768,6 +769,160 @@ def test_copy_on_write_imports_canonical_domains_and_is_idempotent(tmp_path):
     assert inventory_source(source) == before
 
 
+def test_v0292_preserves_live_chats_summaries_and_projects_without_deleted_cache(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "legacy-v0292"
+    target = tmp_path / "v1"
+    external = tmp_path / "old-runtime"
+    source.mkdir()
+    external.mkdir()
+    _create_legacy_fixture(source)
+
+    connection = sqlite3.connect(source / "sessions" / "conversations.db")
+    try:
+        duplicate_request_id = "v0292-reused-request"
+        for sequence in (0, 1):
+            raw_extras = connection.execute(
+                "SELECT extras FROM messages WHERE session_id = 'legacy-session' AND seq = ?",
+                (sequence,),
+            ).fetchone()[0]
+            extras = json.loads(raw_extras) if raw_extras else {}
+            extras["request_id"] = duplicate_request_id
+            connection.execute(
+                "UPDATE messages SET extras = ? WHERE session_id = 'legacy-session' AND seq = ?",
+                (json.dumps(extras, ensure_ascii=False), sequence),
+            )
+        connection.executemany(
+            """
+            INSERT INTO messages(session_id, seq, role, content, created_at, extras)
+            VALUES ('legacy-session', ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    2,
+                    "user",
+                    json.dumps([{"type": "text", "text": "继续完善方案"}], ensure_ascii=False),
+                    1_700_000_003,
+                    json.dumps({"request_id": duplicate_request_id}),
+                ),
+                (
+                    3,
+                    "assistant",
+                    json.dumps("已继续完善", ensure_ascii=False),
+                    1_700_000_004,
+                    json.dumps({"request_id": duplicate_request_id}),
+                ),
+            ],
+        )
+        connection.execute(
+            "UPDATE sessions SET msg_count = 4, last_active = ? WHERE session_id = 'legacy-session'",
+            (1_700_000_004,),
+        )
+        connection.execute(
+            """
+            INSERT INTO sessions(
+                session_id, channel_type, title, title_locked, context_start_seq,
+                project_id, project_name, project_path, project_memory_path,
+                project_dreams_path, metadata_json, created_at, last_active, msg_count
+            ) VALUES ('summary-session', 'web', '', 0, 0, '', '', '', '', '', '', ?, ?, 0)
+            """,
+            (1_700_000_200, 1_700_000_201),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    ui_path = source / ".ecorex" / "ui-state.json"
+    ui_state = json.loads(ui_path.read_text(encoding="utf-8"))
+    ui_state["sessionTitles"] = {
+        "legacy-session": "不应覆盖锁定摘要",
+        "summary-session": "来自 v0.2.9.2 的会话摘要",
+        "deleted-session": "已删除会话",
+    }
+    ui_state["pinnedSessions"] = {"summary-session": True}
+    ui_state["pinnedSessionTimes"] = {"summary-session": 1_700_000_202_000}
+    ui_state["sessionUiState"] = {
+        "deleted-session": {
+            "title": "已删除会话",
+            "messages": [
+                {"role": "user", "content": "这条缓存不应恢复"},
+                {"role": "assistant", "content": "这条回复也不应恢复"},
+            ],
+        }
+    }
+    _write_json(ui_path, ui_state)
+
+    release_evidence = external / "runtime-manifest.json"
+    _write_json(
+        release_evidence,
+        {
+            "schemaVersion": "v0.2.5-runtime-manifest-v1",
+            "product": "EcoreX",
+            "version": "0.2.9.2",
+        },
+    )
+    source_before = inventory_source(source, source_version="0.2.9.2")
+    evidence_before = release_evidence.read_bytes()
+
+    report = migrate_legacy_to_v1(
+        source,
+        target,
+        source_version="0.2.9.2",
+        quarantine_key=QUARANTINE_KEY,
+        release_evidence_file=release_evidence,
+    )
+
+    database = target / TARGET_DATABASE_NAME
+    assert report.source_version == "0.2.9.2"
+    assert report.source_evidence["declared_version"] == "0.2.9.2"
+    assert inventory_source(source, source_version="0.2.9.2") == source_before
+    assert release_evidence.read_bytes() == evidence_before
+    assert _query_one(database, "SELECT COUNT(*) FROM threads") == 2
+    assert _query_one(database, "SELECT COUNT(*) FROM items WHERE kind = 'message'") == 4
+    assert _query_one(
+        database,
+        "SELECT COUNT(*) FROM threads WHERE title = '已删除会话'",
+    ) == 0
+    assert _query_one(
+        database,
+        "SELECT COUNT(*) FROM threads WHERE title = '制定 v1.0 产品化方案'",
+    ) == 1
+    assert _query_one(
+        database,
+        "SELECT COUNT(*) FROM threads WHERE title = '来自 v0.2.9.2 的会话摘要'",
+    ) == 1
+    assert _query_one(
+        database,
+        "SELECT COUNT(*) FROM threads WHERE json_extract(metadata_json, '$.pinned') = 1",
+    ) == 1
+    assert _query_all(
+        database,
+        "SELECT name, project_path, pinned, active FROM projects",
+    ) == [("Alpha", str(source / "projects" / "alpha"), 1, 1)]
+    assert _query_one(database, "SELECT COUNT(*) FROM project_thread_bindings") == 1
+    assert report.counts["session_summaries"] == 2
+    assert report.counts["pinned_threads"] == 1
+    assert report.counts["deleted_session_cache_excluded"] == 1
+    assert report.counts["ambiguous_legacy_request_ids"] == 1
+    assert report.counts["ambiguous_legacy_request_occurrences"] == 2
+    assert _query_one(
+        database,
+        "SELECT COUNT(*) FROM turns WHERE "
+        "json_extract(metadata_json, '$.migration.legacy_request_id_ambiguous') = 1",
+    ) == 2
+    replay = migrate_legacy_to_v1(
+        source,
+        target,
+        source_version="0.2.9.2",
+        quarantine_key=QUARANTINE_KEY,
+        release_evidence_file=release_evidence,
+    )
+    assert replay.idempotent_replay is True
+    assert replay.migration_id == report.migration_id
+    assert inventory_source(source, source_version="0.2.9.2") == source_before
+
+
 def test_real_shared_memory_and_conversation_database_is_snapshotted_once(tmp_path):
     source = tmp_path / "legacy"
     target = tmp_path / "v1"
@@ -1233,7 +1388,14 @@ def test_released_v030_runtime_state_is_preserved_but_never_auto_executes(tmp_pa
         "agent_run_events",
     }
     database = target / TARGET_DATABASE_NAME
-    assert _query_one(database, "SELECT COUNT(*) FROM threads") == 3
+    # cached-session exists only in stale WebUI cache. The canonical database
+    # is the deletion authority, so migration must not resurrect it.
+    assert _query_one(database, "SELECT COUNT(*) FROM threads") == 2
+    assert report.counts["deleted_session_cache_excluded"] == 1
+    assert _query_one(
+        database,
+        "SELECT COUNT(*) FROM threads WHERE title = '仅在 Web 缓存中的会话'",
+    ) == 0
     assert _query_one(database, "SELECT COUNT(*) FROM legacy_run_records") == 2
     assert _query_one(database, "SELECT COUNT(*) FROM legacy_run_event_records") == 2
     assert _query_one(database, "SELECT COUNT(*) FROM legacy_pending_work") == 1
@@ -1271,7 +1433,7 @@ def test_released_v030_runtime_state_is_preserved_but_never_auto_executes(tmp_pa
         database,
         "SELECT COUNT(*) FROM threads WHERE title = '仅在 Web 缓存中的会话'",
     )
-    assert cached_thread == 1
+    assert cached_thread == 0
     database_bytes = database.read_bytes()
     assert b"scheduler-secret-must-not-migrate" not in database_bytes
     assert b"hidden-context-must-not-migrate" not in database_bytes

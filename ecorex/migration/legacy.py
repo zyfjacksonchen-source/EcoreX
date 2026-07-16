@@ -1,4 +1,4 @@
-"""Read-only adapters for the real v0.3.0 SQLite and JSON layouts."""
+"""Read-only adapters for the released v0.2.9.2/v0.3.0 data layouts."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ import re
 import sqlite3
 from typing import Any, Iterable, Mapping
 from urllib.parse import quote
+
+from .inventory import SUPPORTED_SOURCE_VERSIONS
 
 from .errors import (
     DuplicateLegacyIdError,
@@ -99,6 +101,7 @@ class LegacySchedulerTasks:
 
 @dataclass(frozen=True, slots=True)
 class LegacyReleaseEvidence:
+    source_version: str
     evidence_level: str
     marker_label: str | None
     marker_sha256: str | None
@@ -110,6 +113,7 @@ class LegacyReleaseEvidence:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "source_version": self.source_version,
             "evidence_level": self.evidence_level,
             "marker_label": self.marker_label,
             "marker_sha256": self.marker_sha256,
@@ -118,8 +122,12 @@ class LegacyReleaseEvidence:
             "package_sha256": self.package_sha256,
             "schema_fingerprint": self.schema_fingerprint,
             "schema_tables": list(self.schema_tables),
-            "baseline_release_schema_commit": V030_RELEASE_SCHEMA_COMMIT,
-            "baseline_last_hotfix_commit": V030_LAST_HOTFIX_COMMIT,
+            "baseline_release_schema_commit": (
+                V030_RELEASE_SCHEMA_COMMIT if self.source_version == "0.3.0" else None
+            ),
+            "baseline_last_hotfix_commit": (
+                V030_LAST_HOTFIX_COMMIT if self.source_version == "0.3.0" else None
+            ),
             "asset_attested": False,
         }
 
@@ -872,11 +880,14 @@ def sqlite_schema_fingerprint(
 def read_release_evidence(
     root: Path,
     *,
+    expected_source_version: str,
     marker_override: Path | None,
     marker_label: str | None,
     schema_fingerprint: str,
     schema_tables: tuple[str, ...],
 ) -> LegacyReleaseEvidence:
+    if expected_source_version not in SUPPORTED_SOURCE_VERSIONS:
+        raise LegacySchemaError("legacy source version is unsupported")
     path = marker_override
     label = marker_label
     if path is None:
@@ -897,9 +908,10 @@ def read_release_evidence(
     if path is None:
         if not schema_tables:
             raise LegacySchemaError(
-                "legacy source has neither release evidence nor a recognized v0.3 data schema"
+                "legacy source has neither release evidence nor a recognized released data schema"
             )
         return LegacyReleaseEvidence(
+            source_version=expected_source_version,
             evidence_level="release_schema_compatible_unattested",
             marker_label=None,
             marker_sha256=None,
@@ -912,8 +924,11 @@ def read_release_evidence(
 
     payload = read_json_object(path, max_bytes=1024 * 1024)
     declared_version = str(payload.get("version") or "").strip().lstrip("v")
-    if declared_version != "0.3.0":
-        raise LegacySchemaError("legacy release evidence does not declare version 0.3.0")
+    if declared_version != expected_source_version:
+        raise LegacySchemaError(
+            "legacy release evidence does not declare the selected source version "
+            f"{expected_source_version}"
+        )
     declared_commit = str(
         payload.get("sourceCommit")
         or payload.get("source_commit")
@@ -935,6 +950,7 @@ def read_release_evidence(
         label="legacy release evidence",
     )
     return LegacyReleaseEvidence(
+        source_version=expected_source_version,
         evidence_level="release_marker_and_schema" if schema_tables else "release_marker_only",
         marker_label=label,
         marker_sha256=marker_digest,

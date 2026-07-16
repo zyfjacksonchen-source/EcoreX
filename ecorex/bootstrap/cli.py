@@ -11,7 +11,12 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from ecorex.integration.pack_verification import verify_product_capability_pack
-from ecorex.migration import ProductMigrationError, write_product_migration_plan
+from ecorex.migration import (
+    DEFAULT_SOURCE_VERSION,
+    SUPPORTED_SOURCE_VERSIONS,
+    ProductMigrationError,
+    write_product_migration_plan,
+)
 from ecorex.update import (
     Ed25519SignatureVerifier,
     ProductFileLock,
@@ -46,6 +51,19 @@ def _parser() -> argparse.ArgumentParser:
             "migration plan before v1 starts"
         ),
     )
+    parser.add_argument(
+        "--legacy-source",
+        help="installer-selected released data root for one-time copy-on-write migration",
+    )
+    parser.add_argument(
+        "--legacy-source-version",
+        choices=sorted(SUPPORTED_SOURCE_VERSIONS),
+        default=DEFAULT_SOURCE_VERSION,
+    )
+    parser.add_argument(
+        "--legacy-release-evidence",
+        help="runtime-manifest.json or release.json from the installed legacy Runtime",
+    )
     return parser
 
 
@@ -54,12 +72,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         keys = _read_public_keys(args.trusted_public_key)
         verifier = Ed25519SignatureVerifier(keys)
-        if args.legacy_v030_source:
+        if args.legacy_v030_source and args.legacy_source:
+            raise BootstrapConfigurationError("Only one legacy source may be selected")
+        legacy_source = args.legacy_source or args.legacy_v030_source
+        legacy_version = (
+            DEFAULT_SOURCE_VERSION
+            if args.legacy_v030_source and not args.legacy_source
+            else args.legacy_source_version
+        )
+        if args.legacy_release_evidence and not legacy_source:
+            raise BootstrapConfigurationError(
+                "Legacy release evidence requires a selected legacy source"
+            )
+        if legacy_source:
             install_root = Path(os.path.abspath(args.install_root))
             with ProductFileLock(install_root / "install-update.lock", timeout=10.0):
                 write_product_migration_plan(
                     install_root,
-                    Path(os.path.abspath(args.legacy_v030_source)),
+                    Path(os.path.abspath(legacy_source)),
+                    source_version=legacy_version,
+                    release_evidence_file=(
+                        Path(os.path.abspath(args.legacy_release_evidence))
+                        if args.legacy_release_evidence
+                        else None
+                    ),
                 )
         supervisor = BootstrapSupervisor(
             args.install_root,

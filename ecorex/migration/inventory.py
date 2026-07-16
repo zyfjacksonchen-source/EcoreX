@@ -23,7 +23,10 @@ from .path_security import (
 )
 
 
-SOURCE_VERSION = "0.3.0"
+DEFAULT_SOURCE_VERSION = "0.3.0"
+SUPPORTED_SOURCE_VERSIONS = frozenset({"0.2.9.2", "0.3.0"})
+# Backward-compatible name for callers which still mean the v0.3 baseline.
+SOURCE_VERSION = DEFAULT_SOURCE_VERSION
 _PIN_LABEL = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 
 
@@ -47,8 +50,12 @@ def inventory_source(
     source_root: str | Path,
     *,
     pinned_files: Mapping[str, str | Path] | None = None,
+    source_version: str = DEFAULT_SOURCE_VERSION,
 ) -> SourceInventory:
     """Hash every source entry without following links or writing sidecars."""
+
+    if source_version not in SUPPORTED_SOURCE_VERSIONS:
+        raise SourceLayoutError("legacy source version is unsupported")
 
     root = secure_directory(source_root, label="legacy source root")
 
@@ -132,7 +139,7 @@ def inventory_source(
 
     entries.sort(key=lambda item: (item.relative_path.casefold(), item.relative_path))
     return SourceInventory(
-        source_version=SOURCE_VERSION,
+        source_version=source_version,
         digest=_entry_digest(entries),
         entries=tuple(entries),
         total_bytes=sum(item.size_bytes for item in entries if item.kind == "file"),
