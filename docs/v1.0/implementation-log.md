@@ -5659,3 +5659,42 @@ a protected signed Candidate, managed-provider acceptance or release approval.
 This is deterministic local contract evidence, not a real managed Image 2
 connectivity, precision score, protected Candidate, publication or rollout
 claim.
+
+## 2026-07-16 - Exact-main signed Candidate and live-boundary audit
+
+PR #8 merged to exact main
+`90539b2fce55f2bbd20c552d68b07135b75e7742`. The independent main push run
+`29474876004` passed Ubuntu quality/deterministic build, Windows x64, macOS
+arm64/x64 and cross-runner byte stability; all five Jobs completed.
+
+The exact-main local Windows signed-Candidate ceremony passed in 2,203.25
+seconds. First install, committed migration restart, same-version update and
+refresh, and the restored rollback Runtime all returned HTTP 200. Three durable
+drain checkpoints preceded activation attempts; a corrupt digest was rejected,
+the fault slot was discarded, the private key was not persisted and the
+temporary Candidate was removed. Core is 21,535,788 bytes and Bootstrap is
+3,109,078 bytes. The 43,534-byte redacted full report has SHA-256
+`9495383f...d5b3d2`. The tracked aggregate receipt is
+`evidence/windows-signed-candidate-main-90539b2f-2026-07-16-summary.json`.
+
+The live audit deliberately did not relax security to finish the checklist.
+The existing local administrator credential still reaches the legacy HTTP
+provider: a real catalog request contains `gpt-5.6-sol`, and a real Responses
+request completed with medium reasoning and the 272,000 compaction policy.
+That is a direct diagnostic only. The v1 image adapter requires a fixed HTTPS
+origin; the legacy origin is HTTP and the same host does not accept HTTPS, so
+Image 2 live execution was blocked before the provider rather than downgraded.
+No v1 managed device-session credential exists on this workstation.
+
+The ChatGPT Chrome Extension is installed and enabled, but Chrome was not
+running and the native messaging registration is absent. Candidate-bound CDP
+was therefore not executed; the registry was not self-repaired or bypassed.
+The existing real v0.2.9.2 import evidence still retains 54 authoritative
+sessions, excludes 93 cache-only deleted IDs and restores zero deleted
+sessions. This Candidate ceremony used the released v0.3 schema fixture, so a
+real v0.2.9.2 signed activation is not claimed.
+
+Promotion remains closed: the local drill has 8/24 platform receipts, while 16
+protected macOS receipts, a managed HTTPS Gateway/device session and restored
+Chrome control are absent. No release publication, rollout or user update was
+attempted.

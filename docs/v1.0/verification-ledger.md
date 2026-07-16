@@ -1934,3 +1934,17 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Static and byte gates | 0 | Ruff/compile, all-zero design debt, strict legacy cutoff, public download, dependency locks, Runtime/Server schema authority, reproducibility, diff and 678-source-file admission pass. Locked profiles contain Bootstrap 3, Cloud 34, Dev 35, Platform-stage 48, Runtime 23 and npm 282 packages. |
 | Hosted exact implementation source | 0 | Draft PR #8 commit `9b893ce9079b2cb1b90b951a448b27bbea2620f2`; Actions run `29474142345` passed Ubuntu quality/deterministic build, Windows x64, macOS arm64/x64 and cross-runner byte stability. All five Jobs completed successfully. |
 | Evidence boundary | pending | A real managed Image 2 endpoint still must prove model activation, four unique concurrent outputs, no duplicate billing and Retouch unchanged-region scoring on a signed installed Candidate. No publication or rollout occurred. |
+
+## Exact-main signed Candidate and live-boundary audit - 2026-07-16
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Exact main | 0 | PR #8 merged as `90539b2fce55f2bbd20c552d68b07135b75e7742`; main push run `29474876004` passed all five Ubuntu/Windows/macOS/byte-stability Jobs. |
+| Local signed Candidate | 0 | Passed in 2,203.25s. First install, migration restart, update-and-refresh and rollback returned HTTP 200; three checkpoints, bad-digest rejection, fault-slot discard, non-persisted private key and cleanup passed. |
+| Candidate artifacts | 0 | Core 21,535,788 bytes; Bootstrap 3,109,078; browser 190,153,571; image 1,376; OCR 94,993,855; Office 14,836,807. Every recorded artifact has an exact SHA-256 in the tracked receipt. |
+| Direct GPT-5.6 diagnostic | 0 with boundary | Existing legacy administrator credential reached the configured HTTP provider; catalog returned 200 and contained `gpt-5.6-sol`, while Responses returned 200/terminal with medium reasoning and 272,000 compaction. No managed Gateway/session was used, so this is not official live acceptance. |
+| HTTPS image boundary | blocked safely | The legacy provider origin is HTTP and the same host HTTPS probe failed to connect. The v1 direct image adapter remained fail-closed; Image 2 concurrency/Retouch was not rerun by bypassing its HTTPS origin contract. |
+| Chrome control | blocked safely | Chrome and the ChatGPT Chrome Extension are installed; the extension is enabled, but Chrome is not running and the native messaging registration is missing. No registry repair, alternate automation or Candidate-bound CDP claim was made. |
+| Deleted-session authority | 0 | Real v0.2.9.2 commit import still proves 54 retained authoritative sessions, 93 excluded cache-only deleted IDs and zero restored deleted sessions. This local Candidate used the released v0.3 fixture, so real-v0.2.9.2 signed activation remains pending. |
+| Redacted evidence | 0 | `evidence/windows-signed-candidate-main-90539b2f-2026-07-16-summary.json` contains aggregate statuses/digests only. The untracked 43,534-byte full report SHA-256 is `9495383f...d5b3d2`; no credentials, origins, prompts, responses, paths or conversation content are retained. |
+| Promotion/publication | blocked | Local evidence remains 8/24 receipts. Sixteen protected macOS receipts, managed HTTPS Gateway/device session and Candidate-bound Chrome control are absent; no publication, rollout or user update occurred. |

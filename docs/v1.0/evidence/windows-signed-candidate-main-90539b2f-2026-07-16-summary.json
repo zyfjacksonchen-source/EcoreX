@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "local_windows_signed_candidate_and_live_boundary_audit",
+  "recorded_at": "2026-07-16T14:51:58+08:00",
+  "source": {
+    "commit": "90539b2fce55f2bbd20c552d68b07135b75e7742",
+    "version": "1.0.0",
+    "main_hosted_run_id": 29474876004,
+    "main_hosted_jobs_passed": 5
+  },
+  "local_candidate": {
+    "status": "passed",
+    "elapsed_seconds": 2203.25,
+    "release_id": "release-stable-aa9b666fbfeb70b1f26f37a4",
+    "build_digest": "aa9b666fbfeb70b1f26f37a4409245a0c11e9545ef2f521774caf12f9c9598f6",
+    "manifest_sha256": "658e3e50d59ac4ccbd7c8afd21ba20353967aaf7e7f745b98d964d7d172f6804",
+    "full_report": {
+      "tracked": false,
+      "bytes": 43534,
+      "sha256": "9495383fac937e53b373766f32fa7860c8f60b3330bb42cb5791871cdcd5b3d2",
+      "contains_secrets": false
+    },
+    "platform_stage": {
+      "local_windows_receipts": 8,
+      "required_protected_receipts": 24,
+      "missing_protected_macos_receipts": 16
+    },
+    "runtime": {
+      "first_install": "completed",
+      "migration_receipt": "committed",
+      "migration_restart_http_status": 200,
+      "update_and_refresh": "completed",
+      "update_and_refresh_http_status": 200,
+      "rollback": "rollback",
+      "rollback_http_status": 200,
+      "durable_drain_checkpoints": 3,
+      "bad_digest_rejected": true,
+      "fault_slot_discarded": true
+    },
+    "artifacts": {
+      "core": {
+        "bytes": 21535788,
+        "sha256": "d5afb8b8e3f447e7f98935cd0b0c245b97b87b0934bd3794a5d7f93d6f946759"
+      },
+      "bootstrap": {
+        "bytes": 3109078,
+        "sha256": "340654a97abdfb0a0e9b77a1ecc83bb3fa66500ec2153a48a239dc32660acd38"
+      },
+      "browser_pack": {
+        "bytes": 190153571,
+        "sha256": "dcb5353bbfab081bbb3a873560f1596ae0d1e39b5cdd2b5ac3acfd85018c1d56"
+      },
+      "image_pack": {
+        "bytes": 1376,
+        "sha256": "012f485114cc77ca0c30dbf775303aa94263ae9b561cdae747915e44bef2e370"
+      },
+      "ocr_pack": {
+        "bytes": 94993855,
+        "sha256": "7adf50dd8e796cce53c69db60f8b85a9d56e7b5ce2a55a2f0560f639e1590628"
+      },
+      "office_pack": {
+        "bytes": 14836807,
+        "sha256": "f9323262f069732eb191acacaf26c5c8fdf078e523d135f35bf4e5cf678241a4"
+      }
+    },
+    "private_key_persisted": false,
+    "temporary_candidate_removed": true,
+    "external_publication": false
+  },
+  "live_boundary_audit": {
+    "direct_chat_diagnostic": {
+      "credential_source": "existing_local_administrator_policy",
+      "provider_transport": "legacy_http_not_v1_acceptable",
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": "medium",
+      "compact_threshold": 272000,
+      "catalog_status": 200,
+      "catalog_contains_model": true,
+      "responses_status": 200,
+      "responses_terminal": true,
+      "managed_gateway_used": false
+    },
+    "managed_session_credential_present": false,
+    "image_provider": {
+      "legacy_origin_scheme": "http",
+      "same_host_https_probe": "connect_failed",
+      "v1_direct_adapter_exercised_live": false,
+      "failure_mode": "blocked_before_provider_because_https_is_required"
+    },
+    "chrome_control": {
+      "chrome_installed": true,
+      "chrome_running": false,
+      "extension_installed": true,
+      "extension_enabled": true,
+      "native_host_manifest_file_present": true,
+      "native_host_registration_correct": false,
+      "candidate_bound_cdp_executed": false
+    }
+  },
+  "migration_deletion_authority": {
+    "real_v0292_authoritative_sessions_retained": 54,
+    "cache_only_deleted_session_ids_excluded": 93,
+    "deleted_sessions_restored": 0,
+    "candidate_fixture_source": "released_v030_schema_fixture",
+    "real_v0292_signed_activation_claimed": false
+  },
+  "boundaries": {
+    "protected_candidate_claimed": false,
+    "managed_gateway_claimed": false,
+    "candidate_bound_cdp_claimed": false,
+    "publication_attempted": false,
+    "rollout_attempted": false,
+    "privacy": "Only aggregate status, timing, sizes and cryptographic digests are retained. No credential, provider origin, prompt, response, user path, raw session identifier or conversation content is included."
+  }
+}
