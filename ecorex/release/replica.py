@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 import hashlib
 import json
 import mimetypes
@@ -10,7 +12,8 @@ import os
 from pathlib import Path
 import re
 import stat as stat_module
-from typing import Any, Mapping, Protocol, runtime_checkable
+import time
+from typing import Any, Callable, Mapping, Protocol, runtime_checkable
 from urllib.parse import quote, urlsplit
 
 import httpx
@@ -23,10 +26,17 @@ _HOST_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 
 class ReleaseReplicaError(RuntimeError):
-    def __init__(self, code: str, *, retryable: bool = False) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        retryable: bool = False,
+        retry_after_seconds: float | None = None,
+    ) -> None:
         super().__init__(code)
         self.code = code
         self.retryable = retryable
+        self.retry_after_seconds = retry_after_seconds
 
 
 @runtime_checkable
@@ -314,15 +324,41 @@ class HTTPSReadThroughReleaseMirror:
         *,
         source_id: str,
         public_hosts: frozenset[str],
+        attempts: int = 7,
+        backoff_seconds: tuple[float, ...] = (1, 2, 4, 8, 16, 30),
+        deadline_seconds: float = 15 * 60,
+        sleeper: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
         client: httpx.Client | None = None,
     ) -> None:
         hosts = frozenset(host.casefold().rstrip(".") for host in public_hosts if host)
         if _SAFE_ID.fullmatch(source_id) is None or not hosts or any(
             not _valid_host(host) for host in hosts
+        ) or (
+            isinstance(attempts, bool)
+            or not 1 <= attempts <= 10
+            or len(backoff_seconds) != attempts - 1
+            or any(
+                isinstance(delay, bool)
+                or not isinstance(delay, (int, float))
+                or not 0 <= float(delay) <= 30
+                for delay in backoff_seconds
+            )
+            or isinstance(deadline_seconds, bool)
+            or not isinstance(deadline_seconds, (int, float))
+            or not 1 <= float(deadline_seconds) <= 30 * 60
+            or not callable(sleeper)
+            or not callable(clock)
         ):
             raise ValueError("read-through mirror configuration is invalid")
         self.source_id = source_id
         self.public_hosts = hosts
+        self.attempts = attempts
+        self.backoff_seconds = tuple(float(delay) for delay in backoff_seconds)
+        self.deadline_seconds = float(deadline_seconds)
+        self.sleeper = sleeper
+        self.clock = clock
+        self._verification_started_at: float | None = None
         self._owns_client = client is None
         self.client = client or httpx.Client(
             timeout=httpx.Timeout(connect=15, read=180, write=15, pool=15),
@@ -367,6 +403,54 @@ class HTTPSReadThroughReleaseMirror:
             or not parsed.path
         ):
             raise ValueError("read-through mirror does not match signed source URL")
+        if self._verification_started_at is None:
+            self._verification_started_at = self.clock()
+        last_error: ReleaseReplicaError | None = None
+        for attempt in range(self.attempts):
+            if self._deadline_exhausted():
+                raise ReleaseReplicaError(
+                    "mirror_verification_deadline_exceeded", retryable=True
+                )
+            try:
+                return self._verify_asset_once(
+                    base_url=base_url,
+                    release_id=release_id,
+                    file_path=file_path,
+                    expected_sha256=expected_sha256,
+                    expected_size=before.st_size,
+                )
+            except ReleaseReplicaError as error:
+                last_error = error
+                if not error.retryable or attempt >= self.attempts - 1:
+                    raise
+                delay = self.backoff_seconds[attempt]
+                if error.retry_after_seconds is not None:
+                    delay = max(delay, min(error.retry_after_seconds, 30.0))
+                if self.clock() + delay >= self._deadline_at:
+                    raise ReleaseReplicaError(
+                        "mirror_verification_deadline_exceeded", retryable=True
+                    ) from error
+                self.sleeper(delay)
+        assert last_error is not None
+        raise last_error
+
+    @property
+    def _deadline_at(self) -> float:
+        assert self._verification_started_at is not None
+        return self._verification_started_at + self.deadline_seconds
+
+    def _deadline_exhausted(self) -> bool:
+        return self.clock() >= self._deadline_at
+
+    def _verify_asset_once(
+        self,
+        *,
+        base_url: str,
+        release_id: str,
+        file_path: Path,
+        expected_sha256: str,
+        expected_size: int,
+    ) -> ReleaseReplicaReceipt:
         url = f"{base_url.rstrip('/')}/{quote(file_path.name, safe='')}"
         digest = hashlib.sha256()
         size = 0
@@ -383,8 +467,11 @@ class HTTPSReadThroughReleaseMirror:
                     raise ReleaseReplicaError(
                         "mirror_unavailable",
                         retryable=(
-                            response.status_code in {408, 425, 429}
+                            response.status_code in {404, 408, 425, 429}
                             or response.status_code >= 500
+                        ),
+                        retry_after_seconds=_retry_after_seconds(
+                            response.headers.get("retry-after")
                         ),
                     )
                 if response.headers.get(
@@ -393,19 +480,23 @@ class HTTPSReadThroughReleaseMirror:
                     raise ReleaseReplicaError("mirror_compressed_response")
                 declared = response.headers.get("content-length")
                 if declared is not None and (
-                    not declared.isdigit() or int(declared) != before.st_size
+                    not declared.isdigit() or int(declared) != expected_size
                 ):
                     raise ReleaseReplicaError("mirror_size_mismatch")
                 for chunk in response.iter_bytes():
+                    if self._deadline_exhausted():
+                        raise ReleaseReplicaError(
+                            "mirror_verification_deadline_exceeded", retryable=True
+                        )
                     size += len(chunk)
-                    if size > before.st_size:
+                    if size > expected_size:
                         raise ReleaseReplicaError("mirror_size_mismatch")
                     digest.update(chunk)
         except ReleaseReplicaError:
             raise
         except (httpx.TimeoutException, httpx.TransportError):
             raise ReleaseReplicaError("mirror_unavailable", retryable=True) from None
-        if size != before.st_size or digest.hexdigest() != expected_sha256:
+        if size != expected_size or digest.hexdigest() != expected_sha256:
             raise ReleaseReplicaError("mirror_digest_mismatch")
         return ReleaseReplicaReceipt(
             self.source_id,
@@ -415,6 +506,21 @@ class HTTPSReadThroughReleaseMirror:
             expected_sha256,
             url,
         )
+
+
+def _retry_after_seconds(value: str | None) -> float | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    if stripped.isdigit():
+        return min(float(stripped), 30.0)
+    try:
+        parsed = parsedate_to_datetime(stripped)
+        if parsed.tzinfo is None:
+            return None
+        return min(max((parsed.astimezone(UTC) - datetime.now(UTC)).total_seconds(), 0), 30.0)
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def _consume_json(response: httpx.Response, *, accepted: set[int]) -> Any:

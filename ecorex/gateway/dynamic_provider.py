@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import ssl
 from typing import AsyncIterator, Mapping, Protocol
 
 from ecorex.control_plane.management_models import ActiveModelConfiguration
@@ -49,6 +50,7 @@ class DynamicManagedResponsesProvider:
         total_timeout_seconds: float = 240.0,
         max_concurrency: int = 64,
         max_connections: int = 128,
+        ssl_context: ssl.SSLContext | None = None,
     ) -> None:
         self.source = source
         self.origins = dict(origins)
@@ -59,6 +61,7 @@ class DynamicManagedResponsesProvider:
         self.total_timeout_seconds = total_timeout_seconds
         self.max_concurrency = max_concurrency
         self.max_connections = max_connections
+        self.ssl_context = ssl_context
         self._entries: dict[tuple[str, int], _ProviderEntry] = {}
         self._lock = asyncio.Lock()
         self._closed = False
@@ -142,6 +145,7 @@ class DynamicManagedResponsesProvider:
                     "total_timeout_seconds": self.total_timeout_seconds,
                     "max_concurrency": self.max_concurrency,
                     "max_connections": self.max_connections,
+                    "ssl_context": self.ssl_context,
                 }
                 if configuration.provider_preset == "responses":
                     provider = ManagedHTTPSResponsesProvider(

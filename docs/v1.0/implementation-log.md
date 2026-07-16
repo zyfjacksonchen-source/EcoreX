@@ -5845,3 +5845,86 @@ pass with 24 chunks and 459.76 KiB raw / 146.20 KiB gzip initial JavaScript.
 Publication remains pending: corrected source must merge to main, the ephemeral
 Windows runner must be re-registered, all three real stages regenerated in one
 run, and exact-main cloud/client artifacts signed before deployment.
+
+## 2026-07-16 - Direct-production transaction and public-cutover closure
+
+The direct-publication exception is now a separate, fail-closed contract rather
+than a mutation of the normal gate table.  A release-key-signed prepare/finalize
+admission binds the exact stable manifest, Candidate receipt, operator waiver,
+publication-key-signed three-source receipt and Bootstrap readback proof.  Only
+`live-model`, `live-image` and `cdp-acceptance` may be recorded as `waived`; they
+are never projected as `passed`.  Every other required gate must pass, prepare
+and finalize are append-only/idempotent, the production exception is disabled
+by default and can name only one release ID plus one operator-instruction
+digest.  The exceptional request body is capped at 32 MiB before JSON parsing,
+with a matching route-scoped Nginx limit that does not widen ordinary Admin
+requests.
+
+The cloud activation journal now records `migrating` before stopping either
+writer set and records `schema_ready` only after the idempotent migration and
+all schema gates pass.  Source and target writers are never active together.
+Recovery classifies both live Nginx routes, verifies all four service roles and
+rolls forward after a possible target write.  A deterministic first-release
+migration failure restores the immutable legacy source; a v1 source is restored
+only after schema compatibility succeeds.  The journal unlink remains the
+sole commit point.  A read-only production corpus dry-run retained 40 active
+users, excluded seven deleted users, retained eight eligible sessions, excluded
+248 revoked and 114 expired sessions, and reduced 2,088 usage rows into 2,061
+authoritative aggregates while excluding 27 rows.  Unsafe historical public
+HTTP OpenAI/Gemini/Image credentials are imported disabled with
+`rotation_required`; the legacy database remains unchanged.
+
+Release bytes can now be uploaded to the Control Plane's fixed CDN replica
+namespace using a rotating current/next bearer token, exact length/digest and
+kind validation, no-clobber content-addressed writes, fsync and crash recovery.
+The client mirror retries only retryable transport/status failures with bounded
+shared backoff; redirect, encoding, size and digest failures remain terminal.
+The provider bridge uses a root-owned specification, loopback-only TLS,
+private-CA hostname constraints, certificate/key/SAN/EKU checks, tagged hosts
+ownership and a real TLS/OPTIONS probe.  Public or hostname HTTP upstreams are
+rejected; HTTP is available only behind an explicit waiver for loopback/private
+IP literals.
+
+The Linux aarch64 cloud artifact builder is exact-source and wheel-only.  It
+binds Python 3.11.9, lock digests, source commit, file modes and every file
+digest, then exports a detached domain-separated payload for the Windows DPAPI
+release key.  Linux attaches and verifies that signature only after rescanning
+the staged tree.  The public Web/Admin deployer similarly requires a
+release-key-signed site authorization binding the manifest, waiver,
+publication/index/direct receipts and exact site-tree digest.  It uses the
+shared product lock, content-addressed slots, a durable journal, atomic legacy
+directory exchange/current pointer, Nginx validation/reload and real-SNI HTTPS
+body/cache/Admin readback before it commits.  The Admin link is the exact
+`/ecorex-agent/admin/` target.
+
+Independent review then closed three pre-publication bypasses.  The 32 MiB
+direct-admission allowance is an anchored PUT-only Nginx location, not a
+release-admin namespace override.  An internal no-body `auth_request` verifies
+the Bearer and `release_admin` role in Nginx's access phase before the proxy
+buffers the client body; ASGI repeats authentication and admits only one
+in-flight evidence body, returning 401/403/429 without reading rejected bodies.
+The public download root is taken over under the shared lock as root-owned
+0755 with the static reader group, while staging/legacy state remains root-only;
+owner, mode, device, symlink and hardlink boundaries are rechecked before every
+switch.  Admin readback is no longer any non-empty HTTP 200: the site
+authorization derives exact index/CSS/JS/health identities from the same
+signed cloud manifest, and online validation requires their byte digests,
+cache policy, CSP, product-version header and canonical ready response.
+
+Windows online-publication verification no longer compares CPython's
+path-projected creation time with a handle-projected NTFS ChangeTime.  Stable
+identity uses birth time while descriptor-before/after and final path reopen
+retain ChangeTime, size, last-write, volume and file ID checks.  The new test
+also detects same-size mutation with restored mtime, so the correction removes
+the false failure without relaxing TOCTOU protection.
+
+The final combined changed-boundary suite passes 206 tests with ten explicit
+platform-conditioned skips and zero failures.  The cloud activation suite
+passes 51 tests with four Windows skips; the expanded public-site/security
+suite passes 40 tests with five Windows symlink skips.  Lint/compile,
+dependency locks, Runtime/server schema authority (including the explicit
+direct-admission migration authority), strict legacy cutoff and the public
+download gate pass.  Publication is still pending the source commit,
+PR matrix, exact-main platform/cloud builds, signatures, server migration,
+three-source readback, Bootstrap activation and final live URL validation.  Old
+production traffic has not been switched by this implementation batch.

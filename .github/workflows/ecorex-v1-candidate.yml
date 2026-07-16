@@ -614,7 +614,10 @@ jobs:
       - name: Download optional prior signed Core set for delta derivation
         if: ${{ inputs.delta_base_tag != '' }}
         env:
-          GH_TOKEN: ${{ github.token }}
+          # The workflow GITHUB_TOKEN is repository-scoped and cannot read the
+          # independent public installer repository.  Keep this credential
+          # read-only and separate from the publication writer token.
+          GH_TOKEN: ${{ secrets.ECOREX_GITHUB_RELEASE_READ_TOKEN }}
           DELTA_BASE_TAG: ${{ inputs.delta_base_tag }}
           ECOREX_GITHUB_RELEASE_REPOSITORY: ${{ vars.ECOREX_GITHUB_RELEASE_REPOSITORY }}
         run: |

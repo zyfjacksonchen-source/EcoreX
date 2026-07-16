@@ -9,8 +9,8 @@
     "dirty_worktree_preserved": true
   },
   "current_milestone": "direct_production_publication",
-  "current_batch": "The user authorized direct production publication and waived the separate manual/CDP/HSM gate. The first real platform stage failed safely and its root causes are fixed: registry-free digest-pinned Windows Python, cross-platform ONNX Runtime 1.23.2 and native HTTP GA header reads. Target-host smoke then fixed wheel Admin assets, the real PostgreSQL service/client authority and a reversible two-level Nginx Admin route. Candidate sources now bind public EcoreX-installers and treat ghproxy.net as a read-only full-byte verified mirror. Old production traffic remains active; no publication or cutover is claimed.",
-  "last_verified_batch": "Evidence on 2026-07-16: 27 cloud/deployment/package tests and 61 release/repository/Candidate tests pass; three formerly failing Windows Candidate tests and 100 repeated executable fixture reads pass after the stat identity correction. Ruff, dependency-lock and diff gates pass. Generated Web contracts, TypeScript, 180/180 Web tests and the 24-chunk production build pass at 459.76 KiB raw / 146.20 KiB gzip initial JavaScript. Target-host offline legacy and Candidate Nginx assemblies pass nginx -t. A real ghproxy old-release GET returns 200, no redirects or compression, 105 exact bytes and matching SHA-256. Run 29506205694 remains a recorded safe failure and produced no reusable stage set. No publication or rollout is claimed.",
+  "current_batch": "Direct-production transaction closure is implemented but not yet committed or deployed. Separate signed direct prepare/finalize admission records the three explicitly waived live gates without forging PASS. Cloud migration, CDN replica/read-through, provider TLS bridge, exact Linux aarch64 artifact signing, and signed atomic Web/Admin cutover now share fail-closed authorities and recovery contracts. The v0 source remains immutable and old production traffic remains active until exact-main build/sign/readback gates succeed.",
+  "last_verified_batch": "Evidence on 2026-07-16: PR #12 baseline head 6364f07b59c960f390516b82b4db5b1e79984d8b passed all five hosted Ubuntu/Windows/macOS/byte-stability Jobs in run 29511476979. Newer transaction-closure source passes 206 changed-boundary tests with ten Windows platform-conditioned skips and zero failures; cloud activation passes 51/4 skips, expanded public-site/security coverage 40/5 skips and Windows online identity 9/0. Ruff/compile, dependency locks, 20-fragment Runtime schema authority, 11-authority server schema, strict legacy cutoff and public download gates pass. A real environment dry-run retains 40 active users and eight eligible sessions, excludes seven deleted users plus 248 revoked and 114 expired sessions, and retains 2,061 of 2,088 usage rows. No publication or cutover is claimed until this WIP is committed and the hosted matrix reruns.",
   "recovery_document": "docs/v1.0/implementation-log.md",
   "verification_document": "docs/v1.0/verification-ledger.md",
   "milestones": [
@@ -23,29 +23,15 @@
     {"id": "migration_ga_gates", "status": "in_progress"}
   ],
   "remaining_local_work": [
-    "after the ChatGPT Chrome Extension native host is restored and Chrome is running, execute the fixed 18-scenario/four-viewport matrix against an installed signed v1 Runtime; do not substitute the prior mock Runtime receipt",
-    "configure a fixed approved HTTPS provider origin and a v1 managed device-flow session before rerunning GPT-5.6 SOL, four Image 2 completions and structured Retouch through managed Gateway authority",
-    "run the new installed-signed Chrome callback as a lower-level unauthenticated shell smoke only after browser control is restored; do not count that smoke as the authenticated office scenario matrix",
-    "rerun the fixed 18-scenario native Chrome CDP matrix and four locked viewports against that installed signed Runtime without claiming protected provenance",
-    "exercise real GPT-5.6 SOL and Image 2 through configured managed Gateway/device-flow authority, including four unique concurrent images and rectangle Retouch unchanged-region scoring; if no managed endpoint/session exists, retain this as an explicit external live blocker",
-    "after the repository plan supports required Environment reviewers, apply the head-fenced governance contract and provision the named Environment values, Secrets, one isolated exact-toolchain Windows stage Runner and three distinct privileged Runner roles until the live audit is ready",
-    "dispatch the split protected Candidate workflow, then pass its exact successful run/attempt/accepted Artifact ID to the verify-only publication workflow before any administrator mutation approval",
-    "build the fixed 24-receipt protected Windows/macOS Candidate on the isolated exact-toolchain Windows Runner plus protected hosted macOS jobs from the latest committed product source; local drills cannot be reused as protected provenance",
-    "provision the digest-pinned protected Windows live-acceptance driver and its real device-flow test account, route the now-responsive upstream through the managed Model/Image Gateways, and let the post-signing job produce all three Candidate-bound receipts",
-    "bind the final Python JUnit, Web, migration, image and platform evidence to the immutable Candidate recipe and release manifest",
-    "complete protected Windows/macOS platform stages, publish/readback evidence, migration activation and first-install pin drills"
+    "complete independent review, Ruff/compile/static gates, commit and push the transaction-closure source without touching the user-owned .artifacts tree",
+    "rerun PR #12 Ubuntu quality, Windows x64, macOS arm64/x64 and cross-runner canonical-byte stability at the new exact head, then merge to main",
+    "run one exact-main Windows/macOS platform stage, assemble the single Web build and produce signed client receipts",
+    "build the exact-main Linux aarch64 cloud artifact, sign it with the Windows DPAPI release key and attach/verify it on Linux",
+    "perform commit-mode v0.2.9.2 migration, deploy the cloud slot, publish GitHub/CDN/ghproxy bytes, activate Bootstrap/direct rollout, then atomically switch and read back Web/Admin",
+    "run final HTTP, installer/update and in-app Browser validation against the live signed v1 deployment"
   ],
   "external_blockers": [
-    "a GitHub plan that supports required Environment reviewers for this private repository, followed by six protected release Environments with real values and Secrets; reviewer-free Environments are not an acceptable substitute",
-    "one exact-toolchain Windows stage Runner and three distinct online role-labelled privileged self-hosted Runners for signing, live acceptance and publication",
-    "protected-Environment exact-toolchain Windows x64 plus hosted macOS arm64/x64 signed WebUI Runtime archives containing the real Core and complete browser/channels/image/ocr/office/sandbox Pack set",
-    "protected native Windows AppContainer/Job and macOS Seatbelt build/probe receipts; local Windows helper compilation is not a substitute for protected provenance",
-    "macOS arm64/x64 install, update, rollback and Keychain drills",
-    "protected hosted four-hour multi-node image soak plus production HTTPS/private-bucket/KMS evidence; the bounded real PostgreSQL 16.9 + MinIO 256-job/48-worker crash drill is complete",
-    "production managed Model/Image Gateway, Feishu, Tencent Docs and OTLP endpoints; direct local upstream availability is now diagnostic-green but is not a managed-Gateway receipt",
-    "protected ecorex-live-acceptance Windows x64 runner, digest-pinned driver and Credential Manager test session",
-    "live domestic mirror, GitHub and CDN digest-consistent outage failover",
-    "real installed-user v0.3.0 corpus and historical archive attestation",
-    "coarse touch, forced colors, reduced motion, screen reader and slow-network reconnect evidence"
+    "historical public-HTTP OpenAI/Gemini/Image credentials require administrator rotation before those provider revisions can be activated; they remain disabled and rotation_required",
+    "whole-machine reboot requires the recorded LUKS operator unlock procedure; the current single-host CAS replica and shared PostgreSQL role remain explicitly waived availability constraints"
   ]
 }

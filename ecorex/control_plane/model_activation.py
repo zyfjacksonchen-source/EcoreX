@@ -16,6 +16,7 @@ import binascii
 from dataclasses import dataclass
 import hashlib
 import json
+import ssl
 import struct
 from typing import Any, Mapping, Protocol, runtime_checkable
 import zlib
@@ -103,6 +104,7 @@ class HTTPSModelConnectionTester:
         client: httpx.AsyncClient | None = None,
         timeout_seconds: float = 180.0,
         max_concurrency: int = 4,
+        ssl_context: ssl.SSLContext | None = None,
     ) -> None:
         normalized: dict[str, str] = {}
         for preset, origin in origins.items():
@@ -140,6 +142,7 @@ class HTTPSModelConnectionTester:
             follow_redirects=False,
             trust_env=False,
             http2=False,
+            verify=ssl_context if ssl_context is not None else True,
         )
         if not isinstance(self._client, httpx.AsyncClient):
             raise ValueError("model connection tester client is invalid")

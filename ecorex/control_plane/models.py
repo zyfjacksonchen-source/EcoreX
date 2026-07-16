@@ -48,6 +48,11 @@ class GateBundleRequest(ControlModel):
     client_request_id: str = Field(min_length=1, max_length=256)
 
 
+class DirectAdmissionRequest(ControlModel):
+    attestation: dict
+    client_request_id: str = Field(min_length=1, max_length=256)
+
+
 class CreateRolloutRequest(ControlModel):
     release_id: str = Field(min_length=1, max_length=128)
     percentage: int = Field(ge=1, le=100)

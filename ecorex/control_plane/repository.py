@@ -22,6 +22,12 @@ from ecorex.release.public_index import (
     validate_public_bootstrap_index,
 )
 from ecorex.release.live_acceptance import LIVE_ACCEPTANCE_GATES
+from ecorex.release.direct_admission import (
+    DirectReleaseAdmissionError,
+    DirectReleaseAdmissionPolicy,
+    canonical_direct_admission,
+    validate_signed_direct_admission,
+)
 from ecorex.release.gate_attestation import (
     GateAttestationError,
     gate_bundle_sha256,
@@ -221,10 +227,14 @@ class ControlPlaneRepository:
         *,
         verifier: SignatureVerifier,
         bootstrap_freshness_verifier: SignatureVerifier | None = None,
+        direct_release_policy: DirectReleaseAdmissionPolicy | None = None,
     ) -> None:
         self.path = Path(path).expanduser().resolve()
         self.verifier = verifier
         self.bootstrap_freshness_verifier = bootstrap_freshness_verifier
+        self.direct_release_policy = (
+            direct_release_policy or DirectReleaseAdmissionPolicy()
+        )
         self.schema_receipt: ControlPlaneSchemaReceipt = ControlPlaneSchemaManager(
             self.path
         ).validate()
@@ -359,7 +369,12 @@ class ControlPlaneRepository:
                 "WHERE release_id=? LIMIT 1",
                 (release_id,),
             ).fetchone()
-            if attested is not None:
+            direct_attested = connection.execute(
+                "SELECT 1 FROM direct_release_admissions "
+                "WHERE release_id=? LIMIT 1",
+                (release_id,),
+            ).fetchone()
+            if attested is not None or direct_attested is not None:
                 raise ControlPlaneConflict("signed release gates are immutable")
             connection.execute(
                 "INSERT INTO control_release_gates(release_id,gate_name,status,evidence,updated_at) "
@@ -405,6 +420,13 @@ class ControlPlaneRepository:
             release = self._require_release(connection, release_id)
             if release["status"] != "candidate":
                 raise ControlPlaneConflict("published release gates are immutable")
+            if connection.execute(
+                "SELECT 1 FROM direct_release_admissions WHERE release_id=? LIMIT 1",
+                (release_id,),
+            ).fetchone() is not None:
+                raise ControlPlaneConflict(
+                    "direct and protected release admissions cannot be mixed"
+                )
             manifest = self._verified_manifest(release)
             phase = attestation.get("phase")
             if phase not in {"prepare", "finalize"}:
@@ -475,6 +497,205 @@ class ControlPlaneRepository:
                 actor,
                 client_request_id,
                 "gate-bundle.record",
+                request,
+                result.model_dump(),
+            )
+            return result
+
+    def record_direct_admission(
+        self,
+        release_id: str,
+        attestation: dict[str, Any],
+        *,
+        actor: ControlPrincipal,
+        client_request_id: str,
+    ) -> CandidateProjection:
+        """Accept a release-scoped direct exception without forging PASS facts."""
+
+        if not isinstance(attestation, dict):
+            raise ValueError("direct release admission is invalid")
+        attestation_sha256 = hashlib.sha256(
+            canonical_direct_admission(attestation)
+        ).hexdigest()
+        request = {
+            "release_id": release_id,
+            "attestation_sha256": attestation_sha256,
+        }
+        with self._transaction() as connection:
+            replay = self._replay(
+                connection,
+                actor,
+                client_request_id,
+                "direct-admission.record",
+                request,
+            )
+            if replay is not None:
+                return CandidateProjection.model_validate(replay)
+            release = self._require_release(connection, release_id)
+            if release["status"] != "candidate":
+                raise ControlPlaneConflict("published release gates are immutable")
+            if connection.execute(
+                "SELECT 1 FROM control_release_gate_attestations "
+                "WHERE release_id=? LIMIT 1",
+                (release_id,),
+            ).fetchone() is not None:
+                raise ControlPlaneConflict(
+                    "direct and protected release admissions cannot be mixed"
+                )
+            manifest = self._verified_manifest(release)
+            phase = attestation.get("phase")
+            if phase not in {"prepare", "finalize"}:
+                raise ReleaseGateError("direct release admission phase is invalid")
+            expected = required_release_gates(manifest.channel)
+            if phase == "prepare":
+                if manifest.channel is not ReleaseChannel.STABLE:
+                    raise ReleaseGateError(
+                        "direct release admission requires the stable channel"
+                    )
+                expected -= {"bootstrap-index"}
+            try:
+                validated = validate_signed_direct_admission(
+                    attestation,
+                    manifest=manifest,
+                    expected_manifest_sha256=str(release["manifest_file_sha256"]),
+                    expected_gates=frozenset(expected),
+                    expected_phase=str(phase),
+                    policy=self.direct_release_policy,
+                    release_verifier=self.verifier,
+                )
+            except DirectReleaseAdmissionError as exc:
+                raise ReleaseGateError(str(exc)) from None
+            if validated.attestation_sha256 != attestation_sha256:
+                raise ReleaseGateError("direct release admission digest is invalid")
+            existing = connection.execute(
+                "SELECT * FROM direct_release_admissions "
+                "WHERE release_id=? AND phase=?",
+                (release_id, phase),
+            ).fetchone()
+            attestation_json = _json(attestation)
+            if existing is not None and (
+                existing["attestation_sha256"] != attestation_sha256
+                or existing["attestation_json"] != attestation_json
+            ):
+                raise ControlPlaneConflict(
+                    "direct release admission phase is already bound to different evidence"
+                )
+            if phase == "finalize":
+                prepared = connection.execute(
+                    "SELECT * FROM direct_release_admissions "
+                    "WHERE release_id=? AND phase='prepare'",
+                    (release_id,),
+                ).fetchone()
+                if prepared is None:
+                    raise ReleaseGateError(
+                        "direct release finalize requires its exact prepare admission"
+                    )
+                for name, observed in (
+                    ("operator_instruction_sha256", self.direct_release_policy.operator_instruction_sha256),
+                    ("manifest_sha256", str(release["manifest_file_sha256"])),
+                    ("candidate_receipt_sha256", validated.candidate_receipt_sha256),
+                    ("operator_waiver_sha256", validated.operator_waiver_sha256),
+                    ("publication_receipt_sha256", validated.publication_receipt_sha256),
+                    ("release_key_id", validated.release_key_id),
+                    ("publication_key_id", validated.publication_key_id),
+                ):
+                    if prepared[name] != observed:
+                        raise ReleaseGateError(
+                            "direct release finalize drifted from prepare admission"
+                        )
+                prepared_value = json.loads(str(prepared["attestation_json"]))
+                prepared_gates = prepared_value.get("gates")
+                final_gates = attestation.get("gates")
+                if (
+                    not isinstance(prepared_gates, dict)
+                    or not isinstance(final_gates, dict)
+                    or {
+                        name: detail
+                        for name, detail in final_gates.items()
+                        if name != "bootstrap-index"
+                    }
+                    != prepared_gates
+                ):
+                    raise ReleaseGateError(
+                        "direct release finalize gates drifted from prepare admission"
+                    )
+            if existing is None:
+                connection.execute(
+                    "INSERT INTO direct_release_admissions("
+                    "attestation_sha256,release_id,phase,operator_instruction_sha256,"
+                    "manifest_sha256,candidate_receipt_sha256,operator_waiver_sha256,"
+                    "publication_receipt_sha256,release_key_id,publication_key_id,"
+                    "attestation_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        attestation_sha256,
+                        release_id,
+                        phase,
+                        self.direct_release_policy.operator_instruction_sha256,
+                        release["manifest_file_sha256"],
+                        validated.candidate_receipt_sha256,
+                        validated.operator_waiver_sha256,
+                        validated.publication_receipt_sha256,
+                        validated.release_key_id,
+                        validated.publication_key_id,
+                        attestation_json,
+                        _now(),
+                    ),
+                )
+            for gate, detail in sorted(validated.gates.items()):
+                if gate in LIVE_ACCEPTANCE_GATES:
+                    prior = connection.execute(
+                        "SELECT status,evidence FROM direct_release_gate_waivers "
+                        "WHERE release_id=? AND gate_name=?",
+                        (release_id, gate),
+                    ).fetchone()
+                    if prior is None:
+                        connection.execute(
+                            "INSERT INTO direct_release_gate_waivers("
+                            "release_id,gate_name,status,evidence,attestation_sha256,created_at) "
+                            "VALUES(?,?,?,?,?,?)",
+                            (
+                                release_id,
+                                gate,
+                                "waived",
+                                detail["evidence"],
+                                attestation_sha256,
+                                _now(),
+                            ),
+                        )
+                    elif (
+                        prior["status"] != "waived"
+                        or prior["evidence"] != detail["evidence"]
+                    ):
+                        raise ReleaseGateError(
+                            "direct release waiver drifted after prepare admission"
+                        )
+                    continue
+                if gate == "bootstrap-index":
+                    self._require_direct_publication_bootstrap_binding(
+                        connection,
+                        release=release,
+                        evidence=detail["evidence"],
+                        publication_receipt_sha256=(
+                            validated.publication_receipt_sha256
+                        ),
+                    )
+                connection.execute(
+                    "INSERT INTO control_release_gates("
+                    "release_id,gate_name,status,evidence,updated_at) "
+                    "VALUES(?,?,?,?,?) ON CONFLICT(release_id,gate_name) DO UPDATE SET "
+                    "status=excluded.status,evidence=excluded.evidence,"
+                    "updated_at=excluded.updated_at",
+                    (release_id, gate, "passed", detail["evidence"], _now()),
+                )
+            result = self._candidate(connection, release_id)
+            self._audit(
+                connection, actor, "direct-admission.record", release_id, request
+            )
+            self._remember(
+                connection,
+                actor,
+                client_request_id,
+                "direct-admission.record",
                 request,
                 result.model_dump(),
             )
@@ -1876,14 +2097,34 @@ class ControlPlaneRepository:
             candidate = self._candidate(connection, release_id)
             if candidate.status not in {"candidate", "published"}:
                 raise ControlPlaneConflict("withdrawn release cannot be published")
-            if candidate.missing_gates or any(
-                value != "passed" for value in candidate.gates.values()
+            waived = {
+                name for name, status in candidate.gates.items() if status == "waived"
+            }
+            direct = bool(waived)
+            if (
+                candidate.missing_gates
+                or waived - LIVE_ACCEPTANCE_GATES
+                or (
+                    direct
+                    and any(
+                        status
+                        != ("waived" if name in LIVE_ACCEPTANCE_GATES else "passed")
+                        for name, status in candidate.gates.items()
+                    )
+                )
+                or (
+                    not direct
+                    and any(status != "passed" for status in candidate.gates.values())
+                )
             ):
                 raise ReleaseGateError(
-                    "all required release gates must pass before publication"
+                    "all non-waived required release gates must pass before publication"
                 )
             release = self._require_release(connection, release_id)
-            self._require_final_gate_attestation(connection, release)
+            if direct:
+                self._require_final_direct_admission(connection, release)
+            else:
+                self._require_final_gate_attestation(connection, release)
             self._require_current_release_bootstrap_gate(connection, release)
             # Publication is monotonic.  A later idempotent administrator
             # request must not rewrite the original publication time, which is
@@ -3314,6 +3555,17 @@ class ControlPlaneRepository:
                 (release_id,),
             )
         }
+        waivers = {
+            item["gate_name"]: item["status"]
+            for item in connection.execute(
+                "SELECT gate_name,status FROM direct_release_gate_waivers "
+                "WHERE release_id=?",
+                (release_id,),
+            )
+        }
+        if set(gates) & set(waivers):
+            raise ControlPlaneError("release gates contain conflicting authorities")
+        gates.update(waivers)
         return CandidateProjection(
             release_id=row["release_id"],
             version=row["version"],
@@ -3673,6 +3925,43 @@ class ControlPlaneRepository:
             evidence=str(gate["evidence"]),
         )
 
+    def _require_direct_publication_bootstrap_binding(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        release: sqlite3.Row,
+        evidence: str,
+        publication_receipt_sha256: str,
+    ) -> None:
+        """Bind the direct three-origin receipt to the exact read-back index."""
+
+        self._require_bootstrap_index_proof(
+            connection,
+            release=release,
+            evidence=evidence,
+        )
+        match = _BOOTSTRAP_PROOF.fullmatch(evidence)
+        assert match is not None
+        proof = self._bootstrap_proof_by_record(
+            connection, match.group(1), str(release["release_id"])
+        )
+        if proof is None:
+            raise ReleaseGateError("stable Bootstrap proof is missing")
+        index = _parse_bootstrap_index_bytes(
+            bytes(proof["index_bytes"]),
+            verifier=self.verifier,
+            freshness_verifier=self._require_bootstrap_freshness_verifier(),
+        )
+        public_release = index.get("release")
+        if (
+            not isinstance(public_release, dict)
+            or public_release.get("publication_receipt_sha256")
+            != publication_receipt_sha256
+        ):
+            raise ReleaseGateError(
+                "direct publication receipt does not match the Bootstrap readback"
+            )
+
     def _require_final_gate_attestation(
         self,
         connection: sqlite3.Connection,
@@ -3724,6 +4013,98 @@ class ControlPlaneRepository:
             raise ReleaseGateError(
                 "stored release gates drifted from their signed bundle"
             )
+
+    def _require_final_direct_admission(
+        self,
+        connection: sqlite3.Connection,
+        release: sqlite3.Row,
+    ) -> None:
+        row = connection.execute(
+            "SELECT * FROM direct_release_admissions "
+            "WHERE release_id=? AND phase='finalize'",
+            (release["release_id"],),
+        ).fetchone()
+        if row is None:
+            raise ReleaseGateError(
+                "direct release lacks a final signed admission bundle"
+            )
+        payload = str(row["attestation_json"])
+        if _sha(payload) != row["attestation_sha256"]:
+            raise ReleaseGateError("stored direct release admission digest is invalid")
+        try:
+            value = json.loads(payload)
+        except (json.JSONDecodeError, RecursionError):
+            raise ReleaseGateError(
+                "stored direct release admission is invalid"
+            ) from None
+        if not isinstance(value, dict):
+            raise ReleaseGateError("stored direct release admission is invalid")
+        manifest = self._verified_manifest(release)
+        try:
+            validated = validate_signed_direct_admission(
+                value,
+                manifest=manifest,
+                expected_manifest_sha256=str(release["manifest_file_sha256"]),
+                expected_gates=required_release_gates(manifest.channel),
+                expected_phase="finalize",
+                policy=self.direct_release_policy,
+                release_verifier=self.verifier,
+            )
+        except DirectReleaseAdmissionError:
+            raise ReleaseGateError(
+                "stored direct release admission is untrusted"
+            ) from None
+        if (
+            validated.attestation_sha256 != row["attestation_sha256"]
+            or validated.candidate_receipt_sha256
+            != row["candidate_receipt_sha256"]
+            or validated.operator_waiver_sha256 != row["operator_waiver_sha256"]
+            or validated.publication_receipt_sha256
+            != row["publication_receipt_sha256"]
+            or validated.release_key_id != row["release_key_id"]
+            or validated.publication_key_id != row["publication_key_id"]
+            or row["operator_instruction_sha256"]
+            != self.direct_release_policy.operator_instruction_sha256
+            or row["manifest_sha256"] != release["manifest_file_sha256"]
+        ):
+            raise ReleaseGateError(
+                "stored direct release admission identity drifted"
+            )
+        observed: dict[str, dict[str, str]] = {
+            str(item["gate_name"]): {
+                "status": str(item["status"]),
+                "evidence": str(item["evidence"]),
+            }
+            for item in connection.execute(
+                "SELECT gate_name,status,evidence FROM control_release_gates "
+                "WHERE release_id=?",
+                (release["release_id"],),
+            )
+        }
+        observed.update(
+            {
+                str(item["gate_name"]): {
+                    "status": str(item["status"]),
+                    "evidence": str(item["evidence"]),
+                }
+                for item in connection.execute(
+                    "SELECT gate_name,status,evidence "
+                    "FROM direct_release_gate_waivers WHERE release_id=?",
+                    (release["release_id"],),
+                )
+            }
+        )
+        if observed != dict(validated.gates):
+            raise ReleaseGateError(
+                "stored direct release gates drifted from their signed admission"
+            )
+        self._require_current_release_bootstrap_gate(connection, release)
+        self._require_direct_publication_bootstrap_binding(
+            connection,
+            release=release,
+            evidence=validated.gates["bootstrap-index"]["evidence"],
+            publication_receipt_sha256=validated.publication_receipt_sha256,
+        )
 
     def _require_bootstrap_freshness_verifier(self) -> SignatureVerifier:
         if self.bootstrap_freshness_verifier is None:

@@ -1014,7 +1014,7 @@ def _validate_sources(
     return tuple(identities), tuple(bases)
 
 
-def _validate_publication_receipt(
+def validate_publication_receipt(
     *,
     manifest: ReleaseManifest,
     manifest_sha256: str,
@@ -1119,6 +1119,12 @@ def _validate_publication_receipt(
             )
         result[source.source_id] = entries
     return result
+
+
+# Backward-compatible internal name for existing callers. New trust-boundary
+# code must use the public validator above rather than importing a private
+# implementation detail.
+_validate_publication_receipt = validate_publication_receipt
 
 
 def _canonical_json_bytes(value: Mapping[str, Any]) -> bytes:

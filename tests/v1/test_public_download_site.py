@@ -28,6 +28,11 @@ def test_public_download_site_static_gate_passes() -> None:
     assert evidence["status"] == "passed"
     assert evidence["public_pointer"] == "unpublished"
     assert evidence["hashed_asset_count"] == 5
+    html = (ROOT / "deploy" / "ecorex-site" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    assert 'href="/ecorex-agent/admin/"' in html
+    assert 'href="/admin/"' not in html
 
 
 def test_public_asset_builder_writes_new_hashes_before_switching_html(

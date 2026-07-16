@@ -27,6 +27,11 @@ from typing import Any, Protocol, runtime_checkable
 from fastapi import FastAPI
 
 from ecorex.managed_model_policy import require_managed_chat_mapping
+from ecorex.security.provider_tls import (
+    ProviderTLSConfigurationError,
+    pinned_provider_ssl_context,
+    validate_provider_ca_binding,
+)
 from ecorex.control_plane.management import AdminManagementRepository
 from ecorex.control_plane.management_schema import AdminManagementSchemaManager
 from ecorex.control_plane.management_models import MANAGED_MODEL_ORIGIN_PRESETS
@@ -124,6 +129,10 @@ class HTTPSResponsesProviderFactory:
             total_timeout_seconds=config.provider_total_timeout_seconds,
             max_concurrency=config.provider_max_concurrency,
             max_connections=config.provider_max_connections,
+            ssl_context=pinned_provider_ssl_context(
+                config.provider_ca_bundle_path,
+                config.provider_ca_bundle_sha256,
+            ),
         )
 
 
@@ -140,6 +149,8 @@ class GatewayProductionConfig:
     auth_issuer: str
     auth_audience: str
     auth_public_keys_json: str = field(repr=False)
+    provider_ca_bundle_path: Path | None = None
+    provider_ca_bundle_sha256: str | None = field(default=None, repr=False)
     auth_max_token_lifetime_seconds: int = 900
     auth_clock_skew_seconds: int = 30
     provider_connect_timeout_seconds: float = 5.0
@@ -263,6 +274,16 @@ class GatewayProductionConfig:
                 "gateway administrator model source requires explicit enablement"
             )
         try:
+            validate_provider_ca_binding(
+                (self.provider_origin, *dict(self.model_provider_origins).values()),
+                ca_bundle_path=self.provider_ca_bundle_path,
+                ca_bundle_sha256=self.provider_ca_bundle_sha256,
+            )
+        except ProviderTLSConfigurationError:
+            raise GatewayProductionConfigurationError(
+                "gateway provider CA binding is invalid"
+            ) from None
+        try:
             parse_ed25519_public_keyring(self.auth_public_keys_json)
         except GatewayAuthenticationConfigurationError:
             raise GatewayProductionConfigurationError(
@@ -384,6 +405,12 @@ class GatewayProductionConfig:
             auth_audience=_required(values, "ECOREX_GATEWAY_AUTH_AUDIENCE"),
             auth_public_keys_json=_required(
                 values, "ECOREX_GATEWAY_AUTH_PUBLIC_KEYS_JSON", maximum=16_384
+            ),
+            provider_ca_bundle_path=_optional_absolute_path(
+                values, "ECOREX_GATEWAY_PROVIDER_CA_BUNDLE_PATH"
+            ),
+            provider_ca_bundle_sha256=(
+                values.get("ECOREX_GATEWAY_PROVIDER_CA_BUNDLE_SHA256") or None
             ),
             auth_max_token_lifetime_seconds=_integer(
                 values,
@@ -836,6 +863,10 @@ class SingleNodeSQLiteResponsesProvider:
             total_timeout_seconds=config.provider_total_timeout_seconds,
             max_concurrency=config.provider_max_concurrency,
             max_connections=config.provider_max_connections,
+            ssl_context=pinned_provider_ssl_context(
+                config.provider_ca_bundle_path,
+                config.provider_ca_bundle_sha256,
+            ),
         )
 
 
@@ -904,6 +935,24 @@ def _absolute_path(environment: Mapping[str, str], name: str) -> Path:
     if not value.is_absolute():
         raise GatewayProductionConfigurationError(
             "gateway database path must be absolute"
+        )
+    return Path(os.path.abspath(os.fspath(value)))
+
+
+def _optional_absolute_path(
+    environment: Mapping[str, str], name: str
+) -> Path | None:
+    raw = environment.get(name)
+    if raw is None or raw == "":
+        return None
+    if not isinstance(raw, str) or len(raw) > 8192 or "\x00" in raw:
+        raise GatewayProductionConfigurationError(
+            "gateway optional path setting is invalid"
+        )
+    value = Path(raw).expanduser()
+    if not value.is_absolute():
+        raise GatewayProductionConfigurationError(
+            "gateway optional path setting must be absolute"
         )
     return Path(os.path.abspath(os.fspath(value)))
 

@@ -81,6 +81,7 @@ def test_admin_web_is_content_addressed_allowlisted_and_security_headered() -> N
         assert page.headers["x-content-type-options"] == "nosniff"
         assert page.headers["x-frame-options"] == "DENY"
         assert page.headers["referrer-policy"] == "no-referrer"
+        assert page.headers["x-ecorex-product-version"] == "1.0.0"
         csp = page.headers["content-security-policy"]
         assert "default-src 'none'" in csp
         assert "script-src 'self'" in csp
@@ -149,6 +150,16 @@ def test_asset_verifier_fails_closed_for_tamper_extra_files_and_bad_prefix(
 
     with pytest.raises(ValueError, match="prefix"):
         create_admin_web_router(prefix="//unsafe")
+
+    external = FastAPI()
+    external.include_router(
+        create_admin_web_router(
+            external_asset_prefix="/ecorex-agent/admin/assets"
+        )
+    )
+    external_html = TestClient(external).get("/admin/").text
+    assert "/ecorex-agent/admin/assets/admin." in external_html
+    assert '="/admin/assets/admin.' not in external_html
 
 
 def test_asset_verifier_reads_signed_resources_through_zipimport(

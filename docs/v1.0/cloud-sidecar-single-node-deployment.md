@@ -192,14 +192,28 @@ artifact/keyring/attestation/二进制重定向到围栏外。
 1. 锁定 `/run/lock/ecorex-cloud-deploy.lock`；
 2. 验签并 stage 新 release；
 3. 安装签名覆盖内的 systemd/Nginx 模板，写 inactive slot 配置；
-4. 以新代码执行 migrate + 完整 check；
-5. 停止旧 slot，再启动候选 slot；
-6. 三个 `/health/ready` 均 200，Image Worker systemd 已启动；
-7. 原子替换 `active-control-plane.conf` symlink，`nginx -t` 后 reload；
-8. fsync 写入 `/var/lib/ecorex/cloud-deploy/active.json` 和 `current` symlink。
+4. durable 写入并 fsync `activation-pending.json`，先记录 `prepared`，再记录
+   `migrating`；后者必须早于任何 writer stop；
+5. 先停止 target writer，再停止 source writer；首次 v1 激活的 source 是 legacy，
+   同样必须显式停止 legacy Admin/Web writer；
+6. 在双侧 writer 均停止后，以新代码幂等执行 migrate + 完整 check，成功后 durable
+   记录 `schema_ready`；候选服务严禁在此标记前启动；
+7. 启动候选 slot，三个 `/health/ready` 均 200，Image Worker systemd 已启动；
+8. 原子替换 `active-control-plane.conf` symlink，`nginx -t` 后 reload；
+9. fsync 写入 `/var/lib/ecorex/cloud-deploy/active.json` 和 `current` symlink；
+10. 删除并 fsync pending journal，作为唯一 commit point。
 
-候选 health 或 Nginx 失败时，部署器停止候选、重启旧 slot，并保持/恢复旧 Nginx
-上游。明确回滚命令：
+恢复同时读取 journal phase 和 `active-control-plane.conf` / `active-admin-route.conf`
+两个实际 symlink。`migrating` 表示 migration 可能执行了任意前缀：启动恢复先再次停止
+target/source 两侧 writer，重新验签 target release，幂等重跑 migrate + check，并 durable
+推进到 `schema_ready`，之后才允许选择恢复方向。路由明确仍指向 source 时，仅在旧 slot
+对当前 schema 的四个服务角色检查全部通过后恢复 source；检查不兼容则 roll-forward。
+首次 v1 激活的 legacy source 在 migration 开始后无法提供 v1 schema 兼容证明，因此必须
+roll-forward target。phase 为 `routes_switched`/`state_written`，或双 link 已指向 target、
+部分切换或无法判定时，也必须 roll-forward。两个方向都先停止两侧 writer，再检查并启动
+唯一目标；任何时刻不允许两个 writer 集合重叠。迁移或恢复失败保留 journal，下一次启动
+继续幂等收敛。首次 v1 激活把 legacy 记为 typed prior；明确回滚命令可受控启动 legacy
+服务并切回 control disabled + legacy Admin 路由：
 
 ```text
 python scripts/deploy-v1-cloud-sidecar.py \

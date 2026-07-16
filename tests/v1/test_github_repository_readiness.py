@@ -146,6 +146,26 @@ def test_environment_configuration_is_scoped_and_fail_closed() -> None:
     ) in findings
 
 
+def test_signing_environment_requires_cross_repository_read_only_token() -> None:
+    snapshot = _healthy_snapshot()
+    environment = snapshot["environments"]["ecorex-release-signing-stable"]
+    environment["secrets"].remove("ECOREX_GITHUB_RELEASE_READ_TOKEN")
+
+    result = evaluate_release_repository(snapshot)
+
+    assert {
+        (item["code"], item["subject"]) for item in result["findings"]
+    } >= {
+        (
+            "environment_secret_missing",
+            "ecorex-release-signing-stable:ECOREX_GITHUB_RELEASE_READ_TOKEN",
+        )
+    }
+    publication = snapshot["environments"]["ecorex-release-publication-stable"]
+    assert "ECOREX_GITHUB_RELEASE_TOKEN" in publication["secrets"]
+    assert "ECOREX_GITHUB_RELEASE_READ_TOKEN" not in publication["secrets"]
+
+
 def test_platform_signing_live_and_publication_roles_must_not_overlap() -> None:
     snapshot = _healthy_snapshot()
     shared = {

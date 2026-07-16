@@ -43,6 +43,9 @@ from ecorex.release import (
     write_public_bootstrap_index,
     gate_bundle_sha256,
     validate_signed_gate_bundle,
+    DIRECT_ADMISSION_TYPE,
+    DirectReleaseAdmissionPolicy,
+    validate_signed_direct_admission,
 )
 from ecorex.update.locking import ProductFileLock
 
@@ -52,6 +55,7 @@ from .repository import required_release_gates
 
 MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
+MAX_DIRECT_ADMISSION_BYTES = 32 * 1024 * 1024
 _PUBLICATION_GATES = frozenset({"github-release", "mirror-sync", "cdn-sync"})
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_LOCAL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -99,6 +103,18 @@ def _parser() -> argparse.ArgumentParser:
     promote.add_argument("--minimum-compatible-version")
     promote.add_argument("--activate", action="store_true")
     promote.add_argument("--dry-run", action="store_true")
+    promote.add_argument(
+        "--direct-admission",
+        action="store_true",
+        help="use the separately signed single-release direct admission contract",
+    )
+    promote.add_argument(
+        "--trusted-publication-key",
+        action="append",
+        default=[],
+        metavar="KEY_ID=BASE64_PUBLIC_KEY",
+    )
+    promote.add_argument("--operator-instruction-sha256")
 
     action = commands.add_parser("rollout", help="activate, pause or halt a rollout")
     action.add_argument("rollout_id")
@@ -340,6 +356,8 @@ class PromotionJournal:
             "rollout.activate",
             "gate-bundle.prepare",
             "gate-bundle.finalize",
+            "direct-admission.prepare",
+            "direct-admission.finalize",
         }
         request_ids = value.get("request_ids") if isinstance(value, dict) else None
         rollout_id = value.get("rollout_id") if isinstance(value, dict) else None
@@ -1988,12 +2006,30 @@ def _promote(
     for artifact in manifest.artifacts:
         verify_artifact_signature(manifest, artifact, verifier)
     evidence = _read_json(
-        args.evidence, limit=MAX_EVIDENCE_BYTES, label="release evidence"
+        args.evidence,
+        limit=(
+            MAX_DIRECT_ADMISSION_BYTES
+            if bool(getattr(args, "direct_admission", False))
+            else MAX_EVIDENCE_BYTES
+        ),
+        label="release evidence",
     )
     if not isinstance(evidence, dict):
         raise ValueError("release evidence must be a JSON object")
     required_gates = required_release_gates(manifest.channel)
     phase = args.phase
+    direct_admission = bool(getattr(args, "direct_admission", False))
+    if direct_admission and (
+        manifest.channel is not ReleaseChannel.STABLE
+        or phase not in {"prepare", "finalize"}
+    ):
+        raise ValueError(
+            "direct admission requires an explicit stable prepare/finalize phase"
+        )
+    if bool(evidence.get("attestation_type") == DIRECT_ADMISSION_TYPE) != (
+        direct_admission
+    ):
+        raise ValueError("direct admission mode does not match release evidence")
     if manifest.channel is not ReleaseChannel.STABLE and phase != "auto":
         raise ValueError("phased promotion is reserved for the stable channel")
     if phase == "prepare" and args.activate:
@@ -2004,14 +2040,46 @@ def _promote(
         else required_gates
     )
     bundle_phase = "prepare" if phase == "prepare" else "finalize"
-    validated = validate_signed_gate_bundle(
-        evidence,
-        manifest=manifest,
-        expected_gates=frozenset(expected_gates),
-        expected_phase=bundle_phase,
-        verifier=verifier,
-        expected_manifest_sha256=digest,
-    )
+    if direct_admission:
+        instruction_sha256 = getattr(args, "operator_instruction_sha256", None)
+        publication_key_values = getattr(args, "trusted_publication_key", [])
+        if (
+            not isinstance(instruction_sha256, str)
+            or _SHA256.fullmatch(instruction_sha256) is None
+            or not publication_key_values
+        ):
+            raise ValueError(
+                "direct admission requires instruction and publication trust"
+            )
+        release_keys = _trusted_release_keys(args.trusted_key)
+        publication_keys = _trusted_release_keys(publication_key_values)
+        validated_direct = validate_signed_direct_admission(
+            evidence,
+            manifest=manifest,
+            expected_manifest_sha256=digest,
+            expected_gates=frozenset(expected_gates),
+            expected_phase=bundle_phase,
+            policy=DirectReleaseAdmissionPolicy(
+                enabled=True,
+                release_id=manifest.release_id,
+                operator_instruction_sha256=instruction_sha256,
+                release_public_keys=release_keys,
+                publication_public_keys=publication_keys,
+            ),
+            release_verifier=verifier,
+        )
+        validated = validated_direct.gates
+        attestation_sha256 = validated_direct.attestation_sha256
+    else:
+        validated = validate_signed_gate_bundle(
+            evidence,
+            manifest=manifest,
+            expected_gates=frozenset(expected_gates),
+            expected_phase=bundle_phase,
+            verifier=verifier,
+            expected_manifest_sha256=digest,
+        )
+        attestation_sha256 = gate_bundle_sha256(evidence)
     normalized = {
         gate: result["evidence"] for gate, result in validated.items()
     }
@@ -2066,7 +2134,8 @@ def _promote(
             "percentage": args.percentage,
             "activate": args.activate,
             "phase": phase,
-            "gate_bundle_sha256": gate_bundle_sha256(evidence),
+            "gate_bundle_sha256": attestation_sha256,
+            "direct_admission": direct_admission,
             "publication_receipt": publication_token,
             "bootstrap_index_receipt": bootstrap_index_token,
         }
@@ -2124,11 +2193,22 @@ def _promote(
                 or trusted_bootstrap_proof.target.release_id != manifest.release_id
             ):
                 raise ValueError("trusted Bootstrap proof does not match the release")
-        candidate = client.record_gate_bundle(
-            manifest.release_id,
-            evidence,
-            client_request_id=journal.request_id(f"gate-bundle.{bundle_phase}"),
-        )
+        if direct_admission:
+            candidate = client.record_direct_admission(
+                manifest.release_id,
+                evidence,
+                client_request_id=journal.request_id(
+                    f"direct-admission.{bundle_phase}"
+                ),
+            )
+        else:
+            candidate = client.record_gate_bundle(
+                manifest.release_id,
+                evidence,
+                client_request_id=journal.request_id(
+                    f"gate-bundle.{bundle_phase}"
+                ),
+            )
         rollout_id = journal.data.get("rollout_id")
         if rollout_id is None:
             rollout = client.create_rollout(

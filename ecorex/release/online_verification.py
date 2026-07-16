@@ -923,9 +923,17 @@ def _read_or_hash(
         current = path.lstat()
         if (
             total != before.st_size
-            or _identity(after) != _identity(before)
+            or _descriptor_identity(after) != _descriptor_identity(opened)
             or _identity(current) != _identity(before)
             or not _regular(current)
+        ):
+            raise OnlinePublicationVerificationError(code)
+        with path.open("rb") as current_stream:
+            current_opened = os.fstat(current_stream.fileno())
+        if (
+            not _regular(current_opened)
+            or _descriptor_identity(current_opened)
+            != _descriptor_identity(opened)
         ):
             raise OnlinePublicationVerificationError(code)
         return total, digest.hexdigest(), b"".join(chunks) if retain else None
@@ -1016,6 +1024,26 @@ def _regular(value: os.stat_result) -> bool:
 
 
 def _identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
+    # Since Python 3.12, Windows path stat and descriptor fstat can expose
+    # different st_ctime meanings for the same file: path stat reports the
+    # creation time while fstat reports the NTFS change time.  st_birthtime is
+    # the stable creation identity on that platform.  Change time still guards
+    # the read below through descriptor-to-descriptor comparisons.
+    creation_or_change_ns = (
+        getattr(value, "st_birthtime_ns", value.st_ctime_ns)
+        if os.name == "nt"
+        else value.st_ctime_ns
+    )
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_size,
+        value.st_mtime_ns,
+        creation_or_change_ns,
+    )
+
+
+def _descriptor_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
     return (
         value.st_dev,
         value.st_ino,

@@ -113,7 +113,13 @@ def main() -> int:
     try:
         _exact_main(args.expected_commit)
         result = build_signed_cloud_artifact(
-            args.root, release_id=args.release_id, signer=_signer()
+            args.root,
+            release_id=args.release_id,
+            signer=_signer(),
+            source_commit=args.expected_commit,
+            dependency_lock_manifest_sha256=_sha256(
+                ROOT / "requirements" / "locks" / "manifest.json"
+            ),
         )
         print(json.dumps({"ok": True, **result}, sort_keys=True, separators=(",", ":")))
         return 0

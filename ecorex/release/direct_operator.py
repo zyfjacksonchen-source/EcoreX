@@ -149,7 +149,7 @@ def build_direct_release_waiver(
     if signer.key_id == publication_key_id or release_public == publication_public:
         raise DirectReleaseWaiverError("direct_release_keys_not_independent")
     _verify_manifest_bytes(manifest, manifest_bytes)
-    _verify_candidate_receipt(
+    validate_direct_candidate_receipt(
         manifest=manifest,
         manifest_bytes=manifest_bytes,
         receipt=candidate_receipt,
@@ -354,7 +354,7 @@ def _verify_manifest_bytes(manifest: ReleaseManifest, payload: bytes) -> None:
         raise DirectReleaseWaiverError("direct_release_manifest_mismatch")
 
 
-def _verify_candidate_receipt(
+def validate_direct_candidate_receipt(
     *,
     manifest: ReleaseManifest,
     manifest_bytes: bytes,
@@ -463,5 +463,6 @@ __all__ = [
     "build_direct_release_waiver",
     "direct_release_waiver_signing_payload",
     "parse_external_public_key_description",
+    "validate_direct_candidate_receipt",
     "validate_direct_release_waiver",
 ]

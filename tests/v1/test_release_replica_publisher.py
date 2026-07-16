@@ -125,6 +125,8 @@ def test_github_read_through_mirror_rejects_invalid_transport_contract(
     mirror = HTTPSReadThroughReleaseMirror(
         source_id="github-cn",
         public_hosts=frozenset({"ghproxy.example"}),
+        attempts=1,
+        backoff_seconds=(),
         client=httpx.Client(
             transport=httpx.MockTransport(lambda _request: response)
         ),
@@ -139,6 +141,97 @@ def test_github_read_through_mirror_rejects_invalid_transport_contract(
         )
 
     assert failure.value.retryable is retryable
+
+
+def test_github_read_through_mirror_retries_only_transient_propagation(
+    tmp_path: Path,
+) -> None:
+    release_id = "release-stable-0123456789abcdef01234567"
+    package = tmp_path / "core.zip"
+    package.write_bytes(b"signed")
+    digest = hashlib.sha256(package.read_bytes()).hexdigest()
+    responses = [
+        httpx.Response(404, headers={"retry-after": "2"}),
+        httpx.Response(503),
+        httpx.Response(200, content=package.read_bytes()),
+    ]
+    calls = 0
+    now = [0.0]
+    sleeps: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        response = responses[calls]
+        calls += 1
+        return response
+
+    def sleep(delay: float) -> None:
+        sleeps.append(delay)
+        now[0] += delay
+
+    mirror = HTTPSReadThroughReleaseMirror(
+        source_id="github-cn",
+        public_hosts=frozenset({"ghproxy.example"}),
+        attempts=3,
+        backoff_seconds=(1, 2),
+        deadline_seconds=30,
+        sleeper=sleep,
+        clock=lambda: now[0],
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    receipt = mirror.verify_asset(
+        base_url=f"https://ghproxy.example/releases/{release_id}",
+        release_id=release_id,
+        path=package,
+        expected_sha256=digest,
+    )
+
+    assert receipt.sha256 == digest
+    assert calls == 3
+    assert sleeps == [2.0, 2.0]
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(302, headers={"location": "https://evil.example/core.zip"}),
+        httpx.Response(401),
+        httpx.Response(200, content=b"forged"),
+    ],
+)
+def test_github_read_through_mirror_never_retries_deterministic_failure(
+    tmp_path: Path,
+    response: httpx.Response,
+) -> None:
+    release_id = "release-stable-0123456789abcdef01234567"
+    package = tmp_path / "core.zip"
+    package.write_bytes(b"signed")
+    digest = hashlib.sha256(package.read_bytes()).hexdigest()
+    calls = 0
+    sleeps: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return response
+
+    mirror = HTTPSReadThroughReleaseMirror(
+        source_id="github-cn",
+        public_hosts=frozenset({"ghproxy.example"}),
+        sleeper=sleeps.append,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    with pytest.raises(ReleaseReplicaError):
+        mirror.verify_asset(
+            base_url=f"https://ghproxy.example/releases/{release_id}",
+            release_id=release_id,
+            path=package,
+            expected_sha256=digest,
+        )
+
+    assert calls == 1
+    assert sleeps == []
 
 
 def test_github_read_through_mirror_rejects_non_allowlisted_signed_host(

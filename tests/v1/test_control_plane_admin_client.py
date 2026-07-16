@@ -135,6 +135,37 @@ def test_admin_client_submits_one_candidate_bound_gate_bundle() -> None:
     ]
 
 
+def test_admin_client_submits_direct_admission_to_separate_endpoint() -> None:
+    observed: list[tuple[str, str, dict]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        observed.append((request.method, request.url.path, body))
+        return httpx.Response(200, json=candidate())
+
+    control = client(handler)
+    attestation = {
+        "schema_version": 1,
+        "attestation_type": "ecorex-direct-release-admission",
+    }
+    result = control.record_direct_admission(
+        "release-1.0.0",
+        attestation,
+        client_request_id="direct-admission-one",
+    )
+    assert result.release_id == "release-1.0.0"
+    assert observed == [
+        (
+            "PUT",
+            "/api/v1/admin/releases/release-1.0.0/direct-admission",
+            {
+                "attestation": attestation,
+                "client_request_id": "direct-admission-one",
+            },
+        )
+    ]
+
+
 def test_admin_client_rejects_unallowlisted_or_credentialed_endpoint() -> None:
     with pytest.raises(ValueError, match="allowlisted"):
         AdminControlPlaneClient(

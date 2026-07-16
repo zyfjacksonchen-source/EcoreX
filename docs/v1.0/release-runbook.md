@@ -1,5 +1,10 @@
 # EcoreX v1.0 release runbook
 
+> 单版本应急 direct admission 不得复用普通 gate bundle。仅在明确运营授权时按
+> [Direct release admission](./direct-release-admission.md) 执行 prepare → Bootstrap
+> stage/readback → finalize → rollout；live acceptance 只能显示为 `waived`，不能
+> 显示为 `passed`。
+
 This runbook is the administrator-facing Product path. User machines never run
 Git, npm, pip or a release script. Tokens stay in the release service/CI
 environment and are never written into this file or process arguments.
@@ -378,10 +383,11 @@ suites, WebUI audit/typecheck/tests/build, migration dry-run, schema authority,
 reproducibility, license, secret, SBOM, signature, size and protected live
 acceptance gates. The separate publication workflow re-authenticates the signed
 Candidate and every gate before reusing `ReleaseAssetPublicationCoordinator`,
-which finalizes the domestic mirror first, creates/uploads GitHub second,
-finalizes CDN third and makes the GitHub draft public only after all three
-contain the same signed bytes. The three publication gates share one immutable
-publication-receipt digest.
+which creates/uploads the GitHub draft, finalizes CDN, makes the exact GitHub
+release public and only then streams every byte through the read-through
+domestic mirror. A transient mirror propagation failure is resumable against
+the same immutable GitHub release. The three publication gates share one
+immutable publication-receipt digest.
 
 Required protected configuration is deliberately operational, not committed:
 
@@ -397,7 +403,9 @@ Required protected configuration is deliberately operational, not committed:
   workflow;
 - signing environments: release signer executable/digest, optional adapter/
   digest, signer key ID/public key, the public `owner/repository` release target
-  and version-qualified mirror/CDN base URLs;
+  and version-qualified mirror/CDN base URLs. Delta derivation additionally
+  receives `ECOREX_GITHUB_RELEASE_READ_TOKEN`, scoped read-only to the separate
+  installer repository; it must never reuse the publication writer token;
 - live-acceptance environment: digest-pinned Windows acceptance driver and the
   managed Model/Image/CDP test session held outside repository files;
 - publication environments: publication config, public GitHub release target,

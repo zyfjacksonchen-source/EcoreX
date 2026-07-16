@@ -31,6 +31,11 @@ from fastapi.responses import JSONResponse
 
 from ecorex.control_plane.management import AdminManagementRepository
 from ecorex.control_plane.management_schema import AdminManagementSchemaManager
+from ecorex.security.provider_tls import (
+    ProviderTLSConfigurationError,
+    pinned_provider_ssl_context,
+    validate_provider_ca_binding,
+)
 from ecorex.storage.attested_local_cas import (
     AttestedEncryptedLocalCAS,
     AttestedEncryptedLocalVolume,
@@ -343,6 +348,8 @@ class ImageProductionConfig:
     provider_id: str
     provider_origin: str
     provider_allowed_origins: frozenset[str]
+    provider_ca_bundle_path: Path | None = None
+    provider_ca_bundle_sha256: str | None = field(default=None, repr=False)
     bind_host: str = "127.0.0.1"
     bind_port: int = 8450
     allow_trusted_ingress_http: bool = False
@@ -464,6 +471,16 @@ class ImageProductionConfig:
             raise ImageProductionConfigurationError(
                 "image administrator model source requires explicit enablement"
             )
+        try:
+            validate_provider_ca_binding(
+                (self.provider_origin, *dict(self.model_provider_origins).values()),
+                ca_bundle_path=self.provider_ca_bundle_path,
+                ca_bundle_sha256=self.provider_ca_bundle_sha256,
+            )
+        except ProviderTLSConfigurationError:
+            raise ImageProductionConfigurationError(
+                "image provider CA binding is invalid"
+            ) from None
 
     def _content_storage_is_valid(self, api_blob_slots: int) -> bool:
         local_values = (
@@ -719,6 +736,12 @@ class ImageProductionConfig:
             provider_id=_required(values, "ECOREX_IMAGE_PROVIDER_ID"),
             provider_origin=provider_origin,
             provider_allowed_origins=allowed_origins,
+            provider_ca_bundle_path=_optional_absolute_path(
+                values, "ECOREX_IMAGE_PROVIDER_CA_BUNDLE_PATH"
+            ),
+            provider_ca_bundle_sha256=(
+                values.get("ECOREX_IMAGE_PROVIDER_CA_BUNDLE_SHA256") or None
+            ),
             bind_host=values.get("ECOREX_IMAGE_BIND_HOST", "127.0.0.1"),
             bind_port=_integer(values, "ECOREX_IMAGE_BIND_PORT", minimum=1024, maximum=65535, default=8450),
             allow_trusted_ingress_http=_boolean(values, "ECOREX_IMAGE_ALLOW_TRUSTED_INGRESS_HTTP", default=False),
@@ -1339,6 +1362,10 @@ class PostgresS3ManagedImageProvider:
                     max_image_bytes=config.max_image_bytes,
                     max_connections=config.provider_max_connections,
                     max_concurrency=config.provider_max_concurrency,
+                    ssl_context=pinned_provider_ssl_context(
+                        config.provider_ca_bundle_path,
+                        config.provider_ca_bundle_sha256,
+                    ),
                     input_store=content_store,
                 )
                 resolver: ImageModelConfigurationResolver | None = (
@@ -1356,6 +1383,10 @@ class PostgresS3ManagedImageProvider:
                     max_image_bytes=config.max_image_bytes,
                     max_connections=config.provider_max_connections,
                     max_concurrency=config.provider_max_concurrency,
+                    ssl_context=pinned_provider_ssl_context(
+                        config.provider_ca_bundle_path,
+                        config.provider_ca_bundle_sha256,
+                    ),
                 )
                 resolver = None
             return storage, content_store, provider, resolver
@@ -1442,6 +1473,24 @@ def _absolute_path(environment: Mapping[str, str], name: str) -> Path:
     if not path.is_absolute():
         raise ImageProductionConfigurationError(
             "image path setting must be absolute"
+        )
+    return path.resolve()
+
+
+def _optional_absolute_path(
+    environment: Mapping[str, str], name: str
+) -> Path | None:
+    raw = environment.get(name)
+    if raw is None or raw == "":
+        return None
+    if not isinstance(raw, str) or len(raw) > 8192 or "\x00" in raw:
+        raise ImageProductionConfigurationError(
+            "image optional path setting is invalid"
+        )
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        raise ImageProductionConfigurationError(
+            "image optional path setting must be absolute"
         )
     return path.resolve()
 

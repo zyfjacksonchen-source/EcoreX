@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "public_ca_bundle_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "server_certificate_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "server_private_key_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "upstreams": {
+    "ecorex_chat": {
+      "origin": "https://api.openai.com/v1",
+      "legacy_http_waiver": null
+    },
+    "deepseek_chat": {
+      "origin": "https://api.deepseek.com/v1",
+      "legacy_http_waiver": null
+    },
+    "gemini_chat": {
+      "origin": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "legacy_http_waiver": null
+    },
+    "doubao_chat": {
+      "origin": "https://ark.cn-beijing.volces.com/api/v3",
+      "legacy_http_waiver": null
+    },
+    "ecorex_image": {
+      "origin": "https://api.openai.com/v1",
+      "legacy_http_waiver": null
+    }
+  }
+}

@@ -11,7 +11,10 @@ import sys
 
 import pytest
 
-from ecorex.control_plane.management import AdminManagementRepository
+from ecorex.control_plane.management import (
+    AdminManagementConflict,
+    AdminManagementRepository,
+)
 from ecorex.control_plane.management_schema import AdminManagementSchemaManager
 from ecorex.control_plane.models import ControlPrincipal
 from ecorex.migration import (
@@ -166,20 +169,27 @@ def test_copy_on_write_import_preserves_users_usage_and_model_secrets(tmp_path: 
     by_slot = {(item.draft or item.active).local_model_id: item for item in models}
     main = by_slot["ecorex-chat"].draft
     assert main is not None and main.upstream_model_id == "gpt-5.6-sol"
-    lease = repository.begin_model_test(
-        by_slot["ecorex-chat"].config_id,
+    assert main.enabled is False
+    assert main.test_status == "failed"
+    assert main.test_error_code == "rotation_required"
+    for slot in ("ecorex-chat", "ecorex-gemini-3.1-pro", "gpt-image-2", "gpt-image-2-edit"):
+        draft = by_slot[slot].draft
+        assert draft is not None and draft.enabled is False
+        assert draft.test_error_code == "rotation_required"
+        with pytest.raises(AdminManagementConflict, match="rotation"):
+            repository.begin_model_test(
+                by_slot[slot].config_id,
+                1,
+                actor=ACTOR,
+                client_request_id=f"blocked-unrotated-{slot}",
+            )
+    deepseek_lease = repository.begin_model_test(
+        by_slot["ecorex-deepseek-v4-pro"].config_id,
         1,
         actor=ACTOR,
-        client_request_id="verify-imported-key",
+        client_request_id="verify-safe-https-key",
     )
-    assert lease.configuration.api_key == SECRETS["openai"]
-    image_lease = repository.begin_model_test(
-        by_slot["gpt-image-2"].config_id,
-        1,
-        actor=ACTOR,
-        client_request_id="verify-explicit-image-key",
-    )
-    assert image_lease.configuration.api_key == SECRETS["image"]
+    assert deepseek_lease.configuration.api_key == SECRETS["deepseek"]
     assert b"DO NOT IMPORT THIS CHAT" not in target.read_bytes()
     assert all(secret.encode() not in target.read_bytes() for secret in SECRETS.values())
     repository.verify_integrity()
@@ -228,14 +238,18 @@ def test_four_chat_rows_reuse_openai_key_for_missing_image_slots(tmp_path: Path)
     models = repository.list_model_configurations()
     by_slot = {(item.draft or item.active).local_model_id: item for item in models}
     assert {"gpt-image-2", "gpt-image-2-edit"} <= set(by_slot)
-    for index, slot in enumerate(("gpt-image-2", "gpt-image-2-edit"), start=1):
-        lease = repository.begin_model_test(
-            by_slot[slot].config_id,
-            1,
-            actor=ACTOR,
-            client_request_id=f"verify-fallback-image-key-{index}",
-        )
-        assert lease.configuration.api_key == SECRETS["openai"]
+    for slot in ("gpt-image-2", "gpt-image-2-edit"):
+        draft = by_slot[slot].draft
+        assert draft is not None
+        assert draft.enabled is False
+        assert draft.test_error_code == "rotation_required"
+        with pytest.raises(AdminManagementConflict, match="rotation"):
+            repository.begin_model_test(
+                by_slot[slot].config_id,
+                1,
+                actor=ACTOR,
+                client_request_id=f"blocked-fallback-image-key-{slot}",
+            )
 
 
 def test_duplicate_legacy_slot_rolls_back_atomically(tmp_path: Path) -> None:
