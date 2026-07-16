@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import runpy
 import shutil
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -407,6 +408,14 @@ def _portable_exchange(source: Path, target: Path) -> None:
 
 
 def _enable_portable_apply(monkeypatch: pytest.MonkeyPatch) -> None:
+    # ``apply(..., enforce_server_fence=False)`` exercises the transaction on
+    # an unprivileged CI account.  Linux still exposes ``os.lchown``, so the
+    # production-only root:static ownership operation must be represented by
+    # the portable boundary just like renameat2/flock.  Keep the production
+    # implementation intact: the real server path still lchowns every current
+    # symlink to root:STATIC_READ_GID and validates it during layout takeover.
+    if sys.platform.startswith("linux"):
+        monkeypatch.setattr(deployment.os, "lchown", lambda *_args: None)
     monkeypatch.setattr(deployment, "_rename_noreplace", _portable_noreplace)
     monkeypatch.setattr(deployment, "_rename_exchange", _portable_exchange)
     monkeypatch.setattr(deployment, "_acquire_lock", lambda _path: 41)

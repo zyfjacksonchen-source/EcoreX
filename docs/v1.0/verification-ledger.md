@@ -2010,3 +2010,15 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Windows online file identity | 0 | 9 focused tests pass. Birth time provides stable path/handle identity; descriptor ChangeTime and final reopen retain same-size/restored-mtime mutation detection. |
 | Combined changed boundary | 0 | 15 release domains: 206 passed / 10 explicit platform-conditioned skips / zero failures in 80.78 seconds. Ruff/compile, dependency locks, Runtime schema authority (20 fragments), server schema authority (11 explicit authorities), strict legacy cutoff and public-site gates pass. One unchanged Starlette multipart deprecation warning only. |
 | Public traffic | pending | No source commit/merge, exact-main platform stage, signed cloud/client artifact, publication, rollout or Web/Admin cutover is claimed by this entry. |
+
+## Linux semantic correction before merge - 2026-07-17
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| PR run `29521151721` | 1 expected | Windows x64 and macOS arm64/x64 passed. Ubuntu full Runtime found 14 Linux-only failures and stopped before Web/static/byte stages; cross-runner stability was skipped. No merge or publication occurred. |
+| Cloud artifact and Admin route | 0 | Test fixtures now apply signed 0755/0644 modes. Admin Nginx validation checks seven exact location contracts while allowing unrelated CP routes; path/rewrite/header/upstream/duplicate/extra-location drift remains fail-closed. |
+| Provider Bridge POSIX boundary | 0 | Production still requires root:root. Portable tests simulate and assert ownership; atomic order is ownership, final mode, short-write loop, file fsync, replace and parent fsync. Reload failure restores without masking the original error. |
+| Public-site POSIX boundary | 0 | Portable tests simulate root:994 `lchown`; production owner/mode/link/device checks are unchanged. Legacy rollback, crash recovery and receipt-to-journal-clear recovery execute on Linux. |
+| Windows affected domains | 0 | 81 passed / 12 explicit Linux-conditioned skips / zero failures. |
+| WSL Ubuntu Python 3.11.9 | 0 | 93 passed / zero failures across cloud sidecar, Provider TLS Bridge and public-site deployment in 19.52 seconds. |
+| Static correction gates | 0 | Ruff, Python compilation and `git diff --check` pass. Full hosted rerun remains pending. |

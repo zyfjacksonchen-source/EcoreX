@@ -401,6 +401,12 @@ def _replace(path: Path, payload: bytes, mode: int) -> None:
         raise ProviderBridgeInstallError("provider_bridge_install_target_invalid")
     descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
+        if os.name != "nt":
+            # Set ownership before the final mode because chown(2) is allowed to
+            # clear permission bits.  Both metadata changes must happen before
+            # fsync so a successful replace never advertises an undurable
+            # root-owned file contract.
+            os.fchown(descriptor, 0, 0)
         if hasattr(os, "fchmod"):
             os.fchmod(descriptor, mode)
         view = memoryview(payload)
@@ -411,8 +417,6 @@ def _replace(path: Path, payload: bytes, mode: int) -> None:
                 raise OSError
             written += count
         os.fsync(descriptor)
-        if os.name != "nt":
-            os.fchown(descriptor, 0, 0)
         os.close(descriptor)
         descriptor = -1
         if not hasattr(os, "fchmod"):

@@ -76,6 +76,37 @@ LEGACY_ADMIN_LOCATION_HEADERS = (
     "location ^~ /ecorex-agent/api/admin/",
     "location ^~ /ecorex-agent/admin/",
 )
+CONTROL_PLANE_ADMIN_ROUTE_CONTRACT = {
+    "location = /ecorex-agent/admin": (
+        "return 308 /ecorex-agent/admin/;",
+    ),
+    "location = /admin": (
+        "return 308 /ecorex-agent/admin/;",
+    ),
+    "location ^~ /admin/": (
+        "return 308 /ecorex-agent/admin/;",
+    ),
+    "location ^~ /ecorex-agent/admin/api/": ("return 410;",),
+    "location ^~ /ecorex-agent/api/admin/": ("return 410;",),
+    "location = /ecorex-agent/admin/health/ready": (
+        "rewrite ^ /health/ready break;",
+        "proxy_pass $ecorex_control_plane;",
+        "proxy_http_version 1.1;",
+        "proxy_set_header Host $host;",
+        "proxy_set_header X-Forwarded-Proto $scheme;",
+        "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+        "proxy_buffering off;",
+    ),
+    "location ^~ /ecorex-agent/admin/": (
+        "rewrite ^/ecorex-agent/admin/(.*)$ /admin/$1 break;",
+        "proxy_pass $ecorex_control_plane;",
+        "proxy_http_version 1.1;",
+        "proxy_set_header Host $host;",
+        "proxy_set_header X-Forwarded-Proto $scheme;",
+        "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+        "proxy_buffering off;",
+    ),
+}
 
 SLOTS = ("blue", "green")
 PORTS = {
@@ -1080,6 +1111,43 @@ def _restore_symlink(link: Path, previous: Path | None) -> None:
     _atomic_symlink(previous, link)
 
 
+def _nginx_location_contract(text: str) -> dict[str, tuple[str, ...]]:
+    """Parse a locations-only fragment into an exact, comment-free contract."""
+
+    lines = text.splitlines()
+    contract: dict[str, tuple[str, ...]] = {}
+    index = 0
+    while index < len(lines):
+        statement = lines[index].split("#", 1)[0].strip()
+        index += 1
+        if not statement:
+            continue
+        if not statement.startswith("location ") or not statement.endswith("{"):
+            raise CloudDeployError("nginx_admin_route_wiring_invalid")
+        header = statement[:-1].rstrip()
+        if header in contract:
+            raise CloudDeployError("nginx_admin_route_wiring_invalid")
+        directives: list[str] = []
+        closed = False
+        while index < len(lines):
+            directive = lines[index].split("#", 1)[0].strip()
+            index += 1
+            if not directive:
+                continue
+            if directive == "}":
+                closed = True
+                break
+            # The reviewed Admin fragment intentionally has no nested blocks.
+            # Reject them rather than attempting a permissive Nginx parse.
+            if "{" in directive or "}" in directive:
+                raise CloudDeployError("nginx_admin_route_wiring_invalid")
+            directives.append(directive)
+        if not closed:
+            raise CloudDeployError("nginx_admin_route_wiring_invalid")
+        contract[header] = tuple(directives)
+    return contract
+
+
 def _validate_admin_route_resources() -> None:
     active = NGINX_ROOT / "active-admin-route.conf"
     legacy = NGINX_ROOT / "admin-route-legacy.conf"
@@ -1117,13 +1185,13 @@ def _validate_admin_route_resources() -> None:
     if any(
         legacy_text.count(f"{header} {{") != 1
         for header in LEGACY_ADMIN_LOCATION_HEADERS
-    ) or (
-        candidate_text.count("location = /ecorex-agent/admin {") != 1
-        or candidate_text.count("location ^~ /ecorex-agent/admin/ {") != 1
-        or candidate_text.count("return 410;") != 2
-        or candidate_text.count("proxy_pass $ecorex_control_plane;") != 1
-        or "/srv/ecorex-agent-download" in candidate_text
-    ):
+    ) or "/srv/ecorex-agent-download" in candidate_text:
+        raise CloudDeployError("nginx_admin_route_wiring_invalid")
+    try:
+        candidate_contract = _nginx_location_contract(candidate_text)
+    except CloudDeployError:
+        raise CloudDeployError("nginx_admin_route_wiring_invalid") from None
+    if candidate_contract != CONTROL_PLANE_ADMIN_ROUTE_CONTRACT:
         raise CloudDeployError("nginx_admin_route_wiring_invalid")
 
 

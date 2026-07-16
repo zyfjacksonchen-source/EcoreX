@@ -5928,3 +5928,32 @@ download gate pass.  Publication is still pending the source commit,
 PR matrix, exact-main platform/cloud builds, signatures, server migration,
 three-source readback, Bootstrap activation and final live URL validation.  Old
 production traffic has not been switched by this implementation batch.
+
+## 2026-07-17 - Linux semantic correction before merge
+
+PR run `29521151721` correctly withheld promotion.  Windows x64 and both macOS
+compatibility jobs passed, but the Ubuntu full suite reported 14 failures from
+three test-boundary defects that Windows had conditionally skipped: signed
+cloud fixtures did not apply their declared POSIX modes; portable Provider
+Bridge tests invoked production `fchown(root:root)` as an unprivileged CI user;
+and portable public-site tests invoked production `lchown(root:994)`.  Three
+Admin-route tests also assumed that the Control Plane Nginx file could never
+gain unrelated routes.  No production traffic, manifest or user update was
+created from this failed run; cross-runner byte stability remained skipped.
+
+The fixes preserve every production fence.  Signed artifact fixtures now
+materialize their declared 0755 executable and 0644 data modes.  Provider
+Bridge atomic replacement still unconditionally sets root ownership, with
+tests explicitly simulating and asserting that call; its durable order is
+`fchown → fchmod → write → fsync → replace → parent fsync`.  Public-site
+portable tests now simulate `lchown` alongside their existing rename/flock OS
+boundary, while the deployed code still requires root:994.  Admin-route
+validation now parses exactly seven required locations and verifies each
+path/rewrite/header/upstream directive, rejecting missing, duplicate, mutated
+or unexpected locations without forbidding unrelated Control Plane routes.
+
+The main task reran the three affected domains on both platforms: Windows
+passes 81 tests with 12 Linux-conditioned skips, and WSL Ubuntu with exact
+Python 3.11.9 passes all 93 tests with zero skips/failures.  Ruff, compilation
+and whitespace checks pass.  A new PR head and full hosted matrix are still
+required before merge.

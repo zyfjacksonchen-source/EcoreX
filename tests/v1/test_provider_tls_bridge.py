@@ -4,8 +4,10 @@ from datetime import UTC, datetime, timedelta
 import hashlib
 import inspect
 import json
+import os
 from pathlib import Path
 import ssl
+import stat
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -181,6 +183,22 @@ def _deployment_materials(tmp_path: Path):
         certificate_path,
         private_key_path,
     )
+
+
+def _emulate_root_file_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[int, int]]:
+    """Keep production fchown strict while making non-root POSIX CI explicit."""
+
+    calls: list[tuple[int, int]] = []
+    if not hasattr(bridge_install.os, "fchown"):
+        return calls
+
+    def fchown(_descriptor: int, uid: int, gid: int) -> None:
+        calls.append((uid, gid))
+
+    monkeypatch.setattr(bridge_install.os, "fchown", fchown)
+    return calls
 
 
 def test_private_provider_ca_is_paired_digest_pinned_and_strict(tmp_path: Path) -> None:
@@ -373,7 +391,7 @@ def test_bridge_deployment_rejects_public_http_before_install(tmp_path: Path) ->
 
 
 def test_bridge_install_is_idempotent_and_manages_one_tagged_hosts_block(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     spec_path, ca_path, certificate_path, private_key_path = _deployment_materials(
         tmp_path
@@ -390,6 +408,7 @@ def test_bridge_install_is_idempotent_and_manages_one_tagged_hosts_block(
     hosts_path.write_text("127.0.0.1 localhost\n", encoding="utf-8")
     commands: list[tuple[str, ...]] = []
     probes: list[object] = []
+    ownership_calls = _emulate_root_file_ownership(monkeypatch)
 
     def run(command: tuple[str, ...], _code: str) -> None:
         commands.append(command)
@@ -414,9 +433,14 @@ def test_bridge_install_is_idempotent_and_manages_one_tagged_hosts_block(
     assert commands.count(("/usr/sbin/nginx", "-t")) == 2
     assert commands.count(("/usr/bin/systemctl", "reload", "nginx.service")) == 1
     assert len(probes) == 2
+    if os.name != "nt":
+        assert ownership_calls == [(0, 0), (0, 0)]
+        assert stat.S_IMODE(nginx_path.stat().st_mode) == 0o600
 
 
-def test_bridge_install_failure_restores_exact_previous_files(tmp_path: Path) -> None:
+def test_bridge_install_failure_restores_exact_previous_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     spec_path, ca_path, certificate_path, private_key_path = _deployment_materials(
         tmp_path
     )
@@ -431,6 +455,7 @@ def test_bridge_install_failure_restores_exact_previous_files(tmp_path: Path) ->
     hosts_path = tmp_path / "hosts"
     nginx_path.write_bytes(b"previous nginx\n")
     hosts_path.write_bytes(b"127.0.0.1 localhost\n")
+    ownership_calls = _emulate_root_file_ownership(monkeypatch)
     failed = False
 
     def run(_command: tuple[str, ...], code: str) -> None:
@@ -451,6 +476,8 @@ def test_bridge_install_failure_restores_exact_previous_files(tmp_path: Path) ->
         )
     assert nginx_path.read_bytes() == b"previous nginx\n"
     assert hosts_path.read_bytes() == b"127.0.0.1 localhost\n"
+    if os.name != "nt":
+        assert ownership_calls == [(0, 0)] * 4
 
 
 def test_managed_hosts_rejects_duplicate_sni_outside_owned_block() -> None:
@@ -469,6 +496,7 @@ def test_atomic_replace_handles_short_writes_and_syncs_parent(
 ) -> None:
     target = tmp_path / "atomic.conf"
     real_write = bridge_install.os.write
+    ownership_calls = _emulate_root_file_ownership(monkeypatch)
     writes = 0
 
     def short_write(descriptor: int, payload) -> int:
@@ -481,3 +509,6 @@ def test_atomic_replace_handles_short_writes_and_syncs_parent(
     bridge_install._replace(target, b"a" * 4097, 0o600)
     assert target.read_bytes() == b"a" * 4097
     assert writes > 1
+    if os.name != "nt":
+        assert ownership_calls == [(0, 0)]
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600

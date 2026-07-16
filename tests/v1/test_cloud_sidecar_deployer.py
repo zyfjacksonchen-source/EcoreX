@@ -58,12 +58,17 @@ def _signed_artifact(tmp_path: Path) -> tuple[deployment.CloudDeploymentSpec, Pa
         target = root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(f"fixture:{relative}\n".encode())
+        posix_mode = "0755" if relative.startswith("venv/bin/") else "0644"
+        # Model the real cloud builder contract on POSIX.  write_bytes() is
+        # umask-dependent and otherwise leaves executable fixture files at
+        # 0644 on Linux while the signed manifest correctly declares 0755.
+        target.chmod(int(posix_mode, 8))
         files.append(
             {
                 "path": relative,
                 "sha256": _sha(target),
                 "size_bytes": target.stat().st_size,
-                "posix_mode": "0755" if relative.startswith("venv/bin/") else "0644",
+                "posix_mode": posix_mode,
             }
         )
     manifest = {
@@ -569,6 +574,54 @@ def test_legacy_admin_routes_move_behind_reversible_include(
         deployment.CloudDeployError, match="nginx_admin_route_wiring_invalid"
     ):
         deployment._install_legacy_admin_route_wiring(spec)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires production-style symlinks")
+@pytest.mark.parametrize(
+    "needle,replacement",
+    (
+        (
+            "location = /ecorex-agent/admin/health/ready {",
+            "location = /ecorex-agent/admin/health/live {",
+        ),
+        (
+            "rewrite ^/ecorex-agent/admin/(.*)$ /admin/$1 break;",
+            "rewrite ^/ecorex-agent/admin/(.*)$ /admin/$1 last;",
+        ),
+        (
+            "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+            "proxy_set_header X-Forwarded-For $http_x_forged_for;",
+        ),
+    ),
+)
+def test_admin_route_contract_rejects_location_directive_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    needle: str,
+    replacement: str,
+) -> None:
+    nginx_root = tmp_path / "ecorex-cloud"
+    nginx_root.mkdir()
+    _, legacy = deployment._legacy_admin_route_payload(
+        _legacy_nginx_server().encode("utf-8")
+    )
+    legacy_path = nginx_root / "admin-route-legacy.conf"
+    legacy_path.write_bytes(legacy)
+    candidate_path = nginx_root / "admin-route-control-plane.conf"
+    candidate = Path(
+        "deploy/ecorex-cloud-sidecar/nginx/admin-route-control-plane.conf"
+    ).read_text(encoding="utf-8")
+    assert needle in candidate
+    candidate_path.write_text(
+        candidate.replace(needle, replacement, 1), encoding="utf-8"
+    )
+    (nginx_root / "active-admin-route.conf").symlink_to(candidate_path)
+    monkeypatch.setattr(deployment, "NGINX_ROOT", nginx_root)
+
+    with pytest.raises(
+        deployment.CloudDeployError, match="nginx_admin_route_wiring_invalid"
+    ):
+        deployment._validate_admin_route_resources()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="requires production-style symlinks")
