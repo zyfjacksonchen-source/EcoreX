@@ -5649,6 +5649,13 @@ Initial JavaScript is 459.76 KiB raw / 146.20 KiB gzip under the unchanged
 475/150 KiB limits. The design debt, strict legacy cutoff, public download,
 dependency lock, Runtime/Server schema authority, reproducibility and 678-file
 source admission gates also pass.
+
+Draft PR #8 pins implementation commit
+`9b893ce9079b2cb1b90b951a448b27bbea2620f2`. Hosted Actions run
+`29474142345` passed all five Jobs: Ubuntu quality and deterministic build,
+Windows x64, macOS arm64, macOS x64 and cross-runner canonical-byte stability.
+This is exact hosted source evidence for the implementation commit; it is not
+a protected signed Candidate, managed-provider acceptance or release approval.
 This is deterministic local contract evidence, not a real managed Image 2
 connectivity, precision score, protected Candidate, publication or rollout
 claim.
