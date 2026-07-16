@@ -195,6 +195,22 @@ def test_production_config_is_postgres_only_and_bounds_process_memory() -> None:
     with pytest.raises(ImageProductionConfigurationError, match="configuration"):
         ImageProductionConfig.from_environment(undersized)
 
+    admin_undersized = dict(
+        values,
+        ECOREX_IMAGE_ADMIN_MANAGEMENT_ENABLED="true",
+        ECOREX_IMAGE_ADMIN_MANAGEMENT_DATABASE_PATH=str(
+            (Path.cwd() / "admin-management.db").resolve()
+        ),
+        ECOREX_IMAGE_MODEL_PROVIDER_ORIGINS_JSON=(
+            '{"openai_compatible_image":"https://image.ecorex.invalid"}'
+        ),
+        ECOREX_IMAGE_WORKER_MEMORY_ENVELOPE_BYTES=str(2 * 1024**3),
+    )
+    with pytest.raises(ImageProductionConfigurationError, match="configuration"):
+        ImageProductionConfig.from_environment(admin_undersized)
+    admin_undersized["ECOREX_IMAGE_WORKER_MEMORY_ENVELOPE_BYTES"] = str(4 * 1024**3)
+    assert ImageProductionConfig.from_environment(admin_undersized).admin_management_enabled
+
 
 def test_production_config_rejects_ssrf_and_missing_auth_or_provider_secret() -> None:
     values = _environment()

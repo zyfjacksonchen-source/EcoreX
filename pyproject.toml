@@ -21,11 +21,13 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "jsonschema==4.26.0",
+    "Pillow==12.3.0",
     "pytest==9.1.1",
     "ruff==0.15.21",
 ]
 image-cloud = [
     "boto3==1.38.0",
+    "Pillow==12.3.0",
     "psycopg[binary,pool]==3.2.1",
 ]
 control-plane-cloud = [

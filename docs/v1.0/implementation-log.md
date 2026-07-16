@@ -5565,3 +5565,97 @@ Python compile and diff checks pass. The aggregate evidence is
 This remains a local Windows drill with 8/24 platform receipts. It does not
 replace protected macOS receipts, a signed installed-live CDP run, managed
 Gateway/device-session acceptance, release publication or rollout.
+
+## 2026-07-16 - Administrator Image 2 direct-provider boundary
+
+The administrator model database previously activated and froze image model
+revisions correctly, but the default dynamic adapter still treated an
+`openai_compatible_image` preset as another EcoreX `/v1/image/jobs` service.
+Changing the Image 2 key/model in the administrator UI therefore was not a
+complete production path, and structured Retouch digests were never converted
+to real upstream image/mask bytes.
+
+The cloud Image Orchestrator now owns a direct bounded adapter. Generation uses
+the fixed allowlisted `/v1/images/generations` route; Retouch reads the frozen
+base, references and PNG mask from shared CAS and uses multipart
+`/v1/images/edits`. It accepts only inline Base64 image data, validates size,
+signature and SHA-256, never follows an upstream URL, never exposes the key to
+the local Runtime and keeps each Job on its admitted configuration revision.
+The internal grayscale selection mask is resized with nearest-neighbour
+sampling to the first image, converted to RGBA and has its selection semantics
+inverted to the upstream alpha contract (selected pixels become transparent).
+When a mask is present, a JPEG/WebP/AVIF base is transcoded to a matching PNG
+inside the configured pixel and byte envelope. Pillow 12.3.0 is locked only in
+the development/cloud profiles; it is not added to the local Runtime Core.
+The adapter also enforces the current GPT Image 2 flexible-size contract before
+any billable request: 16-pixel edge alignment, a 3:1 maximum aspect ratio,
+3840-pixel maximum edge and the documented 655,360–8,294,400 total-pixel
+window. Decoded RGBA pixels must fit the configured image memory envelope, so a
+known-invalid or locally unretainable response cannot be requested first and
+rejected only after the provider may have billed it.
+
+The cross-layer audit also removed a large-image Retouch contradiction. The
+Artifact domain intentionally compiles deterministic ROI masks to at most
+2048px/4,194,304 pixels, but the cloud adapter previously required that bounded
+mask to equal the original edit-surface dimensions. A 3840×2160 image therefore
+failed before reaching the provider that was designed to restore the mask. The
+adapter now re-compiles the mask from the immutable full-size edit surface and
+typed annotations, verifies its bytes, digest, dimensions, coverage and regions,
+then permits the direct provider's nearest-neighbour restoration. The cloud Job
+also freezes the edit-surface width and height instead of silently using the
+old 1024×1024 defaults, and the provider verifies the returned dimensions.
+Malformed or substituted masks and unsupported source dimensions still fail
+closed.
+
+Masked JPEG bases now apply EXIF orientation before lossless PNG normalization,
+so the edit surface, ROI mask and provider pixels share the same user-visible
+coordinate system. A dedicated 32-submit asynchronous test proves the direct
+adapter never exceeds its hard four-call semaphore even when all submissions
+arrive together; this is adapter-level boundedness, not a provider soak claim.
+
+The failure policy is deliberately billing-safe. A submit timeout, transport
+failure, 408/425 or 5xx becomes `provider_uncertain`; `recover` never resubmits
+because the synchronous Images API has no authoritative lookup route. An
+explicit 429 remains retryable with a bounded delay. Total Retouch inputs are
+bounded to one `max_image_bytes` envelope. Admin direct mode now requires
+`worker_concurrency * max_image_bytes * 6` memory at startup, accounting for
+multipart inputs plus Base64 JSON decode peaks; insufficient deployments fail
+closed before accepting work.
+
+The focused current-source set passes 122 tests with two explicit skips and one
+unchanged Starlette warning. It covers exact generation payloads, model health,
+CAS-backed base/reference/mask multipart, JPEG base conversion, exact mask
+alpha/size semantics, EXIF-oriented coordinates, bounded 4K ROI restoration,
+32-submit direct-adapter concurrency, flexible-size
+boundary/admission, decoded-memory
+preflight, output dimensions, adversarial JSON depth, secret-safe
+transport failures, no URL fetch, no recovery resubmit, bounded delta/date 429,
+concurrency serialization, aggregate input admission, dynamic revision
+selection, production resource validation, storage and managed image
+integration. The adjacent v0.2.9.2 deletion-authority/product migration
+regression also passes 22 tests: cache-only deleted sessions remain excluded.
+The first complete-suite attempt started twice because a background launcher
+appeared idle before its delayed child became visible. The duplicate processes
+contended for CPU and SQLite; that run exposed one real stale dev-dependency
+expectation after Pillow was added and one 50 ms maintenance-thread scheduling
+miss. The dependency contract was corrected, the timing case passed eight
+isolated repetitions, and all duplicate processes were removed. A clean
+single-process rerun then passed 1,970 tests with 17 explicit environment or
+platform skips and zero failures in 1,748.33 seconds. Ruff and diff checks pass.
+The locked Web workspace reports zero vulnerable packages; generated Runtime
+contracts and TypeScript pass, all 180 Web contract tests pass, and the
+production build emits 25 content-addressed assets / 24 JavaScript chunks.
+Initial JavaScript is 459.76 KiB raw / 146.20 KiB gzip under the unchanged
+475/150 KiB limits. The design debt, strict legacy cutoff, public download,
+dependency lock, Runtime/Server schema authority, reproducibility and 678-file
+source admission gates also pass.
+
+Draft PR #8 pins implementation commit
+`9b893ce9079b2cb1b90b951a448b27bbea2620f2`. Hosted Actions run
+`29474142345` passed all five Jobs: Ubuntu quality and deterministic build,
+Windows x64, macOS arm64, macOS x64 and cross-runner canonical-byte stability.
+This is exact hosted source evidence for the implementation commit; it is not
+a protected signed Candidate, managed-provider acceptance or release approval.
+This is deterministic local contract evidence, not a real managed Image 2
+connectivity, precision score, protected Candidate, publication or rollout
+claim.

@@ -1,5 +1,7 @@
 -r runtime.in
 
+Pillow==12.3.0
+
 # Source-quality and contract gates. Exact pins mirror the dev extra.
 jsonschema==4.26.0
 pytest==9.1.1

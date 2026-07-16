@@ -16,6 +16,10 @@ from types import MappingProxyType
 from typing import Any, Awaitable, Mapping, Protocol
 
 from ecorex.artifacts import InspectionRegion, QualityEvidence, RetouchAnnotation
+from ecorex.artifacts.retouch_surface import (
+    compile_annotation_mask,
+    inspect_raster,
+)
 
 
 def _required(value: str, label: str, *, maximum: int = 256) -> str:
@@ -73,8 +77,21 @@ class RetouchMaskAsset:
             raise ValueError("retouch mask digest does not match its bytes")
         if not content.startswith(b"\x89PNG\r\n\x1a\n"):
             raise ValueError("retouch mask must be a PNG image")
-        if not 1 <= self.width_px <= 16_384 or not 1 <= self.height_px <= 16_384:
+        if (
+            not 1 <= self.width_px <= 2048
+            or not 1 <= self.height_px <= 2048
+            or self.width_px * self.height_px > 4_194_304
+        ):
             raise ValueError("retouch mask dimensions are invalid")
+        try:
+            descriptor = inspect_raster(content, "image/png")
+        except ValueError:
+            raise ValueError("retouch mask PNG is malformed") from None
+        if (descriptor.width_px, descriptor.height_px) != (
+            self.width_px,
+            self.height_px,
+        ):
+            raise ValueError("retouch mask dimensions do not match its bytes")
         fraction = float(self.covered_fraction)
         if not 0 <= fraction <= 1:
             raise ValueError("retouch mask coverage is invalid")
@@ -163,11 +180,26 @@ class StructuredRetouchAdapterRequest:
         if self.mask is not None:
             if self.edit_surface is None or not isinstance(self.mask, RetouchMaskAsset):
                 raise ValueError("retouch mask requires an edit surface")
+            if not annotations:
+                raise ValueError("retouch mask requires structured annotations")
+            try:
+                compiled = compile_annotation_mask(
+                    int(self.edit_surface["width_px"]),
+                    int(self.edit_surface["height_px"]),
+                    [annotation.to_dict() for annotation in annotations],
+                )
+            except (TypeError, ValueError, OverflowError):
+                raise ValueError("retouch mask edit surface is invalid") from None
             if (
-                self.mask.width_px != self.edit_surface["width_px"]
-                or self.mask.height_px != self.edit_surface["height_px"]
+                compiled.sha256 != self.mask.sha256
+                or compiled.png_bytes != self.mask.content
+                or compiled.width_px != self.mask.width_px
+                or compiled.height_px != self.mask.height_px
+                or compiled.covered_fraction != self.mask.covered_fraction
+                or compiled.pixel_regions
+                != tuple(dict(region) for region in self.mask.pixel_regions)
             ):
-                raise ValueError("retouch mask dimensions do not match edit surface")
+                raise ValueError("retouch mask does not match its structured annotations")
 
     def metadata(self) -> dict[str, object]:
         """Safe structured metadata; intentionally excludes all image bytes."""

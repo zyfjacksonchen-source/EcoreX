@@ -10,7 +10,8 @@ from fastapi import FastAPI, Header, HTTPException
 import httpx
 import pytest
 
-from ecorex.artifacts import ArtifactService
+from ecorex.artifacts import ArtifactService, RetouchAnnotation
+from ecorex.artifacts.retouch_surface import compile_annotation_mask
 from ecorex.capabilities import SandboxLevel, ToolExecutionScope, ToolInvocationContext
 from ecorex.image_orchestrator import (
     ImageContentStore,
@@ -405,14 +406,21 @@ def test_structured_retouch_maps_surface_mask_and_digest_inputs_to_one_job(
         base = RetouchImageAsset(
             "artifact-001", "revision-001", "image/png", digest, PNG
         )
-        mask_digest = hashlib.sha256(MASK).hexdigest()
+        annotation = RetouchAnnotation(
+            kind="rectangle",
+            normalized_geometry={"x": 0.1, "y": 0.1, "width": 0.25, "height": 0.25},
+            instruction="make the title blue",
+        )
+        compiled = compile_annotation_mask(
+            1024, 1024, [annotation.to_dict()]
+        )
         mask = RetouchMaskAsset(
-            sha256=mask_digest,
-            width_px=1024,
-            height_px=1024,
-            covered_fraction=0.25,
-            pixel_regions=({"x": 10, "y": 10, "width": 100, "height": 80},),
-            content=MASK,
+            sha256=compiled.sha256,
+            width_px=compiled.width_px,
+            height_px=compiled.height_px,
+            covered_fraction=compiled.covered_fraction,
+            pixel_regions=compiled.pixel_regions,
+            content=compiled.png_bytes,
         )
         request = StructuredRetouchAdapterRequest(
             job_id="retouch-job-0001",
@@ -421,7 +429,7 @@ def test_structured_retouch_maps_surface_mask_and_digest_inputs_to_one_job(
             base=base,
             selected=(base,),
             references=(),
-            annotations=(),
+            annotations=(annotation,),
             global_instruction="make the title blue",
             edit_surface={
                 "base_revision_id": base.revision_id,
@@ -440,6 +448,7 @@ def test_structured_retouch_maps_surface_mask_and_digest_inputs_to_one_job(
         assert len(captured) == 1
         command, inputs = captured[0]
         assert command.operation is ImageOperation.RETOUCH
+        assert (command.width, command.height) == (1024, 1024)
         assert command.input_sha256 == (base.sha256, mask.sha256)
         structured = json.loads(command.instruction)
         assert structured["edit_surface"]["raster_digest"] == base.sha256
@@ -447,6 +456,78 @@ def test_structured_retouch_maps_surface_mask_and_digest_inputs_to_one_job(
         assert {item.sha256 for item in inputs} == {base.sha256, mask.sha256}
 
     asyncio.run(scenario())
+
+
+def test_structured_retouch_accepts_bounded_large_surface_mask_and_rejects_drift(
+) -> None:
+    digest = hashlib.sha256(PNG).hexdigest()
+    base = RetouchImageAsset(
+        "artifact-large", "revision-large", "image/png", digest, PNG
+    )
+    annotation = RetouchAnnotation(
+        kind="rectangle",
+        normalized_geometry={"x": 0.2, "y": 0.25, "width": 0.3, "height": 0.2},
+        instruction="replace only this region",
+    )
+    compiled = compile_annotation_mask(3840, 2160, [annotation.to_dict()])
+    assert (compiled.width_px, compiled.height_px) == (2048, 1152)
+    mask = RetouchMaskAsset(
+        sha256=compiled.sha256,
+        width_px=compiled.width_px,
+        height_px=compiled.height_px,
+        covered_fraction=compiled.covered_fraction,
+        pixel_regions=compiled.pixel_regions,
+        content=compiled.png_bytes,
+    )
+    surface = {
+        "base_revision_id": base.revision_id,
+        "raster_digest": base.sha256,
+        "width_px": 3840,
+        "height_px": 2160,
+        "orientation": 1,
+        "color_space": "sRGB",
+        "mime_type": "image/png",
+        "coordinate_space_version": "oriented-normalized-v1",
+    }
+    request = StructuredRetouchAdapterRequest(
+        job_id="retouch-job-large",
+        idempotency_key="retouch-idempotency-large",
+        model_id="gpt-image-2",
+        base=base,
+        selected=(base,),
+        references=(),
+        annotations=(annotation,),
+        global_instruction="preserve everything outside the rectangle",
+        edit_surface=surface,
+        mask=mask,
+    )
+    assert request.mask is mask
+    client = object.__new__(ManagedImageOrchestrationClient)
+    adapter = ManagedImageRetouchAdapter(client)
+    command, _inputs = adapter._command(request)
+    assert (command.width, command.height) == (3840, 2160)
+
+    drifted = RetouchMaskAsset(
+        sha256=compiled.sha256,
+        width_px=compiled.width_px,
+        height_px=compiled.height_px,
+        covered_fraction=min(1.0, compiled.covered_fraction + 0.01),
+        pixel_regions=compiled.pixel_regions,
+        content=compiled.png_bytes,
+    )
+    with pytest.raises(ValueError, match="structured annotations"):
+        StructuredRetouchAdapterRequest(
+            job_id="retouch-job-large-drift",
+            idempotency_key="retouch-idempotency-large-drift",
+            model_id="gpt-image-2",
+            base=base,
+            selected=(base,),
+            references=(),
+            annotations=(annotation,),
+            global_instruction="preserve everything outside the rectangle",
+            edit_surface=surface,
+            mask=drifted,
+        )
 
 
 def test_imagegen_publication_crash_recovers_artifact_without_cloud_repeat(

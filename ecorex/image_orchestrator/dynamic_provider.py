@@ -10,9 +10,10 @@ from typing import Mapping, Protocol
 
 from ecorex.control_plane.management_models import ActiveModelConfiguration
 
-from .managed_provider import ManagedHTTPSImageProvider
+from .cas import ImageContentAddressedStore
 from .models import ImageJob, ImageOperation, ImageUsage
-from .provider import ProviderResult, ProviderUnavailable
+from .openai_provider import OpenAICompatibleImageProvider
+from .provider import ImageProvider, ProviderResult, ProviderUnavailable
 from .service import ImageModelConfigurationSnapshot
 
 
@@ -24,6 +25,12 @@ class ImageModelSource(Protocol):
     def model_revision(
         self, config_id: str, revision: int
     ) -> ActiveModelConfiguration: ...
+
+
+class _ManagedImageProvider(ImageProvider, Protocol):
+    async def health(self) -> None: ...
+
+    async def aclose(self) -> None: ...
 
 
 class AdminImageModelConfigurationResolver:
@@ -52,7 +59,7 @@ class AdminImageModelConfigurationResolver:
 
 @dataclass(slots=True)
 class _Entry:
-    provider: ManagedHTTPSImageProvider
+    provider: _ManagedImageProvider
     active_count: int = 0
 
 
@@ -70,9 +77,10 @@ class DynamicManagedImageProvider:
         max_image_bytes: int,
         max_connections: int,
         max_concurrency: int,
+        input_store: ImageContentAddressedStore | None = None,
         max_cached_revisions: int = 32,
         provider_factory: Callable[
-            [ActiveModelConfiguration, str], ManagedHTTPSImageProvider
+            [ActiveModelConfiguration, str], _ManagedImageProvider
         ] | None = None,
     ) -> None:
         self.source = source
@@ -83,6 +91,7 @@ class DynamicManagedImageProvider:
         self.max_image_bytes = max_image_bytes
         self.max_connections = max_connections
         self.max_concurrency = max_concurrency
+        self.input_store = input_store
         if not 2 <= max_cached_revisions <= 256:
             raise ValueError("dynamic image provider cache limit is invalid")
         self.max_cached_revisions = max_cached_revisions
@@ -222,7 +231,7 @@ class DynamicManagedImageProvider:
             return key, entry
 
     async def _release(self, key: tuple[str, int], entry: _Entry) -> None:
-        retired: list[ManagedHTTPSImageProvider]
+        retired: list[_ManagedImageProvider]
         async with self._lock:
             if entry.active_count <= 0 or self._entries.get(key) is not entry:
                 raise RuntimeError("dynamic image provider reference count is unbalanced")
@@ -238,15 +247,16 @@ class DynamicManagedImageProvider:
         self,
         configuration: ActiveModelConfiguration,
         origin: str,
-    ) -> ManagedHTTPSImageProvider:
+    ) -> _ManagedImageProvider:
         if self._provider_factory is not None:
             return self._provider_factory(configuration, origin)
-        return ManagedHTTPSImageProvider(
+        return OpenAICompatibleImageProvider(
             provider_id=self.provider_id,
             origin=origin,
             allowed_origins=frozenset(self.origins.values()),
             allowed_models=frozenset({configuration.upstream_model_id}),
             bearer_token=lambda value=configuration.api_key: value,
+            input_store=self.input_store,
             timeout_seconds=self.timeout_seconds,
             connect_timeout_seconds=self.connect_timeout_seconds,
             max_image_bytes=self.max_image_bytes,
@@ -254,8 +264,8 @@ class DynamicManagedImageProvider:
             max_concurrency=self.max_concurrency,
         )
 
-    def _retire_idle_locked(self) -> list[ManagedHTTPSImageProvider]:
-        retired: list[ManagedHTTPSImageProvider] = []
+    def _retire_idle_locked(self) -> list[_ManagedImageProvider]:
+        retired: list[_ManagedImageProvider] = []
         if len(self._entries) <= self.max_cached_revisions:
             return retired
         for key, entry in tuple(self._entries.items()):

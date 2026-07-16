@@ -70,6 +70,19 @@ Plane 的测试器、Gateway 和 Image Orchestrator 应使用一致的 preset �
 6. 旧 revision 只在没有活动引用后关闭连接。管理员无需改 Python、重启服务或
    重新打包 WebUI。
 
+生图与精修的活动 revision 在云端 Image Orchestrator 内直接适配固定
+OpenAI-compatible Images API：无输入走 `POST /v1/images/generations`，精修走
+multipart `POST /v1/images/edits`。底图、参考图和遮罩只按 SHA-256 从私有共享
+CAS 读取，API Key 不会下发本地 Runtime。上游必须返回内联 `b64_json`；禁止
+跟随上游提供的图片 URL。一次提交遇到超时、断线、408/425 或 5xx 后可能已经
+计费，因此只进入 `provider_uncertain`，恢复路径绝不盲目重提。429 才按明确
+未接受处理并执行有界退避。
+
+遮罩由云端统一适配，不要求 WebUI 理解 Provider 细节：内部灰度选区会按底图
+尺寸做最近邻缩放并转换为 RGBA，选中区域转换成透明 alpha；带遮罩的非 PNG
+底图会在严格像素/字节预算内转为匹配 PNG。管理员替换模型前应以同一局部选区
+样例验证“选区内改变、选区外保持”以及返回尺寸，不能只以 HTTP 200 判定可用。
+
 需要回退时，使用上一组已保管的模型名和 Key 新建一个 revision，再执行同样的
 测试并启用。后台不会解密并展示历史 Key，也不会允许未测试的历史 revision 直接
 恢复为活动状态。
@@ -118,7 +131,7 @@ Plane 的测试器、Gateway 和 Image Orchestrator 应使用一致的 preset �
 ## 8. 回归命令
 
 ```text
-python -m pytest -q tests/v1/test_control_plane_management.py tests/v1/test_dynamic_image_model_configuration.py tests/v1/test_control_plane_admin_web.py
+python -m pytest -q tests/v1/test_control_plane_management.py tests/v1/test_dynamic_image_model_configuration.py tests/v1/test_openai_compatible_image_provider.py tests/v1/test_control_plane_admin_web.py
 cd desktop
 npm run test:v1
 npx playwright test e2e/admin-web.spec.ts

@@ -120,12 +120,21 @@ class ManagedImageRetouchAdapter:
             sort_keys=True,
             separators=(",", ":"),
         )
+        dimensions = (
+            {
+                "width": int(request.edit_surface["width_px"]),
+                "height": int(request.edit_surface["height_px"]),
+            }
+            if request.edit_surface is not None
+            else {}
+        )
         try:
             command = ImageSubmitRequest(
                 operation=ImageOperation.RETOUCH,
                 model_id=request.model_id,
                 client_request_id=request.idempotency_key,
                 prompt="Apply the signed structured retouch command.",
+                **dimensions,
                 input_sha256=tuple(
                     [asset.sha256 for asset in ordered_assets]
                     + ([request.mask.sha256] if request.mask is not None else [])

@@ -24,6 +24,7 @@ from .models import (
 )
 from .provider import ImageProvider, ProviderResult, ProviderState
 from .managed_provider import ManagedHTTPSImageProvider
+from .openai_provider import OpenAICompatibleImageProvider
 from .postgres_store import PostgresImageConnectionPool, PostgresImageJobStore
 from .postgres_schema import (
     CURRENT_IMAGE_SCHEMA_VERSION,
@@ -71,6 +72,7 @@ __all__ = [
     "ImageOrchestrationService",
     "ImageProvider",
     "ManagedHTTPSImageProvider",
+    "OpenAICompatibleImageProvider",
     "PostgresImageJobStore",
     "PostgresImageConnectionPool",
     "PostgresImageSchemaManager",
