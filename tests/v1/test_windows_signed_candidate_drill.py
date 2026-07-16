@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import json
 from pathlib import Path
+import socket
 import sys
 import threading
 import zipfile
@@ -107,7 +108,7 @@ def test_runtime_readiness_failure_reports_bounded_process_diagnostics(tmp_path:
     with pytest.raises(
         drill.DrillError,
         match=(
-            r"runtime_failed; runtime_exit_code=2; "
+            r"phase=initializing; runtime_failed; runtime_exit_code=2; "
             r"runtime_startup_stage=unavailable; launches=1; requested_restarts=0$"
         ),
     ) as failure:
@@ -121,6 +122,27 @@ def test_runtime_readiness_failure_reports_bounded_process_diagnostics(tmp_path:
         )
 
     assert "slot-private-identity" not in str(failure.value)
+
+
+def test_drill_reserves_a_non_ephemeral_loopback_port_until_release() -> None:
+    drill = _drill_module()
+    lease = drill._reserve_loopback_port()
+    try:
+        assert drill._DRILL_LOOPBACK_PORT_MIN <= lease.port <= drill._DRILL_LOOPBACK_PORT_MAX
+        competing = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            with pytest.raises(OSError):
+                competing.bind(("127.0.0.1", lease.port))
+        finally:
+            competing.close()
+    finally:
+        lease.release()
+
+    rebound = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        rebound.bind(("127.0.0.1", lease.port))
+    finally:
+        rebound.close()
 
 
 def test_candidate_deadlines_separate_total_stage_and_runtime_budgets(

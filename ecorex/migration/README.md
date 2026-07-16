@@ -45,9 +45,10 @@ or different target is never overwritten.
 - the old permission mode is reduced to the v1 `default`/`full_access` intent
   and staged for account binding. Remembered grants and filesystem paths are
   not activated automatically.
-- the canonical conversation DB is the deletion authority. WebUI cache may
-  enrich an existing session's title, pin, or missing messages, but a cache-only
-  session ID is excluded and can never resurrect a deleted conversation.
+- the canonical conversation database remains the deletion authority. WebUI
+  cache may enrich an existing session's title, pin, or missing messages, but a
+  cache-only session ID is excluded and can never resurrect a deleted
+  conversation.
 - commit-mode verification must compare the target Thread/session mapping count
   with the authoritative database count and the reported cache-exclusion count.
   A successful dry-run alone is not accepted as proof that deleted sessions

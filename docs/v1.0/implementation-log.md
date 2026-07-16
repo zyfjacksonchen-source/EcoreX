@@ -5519,3 +5519,49 @@ was not mutated. The aggregate-only evidence is
 SHA-256 `60a7e8d8de54bfd51b0d84dd37e4d0cef1bb45d2044a5ee80ef6521144ce892f`). Signed-v1
 side-by-side activation and post-health count verification remain separate
 release gates.
+
+## 2026-07-16 - Exact-main signed Runtime repeatability failure and bind hardening
+
+Exact main `3dee8fdc882984aaa00b2571859556f178f88aab` passed hosted run
+`29461827830` on Ubuntu, Windows x64, macOS arm64/x64 and Cross-runner byte
+stability. A new detached clean worktree then installed the locked Web
+dependencies with zero vulnerabilities, passed generated-contract/type checks
+and built the 25-asset/24-chunk production Web bundle at 459.76 KiB raw / 146.20
+KiB gzip initial JavaScript.
+
+The first complete local Windows signed-Candidate ceremony failed cleanly after
+1,773.9 seconds: Bootstrap reported one launch, exit 70 and the old generic
+`software` startup stage. It wrote no success report, published nothing and did
+not mutate the installed user Runtime. The same exact source and freshly signed
+artifacts were rebuilt under debug-safe cleanup policy. The second ceremony
+passed in 2,471.86 seconds: first install, migration source-removal restart,
+update-and-refresh and rollback all returned HTTP 200; three durable drain
+checkpoints preceded activations, a corrupt digest was rejected, the fault slot
+was discarded, private keys were not persisted and the disposable Candidate was
+removed. The 43,535-byte redacted full report SHA-256 is
+`1987dd3887be202644edcf16a07a96ee325b8794ac55eebd1b16bcac2d85a31e`.
+
+The old diagnostic did not preserve the ceremony phase, so the root cause is a
+supported inference rather than a direct proof. After the ASGI application and
+Uvicorn Config have composed, Uvicorn `SystemExit` is the listener boundary.
+The drill previously selected `bind(0)`, closed that ephemeral port, then spent
+time verifying the signed slot and Packs before child creation. This left a
+real port-reuse TOCTOU window and matches an isolated generic `software` exit
+followed by an identical-source success.
+
+The hardening keeps a scanned 20000-29999 loopback port bound through signed
+slot and Pack verification, releases it immediately before process spawn,
+records the fixed ceremony phase in future Bootstrap failures, and classifies
+post-composition Uvicorn `SystemExit` as `http_server_bind` rather than an
+unknown software crash. This narrows the pre-spawn reuse window but is not
+described as a proof that all listener races are impossible. Focused Runtime
+entrypoint/Candidate tests pass 50 with one platform skip; the combined
+Bootstrap/update/Runtime/Candidate regression passes 94 with two skips. Ruff,
+Python compile and diff checks pass. The aggregate evidence is
+`evidence/windows-signed-candidate-main-3dee8fdc-2026-07-16-summary.json`
+(4,245 bytes, SHA-256
+`66ef2a5d5d3c8d1f63b29556dc9cf13d57d9079781360955b278d83c8dfc6941`).
+
+This remains a local Windows drill with 8/24 platform receipts. It does not
+replace protected macOS receipts, a signed installed-live CDP run, managed
+Gateway/device-session acceptance, release publication or rollout.

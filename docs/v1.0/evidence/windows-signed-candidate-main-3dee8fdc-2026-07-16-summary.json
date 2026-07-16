@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "local_windows_signed_candidate_repeatability_and_hardening",
+  "recorded_at": "2026-07-16",
+  "source": {
+    "commit": "3dee8fdc882984aaa00b2571859556f178f88aab",
+    "version": "1.0.0",
+    "clean_detached_worktree": true
+  },
+  "web_bundle": {
+    "production_assets": 25,
+    "chunks": 24,
+    "initial_javascript_bytes": 470794,
+    "initial_javascript_gzip_bytes": 149706,
+    "dependency_vulnerabilities": 0
+  },
+  "attempts": [
+    {
+      "ordinal": 1,
+      "status": "failed_cleanly",
+      "elapsed_seconds": 1773.9,
+      "failure": {
+        "bootstrap_reason": "runtime_failed",
+        "runtime_exit_code": 70,
+        "runtime_startup_stage": "software",
+        "launches": 1,
+        "requested_restarts": 0,
+        "ceremony_phase": "unavailable_in_pre_hardening_diagnostic"
+      },
+      "report_written": false,
+      "installed_user_runtime_mutated": false,
+      "publication_attempted": false
+    },
+    {
+      "ordinal": 2,
+      "status": "passed",
+      "elapsed_seconds": 2471.86,
+      "full_report": {
+        "bytes": 43535,
+        "sha256": "1987dd3887be202644edcf16a07a96ee325b8794ac55eebd1b16bcac2d85a31e",
+        "tracked": false,
+        "contains_secrets": false
+      },
+      "platform_stage": {
+        "local_windows_receipts": 8,
+        "required_protected_receipts": 24,
+        "missing_protected_macos_receipts": 16
+      },
+      "runtime": {
+        "first_install_http_status": 200,
+        "migration_restart_http_status": 200,
+        "update_and_refresh_http_status": 200,
+        "rollback_http_status": 200,
+        "durable_drain_checkpoints": 3,
+        "bad_digest_rejected": true,
+        "fault_slot_discarded": true
+      },
+      "artifacts": {
+        "core": {
+          "bytes": 21528488,
+          "sha256": "7c421bfb8ce1350ed993b3d8506c6ef0d2d55e79430035caa4a442ee91633210"
+        },
+        "bootstrap": {
+          "bytes": 3109080,
+          "sha256": "020735ef13e52529c4beafe3791311a662630f44eaaa28b0517f1c83d5c926e9"
+        },
+        "browser_pack": {
+          "bytes": 190153571,
+          "sha256": "dcb5353bbfab081bbb3a873560f1596ae0d1e39b5cdd2b5ac3acfd85018c1d56"
+        },
+        "image_pack": {
+          "bytes": 1376,
+          "sha256": "012f485114cc77ca0c30dbf775303aa94263ae9b561cdae747915e44bef2e370"
+        },
+        "ocr_pack": {
+          "bytes": 94993855,
+          "sha256": "7adf50dd8e796cce53c69db60f8b85a9d56e7b5ce2a55a2f0560f639e1590628"
+        },
+        "office_pack": {
+          "bytes": 14836807,
+          "sha256": "f9323262f069732eb191acacaf26c5c8fdf078e523d135f35bf4e5cf678241a4"
+        }
+      },
+      "private_key_persisted": false,
+      "temporary_candidate_removed": true,
+      "publication_attempted": false
+    }
+  ],
+  "root_cause_hardening": {
+    "classification": "supported_inference_not_directly_proven",
+    "inference": "The first generic software exit followed a successful identical-source rerun. After ASGI and Uvicorn Config composition, Uvicorn SystemExit is the listener boundary; the drill previously released an OS-assigned ephemeral port before signed slot and Pack verification, leaving a bind TOCTOU window.",
+    "changes": [
+      "reserve a scanned non-ephemeral loopback port through signed slot and Pack verification, then release immediately before process spawn",
+      "record the exact ceremony phase in bounded Bootstrap failure diagnostics",
+      "classify post-composition Uvicorn SystemExit as http_server_bind instead of software"
+    ],
+    "focused_validation": {
+      "passed": 50,
+      "skipped": 1,
+      "ruff": "passed",
+      "python_compile": "passed",
+      "diff_check": "passed"
+    },
+    "combined_runtime_regression": {
+      "passed": 94,
+      "skipped": 2,
+      "warnings": 1,
+      "elapsed_seconds": 338.7
+    }
+  },
+  "boundaries": {
+    "candidate_bound": false,
+    "protected_provenance_claimed": false,
+    "managed_gateway_used": false,
+    "external_publication": false,
+    "rollout_attempted": false,
+    "privacy": "Only fixed stage codes, aggregate measurements and cryptographic digests are retained; no keys, provider origins, prompts, responses, user paths or conversation content are included."
+  }
+}

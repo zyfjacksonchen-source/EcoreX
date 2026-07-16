@@ -179,9 +179,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     except KeyboardInterrupt:
         return 130
     except SystemExit:
-        write_runtime_startup_diagnostic("software")
-        print("EcoreX Product Runtime could not start.", file=sys.stderr)
-        return int(ProductRuntimeExitCode.SOFTWARE)
+        # The ASGI application and Uvicorn Config have already composed. A
+        # remaining Uvicorn SystemExit is the native listener boundary (most
+        # commonly an occupied port), not an unknown application crash.
+        write_runtime_startup_diagnostic("http_server_bind")
+        print("EcoreX Product Runtime configuration is invalid.", file=sys.stderr)
+        print("EcoreX startup stage: http_server_bind", file=sys.stderr)
+        return int(ProductRuntimeExitCode.CONFIGURATION)
     except Exception:
         write_runtime_startup_diagnostic("software")
         # Do not render exception values: transports and platform vaults may

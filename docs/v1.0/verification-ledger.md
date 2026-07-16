@@ -1899,3 +1899,18 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Verifier correction | 1 then 0 | Initial post-import read-only check referenced nonexistent `items.item_type`; automatic temporary cleanup succeeded. The clean rerun used schema-authoritative `items.kind` and passed without changing product behavior. |
 | Cleanup and privacy | 0 | Disposable target and ephemeral key were removed; source inventory digest remained `7bd10f20...15b6cf`. The 1,622-byte evidence SHA-256 is `60a7e8d8...ce892f` and contains no conversation content, raw IDs, user paths or secrets. |
 | Activation boundary | pending | The import is proven, but signed-v1 slot activation, health check and post-activation count verification are still required before rollout. |
+
+## Exact-main signed Runtime repeatability and bind hardening - 2026-07-16
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Exact main | 0 | `3dee8fdc882984aaa00b2571859556f178f88aab`; hosted push run `29461827830` passed all five Ubuntu/Windows/macOS/byte-stability Jobs. |
+| Clean Web build | 0 | Locked install found zero vulnerabilities; generated contracts, TypeScript and production build passed. 25 immutable assets / 24 chunks; initial JS 459.76 KiB raw / 146.20 KiB gzip. |
+| First signed ceremony | 1 | Failed cleanly after 1,773.9s with Bootstrap launch 1, exit 70, old generic stage `software`; no success report, publication or installed-user mutation. |
+| Repeat signed ceremony | 0 | Fresh exact-source run passed in 2,471.86s. First install, migration restart, update-and-refresh and rollback returned HTTP 200; three checkpoints, bad-digest rejection, fault-slot discard, non-persisted keys and cleanup passed. |
+| Local artifacts | 0 | Core 21,528,488 bytes; Bootstrap 3,109,080; browser 190,153,571; OCR 94,993,855; Office 14,836,807. All tracked identities have SHA-256 in the evidence summary. |
+| Root-cause status | inferred | The pre-hardening failure omitted ceremony phase. Uvicorn post-composition `SystemExit` plus an early-released bind(0) port and identical-source success support a bind TOCTOU inference, but it is not relabelled as directly proven. |
+| Hardening | 0 | Drill reserves a non-ephemeral port through signed slot/Pack verification, releases immediately before spawn and includes ceremony phase; Runtime reports `http_server_bind` instead of generic `software` for post-composition Uvicorn SystemExit. This narrows rather than claims to eliminate every listener race. |
+| Regression | 0 | Focused: 50 passed / one platform skip. Combined Bootstrap/update/Runtime/Candidate: 94 passed / two skips. Ruff, Python compilation and diff check pass. |
+| Evidence | 0 | The 4,245-byte `evidence/windows-signed-candidate-main-3dee8fdc-2026-07-16-summary.json` SHA-256 is `66ef2a5d...fc6941`; it records both attempts and the 43,535-byte full report SHA-256 `1987dd38...85a31e`, with no secrets or user content. |
+| Release boundary | blocked | Local evidence has 8/24 platform receipts and no managed Gateway/device session. Protected macOS, installed-live CDP/provider acceptance, publication and rollout remain absent. |

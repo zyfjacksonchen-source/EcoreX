@@ -28,6 +28,7 @@ import os
 from pathlib import Path, PurePosixPath
 import platform
 import re
+import secrets
 import shutil
 import signal
 import sqlite3
@@ -123,6 +124,9 @@ _MIN_TIMEOUT_SECONDS = 45.0
 _MAX_TIMEOUT_SECONDS = 5_400.0
 _PLATFORM_STAGE_TIMEOUT_SECONDS = 50 * 60.0
 _RUNTIME_READY_TIMEOUT_SECONDS = 15 * 60.0
+_DRILL_LOOPBACK_PORT_MIN = 20_000
+_DRILL_LOOPBACK_PORT_MAX = 29_999
+_DRILL_LOOPBACK_PORT_ATTEMPTS = 256
 _FAULT_ENTRYPOINT_MEMBER = "ecorex/server/__main__.py"
 _FAULT_ENTRYPOINT_PAYLOAD = b"raise SystemExit(70)\n"
 _MAX_FAULT_ARCHIVE_MEMBERS = 50_000
@@ -202,6 +206,36 @@ class RuntimeRun:
     @property
     def bootstrap_status(self) -> int:
         return self.probe.bootstrap_status
+
+
+@dataclass(slots=True)
+class _LoopbackPortLease:
+    listener: Any
+    port: int
+    released: bool = False
+
+    def release(self) -> None:
+        if self.released:
+            return
+        self.released = True
+        self.listener.close()
+
+
+class _LeaseReleasingRuntimeLauncher:
+    """Hold the drill port through verification and release at process launch."""
+
+    def __init__(self, lease: _LoopbackPortLease) -> None:
+        from ecorex.bootstrap import SubprocessRuntimeLauncher
+
+        self.lease = lease
+        self.delegate = SubprocessRuntimeLauncher()
+
+    def start(self, spec: Any) -> Any:
+        # Slot and Pack verification can outlive an ephemeral-port lease. Keep
+        # this explicit non-ephemeral port bound through those checks, then
+        # release immediately before the delegated process spawn.
+        self.lease.release()
+        return self.delegate.start(spec)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1736,12 +1770,22 @@ def _coordinator(
     )
 
 
-def _free_loopback_port() -> int:
+def _reserve_loopback_port() -> _LoopbackPortLease:
     import socket
 
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
-        listener.bind(("127.0.0.1", 0))
-        return int(listener.getsockname()[1])
+    width = _DRILL_LOOPBACK_PORT_MAX - _DRILL_LOOPBACK_PORT_MIN + 1
+    start = secrets.randbelow(width)
+    for offset in range(min(width, _DRILL_LOOPBACK_PORT_ATTEMPTS)):
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            port = _DRILL_LOOPBACK_PORT_MIN + ((start + offset) % width)
+            listener.bind(("127.0.0.1", port))
+            return _LoopbackPortLease(listener=listener, port=port)
+        except OSError:
+            listener.close()
+    raise DrillError("a reserved non-ephemeral loopback port is unavailable")
 
 
 def _get_runtime_probe(
@@ -1883,7 +1927,8 @@ def _wait_for_full_runtime(
             result = bootstrap_results[0]
             raise DrillError(
                 "the signed Bootstrap exited before readiness: "
-                f"{result.reason.value}; runtime_exit_code={result.runtime_exit_code!r}; "
+                f"phase={deadline.stage}; {result.reason.value}; "
+                f"runtime_exit_code={result.runtime_exit_code!r}; "
                 f"runtime_startup_stage={result.runtime_startup_stage or 'unavailable'}; "
                 f"launches={result.launches}; requested_restarts={result.requested_restarts}"
             )
@@ -1938,7 +1983,8 @@ def _run_bootstrap_until_ready(
         slots.slot_path(expected_slot), manifest, artifact, security_marker
     ):
         raise DrillError("the staged Runtime failed strict sandbox attestation")
-    port = _free_loopback_port()
+    port_lease = _reserve_loopback_port()
+    port = port_lease.port
     supervisor = BootstrapSupervisor(
         install_root,
         endpoint=RuntimeEndpoint("127.0.0.1", port),
@@ -1948,6 +1994,7 @@ def _run_bootstrap_until_ready(
         max_requested_restarts=2,
         lock_timeout=5.0,
         pack_content_verifier=verify_product_capability_pack,
+        launcher=_LeaseReleasingRuntimeLauncher(port_lease),
     )
     result: list[BootstrapRunResult] = []
     failure: list[BaseException] = []
@@ -1971,6 +2018,7 @@ def _run_bootstrap_until_ready(
             bootstrap_failures=failure,
         )
     finally:
+        port_lease.release()
         try:
             supervisor.request_stop(int(signal.SIGTERM))
         except Exception:

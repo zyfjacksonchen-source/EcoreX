@@ -2086,7 +2086,7 @@ def test_product_server_normalizes_http_configuration_before_ownership_transfer(
     assert composition.transfer_count == 0
 
 
-def test_cli_normalizes_uvicorn_process_failure_without_echoing_details(
+def test_cli_classifies_uvicorn_bind_failure_without_echoing_details(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -2105,5 +2105,6 @@ def test_cli_normalizes_uvicorn_process_failure_without_echoing_details(
     monkeypatch.setattr("ecorex.server.cli.uvicorn.Server", FailingServer)
     result = product_main(["serve", "--host", "127.0.0.1", "--port", "8765"])
     captured = capsys.readouterr()
-    assert result == int(ProductRuntimeExitCode.SOFTWARE)
+    assert result == int(ProductRuntimeExitCode.CONFIGURATION)
+    assert "EcoreX startup stage: http_server_bind" in captured.err
     assert "uvicorn-native-plaintext-secret" not in captured.err
