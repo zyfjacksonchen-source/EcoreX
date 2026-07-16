@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import quote
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -21,6 +23,7 @@ from ecorex.release.online_verification import (
     OnlinePublicationVerifier,
     OnlineVerificationLimits,
 )
+from ecorex.release import online_verification
 from ecorex.release.public_index import _validate_publication_receipt
 from ecorex.update import (
     Ed25519SignatureVerifier,
@@ -347,3 +350,105 @@ def test_github_release_must_be_public_not_draft(tmp_path: Path) -> None:
             output=tmp_path / "receipt.json",
             checkpoint=tmp_path / "checkpoint.json",
         )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows stat semantics regression")
+def test_windows_path_and_descriptor_stat_share_stable_file_identity(
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "artifact.zip"
+    artifact.write_bytes(b"signed artifact")
+    before = artifact.lstat()
+    os.utime(
+        artifact,
+        ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000),
+    )
+    path_metadata = artifact.lstat()
+    with artifact.open("rb") as stream:
+        descriptor_metadata = os.fstat(stream.fileno())
+
+    assert online_verification._identity(path_metadata) == online_verification._identity(
+        descriptor_metadata
+    )
+    assert online_verification._hash_regular_file(
+        artifact, maximum_bytes=1024
+    ) == (len(b"signed artifact"), hashlib.sha256(b"signed artifact").hexdigest())
+
+
+def test_windows_identity_uses_birthtime_across_split_ctime_semantics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    common = {
+        "st_dev": 11,
+        "st_ino": 22,
+        "st_size": 33,
+        "st_mtime_ns": 44,
+        "st_birthtime_ns": 55,
+    }
+    path_metadata = SimpleNamespace(**common, st_ctime_ns=55)
+    descriptor_metadata = SimpleNamespace(**common, st_ctime_ns=66)
+    monkeypatch.setattr(online_verification, "os", SimpleNamespace(name="nt"))
+
+    assert online_verification._identity(path_metadata) == online_verification._identity(
+        descriptor_metadata
+    )
+    assert online_verification._descriptor_identity(
+        path_metadata
+    ) != online_verification._descriptor_identity(descriptor_metadata)
+
+
+def test_same_size_same_mtime_mutation_during_read_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = tmp_path / "artifact.zip"
+    original = b"a" * 4096
+    replacement = b"b" * len(original)
+    artifact.write_bytes(original)
+    before = artifact.stat()
+    real_open = Path.open
+    mutated = False
+
+    class MutatingReader:
+        def __init__(self, stream) -> None:
+            self._stream = stream
+
+        def __enter__(self):
+            self._stream.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self._stream.__exit__(*args)
+
+        def fileno(self) -> int:
+            return self._stream.fileno()
+
+        def read(self, size: int = -1) -> bytes:
+            nonlocal mutated
+            chunk = self._stream.read(size)
+            if not mutated:
+                mutated = True
+                with real_open(artifact, "r+b") as writer:
+                    writer.write(replacement)
+                    writer.flush()
+                    os.fsync(writer.fileno())
+                os.utime(
+                    artifact,
+                    ns=(before.st_atime_ns, before.st_mtime_ns),
+                )
+            return chunk
+
+    def mutating_open(self: Path, *args, **kwargs):
+        stream = real_open(self, *args, **kwargs)
+        mode = args[0] if args else kwargs.get("mode", "r")
+        if self == artifact and mode == "rb":
+            return MutatingReader(stream)
+        return stream
+
+    monkeypatch.setattr(Path, "open", mutating_open)
+    with pytest.raises(
+        OnlinePublicationVerificationError, match="online_local_file_invalid"
+    ):
+        online_verification._hash_regular_file(artifact, maximum_bytes=8192)
+
+    assert mutated is True
+    assert artifact.read_bytes() == replacement

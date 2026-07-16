@@ -173,7 +173,8 @@ def _site(root_value: Path) -> tuple[dict[str, object], bytes]:
     if (
         f'./{scripts[0].name}' not in html_text
         or f'./{styles[0].name}' not in html_text
-        or 'href="/admin/"' not in html_text
+        or 'href="/ecorex-agent/admin/"' not in html_text
+        or 'href="/admin/"' in html_text
         or "__HASH__" in html_text
     ):
         raise ValueError("direct_release_site_html_invalid")

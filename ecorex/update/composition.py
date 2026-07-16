@@ -255,6 +255,11 @@ def build_product_update_composition(
             host_platform=settings.platform,
             host_architecture=settings.architecture,
             release_channel=settings.channel,
+            # Product Runtime startup, its update poller and first-install
+            # readiness recorder execute blocking filesystem work on worker
+            # threads.  They share one coordinator and must serialize instead
+            # of turning a harmless scheduling race into a failed lifespan.
+            lock_timeout=None,
             rollback_authorizer=rollback_authorizer.authorize,
             download_cache_max_bytes=settings.download_cache_max_bytes,
             download_cache_max_age_seconds=settings.download_cache_max_age_seconds,

@@ -21,6 +21,7 @@ from .models import (
     CreateCandidateRequest,
     CreateRollbackRequest,
     CreateRolloutRequest,
+    DirectAdmissionRequest,
     DistributionProjection,
     GateBundleRequest,
     GateResultRequest,
@@ -176,6 +177,24 @@ class AdminControlPlaneClient:
         return self._request(
             "PUT",
             f"/api/v1/admin/releases/{_segment(release_id)}/gate-bundle",
+            CandidateProjection,
+            request,
+        )
+
+    def record_direct_admission(
+        self,
+        release_id: str,
+        attestation: dict[str, Any],
+        *,
+        client_request_id: str,
+    ) -> CandidateProjection:
+        request = DirectAdmissionRequest(
+            attestation=attestation,
+            client_request_id=client_request_id,
+        )
+        return self._request(
+            "PUT",
+            f"/api/v1/admin/releases/{_segment(release_id)}/direct-admission",
             CandidateProjection,
             request,
         )

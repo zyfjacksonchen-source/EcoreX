@@ -26,6 +26,9 @@ from ecorex.managed_model_policy import MANAGED_CHAT_MODEL_POLICIES
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$")
 _SAFE_MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 _MODEL_SECRET_DOMAIN = b"ecorex-admin-model-secret-v1\0"
+_ROTATION_REQUIRED_ORIGINS = frozenset(
+    {"ecorex_chat", "gemini_chat", "ecorex_image"}
+)
 _MAX_SOURCE_BYTES = 8 * 1024 * 1024 * 1024
 _SOURCE_TABLES = frozenset(
     {"users", "client_sessions", "usage_events", "model_credentials"}
@@ -316,6 +319,9 @@ def _commit(
             )
         cipher = AESGCM(encryption_key)
         for model in models:
+            rotation_required = (
+                model.provider_origin_preset in _ROTATION_REQUIRED_ORIGINS
+            )
             config_id = "legacy_model_" + hashlib.sha256(
                 model.local_model_id.encode("utf-8")
             ).hexdigest()[:24]
@@ -344,7 +350,7 @@ def _commit(
                 "is_default,enabled,status,secret_id,key_fingerprint,test_id,test_status,"
                 "test_error_code,tested_at,actor_subject,created_at,updated_at,"
                 "provider_origin_preset) "
-                "VALUES(?,?,?,?,?,?,1,'draft',?,?,NULL,'not_tested',NULL,NULL,?,?,?,?)",
+                "VALUES(?,?,?,?,?,?,?,'draft',?,?,NULL,?,?,NULL,?,?,?,?)",
                 (
                     config_id,
                     1,
@@ -352,8 +358,11 @@ def _commit(
                     model.upstream_model_id,
                     model.provider_preset,
                     int(model.is_default),
+                    0 if rotation_required else 1,
                     secret_id,
                     fingerprint,
+                    "failed" if rotation_required else "not_tested",
+                    "rotation_required" if rotation_required else None,
                     actor,
                     now,
                     now,

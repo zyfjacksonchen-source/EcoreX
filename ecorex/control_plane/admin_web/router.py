@@ -6,6 +6,7 @@ import re
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, Response
+from ecorex import __version__
 
 from .assets import AdminWebAssetError, AdminWebAssets
 
@@ -39,19 +40,28 @@ def _security_headers(*, cache_control: str) -> dict[str, str]:
         "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff",
         "X-Frame-Options": "DENY",
+        "X-EcoreX-Product-Version": __version__,
     }
 
 
 def create_admin_web_router(
     *,
     prefix: str = "/admin",
+    external_asset_prefix: str | None = None,
     assets: AdminWebAssets | None = None,
 ) -> APIRouter:
     normalized_prefix = prefix.rstrip("/")
     if _ROUTER_PREFIX.fullmatch(normalized_prefix) is None:
         raise ValueError("administrator Web prefix is invalid")
+    normalized_asset_prefix = (
+        external_asset_prefix.rstrip("/")
+        if external_asset_prefix is not None
+        else f"{normalized_prefix}/assets"
+    )
+    if _ROUTER_PREFIX.fullmatch(normalized_asset_prefix) is None:
+        raise ValueError("administrator external asset prefix is invalid")
     verified = assets or AdminWebAssets.load()
-    rendered_index = verified.render_index(f"{normalized_prefix}/assets")
+    rendered_index = verified.render_index(normalized_asset_prefix)
     router = APIRouter(prefix=normalized_prefix, include_in_schema=False)
 
     def index_response() -> HTMLResponse:

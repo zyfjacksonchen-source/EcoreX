@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
+import threading
 from typing import Any, Mapping
 
 import pytest
@@ -141,6 +142,32 @@ class _LateWriteAdapter(_ResultAdapter):
         del credentials
         self.invocations.append((action_id, dict(inputs), idempotency_key))
         await asyncio.sleep(0.15)
+        return {
+            "ok": True,
+            "action_id": action_id,
+            "document_id": str(inputs["document_id"]),
+            "content": "迟" * self.content_size,
+        }
+
+
+class _GatedLateWriteAdapter(_ResultAdapter):
+    def __init__(self, *, content_size: int = 0) -> None:
+        super().__init__(content_size=content_size)
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def invoke(
+        self,
+        *,
+        action_id: str,
+        inputs: Mapping[str, Any],
+        credentials: Mapping[str, str],
+        idempotency_key: str | None,
+    ) -> Any:
+        del credentials
+        self.invocations.append((action_id, dict(inputs), idempotency_key))
+        self.started.set()
+        await self.release.wait()
         return {
             "ok": True,
             "action_id": action_id,
@@ -651,20 +678,52 @@ def test_late_successful_timed_out_write_uses_same_stage_and_exact_replay(
 
 def test_late_inline_success_always_creates_recovery_delivery_item(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter = _LateWriteAdapter(content_size=16)
+    adapter = _GatedLateWriteAdapter(content_size=16)
     app, service = _runtime(tmp_path, feishu=adapter, full_access=True)
     _connect(service, "feishu")
     service.adapter_timeout_seconds = 0.05
     composition, context, arguments = _disclosed_write(app, "late-inline")
+    late_stage_created = threading.Event()
+
+    def yield_late_stage_to_waiter(point: str, _invocation_id: str) -> None:
+        if point == "after_stage":
+            late_stage_created.set()
+            raise RuntimeError("simulated-late-watcher-finalization-loss")
+
+    app.state.connector_result_coordinator.fault_hook = yield_late_stage_to_waiter
 
     async def scenario():
         with pytest.raises(ConnectorInvocationUncertain):
             await composition.connector_agent_runtime.write(arguments, context)
-        await asyncio.sleep(0.3)
-        return await composition.connector_agent_runtime.write(arguments, context)
+        assert adapter.started.is_set()
+        waiter_entered = asyncio.Event()
+        original_waiter = service._await_invocation_completion
+
+        async def observed_waiter(invocation_id, *, runtime_context):
+            waiter_entered.set()
+            return await original_waiter(
+                invocation_id,
+                runtime_context=runtime_context,
+            )
+
+        monkeypatch.setattr(service, "_await_invocation_completion", observed_waiter)
+        retry = asyncio.create_task(
+            composition.connector_agent_runtime.write(arguments, context)
+        )
+        await asyncio.wait_for(waiter_entered.wait(), timeout=10)
+        assert not retry.done()
+        adapter.release.set()
+        replay = await asyncio.wait_for(retry, timeout=15)
+        assert (
+            await composition.connector_agent_runtime.write(arguments, context)
+            == replay
+        )
+        return replay
 
     replay = asyncio.run(scenario())
+    assert late_stage_created.is_set()
     assert replay["delivery"] == "inline"
     recovery_items = _recovery_tool_items(
         app.state.runtime, context.execution_scope.thread_id
@@ -681,6 +740,50 @@ def test_late_inline_success_always_creates_recovery_delivery_item(
     )
     assert recovery_event.payload["recovered_after_terminal"] is False
     assert len(adapter.invocations) == 1
+    with sqlite3.connect(tmp_path / "runtime.db") as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM connector_operation_leases"
+        ).fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("inactive_fence", [False, True])
+def test_late_retry_does_not_wait_without_a_live_completion_owner(
+    tmp_path: Path,
+    inactive_fence: bool,
+) -> None:
+    adapter = _GatedLateWriteAdapter(content_size=16)
+    app, service = _runtime(tmp_path, feishu=adapter, full_access=True)
+    _connect(service, "feishu")
+    service.adapter_timeout_seconds = 0.05
+    composition, context, arguments = _disclosed_write(
+        app, f"inactive-{inactive_fence}"
+    )
+
+    async def scenario():
+        with pytest.raises(ConnectorInvocationUncertain):
+            await composition.connector_agent_runtime.write(arguments, context)
+        with sqlite3.connect(tmp_path / "runtime.db") as connection:
+            if inactive_fence:
+                connection.execute(
+                    "UPDATE connector_operation_leases SET status='outcome_unknown'"
+                )
+            else:
+                connection.execute(
+                    "UPDATE connector_operation_leases "
+                    "SET expires_at='2000-01-01T00:00:00+00:00'"
+                )
+        with pytest.raises(ConnectorInvocationUncertain):
+            await composition.connector_agent_runtime.write(arguments, context)
+        adapter.release.set()
+        watchers = tuple(service._uncertain_watchers)
+        if watchers:
+            await asyncio.gather(*watchers)
+
+    asyncio.run(scenario())
+    assert len(adapter.invocations) == 1
+    assert len(
+        _recovery_tool_items(app.state.runtime, context.execution_scope.thread_id)
+    ) == 1
 
 
 def test_same_key_concurrent_model_calls_wait_and_never_dispatch_twice(

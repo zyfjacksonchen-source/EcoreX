@@ -9,7 +9,7 @@ pyee==13.0.1
 # OCR Capability Pack. The model and native wheel closure are copied into the
 # signed pack and never installed into Runtime Core on the user machine.
 rapidocr-onnxruntime==1.4.4
-onnxruntime==1.26.0
+onnxruntime==1.23.2
 # Keep the universal Python 3.11 release lock single-valued.  Without this
 # direct pin uv resolves a second NumPy version for Python >=3.12, while the
 # product Runtime and the lock verifier intentionally support one immutable

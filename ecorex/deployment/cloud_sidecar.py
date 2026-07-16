@@ -28,6 +28,16 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, Sequence
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from ecorex import __version__
+from ecorex.deployment.cloud_artifact import (
+    BUILD_CONTRACT,
+    CLOUD_MANIFEST_SIGNING_DOMAIN,
+)
+from ecorex.deployment.provider_bridge_install import (
+    ProviderBridgeInstallError,
+    install_provider_bridge,
+    validate_provider_bridge_materials,
+)
 
 try:  # The read-only planner is intentionally importable on release workstations.
     import fcntl
@@ -37,7 +47,7 @@ except ImportError:  # pragma: no cover - exercised by Windows CI import coverag
 
 SCHEMA_VERSION = 1
 PYTHON_VERSION = "3.11.9"
-PRODUCT_VERSION = "1.0.0"
+PRODUCT_VERSION = __version__
 TARGET_OS_ID = "alinux"
 TARGET_OS_VERSION = "4"
 TARGET_ARCHITECTURE = "aarch64"
@@ -51,7 +61,52 @@ ENCRYPTED_VOLUME_ROOT = Path("/var/lib/ecorex")
 SECRET_ROOT = ENCRYPTED_VOLUME_ROOT / "secrets"
 SYSTEMD_ROOT = Path("/etc/systemd/system")
 NGINX_ROOT = Path("/etc/nginx/ecorex-cloud")
+NGINX_SERVER_CONFIG = Path("/etc/nginx/conf.d/ecorex-mvdcm.conf")
 LOCK_PATH = Path("/run/lock/ecorex-cloud-deploy.lock")
+ACTIVATION_JOURNAL_PATH = STATE_ROOT / "activation-pending.json"
+RELEASE_REPLICA_ROOT = Path(
+    "/srv/ecorex-agent-download/v1-artifacts"
+)
+RELEASE_REPLICA_PUBLIC_ROOT = "https://dl.ecoremedia.net/ecorex-agent/releases"
+
+NGINX_ROUTE_INCLUDE = "include /etc/nginx/ecorex-cloud/ecorex-cloud.routes.conf;"
+LEGACY_ADMIN_LOCATION_HEADERS = (
+    "location = /ecorex-agent/admin",
+    "location ^~ /ecorex-agent/admin/api/",
+    "location ^~ /ecorex-agent/api/admin/",
+    "location ^~ /ecorex-agent/admin/",
+)
+CONTROL_PLANE_ADMIN_ROUTE_CONTRACT = {
+    "location = /ecorex-agent/admin": (
+        "return 308 /ecorex-agent/admin/;",
+    ),
+    "location = /admin": (
+        "return 308 /ecorex-agent/admin/;",
+    ),
+    "location ^~ /admin/": (
+        "return 308 /ecorex-agent/admin/;",
+    ),
+    "location ^~ /ecorex-agent/admin/api/": ("return 410;",),
+    "location ^~ /ecorex-agent/api/admin/": ("return 410;",),
+    "location = /ecorex-agent/admin/health/ready": (
+        "rewrite ^ /health/ready break;",
+        "proxy_pass $ecorex_control_plane;",
+        "proxy_http_version 1.1;",
+        "proxy_set_header Host $host;",
+        "proxy_set_header X-Forwarded-Proto $scheme;",
+        "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+        "proxy_buffering off;",
+    ),
+    "location ^~ /ecorex-agent/admin/": (
+        "rewrite ^/ecorex-agent/admin/(.*)$ /admin/$1 break;",
+        "proxy_pass $ecorex_control_plane;",
+        "proxy_http_version 1.1;",
+        "proxy_set_header Host $host;",
+        "proxy_set_header X-Forwarded-Proto $scheme;",
+        "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+        "proxy_buffering off;",
+    ),
+}
 
 SLOTS = ("blue", "green")
 PORTS = {
@@ -64,6 +119,11 @@ SERVICE_NAMES = (
     "ecorex-image-api",
     "ecorex-image-worker",
 )
+LEGACY_SERVICE_NAMES = (
+    "ecorex-admin-api.service",
+    "ecorex-usage-panel-api.service",
+    "ecorex-web.service",
+)
 ENV_NAMES = {
     "control-plane": ("control-plane.env", "control-plane.secret.env"),
     "gateway": ("gateway.env", "gateway.secret.env"),
@@ -72,6 +132,23 @@ ENV_NAMES = {
 SAFE_RELEASE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{5,127}\Z")
 SAFE_ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{0,127}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+RELEASE_NAMESPACE = re.compile(
+    r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+    r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\Z"
+)
+TARGET_TYPES = frozenset({"legacy", "slot"})
+TRANSITION_OPERATIONS = frozenset({"activate", "rollback"})
+TRANSITION_PHASES = frozenset(
+    {
+        "prepared",
+        "migrating",
+        "schema_ready",
+        "target_ready",
+        "routes_switched",
+        "state_written",
+    }
+)
 
 
 class CloudDeployError(RuntimeError):
@@ -84,9 +161,15 @@ class CloudDeployError(RuntimeError):
         super().__init__(code)
 
 
+class _RecoverySourceSchemaIncompatible(CloudDeployError):
+    """Internal direction signal; never start a source that cannot read the DB."""
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class CloudDeploymentSpec:
     release_id: str
+    source_commit: str
+    dependency_lock_manifest_sha256: str
     artifact_root: Path
     artifact_manifest_sha256: str
     release_keyring_path: Path
@@ -95,9 +178,10 @@ class CloudDeploymentSpec:
     encryption_attestation_path: Path
     encryption_attestation_sha256: str
     python_binary: Path = Path("/opt/ecorex/platform/python-3.11.9/bin/python3.11")
-    postgres_binary: Path = Path("/usr/pgsql-15/bin/psql")
+    postgres_binary: Path = Path("/usr/bin/psql")
     minio_binary: Path = Path("/opt/ecorex/platform/minio/minio")
     nginx_binary: Path = Path("/usr/sbin/nginx")
+    nginx_server_config: Path = NGINX_SERVER_CONFIG
     systemctl_binary: Path = Path("/usr/bin/systemctl")
 
     @classmethod
@@ -111,6 +195,8 @@ class CloudDeploymentSpec:
         expected = {
             "schema_version",
             "release_id",
+            "source_commit",
+            "dependency_lock_manifest_sha256",
             "artifact_root",
             "artifact_manifest_sha256",
             "release_keyring_path",
@@ -122,6 +208,7 @@ class CloudDeploymentSpec:
             "postgres_binary",
             "minio_binary",
             "nginx_binary",
+            "nginx_server_config",
             "systemctl_binary",
         }
         if set(raw) - expected:
@@ -129,6 +216,10 @@ class CloudDeploymentSpec:
         try:
             spec = cls(
                 release_id=str(raw["release_id"]),
+                source_commit=str(raw["source_commit"]),
+                dependency_lock_manifest_sha256=str(
+                    raw["dependency_lock_manifest_sha256"]
+                ),
                 artifact_root=Path(str(raw["artifact_root"])),
                 artifact_manifest_sha256=str(raw["artifact_manifest_sha256"]),
                 release_keyring_path=Path(str(raw["release_keyring_path"])),
@@ -149,12 +240,20 @@ class CloudDeploymentSpec:
                     )
                 ),
                 postgres_binary=Path(
-                    str(raw.get("postgres_binary", "/usr/pgsql-15/bin/psql"))
+                    str(raw.get("postgres_binary", "/usr/bin/psql"))
                 ),
                 minio_binary=Path(
                     str(raw.get("minio_binary", "/opt/ecorex/platform/minio/minio"))
                 ),
                 nginx_binary=Path(str(raw.get("nginx_binary", "/usr/sbin/nginx"))),
+                nginx_server_config=Path(
+                    str(
+                        raw.get(
+                            "nginx_server_config",
+                            "/etc/nginx/conf.d/ecorex-mvdcm.conf",
+                        )
+                    )
+                ),
                 systemctl_binary=Path(
                     str(raw.get("systemctl_binary", "/usr/bin/systemctl"))
                 ),
@@ -167,7 +266,10 @@ class CloudDeploymentSpec:
     def validate(self) -> None:
         if not SAFE_RELEASE_ID.fullmatch(self.release_id):
             raise CloudDeployError("release_id_invalid")
+        if re.fullmatch(r"[0-9a-f]{40}", self.source_commit) is None:
+            raise CloudDeployError("source_commit_invalid")
         for digest in (
+            self.dependency_lock_manifest_sha256,
             self.artifact_manifest_sha256,
             self.release_keyring_sha256,
             self.target_machine_id_sha256,
@@ -183,6 +285,7 @@ class CloudDeploymentSpec:
             self.postgres_binary,
             self.minio_binary,
             self.nginx_binary,
+            self.nginx_server_config,
             self.systemctl_binary,
         ):
             pure = PurePosixPath(path.as_posix())
@@ -198,12 +301,14 @@ class CloudDeploymentSpec:
             "/opt/ecorex/platform/python-3.11.9/bin/python3.11"
         ):
             raise CloudDeployError("python_binary_outside_fence")
-        if self.postgres_binary != Path("/usr/pgsql-15/bin/psql"):
+        if self.postgres_binary != Path("/usr/bin/psql"):
             raise CloudDeployError("postgres_binary_outside_fence")
         if self.minio_binary != Path("/opt/ecorex/platform/minio/minio"):
             raise CloudDeployError("minio_binary_outside_fence")
         if self.nginx_binary != Path("/usr/sbin/nginx"):
             raise CloudDeployError("nginx_binary_outside_fence")
+        if self.nginx_server_config != NGINX_SERVER_CONFIG:
+            raise CloudDeployError("nginx_server_config_outside_fence")
         if self.systemctl_binary != Path("/usr/bin/systemctl"):
             raise CloudDeployError("systemctl_binary_outside_fence")
 
@@ -280,6 +385,9 @@ def _validate_artifact(spec: CloudDeploymentSpec) -> Mapping[str, Any]:
         "platform",
         "architecture",
         "python_version",
+        "build_contract",
+        "source_commit",
+        "dependency_lock_manifest_sha256",
         "files",
     }:
         raise CloudDeployError("artifact_manifest_invalid")
@@ -290,6 +398,10 @@ def _validate_artifact(spec: CloudDeploymentSpec) -> Mapping[str, Any]:
         or manifest.get("platform") != "linux"
         or manifest.get("architecture") != TARGET_ARCHITECTURE
         or manifest.get("python_version") != PYTHON_VERSION
+        or manifest.get("build_contract") != BUILD_CONTRACT
+        or manifest.get("source_commit") != spec.source_commit
+        or manifest.get("dependency_lock_manifest_sha256")
+        != spec.dependency_lock_manifest_sha256
     ):
         raise CloudDeployError("artifact_target_mismatch")
     if signature.get("manifest_sha256") != spec.artifact_manifest_sha256:
@@ -303,7 +415,8 @@ def _validate_artifact(spec: CloudDeploymentSpec) -> Mapping[str, Any]:
         public_key = base64.b64decode(encoded_key, validate=True)
         signed = base64.b64decode(encoded_signature, validate=True)
         Ed25519PublicKey.from_public_bytes(public_key).verify(
-            signed, _canonical_json(manifest)
+            signed,
+            CLOUD_MANIFEST_SIGNING_DOMAIN + _canonical_json(manifest),
         )
     except Exception:
         raise CloudDeployError("artifact_signature_invalid") from None
@@ -316,12 +429,16 @@ def _validate_artifact(spec: CloudDeploymentSpec) -> Mapping[str, Any]:
             "path",
             "sha256",
             "size_bytes",
+            "posix_mode",
         }:
             raise CloudDeployError("artifact_manifest_invalid")
         relative = item.get("path")
         digest = item.get("sha256")
         size = item.get("size_bytes")
+        posix_mode = item.get("posix_mode")
         if not isinstance(relative, str) or not SHA256.fullmatch(str(digest)):
+            raise CloudDeployError("artifact_manifest_invalid")
+        if posix_mode not in {"0644", "0755"}:
             raise CloudDeployError("artifact_manifest_invalid")
         pure = PurePosixPath(relative)
         if pure.is_absolute() or ".." in pure.parts or relative in seen:
@@ -331,11 +448,17 @@ def _validate_artifact(spec: CloudDeploymentSpec) -> Mapping[str, Any]:
         if source.is_symlink() or not source.is_file():
             raise CloudDeployError("artifact_file_missing")
         try:
-            actual_size = source.stat().st_size
+            metadata = source.stat()
+            actual_size = metadata.st_size
         except OSError:
             raise CloudDeployError("artifact_file_unreadable") from None
         if actual_size != size or _sha256_file(source) != digest:
             raise CloudDeployError("artifact_file_digest_mismatch")
+        actual_mode = stat.S_IMODE(metadata.st_mode)
+        if os.name == "nt":
+            actual_mode = 0o755 if relative.startswith("venv/bin/") else 0o644
+        if f"{actual_mode:04o}" != posix_mode:
+            raise CloudDeployError("artifact_file_mode_mismatch")
     required = {
         "venv/bin/python3.11",
         "venv/bin/ecorex-control-plane",
@@ -348,6 +471,7 @@ def _validate_artifact(spec: CloudDeploymentSpec) -> Mapping[str, Any]:
         "deployment/nginx/control-plane-blue.conf",
         "deployment/nginx/control-plane-green.conf",
         "deployment/nginx/control-plane-disabled.conf",
+        "deployment/nginx/admin-route-control-plane.conf",
         "deployment/nginx/ecorex-cloud.routes.conf",
     }
     if not required.issubset(seen):
@@ -407,19 +531,65 @@ def _validate_attestation(spec: CloudDeploymentSpec) -> None:
         raise CloudDeployError("encryption_attestation_invalid")
 
 
+def _normalized_slot_state(value: Any, code: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise CloudDeployError(code)
+    active_release_id = value.get("active_release_id")
+    active_slot = value.get("active_slot")
+    previous_release_id = value.get("previous_release_id")
+    previous_slot = value.get("previous_slot")
+    previous_target_type = value.get("previous_target_type")
+    if previous_target_type is None:
+        previous_target_type = (
+            "slot"
+            if previous_slot in SLOTS
+            and SAFE_RELEASE_ID.fullmatch(str(previous_release_id or ""))
+            else "legacy"
+        )
+    artifact_digest = value.get("artifact_manifest_sha256")
+    activated_at = value.get("activated_at_unix")
+    if (
+        value.get("schema_version") != SCHEMA_VERSION
+        or value.get("active_target_type", "slot") != "slot"
+        or active_slot not in SLOTS
+        or not SAFE_RELEASE_ID.fullmatch(str(active_release_id or ""))
+        or previous_target_type not in TARGET_TYPES
+        or (
+            previous_target_type == "slot"
+            and (
+                previous_slot not in SLOTS
+                or not SAFE_RELEASE_ID.fullmatch(str(previous_release_id or ""))
+            )
+        )
+        or (
+            previous_target_type == "legacy"
+            and (previous_slot is not None or previous_release_id is not None)
+        )
+        or (artifact_digest is not None and not SHA256.fullmatch(str(artifact_digest)))
+        or isinstance(activated_at, bool)
+        or not isinstance(activated_at, int)
+        or activated_at < 1
+    ):
+        raise CloudDeployError(code)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "active_target_type": "slot",
+        "active_release_id": str(active_release_id),
+        "active_slot": str(active_slot),
+        "previous_target_type": str(previous_target_type),
+        "previous_release_id": previous_release_id,
+        "previous_slot": previous_slot,
+        "artifact_manifest_sha256": artifact_digest,
+        "activated_at_unix": activated_at,
+    }
+
+
 def _state() -> Mapping[str, Any] | None:
     path = STATE_ROOT / "active.json"
     if not path.exists():
         return None
     value = _read_json(path, "deployment_state_invalid")
-    if (
-        not isinstance(value, Mapping)
-        or value.get("schema_version") != SCHEMA_VERSION
-        or value.get("active_slot") not in SLOTS
-        or not SAFE_RELEASE_ID.fullmatch(str(value.get("active_release_id", "")))
-    ):
-        raise CloudDeployError("deployment_state_invalid")
-    return value
+    return _normalized_slot_state(value, "deployment_state_invalid")
 
 
 def build_plan(spec: CloudDeploymentSpec, *, inspect_files: bool = True) -> CloudDeploymentPlan:
@@ -430,11 +600,22 @@ def build_plan(spec: CloudDeploymentSpec, *, inspect_files: bool = True) -> Clou
                 check(spec)
             except CloudDeployError as error:
                 blockers.append(error.code)
+        try:
+            validate_provider_bridge_materials()
+        except ProviderBridgeInstallError as error:
+            blockers.append(error.code)
     try:
         state = _state()
     except CloudDeployError as error:
         state = None
         blockers.append(error.code)
+    try:
+        pending_transition = _transition_journal()
+    except CloudDeployError as error:
+        pending_transition = None
+        blockers.append(error.code)
+    if pending_transition is not None:
+        blockers.append("activation_recovery_required")
     current_slot = None if state is None else str(state["active_slot"])
     target_slot = "blue" if current_slot in {None, "green"} else "green"
     actions = (
@@ -443,7 +624,10 @@ def build_plan(spec: CloudDeploymentSpec, *, inspect_files: bool = True) -> Clou
         "verify_encrypted_persistent_volume_attestation",
         "verify_python_3_11_9_postgresql_15_nginx",
         "verify_encrypted_volume_secret_environment_files",
+        "validate_and_install_loopback_provider_tls_bridge",
+        "recover_incomplete_activation_before_new_mutation",
         "stage_immutable_release",
+        "prepare_exact_release_replica_storage_permissions",
         "install_signed_systemd_and_nginx_templates",
         "verify_root_ecorex_cloud_environment_files",
         "run_control_plane_gateway_image_schema_migrations",
@@ -543,7 +727,7 @@ def _target_preflight(spec: CloudDeploymentSpec, confirmation: str) -> None:
     _run(["/usr/bin/id", "-u", "ecorex-cloud"], code="service_identity_missing")
     _run(["/usr/bin/id", "-u", "ecorex-storage"], code="storage_identity_missing")
     _run(
-        [str(spec.systemctl_binary), "is-active", "postgresql-15.service"],
+        [str(spec.systemctl_binary), "is-active", "postgresql.service"],
         code="postgres_service_unavailable",
     )
     _validate_secret_environment_root()
@@ -677,6 +861,156 @@ def _atomic_write(path: Path, payload: bytes, mode: int = 0o640) -> None:
             os.unlink(temporary)
 
 
+def _fsync_directory(path: Path) -> None:
+    """Durably sync one real directory without following a substituted link."""
+
+    try:
+        before = path.lstat()
+        if (
+            path.is_symlink()
+            or not stat.S_ISDIR(before.st_mode)
+            or path.resolve(strict=True) != path
+        ):
+            raise OSError
+        flags = os.O_RDONLY
+        if hasattr(os, "O_DIRECTORY"):
+            flags |= os.O_DIRECTORY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(path, flags)
+        try:
+            opened = os.fstat(descriptor)
+            if (
+                not stat.S_ISDIR(opened.st_mode)
+                or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+            ):
+                raise OSError
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    except OSError:
+        raise CloudDeployError("deployment_directory_sync_failed") from None
+
+
+def _transition_journal() -> dict[str, Any] | None:
+    path = ACTIVATION_JOURNAL_PATH
+    if not path.exists() and not path.is_symlink():
+        return None
+    try:
+        metadata = path.lstat()
+        payload = path.read_bytes()
+    except OSError:
+        raise CloudDeployError("activation_journal_invalid") from None
+    if (
+        path.is_symlink()
+        or not stat.S_ISREG(metadata.st_mode)
+        or (os.name != "nt" and stat.S_IMODE(metadata.st_mode) & 0o077)
+        or not 1 <= len(payload) <= 64 * 1024
+    ):
+        raise CloudDeployError("activation_journal_invalid")
+    try:
+        value = json.loads(payload.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError):
+        raise CloudDeployError("activation_journal_invalid") from None
+    required = {
+        "schema_version",
+        "operation",
+        "phase",
+        "source_target_type",
+        "source_state",
+        "target_target_type",
+        "target_state",
+        "created_at_unix",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise CloudDeployError("activation_journal_invalid")
+    source_type = value.get("source_target_type")
+    target_type = value.get("target_target_type")
+    operation = value.get("operation")
+    phase = value.get("phase")
+    created_at = value.get("created_at_unix")
+    if (
+        source_type not in TARGET_TYPES
+        or target_type not in TARGET_TYPES
+        or operation not in TRANSITION_OPERATIONS
+        or phase not in TRANSITION_PHASES
+        or isinstance(created_at, bool)
+        or not isinstance(created_at, int)
+        or created_at < 1
+    ):
+        raise CloudDeployError("activation_journal_invalid")
+    source_state = value.get("source_state")
+    target_state = value.get("target_state")
+    if source_type == "slot":
+        source_state = _normalized_slot_state(source_state, "activation_journal_invalid")
+    elif source_state is not None:
+        raise CloudDeployError("activation_journal_invalid")
+    if target_type == "slot":
+        target_state = _normalized_slot_state(target_state, "activation_journal_invalid")
+    elif target_state is not None:
+        raise CloudDeployError("activation_journal_invalid")
+    if (
+        source_type == "slot"
+        and target_type == "slot"
+        and source_state["active_slot"] == target_state["active_slot"]
+    ):
+        raise CloudDeployError("activation_journal_invalid")
+    normalized = {
+        "schema_version": SCHEMA_VERSION,
+        "operation": str(operation),
+        "phase": str(phase),
+        "source_target_type": str(source_type),
+        "source_state": source_state,
+        "target_target_type": str(target_type),
+        "target_state": target_state,
+        "created_at_unix": created_at,
+    }
+    if payload != _canonical_json(normalized) + b"\n":
+        raise CloudDeployError("activation_journal_invalid")
+    return normalized
+
+
+def _write_transition_journal(value: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = dict(value)
+    _atomic_write(
+        ACTIVATION_JOURNAL_PATH,
+        _canonical_json(normalized) + b"\n",
+        mode=0o600,
+    )
+    _fsync_directory(STATE_ROOT)
+    parsed = _transition_journal()
+    if parsed is None:
+        raise CloudDeployError("activation_journal_invalid")
+    return parsed
+
+
+def _advance_transition_journal(
+    journal: Mapping[str, Any], phase: str
+) -> dict[str, Any]:
+    if phase not in TRANSITION_PHASES:
+        raise CloudDeployError("activation_journal_invalid")
+    updated = dict(journal)
+    updated["phase"] = phase
+    return _write_transition_journal(updated)
+
+
+def _clear_transition_journal() -> None:
+    if not ACTIVATION_JOURNAL_PATH.exists() and not ACTIVATION_JOURNAL_PATH.is_symlink():
+        # The unlink is the commit point. If a prior clear removed the entry
+        # but directory fsync raised, target completion may safely finish and
+        # treat the already-absent journal as committed.
+        _fsync_directory(STATE_ROOT)
+        return
+    try:
+        metadata = ACTIVATION_JOURNAL_PATH.lstat()
+        if ACTIVATION_JOURNAL_PATH.is_symlink() or not stat.S_ISREG(metadata.st_mode):
+            raise OSError
+        ACTIVATION_JOURNAL_PATH.unlink()
+    except OSError:
+        raise CloudDeployError("activation_journal_clear_failed") from None
+    _fsync_directory(STATE_ROOT)
+
+
 def _atomic_symlink(target: Path, link: Path) -> None:
     link.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
     temporary = link.parent / f".{link.name}.{os.getpid()}.tmp"
@@ -710,7 +1044,237 @@ def _install_release(spec: CloudDeploymentSpec, manifest: Mapping[str, Any]) -> 
     return destination
 
 
+def _legacy_admin_route_payload(source: bytes) -> tuple[bytes, bytes]:
+    """Extract the exact v0.x Admin locations and replace them with one include."""
+
+    try:
+        text = source.decode("utf-8")
+    except UnicodeDecodeError:
+        raise CloudDeployError("nginx_legacy_admin_route_invalid") from None
+    lines = text.splitlines(keepends=True)
+    spans: list[tuple[int, int]] = []
+    for header in LEGACY_ADMIN_LOCATION_HEADERS:
+        matches = [
+            index
+            for index, line in enumerate(lines)
+            if line.strip() == f"{header} {{"
+        ]
+        if len(matches) != 1:
+            raise CloudDeployError("nginx_legacy_admin_route_invalid")
+        start = matches[0]
+        depth = 0
+        end: int | None = None
+        for index in range(start, len(lines)):
+            statement = lines[index].split("#", 1)[0]
+            depth += statement.count("{") - statement.count("}")
+            if depth == 0:
+                end = index + 1
+                break
+            if depth < 0:
+                break
+        if end is None or end <= start:
+            raise CloudDeployError("nginx_legacy_admin_route_invalid")
+        spans.append((start, end))
+    spans.sort()
+    if any(left[1] > right[0] for left, right in zip(spans, spans[1:])):
+        raise CloudDeployError("nginx_legacy_admin_route_invalid")
+
+    removed = {index for start, end in spans for index in range(start, end)}
+    first = spans[0][0]
+    indent = lines[first][: len(lines[first]) - len(lines[first].lstrip())]
+    rendered: list[str] = []
+    for index, line in enumerate(lines):
+        if index == first:
+            newline = "\r\n" if line.endswith("\r\n") else "\n"
+            rendered.append(f"{indent}{NGINX_ROUTE_INCLUDE}{newline}")
+        if index not in removed:
+            rendered.append(line)
+    legacy = "".join(
+        "".join(lines[start:end]).rstrip("\r\n") + "\n\n"
+        for start, end in spans
+    )
+    migrated = "".join(rendered)
+    if (
+        migrated.count(NGINX_ROUTE_INCLUDE) != 1
+        or any(f"{header} {{" in migrated for header in LEGACY_ADMIN_LOCATION_HEADERS)
+        or not legacy.strip()
+    ):
+        raise CloudDeployError("nginx_legacy_admin_route_invalid")
+    return migrated.encode("utf-8"), legacy.encode("utf-8")
+
+
+def _restore_symlink(link: Path, previous: Path | None) -> None:
+    if previous is None:
+        with contextlib.suppress(FileNotFoundError):
+            link.unlink()
+        return
+    _atomic_symlink(previous, link)
+
+
+def _nginx_location_contract(text: str) -> dict[str, tuple[str, ...]]:
+    """Parse a locations-only fragment into an exact, comment-free contract."""
+
+    lines = text.splitlines()
+    contract: dict[str, tuple[str, ...]] = {}
+    index = 0
+    while index < len(lines):
+        statement = lines[index].split("#", 1)[0].strip()
+        index += 1
+        if not statement:
+            continue
+        if not statement.startswith("location ") or not statement.endswith("{"):
+            raise CloudDeployError("nginx_admin_route_wiring_invalid")
+        header = statement[:-1].rstrip()
+        if header in contract:
+            raise CloudDeployError("nginx_admin_route_wiring_invalid")
+        directives: list[str] = []
+        closed = False
+        while index < len(lines):
+            directive = lines[index].split("#", 1)[0].strip()
+            index += 1
+            if not directive:
+                continue
+            if directive == "}":
+                closed = True
+                break
+            # The reviewed Admin fragment intentionally has no nested blocks.
+            # Reject them rather than attempting a permissive Nginx parse.
+            if "{" in directive or "}" in directive:
+                raise CloudDeployError("nginx_admin_route_wiring_invalid")
+            directives.append(directive)
+        if not closed:
+            raise CloudDeployError("nginx_admin_route_wiring_invalid")
+        contract[header] = tuple(directives)
+    return contract
+
+
+def _validate_admin_route_resources() -> None:
+    active = NGINX_ROOT / "active-admin-route.conf"
+    legacy = NGINX_ROOT / "admin-route-legacy.conf"
+    candidate = NGINX_ROOT / "admin-route-control-plane.conf"
+    if NGINX_ROOT.is_symlink() or not NGINX_ROOT.is_dir() or not active.is_symlink():
+        raise CloudDeployError("nginx_admin_route_wiring_invalid")
+    payloads: dict[Path, bytes] = {}
+    for path in (legacy, candidate):
+        try:
+            metadata = path.lstat()
+            payload = path.read_bytes()
+        except OSError:
+            raise CloudDeployError("nginx_admin_route_wiring_invalid") from None
+        if (
+            path.is_symlink()
+            or not stat.S_ISREG(metadata.st_mode)
+            or (os.name != "nt" and stat.S_IMODE(metadata.st_mode) & 0o022)
+            or not 1 <= len(payload) <= 256 * 1024
+        ):
+            raise CloudDeployError("nginx_admin_route_wiring_invalid")
+        payloads[path] = payload
+    try:
+        resolved = active.resolve(strict=True)
+        allowed = {legacy.resolve(strict=True), candidate.resolve(strict=True)}
+    except OSError:
+        raise CloudDeployError("nginx_admin_route_wiring_invalid") from None
+    if resolved not in allowed:
+        raise CloudDeployError("nginx_admin_route_wiring_invalid")
+
+    try:
+        legacy_text = payloads[legacy].decode("utf-8", errors="strict")
+        candidate_text = payloads[candidate].decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        raise CloudDeployError("nginx_admin_route_wiring_invalid") from None
+    if any(
+        legacy_text.count(f"{header} {{") != 1
+        for header in LEGACY_ADMIN_LOCATION_HEADERS
+    ) or "/srv/ecorex-agent-download" in candidate_text:
+        raise CloudDeployError("nginx_admin_route_wiring_invalid")
+    try:
+        candidate_contract = _nginx_location_contract(candidate_text)
+    except CloudDeployError:
+        raise CloudDeployError("nginx_admin_route_wiring_invalid") from None
+    if candidate_contract != CONTROL_PLANE_ADMIN_ROUTE_CONTRACT:
+        raise CloudDeployError("nginx_admin_route_wiring_invalid")
+
+
+def _install_legacy_admin_route_wiring(spec: CloudDeploymentSpec) -> None:
+    """Move live v0.x Admin locations behind a reversible second-level include."""
+
+    server_config = spec.nginx_server_config
+    try:
+        metadata = server_config.lstat()
+        source = server_config.read_bytes()
+    except OSError:
+        raise CloudDeployError("nginx_server_configuration_unavailable") from None
+    if (
+        server_config.is_symlink()
+        or not stat.S_ISREG(metadata.st_mode)
+        or (os.name != "nt" and stat.S_IMODE(metadata.st_mode) & 0o022)
+        or not 1 <= len(source) <= 2 * 1024 * 1024
+    ):
+        raise CloudDeployError("nginx_server_configuration_invalid")
+
+    include_count = source.count(NGINX_ROUTE_INCLUDE.encode("ascii"))
+    active = NGINX_ROOT / "active-admin-route.conf"
+    legacy = NGINX_ROOT / "admin-route-legacy.conf"
+    if include_count == 1:
+        if (
+            any(
+                f"{header} {{".encode("ascii") in source
+                for header in LEGACY_ADMIN_LOCATION_HEADERS
+            )
+            or not active.is_symlink()
+            or not legacy.is_file()
+            or legacy.is_symlink()
+        ):
+            raise CloudDeployError("nginx_admin_route_wiring_invalid")
+        _validate_admin_route_resources()
+        return
+    if include_count != 0:
+        raise CloudDeployError("nginx_admin_route_wiring_invalid")
+
+    migrated, legacy_payload = _legacy_admin_route_payload(source)
+    backup = STATE_ROOT / "nginx-pre-v1.conf"
+    if backup.exists():
+        try:
+            if backup.is_symlink() or backup.read_bytes() != source:
+                raise OSError
+        except OSError:
+            raise CloudDeployError("nginx_legacy_backup_conflict") from None
+    else:
+        _atomic_write(backup, source, mode=0o600)
+    _atomic_write(legacy, legacy_payload, mode=0o644)
+    previous = active.resolve(strict=False) if active.exists() or active.is_symlink() else None
+    _atomic_symlink(legacy, active)
+    _validate_admin_route_resources()
+    _atomic_write(
+        server_config, migrated, mode=stat.S_IMODE(metadata.st_mode)
+    )
+    try:
+        _run([str(spec.nginx_binary), "-t"], code="nginx_configuration_invalid")
+        _run(
+            [str(spec.systemctl_binary), "reload", "nginx.service"],
+            code="nginx_reload_failed",
+        )
+    except CloudDeployError:
+        _atomic_write(
+            server_config, source, mode=stat.S_IMODE(metadata.st_mode)
+        )
+        _restore_symlink(active, previous)
+        with contextlib.suppress(CloudDeployError):
+            _run([str(spec.nginx_binary), "-t"], code="nginx_restore_failed")
+            _run(
+                [str(spec.systemctl_binary), "reload", "nginx.service"],
+                code="nginx_restore_failed",
+            )
+        raise
+
+
 def _install_deployment_templates(spec: CloudDeploymentSpec, release: Path) -> None:
+    _prepare_release_replica_storage()
+    try:
+        provider_bridge = validate_provider_bridge_materials()
+        install_provider_bridge(provider_bridge)
+    except ProviderBridgeInstallError as error:
+        raise CloudDeployError(error.code) from None
     systemd_source = release / "deployment" / "systemd"
     nginx_source = release / "deployment" / "nginx"
     for name in (
@@ -724,13 +1288,66 @@ def _install_deployment_templates(spec: CloudDeploymentSpec, release: Path) -> N
         "control-plane-blue.conf",
         "control-plane-green.conf",
         "control-plane-disabled.conf",
+        "admin-route-control-plane.conf",
         "ecorex-cloud.routes.conf",
     ):
         _atomic_write(NGINX_ROOT / name, (nginx_source / name).read_bytes(), 0o644)
     active = NGINX_ROOT / "active-control-plane.conf"
     if not active.exists() and not active.is_symlink():
         _atomic_symlink(NGINX_ROOT / "control-plane-disabled.conf", active)
+    _install_legacy_admin_route_wiring(spec)
     _systemctl(spec, "daemon-reload", ())
+
+
+def _prepare_release_replica_storage() -> None:
+    """Provision only the already-authorized CDN subtree for ecorex-cloud."""
+
+    try:
+        environment = _parse_env(
+            CONFIG_ROOT / "config" / "control-plane.env", secret=False
+        )
+    except CloudDeployError:
+        raise CloudDeployError("release_replica_configuration_invalid") from None
+    namespace = environment.get("ECOREX_CP_RELEASE_REPLICA_NAMESPACE", "")
+    if (
+        environment.get("ECOREX_CP_RELEASE_REPLICA_ENABLED") != "true"
+        or environment.get("ECOREX_CP_RELEASE_REPLICA_STORAGE_ROOT")
+        != str(RELEASE_REPLICA_ROOT)
+        or environment.get("ECOREX_CP_RELEASE_REPLICA_PUBLIC_ROOT")
+        != RELEASE_REPLICA_PUBLIC_ROOT
+        or environment.get("ECOREX_CP_RELEASE_REPLICA_PRODUCT_VERSION")
+        != PRODUCT_VERSION
+        or namespace != f"v{PRODUCT_VERSION}"
+        or RELEASE_NAMESPACE.fullmatch(namespace) is None
+    ):
+        raise CloudDeployError("release_replica_configuration_invalid")
+    namespace_root = RELEASE_REPLICA_ROOT / namespace
+    try:
+        if (
+            RELEASE_REPLICA_ROOT.is_symlink()
+            or RELEASE_REPLICA_ROOT.resolve(strict=True) != RELEASE_REPLICA_ROOT
+        ):
+            raise OSError
+        namespace_root.mkdir(mode=0o755, exist_ok=True)
+        for directory in (
+            namespace_root,
+            namespace_root / "stable",
+            namespace_root / "canary",
+        ):
+            directory.mkdir(mode=0o755, exist_ok=True)
+            metadata = directory.lstat()
+            if (
+                not stat.S_ISDIR(metadata.st_mode)
+                or stat.S_ISLNK(metadata.st_mode)
+                or directory.resolve(strict=True) != directory
+            ):
+                raise OSError
+            shutil.chown(directory, user="ecorex-cloud", group="ecorex-storage")
+            os.chmod(directory, 0o755)
+        _fsync_directory(namespace_root)
+        _fsync_directory(RELEASE_REPLICA_ROOT)
+    except OSError:
+        raise CloudDeployError("release_replica_storage_invalid") from None
 
 
 def _verify_nginx_wiring(spec: CloudDeploymentSpec) -> None:
@@ -741,6 +1358,7 @@ def _verify_nginx_wiring(spec: CloudDeploymentSpec) -> None:
     # copying it into a directory is not accepted as production wiring.
     if (
         b"/etc/nginx/ecorex-cloud/active-control-plane.conf" not in result.stdout
+        or b"/etc/nginx/ecorex-cloud/active-admin-route.conf" not in result.stdout
         or b"/ecorex-agent/admin/" not in result.stdout
     ):
         raise CloudDeployError("nginx_route_not_wired")
@@ -842,6 +1460,34 @@ def _schema_gate(release: Path, slot: str) -> None:
         )
 
 
+_RECOVERY_SCHEMA_SERVICES = (
+    ("control-plane", "control-plane"),
+    ("gateway", "gateway"),
+    ("image-api", "image"),
+    ("image-worker", "image"),
+)
+
+
+def _recovery_schema_check(
+    release: Path, slot: str, *, source: bool
+) -> None:
+    for service_name, runtime_service in _RECOVERY_SCHEMA_SERVICES:
+        environment = _service_environment(runtime_service, slot)
+        try:
+            _run_service_command(
+                _service_command(release, runtime_service, "schema", "check"),
+                code=f"{service_name.replace('-', '_')}_recovery_schema_incompatible",
+                environment=environment,
+                timeout=600,
+            )
+        except CloudDeployError:
+            if source:
+                raise _RecoverySourceSchemaIncompatible(
+                    "recovery_source_schema_incompatible"
+                ) from None
+            raise CloudDeployError("recovery_target_schema_incompatible") from None
+
+
 def _unit(service: str, slot: str) -> str:
     return f"{service}@{slot}.service"
 
@@ -853,6 +1499,75 @@ def _systemctl(spec: CloudDeploymentSpec, verb: str, units: Iterable[str]) -> No
 
 def _slot_units(slot: str) -> list[str]:
     return [_unit(service, slot) for service in SERVICE_NAMES]
+
+
+def _stop_target_services(
+    spec: CloudDeploymentSpec, state: Mapping[str, Any] | None
+) -> None:
+    units: Iterable[str] = (
+        reversed(_slot_units(str(state["active_slot"])))
+        if state is not None
+        else reversed(LEGACY_SERVICE_NAMES)
+    )
+    _systemctl(spec, "stop", units)
+
+
+def _start_target_services(
+    spec: CloudDeploymentSpec, state: Mapping[str, Any] | None
+) -> None:
+    if state is None:
+        _systemctl(spec, "start", LEGACY_SERVICE_NAMES)
+        _systemctl(spec, "is-active", LEGACY_SERVICE_NAMES)
+        return
+    slot = str(state["active_slot"])
+    _systemctl(spec, "start", _slot_units(slot))
+    _wait_health(spec, slot)
+
+
+def _stop_transition_writers(
+    spec: CloudDeploymentSpec, journal: Mapping[str, Any]
+) -> None:
+    # Stop the inactive/partial target first, then the authoritative source.
+    # Starting either side is forbidden until both stop operations complete.
+    _stop_target_services(spec, journal["target_state"])
+    _stop_target_services(spec, journal["source_state"])
+
+
+def _ensure_activation_schema_ready(
+    spec: CloudDeploymentSpec,
+    journal: Mapping[str, Any],
+    *,
+    target_release: Path | None = None,
+) -> dict[str, Any]:
+    """Durably fence writers before an idempotent target migration.
+
+    ``migrating`` is written before the first stop request.  A crash at any
+    later instruction therefore leaves enough evidence for startup recovery
+    to stop both writer sets and rerun the target migration safely.
+    """
+
+    effective = dict(journal)
+    if effective.get("operation") != "activate":
+        return effective
+    phase = str(effective.get("phase"))
+    if phase in {"schema_ready", "target_ready", "routes_switched", "state_written"}:
+        return effective
+    if phase == "prepared":
+        effective = _advance_transition_journal(effective, "migrating")
+        phase = "migrating"
+    if phase != "migrating":
+        raise CloudDeployError("activation_journal_invalid")
+    target_state = effective.get("target_state")
+    if not isinstance(target_state, Mapping):
+        raise CloudDeployError("activation_journal_invalid")
+    _stop_transition_writers(spec, effective)
+    release = (
+        target_release
+        if target_release is not None
+        else _verify_transition_release(spec, target_state)
+    )
+    _schema_gate(release, str(target_state["active_slot"]))
+    return _advance_transition_journal(effective, "schema_ready")
 
 
 def _wait_health(
@@ -893,26 +1608,75 @@ def _nginx_target(slot: str) -> Path:
     return NGINX_ROOT / f"control-plane-{slot}.conf"
 
 
-def _switch_nginx(spec: CloudDeploymentSpec, slot: str) -> None:
-    link = NGINX_ROOT / "active-control-plane.conf"
-    previous = link.resolve(strict=False) if link.exists() or link.is_symlink() else None
-    _atomic_symlink(_nginx_target(slot), link)
+def _switch_nginx_targets(
+    spec: CloudDeploymentSpec, *, control_target: Path, admin_target: Path
+) -> None:
+    control_link = NGINX_ROOT / "active-control-plane.conf"
+    admin_link = NGINX_ROOT / "active-admin-route.conf"
+    allowed_control = {
+        _nginx_target("blue"),
+        _nginx_target("green"),
+        NGINX_ROOT / "control-plane-disabled.conf",
+    }
+    allowed_admin = {
+        NGINX_ROOT / "admin-route-control-plane.conf",
+        NGINX_ROOT / "admin-route-legacy.conf",
+    }
+    if control_target not in allowed_control or admin_target not in allowed_admin:
+        raise CloudDeployError("nginx_route_switch_invalid")
+    control_previous = (
+        control_link.resolve(strict=False)
+        if control_link.exists() or control_link.is_symlink()
+        else None
+    )
+    admin_previous = (
+        admin_link.resolve(strict=False)
+        if admin_link.exists() or admin_link.is_symlink()
+        else None
+    )
     try:
+        _atomic_symlink(control_target, control_link)
+        _atomic_symlink(admin_target, admin_link)
+        _fsync_directory(NGINX_ROOT)
+        _validate_admin_route_resources()
         _run([str(spec.nginx_binary), "-t"], code="nginx_configuration_invalid")
         _run(
             [str(spec.systemctl_binary), "reload", "nginx.service"],
             code="nginx_reload_failed",
         )
-    except CloudDeployError:
-        if previous is not None:
-            _atomic_symlink(previous, link)
-            with contextlib.suppress(CloudDeployError):
-                _run([str(spec.nginx_binary), "-t"], code="nginx_restore_failed")
-                _run(
-                    [str(spec.systemctl_binary), "reload", "nginx.service"],
-                    code="nginx_restore_failed",
-                )
-        raise
+    except (CloudDeployError, OSError) as error:
+        with contextlib.suppress(OSError):
+            _restore_symlink(control_link, control_previous)
+        with contextlib.suppress(OSError):
+            _restore_symlink(admin_link, admin_previous)
+        with contextlib.suppress(CloudDeployError):
+            _fsync_directory(NGINX_ROOT)
+            _run([str(spec.nginx_binary), "-t"], code="nginx_restore_failed")
+            _run(
+                [str(spec.systemctl_binary), "reload", "nginx.service"],
+                code="nginx_restore_failed",
+            )
+        if isinstance(error, CloudDeployError):
+            raise
+        raise CloudDeployError("nginx_route_switch_failed") from None
+
+
+def _switch_nginx(spec: CloudDeploymentSpec, slot: str) -> None:
+    if slot not in SLOTS:
+        raise CloudDeployError("nginx_route_switch_invalid")
+    _switch_nginx_targets(
+        spec,
+        control_target=_nginx_target(slot),
+        admin_target=NGINX_ROOT / "admin-route-control-plane.conf",
+    )
+
+
+def _switch_nginx_legacy(spec: CloudDeploymentSpec) -> None:
+    _switch_nginx_targets(
+        spec,
+        control_target=NGINX_ROOT / "control-plane-disabled.conf",
+        admin_target=NGINX_ROOT / "admin-route-legacy.conf",
+    )
 
 
 @contextlib.contextmanager
@@ -940,8 +1704,10 @@ def _activation_state(
 ) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
+        "active_target_type": "slot",
         "active_release_id": release_id,
         "active_slot": slot,
+        "previous_target_type": "legacy" if prior is None else "slot",
         "previous_release_id": None if prior is None else prior["active_release_id"],
         "previous_slot": None if prior is None else prior["active_slot"],
         "artifact_manifest_sha256": artifact_manifest_sha256,
@@ -949,14 +1715,314 @@ def _activation_state(
     }
 
 
+def _rollback_slot_state(
+    current: Mapping[str, Any], *, release_id: str, slot: str, artifact_manifest_sha256: str
+) -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "active_target_type": "slot",
+        "active_release_id": release_id,
+        "active_slot": slot,
+        "previous_target_type": "slot",
+        "previous_release_id": current["active_release_id"],
+        "previous_slot": current["active_slot"],
+        "artifact_manifest_sha256": artifact_manifest_sha256,
+        "activated_at_unix": int(time.time()),
+    }
+
+
+def _legacy_rollback_receipt(current: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "active_target_type": "legacy",
+        "active_release_id": None,
+        "active_slot": None,
+        "previous_target_type": "slot",
+        "previous_release_id": current["active_release_id"],
+        "previous_slot": current["active_slot"],
+        "artifact_manifest_sha256": None,
+        "activated_at_unix": int(time.time()),
+    }
+
+
+def _new_transition_journal(
+    *,
+    operation: str,
+    source_state: Mapping[str, Any] | None,
+    target_state: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if operation not in TRANSITION_OPERATIONS:
+        raise CloudDeployError("activation_journal_invalid")
+    normalized_source = (
+        None
+        if source_state is None
+        else _normalized_slot_state(source_state, "activation_journal_invalid")
+    )
+    normalized_target = (
+        None
+        if target_state is None
+        else _normalized_slot_state(target_state, "activation_journal_invalid")
+    )
+    return _write_transition_journal(
+        {
+            "schema_version": SCHEMA_VERSION,
+            "operation": operation,
+            "phase": "prepared",
+            "source_target_type": "legacy" if normalized_source is None else "slot",
+            "source_state": normalized_source,
+            "target_target_type": "legacy" if normalized_target is None else "slot",
+            "target_state": normalized_target,
+            "created_at_unix": int(time.time()),
+        }
+    )
+
+
+def _release_for_state(state: Mapping[str, Any]) -> Path:
+    release = RELEASE_ROOT / str(state["active_release_id"])
+    try:
+        if release.is_symlink() or not release.is_dir():
+            raise OSError
+        release.relative_to(RELEASE_ROOT)
+    except (OSError, ValueError):
+        raise CloudDeployError("rollback_release_missing") from None
+    return release
+
+
+def _verify_transition_release(
+    spec: CloudDeploymentSpec, state: Mapping[str, Any]
+) -> Path:
+    release = _release_for_state(state)
+    manifest = release / "cloud-release-manifest.json"
+    digest = _sha256_file(manifest)
+    declared = state.get("artifact_manifest_sha256")
+    if declared is not None and declared != digest:
+        raise CloudDeployError("artifact_manifest_digest_mismatch")
+    staged_spec = dataclasses.replace(
+        spec,
+        release_id=str(state["active_release_id"]),
+        artifact_root=release,
+        artifact_manifest_sha256=digest,
+    )
+    _validate_artifact(staged_spec)
+    _verify_staged_runtime(release)
+    return release
+
+
+def _write_slot_projection(state: Mapping[str, Any]) -> None:
+    normalized = _normalized_slot_state(state, "deployment_state_invalid")
+    release = _release_for_state(normalized)
+    _atomic_write(
+        STATE_ROOT / "active.json",
+        _canonical_json(normalized) + b"\n",
+        mode=0o600,
+    )
+    _fsync_directory(STATE_ROOT)
+    _atomic_symlink(release, INSTALL_ROOT / "current")
+    _fsync_directory(INSTALL_ROOT)
+
+
+def _remove_slot_projection() -> None:
+    active = STATE_ROOT / "active.json"
+    current = INSTALL_ROOT / "current"
+    try:
+        if active.exists() or active.is_symlink():
+            metadata = active.lstat()
+            if active.is_symlink() or not stat.S_ISREG(metadata.st_mode):
+                raise OSError
+            active.unlink()
+            _fsync_directory(STATE_ROOT)
+        if current.exists() or current.is_symlink():
+            if not current.is_symlink():
+                raise OSError
+            current.unlink()
+            _fsync_directory(INSTALL_ROOT)
+    except OSError:
+        raise CloudDeployError("deployment_state_clear_failed") from None
+
+
+def _route_targets(state: Mapping[str, Any] | None) -> tuple[Path, Path]:
+    if state is None:
+        return (
+            NGINX_ROOT / "control-plane-disabled.conf",
+            NGINX_ROOT / "admin-route-legacy.conf",
+        )
+    return (
+        _nginx_target(str(state["active_slot"])),
+        NGINX_ROOT / "admin-route-control-plane.conf",
+    )
+
+
+def _classify_transition_routes(journal: Mapping[str, Any]) -> str:
+    """Classify the two live Nginx pointers without trusting a journal phase."""
+
+    control_link = NGINX_ROOT / "active-control-plane.conf"
+    admin_link = NGINX_ROOT / "active-admin-route.conf"
+    try:
+        if not control_link.is_symlink() or not admin_link.is_symlink():
+            return "unknown"
+        actual = (
+            control_link.resolve(strict=True),
+            admin_link.resolve(strict=True),
+        )
+    except OSError:
+        return "unknown"
+    source = _route_targets(journal["source_state"])
+    target = _route_targets(journal["target_state"])
+    if actual == source:
+        return "source"
+    if actual == target:
+        return "target"
+    expected = {source[0], source[1], target[0], target[1]}
+    if actual[0] in expected or actual[1] in expected:
+        return "partial"
+    return "unknown"
+
+
+def _transition_resolution(journal: Mapping[str, Any]) -> str:
+    phase = str(journal["phase"])
+    route_state = _classify_transition_routes(journal)
+    if phase in {"routes_switched", "state_written"}:
+        return "target"
+    # Before the durable routes_switched marker, route identity may nominate
+    # the source, but recovery still schema-checks all four service roles. A
+    # target, mixed or unknown pair may already have accepted writes and must
+    # roll forward immediately.
+    return "source" if route_state == "source" else "target"
+
+
+def _restore_transition_source(
+    spec: CloudDeploymentSpec, journal: Mapping[str, Any]
+) -> None:
+    source_state = journal["source_state"]
+    target_state = journal["target_state"]
+    # Recovery never checks or starts either side while the other side may
+    # still be writing.  Repeated stop requests are intentionally idempotent.
+    _stop_transition_writers(spec, journal)
+    if source_state is not None:
+        source_release = _verify_transition_release(spec, source_state)
+        _recovery_schema_check(
+            source_release, str(source_state["active_slot"]), source=True
+        )
+    elif target_state is not None and journal.get("operation") == "activate":
+        # The first v1 migration writes only the new encrypted v1 databases;
+        # the released legacy stores are immutable migration inputs.  Legacy
+        # writers were stopped before migration began, so restarting them is a
+        # safe availability fallback even when a target migration was partial.
+        # Later v1-to-v1 transitions have a concrete source_state and must pass
+        # the four-role schema compatibility check above.
+        pass
+    _start_target_services(spec, source_state)
+    if source_state is not None:
+        _switch_nginx(spec, str(source_state["active_slot"]))
+        _write_slot_projection(source_state)
+    else:
+        _switch_nginx_legacy(spec)
+        _remove_slot_projection()
+    _clear_transition_journal()
+
+
+def _complete_transition_target(
+    spec: CloudDeploymentSpec, journal: Mapping[str, Any]
+) -> None:
+    source_state = journal["source_state"]
+    target_state = journal["target_state"]
+    if journal.get("operation") == "activate" and journal.get("phase") not in {
+        "schema_ready",
+        "target_ready",
+        "routes_switched",
+        "state_written",
+    }:
+        raise CloudDeployError("activation_schema_not_ready")
+    _stop_transition_writers(spec, journal)
+    if target_state is not None:
+        target_release = _verify_transition_release(spec, target_state)
+        _recovery_schema_check(
+            target_release, str(target_state["active_slot"]), source=False
+        )
+    _start_target_services(spec, target_state)
+    if target_state is not None:
+        _switch_nginx(spec, str(target_state["active_slot"]))
+        _write_slot_projection(target_state)
+    else:
+        _switch_nginx_legacy(spec)
+        _remove_slot_projection()
+    _clear_transition_journal()
+
+
+def _resolve_pending_transition(
+    spec: CloudDeploymentSpec, journal: Mapping[str, Any]
+) -> str:
+    effective = dict(journal)
+    resolution = _transition_resolution(effective)
+    if (
+        effective.get("operation") == "activate"
+        and effective.get("phase") == "migrating"
+        and resolution == "source"
+    ):
+        # A crash or deterministic migration failure must not strand a known
+        # compatible source offline.  Restore it first; only an incompatible
+        # v1 source forces the idempotent target migration to continue.
+        try:
+            _restore_transition_source(spec, effective)
+            return "source"
+        except _RecoverySourceSchemaIncompatible:
+            resolution = "target"
+    if effective.get("operation") == "activate" and resolution == "target":
+        effective = _ensure_activation_schema_ready(spec, effective)
+        resolution = _transition_resolution(effective)
+    if resolution == "target":
+        _complete_transition_target(spec, effective)
+    else:
+        try:
+            _restore_transition_source(spec, effective)
+        except _RecoverySourceSchemaIncompatible:
+            effective = _ensure_activation_schema_ready(spec, effective)
+            _complete_transition_target(spec, effective)
+            resolution = "target"
+    return resolution
+
+
+def _recover_pending_transition(
+    spec: CloudDeploymentSpec,
+) -> Mapping[str, Any] | None:
+    journal = _transition_journal()
+    if journal is None:
+        return None
+    try:
+        resolution = _resolve_pending_transition(spec, journal)
+    except (CloudDeployError, OSError):
+        raise CloudDeployError("activation_recovery_failed") from None
+    return {**journal, "resolution": resolution}
+
+
+def _compensate_transition(
+    spec: CloudDeploymentSpec, journal: Mapping[str, Any]
+) -> str:
+    try:
+        return _resolve_pending_transition(spec, journal)
+    except (CloudDeployError, OSError):
+        raise CloudDeployError("activation_compensation_failed") from None
+
+
 def deploy(spec: CloudDeploymentSpec, *, confirmation: str) -> Mapping[str, Any]:
     """Apply one local deployment after every immutable/target fence passes."""
 
     spec.validate()
     _target_preflight(spec, confirmation)
-    manifest = _validate_artifact(spec)
     _validate_attestation(spec)
     with _deployment_lock():
+        recovered = _recover_pending_transition(spec)
+        if (
+            recovered is not None
+            and recovered.get("operation") == "activate"
+            and recovered.get("resolution") == "target"
+            and isinstance(recovered.get("target_state"), Mapping)
+            and recovered["target_state"].get("active_release_id") == spec.release_id
+            and recovered["target_state"].get("artifact_manifest_sha256")
+            == spec.artifact_manifest_sha256
+        ):
+            return dict(recovered["target_state"])
+        manifest = _validate_artifact(spec)
         prior = _state()
         current = None if prior is None else str(prior["active_slot"])
         target = "blue" if current in {None, "green"} else "green"
@@ -965,32 +2031,52 @@ def deploy(spec: CloudDeploymentSpec, *, confirmation: str) -> Mapping[str, Any]
         _write_slot_environment(target, release)
         _verify_staged_runtime(release)
         _verify_nginx_wiring(spec)
-        _schema_gate(release, target)
-        if current is not None:
-            _systemctl(spec, "stop", reversed(_slot_units(current)))
-        candidate_units = _slot_units(target)
-        try:
-            _systemctl(spec, "start", candidate_units)
-            _wait_health(spec, target)
-            _switch_nginx(spec, target)
-        except CloudDeployError:
-            with contextlib.suppress(CloudDeployError):
-                _systemctl(spec, "stop", reversed(candidate_units))
-            if current is not None:
-                with contextlib.suppress(CloudDeployError):
-                    _systemctl(spec, "start", _slot_units(current))
-                    _wait_health(spec, current)
-            raise
         receipt = _activation_state(
             release_id=spec.release_id,
             slot=target,
             prior=prior,
             artifact_manifest_sha256=spec.artifact_manifest_sha256,
         )
-        _atomic_write(
-            STATE_ROOT / "active.json", _canonical_json(receipt) + b"\n", mode=0o600
+        journal = _new_transition_journal(
+            operation="activate", source_state=prior, target_state=receipt
         )
-        _atomic_symlink(release, INSTALL_ROOT / "current")
+        # The migration publishes ``migrating`` before either writer set is
+        # stopped.  It remains inside the compensation boundary so a
+        # deterministic failure can restore the schema-compatible source (or
+        # the immutable first-release legacy source) instead of unnecessarily
+        # extending an outage.  A process crash still leaves the durable
+        # journal for idempotent startup recovery.
+        try:
+            journal = _ensure_activation_schema_ready(
+                spec, journal, target_release=release
+            )
+            candidate_units = _slot_units(target)
+            _systemctl(spec, "start", candidate_units)
+            _wait_health(spec, target)
+            journal = _advance_transition_journal(journal, "target_ready")
+            _switch_nginx(spec, target)
+            journal = _advance_transition_journal(journal, "routes_switched")
+            _atomic_write(
+                STATE_ROOT / "active.json",
+                _canonical_json(receipt) + b"\n",
+                mode=0o600,
+            )
+            _fsync_directory(STATE_ROOT)
+            journal = _advance_transition_journal(journal, "state_written")
+            _atomic_symlink(release, INSTALL_ROOT / "current")
+            _fsync_directory(INSTALL_ROOT)
+            # Removing the durable journal is the only commit point. A crash
+            # before this unlink remains incomplete. Startup chooses from live
+            # routes, then schema-checks every service role before starting a
+            # source; an incompatible or unverifiable source rolls forward.
+            _clear_transition_journal()
+        except (CloudDeployError, OSError) as error:
+            resolution = _compensate_transition(spec, journal)
+            if resolution == "target":
+                return receipt
+            if isinstance(error, CloudDeployError):
+                raise
+            raise CloudDeployError("activation_commit_failed") from None
         return receipt
 
 
@@ -1001,53 +2087,96 @@ def rollback(spec: CloudDeploymentSpec, *, confirmation: str) -> Mapping[str, An
     _target_preflight(spec, confirmation)
     _validate_attestation(spec)
     with _deployment_lock():
+        recovered = _recover_pending_transition(spec)
+        if (
+            recovered is not None
+            and recovered.get("operation") == "rollback"
+            and recovered.get("resolution") == "target"
+        ):
+            target = recovered.get("target_state")
+            if isinstance(target, Mapping):
+                return dict(target)
+            source = recovered.get("source_state")
+            if isinstance(source, Mapping):
+                return _legacy_rollback_receipt(source)
+            raise CloudDeployError("activation_recovery_failed")
         current = _state()
         if current is None:
             raise CloudDeployError("rollback_state_missing")
+        previous_target_type = current.get("previous_target_type")
         previous_slot = current.get("previous_slot")
         previous_release = current.get("previous_release_id")
-        if previous_slot not in SLOTS or not SAFE_RELEASE_ID.fullmatch(
+        if previous_target_type == "legacy":
+            target_state = None
+            receipt = _legacy_rollback_receipt(current)
+            previous_root = None
+        elif previous_target_type == "slot" and previous_slot in SLOTS and SAFE_RELEASE_ID.fullmatch(
             str(previous_release or "")
         ):
+            previous_root = _release_for_state(
+                {"active_release_id": str(previous_release)}
+            )
+            previous_manifest_sha256 = _sha256_file(
+                previous_root / "cloud-release-manifest.json"
+            )
+            target_state = _rollback_slot_state(
+                current,
+                release_id=str(previous_release),
+                slot=str(previous_slot),
+                artifact_manifest_sha256=previous_manifest_sha256,
+            )
+            previous_root = _verify_transition_release(spec, target_state)
+            receipt = target_state
+        else:
             raise CloudDeployError("rollback_target_missing")
-        previous_root = RELEASE_ROOT / str(previous_release)
-        if not previous_root.is_dir():
-            raise CloudDeployError("rollback_release_missing")
         active_slot = str(current["active_slot"])
-        previous_units = _slot_units(str(previous_slot))
-        _systemctl(spec, "stop", reversed(_slot_units(active_slot)))
-        try:
-            # Old code validates the already-migrated schema.  It is never
-            # allowed to downgrade or restore a live database automatically.
-            for service in _SERVICE_MODULES:
-                _run_service_command(
-                    _service_command(previous_root, service, "schema", "check"),
-                    code="rollback_schema_incompatible",
-                    environment=_service_environment(service, str(previous_slot)),
-                    timeout=600,
-                )
-            _systemctl(spec, "start", previous_units)
-            _wait_health(spec, str(previous_slot))
-            _switch_nginx(spec, str(previous_slot))
-        except CloudDeployError:
-            with contextlib.suppress(CloudDeployError):
-                _systemctl(spec, "stop", reversed(previous_units))
-                _systemctl(spec, "start", _slot_units(active_slot))
-                _wait_health(spec, active_slot)
-            raise
-        receipt = {
-            "schema_version": SCHEMA_VERSION,
-            "active_release_id": previous_release,
-            "active_slot": previous_slot,
-            "previous_release_id": current["active_release_id"],
-            "previous_slot": active_slot,
-            "artifact_manifest_sha256": None,
-            "activated_at_unix": int(time.time()),
-        }
-        _atomic_write(
-            STATE_ROOT / "active.json", _canonical_json(receipt) + b"\n", mode=0o600
+        journal = _new_transition_journal(
+            operation="rollback", source_state=current, target_state=target_state
         )
-        _atomic_symlink(previous_root, INSTALL_ROOT / "current")
+        try:
+            _systemctl(spec, "stop", reversed(_slot_units(active_slot)))
+            if target_state is None:
+                _start_target_services(spec, None)
+                _switch_nginx_legacy(spec)
+            else:
+                assert previous_root is not None
+                # Old code validates the already-migrated schema. It is never
+                # allowed to downgrade or restore a live database automatically.
+                for service in _SERVICE_MODULES:
+                    _run_service_command(
+                        _service_command(previous_root, service, "schema", "check"),
+                        code="rollback_schema_incompatible",
+                        environment=_service_environment(service, str(previous_slot)),
+                        timeout=600,
+                    )
+                _systemctl(spec, "start", _slot_units(str(previous_slot)))
+                _wait_health(spec, str(previous_slot))
+                journal = _advance_transition_journal(journal, "target_ready")
+                _switch_nginx(spec, str(previous_slot))
+            journal = _advance_transition_journal(journal, "routes_switched")
+            if target_state is None:
+                _remove_slot_projection()
+            else:
+                _atomic_write(
+                    STATE_ROOT / "active.json",
+                    _canonical_json(target_state) + b"\n",
+                    mode=0o600,
+                )
+                _fsync_directory(STATE_ROOT)
+                journal = _advance_transition_journal(journal, "state_written")
+                _atomic_symlink(previous_root, INSTALL_ROOT / "current")
+                _fsync_directory(INSTALL_ROOT)
+            # Journal removal, not an intermediate phase label, commits the
+            # rollback. Until then startup resolves live routes and schema
+            # compatibility; it never blindly restores the source target.
+            _clear_transition_journal()
+        except (CloudDeployError, OSError) as error:
+            resolution = _compensate_transition(spec, journal)
+            if resolution == "target":
+                return receipt
+            if isinstance(error, CloudDeployError):
+                raise
+            raise CloudDeployError("rollback_commit_failed") from None
         return receipt
 
 

@@ -28,6 +28,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 from starlette.background import BackgroundTask
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from ecorex import __version__
 from ecorex.release.public_index import MAX_PUBLIC_BOOTSTRAP_INDEX_BYTES
 from ecorex.release.signing import ReleaseSigner
 from ecorex.update import ReleaseChannel, ReleaseManifest, VerificationError
@@ -78,6 +79,7 @@ from .models import (
     CreateRollbackRequest,
     CreateRolloutRequest,
     DistributionProjection,
+    DirectAdmissionRequest,
     GateBundleRequest,
     GateResultRequest,
     KillSwitchProjection,
@@ -92,6 +94,10 @@ from .repository import (
     ControlPlaneNotFound,
     ControlPlaneRepository,
     UpdateHintClient,
+)
+from .release_replica import (
+    CDNReleaseReplicaService,
+    create_cdn_release_replica_router,
 )
 from .signals import DurableUpdateSignalPoller
 from .shares import (
@@ -123,6 +129,10 @@ _SHARE_MEDIA_UPLOAD_PATH = re.compile(
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 _MAX_BOOTSTRAP_ACTIVATION_BYTES = 16 * 1024
+_MAX_DIRECT_ADMISSION_REQUEST_BYTES = 32 * 1024 * 1024
+_DIRECT_ADMISSION_PATH = re.compile(
+    r"^/api/v1/admin/releases/[A-Za-z0-9][A-Za-z0-9._-]{0,127}/direct-admission$"
+)
 
 
 def _share_media_range(value: str | None, size_bytes: int) -> tuple[int, int] | None:
@@ -304,6 +314,158 @@ class _ShareBodyLimitMiddleware:
         await response(scope, receive, send)
 
 
+class _DirectAdmissionBodyLimitMiddleware:
+    """Authenticate, single-flight and bound direct evidence before parsing."""
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        authenticator: ControlPlaneAuthenticator,
+        max_inflight: int = 1,
+    ) -> None:
+        if max_inflight != 1:
+            raise ValueError("direct admission requires one bounded memory slot")
+        self.app = app
+        self.authenticator = authenticator
+        self._slots = asyncio.BoundedSemaphore(max_inflight)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if not (
+            scope["type"] == "http"
+            and scope.get("method") == "PUT"
+            and _DIRECT_ADMISSION_PATH.fullmatch(scope.get("path", ""))
+        ):
+            await self.app(scope, receive, send)
+            return
+        try:
+            current = _authenticate_control_principal(
+                self.authenticator, scope.get("headers", [])
+            )
+        except PermissionError:
+            await self._reject(
+                scope,
+                receive,
+                send,
+                status_code=401,
+                code="direct_admission_authentication_failed",
+                message="Control Plane authentication failed",
+            )
+            return
+        if "release_admin" not in current.roles:
+            await self._reject(
+                scope,
+                receive,
+                send,
+                status_code=403,
+                code="direct_admission_role_required",
+                message="release administrator role is required",
+            )
+            return
+        lengths = [
+            value
+            for name, value in scope.get("headers", [])
+            if name.lower() == b"content-length"
+        ]
+        if (
+            len(lengths) != 1
+            or len(lengths[0]) > 20
+            or not lengths[0].isdigit()
+            or not 1 <= int(lengths[0]) <= _MAX_DIRECT_ADMISSION_REQUEST_BYTES
+        ):
+            status = 413 if lengths else 411
+            await self._reject(
+                scope,
+                receive,
+                send,
+                status_code=status,
+                code=(
+                    "direct_admission_body_too_large"
+                    if status == 413
+                    else "direct_admission_length_required"
+                ),
+                message="direct admission requires an exact bounded body",
+            )
+            return
+        if self._slots.locked():
+            await self._reject(
+                scope,
+                receive,
+                send,
+                status_code=429,
+                code="direct_admission_busy",
+                message="another direct admission is already being verified",
+            )
+            return
+        await self._slots.acquire()
+        try:
+            declared = int(lengths[0])
+            received = 0
+            messages: list[dict[str, Any]] = []
+            while True:
+                message = await receive()
+                messages.append(message)
+                if len(messages) > 16_384:
+                    received = _MAX_DIRECT_ADMISSION_REQUEST_BYTES + 1
+                    break
+                if message.get("type") == "http.request":
+                    received += len(message.get("body", b""))
+                    if received > _MAX_DIRECT_ADMISSION_REQUEST_BYTES:
+                        break
+                    if message.get("more_body", False):
+                        continue
+                break
+            if received > _MAX_DIRECT_ADMISSION_REQUEST_BYTES:
+                await self._reject(
+                    scope,
+                    receive,
+                    send,
+                    status_code=413,
+                    code="direct_admission_body_too_large",
+                    message="direct admission exceeds its size limit",
+                )
+                return
+            if received != declared:
+                await self._reject(
+                    scope,
+                    receive,
+                    send,
+                    status_code=400,
+                    code="direct_admission_body_length_mismatch",
+                    message="direct admission body length differs",
+                )
+                return
+            index = 0
+
+            async def replay_receive():
+                nonlocal index
+                if index < len(messages):
+                    message = messages[index]
+                    index += 1
+                    return message
+                return await receive()
+
+            await self.app(scope, replay_receive, send)
+        finally:
+            self._slots.release()
+
+    @staticmethod
+    async def _reject(
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        *,
+        status_code: int,
+        code: str,
+        message: str,
+    ) -> None:
+        response = JSONResponse(
+            status_code=status_code,
+            content={"detail": {"code": code, "message": message}},
+        )
+        await response(scope, receive, send)
+
+
 def _bearer(value: str) -> str:
     scheme, separator, token = value.partition(" ")
     if (
@@ -314,6 +476,22 @@ def _bearer(value: str) -> str:
     ):
         raise PermissionError("a valid Control Plane bearer token is required")
     return token
+
+
+def _authenticate_control_principal(
+    authenticator: ControlPlaneAuthenticator,
+    headers: list[tuple[bytes, bytes]],
+) -> ControlPrincipal:
+    values = [
+        value for name, value in headers if name.lower() == b"authorization"
+    ]
+    if len(values) != 1:
+        raise PermissionError("one authorization header is required")
+    try:
+        authorization = values[0].decode("ascii")
+    except UnicodeDecodeError:
+        raise PermissionError("authorization header must be ASCII") from None
+    return authenticator.authenticate(_bearer(authorization))
 
 
 def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -530,6 +708,7 @@ def create_control_plane_app(
     management_repository: AdminManagementRepository | None = None,
     model_connection_tester: ModelConnectionTester | None = None,
     device_identity_broker: ManagedDeviceIdentityBroker | None = None,
+    release_replica_service: CDNReleaseReplicaService | None = None,
 ) -> FastAPI:
     hub = UpdateSignalHub()
     resolved_model_tester = (
@@ -585,6 +764,11 @@ def create_control_plane_app(
         openapi_url="/api/v1/openapi.json",
         lifespan=lifespan,
     )
+    app.add_middleware(
+        _DirectAdmissionBodyLimitMiddleware,
+        authenticator=authenticator,
+        max_inflight=1,
+    )
     if share_repository is not None:
         app.add_middleware(_ShareBodyLimitMiddleware)
     if audit_repository is not None:
@@ -600,11 +784,12 @@ def create_control_plane_app(
     app.state.rollback_signer = rollback_signer
     app.state.management_repository = management_repository
     app.state.device_identity_broker = device_identity_broker
+    app.state.release_replica_service = release_replica_service
 
     def principal(request: Request) -> ControlPrincipal:
         try:
-            return authenticator.authenticate(
-                _bearer(request.headers.get("authorization", ""))
+            return _authenticate_control_principal(
+                authenticator, request.scope.get("headers", [])
             )
         except PermissionError as error:
             raise HTTPException(
@@ -641,7 +826,11 @@ def create_control_plane_app(
 
     admin_resume_provider = AdminResumeAdapter(repository.admin_resume_facts)
     app.state.admin_resume_provider = admin_resume_provider
-    app.include_router(create_admin_web_router())
+    app.include_router(
+        create_admin_web_router(
+            external_asset_prefix="/ecorex-agent/admin/assets"
+        )
+    )
     app.include_router(
         create_admin_resume_router(
             admin_resume_provider,
@@ -675,6 +864,21 @@ def create_control_plane_app(
                 admin_dependency=audit_admin,
             )
         )
+    if release_replica_service is not None:
+        app.include_router(create_cdn_release_replica_router(release_replica_service))
+
+    @app.get(
+        "/api/v1/internal/release-admin-auth",
+        status_code=204,
+        response_class=Response,
+        include_in_schema=False,
+    )
+    def release_admin_auth_probe(
+        _current: ControlPrincipal = Depends(admin),
+    ) -> Response:
+        """No-body Nginx auth_request target; never returns token metadata."""
+
+        return Response(status_code=204)
 
     @app.middleware("http")
     async def no_store(request: Request, call_next):
@@ -694,6 +898,8 @@ def create_control_plane_app(
         ):
             response.headers["Cache-Control"] = "no-store"
             response.headers["X-Content-Type-Options"] = "nosniff"
+        if request.url.path.startswith("/health/"):
+            response.headers["X-EcoreX-Product-Version"] = __version__
         return response
 
     if service_lifecycle is not None:
@@ -1097,6 +1303,22 @@ def create_control_plane_app(
     ) -> CandidateProjection:
         return repository.publish(
             release_id, actor=current, client_request_id=request.client_request_id
+        )
+
+    @app.put(
+        "/api/v1/admin/releases/{release_id}/direct-admission",
+        response_model=CandidateProjection,
+    )
+    def record_direct_admission(
+        release_id: str,
+        request: DirectAdmissionRequest,
+        current: ControlPrincipal = Depends(admin),
+    ) -> CandidateProjection:
+        return repository.record_direct_admission(
+            release_id,
+            request.attestation,
+            actor=current,
+            client_request_id=request.client_request_id,
         )
 
     @app.post(

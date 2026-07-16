@@ -31,7 +31,13 @@ from typing import Any, Protocol, runtime_checkable
 from urllib.parse import urlsplit
 import uuid
 
+from ecorex import __version__
 from ecorex.observability.audit import AuditRetentionPolicy
+from ecorex.security.provider_tls import (
+    ProviderTLSConfigurationError,
+    pinned_provider_ssl_context,
+    validate_provider_ca_binding,
+)
 from ecorex.storage.attested_local_cas import (
     AttestedEncryptedLocalCAS,
     AttestedEncryptedLocalVolume,
@@ -43,7 +49,8 @@ from ecorex.release import (
     PUBLIC_BOOTSTRAP_AUTHORITY_MAX_TTL_SECONDS,
     ReleaseSigner,
 )
-from ecorex.update import Ed25519SignatureVerifier
+from ecorex.release.direct_admission import DirectReleaseAdmissionPolicy
+from ecorex.update import Ed25519SignatureVerifier, MAX_ARTIFACT_BYTES
 
 from .app import ControlPlaneServiceLifecycle, create_control_plane_app
 from .audit import CloudAuditRepository
@@ -62,6 +69,7 @@ from .audit_schema import (
     MIGRATION_001_CHECKSUM as CLOUD_AUDIT_MIGRATION_CHECKSUM,
     CloudAuditSchemaManager,
 )
+from .direct_admission_schema import CURRENT_DIRECT_ADMISSION_SCHEMA_VERSION
 from .production_auth import (
     Ed25519JWTAuthenticator,
     parse_ed25519_public_keyring,
@@ -88,6 +96,13 @@ from .device_identity_production import (
 )
 from .device_identity_schema import DeviceIdentitySchemaManager
 from .repository import ControlPlaneRepository
+from .release_replica import (
+    CDNReleaseReplicaService,
+    CloudReleaseReplicaAuditSink,
+    EnvironmentRotatingReleaseReplicaTokenVerifier,
+    PRODUCTION_RELEASE_REPLICA_PUBLIC_ROOT,
+    PRODUCTION_RELEASE_REPLICA_ROOT,
+)
 from .schema import (
     CONTROL_PLANE_SCHEMA_SHA256,
     CURRENT_CONTROL_PLANE_SCHEMA_VERSION,
@@ -373,9 +388,20 @@ class ControlPlaneProductionConfig:
     rollback_signer_timeout_seconds: int = 30
     admin_management_enabled: bool = False
     model_provider_origins: Mapping[str, str] = field(default_factory=dict)
+    model_provider_ca_bundle_path: Path | None = None
+    model_provider_ca_bundle_sha256: str | None = field(default=None, repr=False)
     model_activation_timeout_seconds: int = 180
     device_identity_enabled: bool = False
     device_identity: DeviceIdentityProductionConfig | None = None
+    release_replica_enabled: bool = False
+    release_replica_storage_root: Path | None = None
+    release_replica_public_root: str | None = None
+    release_replica_namespace: str | None = None
+    release_replica_product_version: str | None = None
+    release_replica_max_asset_bytes: int = MAX_ARTIFACT_BYTES
+    direct_release_admission_enabled: bool = False
+    direct_release_id: str | None = None
+    direct_release_instruction_sha256: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         try:
@@ -507,6 +533,25 @@ class ControlPlaneProductionConfig:
             raise ProductionConfigurationError(
                 "release, publication and rollback trust roles must use distinct keys"
             )
+        if self.direct_release_admission_enabled:
+            if (
+                not isinstance(self.direct_release_id, str)
+                or _SAFE_ID.fullmatch(self.direct_release_id) is None
+                or re.fullmatch(
+                    r"[0-9a-f]{64}", str(self.direct_release_instruction_sha256)
+                )
+                is None
+            ):
+                raise ProductionConfigurationError(
+                    "direct release admission scope is invalid"
+                )
+        elif (
+            self.direct_release_id is not None
+            or self.direct_release_instruction_sha256 is not None
+        ):
+            raise ProductionConfigurationError(
+                "disabled direct release admission must not retain authority"
+            )
         signer_required = (
             self.publication_signer_executable,
             self.publication_signer_executable_sha256,
@@ -622,6 +667,16 @@ class ControlPlaneProductionConfig:
             raise ProductionConfigurationError(
                 "managed model origins require administrator management"
             )
+        try:
+            validate_provider_ca_binding(
+                origins.values(),
+                ca_bundle_path=self.model_provider_ca_bundle_path,
+                ca_bundle_sha256=self.model_provider_ca_bundle_sha256,
+            )
+        except ProviderTLSConfigurationError:
+            raise ProductionConfigurationError(
+                "managed model provider CA binding is invalid"
+            ) from None
         if self.device_identity_enabled != (self.device_identity is not None):
             raise ProductionConfigurationError(
                 "managed device identity configuration is incomplete"
@@ -645,6 +700,31 @@ class ControlPlaneProductionConfig:
         ):
             raise ProductionConfigurationError(
                 "managed device identity access tokens are not trusted by Control Plane"
+            )
+        if self.release_replica_enabled:
+            if (
+                self.release_replica_storage_root
+                != PRODUCTION_RELEASE_REPLICA_ROOT
+                or self.release_replica_public_root
+                != PRODUCTION_RELEASE_REPLICA_PUBLIC_ROOT
+                or self.release_replica_product_version != __version__
+                or self.release_replica_namespace != f"v{__version__}"
+                or not 1
+                <= self.release_replica_max_asset_bytes
+                <= MAX_ARTIFACT_BYTES
+            ):
+                raise ProductionConfigurationError(
+                    "production CDN release replica fence is invalid"
+                )
+        elif (
+            self.release_replica_storage_root is not None
+            or self.release_replica_public_root is not None
+            or self.release_replica_namespace is not None
+            or self.release_replica_product_version is not None
+            or self.release_replica_max_asset_bytes != MAX_ARTIFACT_BYTES
+        ):
+            raise ProductionConfigurationError(
+                "CDN release replica settings require the service to be enabled"
             )
         object.__setattr__(self, "model_provider_origins", dict(origins))
 
@@ -878,6 +958,22 @@ class ControlPlaneProductionConfig:
         device_identity_enabled = _boolean(
             values, "ECOREX_CP_DEVICE_IDENTITY_ENABLED", default=False
         )
+        release_replica_enabled = _boolean(
+            values, "ECOREX_CP_RELEASE_REPLICA_ENABLED", default=False
+        )
+        direct_release_enabled = _boolean(
+            values, "ECOREX_CP_DIRECT_RELEASE_ADMISSION_ENABLED", default=False
+        )
+        direct_release_id = values.get("ECOREX_CP_DIRECT_RELEASE_ID") or None
+        direct_instruction = (
+            values.get("ECOREX_CP_DIRECT_RELEASE_INSTRUCTION_SHA256") or None
+        )
+        if not direct_release_enabled and (
+            direct_release_id is not None or direct_instruction is not None
+        ):
+            raise ProductionConfigurationError(
+                "disabled direct release admission must not retain authority"
+            )
         origins: dict[str, str] = {}
         raw_origins = values.get("ECOREX_CP_MODEL_PROVIDER_ORIGINS_JSON")
         if raw_origins:
@@ -1171,6 +1267,12 @@ class ControlPlaneProductionConfig:
             ),
             admin_management_enabled=management_enabled,
             model_provider_origins=origins,
+            model_provider_ca_bundle_path=_optional_absolute_path(
+                values, "ECOREX_CP_MODEL_PROVIDER_CA_BUNDLE_PATH"
+            ),
+            model_provider_ca_bundle_sha256=(
+                values.get("ECOREX_CP_MODEL_PROVIDER_CA_BUNDLE_SHA256") or None
+            ),
             model_activation_timeout_seconds=_integer(
                 values,
                 "ECOREX_CP_MODEL_ACTIVATION_TIMEOUT_SECONDS",
@@ -1184,6 +1286,54 @@ class ControlPlaneProductionConfig:
                 if device_identity_enabled
                 else None
             ),
+            release_replica_enabled=release_replica_enabled,
+            release_replica_storage_root=(
+                (
+                    PRODUCTION_RELEASE_REPLICA_ROOT
+                    if _required(
+                        values, "ECOREX_CP_RELEASE_REPLICA_STORAGE_ROOT"
+                    )
+                    == PRODUCTION_RELEASE_REPLICA_ROOT.as_posix()
+                    else Path(
+                        _required(
+                            values, "ECOREX_CP_RELEASE_REPLICA_STORAGE_ROOT"
+                        )
+                    )
+                )
+                if release_replica_enabled
+                else None
+            ),
+            release_replica_public_root=(
+                _required(values, "ECOREX_CP_RELEASE_REPLICA_PUBLIC_ROOT").rstrip("/")
+                if release_replica_enabled
+                else None
+            ),
+            release_replica_namespace=(
+                _required(values, "ECOREX_CP_RELEASE_REPLICA_NAMESPACE")
+                if release_replica_enabled
+                else None
+            ),
+            release_replica_product_version=(
+                _required(values, "ECOREX_CP_RELEASE_REPLICA_PRODUCT_VERSION")
+                if release_replica_enabled
+                else None
+            ),
+            release_replica_max_asset_bytes=(
+                _integer(
+                    values,
+                    "ECOREX_CP_RELEASE_REPLICA_MAX_ASSET_BYTES",
+                    minimum=1,
+                    maximum=MAX_ARTIFACT_BYTES,
+                    default=MAX_ARTIFACT_BYTES,
+                )
+                if release_replica_enabled
+                else MAX_ARTIFACT_BYTES
+            ),
+            direct_release_admission_enabled=direct_release_enabled,
+            direct_release_id=(direct_release_id if direct_release_enabled else None),
+            direct_release_instruction_sha256=(
+                direct_instruction if direct_release_enabled else None
+            ),
         )
 
 
@@ -1195,6 +1345,7 @@ class ProductionSchemaReport:
     audit_schema_version: int
     share_schema_version: int
     admin_management_schema_version: int
+    direct_admission_schema_version: int
     backup: BackupReceipt
 
     def to_dict(self) -> dict[str, Any]:
@@ -1205,6 +1356,7 @@ class ProductionSchemaReport:
             "audit_schema_version": self.audit_schema_version,
             "share_schema_version": self.share_schema_version,
             "admin_management_schema_version": self.admin_management_schema_version,
+            "direct_admission_schema_version": self.direct_admission_schema_version,
             "backup": self.backup.to_dict(),
         }
 
@@ -1334,6 +1486,7 @@ class ControlPlaneProductionBundle:
     management_repository: AdminManagementRepository | None
     model_connection_tester: HTTPSModelConnectionTester | None
     device_identity_broker: ManagedDeviceIdentityBroker | None
+    release_replica_service: CDNReleaseReplicaService | None
     lifecycle: "SingleNodeControlPlaneLifecycle"
     config: ControlPlaneProductionConfig
 
@@ -1354,6 +1507,7 @@ class ControlPlaneProductionBundle:
             management_repository=self.management_repository,
             model_connection_tester=self.model_connection_tester,
             device_identity_broker=self.device_identity_broker,
+            release_replica_service=self.release_replica_service,
         )
 
 
@@ -1370,6 +1524,7 @@ class SingleNodeControlPlaneLifecycle(ControlPlaneServiceLifecycle):
         audit_repository: CloudAuditRepository,
         share_repository: CloudShareRepository,
         bootstrap_index_service: BootstrapIndexPublicationService,
+        release_replica_service: CDNReleaseReplicaService | None,
     ) -> None:
         self.config = config
         self.instance_lock = instance_lock
@@ -1380,6 +1535,7 @@ class SingleNodeControlPlaneLifecycle(ControlPlaneServiceLifecycle):
         self.audit_repository = audit_repository
         self.share_repository = share_repository
         self.bootstrap_index_service = bootstrap_index_service
+        self.release_replica_service = release_replica_service
         self._accepting = False
         self._live = False
         self._closed = False
@@ -1513,6 +1669,8 @@ class SingleNodeControlPlaneLifecycle(ControlPlaneServiceLifecycle):
             self.storage.validate_controls(write_probe=True)
         else:
             self.storage.ping()
+        if self.release_replica_service is not None:
+            self.release_replica_service.health_check(write_probe=write_s3)
 
     async def _backup_loop(self) -> None:
         delay = self.config.backup_interval_seconds
@@ -1640,6 +1798,22 @@ def _configured_rollback_signer(
     return signer
 
 
+def _direct_release_policy(
+    config: ControlPlaneProductionConfig,
+    release_keys: Mapping[str, bytes],
+    publication_keys: Mapping[str, bytes],
+) -> DirectReleaseAdmissionPolicy:
+    if not config.direct_release_admission_enabled:
+        return DirectReleaseAdmissionPolicy()
+    return DirectReleaseAdmissionPolicy(
+        enabled=True,
+        release_id=config.direct_release_id,
+        operator_instruction_sha256=config.direct_release_instruction_sha256,
+        release_public_keys=dict(release_keys),
+        publication_public_keys=dict(publication_keys),
+    )
+
+
 class SingleNodeSQLiteS3Provider:
     def __init__(
         self,
@@ -1699,6 +1873,7 @@ class SingleNodeSQLiteS3Provider:
             audit_schema_version=audit.migration_version,
             share_schema_version=share.migration_version,
             admin_management_schema_version=management.migration_version,
+            direct_admission_schema_version=CURRENT_DIRECT_ADMISSION_SCHEMA_VERSION,
             backup=post_backup,
         )
 
@@ -1760,6 +1935,9 @@ class SingleNodeSQLiteS3Provider:
                 config.database_path,
                 verifier=verifier,
                 bootstrap_freshness_verifier=publication_verifier,
+                direct_release_policy=_direct_release_policy(
+                    config, release_keys, publication_keys
+                ),
             )
             CloudShareRepository(
                 config.database_path,
@@ -1800,6 +1978,7 @@ class SingleNodeSQLiteS3Provider:
             audit_schema_version=audit.migration_version,
             share_schema_version=share.migration_version,
             admin_management_schema_version=management.migration_version,
+            direct_admission_schema_version=CURRENT_DIRECT_ADMISSION_SCHEMA_VERSION,
             backup=receipt,
         )
 
@@ -1835,6 +2014,7 @@ class SingleNodeSQLiteS3Provider:
         storage: ShareStorageDependency | None = None
         bootstrap_index_service: BootstrapIndexPublicationService | None = None
         model_connection_tester: HTTPSModelConnectionTester | None = None
+        release_replica_service: CDNReleaseReplicaService | None = None
         try:
             volume.validate_wal()
             ControlPlaneSchemaManager(config.database_path).validate()
@@ -1864,6 +2044,9 @@ class SingleNodeSQLiteS3Provider:
                 config.database_path,
                 verifier=verifier,
                 bootstrap_freshness_verifier=publication_verifier,
+                direct_release_policy=_direct_release_policy(
+                    config, release_keys, publication_keys
+                ),
             )
             bootstrap_index_service = BootstrapIndexPublicationService(
                 repository,
@@ -1904,6 +2087,26 @@ class SingleNodeSQLiteS3Provider:
                     aggregate_days=config.audit_aggregate_days,
                 ),
             )
+            if config.release_replica_enabled:
+                assert config.release_replica_storage_root is not None
+                assert config.release_replica_public_root is not None
+                assert config.release_replica_namespace is not None
+                assert config.release_replica_product_version is not None
+                token_verifier = EnvironmentRotatingReleaseReplicaTokenVerifier()
+                if not token_verifier.configured():
+                    raise ProductionConfigurationError(
+                        "CDN release replica server credential is unavailable"
+                    )
+                release_replica_service = CDNReleaseReplicaService(
+                    storage_root=config.release_replica_storage_root,
+                    public_root=config.release_replica_public_root,
+                    release_namespace=config.release_replica_namespace,
+                    product_version=config.release_replica_product_version,
+                    verifier=verifier,
+                    token_verifier=token_verifier,
+                    audit_sink=CloudReleaseReplicaAuditSink(audit_repository),
+                    max_asset_bytes=config.release_replica_max_asset_bytes,
+                )
             management_repository = (
                 AdminManagementRepository(
                     config.database_path, encryption_key=management_key
@@ -1915,6 +2118,10 @@ class SingleNodeSQLiteS3Provider:
                 HTTPSModelConnectionTester(
                     config.model_provider_origins,
                     timeout_seconds=float(config.model_activation_timeout_seconds),
+                    ssl_context=pinned_provider_ssl_context(
+                        config.model_provider_ca_bundle_path,
+                        config.model_provider_ca_bundle_sha256,
+                    ),
                 )
                 if management_repository is not None
                 else None
@@ -1939,6 +2146,7 @@ class SingleNodeSQLiteS3Provider:
                 audit_repository=audit_repository,
                 share_repository=share_repository,
                 bootstrap_index_service=bootstrap_index_service,
+                release_replica_service=release_replica_service,
             )
             return ControlPlaneProductionBundle(
                 repository=repository,
@@ -1951,6 +2159,7 @@ class SingleNodeSQLiteS3Provider:
                 management_repository=management_repository,
                 model_connection_tester=model_connection_tester,
                 device_identity_broker=device_identity_broker,
+                release_replica_service=release_replica_service,
                 lifecycle=lifecycle,
                 config=config,
             )

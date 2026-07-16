@@ -6,6 +6,7 @@ import json
 import multiprocessing
 import os
 import stat
+import threading
 import time
 import zipfile
 from pathlib import Path
@@ -49,6 +50,52 @@ def _child_lock_and_exit(path: str, ready: multiprocessing.Event) -> None:
 
 _SPAWN_DEADLINE_SECONDS = 20.0
 _PROCESS_CLEANUP_SECONDS = 2.0
+
+
+class _ObservableCondition(threading.Condition):
+    def __init__(self, waiting: threading.Event) -> None:
+        super().__init__()
+        self.waiting = waiting
+
+    def wait(self, timeout: float | None = None) -> bool:
+        self.waiting.set()
+        return super().wait(timeout)
+
+
+class _FaultBackend:
+    name = "test-fault-backend"
+
+    def __init__(
+        self,
+        *,
+        acquire_failures: int = 0,
+        release_failures: int = 0,
+    ) -> None:
+        self.acquire_failures = acquire_failures
+        self.release_failures = release_failures
+
+    def try_acquire(self, _stream) -> bool:
+        if self.acquire_failures:
+            self.acquire_failures -= 1
+            raise RuntimeError("injected backend acquire failure")
+        return True
+
+    def release(self, _stream) -> None:
+        if self.release_failures:
+            self.release_failures -= 1
+            raise RuntimeError("injected backend release failure")
+
+
+class _CloseFailureStream:
+    def __init__(self, stream) -> None:
+        self.stream = stream
+
+    def __getattr__(self, name: str):
+        return getattr(self.stream, name)
+
+    def close(self) -> None:
+        self.stream.close()
+        raise RuntimeError("injected stream close failure")
 
 
 def _process_diagnostic(process: multiprocessing.Process) -> str:
@@ -209,6 +256,173 @@ def test_product_lock_releases_after_exception_and_process_death(tmp_path: Path)
         _reap_process(process)
     with ProductFileLock(lock_path, timeout=1.0):
         pass
+
+
+def test_product_lock_serializes_same_instance_across_threads_without_dual_owner(
+    tmp_path: Path,
+) -> None:
+    lock = ProductFileLock(
+        tmp_path / "threaded-product.lock",
+        timeout=2.0,
+        poll_interval=0.005,
+    )
+    first_acquired = threading.Event()
+    release_first = threading.Event()
+    waiter_started = threading.Event()
+    waiter_finished = threading.Event()
+    failures: list[BaseException] = []
+    waiter_blocked = threading.Event()
+    active_owners = 0
+    maximum_owners = 0
+    counter_guard = threading.Lock()
+    lock._guard = _ObservableCondition(waiter_blocked)
+
+    def own_first() -> None:
+        nonlocal active_owners, maximum_owners
+        try:
+            with lock:
+                with counter_guard:
+                    active_owners += 1
+                    maximum_owners = max(maximum_owners, active_owners)
+                first_acquired.set()
+                assert release_first.wait(timeout=2.0)
+                with counter_guard:
+                    active_owners -= 1
+        except BaseException as error:
+            failures.append(error)
+
+    def wait_for_lock() -> None:
+        nonlocal active_owners, maximum_owners
+        try:
+            assert first_acquired.wait(timeout=2.0)
+            waiter_started.set()
+            with lock:
+                with counter_guard:
+                    active_owners += 1
+                    maximum_owners = max(maximum_owners, active_owners)
+                    active_owners -= 1
+        except BaseException as error:
+            failures.append(error)
+        finally:
+            waiter_finished.set()
+
+    owner = threading.Thread(target=own_first, name="product-lock-owner")
+    waiter = threading.Thread(target=wait_for_lock, name="product-lock-waiter")
+    owner.start()
+    waiter.start()
+    try:
+        assert first_acquired.wait(timeout=2.0)
+        assert waiter_started.wait(timeout=2.0)
+        assert waiter_blocked.wait(timeout=2.0)
+        # The observable condition proves the second thread reached the
+        # in-instance wait while the first owner was still installed. Release
+        # is explicit; correctness does not depend on a scheduling sleep.
+        assert waiter_finished.is_set() is False
+        release_first.set()
+        owner.join(timeout=2.0)
+        waiter.join(timeout=2.0)
+    finally:
+        release_first.set()
+        owner.join(timeout=2.0)
+        waiter.join(timeout=2.0)
+
+    assert owner.is_alive() is False
+    assert waiter.is_alive() is False
+    assert failures == []
+    assert maximum_owners == 1
+    assert active_owners == 0
+
+
+def test_product_lock_finite_timeout_and_non_owner_release_preserve_owner(
+    tmp_path: Path,
+) -> None:
+    lock = ProductFileLock(tmp_path / "thread-timeout.lock", timeout=0.05)
+    owner_acquired = threading.Event()
+    release_owner = threading.Event()
+
+    def own() -> None:
+        with lock:
+            owner_acquired.set()
+            assert release_owner.wait(timeout=2.0)
+
+    owner = threading.Thread(target=own, name="product-lock-timeout-owner")
+    owner.start()
+    try:
+        assert owner_acquired.wait(timeout=2.0)
+        started = time.monotonic()
+        with pytest.raises(LockUnavailable, match="timed out acquiring product lock"):
+            lock.acquire()
+        assert time.monotonic() - started >= 0.025
+        with pytest.raises(
+            RuntimeError, match="only be released by its owning thread"
+        ):
+            lock.release()
+        assert lock.acquired is True
+    finally:
+        release_owner.set()
+        owner.join(timeout=2.0)
+
+    assert owner.is_alive() is False
+    assert lock.acquired is False
+
+
+def test_product_lock_acquire_cleanup_cannot_be_wedged_by_stream_close_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "acquire-cleanup.lock"
+    backend = _FaultBackend(acquire_failures=1)
+    lock = ProductFileLock(path, timeout=0.0, backend=backend)
+    original_open = Path.open
+    inject_close_failure = True
+
+    def open_with_one_close_failure(candidate: Path, *args, **kwargs):
+        nonlocal inject_close_failure
+        stream = original_open(candidate, *args, **kwargs)
+        if candidate == path and inject_close_failure:
+            inject_close_failure = False
+            return _CloseFailureStream(stream)
+        return stream
+
+    monkeypatch.setattr(Path, "open", open_with_one_close_failure)
+    with pytest.raises(RuntimeError, match="injected backend acquire failure"):
+        lock.acquire()
+    assert lock.acquired is False
+
+    with lock:
+        assert lock.acquired is True
+    assert lock.acquired is False
+
+
+@pytest.mark.parametrize("failure_site", ["backend", "stream"])
+def test_product_lock_release_failure_always_clears_owner_and_wakes_next_acquire(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_site: str,
+) -> None:
+    path = tmp_path / f"release-{failure_site}.lock"
+    backend = _FaultBackend(release_failures=int(failure_site == "backend"))
+    lock = ProductFileLock(path, timeout=0.0, backend=backend)
+    original_open = Path.open
+    inject_close_failure = failure_site == "stream"
+
+    def open_with_one_close_failure(candidate: Path, *args, **kwargs):
+        nonlocal inject_close_failure
+        stream = original_open(candidate, *args, **kwargs)
+        if candidate == path and inject_close_failure:
+            inject_close_failure = False
+            return _CloseFailureStream(stream)
+        return stream
+
+    monkeypatch.setattr(Path, "open", open_with_one_close_failure)
+    lock.acquire()
+    with pytest.raises(RuntimeError, match=f"injected {failure_site}"):
+        lock.release()
+    assert lock.acquired is False
+
+    with lock:
+        assert lock.acquired is True
+    assert lock.acquired is False
 
 
 def test_journal_is_hash_chained_and_ignores_only_a_partial_tail(tmp_path: Path) -> None:

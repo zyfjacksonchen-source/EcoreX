@@ -1,11 +1,14 @@
 {
   "schema_version": 1,
   "release_id": "ecorex-cloud-v1.0.0-build-REPLACE",
+  "source_commit": "REPLACE_WITH_40_LOWERCASE_HEX",
+  "dependency_lock_manifest_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
   "artifact_root": "/srv/ecorex-upload/ecorex-cloud-v1.0.0-build-REPLACE",
   "artifact_manifest_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
   "release_keyring_path": "/etc/ecorex/cloud/release-public-keys.json",
   "release_keyring_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
   "target_machine_id_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
   "encryption_attestation_path": "/etc/ecorex/cloud/encrypted-volume-attestation.json",
-  "encryption_attestation_sha256": "REPLACE_WITH_64_LOWERCASE_HEX"
+  "encryption_attestation_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
+  "nginx_server_config": "/etc/nginx/conf.d/ecorex-mvdcm.conf"
 }

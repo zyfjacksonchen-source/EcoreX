@@ -238,6 +238,9 @@ class RuntimeConnectorResultCoordinator:
         stage = self.repository.get_result_stage(invocation_id)
         if stage is None:
             raise KeyError(invocation_id)
+        recovery_delivery = (
+            recovery_delivery or stage.completion_path == "late_provider_result"
+        )
         if stage.status == "finalized":
             if not isinstance(stage.result, dict):
                 raise RuntimeError("Finalized Connector result envelope is unavailable")

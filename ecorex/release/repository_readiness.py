@@ -113,8 +113,10 @@ _PUBLICATION_SIGNER_VARIABLES = frozenset(
         "ECOREX_PUBLICATION_SIGNER_PUBLIC_KEY",
     }
 )
+_SIGNING_SECRETS = frozenset({"ECOREX_GITHUB_RELEASE_READ_TOKEN"})
 _PUBLICATION_VARIABLES = frozenset(
     {
+        "ECOREX_GITHUB_RELEASE_REPOSITORY",
         "ECOREX_RELEASE_PUBLICATION_CONFIG",
         "ECOREX_BOOTSTRAP_INDEX_PUBLICATION_CONFIG",
         "ECOREX_CONTROL_PLANE_URL",
@@ -123,7 +125,7 @@ _PUBLICATION_VARIABLES = frozenset(
 )
 _PUBLICATION_SECRETS = frozenset(
     {
-        "ECOREX_MIRROR_TOKEN",
+        "ECOREX_GITHUB_RELEASE_TOKEN",
         "ECOREX_CDN_TOKEN",
         "ECOREX_BOOTSTRAP_INDEX_TOKEN",
         "ECOREX_CONTROL_PLANE_TOKEN",
@@ -147,6 +149,7 @@ def default_release_repository_contract() -> ReleaseRepositoryContract:
     """Return the single v1 repository governance contract."""
 
     signing_variables = _SIGNER_VARIABLES | {
+        "ECOREX_GITHUB_RELEASE_REPOSITORY",
         "ECOREX_RELEASE_MIRROR_BASE_URL",
         "ECOREX_RELEASE_CDN_BASE_URL",
     }
@@ -174,8 +177,16 @@ def default_release_repository_contract() -> ReleaseRepositoryContract:
         ),
         environments=(
             EnvironmentContract("ecorex-release-stage", _STAGE_VARIABLES),
-            EnvironmentContract("ecorex-release-signing-canary", signing_variables),
-            EnvironmentContract("ecorex-release-signing-stable", signing_variables),
+            EnvironmentContract(
+                "ecorex-release-signing-canary",
+                signing_variables,
+                _SIGNING_SECRETS,
+            ),
+            EnvironmentContract(
+                "ecorex-release-signing-stable",
+                signing_variables,
+                _SIGNING_SECRETS,
+            ),
             EnvironmentContract(
                 "ecorex-live-acceptance",
                 frozenset(

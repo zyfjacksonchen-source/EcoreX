@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { get as httpGet } from "node:http";
 import test from "node:test";
 
 import { createGaMockServer } from "./ga-mock-server.mjs";
@@ -7,6 +8,31 @@ const MUTATION_HEADERS = {
   "Content-Type": "application/json",
   "X-EcoreX-CSRF": "ga-csrf-token-0123456789abcdef0123456789abcdef",
 };
+
+async function directGet(url, { headers = {} } = {}) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const request = httpGet(url, { headers }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.once("error", rejectPromise);
+      response.once("end", () => {
+        const payload = Buffer.concat(chunks);
+        resolvePromise({
+          status: response.statusCode ?? 0,
+          headers: {
+            get(name) {
+              const value = response.headers[String(name).toLowerCase()];
+              return Array.isArray(value) ? value.join(", ") : value ?? null;
+            },
+          },
+          async json() { return JSON.parse(payload.toString("utf8")); },
+          async text() { return payload.toString("utf8"); },
+        });
+      });
+    });
+    request.once("error", rejectPromise);
+  });
+}
 
 async function readUntil(response, marker) {
   assert.ok(response.body);
@@ -27,7 +53,7 @@ test("GA harness exposes managed bootstrap, strict CSRF, state reset, and unique
   const harness = await createGaMockServer({ scenario: "unauthenticated" });
   context.after(() => harness.close());
 
-  const page = await fetch(harness.url);
+  const page = await directGet(harness.url);
   const html = await page.text();
   assert.equal(page.headers.get("cache-control"), "no-store");
   assert.match(page.headers.get("content-security-policy") || "", /script-src 'self'/);
@@ -183,7 +209,7 @@ test("GA frame reload preserves one browser session while a fresh session resets
   const harness = await createGaMockServer({ scenario: "artifact" });
   context.after(() => harness.close());
   const frameUrl = `${harness.url}/__ga/frame-app?scenario=artifact&theme=light`;
-  const firstFrame = await fetch(frameUrl);
+  const firstFrame = await directGet(frameUrl);
   const sessionCookie = firstFrame.headers.get("set-cookie")?.split(";", 1)[0] || "";
   assert.equal(sessionCookie, "ecorex_ga_session=1");
 
@@ -232,7 +258,7 @@ test("responsive GA matrix uses exact same-origin frame viewports without weaken
   const harness = await createGaMockServer({ scenario: "empty" });
   context.after(() => harness.close());
 
-  const matrixResponse = await fetch(`${harness.url}/__ga/viewport-matrix`);
+  const matrixResponse = await directGet(`${harness.url}/__ga/viewport-matrix`);
   const matrix = await matrixResponse.json();
   assert.equal(matrixResponse.status, 200);
   assert.equal(matrixResponse.headers.get("cache-control"), "no-store");
@@ -249,7 +275,7 @@ test("responsive GA matrix uses exact same-origin frame viewports without weaken
     assert.match(entry.url, /^\/__ga\/viewport\?viewport=\d+x\d+&theme=(?:light|dark)&scenario=artifact$/);
   }
 
-  const wrapperResponse = await fetch(
+  const wrapperResponse = await directGet(
     `${harness.url}/__ga/viewport?viewport=390x844&theme=dark&scenario=artifact`,
   );
   const wrapper = await wrapperResponse.text();
@@ -268,12 +294,12 @@ test("responsive GA matrix uses exact same-origin frame viewports without weaken
   assert.doesNotMatch(wrapper, /<script(?![^>]+\bsrc=)/i);
   assert.doesNotMatch(wrapper, /\son\w+=/i);
 
-  const productionResponse = await fetch(harness.url);
+  const productionResponse = await directGet(harness.url);
   const productionCsp = productionResponse.headers.get("content-security-policy") || "";
   assert.match(productionCsp, /frame-ancestors 'none'/);
   assert.equal(productionResponse.headers.get("x-frame-options"), "DENY");
 
-  const frameResponse = await fetch(
+  const frameResponse = await directGet(
     `${harness.url}/__ga/frame-app?scenario=artifact&theme=dark`,
   );
   const frame = await frameResponse.text();
@@ -295,7 +321,7 @@ test("responsive GA matrix uses exact same-origin frame viewports without weaken
   const state = await fetch(`${harness.url}/__ga/state`).then((response) => response.json());
   assert.equal(state.scenario, "artifact");
 
-  const bootstrapResponse = await fetch(`${harness.url}/__ga/frame-bootstrap.js?theme=dark`);
+  const bootstrapResponse = await directGet(`${harness.url}/__ga/frame-bootstrap.js?theme=dark`);
   const bootstrap = await bootstrapResponse.text();
   assert.equal(bootstrapResponse.headers.get("cache-control"), "no-store");
   assert.match(bootstrap, /const theme = "dark"/);
@@ -310,7 +336,7 @@ test("responsive GA matrix uses exact same-origin frame viewports without weaken
   assert.match(viewportScript, /view\.axe\.run/);
   assert.match(viewportScript, /accessibility\.violations\.length === 0/);
 
-  const axeResponse = await fetch(`${harness.url}/__ga/axe.js`);
+  const axeResponse = await directGet(`${harness.url}/__ga/axe.js`);
   const axeSource = await axeResponse.text();
   assert.equal(axeResponse.status, 200);
   assert.equal(axeResponse.headers.get("cache-control"), "no-store");

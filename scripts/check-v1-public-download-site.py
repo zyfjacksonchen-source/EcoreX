@@ -124,8 +124,10 @@ def main() -> int:
         errors,
     )
     _require(
-        'href="/admin/"' in html and 'href="./admin/"' not in html,
-        "public HTML must link only to the v1 Control Plane administrator WebUI",
+        'href="/ecorex-agent/admin/"' in html
+        and 'href="/admin/"' not in html
+        and 'href="./admin/"' not in html,
+        "public HTML must link directly to the canonical v1 Control Plane administrator WebUI",
         errors,
     )
     for path in scripts + styles:
@@ -203,6 +205,8 @@ def main() -> int:
     _require(
         "location ^~ /admin/" in nginx
         and "location ^~ /api/v1/admin/" in nginx
+        and "location = /ecorex-agent/admin/health/ready" in nginx
+        and "rewrite ^ /health/ready break;" in nginx
         and "$ecorex_control_plane" in nginx
         and "$ecorex_web_runtime" not in nginx
         and "127.0.0.1:9909" not in nginx

@@ -15,6 +15,7 @@ import hashlib
 import ipaddress
 import json
 import re
+import ssl
 from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit
@@ -130,6 +131,7 @@ class ManagedHTTPSResponsesProvider:
         total_timeout_seconds: float = 240.0,
         max_concurrency: int = 64,
         max_connections: int = 128,
+        ssl_context: ssl.SSLContext | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         normalized_origin = normalize_https_origin(origin)
@@ -215,6 +217,7 @@ class ManagedHTTPSResponsesProvider:
             follow_redirects=False,
             trust_env=False,
             http2=False,
+            verify=ssl_context if ssl_context is not None else True,
         )
         if not isinstance(self._client, httpx.AsyncClient):
             raise ResponsesProviderConfigurationError("provider HTTP client is invalid")

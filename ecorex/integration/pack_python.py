@@ -387,18 +387,28 @@ def _is_link_or_reparse(metadata: os.stat_result) -> bool:
 
 
 def _stat_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    """Return fields stable across path and descriptor stat views.
+
+    Windows can expose a file creation timestamp through ``lstat`` while
+    ``fstat`` on the already-open handle reports the last-write timestamp in
+    ``st_ctime_ns``.  The handle identity still remains strongly bound by
+    volume, file ID, size and last-write time.  Creation/change time stays in
+    ``_path_identity`` so a name replacement between the two path checks is
+    still rejected without making valid reads intermittently fail.
+    """
+
     return (
         metadata.st_dev,
         metadata.st_ino,
         metadata.st_size,
         metadata.st_mtime_ns,
-        metadata.st_ctime_ns,
     )
 
 
 def _path_identity(metadata: os.stat_result) -> tuple[int, ...]:
     return (
         *_stat_identity(metadata),
+        metadata.st_ctime_ns,
         metadata.st_mode,
         int(getattr(metadata, "st_file_attributes", 0)),
     )

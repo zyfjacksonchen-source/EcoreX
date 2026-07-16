@@ -102,7 +102,12 @@ class ProductFileLock:
         self._stream: BinaryIO | None = None
         self._depth = 0
         self._owner_thread: int | None = None
-        self._guard = threading.Lock()
+        self._guard = threading.Condition()
+        # Reserving the instance while a thread opens and acquires the OS
+        # descriptor prevents two threads from racing through the initial
+        # ``_depth == 0`` check.  This is not ownership: only a successful OS
+        # lock acquisition installs ``_owner_thread``.
+        self._acquiring_thread: int | None = None
 
     @property
     def backend_name(self) -> str:
@@ -115,43 +120,82 @@ class ProductFileLock:
 
     def acquire(self) -> "ProductFileLock":
         thread_id = threading.get_ident()
+        started = time.monotonic()
         with self._guard:
-            if self._depth:
-                if self._owner_thread != thread_id:
-                    raise LockUnavailable("lock instance is already owned by another thread")
-                self._depth += 1
-                return self
+            while self._depth or self._acquiring_thread is not None:
+                if self._depth and self._owner_thread == thread_id:
+                    self._depth += 1
+                    return self
+                remaining = self._remaining_timeout(started)
+                if remaining is not None and remaining <= 0:
+                    raise LockUnavailable(
+                        f"timed out acquiring product lock {self.path}"
+                    )
+                # A different thread never becomes a second/re-entrant owner.
+                # It waits for the current instance owner (or in-flight OS
+                # acquisition) and competes only after release is complete.
+                self._guard.wait(timeout=remaining)
+            self._acquiring_thread = thread_id
 
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        if os.path.lexists(self.path):
-            metadata = self.path.lstat()
-            attributes = getattr(metadata, "st_file_attributes", 0)
-            reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
-            if stat.S_ISLNK(metadata.st_mode) or bool(attributes & reparse_flag):
-                raise LockUnavailable("product lock path cannot be a link or reparse point")
-        stream = self.path.open("a+b", buffering=0)
+        stream: BinaryIO | None = None
+        backend_acquired = False
         try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            if os.path.lexists(self.path):
+                metadata = self.path.lstat()
+                attributes = getattr(metadata, "st_file_attributes", 0)
+                reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+                if stat.S_ISLNK(metadata.st_mode) or bool(attributes & reparse_flag):
+                    raise LockUnavailable(
+                        "product lock path cannot be a link or reparse point"
+                    )
+            stream = self.path.open("a+b", buffering=0)
             stream.seek(0, os.SEEK_END)
             if stream.tell() == 0:
                 stream.write(b"\0")
                 stream.flush()
                 os.fsync(stream.fileno())
 
-            started = time.monotonic()
             while not self._backend.try_acquire(stream):
-                if self.timeout is not None and time.monotonic() - started >= self.timeout:
+                remaining = self._remaining_timeout(started)
+                if remaining is not None and remaining <= 0:
                     raise LockUnavailable(f"timed out acquiring product lock {self.path}")
-                time.sleep(self.poll_interval)
+                time.sleep(
+                    self.poll_interval
+                    if remaining is None
+                    else min(self.poll_interval, remaining)
+                )
+            backend_acquired = True
 
             with self._guard:
-                # No other thread can have acquired this instance because only
-                # this call owns the newly opened descriptor.
+                if self._acquiring_thread != thread_id:
+                    raise RuntimeError("product lock acquisition reservation was lost")
                 self._stream = stream
                 self._depth = 1
                 self._owner_thread = thread_id
-            return self
+                self._acquiring_thread = None
+                return self
         except BaseException:
-            stream.close()
+            try:
+                if stream is not None and backend_acquired:
+                    try:
+                        self._backend.release(stream)
+                    except BaseException:
+                        # Preserve the acquisition failure while still trying
+                        # descriptor close, which is the final OS-lock fence.
+                        pass
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except BaseException:
+                        # Cleanup failures must not strand the in-process
+                        # reservation or replace the causal acquire failure.
+                        pass
+            finally:
+                with self._guard:
+                    if self._acquiring_thread == thread_id:
+                        self._acquiring_thread = None
+                        self._guard.notify_all()
             raise
 
     def release(self) -> None:
@@ -165,12 +209,30 @@ class ProductFileLock:
             if self._depth:
                 return
             stream = self._stream
-            self._stream = None
-            self._owner_thread = None
-        try:
-            self._backend.release(stream)
-        finally:
-            stream.close()
+            # Keep ownership installed until both the OS unlock and descriptor
+            # close finish.  A waiter cannot reserve this instance in the
+            # small release boundary and become a second owner.
+            release_error: BaseException | None = None
+            try:
+                self._backend.release(stream)
+            except BaseException as error:
+                release_error = error
+            try:
+                stream.close()
+            except BaseException as error:
+                if release_error is None:
+                    release_error = error
+            finally:
+                self._stream = None
+                self._owner_thread = None
+                self._guard.notify_all()
+            if release_error is not None:
+                raise release_error
+
+    def _remaining_timeout(self, started: float) -> float | None:
+        if self.timeout is None:
+            return None
+        return self.timeout - (time.monotonic() - started)
 
     def __enter__(self) -> "ProductFileLock":
         return self.acquire()

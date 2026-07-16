@@ -1,6 +1,6 @@
 [Unit]
 Description=EcoreX v1 Image Worker (%i slot)
-After=network-online.target postgresql-15.service
+After=network-online.target postgresql.service
 Wants=network-online.target
 RequiresMountsFor=/var/lib/ecorex
 

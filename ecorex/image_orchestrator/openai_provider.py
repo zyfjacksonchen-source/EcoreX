@@ -18,6 +18,7 @@ from email.utils import parsedate_to_datetime
 from io import BytesIO
 import json
 import re
+import ssl
 from typing import Any
 
 import httpx
@@ -69,6 +70,7 @@ class OpenAICompatibleImageProvider:
         max_image_bytes: int = 64 * 1024 * 1024,
         max_connections: int = 32,
         max_concurrency: int = 16,
+        ssl_context: ssl.SSLContext | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         if not isinstance(provider_id, str) or _IDENTITY.fullmatch(provider_id) is None:
@@ -149,6 +151,7 @@ class OpenAICompatibleImageProvider:
             follow_redirects=False,
             trust_env=False,
             http2=False,
+            verify=ssl_context if ssl_context is not None else True,
         )
         if not isinstance(self._client, httpx.AsyncClient):
             raise ManagedImageProviderConfigurationError(

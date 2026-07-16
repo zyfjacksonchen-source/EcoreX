@@ -49,6 +49,7 @@ from .models import (
     ControlUpdateSignal,
     ControlUpdateSignalBatch,
     CreateCandidateRequest,
+    DirectAdmissionRequest,
     CreateRollbackRequest,
     CreateRolloutRequest,
     DistributionProjection,
@@ -134,6 +135,16 @@ from .repository import (
     ReleaseGateError,
     UpdateHintClient,
 )
+from .release_replica import (
+    CDNReleaseReplicaService,
+    CDN_SOURCE_ID,
+    CloudReleaseReplicaAuditSink,
+    EnvironmentRotatingReleaseReplicaTokenVerifier,
+    PRODUCTION_RELEASE_REPLICA_PUBLIC_ROOT,
+    PRODUCTION_RELEASE_REPLICA_ROOT,
+    ReleaseReplicaServiceError,
+    create_cdn_release_replica_router,
+)
 from .production_auth import (
     AccessEntitlements,
     ControlPlaneAuthenticationConfigurationError,
@@ -150,6 +161,14 @@ from .schema import (
     ControlPlaneSchemaReceipt,
     migrate_control_plane_database,
     validate_control_plane_database,
+)
+from .direct_admission_schema import (
+    CURRENT_DIRECT_ADMISSION_SCHEMA_VERSION,
+    DIRECT_ADMISSION_MIGRATION_CHECKSUM,
+    DIRECT_ADMISSION_MIGRATION_NAME,
+    DirectAdmissionSchemaError,
+    DirectAdmissionSchemaManager,
+    DirectAdmissionSchemaReceipt,
 )
 from .share_schema import (
     CLOUD_SHARE_SCHEMA_SHA256,

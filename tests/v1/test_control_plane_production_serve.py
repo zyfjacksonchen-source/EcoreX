@@ -308,6 +308,34 @@ def test_single_node_lock_and_pg_multi_replica_fail_closed(tmp_path: Path) -> No
     environment["ECOREX_CP_STORAGE_BACKEND"] = "postgresql"
     with pytest.raises(ProductionConfigurationError, match="single-node SQLite WAL"):
         ControlPlaneProductionConfig.from_environment(environment)
+
+
+def test_direct_release_admission_requires_explicit_single_release_scope(
+    tmp_path: Path,
+) -> None:
+    config, _secrets, _private = _material(tmp_path)
+    environment = _environment(config)
+    parsed = ControlPlaneProductionConfig.from_environment(environment)
+    assert parsed.direct_release_admission_enabled is False
+    assert parsed.direct_release_id is None
+    assert parsed.direct_release_instruction_sha256 is None
+
+    instruction = hashlib.sha256(b"operator direct release instruction").hexdigest()
+    environment.update(
+        {
+            "ECOREX_CP_DIRECT_RELEASE_ADMISSION_ENABLED": "true",
+            "ECOREX_CP_DIRECT_RELEASE_ID": "release-stable-" + "a" * 24,
+            "ECOREX_CP_DIRECT_RELEASE_INSTRUCTION_SHA256": instruction,
+        }
+    )
+    direct = ControlPlaneProductionConfig.from_environment(environment)
+    assert direct.direct_release_admission_enabled is True
+    assert direct.direct_release_id == "release-stable-" + "a" * 24
+    assert direct.direct_release_instruction_sha256 == instruction
+
+    environment["ECOREX_CP_DIRECT_RELEASE_ADMISSION_ENABLED"] = "false"
+    with pytest.raises(ProductionConfigurationError, match="must not retain"):
+        ControlPlaneProductionConfig.from_environment(environment)
     environment["ECOREX_CP_STORAGE_BACKEND"] = "sqlite-wal"
     environment["ECOREX_CP_REPLICA_COUNT"] = "2"
     with pytest.raises(ProductionConfigurationError, match="single-node SQLite WAL"):
@@ -840,3 +868,43 @@ def _environment(config: ControlPlaneProductionConfig) -> dict[str, str]:
             ),
         )
     return values
+
+
+def test_release_replica_environment_is_version_namespace_fenced(
+    tmp_path: Path,
+) -> None:
+    config, _secrets, _private = _material(tmp_path)
+    environment = _environment(config)
+    environment.update(
+        ECOREX_CP_RELEASE_REPLICA_ENABLED="true",
+        ECOREX_CP_RELEASE_REPLICA_STORAGE_ROOT=(
+            "/srv/ecorex-agent-download/v1-artifacts"
+        ),
+        ECOREX_CP_RELEASE_REPLICA_PUBLIC_ROOT=(
+            "https://dl.ecoremedia.net/ecorex-agent/releases"
+        ),
+        ECOREX_CP_RELEASE_REPLICA_NAMESPACE="v1.0.0",
+        ECOREX_CP_RELEASE_REPLICA_PRODUCT_VERSION="1.0.0",
+        ECOREX_CP_RELEASE_REPLICA_MAX_ASSET_BYTES=str(500 * 1024 * 1024),
+    )
+    parsed = ControlPlaneProductionConfig.from_environment(environment)
+    assert parsed.release_replica_enabled is True
+    assert parsed.release_replica_namespace == "v1.0.0"
+    assert parsed.release_replica_product_version == "1.0.0"
+
+    for name, invalid in (
+        ("ECOREX_CP_RELEASE_REPLICA_NAMESPACE", "v1.0.1"),
+        ("ECOREX_CP_RELEASE_REPLICA_PRODUCT_VERSION", "1.0.1"),
+        (
+            "ECOREX_CP_RELEASE_REPLICA_STORAGE_ROOT",
+            "/srv/ecorex-agent-download/v1-artifacts/v1.0.0",
+        ),
+        (
+            "ECOREX_CP_RELEASE_REPLICA_PUBLIC_ROOT",
+            "https://dl.ecoremedia.net/ecorex-agent/releases/v1.0.0",
+        ),
+    ):
+        drifted = dict(environment)
+        drifted[name] = invalid
+        with pytest.raises(ProductionConfigurationError, match="replica fence"):
+            ControlPlaneProductionConfig.from_environment(drifted)

@@ -54,9 +54,53 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python 3.11
+        if: ${{ runner.os != 'Windows' }}
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.11.9"
+
+      - name: Set up isolated Python 3.11 on Windows
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $uvVersion = "0.11.7"
+          $uvArchive = Join-Path $env:RUNNER_TEMP "uv-$uvVersion-x86_64-pc-windows-msvc.zip"
+          $uvRoot = Join-Path $env:RUNNER_TEMP "uv-$uvVersion"
+          $pythonRoot = Join-Path $env:RUNNER_TEMP "python-3.11.9"
+          Invoke-WebRequest -Uri "https://github.com/astral-sh/uv/releases/download/$uvVersion/uv-x86_64-pc-windows-msvc.zip" -OutFile $uvArchive -UseBasicParsing
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $uvArchive).Hash.ToLowerInvariant()
+          $expected = "fe0c7815acf4fc45f8a5eff58ed3cf7ae2e15c3cf1dceadbd10c816ec1690cc1"
+          if ($actual -ne $expected) {
+            throw "uv_archive_digest_mismatch"
+          }
+          Expand-Archive -LiteralPath $uvArchive -DestinationPath $uvRoot -Force
+          $uv = Join-Path $uvRoot "uv.exe"
+          $observedUv = (& $uv --version).Trim()
+          if ($observedUv -notmatch "^uv 0\.11\.7 \(9d177269e ") {
+            throw "uv_toolchain_mismatch:$observedUv"
+          }
+          $env:UV_PYTHON_INSTALL_DIR = $pythonRoot
+          & $uv --no-config python install --install-dir $pythonRoot --no-bin --no-registry --no-cache --managed-python --compile-bytecode 3.11.9
+          if ($LASTEXITCODE -ne 0) {
+            throw "python_toolchain_install_failed:$LASTEXITCODE"
+          }
+          $python = (& $uv --no-config python find --no-project --managed-python --no-python-downloads --resolve-links 3.11.9).Trim()
+          if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
+            throw "python_executable_missing"
+          }
+          $observedVersion = (& $python -c "import platform; print(platform.python_version())").Trim()
+          if ($observedVersion -ne "3.11.9") {
+            throw "python_toolchain_mismatch:$observedVersion"
+          }
+          $installRoot = Split-Path -Parent $python
+          $installRoot | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          (Join-Path $installRoot "Scripts") | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          @(
+            "pythonLocation=$installRoot",
+            "Python_ROOT_DIR=$installRoot",
+            "Python3_ROOT_DIR=$installRoot"
+          ) | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Set up Node 22 for the one final Web build
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

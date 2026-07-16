@@ -718,6 +718,8 @@ class AdminManagementRepository:
             ).fetchone()
             if row is None or row["status"] not in {"draft", "rejected"}:
                 raise AdminManagementConflict("model revision cannot be tested")
+            if row["test_error_code"] == "rotation_required":
+                raise AdminManagementConflict("model credential rotation is required")
             test_id = "mtest_" + uuid.uuid4().hex
             now = _now()
             cursor = connection.execute(

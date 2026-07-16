@@ -19,9 +19,15 @@ import sqlite3
 import stat
 from typing import Any, Mapping, Sequence
 
+from ecorex.update.locking import LockUnavailable, ProductFileLock
+
 from .bootstrap_index_schema import (
     BootstrapIndexSchemaError,
     BootstrapIndexSchemaManager,
+)
+from .direct_admission_schema import (
+    DirectAdmissionSchemaError,
+    DirectAdmissionSchemaManager,
 )
 
 
@@ -367,6 +373,18 @@ class ControlPlaneSchemaManager:
     def migrate(
         self, *, target_version: int = CURRENT_CONTROL_PLANE_SCHEMA_VERSION
     ) -> ControlPlaneSchemaReceipt:
+        lock_path = self.path.with_name(self.path.name + ".schema-migrate.lock")
+        try:
+            with ProductFileLock(lock_path, timeout=60):
+                return self._migrate_locked(target_version=target_version)
+        except LockUnavailable:
+            raise ControlPlaneSchemaError(
+                "control plane schema migration lease is unavailable"
+            ) from None
+
+    def _migrate_locked(
+        self, *, target_version: int
+    ) -> ControlPlaneSchemaReceipt:
         if target_version != CURRENT_CONTROL_PLANE_SCHEMA_VERSION:
             raise ValueError("control plane schema migration target is invalid")
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -382,6 +400,7 @@ class ControlPlaneSchemaManager:
                 receipt = self._validate_connection(connection)
                 connection.commit()
                 BootstrapIndexSchemaManager(self.path).migrate()
+                DirectAdmissionSchemaManager(self.path).migrate()
                 return receipt
             if source_digest == EMPTY_CONTROL_PLANE_SCHEMA_SHA256:
                 _execute_sql(connection, CONTROL_PLANE_SCHEMA_SQL)
@@ -429,12 +448,13 @@ class ControlPlaneSchemaManager:
             connection.commit()
             connection.execute("PRAGMA journal_mode=WAL")
             BootstrapIndexSchemaManager(self.path).migrate()
+            DirectAdmissionSchemaManager(self.path).migrate()
             return receipt
-        except BootstrapIndexSchemaError:
+        except (BootstrapIndexSchemaError, DirectAdmissionSchemaError):
             if connection.in_transaction:
                 connection.rollback()
             raise ControlPlaneSchemaError(
-                "control plane Bootstrap index schema migration failed"
+                "control plane extension schema migration failed"
             ) from None
         except ControlPlaneSchemaError:
             if connection.in_transaction:
@@ -458,17 +478,20 @@ class ControlPlaneSchemaManager:
             receipt = self._validate_connection(connection)
             connection.commit()
             BootstrapIndexSchemaManager(self.path).validate()
+            DirectAdmissionSchemaManager(self.path).validate()
             return receipt
         except ControlPlaneSchemaError:
             if connection.in_transaction:
                 connection.rollback()
             raise
         except Exception as error:
-            if isinstance(error, BootstrapIndexSchemaError):
+            if isinstance(
+                error, (BootstrapIndexSchemaError, DirectAdmissionSchemaError)
+            ):
                 if connection.in_transaction:
                     connection.rollback()
                 raise ControlPlaneSchemaError(
-                    "control plane Bootstrap index schema is incompatible"
+                    "control plane extension schema is incompatible"
                 ) from None
             if connection.in_transaction:
                 connection.rollback()

@@ -1976,3 +1976,73 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Real-user boundary | pending | Candidate used a deterministic exact-release fixture. Prior real v0.2.9.2 import remains 54 authoritative sessions retained, 93 cache-only deleted IDs excluded and zero restored, but is not relabelled as signed activation. |
 | Live/protected boundary | blocked safely | Candidate-bound authenticated CDP, managed HTTPS Model/Image execution, 16 protected macOS receipts, publication and rollout remain absent. |
 | Hosted validation | 0 | PR head `f7c14d1499a296ea52ef3822a4bd9846b92e8827`, run `29485934540`: Ubuntu quality/deterministic build, Windows x64, macOS arm64/x64 and cross-runner byte stability all passed (5/5 Jobs). |
+
+## Direct-production publication unblock - 2026-07-16
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Operator gate | WAIVED | User authorized direct production publication. Manual/CDP/HSM approval is not reported as passed; immutable signatures, health/readback and three-source byte verification remain mandatory. |
+| First platform stage | 1 expected | Run `29506205694` failed safely and emitted no complete Candidate input: Windows registry mutation, unavailable macOS `onnxruntime 1.26.0`, and macOS Fetch header projection differences. |
+| Stage corrections | 0 | Windows digest-pinned uv/Python 3.11.9 leaves registry unchanged and imports NumPy/ONNX/RapidOCR; `onnxruntime 1.23.2` macOS arm64/x64 wheel hashes are locked; Web tests pass 180/180. |
+| Cloud target smoke | 0 with boundary | LUKS2, Python 3.11.9, PostgreSQL 15 TLS and four independent signer roles work. Old services/routes remain active; no new current slot or active release state exists. |
+| Wheel resources | 0 | Package-data includes the Admin static allowlist; a built wheel contains and loads all four digest-verified resources without the smoke-only copy workaround. |
+| Nginx two-level route | 0 | Real legacy and Candidate assemblies pass target-host `nginx -t`; legacy Admin remains active before health, switch moves two symlinks, and failure restores both. Unknown/external/tampered route targets fail closed. |
+| PostgreSQL authority | 0 | Target uses `postgresql.service` and `/usr/bin/psql`; deployer and units match. The target drop-in has `RequiresMountsFor` in `[Unit]` and PostgreSQL remains active. |
+| Public repository/source order | 0 | Candidate binds public `EcoreX-installers`; order is GitHub draft → CDN finalize → GitHub public → ghproxy full GET/SHA-256. Real ghproxy probe: 200, zero redirects, identity encoding, 105/105 bytes, matching digest. |
+| Windows stable-file identity | 0 | 100 consecutive executable fixture reads and three formerly failing Candidate tests pass after separating descriptor-stable identity from path creation/mode identity. |
+| Focused backend | 0 | Cloud/package/deployer: 27 passed with 3 Windows symlink skips; publication/repository/Candidate: 61 passed. Ruff, dependency-lock and diff gates pass. |
+| WebUI | 0 | Generated contracts, TypeScript, 180/180 tests and content-addressed build pass; 24 chunks, 459.76 KiB raw / 146.20 KiB gzip initial JavaScript. |
+| Availability waivers | WAIVED | Single-host local CAS is not HA; LUKS needs operator loop/unlock after whole-machine reboot; PostgreSQL migration/runtime currently share one role. |
+| Publication | pending | Corrected main, same-run Windows/macOS stages, exact-main cloud artifact, model/identity migration, signed release, CDN/GitHub/ghproxy readback, Bootstrap activation and public traffic validation remain required. |
+
+## Direct-production transaction closure - 2026-07-16
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Hosted baseline | 0 | PR #12 head `6364f07b59c960f390516b82b4db5b1e79984d8b`, run `29511476979`, passed Ubuntu quality/deterministic build, Windows x64, macOS arm64/x64 and cross-runner byte stability (5/5 Jobs). The transaction-closure WIP is newer and must rerun this matrix after commit. |
+| Direct admission | 0 | Domain-separated prepare/finalize signatures bind exact manifest, Candidate, operator waiver, three-source publication and Bootstrap proof. Only the three live-acceptance gates project `waived`; all other required gates remain `passed`-only. Append-only persistence, replay idempotency and drift rejection pass. The 32 MiB Nginx allowance is exact PUT-only; access-phase no-body auth verifies `release_admin` before buffering, ASGI reauthenticates and uses one memory slot, and 401/403/429 rejections do not read the body. |
+| Cloud activation transaction | 0 | `migrating` precedes writer stops; `schema_ready` follows migration; no dual writer; source-schema checks and target roll-forward are deterministic. First-release migration failure restores the immutable legacy source. Focused result: 51 passed / 4 Windows platform skips. |
+| Real environment migration dry-run | 0 | 40 active users retained / seven deleted excluded; eight eligible sessions retained / 248 revoked and 114 expired excluded; 2,061 usage aggregates retained from 2,088 rows with 27 excluded. Source remained unchanged and no target was generated. Unsafe historical public-HTTP provider credentials are disabled with `rotation_required`. |
+| CDN replica and mirror | 0 | Current/next bearer tokens, exact digest/length/kind, content-addressed no-clobber writes, fsync/crash recovery and bounded retryable-only read-through are covered. Redirect, encoding, size and digest drift fail closed. |
+| Provider bridge | 0 | Loopback-only TLS bridge, private-CA namespace, root-owned material, certificate/key/SAN/EKU validation, hosts ownership and real probe pass. Public/hostname HTTP origins are rejected; private-IP HTTP requires an explicit waiver. |
+| Exact cloud artifact | 0 | Linux aarch64 wheel-only builder binds exact commit/Python 3.11.9/locks/modes/files. Windows DPAPI signs the detached domain payload; Linux rescans before attach. Real exact-main build/sign/attach remains a post-merge gate. |
+| Public Web/Admin transaction | 0 | Release-key-signed exact-tree authorization, shared flock, root-owned 0755 download/slot tree, root-only staging/legacy state, symlink/hardlink/device fences, durable journal, atomic legacy/current switch and dual-parent fsync pass. Admin identity is derived from the same signed cloud manifest; readback requires exact index/CSS/JS/health bytes, no-store/CSP/immutable policies and the product-version header. Exact target is `/ecorex-agent/admin/`. Focused result: 40 passed / 5 Windows symlink skips. |
+| Windows online file identity | 0 | 9 focused tests pass. Birth time provides stable path/handle identity; descriptor ChangeTime and final reopen retain same-size/restored-mtime mutation detection. |
+| Combined changed boundary | 0 | 15 release domains: 206 passed / 10 explicit platform-conditioned skips / zero failures in 80.78 seconds. Ruff/compile, dependency locks, Runtime schema authority (20 fragments), server schema authority (11 explicit authorities), strict legacy cutoff and public-site gates pass. One unchanged Starlette multipart deprecation warning only. |
+| Public traffic | pending | No source commit/merge, exact-main platform stage, signed cloud/client artifact, publication, rollout or Web/Admin cutover is claimed by this entry. |
+
+## Linux semantic correction before merge - 2026-07-17
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| PR run `29521151721` | 1 expected | Windows x64 and macOS arm64/x64 passed. Ubuntu full Runtime found 14 Linux-only failures and stopped before Web/static/byte stages; cross-runner stability was skipped. No merge or publication occurred. |
+| Cloud artifact and Admin route | 0 | Test fixtures now apply signed 0755/0644 modes. Admin Nginx validation checks seven exact location contracts while allowing unrelated CP routes; path/rewrite/header/upstream/duplicate/extra-location drift remains fail-closed. |
+| Provider Bridge POSIX boundary | 0 | Production still requires root:root. Portable tests simulate and assert ownership; atomic order is ownership, final mode, short-write loop, file fsync, replace and parent fsync. Reload failure restores without masking the original error. |
+| Public-site POSIX boundary | 0 | Portable tests simulate root:994 `lchown`; production owner/mode/link/device checks are unchanged. Legacy rollback, crash recovery and receipt-to-journal-clear recovery execute on Linux. |
+| Windows affected domains | 0 | 81 passed / 12 explicit Linux-conditioned skips / zero failures. |
+| WSL Ubuntu Python 3.11.9 | 0 | 93 passed / zero failures across cloud sidecar, Provider TLS Bridge and public-site deployment in 19.52 seconds. |
+| Static correction gates | 0 | Ruff, Python compilation and `git diff --check` pass. Full hosted rerun remains pending. |
+
+## Connector late-success ownership correction - 2026-07-17
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| PR run `29522376431` | 1 expected | Earlier 14 Linux failures were gone. Ubuntu completed with one connector late-success failure (2,178 passed / 35 skipped); Windows and both macOS jobs passed. Cross-runner stability was skipped and no artifact was promoted. |
+| Root cause | 0 | Fixed sleep was nondeterministic and revealed that `outcome_unknown` ignored an active exclusive provider-completion lease, sending a safe retry directly to manual reconciliation. |
+| Reservation/polling contract | 0 | Non-expired active provider fence returns `in_progress` and waits without redispatch. Expired or inactive fence remains `uncertain`; no unsafe retry was introduced. |
+| Durable recovery delivery | 0 | `completion_path=late_provider_result` is authoritative even if the waiter finalizes the stage first. Recovery Tool Item/event, result and provider dispatch are exact-once; leases end at zero. |
+| Deterministic regression | 0 | Explicit waiter-entry barrier replaces sleep/call_later. Result suite passes 19 on Windows and 19 on WSL Ubuntu/Python 3.11.9; all Connector regression passes 132. Ruff/compile/diff pass. |
+| Promotion | pending | New commit and hosted full-suite/cross-runner rerun are mandatory. |
+
+## Product update lock ownership correction - 2026-07-17
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| PR run `29524461343` | 1 expected | Connector correction passed; Windows x64 and macOS arm64/x64 passed. Ubuntu reached 2,180 passed / 35 skipped and exposed one product update-lock thread race; cross-runner stability was skipped. No merge, artifact promotion or public cutover occurred. |
+| Root cause | 0 | Update polling read `current_release_identity` while Runtime startup recorded `mark_runtime_ready` on another worker thread. The same lock instance incorrectly rejected normal cross-thread ownership even when product serialization was required. |
+| Lock contract | 0 | Same-thread re-entry remains depth-counted. Other threads use one condition/deadline across instance and OS acquisition. `timeout=0` stays fail-fast; production update composition explicitly uses `timeout=None`. Backend unlock and stream close complete before ownership handoff. |
+| Failure cleanup | 0 | Injected backend-acquire, backend-release and stream-close failures always clear reservation/owner/stream state and notify waiters. Non-owner release is rejected without changing the live owner. |
+| Deterministic race | 0 | Observable barriers fix the update identity reader inside the critical section and prove the readiness recorder waits before handoff; no sleeps or scheduler guesses are used. Implementing-agent evidence: 20/20 race repetitions and 250/250 thread stress repetitions. |
+| WSL Ubuntu Python 3.11.9 | 0 | `test_update_composition.py` plus `test_update_durability.py`: 23 passed. Focused lock/product-barrier set: 18 passed. Ruff, compileall and `git diff --check` pass. |
+| Independent review | 0 | No remaining P0/P1 in locking, production wiring or regression coverage. The original Linux full-suite path must still pass on a new PR head. |
+| Promotion | pending | Commit/push and a new five-job hosted matrix are mandatory before protected-main merge or any production mutation. |

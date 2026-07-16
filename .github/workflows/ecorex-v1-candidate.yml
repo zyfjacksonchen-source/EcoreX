@@ -602,23 +602,28 @@ jobs:
         env:
           ECOREX_RELEASE_MIRROR_BASE_URL: ${{ vars.ECOREX_RELEASE_MIRROR_BASE_URL }}
           ECOREX_RELEASE_CDN_BASE_URL: ${{ vars.ECOREX_RELEASE_CDN_BASE_URL }}
+          ECOREX_GITHUB_RELEASE_REPOSITORY: ${{ vars.ECOREX_GITHUB_RELEASE_REPOSITORY }}
         run: >-
           python scripts/assemble-v1-candidate-recipe.py
           --input-root .candidate/input
           --output .candidate/input/candidate-recipe.json
           --channel ${{ inputs.channel }}
           --created-at "${{ steps.commit.outputs.created_at }}"
-          --repository ${{ github.repository }}
+          --repository "$ECOREX_GITHUB_RELEASE_REPOSITORY"
 
       - name: Download optional prior signed Core set for delta derivation
         if: ${{ inputs.delta_base_tag != '' }}
         env:
-          GH_TOKEN: ${{ github.token }}
+          # The workflow GITHUB_TOKEN is repository-scoped and cannot read the
+          # independent public installer repository.  Keep this credential
+          # read-only and separate from the publication writer token.
+          GH_TOKEN: ${{ secrets.ECOREX_GITHUB_RELEASE_READ_TOKEN }}
           DELTA_BASE_TAG: ${{ inputs.delta_base_tag }}
+          ECOREX_GITHUB_RELEASE_REPOSITORY: ${{ vars.ECOREX_GITHUB_RELEASE_REPOSITORY }}
         run: |
           mkdir -p .candidate/delta-base
           gh release download "$DELTA_BASE_TAG" \
-            --repo "${{ github.repository }}" \
+            --repo "$ECOREX_GITHUB_RELEASE_REPOSITORY" \
             --dir .candidate/delta-base \
             --pattern release-manifest.json \
             --pattern 'ecorex-core-*.zip'

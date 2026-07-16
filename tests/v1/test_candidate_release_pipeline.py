@@ -917,6 +917,14 @@ def test_candidate_and_publication_workflows_are_split_and_default_safe() -> Non
     assert "publish-assets" not in candidate
     assert "contents: write" not in candidate
     assert "ECOREX_CONTROL_PLANE_TOKEN" not in candidate
+    assert "ECOREX_GITHUB_RELEASE_REPOSITORY" in candidate
+    assert '--repository "$ECOREX_GITHUB_RELEASE_REPOSITORY"' in candidate
+    delta_download = candidate.split(
+        "- name: Download optional prior signed Core set for delta derivation", 1
+    )[1].split("- name:", 1)[0]
+    assert "GH_TOKEN: ${{ secrets.ECOREX_GITHUB_RELEASE_READ_TOKEN }}" in delta_download
+    assert "GH_TOKEN: ${{ github.token }}" not in delta_download
+    assert "ECOREX_GITHUB_RELEASE_TOKEN" not in candidate
 
     assert "pull_request:" not in publication
     assert "workflow_dispatch:" in publication
@@ -942,6 +950,10 @@ def test_candidate_and_publication_workflows_are_split_and_default_safe() -> Non
     assert "ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256" in publication
     assert "--expected-workflow-run-id ${{ inputs.candidate_run_id }}" in publication
     assert "--publish-github" in publication
+    assert "ECOREX_GITHUB_RELEASE_TOKEN" in publication
+    assert "ECOREX_GITHUB_RELEASE_READ_TOKEN" not in publication
+    assert "ECOREX_MIRROR_TOKEN" not in publication
+    assert "verify the read-through mirror" in publication
     assert publication.index("verify-v1-accepted-candidate.py") < publication.index(
         "publish-assets"
     )

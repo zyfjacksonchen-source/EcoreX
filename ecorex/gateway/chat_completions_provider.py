@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator, Callable, Mapping
 import hashlib
 import json
+import ssl
 from types import MappingProxyType
 from typing import Any
 
@@ -64,6 +65,7 @@ class ManagedHTTPSChatCompletionsProvider:
         total_timeout_seconds: float = 240.0,
         max_concurrency: int = 64,
         max_connections: int = 128,
+        ssl_context: ssl.SSLContext | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         normalized = normalize_https_origin(origin)
@@ -118,6 +120,7 @@ class ManagedHTTPSChatCompletionsProvider:
             follow_redirects=False,
             trust_env=False,
             http2=False,
+            verify=ssl_context if ssl_context is not None else True,
         )
 
     async def stream(

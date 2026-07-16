@@ -1,5 +1,10 @@
 # EcoreX v1.0 release runbook
 
+> 单版本应急 direct admission 不得复用普通 gate bundle。仅在明确运营授权时按
+> [Direct release admission](./direct-release-admission.md) 执行 prepare → Bootstrap
+> stage/readback → finalize → rollout；live acceptance 只能显示为 `waived`，不能
+> 显示为 `passed`。
+
 This runbook is the administrator-facing Product path. User machines never run
 Git, npm, pip or a release script. Tokens stay in the release service/CI
 environment and are never written into this file or process arguments.
@@ -76,9 +81,10 @@ offline or label-mismatched Runner does not satisfy the contract.
 
 ## Candidate asset publication
 
-Export the three credentials through the variable names above, then run one
-resumable command. `--trusted-key` contains a public verification key, not a
-secret.
+Export the GitHub release and CDN publisher credentials through the variable
+names in `publication.json`, then run one resumable command. A
+`github-read-through` mirror has no credential or mutation endpoint.
+`--trusted-key` contains a public verification key, not a secret.
 
 ```powershell
 ecorex-release publish-assets `
@@ -90,9 +96,12 @@ ecorex-release publish-assets `
 ```
 
 The command verifies the exact local directory and all signatures/digests,
-then performs domestic mirror, GitHub draft, CDN and GitHub visibility in that
-order. Re-running resumes matching assets. A conflicting same-name asset or any
-receipt mismatch stops the command; it never overwrites remote bytes.
+creates or resumes the GitHub draft, finalizes the CDN replica, makes the
+complete GitHub release public and then streams every asset through the signed
+domestic read-through mirror with redirects and content encoding disabled.
+Re-running resumes matching assets, including when GitHub is already public but
+the mirror check was temporarily unavailable. A conflicting same-name asset or
+any receipt mismatch stops the command; it never overwrites remote bytes.
 The atomic receipt records the exact manifest digest and three validated source
 projections; its SHA-256 is printed for the Control Plane release-gate evidence.
 The `github-release`, `mirror-sync`, and `cdn-sync` entries in
@@ -374,10 +383,11 @@ suites, WebUI audit/typecheck/tests/build, migration dry-run, schema authority,
 reproducibility, license, secret, SBOM, signature, size and protected live
 acceptance gates. The separate publication workflow re-authenticates the signed
 Candidate and every gate before reusing `ReleaseAssetPublicationCoordinator`,
-which finalizes the domestic mirror first, creates/uploads GitHub second,
-finalizes CDN third and makes the GitHub draft public only after all three
-contain the same signed bytes. The three publication gates share one immutable
-publication-receipt digest.
+which creates/uploads the GitHub draft, finalizes CDN, makes the exact GitHub
+release public and only then streams every byte through the read-through
+domestic mirror. A transient mirror propagation failure is resumable against
+the same immutable GitHub release. The three publication gates share one
+immutable publication-receipt digest.
 
 Required protected configuration is deliberately operational, not committed:
 
@@ -392,11 +402,16 @@ Required protected configuration is deliberately operational, not committed:
   locked platform-stage Python profile and Chromium are installed by the
   workflow;
 - signing environments: release signer executable/digest, optional adapter/
-  digest, signer key ID/public key and version-qualified mirror/CDN base URLs;
+  digest, signer key ID/public key, the public `owner/repository` release target
+  and version-qualified mirror/CDN base URLs. Delta derivation additionally
+  receives `ECOREX_GITHUB_RELEASE_READ_TOKEN`, scoped read-only to the separate
+  installer repository; it must never reuse the publication writer token;
 - live-acceptance environment: digest-pinned Windows acceptance driver and the
   managed Model/Image/CDP test session held outside repository files;
-- publication environments: publication config, mirror/CDN/Bootstrap
-  credentials, Control Plane URL/host allowlist/token and required reviewers.
+- publication environments: publication config, public GitHub release target,
+  GitHub release/CDN/Bootstrap credentials, Control Plane URL/host
+  allowlist/token and required reviewers. A read-through mirror must never have
+  an upload credential.
 
 The stager, production Windows sandbox helper, platform launchers and Pack
 implementations are repository-owned sources. Their compiled bytes and the

@@ -333,6 +333,58 @@ def test_publication_config_builds_fixed_https_publishers_without_secrets(
         _publication_coordinator(args)
 
 
+def test_publication_config_builds_read_through_mirror_without_credentials(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "publication-read-through.json"
+    config.write_text(
+        """
+        {
+          "schema_version": 1,
+          "github": {
+            "owner": "zhangyifanjackson-dotcom",
+            "repository": "EcoreX-installers",
+            "token_env": "ECOREX_GITHUB_RELEASE_TOKEN"
+          },
+          "mirror": {
+            "source_id": "github-cn",
+            "mode": "github-read-through",
+            "public_hosts": ["ghproxy.net"]
+          },
+          "cdn": {
+            "source_id": "cdn",
+            "endpoint": "https://publisher.cdn.example/api/v1/releases",
+            "allowed_hosts": ["publisher.cdn.example"],
+            "public_hosts": ["dl.ecoremedia.net"],
+            "token_env": "ECOREX_CDN_TOKEN"
+          }
+        }
+        """,
+        encoding="utf-8",
+    )
+    args = _parser().parse_args(
+        [
+            "publish-assets",
+            "--release-dir",
+            str(tmp_path),
+            "--publication-config",
+            str(config),
+            "--receipt",
+            str(tmp_path / "receipt.json"),
+            "--trusted-key",
+            "release-key=" + base64.b64encode(b"x" * 32).decode("ascii"),
+        ]
+    )
+
+    coordinator = _publication_coordinator(args)
+    try:
+        assert coordinator.mirror.read_through is True
+        assert coordinator.mirror.public_hosts == frozenset({"ghproxy.net"})
+        assert coordinator.github.repository == "EcoreX-installers"
+    finally:
+        coordinator.close()
+
+
 def test_receipt_identity_conflict_stops_before_any_remote_publication(
     tmp_path: Path,
     capsys,
@@ -431,13 +483,19 @@ def test_checked_in_publication_example_schema_and_cli_parser_stay_bound(
     assert set(example["github"]) == set(
         schema["$defs"]["github"]["required"]
     ) == set(schema["$defs"]["github"]["properties"])
-    for label in ("mirror", "cdn"):
-        assert set(example[label]) == set(
-            schema["$defs"]["replica"]["required"]
-        ) == set(schema["$defs"]["replica"]["properties"])
-        assert example[label]["endpoint"].startswith("https://")
-        assert ".invalid/" in example[label]["endpoint"]
-        assert all(host.endswith(".invalid") for host in example[label]["public_hosts"])
+    assert len(schema["properties"]["mirror"]["oneOf"]) == 2
+    assert set(example["mirror"]) == set(
+        schema["$defs"]["readThroughMirror"]["required"]
+    ) == set(schema["$defs"]["readThroughMirror"]["properties"])
+    assert example["mirror"]["mode"] == "github-read-through"
+    assert example["mirror"]["public_hosts"] == ["ghproxy.net"]
+    assert set(example["cdn"]) == set(
+        schema["$defs"]["replica"]["required"]
+    ) == set(schema["$defs"]["replica"]["properties"])
+    assert example["cdn"]["endpoint"].startswith("https://")
+    assert ".invalid/" in example["cdn"]["endpoint"]
+    assert example["cdn"]["public_hosts"] == ["dl.ecoremedia.net"]
+    assert example["github"]["repository"] == "EcoreX-installers"
     serialized = json.dumps(example, sort_keys=True)
     assert "Bearer " not in serialized
     assert "password" not in serialized.casefold()

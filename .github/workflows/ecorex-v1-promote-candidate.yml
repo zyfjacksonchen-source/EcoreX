@@ -257,10 +257,9 @@ jobs:
           cp .publication-input-extraction.json
           .candidate/output/evidence/publication-input-extraction.json
 
-      - name: Publish in signed source order and make GitHub public last
+      - name: Publish GitHub and CDN, then verify the read-through mirror
         env:
-          ECOREX_GITHUB_TOKEN: ${{ github.token }}
-          ECOREX_MIRROR_TOKEN: ${{ secrets.ECOREX_MIRROR_TOKEN }}
+          ECOREX_GITHUB_RELEASE_TOKEN: ${{ secrets.ECOREX_GITHUB_RELEASE_TOKEN }}
           ECOREX_CDN_TOKEN: ${{ secrets.ECOREX_CDN_TOKEN }}
           KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
           PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}

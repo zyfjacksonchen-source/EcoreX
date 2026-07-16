@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,8 @@ def _spec(tmp_path: Path, artifact: Path | None = None) -> deployment.CloudDeplo
     attestation.write_text("{}", encoding="utf-8")
     return deployment.CloudDeploymentSpec(
         release_id="ecorex-cloud-v1.0.0-test",
+        source_commit="a" * 40,
+        dependency_lock_manifest_sha256="b" * 64,
         artifact_root=artifact or tmp_path / "artifact",
         artifact_manifest_sha256="0" * 64,
         release_keyring_path=keyring,
@@ -47,6 +50,7 @@ def _signed_artifact(tmp_path: Path) -> tuple[deployment.CloudDeploymentSpec, Pa
         "deployment/nginx/control-plane-blue.conf",
         "deployment/nginx/control-plane-green.conf",
         "deployment/nginx/control-plane-disabled.conf",
+        "deployment/nginx/admin-route-control-plane.conf",
         "deployment/nginx/ecorex-cloud.routes.conf",
     )
     files = []
@@ -54,11 +58,17 @@ def _signed_artifact(tmp_path: Path) -> tuple[deployment.CloudDeploymentSpec, Pa
         target = root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(f"fixture:{relative}\n".encode())
+        posix_mode = "0755" if relative.startswith("venv/bin/") else "0644"
+        # Model the real cloud builder contract on POSIX.  write_bytes() is
+        # umask-dependent and otherwise leaves executable fixture files at
+        # 0644 on Linux while the signed manifest correctly declares 0755.
+        target.chmod(int(posix_mode, 8))
         files.append(
             {
                 "path": relative,
                 "sha256": _sha(target),
                 "size_bytes": target.stat().st_size,
+                "posix_mode": posix_mode,
             }
         )
     manifest = {
@@ -68,6 +78,9 @@ def _signed_artifact(tmp_path: Path) -> tuple[deployment.CloudDeploymentSpec, Pa
         "platform": "linux",
         "architecture": "aarch64",
         "python_version": "3.11.9",
+        "build_contract": deployment.BUILD_CONTRACT,
+        "source_commit": "a" * 40,
+        "dependency_lock_manifest_sha256": "b" * 64,
         "files": files,
     }
     manifest_path = root / "cloud-release-manifest.json"
@@ -79,7 +92,10 @@ def _signed_artifact(tmp_path: Path) -> tuple[deployment.CloudDeploymentSpec, Pa
     public = private.public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw
     )
-    signature = private.sign(deployment._canonical_json(manifest))
+    signature = private.sign(
+        deployment.CLOUD_MANIFEST_SIGNING_DOMAIN
+        + deployment._canonical_json(manifest)
+    )
     signature_path = root / "cloud-release-manifest.sig.json"
     signature_path.write_text(
         json.dumps(
@@ -115,6 +131,8 @@ def _signed_artifact(tmp_path: Path) -> tuple[deployment.CloudDeploymentSpec, Pa
     )
     spec = deployment.CloudDeploymentSpec(
         release_id="ecorex-cloud-v1.0.0-test",
+        source_commit="a" * 40,
+        dependency_lock_manifest_sha256="b" * 64,
         artifact_root=root,
         artifact_manifest_sha256=_sha(manifest_path),
         release_keyring_path=keyring,
@@ -148,6 +166,67 @@ def test_artifact_byte_tamper_is_rejected_before_staging(tmp_path: Path) -> None
         deployment._validate_artifact(spec)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows does not expose POSIX modes")
+def test_artifact_executable_mode_tamper_is_rejected_before_staging(
+    tmp_path: Path,
+) -> None:
+    spec, root = _signed_artifact(tmp_path)
+    target = root / "venv/bin/ecorex-image"
+    target.chmod(0o644)
+
+    with pytest.raises(deployment.CloudDeployError, match="artifact_file_mode_mismatch"):
+        deployment._validate_artifact(spec)
+
+
+def test_artifact_manifest_is_bound_to_expected_source_and_lock(tmp_path: Path) -> None:
+    spec, _ = _signed_artifact(tmp_path)
+
+    with pytest.raises(deployment.CloudDeployError, match="artifact_target_mismatch"):
+        deployment._validate_artifact(
+            deployment.dataclasses.replace(spec, source_commit="c" * 40)
+        )
+    with pytest.raises(deployment.CloudDeployError, match="artifact_target_mismatch"):
+        deployment._validate_artifact(
+            deployment.dataclasses.replace(
+                spec, dependency_lock_manifest_sha256="d" * 64
+            )
+        )
+
+
+def test_raw_canonical_signature_cannot_cross_cloud_signing_domain(
+    tmp_path: Path,
+) -> None:
+    spec, root = _signed_artifact(tmp_path)
+    manifest = json.loads((root / "cloud-release-manifest.json").read_text())
+    private = Ed25519PrivateKey.generate()
+    public = private.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw
+    )
+    signature_path = root / "cloud-release-manifest.sig.json"
+    signature_path.write_text(
+        json.dumps(
+            {
+                "key_id": "wrong-domain",
+                "manifest_sha256": spec.artifact_manifest_sha256,
+                "signature_b64": base64.b64encode(
+                    private.sign(deployment._canonical_json(manifest))
+                ).decode("ascii"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    spec.release_keyring_path.write_text(
+        json.dumps({"wrong-domain": base64.b64encode(public).decode("ascii")}),
+        encoding="utf-8",
+    )
+    spec = deployment.dataclasses.replace(
+        spec, release_keyring_sha256=_sha(spec.release_keyring_path)
+    )
+
+    with pytest.raises(deployment.CloudDeployError, match="artifact_signature_invalid"):
+        deployment._validate_artifact(spec)
+
+
 def test_unlisted_artifact_file_is_rejected(tmp_path: Path) -> None:
     spec, root = _signed_artifact(tmp_path)
     (root / "venv/lib/python3.11/site-packages").mkdir(parents=True)
@@ -178,6 +257,8 @@ def test_encryption_flag_is_not_accepted_as_proof(tmp_path: Path) -> None:
 def test_spec_fences_release_keys_attestation_and_binaries() -> None:
     spec = deployment.CloudDeploymentSpec(
         release_id="ecorex-cloud-v1.0.0-test",
+        source_commit="a" * 40,
+        dependency_lock_manifest_sha256="b" * 64,
         artifact_root=Path("/tmp/untrusted"),
         artifact_manifest_sha256="0" * 64,
         release_keyring_path=Path("/etc/ecorex/cloud/release-public-keys.json"),
@@ -192,12 +273,25 @@ def test_spec_fences_release_keys_attestation_and_binaries() -> None:
     with pytest.raises(deployment.CloudDeployError, match="artifact_root_outside_fence"):
         spec.validate()
 
+    fenced = deployment.dataclasses.replace(
+        spec,
+        artifact_root=Path("/srv/ecorex-upload/ecorex-cloud-v1.0.0-test"),
+        nginx_server_config=Path("/etc/nginx/conf.d/another-server.conf"),
+    )
+    with pytest.raises(
+        deployment.CloudDeployError, match="nginx_server_config_outside_fence"
+    ):
+        fenced.validate()
+
 
 def test_default_plan_is_read_only_and_uses_storage_contract_gate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     spec, _ = _signed_artifact(tmp_path)
     monkeypatch.setattr(deployment, "_state", lambda: None)
+    monkeypatch.setattr(
+        deployment, "validate_provider_bridge_materials", lambda: object()
+    )
 
     plan = deployment.build_plan(spec)
 
@@ -205,7 +299,25 @@ def test_default_plan_is_read_only_and_uses_storage_contract_gate(
     assert plan.target_slot == "blue"
     assert plan.blockers == ()
     assert "run_exact_control_plane_and_image_storage_contract_checks" in plan.actions
+    assert "validate_and_install_loopback_provider_tls_bridge" in plan.actions
     assert all("minio" not in action for action in plan.actions)
+
+
+def test_read_only_plan_surfaces_pending_activation_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _spec(tmp_path)
+    monkeypatch.setattr(deployment, "_state", lambda: None)
+    monkeypatch.setattr(
+        deployment,
+        "_transition_journal",
+        lambda: {"phase": "state_written"},
+    )
+
+    plan = deployment.build_plan(spec, inspect_files=False)
+
+    assert "activation_recovery_required" in plan.blockers
+    assert "recover_incomplete_activation_before_new_mutation" in plan.actions
 
 
 def test_schema_gate_runs_real_checks_and_blocks_incompatible_minio(
@@ -239,6 +351,59 @@ def test_schema_gate_runs_real_checks_and_blocks_incompatible_minio(
         ("schema", "migrate"),
         ("schema", "check"),
     ]
+
+
+def test_recovery_schema_check_covers_all_four_service_roles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, tuple[str, ...]]] = []
+    monkeypatch.setattr(
+        deployment, "_service_environment", lambda service, _slot: {"SVC": service}
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_run_service_command",
+        lambda command, **kwargs: calls.append((kwargs["code"], tuple(command))),
+    )
+
+    deployment._recovery_schema_check(tmp_path / "release", "blue", source=True)
+
+    assert [code for code, _command in calls] == [
+        "control_plane_recovery_schema_incompatible",
+        "gateway_recovery_schema_incompatible",
+        "image_api_recovery_schema_incompatible",
+        "image_worker_recovery_schema_incompatible",
+    ]
+    assert all(command[-2:] == ("schema", "check") for _code, command in calls)
+
+
+@pytest.mark.parametrize(
+    "source,expected",
+    (
+        (True, "recovery_source_schema_incompatible"),
+        (False, "recovery_target_schema_incompatible"),
+    ),
+)
+def test_recovery_schema_incompatibility_is_directional(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source: bool,
+    expected: str,
+) -> None:
+    monkeypatch.setattr(
+        deployment, "_service_environment", lambda *_args: {"SAFE": "value"}
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_run_service_command",
+        lambda *_args, **kwargs: (_ for _ in ()).throw(
+            deployment.CloudDeployError(kwargs["code"])
+        ),
+    )
+    with pytest.raises(deployment.CloudDeployError, match=expected):
+        deployment._recovery_schema_check(
+            tmp_path / "release", "blue", source=source
+        )
 
 
 def test_target_apply_requires_exact_machine_confirmation(
@@ -316,3 +481,1169 @@ def test_local_cas_units_do_not_depend_on_minio_and_secrets_require_mount() -> N
     minio = (root / "minio.service").read_text(encoding="utf-8")
     assert "EnvironmentFile=/var/lib/ecorex/secrets/minio.secret.env" in minio
     assert "/etc/ecorex/cloud/secrets/" not in minio
+
+
+def _legacy_nginx_server() -> str:
+    return """server {
+    listen 443 ssl;
+
+    location = /ecorex-agent/admin {
+        return 301 /ecorex-agent/admin/;
+    }
+
+    location ^~ /ecorex-agent/admin/api/ {
+        proxy_pass http://127.0.0.1:18084/admin/api/;
+    }
+
+    location ^~ /ecorex-agent/api/admin/ {
+        proxy_pass http://127.0.0.1:18084/api/admin/;
+    }
+
+    location ^~ /ecorex-agent/admin/ {
+        auth_basic "EcoreX Admin";
+        alias /srv/ecorex-agent-download/current/admin/;
+    }
+
+    location ^~ /ecorex-agent/ {
+        alias /srv/ecorex-agent-download/current/;
+    }
+}
+"""
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires production-style symlinks")
+def test_legacy_admin_routes_move_behind_reversible_include(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    nginx_root = tmp_path / "ecorex-cloud"
+    nginx_root.mkdir()
+    server = tmp_path / "ecorex.conf"
+    server.write_text(_legacy_nginx_server(), encoding="utf-8")
+    server.chmod(0o644)
+    state = tmp_path / "state"
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(deployment, "NGINX_ROOT", nginx_root)
+    monkeypatch.setattr(deployment, "STATE_ROOT", state)
+    monkeypatch.setattr(
+        deployment,
+        "_run",
+        lambda command, **_kwargs: calls.append(tuple(command)),
+    )
+
+    candidate_source = Path(
+        "deploy/ecorex-cloud-sidecar/nginx/admin-route-control-plane.conf"
+    ).read_text(encoding="utf-8")
+    candidate = nginx_root / "admin-route-control-plane.conf"
+    candidate.write_text(candidate_source, encoding="utf-8")
+    spec = deployment.dataclasses.replace(
+        _spec(tmp_path), nginx_server_config=server
+    )
+
+    deployment._install_legacy_admin_route_wiring(spec)
+
+    migrated = server.read_text(encoding="utf-8")
+    legacy = (nginx_root / "admin-route-legacy.conf").read_text(encoding="utf-8")
+    assert migrated.count(deployment.NGINX_ROUTE_INCLUDE) == 1
+    assert "location ^~ /ecorex-agent/ {" in migrated
+    for header in deployment.LEGACY_ADMIN_LOCATION_HEADERS:
+        assert f"{header} {{" not in migrated
+        assert f"{header} {{" in legacy
+    assert (nginx_root / "active-admin-route.conf").resolve() == (
+        nginx_root / "admin-route-legacy.conf"
+    ).resolve()
+    assert (state / "nginx-pre-v1.conf").read_text(encoding="utf-8") == _legacy_nginx_server()
+    assert calls == [
+        ("/usr/sbin/nginx", "-t"),
+        ("/usr/bin/systemctl", "reload", "nginx.service"),
+    ]
+
+    deployment._install_legacy_admin_route_wiring(spec)
+    assert len(calls) == 2
+
+    candidate.write_text("tampered", encoding="utf-8")
+    with pytest.raises(
+        deployment.CloudDeployError, match="nginx_admin_route_wiring_invalid"
+    ):
+        deployment._install_legacy_admin_route_wiring(spec)
+    candidate.write_text(candidate_source, encoding="utf-8")
+    external = tmp_path / "external-admin.conf"
+    external.write_text(candidate_source, encoding="utf-8")
+    (nginx_root / "active-admin-route.conf").unlink()
+    (nginx_root / "active-admin-route.conf").symlink_to(external)
+    with pytest.raises(
+        deployment.CloudDeployError, match="nginx_admin_route_wiring_invalid"
+    ):
+        deployment._install_legacy_admin_route_wiring(spec)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires production-style symlinks")
+@pytest.mark.parametrize(
+    "needle,replacement",
+    (
+        (
+            "location = /ecorex-agent/admin/health/ready {",
+            "location = /ecorex-agent/admin/health/live {",
+        ),
+        (
+            "rewrite ^/ecorex-agent/admin/(.*)$ /admin/$1 break;",
+            "rewrite ^/ecorex-agent/admin/(.*)$ /admin/$1 last;",
+        ),
+        (
+            "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+            "proxy_set_header X-Forwarded-For $http_x_forged_for;",
+        ),
+    ),
+)
+def test_admin_route_contract_rejects_location_directive_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    needle: str,
+    replacement: str,
+) -> None:
+    nginx_root = tmp_path / "ecorex-cloud"
+    nginx_root.mkdir()
+    _, legacy = deployment._legacy_admin_route_payload(
+        _legacy_nginx_server().encode("utf-8")
+    )
+    legacy_path = nginx_root / "admin-route-legacy.conf"
+    legacy_path.write_bytes(legacy)
+    candidate_path = nginx_root / "admin-route-control-plane.conf"
+    candidate = Path(
+        "deploy/ecorex-cloud-sidecar/nginx/admin-route-control-plane.conf"
+    ).read_text(encoding="utf-8")
+    assert needle in candidate
+    candidate_path.write_text(
+        candidate.replace(needle, replacement, 1), encoding="utf-8"
+    )
+    (nginx_root / "active-admin-route.conf").symlink_to(candidate_path)
+    monkeypatch.setattr(deployment, "NGINX_ROOT", nginx_root)
+
+    with pytest.raises(
+        deployment.CloudDeployError, match="nginx_admin_route_wiring_invalid"
+    ):
+        deployment._validate_admin_route_resources()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires production-style symlinks")
+def test_nginx_candidate_switch_moves_both_routes_after_health_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    nginx_root = tmp_path / "ecorex-cloud"
+    nginx_root.mkdir()
+    for name in (
+        "control-plane-disabled.conf",
+        "control-plane-blue.conf",
+    ):
+        (nginx_root / name).write_text(name, encoding="utf-8")
+    _, legacy = deployment._legacy_admin_route_payload(
+        _legacy_nginx_server().encode("utf-8")
+    )
+    (nginx_root / "admin-route-legacy.conf").write_bytes(legacy)
+    (nginx_root / "admin-route-control-plane.conf").write_text(
+        Path(
+            "deploy/ecorex-cloud-sidecar/nginx/admin-route-control-plane.conf"
+        ).read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (nginx_root / "active-control-plane.conf").symlink_to(
+        nginx_root / "control-plane-disabled.conf"
+    )
+    (nginx_root / "active-admin-route.conf").symlink_to(
+        nginx_root / "admin-route-legacy.conf"
+    )
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(deployment, "NGINX_ROOT", nginx_root)
+    monkeypatch.setattr(
+        deployment,
+        "_run",
+        lambda command, **_kwargs: calls.append(tuple(command)),
+    )
+
+    deployment._switch_nginx(_spec(tmp_path), "blue")
+
+    assert (nginx_root / "active-control-plane.conf").resolve() == (
+        nginx_root / "control-plane-blue.conf"
+    ).resolve()
+    assert (nginx_root / "active-admin-route.conf").resolve() == (
+        nginx_root / "admin-route-control-plane.conf"
+    ).resolve()
+    assert calls == [
+        ("/usr/sbin/nginx", "-t"),
+        ("/usr/bin/systemctl", "reload", "nginx.service"),
+    ]
+
+
+def test_deploy_does_not_switch_admin_route_before_candidate_health(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _spec(tmp_path)
+    release = tmp_path / "release"
+    events: list[str] = []
+    monkeypatch.setattr(deployment.CloudDeploymentSpec, "validate", lambda _self: None)
+    monkeypatch.setattr(deployment, "_target_preflight", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_validate_artifact", lambda _spec: {})
+    monkeypatch.setattr(deployment, "_validate_attestation", lambda _spec: None)
+    monkeypatch.setattr(
+        deployment,
+        "_deployment_lock",
+        lambda: deployment.contextlib.nullcontext(),
+    )
+    monkeypatch.setattr(deployment, "_recover_pending_transition", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_state", lambda: None)
+    monkeypatch.setattr(deployment, "_install_release", lambda *_args: release)
+    monkeypatch.setattr(deployment, "_install_deployment_templates", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_write_slot_environment", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_verify_staged_runtime", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_verify_nginx_wiring", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_schema_gate", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_systemctl", lambda *_args: None)
+    monkeypatch.setattr(
+        deployment, "_wait_health", lambda *_args: events.append("candidate_healthy")
+    )
+
+    def switch(*_args) -> None:
+        assert events == ["candidate_healthy"]
+        events.append("routes_switched")
+
+    monkeypatch.setattr(deployment, "_switch_nginx", switch)
+    monkeypatch.setattr(
+        deployment,
+        "_new_transition_journal",
+        lambda **_kwargs: {"phase": "prepared"},
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_advance_transition_journal",
+        lambda journal, phase: {**journal, "phase": phase},
+    )
+    monkeypatch.setattr(deployment, "_clear_transition_journal", lambda: None)
+    monkeypatch.setattr(deployment, "_fsync_directory", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_atomic_write", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(deployment, "_atomic_symlink", lambda *_args: None)
+
+    deployment.deploy(spec, confirmation="1" * 64)
+
+    assert events == ["candidate_healthy", "routes_switched"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires production-style symlinks")
+def test_nginx_candidate_switch_restores_legacy_admin_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    nginx_root = tmp_path / "ecorex-cloud"
+    nginx_root.mkdir()
+    for name in (
+        "control-plane-disabled.conf",
+        "control-plane-blue.conf",
+    ):
+        (nginx_root / name).write_text(name, encoding="utf-8")
+    _, legacy = deployment._legacy_admin_route_payload(
+        _legacy_nginx_server().encode("utf-8")
+    )
+    (nginx_root / "admin-route-legacy.conf").write_bytes(legacy)
+    (nginx_root / "admin-route-control-plane.conf").write_text(
+        Path(
+            "deploy/ecorex-cloud-sidecar/nginx/admin-route-control-plane.conf"
+        ).read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    control = nginx_root / "active-control-plane.conf"
+    admin = nginx_root / "active-admin-route.conf"
+    control.symlink_to(nginx_root / "control-plane-disabled.conf")
+    admin.symlink_to(nginx_root / "admin-route-legacy.conf")
+    calls = 0
+
+    def fail_candidate_once(_command, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise deployment.CloudDeployError("nginx_configuration_invalid")
+
+    monkeypatch.setattr(deployment, "NGINX_ROOT", nginx_root)
+    monkeypatch.setattr(deployment, "_run", fail_candidate_once)
+
+    with pytest.raises(
+        deployment.CloudDeployError, match="nginx_configuration_invalid"
+    ):
+        deployment._switch_nginx(_spec(tmp_path), "blue")
+
+    assert control.resolve() == (nginx_root / "control-plane-disabled.conf").resolve()
+    assert admin.resolve() == (nginx_root / "admin-route-legacy.conf").resolve()
+    assert calls == 3
+
+
+def _slot_state(
+    release_id: str,
+    slot: str,
+    *,
+    previous_target_type: str = "legacy",
+    previous_release_id: str | None = None,
+    previous_slot: str | None = None,
+) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "active_target_type": "slot",
+        "active_release_id": release_id,
+        "active_slot": slot,
+        "previous_target_type": previous_target_type,
+        "previous_release_id": previous_release_id,
+        "previous_slot": previous_slot,
+        "artifact_manifest_sha256": "a" * 64,
+        "activated_at_unix": 1_700_000_000,
+    }
+
+
+def test_first_activation_receipt_retains_typed_legacy_rollback_target() -> None:
+    first = deployment._activation_state(
+        release_id="ecorex-cloud-v1.0.0-first",
+        slot="blue",
+        prior=None,
+        artifact_manifest_sha256="a" * 64,
+    )
+    second = deployment._activation_state(
+        release_id="ecorex-cloud-v1.0.0-second",
+        slot="green",
+        prior=first,
+        artifact_manifest_sha256="b" * 64,
+    )
+
+    assert first["active_target_type"] == "slot"
+    assert first["previous_target_type"] == "legacy"
+    assert first["previous_release_id"] is None
+    assert first["previous_slot"] is None
+    assert second["previous_target_type"] == "slot"
+    assert second["previous_release_id"] == first["active_release_id"]
+    assert second["previous_slot"] == "blue"
+
+
+def test_transition_journal_is_canonical_durable_and_tamper_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_root = tmp_path / "state"
+    journal_path = state_root / "activation-pending.json"
+    syncs: list[Path] = []
+    monkeypatch.setattr(deployment, "STATE_ROOT", state_root)
+    monkeypatch.setattr(deployment, "ACTIVATION_JOURNAL_PATH", journal_path)
+
+    def atomic_write(path: Path, payload: bytes, mode: int = 0o640) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+        path.chmod(mode)
+
+    monkeypatch.setattr(deployment, "_atomic_write", atomic_write)
+    monkeypatch.setattr(
+        deployment, "_fsync_directory", lambda path: syncs.append(path)
+    )
+    target = _slot_state("ecorex-cloud-v1.0.0-target", "blue")
+
+    journal = deployment._new_transition_journal(
+        operation="activate", source_state=None, target_state=target
+    )
+    journal = deployment._advance_transition_journal(journal, "routes_switched")
+
+    assert journal["source_target_type"] == "legacy"
+    assert journal["target_target_type"] == "slot"
+    assert journal["phase"] == "routes_switched"
+    assert syncs == [state_root, state_root]
+    assert journal_path.read_bytes() == deployment._canonical_json(journal) + b"\n"
+
+    value = json.loads(journal_path.read_text(encoding="utf-8"))
+    value["unexpected"] = True
+    journal_path.write_text(json.dumps(value), encoding="utf-8")
+    with pytest.raises(deployment.CloudDeployError, match="activation_journal_invalid"):
+        deployment._transition_journal()
+
+    value.pop("unexpected")
+    value["phase"] = "committed"
+    journal_path.write_text(
+        json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(deployment.CloudDeployError, match="activation_journal_invalid"):
+        deployment._transition_journal()
+
+
+@pytest.mark.parametrize(
+    "phase,route_state,expected",
+    (
+        ("prepared", "source", "source"),
+        ("target_ready", "source", "source"),
+        ("prepared", "target", "target"),
+        ("prepared", "partial", "target"),
+        ("prepared", "unknown", "target"),
+        ("target_ready", "target", "target"),
+        ("target_ready", "partial", "target"),
+        ("routes_switched", "source", "target"),
+        ("state_written", "source", "target"),
+    ),
+)
+def test_phase_and_double_route_identity_choose_safe_recovery_direction(
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+    route_state: str,
+    expected: str,
+) -> None:
+    journal = {"phase": phase, "source_state": None, "target_state": {}}
+    monkeypatch.setattr(
+        deployment, "_classify_transition_routes", lambda _journal: route_state
+    )
+
+    assert deployment._transition_resolution(journal) == expected
+
+
+def test_activation_schema_boundary_is_durable_before_first_legacy_writer_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[object] = []
+    target = _slot_state("ecorex-cloud-v1.0.0-target", "blue")
+    journal = {
+        "operation": "activate",
+        "phase": "prepared",
+        "source_state": None,
+        "target_state": target,
+    }
+
+    def advance(value, phase):
+        events.append(("journal", phase))
+        return {**value, "phase": phase}
+
+    monkeypatch.setattr(deployment, "_advance_transition_journal", advance)
+    monkeypatch.setattr(
+        deployment,
+        "_systemctl",
+        lambda _spec, verb, units: events.append((verb, tuple(units))),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_schema_gate",
+        lambda _release, slot: events.append(("schema", slot)),
+    )
+
+    result = deployment._ensure_activation_schema_ready(
+        _spec(tmp_path), journal, target_release=tmp_path / "release"
+    )
+
+    assert result["phase"] == "schema_ready"
+    assert events == [
+        ("journal", "migrating"),
+        ("stop", tuple(reversed(deployment._slot_units("blue")))),
+        ("stop", tuple(reversed(deployment.LEGACY_SERVICE_NAMES))),
+        ("schema", "blue"),
+        ("journal", "schema_ready"),
+    ]
+
+
+def test_failed_migration_leaves_migrating_journal_and_writers_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phases: list[str] = []
+    stops: list[tuple[str, ...]] = []
+    target = _slot_state("ecorex-cloud-v1.0.0-target", "blue")
+    journal = {
+        "operation": "activate",
+        "phase": "prepared",
+        "source_state": None,
+        "target_state": target,
+    }
+
+    def advance(value, phase):
+        phases.append(phase)
+        return {**value, "phase": phase}
+
+    monkeypatch.setattr(deployment, "_advance_transition_journal", advance)
+    monkeypatch.setattr(
+        deployment,
+        "_systemctl",
+        lambda _spec, verb, units: stops.append(tuple(units)),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_schema_gate",
+        lambda *_args: (_ for _ in ()).throw(
+            deployment.CloudDeployError("control_plane_schema_migration_failed")
+        ),
+    )
+
+    with pytest.raises(
+        deployment.CloudDeployError, match="control_plane_schema_migration_failed"
+    ):
+        deployment._ensure_activation_schema_ready(
+            _spec(tmp_path), journal, target_release=tmp_path / "release"
+        )
+
+    assert phases == ["migrating"]
+    assert stops == [
+        tuple(reversed(deployment._slot_units("blue"))),
+        tuple(reversed(deployment.LEGACY_SERVICE_NAMES)),
+    ]
+
+
+def test_schema_ready_recovery_does_not_repeat_completed_migration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal = {
+        "operation": "activate",
+        "phase": "schema_ready",
+        "source_state": None,
+        "target_state": _slot_state("ecorex-cloud-v1.0.0-target", "blue"),
+    }
+    monkeypatch.setattr(
+        deployment,
+        "_schema_gate",
+        lambda *_args: pytest.fail("durably completed migration repeated"),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_stop_transition_writers",
+        lambda *_args: pytest.fail("completed boundary refrozen by schema helper"),
+    )
+
+    assert deployment._ensure_activation_schema_ready(_spec(tmp_path), journal) == journal
+
+
+def test_migrating_recovery_reruns_schema_before_target_can_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[object] = []
+    source = _slot_state("ecorex-cloud-v1.0.0-source", "blue")
+    target = _slot_state("ecorex-cloud-v1.0.0-target", "green")
+    journal = {
+        "operation": "activate",
+        "phase": "migrating",
+        "source_state": source,
+        "target_state": target,
+    }
+    monkeypatch.setattr(
+        deployment, "_transition_resolution", lambda _journal: "target"
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_verify_transition_release",
+        lambda _spec, state: events.append(("verify", state["active_slot"]))
+        or tmp_path / "release",
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_schema_gate",
+        lambda _release, slot: events.append(("migrate", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_advance_transition_journal",
+        lambda value, phase: events.append(("journal", phase))
+        or {**value, "phase": phase},
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_recovery_schema_check",
+        lambda _release, slot, **_kwargs: events.append(("check", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_systemctl",
+        lambda _spec, verb, units: events.append((verb, tuple(units))),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_wait_health",
+        lambda _spec, slot: events.append(("health", slot)),
+    )
+    monkeypatch.setattr(deployment, "_switch_nginx", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_write_slot_projection", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_clear_transition_journal", lambda: None)
+
+    assert deployment._resolve_pending_transition(_spec(tmp_path), journal) == "target"
+
+    migration_index = events.index(("migrate", "green"))
+    schema_ready_index = events.index(("journal", "schema_ready"))
+    start_index = next(i for i, event in enumerate(events) if event[0] == "start")
+    assert migration_index < schema_ready_index < start_index
+
+
+def test_migrating_first_release_restores_immutable_legacy_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal = {
+        "operation": "activate",
+        "phase": "migrating",
+        "source_state": None,
+        "target_state": _slot_state("ecorex-cloud-v1.0.0-target", "blue"),
+    }
+    events: list[object] = []
+    monkeypatch.setattr(
+        deployment, "_classify_transition_routes", lambda _journal: "source"
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_schema_gate",
+        lambda *_args: pytest.fail("legacy fallback retried target migration"),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_systemctl",
+        lambda _spec, verb, units: events.append((verb, tuple(units))),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_switch_nginx_legacy",
+        lambda _spec: events.append("legacy_routes"),
+    )
+    monkeypatch.setattr(
+        deployment, "_remove_slot_projection", lambda: events.append("legacy_state")
+    )
+    monkeypatch.setattr(
+        deployment, "_clear_transition_journal", lambda: events.append("journal_clear")
+    )
+
+    assert deployment._resolve_pending_transition(_spec(tmp_path), journal) == "source"
+
+    assert events == [
+        ("stop", tuple(reversed(deployment._slot_units("blue")))),
+        ("stop", tuple(reversed(deployment.LEGACY_SERVICE_NAMES))),
+        ("start", tuple(deployment.LEGACY_SERVICE_NAMES)),
+        ("is-active", tuple(deployment.LEGACY_SERVICE_NAMES)),
+        "legacy_routes",
+        "legacy_state",
+        "journal_clear",
+    ]
+
+
+def test_double_nginx_link_classifier_detects_source_target_and_partial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    nginx = tmp_path / "nginx"
+    monkeypatch.setattr(deployment, "NGINX_ROOT", nginx)
+    control_link = nginx / "active-control-plane.conf"
+    admin_link = nginx / "active-admin-route.conf"
+    resolutions = {
+        control_link: nginx / "control-plane-disabled.conf",
+        admin_link: nginx / "admin-route-legacy.conf",
+    }
+    original_is_symlink = Path.is_symlink
+    original_resolve = Path.resolve
+
+    def is_symlink(path: Path) -> bool:
+        if path in {control_link, admin_link}:
+            return True
+        return original_is_symlink(path)
+
+    def resolve(path: Path, strict: bool = False) -> Path:
+        if path in resolutions:
+            return resolutions[path]
+        return original_resolve(path, strict=strict)
+
+    monkeypatch.setattr(Path, "is_symlink", is_symlink)
+    monkeypatch.setattr(Path, "resolve", resolve)
+    journal = {
+        "source_state": None,
+        "target_state": _slot_state("ecorex-cloud-v1.0.0-target", "blue"),
+    }
+
+    assert deployment._classify_transition_routes(journal) == "source"
+    resolutions[control_link] = nginx / "control-plane-blue.conf"
+    resolutions[admin_link] = nginx / "admin-route-control-plane.conf"
+    assert deployment._classify_transition_routes(journal) == "target"
+    resolutions[admin_link] = nginx / "admin-route-legacy.conf"
+    assert deployment._classify_transition_routes(journal) == "partial"
+
+
+@pytest.mark.parametrize(
+    "phase,route_state,expected",
+    (
+        ("prepared", "source", "source"),
+        ("target_ready", "source", "source"),
+        ("target_ready", "partial", "target"),
+        ("routes_switched", "source", "target"),
+        ("state_written", "unknown", "target"),
+    ),
+)
+def test_kill_window_recovery_executes_selected_direction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+    route_state: str,
+    expected: str,
+) -> None:
+    journal = {
+        "operation": "activate",
+        "phase": phase,
+        "source_state": None,
+        "target_state": _slot_state("ecorex-cloud-v1.0.0-target", "blue"),
+    }
+    calls: list[str] = []
+    monkeypatch.setattr(deployment, "_transition_journal", lambda: journal)
+    monkeypatch.setattr(
+        deployment, "_classify_transition_routes", lambda _journal: route_state
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_restore_transition_source",
+        lambda *_args: calls.append("source"),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_complete_transition_target",
+        lambda *_args: calls.append("target"),
+    )
+
+    result = deployment._recover_pending_transition(_spec(tmp_path))
+
+    assert result is not None
+    assert result["resolution"] == expected
+    assert calls == [expected]
+
+
+def test_schema_incompatible_source_rolls_forward_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal = {
+        "phase": "prepared",
+        "source_state": _slot_state("ecorex-cloud-v1.0.0-source", "blue"),
+        "target_state": _slot_state("ecorex-cloud-v1.0.0-target", "green"),
+    }
+    calls: list[str] = []
+    monkeypatch.setattr(deployment, "_transition_resolution", lambda _journal: "source")
+    monkeypatch.setattr(
+        deployment,
+        "_restore_transition_source",
+        lambda *_args: (_ for _ in ()).throw(
+            deployment._RecoverySourceSchemaIncompatible(
+                "recovery_source_schema_incompatible"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_complete_transition_target",
+        lambda *_args: calls.append("target"),
+    )
+
+    assert deployment._resolve_pending_transition(_spec(tmp_path), journal) == "target"
+    assert calls == ["target"]
+
+
+def test_source_recovery_stops_target_writer_before_starting_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _slot_state("ecorex-cloud-v1.0.0-source", "blue")
+    target = _slot_state(
+        "ecorex-cloud-v1.0.0-target",
+        "green",
+        previous_target_type="slot",
+        previous_release_id=str(source["active_release_id"]),
+        previous_slot="blue",
+    )
+    events: list[object] = []
+    monkeypatch.setattr(
+        deployment,
+        "_verify_transition_release",
+        lambda _spec, state: events.append(("verify", state["active_slot"]))
+        or tmp_path,
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_recovery_schema_check",
+        lambda _release, slot, **_kwargs: events.append(("schema", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_systemctl",
+        lambda _spec, verb, units: events.append((verb, tuple(units))),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_wait_health",
+        lambda _spec, slot: events.append(("health", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_switch_nginx",
+        lambda _spec, slot: events.append(("routes", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_write_slot_projection",
+        lambda state: events.append(("state", state["active_slot"])),
+    )
+    monkeypatch.setattr(
+        deployment, "_clear_transition_journal", lambda: events.append("journal_clear")
+    )
+    deployment._restore_transition_source(
+        _spec(tmp_path), {"source_state": source, "target_state": target}
+    )
+
+    assert events == [
+        ("stop", tuple(reversed(deployment._slot_units("green")))),
+        ("stop", tuple(reversed(deployment._slot_units("blue")))),
+        ("verify", "blue"),
+        ("schema", "blue"),
+        ("start", tuple(deployment._slot_units("blue"))),
+        ("health", "blue"),
+        ("routes", "blue"),
+        ("state", "blue"),
+        "journal_clear",
+    ]
+
+
+def test_target_roll_forward_stops_source_writer_then_reverifies_and_rebuilds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _slot_state("ecorex-cloud-v1.0.0-source", "blue")
+    target = _slot_state(
+        "ecorex-cloud-v1.0.0-target",
+        "green",
+        previous_target_type="slot",
+        previous_release_id=str(source["active_release_id"]),
+        previous_slot="blue",
+    )
+    events: list[object] = []
+    monkeypatch.setattr(
+        deployment,
+        "_verify_transition_release",
+        lambda _spec, state: events.append(("verify", state["active_slot"]))
+        or tmp_path,
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_recovery_schema_check",
+        lambda _release, slot, **_kwargs: events.append(("schema", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_systemctl",
+        lambda _spec, verb, units: events.append((verb, tuple(units))),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_wait_health",
+        lambda _spec, slot: events.append(("health", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_switch_nginx",
+        lambda _spec, slot: events.append(("routes", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_write_slot_projection",
+        lambda state: events.append(("state", state["active_slot"])),
+    )
+    monkeypatch.setattr(
+        deployment, "_clear_transition_journal", lambda: events.append("journal_clear")
+    )
+
+    deployment._complete_transition_target(
+        _spec(tmp_path), {"source_state": source, "target_state": target}
+    )
+
+    assert events == [
+        ("stop", tuple(reversed(deployment._slot_units("green")))),
+        ("stop", tuple(reversed(deployment._slot_units("blue")))),
+        ("verify", "green"),
+        ("schema", "green"),
+        ("start", tuple(deployment._slot_units("green"))),
+        ("health", "green"),
+        ("routes", "green"),
+        ("state", "green"),
+        "journal_clear",
+    ]
+
+
+def test_legacy_source_and_target_paths_stop_slot_before_switch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    slot = _slot_state("ecorex-cloud-v1.0.0-slot", "blue")
+    events: list[object] = []
+    monkeypatch.setattr(
+        deployment,
+        "_systemctl",
+        lambda _spec, verb, units: events.append((verb, tuple(units))),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_switch_nginx_legacy",
+        lambda _spec: events.append("legacy_routes"),
+    )
+    monkeypatch.setattr(
+        deployment, "_remove_slot_projection", lambda: events.append("legacy_state")
+    )
+    monkeypatch.setattr(
+        deployment, "_clear_transition_journal", lambda: events.append("journal_clear")
+    )
+
+    deployment._restore_transition_source(
+        _spec(tmp_path),
+        {
+            "operation": "activate",
+            "phase": "migrating",
+            "source_state": None,
+            "target_state": slot,
+        },
+    )
+    assert events == [
+        ("stop", tuple(reversed(deployment._slot_units("blue")))),
+        ("stop", tuple(reversed(deployment.LEGACY_SERVICE_NAMES))),
+        ("start", tuple(deployment.LEGACY_SERVICE_NAMES)),
+        ("is-active", tuple(deployment.LEGACY_SERVICE_NAMES)),
+        "legacy_routes",
+        "legacy_state",
+        "journal_clear",
+    ]
+    events.clear()
+    deployment._complete_transition_target(
+        _spec(tmp_path),
+        {
+            "operation": "rollback",
+            "phase": "prepared",
+            "source_state": slot,
+            "target_state": None,
+        },
+    )
+
+    assert events == [
+        ("stop", tuple(reversed(deployment.LEGACY_SERVICE_NAMES))),
+        ("stop", tuple(reversed(deployment._slot_units("blue")))),
+        ("start", tuple(deployment.LEGACY_SERVICE_NAMES)),
+        ("is-active", tuple(deployment.LEGACY_SERVICE_NAMES)),
+        "legacy_routes",
+        "legacy_state",
+        "journal_clear",
+    ]
+
+
+def test_journal_removal_is_the_only_commit_point(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    restores = 0
+
+    def restore(*_args) -> None:
+        nonlocal restores
+        restores += 1
+
+    monkeypatch.setattr(deployment, "_transition_journal", lambda: None)
+    monkeypatch.setattr(deployment, "_restore_transition_source", restore)
+
+    deployment._recover_pending_transition(_spec(tmp_path))
+
+    assert restores == 0
+
+
+def test_failed_recovery_keeps_journal_for_next_startup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal = {
+        "phase": "state_written",
+        "source_state": None,
+        "target_state": _slot_state("ecorex-cloud-v1.0.0-target", "blue"),
+    }
+    clears = 0
+    monkeypatch.setattr(deployment, "_transition_journal", lambda: journal)
+    monkeypatch.setattr(
+        deployment,
+        "_complete_transition_target",
+        lambda *_args: (_ for _ in ()).throw(
+            deployment.CloudDeployError("nginx_restore_failed")
+        ),
+    )
+
+    def clear() -> None:
+        nonlocal clears
+        clears += 1
+
+    monkeypatch.setattr(deployment, "_clear_transition_journal", clear)
+
+    with pytest.raises(deployment.CloudDeployError, match="activation_recovery_failed"):
+        deployment._recover_pending_transition(_spec(tmp_path))
+
+    assert clears == 0
+    assert deployment._transition_journal() is journal
+
+
+def test_failed_immediate_compensation_keeps_journal_for_startup_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal = {
+        "phase": "routes_switched",
+        "source_state": None,
+        "target_state": _slot_state("ecorex-cloud-v1.0.0-target", "blue"),
+    }
+    clears = 0
+    monkeypatch.setattr(
+        deployment,
+        "_complete_transition_target",
+        lambda *_args: (_ for _ in ()).throw(
+            deployment.CloudDeployError("nginx_restore_failed")
+        ),
+    )
+    monkeypatch.setattr(deployment, "_transition_journal", lambda: journal)
+
+    def clear() -> None:
+        nonlocal clears
+        clears += 1
+
+    monkeypatch.setattr(deployment, "_clear_transition_journal", clear)
+
+    with pytest.raises(
+        deployment.CloudDeployError, match="activation_compensation_failed"
+    ):
+        deployment._compensate_transition(_spec(tmp_path), journal)
+
+    assert clears == 0
+    assert deployment._transition_journal() is journal
+
+
+@pytest.mark.parametrize(
+    "failure_stage,expected_phase",
+    (
+        ("state", "routes_switched"),
+        ("current", "state_written"),
+        ("clear", "state_written"),
+    ),
+)
+def test_post_route_commit_failures_roll_forward_and_return_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+    expected_phase: str,
+) -> None:
+    spec = _spec(tmp_path)
+    release = tmp_path / "release"
+    release.mkdir()
+    prior = _slot_state("ecorex-cloud-v1.0.0-source", "blue")
+    completed: list[dict[str, object]] = []
+    monkeypatch.setattr(deployment.CloudDeploymentSpec, "validate", lambda _self: None)
+    monkeypatch.setattr(deployment, "_target_preflight", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_validate_artifact", lambda _spec: {})
+    monkeypatch.setattr(deployment, "_validate_attestation", lambda _spec: None)
+    monkeypatch.setattr(
+        deployment,
+        "_deployment_lock",
+        lambda: deployment.contextlib.nullcontext(),
+    )
+    monkeypatch.setattr(deployment, "_recover_pending_transition", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_state", lambda: prior)
+    monkeypatch.setattr(deployment, "_install_release", lambda *_args: release)
+    monkeypatch.setattr(deployment, "_install_deployment_templates", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_write_slot_environment", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_verify_staged_runtime", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_verify_nginx_wiring", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_schema_gate", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_systemctl", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_wait_health", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_switch_nginx", lambda *_args: None)
+    monkeypatch.setattr(
+        deployment,
+        "_new_transition_journal",
+        lambda **kwargs: {
+            "phase": "prepared",
+            "source_state": kwargs["source_state"],
+            "target_state": kwargs["target_state"],
+        },
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_advance_transition_journal",
+        lambda journal, phase: {**journal, "phase": phase},
+    )
+
+    def write_state(path: Path, *_args, **_kwargs) -> None:
+        if failure_stage == "state" and path.name == "active.json":
+            raise OSError("simulated durable state failure")
+
+    def write_current(*_args, **_kwargs) -> None:
+        if failure_stage == "current":
+            raise OSError("simulated current link failure")
+
+    def clear_journal() -> None:
+        if failure_stage == "clear":
+            raise deployment.CloudDeployError("activation_journal_clear_failed")
+
+    monkeypatch.setattr(deployment, "_atomic_write", write_state)
+    monkeypatch.setattr(deployment, "_atomic_symlink", write_current)
+    monkeypatch.setattr(deployment, "_fsync_directory", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_clear_transition_journal", clear_journal)
+    monkeypatch.setattr(
+        deployment,
+        "_classify_transition_routes",
+        lambda _journal: "target",
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_complete_transition_target",
+        lambda _spec, journal: completed.append(dict(journal)),
+    )
+
+    receipt = deployment.deploy(spec, confirmation="1" * 64)
+
+    assert receipt["active_release_id"] == spec.release_id
+    assert len(completed) == 1
+    assert completed[0]["phase"] == expected_phase
+    assert completed[0]["source_state"] == prior
+
+
+def test_first_activation_can_rollback_to_typed_legacy_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _spec(tmp_path)
+    current = _slot_state("ecorex-cloud-v1.0.0-current", "blue")
+    active: dict[str, object] | None = current
+    events: list[object] = []
+    monkeypatch.setattr(deployment.CloudDeploymentSpec, "validate", lambda _self: None)
+    monkeypatch.setattr(deployment, "_target_preflight", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_validate_attestation", lambda _spec: None)
+    monkeypatch.setattr(
+        deployment,
+        "_deployment_lock",
+        lambda: deployment.contextlib.nullcontext(),
+    )
+    monkeypatch.setattr(deployment, "_recover_pending_transition", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_state", lambda: active)
+    monkeypatch.setattr(
+        deployment,
+        "_new_transition_journal",
+        lambda **kwargs: {
+            "phase": "prepared",
+            "source_state": kwargs["source_state"],
+            "target_state": kwargs["target_state"],
+        },
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_advance_transition_journal",
+        lambda journal, phase: {**journal, "phase": phase},
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_systemctl",
+        lambda _spec, verb, units: events.append((verb, tuple(units))),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_switch_nginx_legacy",
+        lambda _spec: events.append("legacy_routes"),
+    )
+    def remove_slot_projection() -> None:
+        nonlocal active
+        active = None
+        events.append("legacy_state")
+
+    monkeypatch.setattr(deployment, "_remove_slot_projection", remove_slot_projection)
+    monkeypatch.setattr(
+        deployment, "_clear_transition_journal", lambda: events.append("journal_clear")
+    )
+
+    receipt = deployment.rollback(spec, confirmation="1" * 64)
+
+    assert receipt["active_target_type"] == "legacy"
+    assert receipt["previous_target_type"] == "slot"
+    assert receipt["previous_release_id"] == current["active_release_id"]
+    assert active is None
+    assert deployment.build_plan(spec, inspect_files=False).target_slot == "blue"
+    assert events == [
+        ("stop", tuple(reversed(deployment._slot_units("blue")))),
+        ("start", tuple(deployment.LEGACY_SERVICE_NAMES)),
+        ("is-active", tuple(deployment.LEGACY_SERVICE_NAMES)),
+        "legacy_routes",
+        "legacy_state",
+        "journal_clear",
+    ]

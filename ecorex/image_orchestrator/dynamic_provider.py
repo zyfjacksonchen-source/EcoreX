@@ -6,6 +6,7 @@ import asyncio
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+import ssl
 from typing import Mapping, Protocol
 
 from ecorex.control_plane.management_models import ActiveModelConfiguration
@@ -77,6 +78,7 @@ class DynamicManagedImageProvider:
         max_image_bytes: int,
         max_connections: int,
         max_concurrency: int,
+        ssl_context: ssl.SSLContext | None = None,
         input_store: ImageContentAddressedStore | None = None,
         max_cached_revisions: int = 32,
         provider_factory: Callable[
@@ -91,6 +93,7 @@ class DynamicManagedImageProvider:
         self.max_image_bytes = max_image_bytes
         self.max_connections = max_connections
         self.max_concurrency = max_concurrency
+        self.ssl_context = ssl_context
         self.input_store = input_store
         if not 2 <= max_cached_revisions <= 256:
             raise ValueError("dynamic image provider cache limit is invalid")
@@ -262,6 +265,7 @@ class DynamicManagedImageProvider:
             max_image_bytes=self.max_image_bytes,
             max_connections=self.max_connections,
             max_concurrency=self.max_concurrency,
+            ssl_context=self.ssl_context,
         )
 
     def _retire_idle_locked(self) -> list[_ManagedImageProvider]:

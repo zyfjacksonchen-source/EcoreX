@@ -5795,3 +5795,228 @@ run `29485934540`: Ubuntu quality/deterministic build, Windows x64, macOS
 arm64, macOS x64 and cross-runner canonical-byte stability all completed
 successfully. Hosted compatibility and byte evidence do not supply protected
 native signing receipts or live provider/browser acceptance.
+
+## 2026-07-16 - Direct-production publication unblock
+
+The operator explicitly waived the separate manual/CDP/HSM approval step and
+authorized direct production publication. The waiver is recorded as `WAIVED`,
+never as a passing protected gate. Old production traffic remains unchanged
+until the exact new Candidate is healthy and all public bytes are read back.
+
+The first platform-stage run `29506205694` correctly failed before it could
+emit a complete three-platform input set. Root causes were isolated and fixed:
+the Windows self-hosted runner now installs digest-pinned Python 3.11.9 through
+digest-pinned uv without registry mutation; `onnxruntime` is pinned to 1.23.2,
+whose CPython 3.11 macOS arm64/x64 wheels are present in the hash lock; and the
+GA tests read security and cookie headers through Node's native HTTP response
+instead of the platform-variable Fetch projection.
+
+Target-host smoke testing found three additional deployment defects before
+traffic mutation. The wheel omitted verified administrator static resources,
+so package-data is now explicit and a real wheel/zipimport test loads them.
+Alibaba Cloud Linux exposes PostgreSQL through `postgresql.service` and
+`/usr/bin/psql`, so the deployer and dependent units now bind those authorities.
+The existing TLS server also owned four legacy Admin locations. The deployer
+now moves those exact locations behind a fail-closed legacy include, keeps them
+active while the Candidate starts, switches both service and Admin routes only
+after health, and restores both symlinks if Nginx validation or reload fails.
+Real production configuration passed offline legacy and Candidate `nginx -t`
+assembly; no live Nginx route was changed during this work.
+
+The release contract now binds public
+`zhangyifanjackson-dotcom/EcoreX-installers`. `ghproxy.net` is a read-only
+GitHub view: GitHub draft assets and CDN are made ready, GitHub becomes public,
+then every mirror byte is downloaded without redirect or encoding and checked
+against the signed SHA-256. A real old-release probe returned HTTP 200, zero
+redirects, 105 exact bytes and the expected digest. No mirror write credential
+exists.
+
+Root review also fixed a Windows descriptor/path stat mismatch. Windows can
+project different `st_ctime_ns` meanings through `lstat` and `fstat`; stable
+handle identity now uses volume, file ID, size and last-write time while both
+path checks retain creation/change time, mode and reparse attributes. Three
+previously deterministic Candidate failures now pass, as do 100 consecutive
+Windows executable fixture reads, without weakening path-swap detection.
+
+Focused Python evidence is 27 cloud/deployment/package tests plus 61 release
+tests, all passing. Ruff, dependency-lock and diff gates pass. Web generated
+contracts, TypeScript, 180/180 tests and the content-addressed production build
+pass with 24 chunks and 459.76 KiB raw / 146.20 KiB gzip initial JavaScript.
+Publication remains pending: corrected source must merge to main, the ephemeral
+Windows runner must be re-registered, all three real stages regenerated in one
+run, and exact-main cloud/client artifacts signed before deployment.
+
+## 2026-07-16 - Direct-production transaction and public-cutover closure
+
+The direct-publication exception is now a separate, fail-closed contract rather
+than a mutation of the normal gate table.  A release-key-signed prepare/finalize
+admission binds the exact stable manifest, Candidate receipt, operator waiver,
+publication-key-signed three-source receipt and Bootstrap readback proof.  Only
+`live-model`, `live-image` and `cdp-acceptance` may be recorded as `waived`; they
+are never projected as `passed`.  Every other required gate must pass, prepare
+and finalize are append-only/idempotent, the production exception is disabled
+by default and can name only one release ID plus one operator-instruction
+digest.  The exceptional request body is capped at 32 MiB before JSON parsing,
+with a matching route-scoped Nginx limit that does not widen ordinary Admin
+requests.
+
+The cloud activation journal now records `migrating` before stopping either
+writer set and records `schema_ready` only after the idempotent migration and
+all schema gates pass.  Source and target writers are never active together.
+Recovery classifies both live Nginx routes, verifies all four service roles and
+rolls forward after a possible target write.  A deterministic first-release
+migration failure restores the immutable legacy source; a v1 source is restored
+only after schema compatibility succeeds.  The journal unlink remains the
+sole commit point.  A read-only production corpus dry-run retained 40 active
+users, excluded seven deleted users, retained eight eligible sessions, excluded
+248 revoked and 114 expired sessions, and reduced 2,088 usage rows into 2,061
+authoritative aggregates while excluding 27 rows.  Unsafe historical public
+HTTP OpenAI/Gemini/Image credentials are imported disabled with
+`rotation_required`; the legacy database remains unchanged.
+
+Release bytes can now be uploaded to the Control Plane's fixed CDN replica
+namespace using a rotating current/next bearer token, exact length/digest and
+kind validation, no-clobber content-addressed writes, fsync and crash recovery.
+The client mirror retries only retryable transport/status failures with bounded
+shared backoff; redirect, encoding, size and digest failures remain terminal.
+The provider bridge uses a root-owned specification, loopback-only TLS,
+private-CA hostname constraints, certificate/key/SAN/EKU checks, tagged hosts
+ownership and a real TLS/OPTIONS probe.  Public or hostname HTTP upstreams are
+rejected; HTTP is available only behind an explicit waiver for loopback/private
+IP literals.
+
+The Linux aarch64 cloud artifact builder is exact-source and wheel-only.  It
+binds Python 3.11.9, lock digests, source commit, file modes and every file
+digest, then exports a detached domain-separated payload for the Windows DPAPI
+release key.  Linux attaches and verifies that signature only after rescanning
+the staged tree.  The public Web/Admin deployer similarly requires a
+release-key-signed site authorization binding the manifest, waiver,
+publication/index/direct receipts and exact site-tree digest.  It uses the
+shared product lock, content-addressed slots, a durable journal, atomic legacy
+directory exchange/current pointer, Nginx validation/reload and real-SNI HTTPS
+body/cache/Admin readback before it commits.  The Admin link is the exact
+`/ecorex-agent/admin/` target.
+
+Independent review then closed three pre-publication bypasses.  The 32 MiB
+direct-admission allowance is an anchored PUT-only Nginx location, not a
+release-admin namespace override.  An internal no-body `auth_request` verifies
+the Bearer and `release_admin` role in Nginx's access phase before the proxy
+buffers the client body; ASGI repeats authentication and admits only one
+in-flight evidence body, returning 401/403/429 without reading rejected bodies.
+The public download root is taken over under the shared lock as root-owned
+0755 with the static reader group, while staging/legacy state remains root-only;
+owner, mode, device, symlink and hardlink boundaries are rechecked before every
+switch.  Admin readback is no longer any non-empty HTTP 200: the site
+authorization derives exact index/CSS/JS/health identities from the same
+signed cloud manifest, and online validation requires their byte digests,
+cache policy, CSP, product-version header and canonical ready response.
+
+Windows online-publication verification no longer compares CPython's
+path-projected creation time with a handle-projected NTFS ChangeTime.  Stable
+identity uses birth time while descriptor-before/after and final path reopen
+retain ChangeTime, size, last-write, volume and file ID checks.  The new test
+also detects same-size mutation with restored mtime, so the correction removes
+the false failure without relaxing TOCTOU protection.
+
+The final combined changed-boundary suite passes 206 tests with ten explicit
+platform-conditioned skips and zero failures.  The cloud activation suite
+passes 51 tests with four Windows skips; the expanded public-site/security
+suite passes 40 tests with five Windows symlink skips.  Lint/compile,
+dependency locks, Runtime/server schema authority (including the explicit
+direct-admission migration authority), strict legacy cutoff and the public
+download gate pass.  Publication is still pending the source commit,
+PR matrix, exact-main platform/cloud builds, signatures, server migration,
+three-source readback, Bootstrap activation and final live URL validation.  Old
+production traffic has not been switched by this implementation batch.
+
+## 2026-07-17 - Linux semantic correction before merge
+
+PR run `29521151721` correctly withheld promotion.  Windows x64 and both macOS
+compatibility jobs passed, but the Ubuntu full suite reported 14 failures from
+three test-boundary defects that Windows had conditionally skipped: signed
+cloud fixtures did not apply their declared POSIX modes; portable Provider
+Bridge tests invoked production `fchown(root:root)` as an unprivileged CI user;
+and portable public-site tests invoked production `lchown(root:994)`.  Three
+Admin-route tests also assumed that the Control Plane Nginx file could never
+gain unrelated routes.  No production traffic, manifest or user update was
+created from this failed run; cross-runner byte stability remained skipped.
+
+The fixes preserve every production fence.  Signed artifact fixtures now
+materialize their declared 0755 executable and 0644 data modes.  Provider
+Bridge atomic replacement still unconditionally sets root ownership, with
+tests explicitly simulating and asserting that call; its durable order is
+`fchown → fchmod → write → fsync → replace → parent fsync`.  Public-site
+portable tests now simulate `lchown` alongside their existing rename/flock OS
+boundary, while the deployed code still requires root:994.  Admin-route
+validation now parses exactly seven required locations and verifies each
+path/rewrite/header/upstream directive, rejecting missing, duplicate, mutated
+or unexpected locations without forbidding unrelated Control Plane routes.
+
+The main task reran the three affected domains on both platforms: Windows
+passes 81 tests with 12 Linux-conditioned skips, and WSL Ubuntu with exact
+Python 3.11.9 passes all 93 tests with zero skips/failures.  Ruff, compilation
+and whitespace checks pass.  A new PR head and full hosted matrix are still
+required before merge.
+
+## 2026-07-17 - Connector late-success ownership correction
+
+PR run `29522376431` proved that all 14 earlier Linux failures were removed:
+Windows x64 and macOS arm64/x64 passed, while Ubuntu completed 2,178 tests and
+failed only `test_late_inline_success_always_creates_recovery_delivery_item`.
+The failure was not hidden with a workflow rerun.  The old test used a fixed
+300 ms sleep, but the load-sensitive failure exposed a real state-machine gap:
+an idempotent retry that observed `outcome_unknown` immediately returned manual
+reconciliation even when the original provider completion lease was still
+active and exclusively owned by its late-result watcher.
+
+The repository now normalizes expired operation leases before classifying an
+idempotency reservation.  `outcome_unknown` with a non-expired active provider
+fence is `in_progress`, so a Runtime caller waits for the original owner; an
+expired or inactive fence remains fail-closed `uncertain`.  Completion polling
+uses the same contract.  Recovery delivery is derived from the durable result
+stage's `completion_path=late_provider_result`, so a retry that wins local
+finalization cannot suppress the one recovery Tool Item/event.
+
+The regression no longer guesses scheduling with sleep or `call_later`.  A
+barrier proves the retry entered `_await_invocation_completion` before the
+gated provider result is released.  Tests also cover watcher failure after
+staging, expired/inactive fences, three later replays, one provider call, one
+recovery item/event and zero final leases.  Connector coverage passes 132
+tests; result-artifact coverage passes 19 on Windows and the same 19 on WSL
+Ubuntu/Python 3.11.9.  Ruff, compilation and whitespace checks pass.  A new
+hosted head is still required before merge.
+
+## 2026-07-17 - Product update lock ownership correction
+
+PR run `29524461343` verified the connector correction and again passed Windows
+x64 plus macOS arm64/x64, but correctly stopped promotion after one Ubuntu
+failure with 2,180 tests passed and 35 skipped.  The failing audit-lifespan test
+exposed a product startup race rather than audit corruption: the newly started
+update poll read `current_release_identity` on one worker thread while the
+Runtime readiness recorder called `mark_runtime_ready` on another.  Both use
+the same `InstallCoordinator` and `ProductFileLock`; the old implementation
+treated any different-thread owner as immediately unavailable even when the
+product intended to wait.  Cross-runner byte stability was skipped and no
+release or production switch occurred.
+
+`ProductFileLock` now reserves a single in-process acquisition and uses a
+condition variable.  The owning thread retains re-entrancy, while another
+thread waits according to one deadline covering both the in-process and OS
+lock phases.  A zero timeout remains fail-fast; the production update
+composition explicitly selects `timeout=None` so its trusted background
+workers serialize instead of failing the Runtime lifespan.  Ownership is not
+transferred until backend unlock and descriptor close finish.  Backend or
+stream exceptions always clear the acquisition reservation/owner state and
+wake waiters, preventing a failed cleanup from permanently wedging updates.
+
+The regression uses observable condition barriers, not sleeps.  It fixes an
+identity reader inside the critical section, proves the readiness recorder is
+waiting, then releases the first owner and verifies both operations complete
+without dual ownership.  Finite timeout, non-owner release, backend failure,
+stream-close failure, re-entrancy and process exclusion remain covered.  On
+WSL Ubuntu with exact Python 3.11.9, update composition plus durability pass all
+23 tests; the focused lock/product barrier set passes all 18 tests.  The
+implementing agent additionally repeated the deterministic race 20 times and
+the thread stress 250 times.  Ruff, compilation and whitespace checks pass.
+Independent review found no remaining P0/P1.  A new hosted full matrix is still
+mandatory before merge.
