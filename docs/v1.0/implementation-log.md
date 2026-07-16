@@ -5698,3 +5698,100 @@ Promotion remains closed: the local drill has 8/24 platform receipts, while 16
 protected macOS receipts, a managed HTTPS Gateway/device session and restored
 Chrome control are absent. No release publication, rollout or user update was
 attempted.
+
+## 2026-07-16 - Parallel release-blocker integration before the next Candidate
+
+Three independent blocker lines were integrated and then reviewed again on the
+main task. The administrator model test no longer treats catalog visibility as
+activation proof. An explicit test now performs Catalog plus exactly one real
+operation on the frozen revision: Responses, Chat Completions, Images
+Generations or multipart Images Edits. Submitted POST timeouts, transport
+losses, 408/425 and 5xx are `provider_test_uncertain`; the Control Plane does
+not retry or replace the active revision. Readiness never invokes this path.
+The operation has a separate 30–600 second production timeout (180 seconds by
+default), bounded response bodies/concurrency, HTTPS-only fixed origins and
+in-memory-only response validation.
+
+The Windows signed-Candidate drill now defaults to the exact v0.2.9.2 release
+tag schema and includes a cache-only deleted-session fixture. An optional
+operator-selected legacy root is inventoried, copied to a disposable stable
+snapshot and inventoried again; migration and deletion checks run only against
+that snapshot. The deletion gate reuses the product migrator's exact database
+candidate order and released conversation adapter instead of maintaining a
+second SQLite approximation. Target aggregate counts, read-only integrity and
+the intersection between cache-only IDs and imported legacy session mappings
+must all pass before the activation evidence is accepted. The source is never
+deleted or used as the v1 target.
+
+A Candidate callback boundary can run a fixed real-Google-Chrome CDP harness
+only after the signed fault Candidate has reached an authoritative rollback
+terminal and the restored slot is current, known-good, receipt-valid and
+sandbox-attested. The callback is rechecked after execution, uses a bounded
+Windows Job, an isolated profile and no ambient provider/proxy credentials.
+Chrome chooses its own ephemeral debug port and publishes it through
+`DevToolsActivePort`; response bodies and evidence are bounded. The current
+harness deliberately labels its result `unauthenticated-shell-smoke` and
+declares that full office scenarios and promotion were not proven. It cannot
+substitute for the requested authenticated image/tool/steer/Retouch matrix.
+
+Root review added server-error no-retry coverage, migration candidate-order
+coverage, read-only target verification, streaming response limits and the
+explicit smoke evidence scope. The complete Python suite passes 1,996 tests
+with 17 explicit skips, zero failures and zero errors (2,013 JUnit cases) in
+1,095.247 seconds. The 106-test changed-boundary set, compile/lint and all
+static product gates pass. Web generated contracts, TypeScript and 180/180
+tests pass; the production bundle remains 459.76 KiB raw / 146.20 KiB gzip
+initial JavaScript across 24 chunks, and the dependency audit reports zero
+vulnerabilities.
+
+These are implementation and local deterministic gates only. The next exact
+source signed-Candidate ceremony, real managed HTTPS provider/device session,
+authenticated browser matrix, protected macOS receipts and publication remain
+separate gates. No rollout or user update was attempted.
+
+## 2026-07-16 - Exact-source v0.2.9.2 signed activation ceremony
+
+Implementation commit `d60d9cda8c2ef9d183b2f5b0e331e9cf8de36b7b`
+was checked out into a clean detached worktree. The locked Web install reported
+zero vulnerabilities and rebuilt the same 25 immutable assets / 24 chunks at
+459.76 KiB raw / 146.20 KiB gzip initial JavaScript. The worktree remained
+clean before the source-pinned Windows stage began.
+
+The signed Candidate ceremony passed in 2,170.156 seconds. Eight local Windows
+Core/Bootstrap/Pack receipts were generated. First install waited for explicit
+confirmation and its signed Runtime returned HTTP 200. The default migration
+gate used the exact v0.2.9.2 tag schema commit
+`b52999b07a753e103a993a4da9d3c83c3f366e71`: two authoritative fixture
+Threads, two messages, two summaries, one Project and one binding were imported
+copy-on-write; one cache-only deleted session was excluded, zero deleted
+sessions were restored and SQLite integrity was `ok`. The disposable snapshot
+was removed before a second signed Runtime restart returned HTTP 200.
+
+The same ceremony then completed a confirmed background update and refresh,
+rejected a corrupt digest without pointer mutation, activated a signed fault
+Candidate and restored the previous known-good slot with rollback HTTP 200.
+Three durable drain checkpoints preceded activation attempts. The fault slot
+was removed, private signing material was not persisted, and the complete
+temporary Candidate directory was removed.
+
+The untracked 44,008-byte full report has SHA-256
+`22c1078b...e5d37c`. The aggregate-only tracked summary is
+`evidence/windows-signed-candidate-d60d9cda-2026-07-16-summary.json`.
+This ceremony proves the exact released v0.2.9.2 schema/deletion contract inside
+the signed activation chain, but its corpus is a deterministic release fixture.
+It does not relabel the earlier real installed import as signed activation. The
+real import evidence remains 54 retained authoritative sessions, 93 excluded
+cache-only IDs and zero restored deleted sessions.
+
+Installed-signed CDP was intentionally absent from this ordinary ceremony: the
+new lower-level harness is explicitly an unauthenticated shell smoke, while the
+requested authenticated image/tool/steer/Retouch matrix still requires restored
+browser plugin control and a managed test session. Protected macOS receipts,
+managed HTTPS Model/Image acceptance, publication and rollout remain closed.
+
+The implementation/evidence head
+`f7c14d1499a296ea52ef3822a4bd9846b92e8827` then passed hosted pull-request
+run `29485934540`: Ubuntu quality/deterministic build, Windows x64, macOS
+arm64, macOS x64 and cross-runner canonical-byte stability all completed
+successfully. Hosted compatibility and byte evidence do not supply protected
+native signing receipts or live provider/browser acceptance.

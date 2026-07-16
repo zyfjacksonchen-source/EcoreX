@@ -108,7 +108,7 @@
             <header class="section-heading">
               <div>
                 <h2 id="models-title">托管模型</h2>
-                <p>分别配置主模型、生图模型和精修模型。新 Key 只有测试通过后才会原子生效。</p>
+                <p>分别配置主模型、生图模型和精修模型。显式测试会调用一次真实模型；通过后新 Key 才会原子生效。</p>
               </div>
               <button class="button primary" id="create-model-button" data-session-control type="button" disabled>添加模型</button>
             </header>
@@ -369,7 +369,7 @@
 
     <dialog class="editor-dialog" id="model-dialog" aria-labelledby="model-dialog-title">
       <form id="model-form" novalidate>
-        <div class="dialog-heading"><h2 id="model-dialog-title">添加模型</h2><p>保存为草稿后，在列表中点击“测试并启用”。</p></div>
+        <div class="dialog-heading"><h2 id="model-dialog-title">添加模型</h2><p>保存为草稿后，在列表中显式发起一次真实模型测试并启用。</p></div>
         <input id="model-config-id" type="hidden">
         <input id="model-active-revision" type="hidden">
         <div class="editor-grid">

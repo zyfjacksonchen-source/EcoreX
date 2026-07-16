@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "local_windows_signed_candidate_v0292_activation",
+  "recorded_at": "2026-07-16T17:01:59+08:00",
+  "source": {
+    "commit": "d60d9cda8c2ef9d183b2f5b0e331e9cf8de36b7b",
+    "version": "1.0.0",
+    "worktree_dirty": false,
+    "hosted_validation_head": "f7c14d1499a296ea52ef3822a4bd9846b92e8827",
+    "hosted_ci_run_id": 29485934540,
+    "hosted_ci_jobs_passed": 5,
+    "hosted_ci_claimed": true
+  },
+  "local_candidate": {
+    "status": "passed",
+    "elapsed_seconds": 2170.156,
+    "release_id": "release-stable-275f923a86d45c4bf688fd39",
+    "build_digest": "275f923a86d45c4bf688fd393b059acb4879e6bb7cfa60e5e97f08ff531e3617",
+    "manifest_sha256": "9d6030bdc1af237e28764f81995f61054220c92c1d27daea3fb980fb24e4f2d8",
+    "full_report": {
+      "tracked": false,
+      "bytes": 44008,
+      "sha256": "22c1078b2d2bb3017d396a2c08b8aaef87f709a9164b23ef6905d0b293e5d37c",
+      "contains_secrets": false
+    },
+    "platform_stage": {
+      "local_windows_receipts": 8,
+      "required_protected_receipts": 24,
+      "missing_protected_macos_receipts": 16
+    },
+    "runtime": {
+      "first_install": "completed",
+      "first_install_http_status": 200,
+      "activation_required_user_confirmation": true,
+      "migration_restart_http_status": 200,
+      "update_and_refresh": "completed",
+      "update_and_refresh_http_status": 200,
+      "rollback": "rollback",
+      "rollback_http_status": 200,
+      "durable_drain_checkpoints": 3,
+      "bad_digest_rejected": true,
+      "fault_slot_discarded": true
+    },
+    "migration": {
+      "source_version": "0.2.9.2",
+      "corpus_mode": "synthetic-release-fixture",
+      "baseline_release_schema_commit": "b52999b07a753e103a993a4da9d3c83c3f366e71",
+      "threads": 2,
+      "messages": 2,
+      "session_summaries": 2,
+      "projects": 1,
+      "project_bindings": 1,
+      "cache_only_deleted_session_ids_excluded": 1,
+      "deleted_sessions_restored": 0,
+      "database_integrity": "ok",
+      "deletion_authority_verified": true,
+      "copy_on_write": true,
+      "source_read_only": true,
+      "disposable_snapshot_removed": true
+    },
+    "artifacts": {
+      "core": {
+        "bytes": 21539686,
+        "sha256": "644a3f942c4321783f1ab8f4ce1262c3ed176e41e8c50828513dfb08df7d4d6a"
+      },
+      "bootstrap": {
+        "bytes": 3109076,
+        "sha256": "0ff23492b29bc8d86aff7c16432c6ff0f3fa207af3dc4eeb0038d555f4e1ceff"
+      },
+      "browser_pack": {
+        "bytes": 190153571,
+        "sha256": "dcb5353bbfab081bbb3a873560f1596ae0d1e39b5cdd2b5ac3acfd85018c1d56"
+      },
+      "channels_pack": {
+        "bytes": 809,
+        "sha256": "4a57122cd66ada4dbd71ab6389712ef5f9cd41d580128b711490896e9c291c31"
+      },
+      "image_pack": {
+        "bytes": 1376,
+        "sha256": "012f485114cc77ca0c30dbf775303aa94263ae9b561cdae747915e44bef2e370"
+      },
+      "ocr_pack": {
+        "bytes": 94993855,
+        "sha256": "7adf50dd8e796cce53c69db60f8b85a9d56e7b5ce2a55a2f0560f639e1590628"
+      },
+      "office_pack": {
+        "bytes": 14836807,
+        "sha256": "f9323262f069732eb191acacaf26c5c8fdf078e523d135f35bf4e5cf678241a4"
+      },
+      "sandbox_pack": {
+        "bytes": 7601,
+        "sha256": "34b1b519d6ccfaac4b356e7028886cdb084f541ab14012bd6d1758cf13fcd336"
+      }
+    },
+    "private_key_persisted": false,
+    "temporary_candidate_removed": true,
+    "external_publication": false
+  },
+  "adjacent_quality": {
+    "python_passed": 1996,
+    "python_skipped": 17,
+    "python_failed": 0,
+    "python_errors": 0,
+    "web_passed": 180,
+    "web_failed": 0,
+    "web_initial_javascript_kib": 459.76,
+    "web_initial_javascript_gzip_kib": 146.20,
+    "web_chunks": 24,
+    "web_high_severity_vulnerabilities": 0
+  },
+  "boundaries": {
+    "real_installed_v0292_corpus_claimed": false,
+    "existing_real_import_authoritative_sessions_retained": 54,
+    "existing_real_import_cache_only_deleted_ids_excluded": 93,
+    "existing_real_import_deleted_sessions_restored": 0,
+    "candidate_bound_cdp_claimed": false,
+    "managed_gateway_claimed": false,
+    "protected_candidate_claimed": false,
+    "publication_attempted": false,
+    "rollout_attempted": false,
+    "privacy": "Only aggregate status, timing, sizes and cryptographic digests are retained. No credential, provider origin, prompt, response, user path, raw session identifier or conversation content is included."
+  }
+}

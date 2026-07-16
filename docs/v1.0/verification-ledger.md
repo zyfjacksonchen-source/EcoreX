@@ -1948,3 +1948,31 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Deleted-session authority | 0 | Real v0.2.9.2 commit import still proves 54 retained authoritative sessions, 93 excluded cache-only deleted IDs and zero restored deleted sessions. This local Candidate used the released v0.3 fixture, so real-v0.2.9.2 signed activation remains pending. |
 | Redacted evidence | 0 | `evidence/windows-signed-candidate-main-90539b2f-2026-07-16-summary.json` contains aggregate statuses/digests only. The untracked 43,534-byte full report SHA-256 is `9495383f...d5b3d2`; no credentials, origins, prompts, responses, paths or conversation content are retained. |
 | Promotion/publication | blocked | Local evidence remains 8/24 receipts. Sixteen protected macOS receipts, managed HTTPS Gateway/device session and Candidate-bound Chrome control are absent; no publication, rollout or user update occurred. |
+
+## Parallel blocker integration before next signed Candidate - 2026-07-16
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Administrator activation authority | 0 | Model directory visibility is diagnostic only. Explicit activation performs Catalog plus exactly one frozen-revision Responses/Chat/Images Generation/Images Edit operation; only a contract-valid real result can atomically activate. |
+| Uncertain billing boundary | 0 | Submitted POST timeout/transport/408/425/5xx is `provider_test_uncertain`, never auto-retried and never activates. A deterministic per-revision idempotency key supports provider reconciliation without implying client retry. Readiness makes zero model calls. |
+| Production configuration | 0 | Fixed public HTTPS origins remain deployment-owned. Activation has a separate bounded `ECOREX_CP_MODEL_ACTIVATION_TIMEOUT_SECONDS` range of 30–600 seconds, default 180; provider result bodies are bounded and validated in memory only. |
+| v0.2.9.2 signed-upgrade gate | 0 | Local Candidate defaults to exact tag `v0.2.9.2` / commit `b52999b07a753e103a993a4da9d3c83c3f366e71`. A user-selected source is copied into a disposable inventory-stable snapshot; migration never targets or deletes the source. |
+| Deleted-session non-resurrection | 0 | The Candidate verifier reuses the production database candidate order and released conversation reader. Cache-only deleted IDs must have zero intersection with imported session mappings and the migration report count must match exactly. |
+| Installed-signed CDP boundary | 0 with scope | Callback runs only after authoritative rollback to a signed current known-good sandboxed slot and rechecks all authorities after Chrome exits. It uses a bounded Job, isolated profile, Chrome-owned ephemeral debug port and bounded evidence. Its explicit scope is `unauthenticated-shell-smoke`; full office scenario acceptance and promotion are false. |
+| Python complete suite | 0 | JUnit: 2,013 cases, 0 failures, 0 errors, 17 skipped; console summary 1,996 passed in 1,095.51 seconds. Changed-boundary regression: 106 passed. Compile/lint and all v1 static product gates pass. |
+| WebUI | 0 | Generated contracts, TypeScript and 180/180 tests pass. Build emits 24 chunks; initial JavaScript is 459.76 KiB raw / 146.20 KiB gzip. Production dependency audit reports zero vulnerabilities. |
+| Remaining acceptance | pending | Execute the exact committed source signed Candidate, then use a real managed HTTPS provider/session and restored browser plugin control for the authenticated image/tool/steer/Retouch matrix. Protected macOS receipts and publication remain absent. |
+
+## Exact-source v0.2.9.2 signed activation ceremony - 2026-07-16
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Exact source | 0 | Clean detached worktree at `d60d9cda8c2ef9d183b2f5b0e331e9cf8de36b7b`; locked Web install/build passed with zero vulnerabilities and no source dirtiness. |
+| Local signed Candidate | 0 | Passed in 2,170.156s with 8 local Windows receipts. First install, post-migration restart, update-and-refresh and rollback each returned HTTP 200. |
+| v0.2.9.2 migration | 0 | Exact tag schema commit `b52999b07a753e103a993a4da9d3c83c3f366e71`; copy-on-write fixture imported 2 Threads, 2 messages, 2 summaries, 1 Project and 1 binding. Integrity `ok`; one cache-only deleted ID excluded and zero restored. |
+| Update safety | 0 | Three durable checkpoints; explicit activation required; bad digest rejected without pointer mutation; fault slot discarded; previous signed known-good slot restored. |
+| Secret and cleanup boundary | 0 | Private key persisted=false; disposable legacy snapshot and complete Candidate directory removed; no external publication. |
+| Evidence | 0 | Full report 44,008 bytes / SHA-256 `22c1078b...e5d37c` remains untracked. Aggregate tracked receipt: `evidence/windows-signed-candidate-d60d9cda-2026-07-16-summary.json`. |
+| Real-user boundary | pending | Candidate used a deterministic exact-release fixture. Prior real v0.2.9.2 import remains 54 authoritative sessions retained, 93 cache-only deleted IDs excluded and zero restored, but is not relabelled as signed activation. |
+| Live/protected boundary | blocked safely | Candidate-bound authenticated CDP, managed HTTPS Model/Image execution, 16 protected macOS receipts, publication and rollout remain absent. |
+| Hosted validation | 0 | PR head `f7c14d1499a296ea52ef3822a4bd9846b92e8827`, run `29485934540`: Ubuntu quality/deterministic build, Windows x64, macOS arm64/x64 and cross-runner byte stability all passed (5/5 Jobs). |

@@ -43,6 +43,7 @@ Provider 地址仍由部署者固定允许，管理员只能选择预置接口�
 ```text
 ECOREX_CP_MODEL_PROVIDER_ORIGINS_JSON=
   {"responses":"https://...","openai_compatible_chat":"https://...","openai_compatible_image":"https://..."}
+ECOREX_CP_MODEL_ACTIVATION_TIMEOUT_SECONDS=180
 ECOREX_GATEWAY_MODEL_PROVIDER_ORIGINS_JSON=
   {"responses":"https://...","openai_compatible_chat":"https://..."}
 ECOREX_IMAGE_MODEL_PROVIDER_ORIGINS_JSON=
@@ -51,8 +52,9 @@ ECOREX_IMAGE_MODEL_PROVIDER_ORIGINS_JSON=
 
 值必须是无凭据、无 path/query/fragment、443 端口的 HTTPS origin。Control
 Plane 的测试器、Gateway 和 Image Orchestrator 应使用一致的 preset → origin
-映射。生产配置原有的模型 allowlist、鉴权、公钥、超时和资源上限仍必须存在；
-打开动态管理不会放宽这些边界。
+映射。激活超时允许 30–600 秒，默认 180 秒；它只约束管理员显式测试，不参与
+readiness 或后台探活。生产配置原有的模型 allowlist、鉴权、公钥、超时和资源
+上限仍必须存在；打开动态管理不会放宽这些边界。
 
 ## 4. 模型更换闭环
 
@@ -60,8 +62,11 @@ Plane 的测试器、Gateway 和 Image Orchestrator 应使用一致的 preset �
    精修；填写页面名称、上游模型名、接口类型和新 API Key。
 2. 保存只创建不可执行草稿。API Key 立即 AES-GCM 加密，页面和列表只返回短
    指纹，不允许读回明文。
-3. 点击“测试并启用”。Control Plane 使用草稿的冻结 revision 对 allowlisted
-   origin 做有界真实连通测试；失败只记录稳定错误码，不能激活。
+3. 点击“测试并启用”。Control Plane 使用草稿的冻结 revision 先读取模型目录，
+   再按用途发起恰好一次真实操作：主模型走 Responses 或 Chat Completions，生图
+   走 Images Generations，精修走 multipart Images Edits。只有真实结果满足合同才
+   能激活；目录可见或 HTTP 200 本身都不算通过。响应内容只在内存中验证，不写
+   数据库、日志或审计正文。
 4. 测试通过和默认模型切换在同一事务完成。新的聊天请求立即读取新 revision；
    已开始的流继续使用旧 revision，避免半路换 Key。
 5. 生图/精修任务在入队时持久化 `config_id + revision + upstream_model_id`。
@@ -69,6 +74,12 @@ Plane 的测试器、Gateway 和 Image Orchestrator 应使用一致的 preset �
    计费或改变结果语义。
 6. 旧 revision 只在没有活动引用后关闭连接。管理员无需改 Python、重启服务或
    重新打包 WebUI。
+
+真实 POST 使用冻结 revision 派生的稳定幂等键，但 EcoreX 不自动重试。提交后
+发生超时、断线、408/425 或 5xx 时，结果可能已经产生或计费，后台返回
+`provider_test_uncertain`、保留当前线上 revision，并要求管理员先向服务商核对
+再决定是否以新的显式操作重试。普通 readiness 只检查本地/依赖健康，不调用模型，
+因此不会因探活产生 Token 或图片费用。
 
 生图与精修的活动 revision 在云端 Image Orchestrator 内直接适配固定
 OpenAI-compatible Images API：无输入走 `POST /v1/images/generations`，精修走
@@ -123,6 +134,12 @@ CAS 读取，API Key 不会下发本地 Runtime。上游必须返回内联 `b64_
 
 - `provider_test_unavailable`：检查固定 origin、TLS、DNS 和出口策略；不要在页面
   临时改 URL。
+- `provider_test_uncertain`：真实 POST 的结果未知；系统没有重试，也没有启用草稿。
+  先检查服务商请求记录/账单，再由管理员决定是否重新发起。
+- `provider_test_rate_limited`：服务商拒绝了本次显式测试；稍后人工重试，当前配置
+  保持不变。
+- `provider_inference_rejected`：目录可见但真实操作被拒绝；检查用途、权限、模型名
+  和服务商请求参数，不能用目录成功绕过。
 - `provider_model_unavailable`：上游不存在该模型名，修正草稿后产生新 revision。
 - 解密失败：先确认三个进程读取的是同一密钥和数据库；禁止自动生成新密钥覆盖。
 - Gateway/Image 找不到活动配置：确认对应模型位已经“测试并启用”，用途与本地

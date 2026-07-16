@@ -980,8 +980,11 @@
     provider_test_unconfigured: "该接口类型尚未由平台允许",
     provider_test_timeout: "测试超时，请检查服务商状态",
     provider_test_unavailable: "暂时无法连接模型服务",
+    provider_test_uncertain: "真实请求结果不确定，系统未自动重试或启用",
+    provider_test_rate_limited: "模型服务限流，当前配置未启用",
     provider_test_protocol: "模型服务返回了不兼容的格式",
     provider_test_rejected: "模型服务拒绝了测试请求",
+    provider_inference_rejected: "模型服务拒绝了真实推理请求",
     provider_test_cancelled: "测试已取消",
   })[code] || "模型测试未通过";
 
@@ -1057,7 +1060,7 @@
         activate.addEventListener("click", () => {
           askConfirmation({
             title: `测试并启用 ${revision.display_name}？`,
-            description: "只有 Key 与模型名称都验证通过时，新修订才会原子替换当前配置；失败不影响线上模型。",
+            description: "系统会向对应服务发送一次真实请求，图片测试可能产生费用。只有返回可用结果时新修订才会生效；失败或结果不确定时保留线上配置且不会自动重试。",
             confirmLabel: "开始测试",
             operation: () => withBusy(activate, "测试中", async () => {
               const payload = await apiRequest(`/models/${safeSegment(configuration.config_id)}/test-and-activate`, {

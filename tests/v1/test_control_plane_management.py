@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 import sqlite3
 
@@ -208,6 +209,25 @@ def test_connection_test_uses_server_origin_and_checks_exact_model() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
+        if request.url.path == "/v1/responses":
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "application/json"},
+                json={
+                    "model": "gpt-5.6-sol",
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": "ECOREX_ACTIVATION_OK",
+                                }
+                            ],
+                        }
+                    ],
+                },
+            )
         return httpx.Response(
             200,
             headers={"Content-Type": "application/json"},
@@ -225,6 +245,12 @@ def test_connection_test_uses_server_origin_and_checks_exact_model() -> None:
     assert result.passed
     assert requests[0].url == "https://models.ecorex.example/v1/models"
     assert requests[0].headers["authorization"] == "Bearer sk-test-value"
+    assert requests[1].url == "https://models.ecorex.example/v1/responses"
+    assert requests[1].headers["authorization"] == "Bearer sk-test-value"
+    assert requests[1].headers["idempotency-key"].startswith(
+        "ecorex-model-activation-"
+    )
+    assert json.loads(requests[1].content)["model"] == "gpt-5.6-sol"
 
 
 def _repository_for_active_configuration():

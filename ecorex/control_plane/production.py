@@ -247,6 +247,7 @@ class ControlPlaneProductionConfig:
     publication_signer_timeout_seconds: int = 30
     admin_management_enabled: bool = False
     model_provider_origins: Mapping[str, str] = field(default_factory=dict)
+    model_activation_timeout_seconds: int = 180
 
     def __post_init__(self) -> None:
         try:
@@ -359,6 +360,7 @@ class ControlPlaneProductionConfig:
             + PUBLIC_BOOTSTRAP_AUTHORITY_FUTURE_SKEW_SECONDS
             >= self.bootstrap_freshness_lead_seconds
             or not 1 <= self.publication_signer_timeout_seconds <= 120
+            or not 30 <= self.model_activation_timeout_seconds <= 600
         ):
             raise ProductionConfigurationError(
                 "Control Plane production configuration is invalid"
@@ -798,6 +800,13 @@ class ControlPlaneProductionConfig:
             ),
             admin_management_enabled=management_enabled,
             model_provider_origins=origins,
+            model_activation_timeout_seconds=_integer(
+                values,
+                "ECOREX_CP_MODEL_ACTIVATION_TIMEOUT_SECONDS",
+                minimum=30,
+                maximum=600,
+                default=180,
+            ),
         )
 
 
@@ -1437,7 +1446,7 @@ class SingleNodeSQLiteS3Provider:
             model_connection_tester = (
                 HTTPSModelConnectionTester(
                     config.model_provider_origins,
-                    timeout_seconds=float(config.dependency_timeout_seconds),
+                    timeout_seconds=float(config.model_activation_timeout_seconds),
                 )
                 if management_repository is not None
                 else None

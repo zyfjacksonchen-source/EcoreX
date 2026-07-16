@@ -2,20 +2,16 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import hashlib
 import json
 from pathlib import Path
-import re
 import secrets
 import sqlite3
-from typing import Any, Mapping, Protocol, runtime_checkable
-from urllib.parse import urlsplit
+from typing import Any, Mapping
 import uuid
 
-import httpx
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -35,10 +31,15 @@ from .management_models import (
 )
 from .management_schema import AdminManagementSchemaManager
 from .models import ControlPrincipal
+from .model_activation import (
+    HTTPSModelConnectionTester,
+    ModelConnectionTester,
+    ModelConnectionTestResult,
+    RejectingModelConnectionTester,
+)
 
 
 _ZERO_DIGEST = "0" * 64
-_SAFE_ERROR = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 
 class AdminManagementError(RuntimeError):
@@ -61,154 +62,6 @@ class AdminModelSecretError(AdminManagementError):
 class ModelTestLease:
     test_id: str
     configuration: ActiveModelConfiguration
-
-
-@dataclass(frozen=True, slots=True)
-class ModelConnectionTestResult:
-    passed: bool
-    error_code: str | None = None
-
-    def __post_init__(self) -> None:
-        if self.passed and self.error_code is not None:
-            raise ValueError("successful model test cannot include an error")
-        if not self.passed and (
-            not isinstance(self.error_code, str)
-            or _SAFE_ERROR.fullmatch(self.error_code) is None
-        ):
-            raise ValueError("failed model test requires a safe error code")
-
-
-@runtime_checkable
-class ModelConnectionTester(Protocol):
-    async def test(
-        self, configuration: ActiveModelConfiguration
-    ) -> ModelConnectionTestResult: ...
-
-
-class RejectingModelConnectionTester:
-    async def test(
-        self, configuration: ActiveModelConfiguration
-    ) -> ModelConnectionTestResult:
-        del configuration
-        return ModelConnectionTestResult(
-            passed=False, error_code="provider_test_unconfigured"
-        )
-
-
-class HTTPSModelConnectionTester:
-    """Bounded same-adapter credential/model probe for server-approved providers."""
-
-    def __init__(
-        self,
-        origins: Mapping[str, str],
-        *,
-        client: httpx.AsyncClient | None = None,
-        timeout_seconds: float = 10.0,
-    ) -> None:
-        normalized: dict[str, str] = {}
-        for preset, origin in origins.items():
-            if preset not in {
-                "responses",
-                "openai_compatible_chat",
-                "openai_compatible_image",
-            }:
-                raise ValueError("unknown model provider preset")
-            parsed = urlsplit(origin)
-            if (
-                parsed.scheme != "https"
-                or not parsed.hostname
-                or parsed.username is not None
-                or parsed.password is not None
-                or parsed.query
-                or parsed.fragment
-                or parsed.path.rstrip("/")
-                or parsed.port not in {None, 443}
-                or parsed.hostname.casefold() in {"localhost", "localhost.localdomain"}
-            ):
-                raise ValueError("model provider origin is invalid")
-            normalized[preset] = f"https://{parsed.hostname.casefold()}"
-        if not normalized or not 1.0 <= timeout_seconds <= 30.0:
-            raise ValueError("model connection tester configuration is invalid")
-        self.origins = normalized
-        self._owns_client = client is None
-        self._client = client or httpx.AsyncClient(
-            timeout=httpx.Timeout(timeout_seconds),
-            limits=httpx.Limits(max_connections=16, max_keepalive_connections=8),
-            follow_redirects=False,
-            trust_env=False,
-        )
-
-    async def test(
-        self, configuration: ActiveModelConfiguration
-    ) -> ModelConnectionTestResult:
-        origin = self.origins.get(configuration.provider_preset)
-        if origin is None:
-            return ModelConnectionTestResult(
-                passed=False, error_code="provider_test_unconfigured"
-            )
-        try:
-            async with asyncio.timeout(30):
-                response = await self._client.get(
-                    origin + "/v1/models",
-                    headers={
-                        "Authorization": f"Bearer {configuration.api_key}",
-                        "Accept": "application/json",
-                        "User-Agent": "EcoreX-Control-Plane/1.0",
-                    },
-                )
-        except (TimeoutError, httpx.TimeoutException):
-            return ModelConnectionTestResult(
-                passed=False, error_code="provider_test_timeout"
-            )
-        except httpx.TransportError:
-            return ModelConnectionTestResult(
-                passed=False, error_code="provider_test_unavailable"
-            )
-        try:
-            if response.status_code in {401, 403}:
-                return ModelConnectionTestResult(
-                    passed=False, error_code="provider_key_rejected"
-                )
-            if response.status_code != 200:
-                return ModelConnectionTestResult(
-                    passed=False, error_code="provider_test_rejected"
-                )
-            content_type = response.headers.get("content-type", "").split(";", 1)[0]
-            if content_type.strip().casefold() != "application/json":
-                return ModelConnectionTestResult(
-                    passed=False, error_code="provider_test_protocol"
-                )
-            body = response.content
-            if not body or len(body) > 2 * 1024 * 1024:
-                return ModelConnectionTestResult(
-                    passed=False, error_code="provider_test_protocol"
-                )
-            value = json.loads(body)
-            data = value.get("data") if isinstance(value, dict) else None
-            if not isinstance(data, list) or len(data) > 20_000:
-                return ModelConnectionTestResult(
-                    passed=False, error_code="provider_test_protocol"
-                )
-            visible = {
-                item.get("id")
-                for item in data
-                if isinstance(item, dict) and isinstance(item.get("id"), str)
-            }
-            if configuration.upstream_model_id not in visible:
-                return ModelConnectionTestResult(
-                    passed=False, error_code="provider_model_unavailable"
-                )
-            return ModelConnectionTestResult(passed=True)
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            return ModelConnectionTestResult(
-                passed=False, error_code="provider_test_protocol"
-            )
-        finally:
-            await response.aclose()
-
-    async def aclose(self) -> None:
-        if self._owns_client:
-            await self._client.aclose()
 
 
 class _ModelSecretCipher:

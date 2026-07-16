@@ -311,6 +311,8 @@ def test_publication_signer_configuration_is_complete_and_digest_pinned(
     with pytest.raises(ProductionConfigurationError, match="configuration is invalid"):
         replace(config, bootstrap_freshness_lease_seconds=299)
     with pytest.raises(ProductionConfigurationError, match="configuration is invalid"):
+        replace(config, model_activation_timeout_seconds=29)
+    with pytest.raises(ProductionConfigurationError, match="configuration is invalid"):
         replace(
             config,
             bootstrap_freshness_automation_enabled=True,
@@ -688,4 +690,7 @@ def _environment(config: ControlPlaneProductionConfig) -> dict[str, str]:
         "ECOREX_CP_BACKUP_INTERVAL_SECONDS": str(config.backup_interval_seconds),
         "ECOREX_CP_MAXIMUM_BACKUP_AGE_SECONDS": str(config.maximum_backup_age_seconds),
         "ECOREX_CP_BACKUP_RETAIN_COUNT": str(config.backup_retain_count),
+        "ECOREX_CP_MODEL_ACTIVATION_TIMEOUT_SECONDS": str(
+            config.model_activation_timeout_seconds
+        ),
     }

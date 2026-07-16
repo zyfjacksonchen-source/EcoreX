@@ -112,6 +112,10 @@ size, token lifetime/skew, readiness cache, graceful shutdown, concurrency,
 backlog and update-signal polling/retention. See
 `ControlPlaneProductionConfig.from_environment` for exact names and ranges.
 An S3 endpoint, when supplied, must use HTTPS and contain no credentials.
+`ECOREX_CP_MODEL_ACTIVATION_TIMEOUT_SECONDS` is separately bounded to 30–600
+seconds (default 180) because the explicit administrator activation operation
+performs one real model/image request. It is never used by readiness and an
+uncertain submitted POST is not retried automatically.
 
 To enable the product administrator workspace, set
 `ECOREX_CP_ADMIN_MANAGEMENT_ENABLED=true` and provide the fixed HTTPS preset

@@ -41,7 +41,7 @@ import tempfile
 import threading
 import time
 import tomllib
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 import zipfile
 
 _SCRIPT_REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -86,7 +86,12 @@ from ecorex.migration import (
     inventory_source,
     write_product_migration_plan,
 )
-from ecorex.migration.legacy import V030_RELEASE_SCHEMA_COMMIT
+from ecorex.migration.legacy import (
+    CONVERSATION_CANDIDATES,
+    V030_RELEASE_SCHEMA_COMMIT,
+    discover_existing,
+    read_conversations,
+)
 from ecorex.release.candidate import PACK_SERVICES, PACK_TOOLS
 from ecorex.release.process_boundary import BoundedProcessError, run_bounded_process
 from ecorex.server import ProductRuntimeConfig, WebBundleManifest
@@ -124,6 +129,8 @@ _MIN_TIMEOUT_SECONDS = 45.0
 _MAX_TIMEOUT_SECONDS = 5_400.0
 _PLATFORM_STAGE_TIMEOUT_SECONDS = 50 * 60.0
 _RUNTIME_READY_TIMEOUT_SECONDS = 15 * 60.0
+_LIVE_ACCEPTANCE_TIMEOUT_SECONDS = 3 * 60.0
+_MAX_LIVE_ACCEPTANCE_EVIDENCE_BYTES = 256 * 1024
 _DRILL_LOOPBACK_PORT_MIN = 20_000
 _DRILL_LOOPBACK_PORT_MAX = 29_999
 _DRILL_LOOPBACK_PORT_ATTEMPTS = 256
@@ -156,8 +163,13 @@ _V030_RELEASE_SCHEMA_PATHS = (
     "agent/protocol/run_ledger.py",
     "agent/protocol/run_event_ledger.py",
 )
-
-
+_V0292_RELEASE_TAG = "v0.2.9.2"
+_V0292_RELEASE_SCHEMA_COMMIT = "b52999b07a753e103a993a4da9d3c83c3f366e71"
+_V0292_RELEASE_SCHEMA_PATHS = (
+    "agent/memory/conversation_store.py",
+    "agent/protocol/run_ledger.py",
+)
+_SUPPORTED_LEGACY_SOURCE_VERSIONS = ("0.2.9.2", "0.3.0")
 class DrillError(RuntimeError):
     """A redaction-safe local ceremony failure."""
 
@@ -202,6 +214,7 @@ class Deadline:
 class RuntimeRun:
     result: BootstrapRunResult
     probe: "RuntimeProbe"
+    live_acceptance: Mapping[str, Any] | None = None
 
     @property
     def bootstrap_status(self) -> int:
@@ -245,6 +258,25 @@ class RuntimeProbe:
     asset_path: str | None
     asset_cache_control: str | None
     asset_etag: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class LiveRuntimeAcceptanceContext:
+    """Public, redacted identity for one verified installed Runtime window."""
+
+    base_url: str
+    source_commit: str
+    release_id: str
+    version: str
+    build_digest: str
+    artifact_id: str
+    artifact_sha256: str
+    slot_id: str
+
+
+LiveRuntimeAcceptance = Callable[
+    [LiveRuntimeAcceptanceContext, Deadline], Mapping[str, Any]
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -309,10 +341,15 @@ class RecordingFailoverFetcher:
         if source.source_id in self._fail_once:
             self._fail_once.remove(source.source_id)
             if self._partial_bytes > 0:
-                source_path = self._source_directories[source.source_id] / artifact.file_name
+                source_path = (
+                    self._source_directories[source.source_id] / artifact.file_name
+                )
                 mode = "ab" if resume_from else "wb"
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                with source_path.open("rb") as incoming, destination.open(mode) as outgoing:
+                with (
+                    source_path.open("rb") as incoming,
+                    destination.open(mode) as outgoing,
+                ):
                     incoming.seek(resume_from)
                     remaining = min(
                         self._partial_bytes,
@@ -443,7 +480,9 @@ def _best_effort_failed_security_cleanup(temporary: Path) -> bool:
             if current not in completed:
                 current = completed[-1]
             known_good = tuple(
-                dict.fromkeys((current, *(item for item in completed if item != current)))
+                dict.fromkeys(
+                    (current, *(item for item in completed if item != current))
+                )
             )[:3]
             previous = next((item for item in known_good if item != current), None)
             slots.write_pointers(
@@ -758,9 +797,7 @@ def _stage_windows(
     environment.update(
         {
             "ECOREX_STAGE_RUNTIME_CONFIG_TEMPLATE": str(runtime_config),
-            "ECOREX_STAGE_RUNTIME_CONFIG_TEMPLATE_SHA256": _sha256_file(
-                runtime_config
-            ),
+            "ECOREX_STAGE_RUNTIME_CONFIG_TEMPLATE_SHA256": _sha256_file(runtime_config),
             "ECOREX_PUBLIC_BOOTSTRAP_INDEX_URL": (
                 "https://localhost/public-bootstrap-index.json"
             ),
@@ -821,7 +858,9 @@ def _stage_windows(
             max_stderr_bytes=16 * 1024,
         )
     except (OSError, BoundedProcessError) as exc:
-        raise DrillError("the source-pinned Windows platform stage did not finish") from exc
+        raise DrillError(
+            "the source-pinned Windows platform stage did not finish"
+        ) from exc
     if (
         result.returncode != 0
         or len(result.stdout) > 16 * 1024
@@ -863,7 +902,9 @@ def _stage_windows(
     try:
         native_receipt = json.loads(native_receipt_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise DrillError("the caller-pinned native build receipt is unavailable") from exc
+        raise DrillError(
+            "the caller-pinned native build receipt is unavailable"
+        ) from exc
     if not isinstance(native_receipt, dict):
         raise DrillError("the caller-pinned native build receipt is invalid")
     helper_sha256 = _validated_native_helper_sha256(output, native_receipt)
@@ -883,19 +924,236 @@ def _released_ddl(source: bytes) -> str:
     try:
         tree = ast.parse(source.decode("utf-8"))
     except (UnicodeDecodeError, SyntaxError) as exc:
-        raise DrillError("the v0.3 released schema source is invalid") from exc
+        raise DrillError("the legacy released schema source is invalid") from exc
     for node in tree.body:
-        if (
-            isinstance(node, ast.Assign)
-            and any(
-                isinstance(target, ast.Name) and target.id == "_DDL"
-                for target in node.targets
-            )
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "_DDL"
+            for target in node.targets
         ):
             value = ast.literal_eval(node.value)
             if isinstance(value, str):
                 return value
-    raise DrillError("the v0.3 released schema has no literal DDL authority")
+    raise DrillError("the legacy released schema has no literal DDL authority")
+
+
+def _released_schema_sources(
+    repo: Path,
+    *,
+    revision: str,
+    expected_commit: str,
+    paths: Sequence[str],
+    deadline: Deadline,
+) -> dict[str, bytes]:
+    try:
+        resolved = subprocess.run(
+            ("git", "rev-parse", f"{revision}^{{commit}}"),
+            cwd=repo,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=min(15.0, deadline.remaining()),
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise DrillError("the legacy release schema revision is unavailable") from exc
+    if (
+        resolved.returncode != 0
+        or resolved.stdout.decode("ascii", errors="ignore").strip() != expected_commit
+    ):
+        raise DrillError("the legacy release schema revision is not pinned")
+    try:
+        archive = subprocess.run(
+            ("git", "archive", "--format=tar", expected_commit, *paths),
+            cwd=repo,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=min(30.0, deadline.remaining()),
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise DrillError("the legacy release schema archive is unavailable") from exc
+    if archive.returncode != 0 or not 1 <= len(archive.stdout) <= 8 * 1024 * 1024:
+        raise DrillError("the legacy release schema archive is unavailable")
+    sources: dict[str, bytes] = {}
+    try:
+        with tarfile.open(fileobj=BytesIO(archive.stdout), mode="r:") as bundle:
+            for member in bundle.getmembers():
+                if member.isdir():
+                    continue
+                if member.name not in paths or not member.isfile():
+                    raise DrillError(
+                        "the legacy release schema archive has an unexpected member"
+                    )
+                stream = bundle.extractfile(member)
+                if stream is None:
+                    raise DrillError("the legacy release schema member is unavailable")
+                sources[member.name] = stream.read()
+    except (tarfile.TarError, OSError) as exc:
+        raise DrillError("the legacy release schema archive is invalid") from exc
+    if set(sources) != set(paths):
+        raise DrillError("the legacy release schema archive is incomplete")
+    return sources
+
+
+def _create_released_v0292_fixture(
+    repo: Path,
+    destination: Path,
+    *,
+    deadline: Deadline,
+) -> dict[str, Any]:
+    """Create a deletion-sensitive fixture from the exact v0.2.9.2 tag DDL."""
+
+    sources = _released_schema_sources(
+        repo,
+        revision=_V0292_RELEASE_TAG,
+        expected_commit=_V0292_RELEASE_SCHEMA_COMMIT,
+        paths=_V0292_RELEASE_SCHEMA_PATHS,
+        deadline=deadline,
+    )
+    database = destination / "sessions" / "conversations.db"
+    database.parent.mkdir(parents=True, exist_ok=False)
+    connection = sqlite3.connect(database)
+    try:
+        for path in _V0292_RELEASE_SCHEMA_PATHS:
+            connection.executescript(_released_ddl(sources[path]))
+        connection.executemany(
+            """
+            INSERT INTO sessions(
+                session_id, channel_type, title, title_locked,
+                context_start_seq, created_at, last_active, msg_count
+            ) VALUES (?, 'web', ?, ?, 0, ?, ?, ?)
+            """,
+            (
+                (
+                    "release-drill-session",
+                    "v0.2.9.2 live conversation",
+                    1,
+                    1_700_000_000,
+                    1_700_000_002,
+                    2,
+                ),
+                (
+                    "summary-session",
+                    "",
+                    0,
+                    1_700_000_200,
+                    1_700_000_201,
+                    0,
+                ),
+            ),
+        )
+        connection.executemany(
+            """
+            INSERT INTO messages(session_id, seq, role, content, created_at, extras)
+            VALUES (?, ?, ?, ?, ?, '{}')
+            """,
+            (
+                (
+                    "release-drill-session",
+                    0,
+                    "user",
+                    "preserve the authoritative legacy conversation",
+                    1_700_000_001,
+                ),
+                (
+                    "release-drill-session",
+                    1,
+                    "assistant",
+                    "authoritative conversation preserved",
+                    1_700_000_002,
+                ),
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO agent_runs(
+                request_id, session_id, parent_id, run_type, status, phase,
+                terminal_reason, error_code, error_message, model, provider,
+                created_at, started_at, updated_at, terminal_at, metadata_json
+            ) VALUES (
+                'release-drill-request', 'release-drill-session', NULL, 'message',
+                'completed', 'completed', 'completed', NULL, NULL, 'managed-chat',
+                'managed', 1700000001, 1700000001, 1700000002, 1700000002, '{}'
+            )
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    project = destination / "projects" / "legacy-office"
+    project.mkdir(parents=True)
+    (project / "retained-project-marker.txt").write_text(
+        "synthetic project fixture\n", encoding="utf-8", newline="\n"
+    )
+    ui_state = {
+        "sessionTitles": {
+            "release-drill-session": "must not override the locked title",
+            "summary-session": "v0.2.9.2 retained summary",
+            "deleted-cache-only-session": "deleted conversation",
+        },
+        "pinnedSessions": {"summary-session": True},
+        "pinnedSessionTimes": {"summary-session": 1_700_000_202_000},
+        "sessionUiState": {
+            "deleted-cache-only-session": {
+                "title": "deleted conversation",
+                "messages": [
+                    {"role": "user", "content": "must never be restored"},
+                    {"role": "assistant", "content": "must remain deleted"},
+                ],
+            }
+        },
+        "projects": [
+            {
+                "id": "legacy-office-project",
+                "name": "Legacy Office Project",
+                "path": str(project),
+            }
+        ],
+        "sessionProjects": {
+            "release-drill-session": "legacy-office-project",
+        },
+        "activeProjectId": "legacy-office-project",
+        "pinnedProjects": {"legacy-office-project": True},
+    }
+    ui_path = destination / ".ecorex" / "ui-state.json"
+    ui_path.parent.mkdir(parents=True)
+    ui_path.write_text(
+        json.dumps(ui_state, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    (destination / "runtime-manifest.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": "v0.2.5-runtime-manifest-v1",
+                "product": "EcoreX",
+                "version": "0.2.9.2",
+                "sourceCommit": _V0292_RELEASE_SCHEMA_COMMIT,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    inventory = inventory_source(destination, source_version="0.2.9.2")
+    return {
+        "source": destination,
+        "source_version": "0.2.9.2",
+        "inventory_digest": inventory.digest,
+        "inventory_entries": len(inventory.entries),
+        "inventory_bytes": inventory.total_bytes,
+        "baseline_release_schema_commit": _V0292_RELEASE_SCHEMA_COMMIT,
+        "evidence_level": "exact_release_tag_schema_fixture",
+        "corpus_mode": "synthetic-release-fixture",
+        "source_unchanged": True,
+    }
 
 
 def _create_released_v030_fixture(
@@ -1020,6 +1278,212 @@ def _create_released_v030_fixture(
     }
 
 
+def _snapshot_legacy_source(
+    source: Path,
+    destination: Path,
+    *,
+    source_version: str,
+    deadline: Deadline,
+) -> dict[str, Any]:
+    """Copy a stable user-selected source without ever writing to that source."""
+
+    before = inventory_source(source, source_version=source_version)
+    destination.mkdir(parents=True, exist_ok=False)
+    for entry in before.entries:
+        deadline.remaining()
+        if entry.kind != "file" or entry.relative_path.startswith("@pinned/"):
+            raise DrillError("the user-selected legacy source inventory is invalid")
+        relative = PurePosixPath(entry.relative_path)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise DrillError("the user-selected legacy source inventory is invalid")
+        origin = source.joinpath(*relative.parts)
+        try:
+            metadata = origin.lstat()
+        except OSError as exc:
+            raise DrillError(
+                "the user-selected legacy source changed during snapshot"
+            ) from exc
+        attributes = int(getattr(metadata, "st_file_attributes", 0))
+        reparse = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or stat.S_ISLNK(metadata.st_mode)
+            or bool(attributes & reparse)
+        ):
+            raise DrillError("the user-selected legacy source contains an unsafe entry")
+        target = destination.joinpath(*relative.parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copy2(origin, target, follow_symlinks=False)
+        except OSError as exc:
+            raise DrillError("the user-selected legacy source snapshot failed") from exc
+        if _sha256_file(target) != entry.sha256:
+            raise DrillError("the user-selected legacy source changed during snapshot")
+    after = inventory_source(source, source_version=source_version)
+    copied = inventory_source(destination, source_version=source_version)
+    if before != after or copied.digest != before.digest:
+        raise DrillError("the user-selected legacy source changed during snapshot")
+    return {
+        "source": destination,
+        "source_version": source_version,
+        "inventory_digest": copied.digest,
+        "inventory_entries": len(copied.entries),
+        "inventory_bytes": copied.total_bytes,
+        "baseline_release_schema_commit": None,
+        "evidence_level": "user_selected_readonly_snapshot",
+        "corpus_mode": "user-selected-readonly-snapshot",
+        "source_unchanged": True,
+    }
+
+
+def _prepare_legacy_source(
+    repo: Path,
+    temporary: Path,
+    *,
+    source_version: str,
+    user_source: Path | None,
+    deadline: Deadline,
+) -> dict[str, Any]:
+    if source_version not in _SUPPORTED_LEGACY_SOURCE_VERSIONS:
+        raise DrillError("the selected legacy source version is unsupported")
+    destination = temporary / f"legacy-{source_version.replace('.', '')}-snapshot"
+    if user_source is not None:
+        return _snapshot_legacy_source(
+            user_source,
+            destination,
+            source_version=source_version,
+            deadline=deadline,
+        )
+    if source_version == "0.2.9.2":
+        return _create_released_v0292_fixture(
+            repo,
+            destination,
+            deadline=deadline,
+        )
+    legacy = _create_released_v030_fixture(
+        repo,
+        destination,
+        deadline=deadline,
+    )
+    inventory = inventory_source(destination, source_version=source_version)
+    return {
+        **legacy,
+        "source_version": source_version,
+        "inventory_entries": len(inventory.entries),
+        "inventory_bytes": inventory.total_bytes,
+        "corpus_mode": "synthetic-release-fixture",
+        "source_unchanged": True,
+    }
+
+
+def _cache_only_session_ids(source: Path) -> set[str]:
+    ui_path = source / ".ecorex" / "ui-state.json"
+    if not ui_path.is_file() or ui_path.is_symlink():
+        return set()
+    try:
+        if ui_path.stat().st_size > 16 * 1024 * 1024:
+            raise DrillError("the legacy UI state exceeds the activation gate bound")
+        ui_state = json.loads(ui_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise DrillError("the legacy UI state cannot be verified") from exc
+    if not isinstance(ui_state, Mapping):
+        raise DrillError("the legacy UI state cannot be verified")
+    session_titles = ui_state.get("sessionTitles")
+    session_titles = session_titles if isinstance(session_titles, Mapping) else {}
+    raw_session_state = ui_state.get("sessionUiState") or {}
+    try:
+        cached_ids = {
+            *(str(item) for item in session_titles),
+            *(str(item) for item in raw_session_state),
+        }
+    except TypeError as exc:
+        raise DrillError("the legacy UI state cannot be verified") from exc
+
+    # Use the exact same candidate order and released adapter as the product
+    # migrator.  A second hand-written SQLite discovery path could disagree
+    # with the deletion authority and accidentally turn this gate into a
+    # weaker approximation.
+    database = discover_existing(source, CONVERSATION_CANDIDATES)
+    conversations = read_conversations(database) if database is not None else None
+    canonical_ids = {
+        str(row["session_id"])
+        for row in (conversations.sessions if conversations is not None else ())
+    }
+    return cached_ids - canonical_ids
+
+
+def _migration_aggregate_evidence(
+    *,
+    source: Path,
+    database: Path,
+    report: Mapping[str, Any],
+) -> dict[str, Any]:
+    counts = report.get("counts")
+    if not isinstance(counts, Mapping):
+        raise DrillError("the committed migration report has no aggregate counts")
+    cache_only = _cache_only_session_ids(source)
+    connection = sqlite3.connect(
+        f"file:{database.resolve(strict=True).as_posix()}?mode=ro&immutable=1",
+        uri=True,
+    )
+    try:
+        observed = {
+            "threads": int(
+                connection.execute("SELECT COUNT(*) FROM threads").fetchone()[0]
+            ),
+            "messages": int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM items WHERE kind = 'message'"
+                ).fetchone()[0]
+            ),
+            "session_summaries": int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM threads WHERE trim(title) <> ''"
+                ).fetchone()[0]
+            ),
+            "projects": int(
+                connection.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
+            ),
+            "project_bindings": int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM project_thread_bindings"
+                ).fetchone()[0]
+            ),
+        }
+        imported_sessions = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT legacy_id FROM legacy_id_map WHERE entity_kind = 'session'"
+            )
+        }
+        integrity = str(connection.execute("PRAGMA integrity_check").fetchone()[0])
+    finally:
+        connection.close()
+    if integrity != "ok":
+        raise DrillError("the migrated v1 database failed integrity verification")
+    expected = {
+        "threads": int(counts.get("threads") or 0),
+        "messages": int(counts.get("messages") or 0),
+        "session_summaries": int(counts.get("session_summaries") or 0),
+        "projects": int(counts.get("projects") or 0),
+        "project_bindings": int(counts.get("project_bindings") or 0),
+    }
+    if observed != expected:
+        raise DrillError("the migrated v1 aggregate counts do not match authority")
+    excluded = int(counts.get("deleted_session_cache_excluded") or 0)
+    restored = len(cache_only & imported_sessions)
+    if excluded != len(cache_only) or restored != 0:
+        raise DrillError("a deleted legacy conversation crossed the activation gate")
+    return {
+        **observed,
+        "deleted_session_cache_excluded": excluded,
+        "deleted_sessions_restored": restored,
+        "database_integrity": "ok",
+        "deletion_authority_verified": True,
+        "aggregate_only": True,
+    }
+
+
 def _bind_local_bootstrap_minimum(
     bootstrap: Path,
     signer: Ed25519MemorySigner,
@@ -1090,12 +1554,16 @@ def _declared_runtime_requirements(repo: Path) -> tuple[Requirement, ...]:
     return parsed
 
 
-def _runtime_distribution_closure(repo: Path) -> tuple[importlib.metadata.Distribution, ...]:
+def _runtime_distribution_closure(
+    repo: Path,
+) -> tuple[importlib.metadata.Distribution, ...]:
     pending = list(_declared_runtime_requirements(repo))
     resolved: dict[str, importlib.metadata.Distribution] = {}
     while pending:
         requirement = pending.pop()
-        if requirement.marker is not None and not requirement.marker.evaluate({"extra": ""}):
+        if requirement.marker is not None and not requirement.marker.evaluate(
+            {"extra": ""}
+        ):
             continue
         key = canonicalize_name(requirement.name)
         if key in resolved:
@@ -1285,7 +1753,9 @@ def _preflight_packaged_python(core: Path, deadline: Deadline) -> None:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise DrillError("the packaged Runtime executable preflight did not finish") from exc
+        raise DrillError(
+            "the packaged Runtime executable preflight did not finish"
+        ) from exc
     if completed.returncode != 0 or b"--host" not in completed.stdout:
         raise DrillError("the packaged Runtime executable preflight failed")
 
@@ -1313,7 +1783,9 @@ def _inject_fault_runtime_entrypoint(core: Path) -> str:
     try:
         root = core.resolve(strict=True)
     except OSError:
-        raise DrillError("the packaged Runtime module entrypoint is ambiguous") from None
+        raise DrillError(
+            "the packaged Runtime module entrypoint is ambiguous"
+        ) from None
     disk_matches = tuple(
         path
         for path in root.rglob(_FAULT_ENTRYPOINT_MEMBER)
@@ -1553,7 +2025,9 @@ def _verify_release(built: Any, verifier: Ed25519SignatureVerifier) -> dict[str,
         with zipfile.ZipFile(core_path) as archive:
             storage_payload = archive.read(STORAGE_MIGRATION_FILE_NAME)
     except (KeyError, OSError, zipfile.BadZipFile) as exc:
-        raise DrillError("product Core is missing its storage migration contract") from exc
+        raise DrillError(
+            "product Core is missing its storage migration contract"
+        ) from exc
     storage_manifest = StorageMigrationManifest.from_bytes(storage_payload)
     target_schema_sha256 = current_storage_schema_sha256()
     if (
@@ -1579,14 +2053,8 @@ def _verify_release(built: Any, verifier: Ed25519SignatureVerifier) -> dict[str,
         CORE_ARTIFACT_ID,
         "bootstrap-windows-x64",
         "web-manifest",
-        *(
-            f"capability-pack-{pack_id}-windows-x64"
-            for pack_id in PACK_TOOLS
-        ),
-        *(
-            f"capability-pack-{pack_id}-windows-x64-manifest"
-            for pack_id in PACK_TOOLS
-        ),
+        *(f"capability-pack-{pack_id}-windows-x64" for pack_id in PACK_TOOLS),
+        *(f"capability-pack-{pack_id}-windows-x64-manifest" for pack_id in PACK_TOOLS),
     }
     if artifact_ids != expected_host_artifacts:
         raise DrillError("the local Windows release artifact set is incomplete")
@@ -1852,7 +2320,7 @@ def _get_runtime_probe(
     ):
         raise DrillError("the live WebUI cache contract is invalid")
     prefix = "window.__ECOREX_RUNTIME__=Object.freeze("
-    suffix = ");Object.defineProperty(window,\"__ECOREX_RUNTIME__\""
+    suffix = ');Object.defineProperty(window,"__ECOREX_RUNTIME__"'
     start = index.find(prefix)
     end = index.find(suffix, start + len(prefix)) if start >= 0 else -1
     if start < 0 or end < 0:
@@ -1865,7 +2333,9 @@ def _get_runtime_probe(
         return RuntimeProbe(
             0, index_cache_control, asset_path, asset_cache_control, asset_etag
         )
-    bearer = runtime_config.get("bearerToken") if isinstance(runtime_config, dict) else None
+    bearer = (
+        runtime_config.get("bearerToken") if isinstance(runtime_config, dict) else None
+    )
     if not isinstance(bearer, str) or not 16 <= len(bearer) <= 512:
         return RuntimeProbe(
             0, index_cache_control, asset_path, asset_cache_control, asset_etag
@@ -1936,9 +2406,9 @@ def _wait_for_full_runtime(
             deadline.check()
         except DrillError as exc:
             try:
-                receipt_state = json.loads(receipt_path.read_text(encoding="utf-8")).get(
-                    "state"
-                )
+                receipt_state = json.loads(
+                    receipt_path.read_text(encoding="utf-8")
+                ).get("state")
             except Exception:
                 receipt_state = "unavailable"
             try:
@@ -1965,6 +2435,138 @@ def _wait_for_full_runtime(
         time.sleep(0.1)
 
 
+def _assert_redacted_live_acceptance_evidence(value: Any) -> None:
+    """Reject credentials and other ambient browser state from evidence."""
+
+    forbidden_key_fragments = (
+        "authorization",
+        "bearer",
+        "cookie",
+        "password",
+        "secret",
+        "token",
+    )
+
+    def inspect(item: Any) -> None:
+        if isinstance(item, Mapping):
+            for key, nested in item.items():
+                if not isinstance(key, str):
+                    raise DrillError(
+                        "live acceptance evidence contains a non-string key"
+                    )
+                normalized = key.casefold()
+                if any(fragment in normalized for fragment in forbidden_key_fragments):
+                    raise DrillError(
+                        "live acceptance evidence contains a credential field"
+                    )
+                inspect(nested)
+            return
+        if isinstance(item, (list, tuple)):
+            for nested in item:
+                inspect(nested)
+            return
+        if isinstance(item, str) and re.search(r"\bbearer\s+\S+", item, re.IGNORECASE):
+            raise DrillError("live acceptance evidence contains authorization material")
+
+    inspect(value)
+
+
+def _execute_live_runtime_acceptance(
+    *,
+    slots: SlotStore,
+    security: WindowsSandboxSlotSecurity,
+    manifest: Any,
+    artifact: Any,
+    security_marker: Mapping[str, Any],
+    expected_slot: str,
+    source_commit: str,
+    port: int,
+    deadline: Deadline,
+    callback: LiveRuntimeAcceptance,
+    rollback_is_authoritative: Callable[[], bool],
+) -> Mapping[str, Any]:
+    """Run a bounded callback only while the signed current slot is healthy."""
+
+    if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", source_commit) is None:
+        raise DrillError("the live acceptance source commit is invalid")
+    if not rollback_is_authoritative():
+        raise DrillError("live acceptance requires an authoritative rollback terminal")
+    before = slots.pointers()
+    if before.current != expected_slot or expected_slot not in before.known_good:
+        raise DrillError("live acceptance requires the current known-good slot")
+    expected_path = slots.slot_path(expected_slot)
+    if slots.validate_receipt(
+        slot_id=expected_slot,
+        manifest=manifest,
+        artifact=artifact,
+    ).resolve(strict=True) != expected_path.resolve(strict=True):
+        raise DrillError("live acceptance slot receipt is not authoritative")
+    if not security.validate(
+        expected_path,
+        manifest,
+        artifact,
+        security_marker,
+    ):
+        raise DrillError("live acceptance sandbox attestation is invalid")
+    context = LiveRuntimeAcceptanceContext(
+        base_url=f"http://127.0.0.1:{port}",
+        source_commit=source_commit,
+        release_id=manifest.release_id,
+        version=manifest.version,
+        build_digest=manifest.build_digest,
+        artifact_id=artifact.artifact_id,
+        artifact_sha256=artifact.sha256,
+        slot_id=expected_slot,
+    )
+    acceptance_deadline = deadline.bounded(_LIVE_ACCEPTANCE_TIMEOUT_SECONDS)
+    try:
+        evidence = callback(context, acceptance_deadline)
+    except DrillError:
+        raise
+    except BaseException as exc:
+        raise DrillError(
+            "installed-signed Runtime CDP acceptance failed safely: "
+            f"{type(exc).__name__}"
+        ) from None
+    if not isinstance(evidence, Mapping) or evidence.get("status") != "passed":
+        raise DrillError("installed-signed Runtime CDP acceptance did not pass")
+    _assert_redacted_live_acceptance_evidence(evidence)
+    try:
+        encoded = json.dumps(
+            evidence,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise DrillError("live acceptance evidence is not canonical JSON") from exc
+    if len(encoded) > _MAX_LIVE_ACCEPTANCE_EVIDENCE_BYTES:
+        raise DrillError("live acceptance evidence exceeds its byte limit")
+
+    after = slots.pointers()
+    if (
+        not rollback_is_authoritative()
+        or after != before
+        or after.current != expected_slot
+    ):
+        raise DrillError("the active slot changed during live acceptance")
+    if slots.validate_receipt(
+        slot_id=expected_slot,
+        manifest=manifest,
+        artifact=artifact,
+    ).resolve(strict=True) != expected_path.resolve(strict=True):
+        raise DrillError("the live acceptance slot receipt changed")
+    if not security.validate(
+        expected_path,
+        manifest,
+        artifact,
+        security_marker,
+    ):
+        raise DrillError("the live acceptance sandbox attestation changed")
+    return json.loads(encoded)
+
+
 def _run_bootstrap_until_ready(
     install_root: Path,
     *,
@@ -1972,6 +2574,9 @@ def _run_bootstrap_until_ready(
     security: WindowsSandboxSlotSecurity,
     expected_slot: str,
     deadline: Deadline,
+    source_commit: str | None = None,
+    live_acceptance: LiveRuntimeAcceptance | None = None,
+    live_acceptance_rollback_authority: Callable[[], bool] | None = None,
 ) -> RuntimeRun:
     runtime_deadline = deadline.bounded(_RUNTIME_READY_TIMEOUT_SECONDS)
     slots = SlotStore(install_root)
@@ -2005,9 +2610,12 @@ def _run_bootstrap_until_ready(
         except BaseException as exc:
             failure.append(exc)
 
-    thread = threading.Thread(target=run, name="ecorex-local-bootstrap-drill", daemon=True)
+    thread = threading.Thread(
+        target=run, name="ecorex-local-bootstrap-drill", daemon=True
+    )
     thread.start()
     probe = RuntimeProbe(0, None, None, None, None)
+    live_evidence: Mapping[str, Any] | None = None
     try:
         probe = _wait_for_full_runtime(
             install_root,
@@ -2017,6 +2625,24 @@ def _run_bootstrap_until_ready(
             bootstrap_results=result,
             bootstrap_failures=failure,
         )
+        if live_acceptance is not None:
+            if source_commit is None:
+                raise DrillError("live acceptance requires a source commit")
+            if live_acceptance_rollback_authority is None:
+                raise DrillError("live acceptance requires rollback authority")
+            live_evidence = _execute_live_runtime_acceptance(
+                slots=slots,
+                security=security,
+                manifest=manifest,
+                artifact=artifact,
+                security_marker=security_marker,
+                expected_slot=expected_slot,
+                source_commit=source_commit,
+                port=port,
+                deadline=runtime_deadline,
+                callback=live_acceptance,
+                rollback_is_authoritative=live_acceptance_rollback_authority,
+            )
     finally:
         port_lease.release()
         try:
@@ -2039,10 +2665,18 @@ def _run_bootstrap_until_ready(
         slots.slot_path(expected_slot), manifest, artifact, security_marker
     ):
         raise DrillError("the live Runtime sandbox attestation changed")
-    return RuntimeRun(result[0], probe)
+    return RuntimeRun(result[0], probe, live_evidence)
 
 
-def _build_and_run(repo: Path, temporary: Path, deadline: Deadline) -> dict[str, Any]:
+def _build_and_run(
+    repo: Path,
+    temporary: Path,
+    deadline: Deadline,
+    *,
+    live_acceptance: LiveRuntimeAcceptance | None = None,
+    legacy_source_version: str = "0.2.9.2",
+    legacy_source: Path | None = None,
+) -> dict[str, Any]:
     started_at = time.monotonic()
     _require_host()
     web_dist = repo / "desktop" / "dist"
@@ -2079,13 +2713,20 @@ def _build_and_run(repo: Path, temporary: Path, deadline: Deadline) -> dict[str,
     try:
         dependency_gate = json.loads(
             (
-                stage.root
-                / ".evidence/windows-x64/core/dependency-closure.json"
+                stage.root / ".evidence/windows-x64/core/dependency-closure.json"
             ).read_text(encoding="utf-8")
         )
         distributions = dependency_gate["details"]["distributions"]
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError) as exc:
-        raise DrillError("the staged Runtime dependency evidence is unavailable") from exc
+    except (
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        KeyError,
+        TypeError,
+    ) as exc:
+        raise DrillError(
+            "the staged Runtime dependency evidence is unavailable"
+        ) from exc
     bootstrap_floor = _bind_local_bootstrap_minimum(stage.bootstrap, signer)
     baseline_core = stage.core
     _assert_no_runtime_bytecode(baseline_core)
@@ -2120,13 +2761,19 @@ def _build_and_run(repo: Path, temporary: Path, deadline: Deadline) -> dict[str,
         expected_helper_sha256=stage.helper_sha256,
     )
     drainer = CheckpointingDrainer(install_root / "drain-receipts")
-    legacy = _create_released_v030_fixture(
+    legacy = _prepare_legacy_source(
         repo,
-        temporary / "legacy-v030",
+        temporary,
+        source_version=legacy_source_version,
+        user_source=legacy_source,
         deadline=deadline,
     )
     legacy_source = Path(legacy["source"])
-    write_product_migration_plan(install_root, legacy_source)
+    write_product_migration_plan(
+        install_root,
+        legacy_source,
+        source_version=str(legacy["source_version"]),
+    )
     migration = ProductLegacyMigrationCoordinator(
         install_root,
         install_root / "state" / TARGET_DATABASE_NAME,
@@ -2161,7 +2808,9 @@ def _build_and_run(repo: Path, temporary: Path, deadline: Deadline) -> dict[str,
         prepared.state is not InstallState.AWAITING_USER
         or baseline_coordinator.slots.pointers().current is not None
     ):
-        raise DrillError("first install was activated before explicit user confirmation")
+        raise DrillError(
+            "first install was activated before explicit user confirmation"
+        )
     core_attempts = [
         attempt
         for attempt in baseline_fetcher.attempts
@@ -2181,7 +2830,9 @@ def _build_and_run(repo: Path, temporary: Path, deadline: Deadline) -> dict[str,
         # durable journal is authoritative and must be health-pending.
         latest = baseline_coordinator.journal.latest()
         if latest is None or latest.state is not InstallState.HEALTHCHECKING:
-            raise DrillError("first install did not enter Bootstrap health confirmation")
+            raise DrillError(
+                "first install did not enter Bootstrap health confirmation"
+            )
     deadline.enter("first-install Bootstrap health")
     baseline_runtime = _run_bootstrap_until_ready(
         install_root,
@@ -2209,9 +2860,32 @@ def _build_and_run(repo: Path, temporary: Path, deadline: Deadline) -> dict[str,
     )
     completion_before = migration.completion_authority()
     if completion_before is None:
-        raise DrillError("the v0.3 product migration has no completion authority")
-    if inventory_source(legacy_source).digest != legacy["inventory_digest"]:
-        raise DrillError("the v0.3 source changed during copy-on-write migration")
+        raise DrillError("the legacy product migration has no completion authority")
+    if (
+        inventory_source(
+            legacy_source,
+            source_version=str(legacy["source_version"]),
+        ).digest
+        != legacy["inventory_digest"]
+    ):
+        raise DrillError("the legacy source changed during copy-on-write migration")
+    try:
+        migration_report = json.loads(
+            (install_root / "state" / "migration-report.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise DrillError(
+            "the committed migration aggregate report is unavailable"
+        ) from exc
+    if not isinstance(migration_report, Mapping):
+        raise DrillError("the committed migration aggregate report is invalid")
+    migration_aggregates = _migration_aggregate_evidence(
+        source=legacy_source,
+        database=install_root / "state" / TARGET_DATABASE_NAME,
+        report=migration_report,
+    )
     shutil.rmtree(legacy_source)
     restarted_migration = ProductLegacyMigrationCoordinator(
         install_root,
@@ -2224,7 +2898,9 @@ def _build_and_run(repo: Path, temporary: Path, deadline: Deadline) -> dict[str,
         )
         is not True
     ):
-        raise DrillError("the completed migration did not restart without its legacy source")
+        raise DrillError(
+            "the completed migration did not restart without its legacy source"
+        )
     deadline.enter("post-migration source-removal Runtime restart")
     migrated_restart = _run_bootstrap_until_ready(
         install_root,
@@ -2302,7 +2978,9 @@ def _build_and_run(repo: Path, temporary: Path, deadline: Deadline) -> dict[str,
         healthy_prepared.state is not InstallState.AWAITING_USER
         or healthy_coordinator.slots.pointers().current != prior_slot
     ):
-        raise DrillError("background update changed the active slot before confirmation")
+        raise DrillError(
+            "background update changed the active slot before confirmation"
+        )
     deadline.enter("healthy update user activation")
     healthy_pending = healthy_coordinator.activate(healthy_prepared.transaction_id)
     if healthy_pending.current_slot != healthy_prepared.slot_id:
@@ -2438,6 +3116,18 @@ def _build_and_run(repo: Path, temporary: Path, deadline: Deadline) -> dict[str,
     fault_pending = replacement.activate(fault_prepared.transaction_id)
     if fault_pending.current_slot != fault_prepared.slot_id:
         raise DrillError("fault-injection candidate was not provisionally selected")
+
+    def rollback_is_authoritative() -> bool:
+        rollback_pointers = replacement.slots.pointers()
+        rollback_terminal = replacement.journal.latest()
+        return (
+            rollback_pointers.current == healthy_prepared.slot_id
+            and healthy_prepared.slot_id in rollback_pointers.known_good
+            and rollback_terminal is not None
+            and rollback_terminal.state is InstallState.ROLLBACK
+            and not replacement.slots.slot_path(fault_prepared.slot_id).exists()
+        )
+
     deadline.enter("pre-data rollback Bootstrap health")
     rollback_runtime = _run_bootstrap_until_ready(
         install_root,
@@ -2445,6 +3135,9 @@ def _build_and_run(repo: Path, temporary: Path, deadline: Deadline) -> dict[str,
         security=security,
         expected_slot=healthy_prepared.slot_id,
         deadline=deadline,
+        source_commit=stage.commit_sha,
+        live_acceptance=live_acceptance,
+        live_acceptance_rollback_authority=rollback_is_authoritative,
     )
     pointers = replacement.slots.pointers()
     latest = replacement.journal.latest()
@@ -2543,9 +3236,7 @@ def _build_and_run(repo: Path, temporary: Path, deadline: Deadline) -> dict[str,
                 source.source_id for source in baseline_release.manifest.sources
             ],
             "attempts": baseline_fetcher.attempts,
-            "core_attempt_order": [
-                attempt["source_id"] for attempt in core_attempts
-            ],
+            "core_attempt_order": [attempt["source_id"] for attempt in core_attempts],
             "selected_core_source": core_attempts[-1]["source_id"],
             "core_resume_offset": core_attempts[-1]["resume_from"],
             "cross_source_partial_reuse_forbidden": True,
@@ -2567,21 +3258,34 @@ def _build_and_run(repo: Path, temporary: Path, deadline: Deadline) -> dict[str,
             "core_plus_pack_slot": True,
         },
         "migration": {
-            "source_version": "0.3.0",
-            "baseline_release_schema_commit": legacy[
+            "source_version": legacy["source_version"],
+            "baseline_release_schema_commit": legacy.get(
                 "baseline_release_schema_commit"
-            ],
-            "evidence_level": legacy["evidence_level"],
-            "source_inventory_digest": legacy["inventory_digest"],
+            ),
+            "evidence_level": (
+                migration_report.get("source_evidence", {}).get("evidence_level")
+                if isinstance(migration_report.get("source_evidence"), Mapping)
+                else legacy["evidence_level"]
+            ),
+            "corpus_mode": legacy["corpus_mode"],
+            "source_inventory": {
+                "file_count": legacy["inventory_entries"],
+                "total_bytes": legacy["inventory_bytes"],
+            },
+            "aggregate_counts": migration_aggregates,
             "copy_on_write": True,
+            "user_source_read_only": True,
+            "source_unchanged_during_snapshot": legacy["source_unchanged"],
             "completion_authority_digest": completion_before["authority_digest"],
             "receipt_state": migration_receipt.get("state"),
-            "source_deleted_after_commit": not legacy_source.exists(),
+            "disposable_source_snapshot_deleted_after_commit": (
+                not legacy_source.exists()
+            ),
             "restart_after_source_deletion_http_status": (
                 migrated_restart.bootstrap_status
             ),
             "idempotent_restart_without_source": True,
-            "real_installed_v030_user_corpus_claimed": False,
+            "real_installed_user_corpus_claimed": False,
         },
         "drain_checkpoint": {
             "call_count": len(drainer.calls),
@@ -2651,12 +3355,17 @@ def _build_and_run(repo: Path, temporary: Path, deadline: Deadline) -> dict[str,
             "artifact_fetcher": "RecordingFailoverFetcher(LocalSourceFetcher)",
             "runtime_live_endpoints": "loopback-only",
         },
+        **(
+            {"installed_signed_runtime_cdp": rollback_runtime.live_acceptance}
+            if rollback_runtime.live_acceptance is not None
+            else {}
+        ),
         "blind_spots": [
             "no live GH mirror, GitHub Release, CDN or Control Plane origin was contacted",
             "no external Model/Image Gateway, connector, OTLP or tenant credential was used",
             "macOS arm64/x64 Core and Pack receipts require protected native runners",
             "same-version replacement was exercised; no fabricated 1.0.1 cross-version claim",
-            "v0.3 released-schema data was exercised, not an attested real user installation corpus",
+            "legacy data was exercised through a read-only snapshot; installed-user provenance was not attested",
         ],
     }
 
@@ -2665,12 +3374,19 @@ def run_drill(
     *,
     repo: Path,
     timeout_seconds: float,
+    live_acceptance: LiveRuntimeAcceptance | None = None,
+    legacy_source_version: str = "0.2.9.2",
+    legacy_source: Path | None = None,
 ) -> dict[str, Any]:
     if not _MIN_TIMEOUT_SECONDS <= timeout_seconds <= _MAX_TIMEOUT_SECONDS:
         raise DrillError(
             f"timeout must be between {_MIN_TIMEOUT_SECONDS:g} and "
             f"{_MAX_TIMEOUT_SECONDS:g} seconds"
         )
+    if legacy_source_version not in _SUPPORTED_LEGACY_SOURCE_VERSIONS:
+        raise DrillError("the selected legacy source version is unsupported")
+    if legacy_source is not None and not legacy_source.is_dir():
+        raise DrillError("the user-selected legacy source is unavailable")
     temporary_path: Path | None = None
     failed = False
     report: dict[str, Any]
@@ -2678,7 +3394,12 @@ def run_drill(
         temporary_path = Path(tempfile.mkdtemp(prefix="ecorex-v1-win-signed-drill-"))
         try:
             report = _build_and_run(
-                repo.resolve(), temporary_path, Deadline.after(timeout_seconds)
+                repo.resolve(),
+                temporary_path,
+                Deadline.after(timeout_seconds),
+                live_acceptance=live_acceptance,
+                legacy_source_version=legacy_source_version,
+                legacy_source=legacy_source,
             )
         except DrillError:
             raise
@@ -2698,8 +3419,7 @@ def run_drill(
             else True
         )
         keep_debug = failed and (
-            os.environ.get("ECOREX_DRILL_DEBUG_KEEP") == "1"
-            or not security_cleaned
+            os.environ.get("ECOREX_DRILL_DEBUG_KEEP") == "1" or not security_cleaned
         )
         if temporary_path is not None and not keep_debug:
             shutil.rmtree(temporary_path, ignore_errors=False)
@@ -2737,6 +3457,23 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--legacy-source-version",
+        choices=_SUPPORTED_LEGACY_SOURCE_VERSIONS,
+        default="0.2.9.2",
+        help=(
+            "legacy data contract exercised by the activation gate; defaults to "
+            "the v0.2.9.2 upgrade path"
+        ),
+    )
+    parser.add_argument(
+        "--legacy-source",
+        type=Path,
+        help=(
+            "optional user-selected legacy root; it is inventoried and copied "
+            "read-only into the disposable drill before migration"
+        ),
+    )
+    parser.add_argument(
         "--report",
         type=Path,
         help="optional path for the redacted JSON evidence report",
@@ -2750,6 +3487,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = run_drill(
             repo=args.repo_root,
             timeout_seconds=args.timeout_seconds,
+            legacy_source_version=args.legacy_source_version,
+            legacy_source=args.legacy_source,
         )
     except DrillError as exc:
         print(f"Windows signed-candidate drill failed: {exc}", file=sys.stderr)
