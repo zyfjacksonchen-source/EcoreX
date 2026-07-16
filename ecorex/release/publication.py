@@ -13,7 +13,11 @@ from ecorex.update import ReleaseManifest, SourceKind
 
 from .github import GitHubAssetReceipt, GitHubReleasePublisher
 from .identity import release_tag
-from .replica import HTTPSReleaseReplicaPublisher, ReleaseReplicaReceipt
+from .replica import (
+    HTTPSReadThroughReleaseMirror,
+    HTTPSReleaseReplicaPublisher,
+    ReleaseReplicaReceipt,
+)
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -48,12 +52,17 @@ class PublishedReleaseAssets:
 
 
 class ReleaseAssetPublicationCoordinator:
-    """Upload mirror first, GitHub second and CDN last; publish only after all pass."""
+    """Publish immutable assets, then prove every signed source serves them.
+
+    Managed mirrors keep their historical upload-first behavior. A GitHub
+    read-through mirror is different: it is verified only after the GitHub
+    release is public, because it has no independent upload surface.
+    """
 
     def __init__(
         self,
         *,
-        mirror: HTTPSReleaseReplicaPublisher,
+        mirror: HTTPSReleaseReplicaPublisher | HTTPSReadThroughReleaseMirror,
         github: GitHubReleasePublisher,
         cdn: HTTPSReleaseReplicaPublisher,
     ) -> None:
@@ -110,23 +119,32 @@ class ReleaseAssetPublicationCoordinator:
             cdn_base_url=cdn_source.base_url,
         )
 
-        receipts: dict[str, tuple[Mapping[str, object], ...]] = {}
-        mirror_receipts = tuple(
-            self.mirror.ensure_asset(
-                release_id=manifest.release_id,
-                path=path,
-                expected_sha256=expected_sha256[path.name],
+        read_through = isinstance(self.mirror, HTTPSReadThroughReleaseMirror) or (
+            getattr(self.mirror, "read_through", False) is True
+        )
+        if read_through and not publish_github:
+            raise ValueError(
+                "read-through mirror requires a public GitHub release"
             )
-            for path in files
-        )
-        self._validate_replica_urls(mirror_source.base_url, mirror_receipts)
-        self.mirror.finalize(
-            release_id=manifest.release_id,
-            manifest_sha256=expected_sha256["release-manifest.json"],
-        )
-        receipts[mirror_source.source_id] = tuple(
-            _replica_projection(item) for item in mirror_receipts
-        )
+
+        mirror_receipts: tuple[ReleaseReplicaReceipt, ...] = ()
+        if not read_through:
+            assert isinstance(self.mirror, HTTPSReleaseReplicaPublisher) or callable(
+                getattr(self.mirror, "ensure_asset", None)
+            )
+            mirror_receipts = tuple(
+                self.mirror.ensure_asset(  # type: ignore[union-attr]
+                    release_id=manifest.release_id,
+                    path=path,
+                    expected_sha256=expected_sha256[path.name],
+                )
+                for path in files
+            )
+            self._validate_replica_urls(mirror_source.base_url, mirror_receipts)
+            self.mirror.finalize(  # type: ignore[union-attr]
+                release_id=manifest.release_id,
+                manifest_sha256=expected_sha256["release-manifest.json"],
+            )
 
         draft = self.github.ensure_draft(
             version=manifest.version,
@@ -142,10 +160,6 @@ class ReleaseAssetPublicationCoordinator:
             for path in files
         )
         self._validate_github_urls(github_source.base_url, github_receipts)
-        receipts[github_source.source_id] = tuple(
-            _github_projection(item) for item in github_receipts
-        )
-
         cdn_receipts = tuple(
             self.cdn.ensure_asset(
                 release_id=manifest.release_id,
@@ -159,12 +173,31 @@ class ReleaseAssetPublicationCoordinator:
             release_id=manifest.release_id,
             manifest_sha256=expected_sha256["release-manifest.json"],
         )
-        receipts[cdn_source.source_id] = tuple(
-            _replica_projection(item) for item in cdn_receipts
-        )
-
         if publish_github:
             draft = self.github.publish(draft)
+        if read_through:
+            verifier = self.mirror
+            mirror_receipts = tuple(
+                verifier.verify_asset(  # type: ignore[union-attr]
+                    base_url=mirror_source.base_url,
+                    release_id=manifest.release_id,
+                    path=path,
+                    expected_sha256=expected_sha256[path.name],
+                )
+                for path in files
+            )
+            self._validate_replica_urls(mirror_source.base_url, mirror_receipts)
+        receipts = {
+            mirror_source.source_id: tuple(
+                _replica_projection(item) for item in mirror_receipts
+            ),
+            github_source.source_id: tuple(
+                _github_projection(item) for item in github_receipts
+            ),
+            cdn_source.source_id: tuple(
+                _replica_projection(item) for item in cdn_receipts
+            ),
+        }
         return PublishedReleaseAssets.create(
             release_id=manifest.release_id,
             github_release_id=draft.release_id,

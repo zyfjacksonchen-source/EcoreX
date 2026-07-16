@@ -19,7 +19,14 @@
       "$ref": "#/$defs/github"
     },
     "mirror": {
-      "$ref": "#/$defs/replica"
+      "oneOf": [
+        {
+          "$ref": "#/$defs/replica"
+        },
+        {
+          "$ref": "#/$defs/readThroughMirror"
+        }
+      ]
     },
     "cdn": {
       "$ref": "#/$defs/replica"
@@ -93,6 +100,27 @@
         },
         "token_env": {
           "$ref": "#/$defs/environmentName"
+        }
+      }
+    },
+    "readThroughMirror": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_id",
+        "mode",
+        "public_hosts"
+      ],
+      "properties": {
+        "source_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "mode": {
+          "const": "github-read-through"
+        },
+        "public_hosts": {
+          "$ref": "#/$defs/hostList"
         }
       }
     }

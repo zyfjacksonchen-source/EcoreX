@@ -33,6 +33,7 @@ _REQUIRED = {
     "deployment/nginx/control-plane-blue.conf",
     "deployment/nginx/control-plane-green.conf",
     "deployment/nginx/control-plane-disabled.conf",
+    "deployment/nginx/admin-route-control-plane.conf",
     "deployment/nginx/ecorex-cloud.routes.conf",
 }
 

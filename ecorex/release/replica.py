@@ -299,6 +299,124 @@ class HTTPSReleaseReplicaPublisher:
         )
 
 
+class HTTPSReadThroughReleaseMirror:
+    """Verify a GitHub read-through mirror after the release is public.
+
+    The mirror is deliberately read-only: it has no credential, upload or
+    finalize method. Publication code must first make the immutable GitHub
+    assets public, then stream every mirror byte through this verifier.
+    """
+
+    read_through = True
+
+    def __init__(
+        self,
+        *,
+        source_id: str,
+        public_hosts: frozenset[str],
+        client: httpx.Client | None = None,
+    ) -> None:
+        hosts = frozenset(host.casefold().rstrip(".") for host in public_hosts if host)
+        if _SAFE_ID.fullmatch(source_id) is None or not hosts or any(
+            not _valid_host(host) for host in hosts
+        ):
+            raise ValueError("read-through mirror configuration is invalid")
+        self.source_id = source_id
+        self.public_hosts = hosts
+        self._owns_client = client is None
+        self.client = client or httpx.Client(
+            timeout=httpx.Timeout(connect=15, read=180, write=15, pool=15),
+            follow_redirects=False,
+            trust_env=False,
+            limits=httpx.Limits(max_connections=2, max_keepalive_connections=1),
+        )
+
+    def close(self) -> None:
+        if self._owns_client:
+            self.client.close()
+
+    def verify_asset(
+        self,
+        *,
+        base_url: str,
+        release_id: str,
+        path: str | os.PathLike[str],
+        expected_sha256: str,
+    ) -> ReleaseReplicaReceipt:
+        if _SAFE_ID.fullmatch(release_id) is None or _SHA256.fullmatch(
+            expected_sha256
+        ) is None:
+            raise ValueError("read-through mirror identity is invalid")
+        file_path = Path(path)
+        before = _regular_file(file_path)
+        if (
+            _SAFE_FILE.fullmatch(file_path.name) is None
+            or before.st_size < 1
+            or _hash_file(file_path, before) != expected_sha256
+        ):
+            raise ReleaseReplicaError("local_asset_digest_mismatch")
+        parsed = urlsplit(base_url.rstrip("/"))
+        if (
+            parsed.scheme != "https"
+            or (parsed.hostname or "").casefold().rstrip(".") not in self.public_hosts
+            or parsed.port not in {None, 443}
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+            or not parsed.path
+        ):
+            raise ValueError("read-through mirror does not match signed source URL")
+        url = f"{base_url.rstrip('/')}/{quote(file_path.name, safe='')}"
+        digest = hashlib.sha256()
+        size = 0
+        try:
+            with self.client.stream(
+                "GET",
+                url,
+                headers={"Accept-Encoding": "identity"},
+                follow_redirects=False,
+            ) as response:
+                if response.is_redirect or response.history:
+                    raise ReleaseReplicaError("mirror_redirect_refused")
+                if response.status_code != 200:
+                    raise ReleaseReplicaError(
+                        "mirror_unavailable",
+                        retryable=(
+                            response.status_code in {408, 425, 429}
+                            or response.status_code >= 500
+                        ),
+                    )
+                if response.headers.get(
+                    "content-encoding", "identity"
+                ).casefold() != "identity":
+                    raise ReleaseReplicaError("mirror_compressed_response")
+                declared = response.headers.get("content-length")
+                if declared is not None and (
+                    not declared.isdigit() or int(declared) != before.st_size
+                ):
+                    raise ReleaseReplicaError("mirror_size_mismatch")
+                for chunk in response.iter_bytes():
+                    size += len(chunk)
+                    if size > before.st_size:
+                        raise ReleaseReplicaError("mirror_size_mismatch")
+                    digest.update(chunk)
+        except ReleaseReplicaError:
+            raise
+        except (httpx.TimeoutException, httpx.TransportError):
+            raise ReleaseReplicaError("mirror_unavailable", retryable=True) from None
+        if size != before.st_size or digest.hexdigest() != expected_sha256:
+            raise ReleaseReplicaError("mirror_digest_mismatch")
+        return ReleaseReplicaReceipt(
+            self.source_id,
+            release_id,
+            file_path.name,
+            size,
+            expected_sha256,
+            url,
+        )
+
+
 def _consume_json(response: httpx.Response, *, accepted: set[int]) -> Any:
     if response.is_redirect or response.history:
         raise ReleaseReplicaError("replica_redirect_refused")
@@ -391,6 +509,7 @@ def _valid_host(value: str) -> bool:
 
 __all__ = [
     "EnvironmentReplicaCredential",
+    "HTTPSReadThroughReleaseMirror",
     "HTTPSReleaseReplicaPublisher",
     "ReleaseReplicaError",
     "ReleaseReplicaReceipt",

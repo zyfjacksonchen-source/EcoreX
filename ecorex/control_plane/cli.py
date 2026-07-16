@@ -32,6 +32,7 @@ from ecorex.release import (
     EnvironmentReplicaCredential,
     DigestPinnedExternalSigner,
     GitHubReleasePublisher,
+    HTTPSReadThroughReleaseMirror,
     HTTPSReleaseReplicaPublisher,
     HTTPSPublicBootstrapIndexPublisher,
     PublicBootstrapStageReceipt,
@@ -150,8 +151,8 @@ def _parser() -> argparse.ArgumentParser:
     publish_assets = commands.add_parser(
         "publish-assets",
         help=(
-            "verify once, publish the domestic mirror, GitHub and CDN in the "
-            "signed source order"
+            "verify once, publish GitHub and CDN, then verify the signed "
+            "domestic read-through mirror"
         ),
     )
     publish_assets.add_argument("--release-dir", required=True, type=Path)
@@ -786,7 +787,35 @@ def _publication_coordinator(
             raise ValueError(f"{label} publication config contains an invalid value")
         return string_values[0], string_values[1], allowed, public, string_values[2]
 
-    mirror_args = replica_value("mirror")
+    mirror_value = value.get("mirror")
+    mirror_read_through = False
+    if isinstance(mirror_value, dict) and set(mirror_value) == {
+        "source_id",
+        "mode",
+        "public_hosts",
+    }:
+        mirror_source_id = mirror_value.get("source_id")
+        if (
+            not isinstance(mirror_source_id, str)
+            or not mirror_source_id
+            or mirror_value.get("mode") != "github-read-through"
+        ):
+            raise ValueError("mirror publication config contains an invalid value")
+        mirror_public_hosts = _strict_hosts(
+            mirror_value.get("public_hosts"), "mirror public hosts"
+        )
+        mirror_args: tuple[
+            str, str | None, frozenset[str], frozenset[str], str | None
+        ] = (
+            mirror_source_id,
+            None,
+            frozenset(),
+            mirror_public_hosts,
+            None,
+        )
+        mirror_read_through = True
+    else:
+        mirror_args = replica_value("mirror")
     cdn_args = replica_value("cdn")
     if mirror_args[0] == cdn_args[0]:
         raise ValueError("mirror and CDN source identities must be distinct")
@@ -800,17 +829,24 @@ def _publication_coordinator(
     ):
         raise ValueError("GitHub publication config contains an invalid value")
 
-    mirror: HTTPSReleaseReplicaPublisher | None = None
+    mirror: HTTPSReleaseReplicaPublisher | HTTPSReadThroughReleaseMirror | None = None
     github: GitHubReleasePublisher | None = None
     cdn: HTTPSReleaseReplicaPublisher | None = None
     try:
-        mirror = HTTPSReleaseReplicaPublisher(
-            source_id=mirror_args[0],
-            endpoint=mirror_args[1],
-            allowed_hosts=mirror_args[2],
-            public_hosts=mirror_args[3],
-            credentials=EnvironmentReplicaCredential(variable=mirror_args[4]),
-        )
+        if mirror_read_through:
+            mirror = HTTPSReadThroughReleaseMirror(
+                source_id=mirror_args[0],
+                public_hosts=mirror_args[3],
+            )
+        else:
+            assert mirror_args[1] is not None and mirror_args[4] is not None
+            mirror = HTTPSReleaseReplicaPublisher(
+                source_id=mirror_args[0],
+                endpoint=mirror_args[1],
+                allowed_hosts=mirror_args[2],
+                public_hosts=mirror_args[3],
+                credentials=EnvironmentReplicaCredential(variable=mirror_args[4]),
+            )
         github = GitHubReleasePublisher(
             owner=owner,
             repository=repository,

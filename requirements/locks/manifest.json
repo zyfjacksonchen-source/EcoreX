@@ -31,9 +31,9 @@
     },
     {
       "input": "platform-stage.in",
-      "input_sha256": "de56f4d53a9c37b4970d648c05f67657133c0ab22514b4cc192575581808ec20",
+      "input_sha256": "c8879b3cda087cde176487162d9f9911eac7048f0cd738d3fa3a462b124cc110",
       "lock": "platform-stage.lock",
-      "lock_sha256": "54e53072f26ce3e0b57a2e65d6d116fdf923b6a023682931f34c1bf265ce9718",
+      "lock_sha256": "83fa0b02dbf636c042f73961236a16010d3885ee1e06257722168ef5c8e9d18f",
       "profile": "platform-stage"
     },
     {

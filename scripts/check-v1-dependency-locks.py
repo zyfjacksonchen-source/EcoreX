@@ -24,7 +24,7 @@ GENERATOR_VERSION = "0.11.7"
 PLATFORM_PACK_DEPENDENCIES = {
     "greenlet": "3.4.0",
     "numpy": "2.4.6",
-    "onnxruntime": "1.26.0",
+    "onnxruntime": "1.23.2",
     "openpyxl": "3.1.5",
     "playwright": "1.52.0",
     "pyee": "13.0.1",

@@ -51,7 +51,16 @@ ENCRYPTED_VOLUME_ROOT = Path("/var/lib/ecorex")
 SECRET_ROOT = ENCRYPTED_VOLUME_ROOT / "secrets"
 SYSTEMD_ROOT = Path("/etc/systemd/system")
 NGINX_ROOT = Path("/etc/nginx/ecorex-cloud")
+NGINX_SERVER_CONFIG = Path("/etc/nginx/conf.d/ecorex-mvdcm.conf")
 LOCK_PATH = Path("/run/lock/ecorex-cloud-deploy.lock")
+
+NGINX_ROUTE_INCLUDE = "include /etc/nginx/ecorex-cloud/ecorex-cloud.routes.conf;"
+LEGACY_ADMIN_LOCATION_HEADERS = (
+    "location = /ecorex-agent/admin",
+    "location ^~ /ecorex-agent/admin/api/",
+    "location ^~ /ecorex-agent/api/admin/",
+    "location ^~ /ecorex-agent/admin/",
+)
 
 SLOTS = ("blue", "green")
 PORTS = {
@@ -95,9 +104,10 @@ class CloudDeploymentSpec:
     encryption_attestation_path: Path
     encryption_attestation_sha256: str
     python_binary: Path = Path("/opt/ecorex/platform/python-3.11.9/bin/python3.11")
-    postgres_binary: Path = Path("/usr/pgsql-15/bin/psql")
+    postgres_binary: Path = Path("/usr/bin/psql")
     minio_binary: Path = Path("/opt/ecorex/platform/minio/minio")
     nginx_binary: Path = Path("/usr/sbin/nginx")
+    nginx_server_config: Path = NGINX_SERVER_CONFIG
     systemctl_binary: Path = Path("/usr/bin/systemctl")
 
     @classmethod
@@ -122,6 +132,7 @@ class CloudDeploymentSpec:
             "postgres_binary",
             "minio_binary",
             "nginx_binary",
+            "nginx_server_config",
             "systemctl_binary",
         }
         if set(raw) - expected:
@@ -149,12 +160,20 @@ class CloudDeploymentSpec:
                     )
                 ),
                 postgres_binary=Path(
-                    str(raw.get("postgres_binary", "/usr/pgsql-15/bin/psql"))
+                    str(raw.get("postgres_binary", "/usr/bin/psql"))
                 ),
                 minio_binary=Path(
                     str(raw.get("minio_binary", "/opt/ecorex/platform/minio/minio"))
                 ),
                 nginx_binary=Path(str(raw.get("nginx_binary", "/usr/sbin/nginx"))),
+                nginx_server_config=Path(
+                    str(
+                        raw.get(
+                            "nginx_server_config",
+                            "/etc/nginx/conf.d/ecorex-mvdcm.conf",
+                        )
+                    )
+                ),
                 systemctl_binary=Path(
                     str(raw.get("systemctl_binary", "/usr/bin/systemctl"))
                 ),
@@ -183,6 +202,7 @@ class CloudDeploymentSpec:
             self.postgres_binary,
             self.minio_binary,
             self.nginx_binary,
+            self.nginx_server_config,
             self.systemctl_binary,
         ):
             pure = PurePosixPath(path.as_posix())
@@ -198,12 +218,14 @@ class CloudDeploymentSpec:
             "/opt/ecorex/platform/python-3.11.9/bin/python3.11"
         ):
             raise CloudDeployError("python_binary_outside_fence")
-        if self.postgres_binary != Path("/usr/pgsql-15/bin/psql"):
+        if self.postgres_binary != Path("/usr/bin/psql"):
             raise CloudDeployError("postgres_binary_outside_fence")
         if self.minio_binary != Path("/opt/ecorex/platform/minio/minio"):
             raise CloudDeployError("minio_binary_outside_fence")
         if self.nginx_binary != Path("/usr/sbin/nginx"):
             raise CloudDeployError("nginx_binary_outside_fence")
+        if self.nginx_server_config != NGINX_SERVER_CONFIG:
+            raise CloudDeployError("nginx_server_config_outside_fence")
         if self.systemctl_binary != Path("/usr/bin/systemctl"):
             raise CloudDeployError("systemctl_binary_outside_fence")
 
@@ -348,6 +370,7 @@ def _validate_artifact(spec: CloudDeploymentSpec) -> Mapping[str, Any]:
         "deployment/nginx/control-plane-blue.conf",
         "deployment/nginx/control-plane-green.conf",
         "deployment/nginx/control-plane-disabled.conf",
+        "deployment/nginx/admin-route-control-plane.conf",
         "deployment/nginx/ecorex-cloud.routes.conf",
     }
     if not required.issubset(seen):
@@ -543,7 +566,7 @@ def _target_preflight(spec: CloudDeploymentSpec, confirmation: str) -> None:
     _run(["/usr/bin/id", "-u", "ecorex-cloud"], code="service_identity_missing")
     _run(["/usr/bin/id", "-u", "ecorex-storage"], code="storage_identity_missing")
     _run(
-        [str(spec.systemctl_binary), "is-active", "postgresql-15.service"],
+        [str(spec.systemctl_binary), "is-active", "postgresql.service"],
         code="postgres_service_unavailable",
     )
     _validate_secret_environment_root()
@@ -710,6 +733,193 @@ def _install_release(spec: CloudDeploymentSpec, manifest: Mapping[str, Any]) -> 
     return destination
 
 
+def _legacy_admin_route_payload(source: bytes) -> tuple[bytes, bytes]:
+    """Extract the exact v0.x Admin locations and replace them with one include."""
+
+    try:
+        text = source.decode("utf-8")
+    except UnicodeDecodeError:
+        raise CloudDeployError("nginx_legacy_admin_route_invalid") from None
+    lines = text.splitlines(keepends=True)
+    spans: list[tuple[int, int]] = []
+    for header in LEGACY_ADMIN_LOCATION_HEADERS:
+        matches = [
+            index
+            for index, line in enumerate(lines)
+            if line.strip() == f"{header} {{"
+        ]
+        if len(matches) != 1:
+            raise CloudDeployError("nginx_legacy_admin_route_invalid")
+        start = matches[0]
+        depth = 0
+        end: int | None = None
+        for index in range(start, len(lines)):
+            statement = lines[index].split("#", 1)[0]
+            depth += statement.count("{") - statement.count("}")
+            if depth == 0:
+                end = index + 1
+                break
+            if depth < 0:
+                break
+        if end is None or end <= start:
+            raise CloudDeployError("nginx_legacy_admin_route_invalid")
+        spans.append((start, end))
+    spans.sort()
+    if any(left[1] > right[0] for left, right in zip(spans, spans[1:])):
+        raise CloudDeployError("nginx_legacy_admin_route_invalid")
+
+    removed = {index for start, end in spans for index in range(start, end)}
+    first = spans[0][0]
+    indent = lines[first][: len(lines[first]) - len(lines[first].lstrip())]
+    rendered: list[str] = []
+    for index, line in enumerate(lines):
+        if index == first:
+            newline = "\r\n" if line.endswith("\r\n") else "\n"
+            rendered.append(f"{indent}{NGINX_ROUTE_INCLUDE}{newline}")
+        if index not in removed:
+            rendered.append(line)
+    legacy = "".join(
+        "".join(lines[start:end]).rstrip("\r\n") + "\n\n"
+        for start, end in spans
+    )
+    migrated = "".join(rendered)
+    if (
+        migrated.count(NGINX_ROUTE_INCLUDE) != 1
+        or any(f"{header} {{" in migrated for header in LEGACY_ADMIN_LOCATION_HEADERS)
+        or not legacy.strip()
+    ):
+        raise CloudDeployError("nginx_legacy_admin_route_invalid")
+    return migrated.encode("utf-8"), legacy.encode("utf-8")
+
+
+def _restore_symlink(link: Path, previous: Path | None) -> None:
+    if previous is None:
+        with contextlib.suppress(FileNotFoundError):
+            link.unlink()
+        return
+    _atomic_symlink(previous, link)
+
+
+def _validate_admin_route_resources() -> None:
+    active = NGINX_ROOT / "active-admin-route.conf"
+    legacy = NGINX_ROOT / "admin-route-legacy.conf"
+    candidate = NGINX_ROOT / "admin-route-control-plane.conf"
+    if NGINX_ROOT.is_symlink() or not NGINX_ROOT.is_dir() or not active.is_symlink():
+        raise CloudDeployError("nginx_admin_route_wiring_invalid")
+    payloads: dict[Path, bytes] = {}
+    for path in (legacy, candidate):
+        try:
+            metadata = path.lstat()
+            payload = path.read_bytes()
+        except OSError:
+            raise CloudDeployError("nginx_admin_route_wiring_invalid") from None
+        if (
+            path.is_symlink()
+            or not stat.S_ISREG(metadata.st_mode)
+            or (os.name != "nt" and stat.S_IMODE(metadata.st_mode) & 0o022)
+            or not 1 <= len(payload) <= 256 * 1024
+        ):
+            raise CloudDeployError("nginx_admin_route_wiring_invalid")
+        payloads[path] = payload
+    try:
+        resolved = active.resolve(strict=True)
+        allowed = {legacy.resolve(strict=True), candidate.resolve(strict=True)}
+    except OSError:
+        raise CloudDeployError("nginx_admin_route_wiring_invalid") from None
+    if resolved not in allowed:
+        raise CloudDeployError("nginx_admin_route_wiring_invalid")
+
+    try:
+        legacy_text = payloads[legacy].decode("utf-8", errors="strict")
+        candidate_text = payloads[candidate].decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        raise CloudDeployError("nginx_admin_route_wiring_invalid") from None
+    if any(
+        legacy_text.count(f"{header} {{") != 1
+        for header in LEGACY_ADMIN_LOCATION_HEADERS
+    ) or (
+        candidate_text.count("location = /ecorex-agent/admin {") != 1
+        or candidate_text.count("location ^~ /ecorex-agent/admin/ {") != 1
+        or candidate_text.count("return 410;") != 2
+        or candidate_text.count("proxy_pass $ecorex_control_plane;") != 1
+        or "/srv/ecorex-agent-download" in candidate_text
+    ):
+        raise CloudDeployError("nginx_admin_route_wiring_invalid")
+
+
+def _install_legacy_admin_route_wiring(spec: CloudDeploymentSpec) -> None:
+    """Move live v0.x Admin locations behind a reversible second-level include."""
+
+    server_config = spec.nginx_server_config
+    try:
+        metadata = server_config.lstat()
+        source = server_config.read_bytes()
+    except OSError:
+        raise CloudDeployError("nginx_server_configuration_unavailable") from None
+    if (
+        server_config.is_symlink()
+        or not stat.S_ISREG(metadata.st_mode)
+        or (os.name != "nt" and stat.S_IMODE(metadata.st_mode) & 0o022)
+        or not 1 <= len(source) <= 2 * 1024 * 1024
+    ):
+        raise CloudDeployError("nginx_server_configuration_invalid")
+
+    include_count = source.count(NGINX_ROUTE_INCLUDE.encode("ascii"))
+    active = NGINX_ROOT / "active-admin-route.conf"
+    legacy = NGINX_ROOT / "admin-route-legacy.conf"
+    if include_count == 1:
+        if (
+            any(
+                f"{header} {{".encode("ascii") in source
+                for header in LEGACY_ADMIN_LOCATION_HEADERS
+            )
+            or not active.is_symlink()
+            or not legacy.is_file()
+            or legacy.is_symlink()
+        ):
+            raise CloudDeployError("nginx_admin_route_wiring_invalid")
+        _validate_admin_route_resources()
+        return
+    if include_count != 0:
+        raise CloudDeployError("nginx_admin_route_wiring_invalid")
+
+    migrated, legacy_payload = _legacy_admin_route_payload(source)
+    backup = STATE_ROOT / "nginx-pre-v1.conf"
+    if backup.exists():
+        try:
+            if backup.is_symlink() or backup.read_bytes() != source:
+                raise OSError
+        except OSError:
+            raise CloudDeployError("nginx_legacy_backup_conflict") from None
+    else:
+        _atomic_write(backup, source, mode=0o600)
+    _atomic_write(legacy, legacy_payload, mode=0o644)
+    previous = active.resolve(strict=False) if active.exists() or active.is_symlink() else None
+    _atomic_symlink(legacy, active)
+    _validate_admin_route_resources()
+    _atomic_write(
+        server_config, migrated, mode=stat.S_IMODE(metadata.st_mode)
+    )
+    try:
+        _run([str(spec.nginx_binary), "-t"], code="nginx_configuration_invalid")
+        _run(
+            [str(spec.systemctl_binary), "reload", "nginx.service"],
+            code="nginx_reload_failed",
+        )
+    except CloudDeployError:
+        _atomic_write(
+            server_config, source, mode=stat.S_IMODE(metadata.st_mode)
+        )
+        _restore_symlink(active, previous)
+        with contextlib.suppress(CloudDeployError):
+            _run([str(spec.nginx_binary), "-t"], code="nginx_restore_failed")
+            _run(
+                [str(spec.systemctl_binary), "reload", "nginx.service"],
+                code="nginx_restore_failed",
+            )
+        raise
+
+
 def _install_deployment_templates(spec: CloudDeploymentSpec, release: Path) -> None:
     systemd_source = release / "deployment" / "systemd"
     nginx_source = release / "deployment" / "nginx"
@@ -724,12 +934,14 @@ def _install_deployment_templates(spec: CloudDeploymentSpec, release: Path) -> N
         "control-plane-blue.conf",
         "control-plane-green.conf",
         "control-plane-disabled.conf",
+        "admin-route-control-plane.conf",
         "ecorex-cloud.routes.conf",
     ):
         _atomic_write(NGINX_ROOT / name, (nginx_source / name).read_bytes(), 0o644)
     active = NGINX_ROOT / "active-control-plane.conf"
     if not active.exists() and not active.is_symlink():
         _atomic_symlink(NGINX_ROOT / "control-plane-disabled.conf", active)
+    _install_legacy_admin_route_wiring(spec)
     _systemctl(spec, "daemon-reload", ())
 
 
@@ -741,6 +953,7 @@ def _verify_nginx_wiring(spec: CloudDeploymentSpec) -> None:
     # copying it into a directory is not accepted as production wiring.
     if (
         b"/etc/nginx/ecorex-cloud/active-control-plane.conf" not in result.stdout
+        or b"/etc/nginx/ecorex-cloud/active-admin-route.conf" not in result.stdout
         or b"/ecorex-agent/admin/" not in result.stdout
     ):
         raise CloudDeployError("nginx_route_not_wired")
@@ -894,25 +1107,41 @@ def _nginx_target(slot: str) -> Path:
 
 
 def _switch_nginx(spec: CloudDeploymentSpec, slot: str) -> None:
-    link = NGINX_ROOT / "active-control-plane.conf"
-    previous = link.resolve(strict=False) if link.exists() or link.is_symlink() else None
-    _atomic_symlink(_nginx_target(slot), link)
+    control_link = NGINX_ROOT / "active-control-plane.conf"
+    admin_link = NGINX_ROOT / "active-admin-route.conf"
+    control_previous = (
+        control_link.resolve(strict=False)
+        if control_link.exists() or control_link.is_symlink()
+        else None
+    )
+    admin_previous = (
+        admin_link.resolve(strict=False)
+        if admin_link.exists() or admin_link.is_symlink()
+        else None
+    )
     try:
+        _atomic_symlink(_nginx_target(slot), control_link)
+        _atomic_symlink(NGINX_ROOT / "admin-route-control-plane.conf", admin_link)
+        _validate_admin_route_resources()
         _run([str(spec.nginx_binary), "-t"], code="nginx_configuration_invalid")
         _run(
             [str(spec.systemctl_binary), "reload", "nginx.service"],
             code="nginx_reload_failed",
         )
-    except CloudDeployError:
-        if previous is not None:
-            _atomic_symlink(previous, link)
-            with contextlib.suppress(CloudDeployError):
-                _run([str(spec.nginx_binary), "-t"], code="nginx_restore_failed")
-                _run(
-                    [str(spec.systemctl_binary), "reload", "nginx.service"],
-                    code="nginx_restore_failed",
-                )
-        raise
+    except (CloudDeployError, OSError) as error:
+        with contextlib.suppress(OSError):
+            _restore_symlink(control_link, control_previous)
+        with contextlib.suppress(OSError):
+            _restore_symlink(admin_link, admin_previous)
+        with contextlib.suppress(CloudDeployError):
+            _run([str(spec.nginx_binary), "-t"], code="nginx_restore_failed")
+            _run(
+                [str(spec.systemctl_binary), "reload", "nginx.service"],
+                code="nginx_restore_failed",
+            )
+        if isinstance(error, CloudDeployError):
+            raise
+        raise CloudDeployError("nginx_route_switch_failed") from None
 
 
 @contextlib.contextmanager

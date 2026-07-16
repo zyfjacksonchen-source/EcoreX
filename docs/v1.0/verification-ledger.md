@@ -1976,3 +1976,21 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Real-user boundary | pending | Candidate used a deterministic exact-release fixture. Prior real v0.2.9.2 import remains 54 authoritative sessions retained, 93 cache-only deleted IDs excluded and zero restored, but is not relabelled as signed activation. |
 | Live/protected boundary | blocked safely | Candidate-bound authenticated CDP, managed HTTPS Model/Image execution, 16 protected macOS receipts, publication and rollout remain absent. |
 | Hosted validation | 0 | PR head `f7c14d1499a296ea52ef3822a4bd9846b92e8827`, run `29485934540`: Ubuntu quality/deterministic build, Windows x64, macOS arm64/x64 and cross-runner byte stability all passed (5/5 Jobs). |
+
+## Direct-production publication unblock - 2026-07-16
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Operator gate | WAIVED | User authorized direct production publication. Manual/CDP/HSM approval is not reported as passed; immutable signatures, health/readback and three-source byte verification remain mandatory. |
+| First platform stage | 1 expected | Run `29506205694` failed safely and emitted no complete Candidate input: Windows registry mutation, unavailable macOS `onnxruntime 1.26.0`, and macOS Fetch header projection differences. |
+| Stage corrections | 0 | Windows digest-pinned uv/Python 3.11.9 leaves registry unchanged and imports NumPy/ONNX/RapidOCR; `onnxruntime 1.23.2` macOS arm64/x64 wheel hashes are locked; Web tests pass 180/180. |
+| Cloud target smoke | 0 with boundary | LUKS2, Python 3.11.9, PostgreSQL 15 TLS and four independent signer roles work. Old services/routes remain active; no new current slot or active release state exists. |
+| Wheel resources | 0 | Package-data includes the Admin static allowlist; a built wheel contains and loads all four digest-verified resources without the smoke-only copy workaround. |
+| Nginx two-level route | 0 | Real legacy and Candidate assemblies pass target-host `nginx -t`; legacy Admin remains active before health, switch moves two symlinks, and failure restores both. Unknown/external/tampered route targets fail closed. |
+| PostgreSQL authority | 0 | Target uses `postgresql.service` and `/usr/bin/psql`; deployer and units match. The target drop-in has `RequiresMountsFor` in `[Unit]` and PostgreSQL remains active. |
+| Public repository/source order | 0 | Candidate binds public `EcoreX-installers`; order is GitHub draft → CDN finalize → GitHub public → ghproxy full GET/SHA-256. Real ghproxy probe: 200, zero redirects, identity encoding, 105/105 bytes, matching digest. |
+| Windows stable-file identity | 0 | 100 consecutive executable fixture reads and three formerly failing Candidate tests pass after separating descriptor-stable identity from path creation/mode identity. |
+| Focused backend | 0 | Cloud/package/deployer: 27 passed with 3 Windows symlink skips; publication/repository/Candidate: 61 passed. Ruff, dependency-lock and diff gates pass. |
+| WebUI | 0 | Generated contracts, TypeScript, 180/180 tests and content-addressed build pass; 24 chunks, 459.76 KiB raw / 146.20 KiB gzip initial JavaScript. |
+| Availability waivers | WAIVED | Single-host local CAS is not HA; LUKS needs operator loop/unlock after whole-machine reboot; PostgreSQL migration/runtime currently share one role. |
+| Publication | pending | Corrected main, same-run Windows/macOS stages, exact-main cloud artifact, model/identity migration, signed release, CDN/GitHub/ghproxy readback, Bootstrap activation and public traffic validation remain required. |

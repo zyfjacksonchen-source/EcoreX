@@ -7,5 +7,6 @@
   "release_keyring_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
   "target_machine_id_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
   "encryption_attestation_path": "/etc/ecorex/cloud/encrypted-volume-attestation.json",
-  "encryption_attestation_sha256": "REPLACE_WITH_64_LOWERCASE_HEX"
+  "encryption_attestation_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
+  "nginx_server_config": "/etc/nginx/conf.d/ecorex-mvdcm.conf"
 }

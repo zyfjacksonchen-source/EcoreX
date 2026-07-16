@@ -5795,3 +5795,53 @@ run `29485934540`: Ubuntu quality/deterministic build, Windows x64, macOS
 arm64, macOS x64 and cross-runner canonical-byte stability all completed
 successfully. Hosted compatibility and byte evidence do not supply protected
 native signing receipts or live provider/browser acceptance.
+
+## 2026-07-16 - Direct-production publication unblock
+
+The operator explicitly waived the separate manual/CDP/HSM approval step and
+authorized direct production publication. The waiver is recorded as `WAIVED`,
+never as a passing protected gate. Old production traffic remains unchanged
+until the exact new Candidate is healthy and all public bytes are read back.
+
+The first platform-stage run `29506205694` correctly failed before it could
+emit a complete three-platform input set. Root causes were isolated and fixed:
+the Windows self-hosted runner now installs digest-pinned Python 3.11.9 through
+digest-pinned uv without registry mutation; `onnxruntime` is pinned to 1.23.2,
+whose CPython 3.11 macOS arm64/x64 wheels are present in the hash lock; and the
+GA tests read security and cookie headers through Node's native HTTP response
+instead of the platform-variable Fetch projection.
+
+Target-host smoke testing found three additional deployment defects before
+traffic mutation. The wheel omitted verified administrator static resources,
+so package-data is now explicit and a real wheel/zipimport test loads them.
+Alibaba Cloud Linux exposes PostgreSQL through `postgresql.service` and
+`/usr/bin/psql`, so the deployer and dependent units now bind those authorities.
+The existing TLS server also owned four legacy Admin locations. The deployer
+now moves those exact locations behind a fail-closed legacy include, keeps them
+active while the Candidate starts, switches both service and Admin routes only
+after health, and restores both symlinks if Nginx validation or reload fails.
+Real production configuration passed offline legacy and Candidate `nginx -t`
+assembly; no live Nginx route was changed during this work.
+
+The release contract now binds public
+`zhangyifanjackson-dotcom/EcoreX-installers`. `ghproxy.net` is a read-only
+GitHub view: GitHub draft assets and CDN are made ready, GitHub becomes public,
+then every mirror byte is downloaded without redirect or encoding and checked
+against the signed SHA-256. A real old-release probe returned HTTP 200, zero
+redirects, 105 exact bytes and the expected digest. No mirror write credential
+exists.
+
+Root review also fixed a Windows descriptor/path stat mismatch. Windows can
+project different `st_ctime_ns` meanings through `lstat` and `fstat`; stable
+handle identity now uses volume, file ID, size and last-write time while both
+path checks retain creation/change time, mode and reparse attributes. Three
+previously deterministic Candidate failures now pass, as do 100 consecutive
+Windows executable fixture reads, without weakening path-swap detection.
+
+Focused Python evidence is 27 cloud/deployment/package tests plus 61 release
+tests, all passing. Ruff, dependency-lock and diff gates pass. Web generated
+contracts, TypeScript, 180/180 tests and the content-addressed production build
+pass with 24 chunks and 459.76 KiB raw / 146.20 KiB gzip initial JavaScript.
+Publication remains pending: corrected source must merge to main, the ephemeral
+Windows runner must be re-registered, all three real stages regenerated in one
+run, and exact-main cloud/client artifacts signed before deployment.

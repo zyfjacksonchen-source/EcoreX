@@ -13,6 +13,11 @@
   继续只监听 loopback；
 - `blue/green` 保存两套不可变代码，数据库和对象存储仍是唯一事实源。
 
+现网 Nginx 单机围栏固定为
+`/etc/nginx/conf.d/ecorex-mvdcm.conf`，该路径同时写入部署 spec 合同；部署器拒绝改指
+其他 server 配置。首次路由接管只在该 root-owned、非 symlink、不可组写的普通文件
+上执行，避免误修改同机其他虚拟主机。
+
 这不是多机 HA。SQLite 不放 NFS/SMB/普通共享盘，不同时启动两个 Control Plane
 或两个 Gateway。Image API 与 Worker 通过 PostgreSQL 租约/围栏并发。
 
@@ -93,6 +98,12 @@ venv/bin/ecorex-image
 deployment/systemd/*.service
 deployment/nginx/*.conf
 ```
+
+首次接管既有 v0.x Admin 路由时，部署器先把原有 Admin location 原样迁入
+`admin-route-legacy.conf`，主 TLS server 只保留一个受管 include。候选 Control Plane
+健康前 `active-admin-route.conf` 始终指向 legacy include；健康通过后才与 slot upstream
+一起切到 `admin-route-control-plane.conf`。Nginx 校验或 reload 失败时两级 symlink
+同时恢复，因此不需要人工删除重复 location，也不会在候选准备阶段中断旧 Admin。
 
 manifest 固定 `version=1.0.0`、`platform=linux`、`architecture=aarch64`、
 `python_version=3.11.9`，列出每个普通文件的长度和 SHA-256。签名是 canonical JSON

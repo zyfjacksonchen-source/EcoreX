@@ -49,6 +49,9 @@ ecorex-share-schema = "ecorex.control_plane.share_schema:main"
 include = ["ecorex*"]
 exclude = ["cli*", "agent*", "channel*", "desktop*", "tests*"]
 
+[tool.setuptools.package-data]
+"ecorex.control_plane.admin_web" = ["static/*"]
+
 [tool.setuptools.dynamic]
 version = {attr = "ecorex.__version__"}
 

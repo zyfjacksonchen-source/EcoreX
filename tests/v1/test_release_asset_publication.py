@@ -11,6 +11,7 @@ from ecorex.release import (
     GitHubAssetReceipt,
     GitHubReleaseDraft,
     ReleaseAssetPublicationCoordinator,
+    ReleaseReplicaError,
     ReleaseReplicaReceipt,
 )
 from ecorex.update import ReleaseChannel, ReleaseSource, SourceKind
@@ -53,6 +54,37 @@ class Replica:
             raise RuntimeError("close failed")
 
 
+class ReadThroughMirror:
+    read_through = True
+
+    def __init__(self, source_id: str, base_url: str, order: list[str]) -> None:
+        self.source_id = source_id
+        self.base_url = base_url
+        self.public_hosts = frozenset({urlsplit(base_url).hostname})
+        self.order = order
+        self.closed = False
+        self.failures_remaining = 0
+
+    def verify_asset(self, *, base_url, release_id, path, expected_sha256):
+        assert base_url == self.base_url
+        name = Path(path).name
+        self.order.append(f"{self.source_id}:verify:{name}")
+        if self.failures_remaining:
+            self.failures_remaining -= 1
+            raise ReleaseReplicaError("mirror_unavailable", retryable=True)
+        return ReleaseReplicaReceipt(
+            self.source_id,
+            release_id,
+            name,
+            Path(path).stat().st_size,
+            expected_sha256,
+            f"{base_url}/{name}",
+        )
+
+    def close(self):
+        self.closed = True
+
+
 class GitHub:
     owner = "acme"
     repository = "ecorex"
@@ -69,7 +101,7 @@ class GitHub:
             71,
             "v1.0.0",
             "https://uploads.github.com/repos/acme/ecorex/releases/71/assets{?name}",
-            True,
+            not self.published,
         )
 
     def ensure_asset(self, draft, path, *, expected_sha256):
@@ -85,6 +117,8 @@ class GitHub:
         )
 
     def publish(self, draft):
+        if not draft.draft:
+            return draft
         self.order.append("github:publish")
         self.published = True
         return GitHubReleaseDraft(
@@ -181,6 +215,98 @@ def test_bad_replica_receipt_stops_before_github_publish(tmp_path: Path) -> None
         )
     assert "github:draft" not in order
     assert github.published is False
+
+
+def test_read_through_mirror_is_verified_only_after_github_is_public(
+    tmp_path: Path,
+) -> None:
+    manifest, files, digests = _inputs(tmp_path)
+    order: list[str] = []
+    mirror = ReadThroughMirror("github-cn", manifest.sources[0].base_url, order)
+    github = GitHub(order)
+    cdn = Replica("cdn", manifest.sources[2].base_url, order)
+    coordinator = ReleaseAssetPublicationCoordinator(
+        mirror=mirror, github=github, cdn=cdn
+    )
+
+    result = coordinator.publish(
+        manifest=manifest,
+        files=files,
+        expected_sha256=digests,
+        publish_github=True,
+    )
+
+    mirror_verifications = [
+        index
+        for index, value in enumerate(order)
+        if value.startswith("github-cn:verify:")
+    ]
+    assert mirror_verifications
+    assert order.index("cdn:finalize") < order.index("github:publish")
+    assert order.index("github:publish") < min(mirror_verifications)
+    assert not any(value.startswith("github-cn:asset:") for value in order)
+    assert result.github_draft is False
+    assert len(result.source_receipts["github-cn"]) == len(files)
+
+
+def test_read_through_mirror_refuses_a_draft_before_any_remote_mutation(
+    tmp_path: Path,
+) -> None:
+    manifest, files, digests = _inputs(tmp_path)
+    order: list[str] = []
+    coordinator = ReleaseAssetPublicationCoordinator(
+        mirror=ReadThroughMirror(
+            "github-cn", manifest.sources[0].base_url, order
+        ),
+        github=GitHub(order),
+        cdn=Replica("cdn", manifest.sources[2].base_url, order),
+    )
+
+    with pytest.raises(ValueError, match="requires a public GitHub release"):
+        coordinator.publish(
+            manifest=manifest,
+            files=files,
+            expected_sha256=digests,
+            publish_github=False,
+        )
+
+    assert order == []
+
+
+def test_read_through_failure_is_retryable_after_github_publication(
+    tmp_path: Path,
+) -> None:
+    manifest, files, digests = _inputs(tmp_path)
+    order: list[str] = []
+    mirror = ReadThroughMirror("github-cn", manifest.sources[0].base_url, order)
+    mirror.failures_remaining = 1
+    github = GitHub(order)
+    coordinator = ReleaseAssetPublicationCoordinator(
+        mirror=mirror,
+        github=github,
+        cdn=Replica("cdn", manifest.sources[2].base_url, order),
+    )
+
+    with pytest.raises(ReleaseReplicaError) as failure:
+        coordinator.publish(
+            manifest=manifest,
+            files=files,
+            expected_sha256=digests,
+            publish_github=True,
+        )
+    assert failure.value.retryable is True
+    assert github.published is True
+    assert order.count("github:publish") == 1
+
+    result = coordinator.publish(
+        manifest=manifest,
+        files=files,
+        expected_sha256=digests,
+        publish_github=True,
+    )
+    assert result.github_draft is False
+    assert order.count("github:publish") == 1
+    assert len(result.source_receipts["github-cn"]) == len(files)
 
 
 def test_signed_source_mismatch_fails_before_first_remote_mutation(

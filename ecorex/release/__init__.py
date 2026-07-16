@@ -41,6 +41,7 @@ from .github import (
 )
 from .replica import (
     EnvironmentReplicaCredential,
+    HTTPSReadThroughReleaseMirror,
     HTTPSReleaseReplicaPublisher,
     ReleaseReplicaError,
     ReleaseReplicaReceipt,
@@ -155,6 +156,7 @@ __all__ = [
     "LIVE_ACCEPTANCE_GATES",
     "release_tag",
     "HTTPSReleaseReplicaPublisher",
+    "HTTPSReadThroughReleaseMirror",
     "HTTPSPublicBootstrapIndexPublisher",
     "MAX_BOOTSTRAP_BYTES",
     "MAX_CAPABILITY_PACK_BYTES",

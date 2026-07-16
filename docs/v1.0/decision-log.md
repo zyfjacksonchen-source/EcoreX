@@ -448,7 +448,7 @@
 
 ## ADR-042 - Public release visibility is fenced by every signed origin
 
-- Status: accepted.
+- Status: amended 2026-07-16.
 - Decision: the low-level GitHub uploader may create and resume only a draft.
   The Product publication coordinator verifies the immutable local release once,
   finalizes the signed domestic mirror first, uploads the GitHub draft second,
@@ -460,6 +460,14 @@
   release whose first download source is empty, a stale script cannot overwrite
   a same-name asset, and retrying the one publication command resumes the same
   release identity without exposing tokens in arguments or configuration.
+- Amendment: the production domestic source is `ghproxy.net`, a read-through
+  view of the public `EcoreX-installers` GitHub Release, not an independently
+  writable replica. Candidate signing therefore binds the public installers
+  repository. Publication completes GitHub draft assets and CDN, publishes
+  GitHub, then performs a no-redirect, identity-encoded, full-byte SHA-256 check
+  through ghproxy before producing the three-source receipt. A mirror failure
+  after GitHub visibility is retryable and cannot advance the Bootstrap pointer
+  without a valid receipt.
 
 ## ADR-043 - Bootstrap alone confirms a provisional Runtime activation
 

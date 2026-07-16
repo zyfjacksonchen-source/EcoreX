@@ -191,6 +191,67 @@ def test_asset_verifier_reads_signed_resources_through_zipimport(
     assert completed.returncode == 0, completed.stderr.decode("utf-8", errors="replace")
 
 
+def test_built_wheel_contains_and_loads_verified_admin_assets(
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    wheel_directory = tmp_path / "wheel"
+    wheel_directory.mkdir()
+    built = subprocess.run(
+        (
+            sys.executable,
+            "-m",
+            "pip",
+            "wheel",
+            "--no-deps",
+            "--no-build-isolation",
+            "--wheel-dir",
+            str(wheel_directory),
+            str(root),
+        ),
+        cwd=tmp_path,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=120,
+        check=False,
+    )
+    assert built.returncode == 0, built.stderr.decode("utf-8", errors="replace")
+    wheels = tuple(wheel_directory.glob("*.whl"))
+    assert len(wheels) == 1
+    wheel = wheels[0]
+    expected = {
+        f"ecorex/control_plane/admin_web/static/{path.name}"
+        for path in STATIC.iterdir()
+    }
+    with zipfile.ZipFile(wheel) as archive:
+        names = set(archive.namelist())
+    assert expected <= names
+
+    loaded = subprocess.run(
+        (
+            sys.executable,
+            "-I",
+            "-c",
+            (
+                "import sys;"
+                f"sys.path.insert(0,{str(wheel)!r});"
+                "from ecorex.control_plane.admin_web.assets import AdminWebAssets;"
+                "bundle=AdminWebAssets.load();"
+                "assert len(bundle.assets)==2;"
+                "assert len(bundle.index_digest)==64"
+            ),
+        ),
+        cwd=tmp_path,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=30,
+        check=False,
+    )
+    assert loaded.returncode == 0, loaded.stderr.decode("utf-8", errors="replace")
+
+
 def test_admin_dom_and_script_contract_are_csp_safe_and_ephemeral() -> None:
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     script = (STATIC / "admin.js").read_text(encoding="utf-8")

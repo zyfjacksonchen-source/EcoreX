@@ -76,9 +76,10 @@ offline or label-mismatched Runner does not satisfy the contract.
 
 ## Candidate asset publication
 
-Export the three credentials through the variable names above, then run one
-resumable command. `--trusted-key` contains a public verification key, not a
-secret.
+Export the GitHub release and CDN publisher credentials through the variable
+names in `publication.json`, then run one resumable command. A
+`github-read-through` mirror has no credential or mutation endpoint.
+`--trusted-key` contains a public verification key, not a secret.
 
 ```powershell
 ecorex-release publish-assets `
@@ -90,9 +91,12 @@ ecorex-release publish-assets `
 ```
 
 The command verifies the exact local directory and all signatures/digests,
-then performs domestic mirror, GitHub draft, CDN and GitHub visibility in that
-order. Re-running resumes matching assets. A conflicting same-name asset or any
-receipt mismatch stops the command; it never overwrites remote bytes.
+creates or resumes the GitHub draft, finalizes the CDN replica, makes the
+complete GitHub release public and then streams every asset through the signed
+domestic read-through mirror with redirects and content encoding disabled.
+Re-running resumes matching assets, including when GitHub is already public but
+the mirror check was temporarily unavailable. A conflicting same-name asset or
+any receipt mismatch stops the command; it never overwrites remote bytes.
 The atomic receipt records the exact manifest digest and three validated source
 projections; its SHA-256 is printed for the Control Plane release-gate evidence.
 The `github-release`, `mirror-sync`, and `cdn-sync` entries in
@@ -392,11 +396,14 @@ Required protected configuration is deliberately operational, not committed:
   locked platform-stage Python profile and Chromium are installed by the
   workflow;
 - signing environments: release signer executable/digest, optional adapter/
-  digest, signer key ID/public key and version-qualified mirror/CDN base URLs;
+  digest, signer key ID/public key, the public `owner/repository` release target
+  and version-qualified mirror/CDN base URLs;
 - live-acceptance environment: digest-pinned Windows acceptance driver and the
   managed Model/Image/CDP test session held outside repository files;
-- publication environments: publication config, mirror/CDN/Bootstrap
-  credentials, Control Plane URL/host allowlist/token and required reviewers.
+- publication environments: publication config, public GitHub release target,
+  GitHub release/CDN/Bootstrap credentials, Control Plane URL/host
+  allowlist/token and required reviewers. A read-through mirror must never have
+  an upload credential.
 
 The stager, production Windows sandbox helper, platform launchers and Pack
 implementations are repository-owned sources. Their compiled bytes and the
