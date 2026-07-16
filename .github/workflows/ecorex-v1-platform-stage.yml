@@ -93,14 +93,31 @@ jobs:
           if ($observedVersion -ne "3.11.9") {
             throw "python_toolchain_mismatch:$observedVersion"
           }
-          $installRoot = Split-Path -Parent $python
-          $installRoot | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          (Join-Path $installRoot "Scripts") | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          # uv-managed base interpreters are PEP 668 protected.  The Stage
+          # dependencies belong in a disposable venv rooted in RUNNER_TEMP;
+          # mutating or bypassing the managed base would make the build both
+          # non-repeatable and dependent on runner state.
+          $venvName = "ecorex-platform-stage-venv-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.id }}"
+          $venvRoot = Join-Path $env:RUNNER_TEMP $venvName
+          if (Test-Path -LiteralPath $venvRoot) {
+            throw "python_venv_root_not_clean:$venvName"
+          }
+          & $python -m venv $venvRoot
+          if ($LASTEXITCODE -ne 0) {
+            throw "python_venv_creation_failed:$LASTEXITCODE"
+          }
+          $installRoot = $venvRoot
+          $venvPython = Join-Path $installRoot "Scripts\python.exe"
+          $venvVersion = (& $venvPython -c "import platform; print(platform.python_version())").Trim()
+          if ($venvVersion -ne "3.11.9") {
+            throw "python_venv_toolchain_mismatch:$venvVersion"
+          }
           @(
             "pythonLocation=$installRoot",
             "Python_ROOT_DIR=$installRoot",
             "Python3_ROOT_DIR=$installRoot"
           ) | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          (Join-Path $installRoot "Scripts") | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Set up Node 22 for the one final Web build
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

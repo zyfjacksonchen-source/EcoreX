@@ -35,6 +35,7 @@ from ecorex.release.evidence_io import (
     strict_json_loads,
 )
 from ecorex.release.process_boundary import run_bounded_process
+from ecorex.update import Ed25519SignatureVerifier, SignatureVerifier
 
 try:  # The read-only planner remains importable on Windows release workers.
     import fcntl
@@ -74,6 +75,9 @@ STAGING_ROOT = DOWNLOAD_ROOT / "site-staging"
 SLOTS_ROOT = DOWNLOAD_ROOT / "site-slots"
 LEGACY_ROOT = DOWNLOAD_ROOT / "legacy-sites"
 CURRENT_PATH = DOWNLOAD_ROOT / "current"
+PUBLIC_POINTER_PATH = (
+    DOWNLOAD_ROOT / "public-pointer" / "public-bootstrap-index.json"
+)
 STATE_ROOT = Path("/var/lib/ecorex/site-deploy")
 RECEIPT_ROOT = STATE_ROOT / "receipts"
 JOURNAL_PATH = STATE_ROOT / "activation-pending.json"
@@ -86,6 +90,9 @@ NGINX_BINARY = Path("/usr/sbin/nginx")
 SYSTEMCTL_BINARY = Path("/usr/bin/systemctl")
 CURL_BINARY = Path("/usr/bin/curl")
 RELEASE_KEYRING_PATH = Path("/etc/ecorex/cloud/release-public-keys.json")
+PUBLICATION_KEYRING_PATH = Path(
+    "/etc/ecorex/cloud/publication-public-keys.json"
+)
 
 PUBLIC_SITE_AUTHORIZATION_DOMAIN = b"ecorex.public-site-deployment.v1\0"
 PUBLIC_SITE_AUTHORIZATION_TYPE = "ecorex.public-site-deployment-authorization"
@@ -145,11 +152,13 @@ class DeploymentPaths:
     slots_root: Path = SLOTS_ROOT
     legacy_root: Path = LEGACY_ROOT
     current_path: Path = CURRENT_PATH
+    public_pointer_path: Path = PUBLIC_POINTER_PATH
     state_root: Path = STATE_ROOT
     receipt_root: Path = RECEIPT_ROOT
     journal_path: Path = JOURNAL_PATH
     lock_path: Path = LOCK_PATH
     release_keyring_path: Path = RELEASE_KEYRING_PATH
+    publication_keyring_path: Path = PUBLICATION_KEYRING_PATH
 
     @classmethod
     def for_test(cls, root: Path) -> "DeploymentPaths":
@@ -161,11 +170,17 @@ class DeploymentPaths:
             slots_root=download / "site-slots",
             legacy_root=download / "legacy-sites",
             current_path=download / "current",
+            public_pointer_path=(
+                download / "public-pointer" / "public-bootstrap-index.json"
+            ),
             state_root=state,
             receipt_root=state / "receipts",
             journal_path=state / "activation-pending.json",
             lock_path=root / "run" / "ecorex-cloud-deploy.lock",
             release_keyring_path=root / "config" / "release-public-keys.json",
+            publication_keyring_path=(
+                root / "config" / "publication-public-keys.json"
+            ),
         )
 
     @classmethod
@@ -193,11 +208,13 @@ class DeploymentPaths:
             slots_root=unused / "site-slots",
             legacy_root=unused / "legacy-sites",
             current_path=unused / "current",
+            public_pointer_path=release / "site" / "public-bootstrap-index.json",
             state_root=unused / "state",
             receipt_root=unused / "receipts",
             journal_path=unused / "activation-pending.json",
             lock_path=unused / "deploy.lock",
             release_keyring_path=unused / "release-public-keys.json",
+            publication_keyring_path=unused / "publication-public-keys.json",
         )
 
 
@@ -224,15 +241,24 @@ class ValidatedSite:
     waiver_sha256: str
     tree_sha256: str
     files: tuple[SiteFile, ...]
+    public_index: SiteFile
     direct_receipt_sha256: str
     authorization_sha256: str | None
     admin_identity: Mapping[str, Any] | None
 
     def file(self, relative_path: str) -> SiteFile:
+        if relative_path == self.public_index.relative_path:
+            return self.public_index
         for value in self.files:
             if value.relative_path == relative_path:
                 return value
         raise PublicSiteDeployError("site_file_missing")
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class PublicPointerTrust:
+    authority_verifier: SignatureVerifier
+    freshness_verifier: SignatureVerifier
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -674,7 +700,16 @@ def _validate_unsigned_staged_site(
     ):
         raise PublicSiteDeployError("site_published_identity_mismatch")
 
-    ordered = tuple(sorted(files, key=lambda value: value.relative_path))
+    ordered = tuple(
+        sorted(
+            (
+                value
+                for value in files
+                if value.relative_path != "public-bootstrap-index.json"
+            ),
+            key=lambda value: value.relative_path,
+        )
+    )
     # Re-list after all stable reads.  A root-side staging mutation cannot add
     # an unbound file between the initial exact-set check and deployment.
     if {entry.name for entry in site_root.iterdir()} != set(root_entries) or {
@@ -700,6 +735,7 @@ def _validate_unsigned_staged_site(
         waiver_sha256=str(receipt["waiver_sha256"]),
         tree_sha256=_sha256(_canonical_json(tree)),
         files=ordered,
+        public_index=pointer_file,
         direct_receipt_sha256=_sha256(receipt_payload),
         authorization_sha256=None,
         admin_identity=None,
@@ -992,27 +1028,28 @@ def sign_public_site_authorization(site: ValidatedSite, *, signer: Any) -> dict[
     }
 
 
-def _read_release_keyring(
+def _read_public_keyring(
     path: Path,
     *,
     expected_owner_uid: int | None,
+    code: str,
 ) -> dict[str, bytes]:
     _require_secure_regular_file(
         path,
-        code="release_keyring_invalid",
+        code=code,
         expected_owner_uid=expected_owner_uid,
     )
     payload = _read_site_file(
         path,
         maximum_bytes=64 * 1024,
-        code="release_keyring_invalid",
+        code=code,
     )
     try:
-        value = strict_json_loads(payload, code="release_keyring_invalid")
+        value = strict_json_loads(payload, code=code)
     except ValueError:
-        raise PublicSiteDeployError("release_keyring_invalid") from None
+        raise PublicSiteDeployError(code) from None
     if not isinstance(value, dict) or not 1 <= len(value) <= 32:
-        raise PublicSiteDeployError("release_keyring_invalid")
+        raise PublicSiteDeployError(code)
     keys: dict[str, bytes] = {}
     for key_id, encoded in value.items():
         if (
@@ -1020,16 +1057,44 @@ def _read_release_keyring(
             or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", key_id) is None
             or not isinstance(encoded, str)
         ):
-            raise PublicSiteDeployError("release_keyring_invalid")
+            raise PublicSiteDeployError(code)
         try:
             public = base64.b64decode(encoded, validate=True)
             Ed25519PublicKey.from_public_bytes(public)
         except (TypeError, ValueError):
-            raise PublicSiteDeployError("release_keyring_invalid") from None
+            raise PublicSiteDeployError(code) from None
         if len(public) != 32:
-            raise PublicSiteDeployError("release_keyring_invalid")
+            raise PublicSiteDeployError(code)
         keys[key_id] = public
     return keys
+
+
+def _read_public_pointer_trust(
+    paths: DeploymentPaths,
+    *,
+    expected_owner_uid: int | None,
+) -> PublicPointerTrust:
+    authority_keys = _read_public_keyring(
+        paths.release_keyring_path,
+        expected_owner_uid=expected_owner_uid,
+        code="release_keyring_invalid",
+    )
+    freshness_keys = _read_public_keyring(
+        paths.publication_keyring_path,
+        expected_owner_uid=expected_owner_uid,
+        code="publication_keyring_invalid",
+    )
+    if set(authority_keys).intersection(freshness_keys) or set(
+        authority_keys.values()
+    ).intersection(freshness_keys.values()):
+        raise PublicSiteDeployError("public_pointer_trust_roles_overlap")
+    try:
+        return PublicPointerTrust(
+            authority_verifier=Ed25519SignatureVerifier(authority_keys),
+            freshness_verifier=Ed25519SignatureVerifier(freshness_keys),
+        )
+    except (TypeError, ValueError):
+        raise PublicSiteDeployError("public_pointer_trust_invalid") from None
 
 
 def verify_public_site_authorization(
@@ -1124,9 +1189,10 @@ def validate_staged_site(
         raise PublicSiteDeployError("admin_deployment_identity_missing")
     validate_admin_deployment_identity(admin_identity, version=site.version)
     site = dataclasses.replace(site, admin_identity=dict(admin_identity))
-    keys = _read_release_keyring(
+    keys = _read_public_keyring(
         paths.release_keyring_path,
         expected_owner_uid=expected_owner_uid,
+        code="release_keyring_invalid",
     )
     verify_public_site_authorization(site, authorization, public_keys=keys)
     # Re-scan after authorization verification so a same-UID staging mutation
@@ -1137,7 +1203,11 @@ def validate_staged_site(
         expected_owner_uid=expected_owner_uid,
         authorization_expected=True,
     )
-    if rescanned.tree_sha256 != site.tree_sha256 or rescanned.files != site.files:
+    if (
+        rescanned.tree_sha256 != site.tree_sha256
+        or rescanned.files != site.files
+        or rescanned.public_index != site.public_index
+    ):
         raise PublicSiteDeployError("site_changed_after_authorization")
     rescanned = dataclasses.replace(
         rescanned,
@@ -1292,9 +1362,64 @@ def _cache_contains(response: HttpReadback, required: frozenset[str]) -> bool:
     return required.issubset(directives)
 
 
+def _public_pointer_matches_authorized_target(
+    observed_payload: bytes,
+    authorized_payload: bytes,
+    trust: PublicPointerTrust,
+) -> bool:
+    """Allow online freshness renewal, but no signed-target drift.
+
+    The release authorization binds the initially published pointer bytes.
+    The Control Plane may subsequently replace only its independently signed
+    ``freshness`` member.  A site apply/recovery must therefore accept a
+    structurally valid renewed pointer for the same immutable authority while
+    still rejecting any release, source, signature, or target substitution.
+    """
+
+    values: list[dict[str, Any]] = []
+    try:
+        for position, payload in enumerate((observed_payload, authorized_payload)):
+            value = strict_json_loads(
+                payload,
+                code="public_pointer_readback_failed",
+            )
+            if not isinstance(value, dict) or value.get("status") != "published":
+                raise ValueError
+            validate_public_bootstrap_index(
+                value,
+                verifier=trust.authority_verifier,
+                freshness_verifier=trust.freshness_verifier,
+                # The deployment authorization permanently binds the initial
+                # pointer bytes.  Its old freshness window may expire after a
+                # valid online renewal; only the currently observed document
+                # must still be live.
+                allow_expired_freshness=position == 1,
+            )
+            values.append(value)
+    except (TypeError, ValueError):
+        return False
+    observed, authorized = values
+    observed_freshness = observed.get("freshness")
+    authorized_freshness = authorized.get("freshness")
+    if not isinstance(observed_freshness, dict) or not isinstance(
+        authorized_freshness, dict
+    ):
+        return False
+    observed_immutable = dict(observed)
+    authorized_immutable = dict(authorized)
+    observed_immutable.pop("freshness", None)
+    authorized_immutable.pop("freshness", None)
+    return (
+        observed_immutable == authorized_immutable
+        and observed_freshness.get("authority_sha256")
+        == authorized_freshness.get("authority_sha256")
+    )
+
+
 def _verify_target_readback(
     site: ValidatedSite,
     client: ReadbackClient,
+    trust: PublicPointerTrust,
 ) -> dict[str, Any]:
     index = client.get(PUBLIC_ORIGIN, maximum_bytes=MAX_HTML_BYTES)
     if (
@@ -1309,20 +1434,14 @@ def _verify_target_readback(
     )
     if (
         pointer.status != 200
-        or pointer.body != site.file("public-bootstrap-index.json").payload
+        or not _public_pointer_matches_authorized_target(
+            pointer.body,
+            site.public_index.payload,
+            trust,
+        )
         or not _cache_contains(pointer, frozenset({"no-store"}))
     ):
         raise PublicSiteDeployError("public_pointer_readback_failed")
-    try:
-        pointer_value = strict_json_loads(
-            pointer.body,
-            code="public_pointer_readback_failed",
-        )
-        if not isinstance(pointer_value, dict):
-            raise ValueError
-        validate_public_bootstrap_index(pointer_value)
-    except (TypeError, ValueError):
-        raise PublicSiteDeployError("public_pointer_readback_failed") from None
 
     asset_receipts: list[dict[str, Any]] = []
     for value in site.files:
@@ -2264,6 +2383,62 @@ def _normalize_staging_tree(
         raise PublicSiteDeployError("production_staging_layout_invalid") from None
 
 
+def _validate_production_public_pointer_layout(
+    paths: DeploymentPaths,
+    *,
+    device: int,
+) -> None:
+    """Validate the Control-Plane-owned pointer without taking ownership."""
+
+    try:
+        import grp
+        import pwd
+
+        owner_uid = pwd.getpwnam("ecorex-cloud").pw_uid
+        storage_gid = grp.getgrnam("ecorex-storage").gr_gid
+        root = paths.public_pointer_path.parent
+        root_metadata = root.lstat()
+        pointer_metadata = paths.public_pointer_path.lstat()
+        if (
+            _linked(root_metadata)
+            or not stat.S_ISDIR(root_metadata.st_mode)
+            or root.resolve(strict=True) != root.absolute()
+            or root_metadata.st_uid != owner_uid
+            or root_metadata.st_gid != storage_gid
+            or stat.S_IMODE(root_metadata.st_mode) != 0o755
+            or root_metadata.st_dev != device
+            or _linked(pointer_metadata)
+            or not stat.S_ISREG(pointer_metadata.st_mode)
+            or getattr(pointer_metadata, "st_nlink", 1) != 1
+            or pointer_metadata.st_uid != owner_uid
+            or stat.S_IMODE(pointer_metadata.st_mode) != 0o644
+            or pointer_metadata.st_dev != device
+        ):
+            raise OSError
+    except (ImportError, KeyError, OSError):
+        raise PublicSiteDeployError(
+            "production_public_pointer_layout_invalid"
+        ) from None
+
+
+def _verify_local_public_pointer(
+    paths: DeploymentPaths,
+    site: ValidatedSite,
+    trust: PublicPointerTrust,
+) -> None:
+    payload = _read_site_file(
+        paths.public_pointer_path,
+        maximum_bytes=MAX_POINTER_BYTES,
+        code="production_public_pointer_identity_invalid",
+    )
+    if not _public_pointer_matches_authorized_target(
+        payload,
+        site.public_index.payload,
+        trust,
+    ):
+        raise PublicSiteDeployError("production_public_pointer_identity_invalid")
+
+
 def _prepare_production_layout(
     paths: DeploymentPaths,
     release_id: str,
@@ -2309,6 +2484,7 @@ def _prepare_production_layout(
         device=device,
         create=True,
     )
+    _validate_production_public_pointer_layout(paths, device=device)
     _normalize_staging_tree(paths, release_id, device=device)
     if os.path.lexists(paths.current_path):
         try:
@@ -2364,6 +2540,7 @@ def _recover(
     paths: DeploymentPaths,
     controller: ServerController,
     client: ReadbackClient,
+    trust: PublicPointerTrust,
 ) -> dict[str, Any] | None:
     journal = _journal(paths)
     if journal is None:
@@ -2383,7 +2560,7 @@ def _recover(
                 paths, journal, target_is_active=True
             )
             controller.reload()
-            readback = _verify_target_readback(site, client)
+            readback = _verify_target_readback(site, client, trust)
             receipt, receipt_sha = _write_receipt(
                 paths, site, journal, "recovered", readback
             )
@@ -2551,9 +2728,15 @@ def apply(
             paths=paths,
             expected_owner_uid=expected_owner_uid,
         )
+        trust = _read_public_pointer_trust(
+            paths,
+            expected_owner_uid=expected_owner_uid,
+        )
+        if enforce_server_fence:
+            _verify_local_public_pointer(paths, site, trust)
         controller = controller or FixedNginxController()
         client = client or FixedCurlReadback(paths.state_root)
-        recovered = _recover(site, paths, controller, client)
+        recovered = _recover(site, paths, controller, client, trust)
         if recovered is not None and recovered["resolution"] == "target":
             return {
                 "schema_version": SCHEMA_VERSION,
@@ -2574,7 +2757,7 @@ def apply(
             raise PublicSiteDeployError("site_deployment_receipt_state_mismatch")
         if existing_receipt is not None and current_is_site:
             controller.reload()
-            _verify_target_readback(site, client)
+            _verify_target_readback(site, client, trust)
             return {
                 "schema_version": SCHEMA_VERSION,
                 "status": "passed",
@@ -2595,7 +2778,7 @@ def apply(
             _switch_current(paths, journal)
             journal = _advance_journal(paths, journal, "current_switched")
             controller.reload()
-            readback = _verify_target_readback(site, client)
+            readback = _verify_target_readback(site, client, trust)
             journal = _advance_journal(paths, journal, "verified")
             receipt, receipt_sha = _write_receipt(
                 paths, site, journal, slot_action, readback

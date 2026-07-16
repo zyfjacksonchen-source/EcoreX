@@ -8,6 +8,8 @@ import json
 import os
 from pathlib import Path
 import stat
+import subprocess
+import sys
 from typing import Any
 
 from cryptography.hazmat.primitives import serialization
@@ -36,6 +38,7 @@ from ecorex.release import (
     ReleaseBuilder,
     ReleaseBuildSpec,
 )
+from ecorex.release.candidate import PACK_TOOLS
 from ecorex.update import (
     Ed25519SignatureVerifier,
     ReleaseChannel,
@@ -177,6 +180,126 @@ async def _upload_all(client: httpx.AsyncClient, built, token: str = TOKEN_CURRE
             )
         )
     return responses
+
+
+@pytest.mark.anyio
+async def test_recipe_manifest_source_finalizes_through_production_replica(
+    tmp_path: Path,
+) -> None:
+    repository = Path(__file__).resolve().parents[2]
+    input_root = tmp_path / "candidate-input"
+    for platform, architecture in (
+        ("windows", "x64"),
+        ("macos", "arm64"),
+        ("macos", "x64"),
+    ):
+        target = f"{platform}-{architecture}"
+        (input_root / "stages" / target / "core").mkdir(parents=True)
+        (input_root / "stages" / target / "bootstrap").mkdir(parents=True)
+        for pack_id in PACK_TOOLS:
+            (input_root / "stages" / target / "packs" / pack_id).mkdir(
+                parents=True
+            )
+        receipts = input_root / "receipts" / target
+        receipts.mkdir(parents=True)
+        for name in ("core", "bootstrap", *PACK_TOOLS):
+            (receipts / f"{name}.json").write_text("{}", encoding="utf-8")
+
+    recipe_path = input_root / "candidate-recipe.json"
+    assembled = subprocess.run(
+        (
+            sys.executable,
+            str(repository / "scripts" / "assemble-v1-candidate-recipe.py"),
+            "--input-root",
+            str(input_root),
+            "--output",
+            str(recipe_path),
+            "--channel",
+            "stable",
+            "--created-at",
+            "2026-07-17T00:00:00+00:00",
+            "--repository",
+            "acme/ecorex",
+        ),
+        capture_output=True,
+        check=False,
+        env={
+            **os.environ,
+            "ECOREX_RELEASE_MIRROR_BASE_URL": (
+                "https://ghproxy.net/https://github.com/"
+                "acme/ecorex/releases/download"
+            ),
+            "ECOREX_RELEASE_CDN_BASE_URL": (
+                f"{PUBLIC_ROOT}/{RELEASE_NAMESPACE}"
+            ),
+        },
+    )
+    assert assembled.returncode == 0, assembled.stderr.decode(errors="replace")
+    recipe = json.loads(recipe_path.read_text(encoding="utf-8"))
+    assert recipe["sources"][2]["base_url"] == (
+        f"{PUBLIC_ROOT}/{RELEASE_NAMESPACE}"
+    )
+
+    source = tmp_path / "source"
+    (source / "bin").mkdir(parents=True)
+    (source / "bin" / "ecorex.exe").write_bytes(b"signed ecorex product")
+    private = Ed25519PrivateKey.generate()
+    public = private.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    sources = tuple(
+        ReleaseSource(
+            str(item["source_id"]),
+            SourceKind(str(item["kind"])),
+            priority,
+            str(item["base_url"]),
+        )
+        for priority, item in enumerate(recipe["sources"])
+    )
+    built = ReleaseBuilder(Ed25519MemorySigner("release-key", private)).build(
+        ReleaseBuildSpec(
+            channel=ReleaseChannel.STABLE,
+            created_at=str(recipe["created_at"]),
+            release_scoped_sources=True,
+            sources=sources,
+            artifacts=(
+                ArtifactBuildInput(
+                    source_dir=source,
+                    kind=ArtifactKind.CORE,
+                    platform="windows",
+                    architecture="x64",
+                    executable_paths=("bin/ecorex.exe",),
+                ),
+            ),
+        ),
+        tmp_path / "release",
+    )
+    release_id = built.manifest.release_id
+    assert built.manifest.sources[2].base_url == (
+        f"{PUBLIC_ROOT}/{RELEASE_NAMESPACE}/{release_id}"
+    )
+
+    service, app, _audit, _environment = _service(tmp_path, public)
+    manifest_digest = hashlib.sha256(built.manifest_path.read_bytes()).hexdigest()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        responses = await _upload_all(client, built)
+        assert {response.status_code for response in responses} == {201}
+        body = json.dumps({"manifest_sha256": manifest_digest}).encode()
+        finalized = await client.post(
+            f"/api/v1/releases/{release_id}/replicas/cdn/finalize",
+            headers={
+                **_finalize_headers(release_id, manifest_digest),
+                "Content-Length": str(len(body)),
+                "Content-Type": "application/json",
+            },
+            content=body,
+        )
+    assert finalized.status_code == 200, finalized.text
+    assert (
+        service.namespace_root / ReleaseChannel.STABLE.value / release_id
+    ).is_dir()
 
 
 def _finalize_headers(release_id: str, digest: str, token: str = TOKEN_CURRENT):

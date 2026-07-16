@@ -13,11 +13,13 @@
 - 独立部署授权：`site-staging/<release_id>/deployment-authorization.json`
 - 不可变 slot：`site-slots/<release_id>`
 - 当前指针：`current -> site-slots/<release_id>`
+- 动态 Bootstrap 指针：`public-pointer/public-bootstrap-index.json`
 - 旧实体目录备份：`legacy-sites/pre-v1-<transaction_id>`
 - 持久 journal/收据：`/var/lib/ecorex/site-deploy`
 - 共享产品部署锁：`/run/lock/ecorex-cloud-deploy.lock`
 - 固定二进制：`/usr/sbin/nginx`、`/usr/bin/systemctl`、`/usr/bin/curl`
 - 固定发布验签 keyring：`/etc/ecorex/cloud/release-public-keys.json`
+- 固定 freshness 验签 keyring：`/etc/ecorex/cloud/publication-public-keys.json`
 
 staging 目录必须由 root 拥有，不得被 group/other 写入。`site` 中只能有
 `index.html`、`public-bootstrap-index.json`、各一个内容寻址的 JS/CSS
@@ -50,6 +52,20 @@ rendered index、CSS/JS 内容寻址摘要、产品版本标记和 ready 响应�
 然后仅把上述精确站点字节、checker 收据和部署授权上传到固定 staging
 路径。不要直接把代码仓库的 `deploy/ecorex-site`
 复制到生产：仓库指针是故意保持的 `unpublished` 占位文档。
+
+`public-bootstrap-index.json` 是签名 staging 输入，但不会复制进不可变
+`site-slots`。Control Plane 在独立 CP-owned 目录中以 compare-and-swap 原子续签
+freshness；Nginx/Caddy 只有一个 exact route 指向该动态对象。站点授权仍绑定初始
+指针摘要。apply/readback 使用 release keyring 验 immutable authority、使用
+publication keyring 验 freshness，只允许 freshness 窗口变化；未知 key、过期/伪造
+签名及 release/target/source 任一漂移都会阻断。
+
+首次接管旧 Nginx 路由时，cloud deployer 在撤除旧 exact location 前先稳定读取并
+验证旧 pointer，再原子 seed 到 `public-pointer`；紧邻改写 server config 前会再次
+读取 source/target 并要求 exact bytes、长度和 SHA-256 与 seed 相同。任何中途更新、
+签名漂移或双 authority 冲突都保留旧路由并 fail-closed。若旧站原本没有 exact
+pointer 路由且公网返回 404，则只创建规范的 canonical `unpublished` 文档，不伪造
+可下载版本；随后新 exact route 可以安全返回 200，正式 release 仍须经过签名激活。
 
 ## 只读计划
 
@@ -84,7 +100,8 @@ apply 只在 Linux root、固定路径和完整目标确认串下生效。它依
    必须同设备、无预置 symlink/hardlink，否则在 chown/copy 前失败。
 2. 恢复未完成 journal，根据真实指针而不是单独信任 phase 字段；
 3. 在 `site-slots` 同文件系统写入临时目录，逐文件 fsync，重新计算
-   精确文件集和 tree digest，再以 no-replace 原子 rename 固化 slot；
+   精确文件集和 tree digest，再以 no-replace 原子 rename 固化 slot；动态
+   `public-bootstrap-index.json` 不进入该 slot；
 4. 写入 root-only journal；
 5. 原子切换 `current`。旧版 `current` 若是实体目录，使用 Linux
    `renameat2(RENAME_EXCHANGE)` 交换，不留空窗；

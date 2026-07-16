@@ -6020,3 +6020,98 @@ implementing agent additionally repeated the deterministic race 20 times and
 the thread stress 250 times.  Ruff, compilation and whitespace checks pass.
 Independent review found no remaining P0/P1.  A new hosted full matrix is still
 mandatory before merge.
+
+## 2026-07-17 - Protected Stage and pre-signing contract closure
+
+Hosted run `29526376684` passed the protected PR matrix at head `a1cc16c8`:
+Ubuntu quality/deterministic build, Windows x64, macOS arm64/x64 and cross-runner
+byte stability were all green.  PR #12 was squash-merged under repository
+protection as exact main `de70b480f20acc1b5f19b740e67f6282f33037f8`.
+The first exact-main platform Stage, run `29526938093`, then failed safely before
+creating any signed platform input.  Both macOS runners exposed the same GA
+test-helper lifetime defect: three assertions read selected security/Cookie
+headers through a delayed closure over `IncomingMessage` after response
+teardown.  Windows installed the exact uv-managed Python base correctly, but
+then tried to modify that PEP 668 protected interpreter, so Packaging and
+Playwright were unavailable.  No failed-run file is reusable.
+
+The GA helper now snapshots the complete raw on-wire header block inside the
+HTTP response callback.  Exact Node 22.23.1 passes all 180 Web tests and the GA
+file passes three consecutive isolated runs.  Windows Stage now creates a
+disposable venv under `RUNNER_TEMP` from the exact non-registry Python 3.11.9
+base; it never uses `--break-system-packages`.  A fresh local reproduction
+installed all 53 hash-locked platform-stage packages, imported
+Packaging/Playwright/NumPy/ONNX Runtime and passed dependency-lock validation.
+The workflow gate asserts this isolation contract.
+
+The pre-signing audit found and closed three additional production defects
+before they could be embedded in immutable signatures.  First, Candidate
+assembly had placed `stable` inside the CDN URL while the production replica
+serves `/ecorex-agent/releases/v1.0.0/<release_id>`.  Recipe, Candidate source
+validation and replica now share that canonical URL; a real
+recipe-to-signed-manifest-to-upload/finalize integration passes.  Second, the
+mutable Bootstrap freshness pointer was inside the root-owned read-only site
+slot.  It now lives at the Control-Plane-owned
+`/srv/ecorex-agent-download/public-pointer/public-bootstrap-index.json`, with
+one exact Nginx/Caddy route.  Legacy/current aliases are atomically removed.
+The immutable site tree excludes this object, while the deployment
+authorization still binds its initial digest and immutable target.  Root
+readback verifies the release-key authority signature and the distinct
+publication-key freshness signature, rejects unknown/tampered/expired keys or
+target/source drift, and permits only a valid freshness renewal.  CP restart
+CAS renewal preserves mode 0644 and does not change the signed slot.
+
+Third, v0.2.9.2 Admin/identity import had been an external operator step rather
+than part of cloud activation.  First activation now requires explicit
+`legacy_admin_migration.source_version=0.2.9.2`, freezes both writer sets,
+records a fixed cutoff and source/snapshot/Admin-receipt/identity digests in
+the activation journal, commits the idempotent Admin and identity imports, and
+uses the Admin receipt as authority for the commit-before-journal-fsync crash
+window.  Before any target write, deterministic failure restores legacy;
+after a target receipt, recovery is monotonic roll-forward and never starts a
+second legacy writer.  Dry-run now executes the real read-only target preflight
+and validates all public/secret environment dependencies.
+
+Unified WSL Ubuntu/Python 3.11.9 regression passes 179 cloud, migration,
+pointer, public-site, Control Plane and reproducibility tests.  The canonical
+CDN integration set passes four tests; exact Node 22.23.1 Web passes 180/180.
+Ruff, compileall, source-tree (753 files), dependency locks, Runtime/server
+schema authorities, legacy cutoff, public-download gate and whitespace checks
+pass.  A new protected PR matrix, merge and wholly new exact-main platform
+Stage remain mandatory; no production traffic or public release was changed.
+
+## 2026-07-17 - First-route continuity and canonical CDN closure
+
+The final pre-commit audit found that the first cloud deployment could retire a
+legacy exact Bootstrap route before the Control-Plane-owned pointer existed.
+It also found a seed-to-route-retire window in which a legacy publisher could
+change the source after the first copy.  A live read-only check confirmed the
+actual old site still returned 200 for `/ecorex-agent/`, Basic-Auth 401 for
+`/ecorex-agent/admin/`, and 404 for the not-yet-existing public Bootstrap
+pointer.  No live bytes or routes were changed by that check.
+
+The cloud deployer now seeds and binds a typed pointer identity before template
+installation.  If a legacy exact route exists, it uses a stable inode/size read
+and validates either the strict unpublished schema or both independent release
+authority and publication-freshness signatures.  If the old site has no exact
+route and no pointer, it creates only the canonical `unpublished` document;
+it never turns missing legacy state into a fabricated release.  Immediately
+before changing the Nginx server file it repeats the stable source/target read,
+schema/signature validation and exact payload/length/SHA-256 comparison.  Any
+route, source or target drift stops before config mutation or reload.  Template
+failure and Candidate compensation preserve the seeded bytes and old authority.
+
+The public CDN contract is now uniformly
+`/ecorex-agent/releases/v1.0.0/<release_id>/<asset>`.  Channel remains internal
+replica storage derived from the signed release ID; cloud Nginx, the public
+Nginx example and Caddy map that canonical URL to
+`v1-artifacts/v1.0.0/<channel>/<release_id>/<asset>` and reject all directory or
+unmatched paths.  The Stage venv is uniquely bound to run ID, attempt and target
+and refuses any pre-existing directory.
+
+Final local exact-Python regression passes 193 tests with 12 explicit platform
+skips; the complete Candidate/CDN/public set passes 40 tests; exact Node
+22.23.1 passes all 180 Web tests.  Independent review reports no remaining
+P0/P1/P2.  Live/CDP/model/image acceptance remains explicitly `WAIVED`, not
+passed.  A new protected PR matrix and wholly new exact-main Stage are still
+required before signing or production mutation.

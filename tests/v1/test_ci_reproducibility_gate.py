@@ -122,6 +122,15 @@ def test_v1_ci_matrix_is_read_only_and_covers_supported_architectures() -> None:
         ROOT / ".github" / "workflows" / "ecorex-v1-platform-stage.yml"
     ).read_text(encoding="utf-8")
     assert "ECOREX_GITHUB_HOSTED_WINDOWS_NATIVE_COMPATIBILITY" not in release_stage
+    assert (
+        '"ecorex-platform-stage-venv-${{ github.run_id }}-'
+        '${{ github.run_attempt }}-${{ matrix.id }}"' in release_stage
+    )
+    assert 'if (Test-Path -LiteralPath $venvRoot)' in release_stage
+    assert 'throw "python_venv_root_not_clean:$venvName"' in release_stage
+    assert "& $python -m venv $venvRoot" in release_stage
+    assert '(Join-Path $installRoot "Scripts") | Out-File' in release_stage
+    assert "--break-system-packages" not in release_stage
 
 
 def test_dev_toolchain_is_pinned_and_lint_has_a_cross_platform_entrypoint() -> None:

@@ -9,8 +9,8 @@
     "dirty_worktree_preserved": true
   },
   "current_milestone": "direct_production_publication",
-  "current_batch": "PR run 29524461343 verified the connector correction but correctly withheld merge on one Linux product update-lock race after 2,180 passes/35 skips; Windows x64 and both macOS jobs passed. ProductFileLock now serializes different worker threads by deadline, preserves same-thread re-entry and fail-fast timeout zero, and production explicitly uses an unbounded trusted-worker lock. Deterministic identity/readiness barriers plus cleanup fault injection pass locally; commit and a new full hosted matrix are next. Old production traffic remains active and failed-run artifacts are not reusable.",
-  "last_verified_batch": "Evidence on 2026-07-17: run 29524461343 passed Windows x64 and macOS arm64/x64; Ubuntu had one LockUnavailable failure with 2,180 passed/35 skipped, so byte stability was skipped and no merge/publication occurred. The root fix uses a single Condition reservation/deadline, completes backend unlock/stream close before handoff and always clears state/notifies after injected failures. WSL Ubuntu/Python 3.11.9 update composition plus durability passes 23; focused lock/product barriers pass 18; deterministic race repeated 20/20 and thread stress 250/250. Ruff/compile/diff pass and independent review found no P0/P1. A new hosted head remains mandatory.",
+  "current_batch": "PR run 29526376684 passed all five jobs and PR #12 merged as exact main de70b480. Exact-main Stage 29526938093 then failed safely before artifacts. The correction branch now closes macOS raw-header lifetime, Windows PEP 668 Stage isolation, canonical CDN URL mapping, dynamic dual-key Bootstrap pointer continuity, and journal-owned v0.2.9.2 Admin/identity migration. Live old production remains active; the failed Stage is not reusable.",
+  "last_verified_batch": "Evidence on 2026-07-17: exact Node 22.23.1 Web 180/180; exact Python 3.11.9 combined release/cloud/migration/pointer suite 193 passed with 12 platform skips; complete Candidate/CDN/public boundary 40 passed. A fresh Stage venv installed all 53 locked packages. Independent review found no P0/P1/P2 after stable pointer seed plus pre-route-retire revalidation, canonical unpublished fallback for the current 404 site, and public-to-private CDN channel mapping. Live gates remain WAIVED. A new protected PR matrix, merge and wholly new exact-main Stage remain mandatory before signing or deployment.",
   "recovery_document": "docs/v1.0/implementation-log.md",
   "verification_document": "docs/v1.0/verification-ledger.md",
   "milestones": [
@@ -23,8 +23,8 @@
     {"id": "migration_ga_gates", "status": "in_progress"}
   ],
   "remaining_local_work": [
-    "commit and push the reviewed product-lock correction without touching the user-owned .artifacts tree",
-    "rerun PR #12 Ubuntu quality, Windows x64, macOS arm64/x64 and cross-runner canonical-byte stability at the new exact head, then merge to main",
+    "commit and push the reviewed Stage/CDN/pointer/migration correction without touching the user-owned .artifacts tree",
+    "run a new protected PR matrix, merge the correction to main and reject all failed-run artifacts",
     "run one exact-main Windows/macOS platform stage, assemble the single Web build and produce signed client receipts",
     "build the exact-main Linux aarch64 cloud artifact, sign it with the Windows DPAPI release key and attach/verify it on Linux",
     "perform commit-mode v0.2.9.2 migration, deploy the cloud slot, publish GitHub/CDN/ghproxy bytes, activate Bootstrap/direct rollout, then atomically switch and read back Web/Admin",

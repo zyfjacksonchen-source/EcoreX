@@ -5,6 +5,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
+from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -292,6 +294,7 @@ def test_default_plan_is_read_only_and_uses_storage_contract_gate(
     monkeypatch.setattr(
         deployment, "validate_provider_bridge_materials", lambda: object()
     )
+    monkeypatch.setattr(deployment, "_target_preflight", lambda *_args: None)
 
     plan = deployment.build_plan(spec)
 
@@ -313,11 +316,32 @@ def test_read_only_plan_surfaces_pending_activation_recovery(
         "_transition_journal",
         lambda: {"phase": "state_written"},
     )
+    monkeypatch.setattr(deployment, "_target_preflight", lambda *_args: None)
 
     plan = deployment.build_plan(spec, inspect_files=False)
 
     assert "activation_recovery_required" in plan.blockers
     assert "recover_incomplete_activation_before_new_mutation" in plan.actions
+
+
+def test_read_only_plan_executes_real_target_preflight_and_surfaces_dependency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _spec(tmp_path)
+    calls: list[tuple[deployment.CloudDeploymentSpec, str]] = []
+    monkeypatch.setattr(deployment, "_state", lambda: None)
+    monkeypatch.setattr(deployment, "_transition_journal", lambda: None)
+
+    def preflight(value, confirmation):
+        calls.append((value, confirmation))
+        raise deployment.CloudDeployError("postgres_service_unavailable")
+
+    monkeypatch.setattr(deployment, "_target_preflight", preflight)
+
+    plan = deployment.build_plan(spec, inspect_files=False)
+
+    assert calls == [(spec, spec.target_machine_id_sha256)]
+    assert "postgres_service_unavailable" in plan.blockers
 
 
 def test_schema_gate_runs_real_checks_and_blocks_incompatible_minio(
@@ -504,6 +528,10 @@ def _legacy_nginx_server() -> str:
         alias /srv/ecorex-agent-download/current/admin/;
     }
 
+    location = /ecorex-agent/public-bootstrap-index.json {
+        alias /srv/ecorex-agent-download/current/public-bootstrap-index.json;
+    }
+
     location ^~ /ecorex-agent/ {
         alias /srv/ecorex-agent-download/current/;
     }
@@ -524,6 +552,29 @@ def test_legacy_admin_routes_move_behind_reversible_include(
     calls: list[tuple[str, ...]] = []
     monkeypatch.setattr(deployment, "NGINX_ROOT", nginx_root)
     monkeypatch.setattr(deployment, "STATE_ROOT", state)
+    download = tmp_path / "download"
+    legacy_pointer = download / "current" / "public-bootstrap-index.json"
+    target_pointer = download / "public-pointer" / "public-bootstrap-index.json"
+    legacy_pointer.parent.mkdir(parents=True)
+    target_pointer.parent.mkdir()
+    pointer_payload = _unpublished_pointer_bytes()
+    legacy_pointer.write_bytes(pointer_payload)
+    target_pointer.write_bytes(pointer_payload)
+    pointer_digest = hashlib.sha256(pointer_payload).hexdigest()
+    legacy_seed = deployment._PublicBootstrapSeedIdentity(
+        payload=pointer_payload,
+        sha256=pointer_digest,
+        size_bytes=len(pointer_payload),
+        legacy_exact_route=True,
+    )
+    target_seed = deployment.dataclasses.replace(
+        legacy_seed, legacy_exact_route=False
+    )
+    monkeypatch.setattr(deployment, "PUBLIC_BOOTSTRAP_ROOT", target_pointer.parent)
+    monkeypatch.setattr(deployment, "PUBLIC_BOOTSTRAP_INDEX_PATH", target_pointer)
+    monkeypatch.setattr(
+        deployment, "LEGACY_PUBLIC_BOOTSTRAP_INDEX_PATH", legacy_pointer
+    )
     monkeypatch.setattr(
         deployment,
         "_run",
@@ -539,12 +590,16 @@ def test_legacy_admin_routes_move_behind_reversible_include(
         _spec(tmp_path), nginx_server_config=server
     )
 
-    deployment._install_legacy_admin_route_wiring(spec)
+    deployment._install_legacy_admin_route_wiring(
+        spec, public_bootstrap_seed=legacy_seed
+    )
 
     migrated = server.read_text(encoding="utf-8")
     legacy = (nginx_root / "admin-route-legacy.conf").read_text(encoding="utf-8")
     assert migrated.count(deployment.NGINX_ROUTE_INCLUDE) == 1
     assert "location ^~ /ecorex-agent/ {" in migrated
+    assert deployment.LEGACY_POINTER_LOCATION_HEADER not in migrated
+    assert deployment.LEGACY_POINTER_LOCATION_HEADER not in legacy
     for header in deployment.LEGACY_ADMIN_LOCATION_HEADERS:
         assert f"{header} {{" not in migrated
         assert f"{header} {{" in legacy
@@ -557,14 +612,38 @@ def test_legacy_admin_routes_move_behind_reversible_include(
         ("/usr/bin/systemctl", "reload", "nginx.service"),
     ]
 
-    deployment._install_legacy_admin_route_wiring(spec)
-    assert len(calls) == 2
+    # An older v1 deployment could already have the include while retaining
+    # the old exact location.  Upgrading must retire it before the new cloud
+    # fragment owns the only exact location.
+    old_pointer = """
+    location = /ecorex-agent/public-bootstrap-index.json {
+        alias /srv/ecorex-agent-download/current/public-bootstrap-index.json;
+    }
+"""
+    server.write_text(
+        migrated.replace("location ^~ /ecorex-agent/ {", old_pointer + "\n    location ^~ /ecorex-agent/ {"),
+        encoding="utf-8",
+    )
+    deployment._install_legacy_admin_route_wiring(
+        spec, public_bootstrap_seed=legacy_seed
+    )
+    assert deployment.LEGACY_POINTER_LOCATION_HEADER not in server.read_text(
+        encoding="utf-8"
+    )
+    assert len(calls) == 4
+
+    deployment._install_legacy_admin_route_wiring(
+        spec, public_bootstrap_seed=target_seed
+    )
+    assert len(calls) == 4
 
     candidate.write_text("tampered", encoding="utf-8")
     with pytest.raises(
         deployment.CloudDeployError, match="nginx_admin_route_wiring_invalid"
     ):
-        deployment._install_legacy_admin_route_wiring(spec)
+        deployment._install_legacy_admin_route_wiring(
+            spec, public_bootstrap_seed=target_seed
+        )
     candidate.write_text(candidate_source, encoding="utf-8")
     external = tmp_path / "external-admin.conf"
     external.write_text(candidate_source, encoding="utf-8")
@@ -573,7 +652,401 @@ def test_legacy_admin_routes_move_behind_reversible_include(
     with pytest.raises(
         deployment.CloudDeployError, match="nginx_admin_route_wiring_invalid"
     ):
-        deployment._install_legacy_admin_route_wiring(spec)
+        deployment._install_legacy_admin_route_wiring(
+            spec, public_bootstrap_seed=target_seed
+        )
+
+
+def test_public_bootstrap_storage_is_cp_owned_and_publicly_readable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    download_root = tmp_path / "download"
+    download_root.mkdir()
+    pointer_root = download_root / "public-pointer"
+    pointer_path = pointer_root / "public-bootstrap-index.json"
+    config_root = tmp_path / "config-root"
+    config_path = config_root / "config" / "control-plane.env"
+    config_path.parent.mkdir(parents=True)
+    public_url = "https://dl.ecoremedia.net/ecorex-agent/public-bootstrap-index.json"
+    config_path.write_text(
+        "\n".join(
+            (
+                f"ECOREX_CP_PUBLIC_BOOTSTRAP_INDEX_PATH={pointer_path}",
+                f"ECOREX_CP_PUBLIC_BOOTSTRAP_INDEX_URL={public_url}",
+            )
+        ),
+        encoding="utf-8",
+    )
+    ownership: list[tuple[Path, str, str]] = []
+    monkeypatch.setattr(deployment, "CONFIG_ROOT", config_root)
+    monkeypatch.setattr(deployment, "PUBLIC_BOOTSTRAP_ROOT", pointer_root)
+    monkeypatch.setattr(deployment, "PUBLIC_BOOTSTRAP_INDEX_PATH", pointer_path)
+    monkeypatch.setattr(deployment, "PUBLIC_BOOTSTRAP_INDEX_URL", public_url)
+    monkeypatch.setattr(deployment, "_fsync_directory", lambda _path: None)
+    monkeypatch.setattr(
+        deployment.shutil,
+        "chown",
+        lambda path, *, user, group: ownership.append((Path(path), user, group)),
+    )
+
+    deployment._prepare_public_bootstrap_storage()
+    assert pointer_root.is_dir()
+    if os.name != "nt":
+        assert stat.S_IMODE(pointer_root.stat().st_mode) == 0o755
+    assert ownership == [(pointer_root, "ecorex-cloud", "ecorex-storage")]
+
+    pointer_path.write_bytes(b"signed pointer")
+    pointer_path.chmod(0o600)
+    deployment._prepare_public_bootstrap_storage()
+    if os.name != "nt":
+        assert stat.S_IMODE(pointer_path.stat().st_mode) == 0o644
+    assert ownership[-2:] == [
+        (pointer_root, "ecorex-cloud", "ecorex-storage"),
+        (pointer_path, "ecorex-cloud", "ecorex-storage"),
+    ]
+
+
+def _unpublished_pointer_bytes() -> bytes:
+    return deployment._canonical_json(
+        {
+            "schema_version": 1,
+            "document_type": "ecorex.public-bootstrap-discovery",
+            "trust": "untrusted-discovery-hint",
+            "status": "unpublished",
+            "authority": None,
+            "freshness": None,
+            "release": None,
+        }
+    )
+
+
+def _public_pointer_seed_fixture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[deployment.CloudDeploymentSpec, Path, Path, Path]:
+    download = tmp_path / "download"
+    legacy_root = download / "current"
+    target_root = download / "public-pointer"
+    legacy_root.mkdir(parents=True)
+    target_root.mkdir()
+    legacy = legacy_root / "public-bootstrap-index.json"
+    target = target_root / "public-bootstrap-index.json"
+    server = tmp_path / "ecorex.conf"
+    server.write_text(_legacy_nginx_server(), encoding="utf-8")
+    monkeypatch.setattr(deployment, "PUBLIC_BOOTSTRAP_ROOT", target_root)
+    monkeypatch.setattr(deployment, "PUBLIC_BOOTSTRAP_INDEX_PATH", target)
+    monkeypatch.setattr(deployment, "LEGACY_PUBLIC_BOOTSTRAP_INDEX_PATH", legacy)
+    monkeypatch.setattr(deployment, "_fsync_directory", lambda _path: None)
+    monkeypatch.setattr(deployment.shutil, "chown", lambda *_args, **_kwargs: None)
+
+    def atomic_write(path: Path, payload: bytes, mode: int = 0o640) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.test")
+        temporary.write_bytes(payload)
+        temporary.chmod(mode)
+        os.replace(temporary, path)
+
+    monkeypatch.setattr(deployment, "_atomic_write", atomic_write)
+    return (
+        deployment.dataclasses.replace(_spec(tmp_path), nginx_server_config=server),
+        server,
+        legacy,
+        target,
+    )
+
+
+def test_first_legacy_exact_route_is_seeded_before_it_can_be_retired(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec, server, legacy, target = _public_pointer_seed_fixture(
+        tmp_path, monkeypatch
+    )
+    payload = _unpublished_pointer_bytes()
+    legacy.write_bytes(payload)
+
+    seed = deployment._seed_legacy_public_bootstrap_pointer(spec)
+
+    assert seed.sha256 == hashlib.sha256(payload).hexdigest()
+    assert seed.payload == payload
+    assert seed.legacy_exact_route is True
+    assert target.read_bytes() == payload
+    assert deployment.LEGACY_POINTER_LOCATION_HEADER in server.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_absent_404_route_seeds_canonical_unpublished_pointer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec, server, _legacy, target = _public_pointer_seed_fixture(
+        tmp_path, monkeypatch
+    )
+    server.write_bytes(
+        deployment._without_legacy_pointer_location(server.read_bytes())
+    )
+    expected = _unpublished_pointer_bytes() + b"\n"
+
+    seed = deployment._seed_legacy_public_bootstrap_pointer(spec)
+
+    assert seed.payload == expected
+    assert seed.sha256 == hashlib.sha256(expected).hexdigest()
+    assert seed.size_bytes == len(expected)
+    assert seed.legacy_exact_route is False
+    assert target.read_bytes() == expected
+    deployment._verify_public_bootstrap_seed_before_route_retire(spec, seed)
+    target.write_bytes(expected + b" ")
+    with pytest.raises(
+        deployment.CloudDeployError, match="public_bootstrap_seed_identity_changed"
+    ):
+        deployment._verify_public_bootstrap_seed_before_route_retire(spec, seed)
+
+
+def test_legacy_source_mutation_between_seed_and_retire_keeps_old_route(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec, server, legacy, target = _public_pointer_seed_fixture(
+        tmp_path, monkeypatch
+    )
+    payload = _unpublished_pointer_bytes()
+    legacy.write_bytes(payload)
+    seed = deployment._seed_legacy_public_bootstrap_pointer(spec)
+    before = server.read_bytes()
+    # Whitespace preserves a valid public-index document while changing its
+    # exact publication identity after the first stable read.
+    legacy.write_bytes(payload + b"\n")
+    nginx_root = tmp_path / "nginx"
+    nginx_root.mkdir()
+    monkeypatch.setattr(deployment, "NGINX_ROOT", nginx_root)
+    monkeypatch.setattr(deployment, "STATE_ROOT", tmp_path / "state")
+    monkeypatch.setattr(deployment, "_atomic_symlink", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_validate_admin_route_resources", lambda: None)
+
+    with pytest.raises(
+        deployment.CloudDeployError, match="legacy_public_bootstrap_seed_changed"
+    ):
+        deployment._install_legacy_admin_route_wiring(
+            spec, public_bootstrap_seed=seed
+        )
+
+    assert server.read_bytes() == before
+    assert target.read_bytes() == payload
+
+
+@pytest.mark.parametrize(
+    "payload,expected",
+    (
+        (None, "legacy_public_bootstrap_seed_unavailable"),
+        (b"not-json", "legacy_public_bootstrap_seed_invalid"),
+    ),
+)
+def test_missing_or_invalid_legacy_seed_fails_before_exact_route_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    payload: bytes | None,
+    expected: str,
+) -> None:
+    spec, server, legacy, target = _public_pointer_seed_fixture(
+        tmp_path, monkeypatch
+    )
+    before = server.read_bytes()
+    if payload is not None:
+        legacy.write_bytes(payload)
+
+    with pytest.raises(deployment.CloudDeployError, match=expected):
+        deployment._seed_legacy_public_bootstrap_pointer(spec)
+
+    assert server.read_bytes() == before
+    assert not target.exists()
+
+
+def test_existing_different_public_pointer_fails_closed_without_two_writers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec, server, legacy, target = _public_pointer_seed_fixture(
+        tmp_path, monkeypatch
+    )
+    source = _unpublished_pointer_bytes()
+    competing = source + b"\n"
+    legacy.write_bytes(source)
+    target.write_bytes(competing)
+    before = server.read_bytes()
+
+    with pytest.raises(deployment.CloudDeployError, match="public_bootstrap_seed_conflict"):
+        deployment._seed_legacy_public_bootstrap_pointer(spec)
+
+    assert server.read_bytes() == before
+    assert legacy.read_bytes() == source
+    assert target.read_bytes() == competing
+
+
+def test_template_failure_after_seed_keeps_legacy_public_pointer_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec, server, legacy, target = _public_pointer_seed_fixture(
+        tmp_path, monkeypatch
+    )
+    payload = _unpublished_pointer_bytes()
+    legacy.write_bytes(payload)
+    release = tmp_path / "release"
+    for directory, names in (
+        (
+            release / "deployment" / "systemd",
+            (
+                "ecorex-control-plane@.service",
+                "ecorex-gateway@.service",
+                "ecorex-image-api@.service",
+                "ecorex-image-worker@.service",
+            ),
+        ),
+        (
+            release / "deployment" / "nginx",
+            (
+                "control-plane-blue.conf",
+                "control-plane-green.conf",
+                "control-plane-disabled.conf",
+                "admin-route-control-plane.conf",
+                "ecorex-cloud.routes.conf",
+            ),
+        ),
+    ):
+        directory.mkdir(parents=True)
+        for name in names:
+            (directory / name).write_text(name, encoding="utf-8")
+    monkeypatch.setattr(deployment, "SYSTEMD_ROOT", tmp_path / "systemd")
+    monkeypatch.setattr(deployment, "NGINX_ROOT", tmp_path / "nginx")
+    monkeypatch.setattr(deployment, "_prepare_release_replica_storage", lambda: None)
+    monkeypatch.setattr(deployment, "_prepare_public_bootstrap_storage", lambda: None)
+    monkeypatch.setattr(deployment, "_install_publication_keyring", lambda _spec: None)
+    monkeypatch.setattr(
+        deployment, "validate_provider_bridge_materials", lambda: object()
+    )
+    monkeypatch.setattr(deployment, "install_provider_bridge", lambda _value: None)
+    monkeypatch.setattr(deployment, "_atomic_symlink", lambda *_args: None)
+    monkeypatch.setattr(
+        deployment,
+        "_install_legacy_admin_route_wiring",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            deployment.CloudDeployError("nginx_configuration_invalid")
+        ),
+    )
+
+    with pytest.raises(deployment.CloudDeployError, match="nginx_configuration_invalid"):
+        deployment._install_deployment_templates(spec, release)
+
+    assert target.read_bytes() == payload
+    assert legacy.read_bytes() == payload
+    assert deployment.LEGACY_POINTER_LOCATION_HEADER in server.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_candidate_failure_compensation_preserves_seeded_pointer_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec, _server, legacy, target = _public_pointer_seed_fixture(
+        tmp_path, monkeypatch
+    )
+    payload = _unpublished_pointer_bytes()
+    legacy.write_bytes(payload)
+    deployment._seed_legacy_public_bootstrap_pointer(spec)
+    journal = {
+        "operation": "activate",
+        "phase": "migrating",
+        "source_state": None,
+        "target_state": _slot_state("ecorex-cloud-v1.0.0-target", "blue"),
+    }
+    monkeypatch.setattr(
+        deployment, "_classify_transition_routes", lambda _journal: "source"
+    )
+    monkeypatch.setattr(deployment, "_stop_transition_writers", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_start_target_services", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_switch_nginx_legacy", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_remove_slot_projection", lambda: None)
+    monkeypatch.setattr(deployment, "_clear_transition_journal", lambda: None)
+
+    assert deployment._compensate_transition(spec, journal) == "source"
+    assert target.read_bytes() == payload
+
+
+def test_publication_keyring_is_materialized_with_separate_trust_role(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _spec(tmp_path)
+    release_public = base64.b64encode(b"r" * 32).decode("ascii")
+    publication_public = base64.b64encode(b"p" * 32).decode("ascii")
+    release_ring = {"release-key": release_public}
+    publication_ring = {"publication-key": publication_public}
+    spec.release_keyring_path.write_text(json.dumps(release_ring), encoding="utf-8")
+    target = tmp_path / "publication-public-keys.json"
+    monkeypatch.setattr(deployment, "PUBLICATION_KEYRING_PATH", target)
+    monkeypatch.setattr(
+        deployment,
+        "_atomic_write",
+        lambda path, payload, mode=0o640: Path(path).write_bytes(payload),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_parse_env",
+        lambda *_args, **_kwargs: {
+            "ECOREX_CP_RELEASE_PUBLIC_KEYS_JSON": json.dumps(release_ring),
+            "ECOREX_CP_PUBLICATION_PUBLIC_KEYS_JSON": json.dumps(publication_ring),
+        },
+    )
+
+    deployment._install_publication_keyring(spec)
+    assert json.loads(target.read_text(encoding="utf-8")) == publication_ring
+
+    monkeypatch.setattr(
+        deployment,
+        "_parse_env",
+        lambda *_args, **_kwargs: {
+            "ECOREX_CP_RELEASE_PUBLIC_KEYS_JSON": json.dumps(release_ring),
+            "ECOREX_CP_PUBLICATION_PUBLIC_KEYS_JSON": json.dumps(
+                {"publication-key": release_public}
+            ),
+        },
+    )
+    with pytest.raises(
+        deployment.CloudDeployError,
+        match="public_pointer_trust_roles_overlap",
+    ):
+        deployment._install_publication_keyring(spec)
+
+
+def test_nginx_wiring_requires_one_dynamic_pointer_location(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    required = b"""
+include /etc/nginx/ecorex-cloud/active-control-plane.conf;
+include /etc/nginx/ecorex-cloud/active-admin-route.conf;
+location ^~ /ecorex-agent/admin/ {}
+location = /ecorex-agent/public-bootstrap-index.json {
+    alias /srv/ecorex-agent-download/public-pointer/public-bootstrap-index.json;
+}
+"""
+    monkeypatch.setattr(
+        deployment,
+        "_run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout=required),
+    )
+    deployment._verify_nginx_wiring(_spec(tmp_path))
+
+    for invalid in (
+        required
+        + b"\nlocation = /ecorex-agent/public-bootstrap-index.json {}\n",
+        required.replace(b"public-pointer", b"current"),
+    ):
+        monkeypatch.setattr(
+            deployment,
+            "_run",
+            lambda *_args, payload=invalid, **_kwargs: SimpleNamespace(
+                stdout=payload
+            ),
+        )
+        with pytest.raises(deployment.CloudDeployError, match="nginx_route_not_wired"):
+            deployment._verify_nginx_wiring(_spec(tmp_path))
 
 
 @pytest.mark.skipif(os.name == "nt", reason="requires production-style symlinks")
@@ -793,6 +1266,17 @@ def _slot_state(
     }
 
 
+def _legacy_migration_contract() -> dict[str, object]:
+    return {
+        "source_version": "0.2.9.2",
+        "as_of": "2026-07-17T00:00:00Z",
+        "source_database_sha256": "b" * 64,
+        "source_snapshot_sha256": "c" * 64,
+        "import_receipt_sha256": "d" * 64,
+        "identity_records_sha256": "e" * 64,
+    }
+
+
 def test_first_activation_receipt_retains_typed_legacy_rollback_target() -> None:
     first = deployment._activation_state(
         release_id="ecorex-cloud-v1.0.0-first",
@@ -933,6 +1417,125 @@ def test_activation_schema_boundary_is_durable_before_first_legacy_writer_stop(
     ]
 
 
+def test_legacy_commit_runs_only_after_both_writer_sets_are_fenced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[object] = []
+    target = _slot_state("ecorex-cloud-v1.0.0-target", "blue")
+    journal = {
+        "operation": "activate",
+        "phase": "prepared",
+        "source_state": None,
+        "target_state": target,
+        "legacy_admin_migration": deployment._legacy_migration_seed(
+            deployment.dataclasses.replace(
+                _spec(tmp_path),
+                legacy_admin_migration=deployment.LegacyAdminMigrationSpec("0.2.9.2"),
+            ),
+            as_of=deployment.datetime(2026, 7, 17, tzinfo=deployment.UTC),
+        ),
+    }
+
+    def advance(value, phase):
+        events.append(("journal", phase))
+        return {**value, "phase": phase}
+
+    monkeypatch.setattr(deployment, "_advance_transition_journal", advance)
+    monkeypatch.setattr(
+        deployment,
+        "_stop_transition_writers",
+        lambda *_args: events.append("both_writers_stopped"),
+    )
+    monkeypatch.setattr(
+        deployment, "_schema_gate", lambda *_args: events.append("schema_ready")
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_prepare_legacy_import_contract",
+        lambda value: (
+            {**value, "legacy_admin_migration": _legacy_migration_contract()},
+            (),
+        ),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_commit_legacy_admin_and_identity",
+        lambda *_args: events.append("legacy_business_write"),
+    )
+
+    result = deployment._ensure_activation_schema_ready(
+        _spec(tmp_path), journal, target_release=tmp_path / "release"
+    )
+
+    assert result["phase"] == "schema_ready"
+    assert events == [
+        ("journal", "migrating"),
+        "both_writers_stopped",
+        "schema_ready",
+        "legacy_business_write",
+        ("journal", "legacy_imported"),
+        ("journal", "schema_ready"),
+    ]
+
+
+def test_crash_after_admin_commit_forces_idempotent_rollforward_without_legacy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target_database = tmp_path / "control-plane.sqlite3"
+    connection = deployment.sqlite3.connect(target_database)
+    connection.execute(
+        "CREATE TABLE admin_ops_idempotency("
+        "actor_subject TEXT,client_request_id TEXT,operation TEXT,response_json TEXT)"
+    )
+    contract = _legacy_migration_contract()
+    connection.execute(
+        "INSERT INTO admin_ops_idempotency VALUES(?,?,?,?)",
+        (
+            "migration:v0.2.9.2",
+            "legacy-admin-" + str(contract["import_receipt_sha256"])[:32],
+            "legacy.v0292.admin-management.import",
+            json.dumps(
+                {"import_receipt_sha256": contract["import_receipt_sha256"]}
+            ),
+        ),
+    )
+    connection.commit()
+    connection.close()
+    journal = {
+        "operation": "activate",
+        "phase": "migrating",
+        "source_state": None,
+        "target_state": _slot_state("ecorex-cloud-v1.0.0-target", "blue"),
+        "legacy_admin_migration": contract,
+    }
+    events: list[str] = []
+    monkeypatch.setattr(
+        deployment, "CONTROL_PLANE_DATABASE_PATH", target_database
+    )
+    monkeypatch.setattr(
+        deployment, "_classify_transition_routes", lambda _journal: "source"
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_ensure_activation_schema_ready",
+        lambda _spec, value: events.append("resume_import")
+        or {**value, "phase": "schema_ready"},
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_complete_transition_target",
+        lambda *_args: events.append("target_started"),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_restore_transition_source",
+        lambda *_args: pytest.fail("legacy writer restarted after target commit"),
+    )
+
+    assert deployment._resolve_pending_transition(_spec(tmp_path), journal) == "target"
+    assert events == ["resume_import", "target_started"]
+
+
 def test_failed_migration_leaves_migrating_journal_and_writers_stopped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1068,6 +1671,7 @@ def test_migrating_first_release_restores_immutable_legacy_source(
         "phase": "migrating",
         "source_state": None,
         "target_state": _slot_state("ecorex-cloud-v1.0.0-target", "blue"),
+        "legacy_admin_migration": _legacy_migration_contract(),
     }
     events: list[object] = []
     monkeypatch.setattr(

@@ -6,7 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 import hashlib
 import json
+import os
 import sqlite3
+import stat
 import threading
 
 import pytest
@@ -16,6 +18,7 @@ from ecorex.control_plane.app import create_control_plane_app
 from ecorex.control_plane.bootstrap_index_service import (
     BootstrapIndexPublicationError,
     BootstrapIndexPublicationService,
+    FilesystemPublicIndexObjectStore,
 )
 from ecorex.control_plane.bootstrap_freshness import (
     BootstrapFreshnessConfig,
@@ -275,6 +278,41 @@ def _refresher(repository, service, signer, *, owner="refresh-owner"):
             lease_seconds=10 * 60,
         ),
     )
+
+
+def test_filesystem_object_store_restart_renews_public_pointer_atomically(
+    tmp_path,
+) -> None:
+    pointer = tmp_path / "public-pointer" / "public-bootstrap-index.json"
+    initial = _index_bytes()
+    initial_sha256 = hashlib.sha256(initial).hexdigest()
+    first = FilesystemPublicIndexObjectStore(pointer)
+
+    first.activate(
+        initial,
+        expected_previous_sha256=None,
+        candidate_sha256=initial_sha256,
+    )
+    assert pointer.read_bytes() == initial
+    if os.name != "nt":
+        assert stat.S_IMODE(pointer.stat().st_mode) == 0o644
+
+    # Reconstructing the adapter represents a Control Plane process restart.
+    refreshed = _index_bytes(
+        issued_at=datetime.now(UTC).replace(microsecond=0),
+        expires_at=datetime.now(UTC).replace(microsecond=0) + timedelta(hours=2),
+    )
+    refreshed_sha256 = hashlib.sha256(refreshed).hexdigest()
+    restarted = FilesystemPublicIndexObjectStore(pointer)
+    restarted.activate(
+        refreshed,
+        expected_previous_sha256=initial_sha256,
+        candidate_sha256=refreshed_sha256,
+    )
+
+    assert pointer.read_bytes() == refreshed
+    if os.name != "nt":
+        assert stat.S_IMODE(pointer.stat().st_mode) == 0o644
 
 
 def test_publish_then_finalize_crash_is_resumed_from_durable_intent(

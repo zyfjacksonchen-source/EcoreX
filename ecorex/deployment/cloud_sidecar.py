@@ -12,12 +12,14 @@ import argparse
 import base64
 import contextlib
 import dataclasses
+from datetime import UTC, datetime
 import hashlib
 import json
 import os
 import platform
 import re
 import shutil
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -38,6 +40,21 @@ from ecorex.deployment.provider_bridge_install import (
     install_provider_bridge,
     validate_provider_bridge_materials,
 )
+from ecorex.migration.legacy_admin_management import (
+    LegacyAdminManagementImportError,
+    import_v0292_admin_management,
+)
+from ecorex.migration.legacy_identity_export import (
+    LegacyIdentityExportError,
+    export_v0292_legacy_identities,
+)
+from ecorex.release.public_index import (
+    MAX_PUBLIC_BOOTSTRAP_INDEX_BYTES,
+    PublicBootstrapIndexError,
+    unpublished_public_bootstrap_index,
+    validate_public_bootstrap_index,
+)
+from ecorex.update import Ed25519SignatureVerifier, VerificationError
 
 try:  # The read-only planner is intentionally importable on release workstations.
     import fcntl
@@ -64,10 +81,25 @@ NGINX_ROOT = Path("/etc/nginx/ecorex-cloud")
 NGINX_SERVER_CONFIG = Path("/etc/nginx/conf.d/ecorex-mvdcm.conf")
 LOCK_PATH = Path("/run/lock/ecorex-cloud-deploy.lock")
 ACTIVATION_JOURNAL_PATH = STATE_ROOT / "activation-pending.json"
+LEGACY_ADMIN_DATABASE_PATH = Path(
+    "/srv/ecorex-agent-admin/data/ecorex-admin.sqlite3"
+)
+CONTROL_PLANE_DATABASE_PATH = Path(
+    "/var/lib/ecorex/control-plane/control-plane.sqlite3"
+)
 RELEASE_REPLICA_ROOT = Path(
     "/srv/ecorex-agent-download/v1-artifacts"
 )
 RELEASE_REPLICA_PUBLIC_ROOT = "https://dl.ecoremedia.net/ecorex-agent/releases"
+PUBLIC_BOOTSTRAP_ROOT = Path("/srv/ecorex-agent-download/public-pointer")
+PUBLIC_BOOTSTRAP_INDEX_PATH = PUBLIC_BOOTSTRAP_ROOT / "public-bootstrap-index.json"
+LEGACY_PUBLIC_BOOTSTRAP_INDEX_PATH = Path(
+    "/srv/ecorex-agent-download/current/public-bootstrap-index.json"
+)
+PUBLIC_BOOTSTRAP_INDEX_URL = (
+    "https://dl.ecoremedia.net/ecorex-agent/public-bootstrap-index.json"
+)
+PUBLICATION_KEYRING_PATH = CONFIG_ROOT / "publication-public-keys.json"
 
 NGINX_ROUTE_INCLUDE = "include /etc/nginx/ecorex-cloud/ecorex-cloud.routes.conf;"
 LEGACY_ADMIN_LOCATION_HEADERS = (
@@ -75,6 +107,9 @@ LEGACY_ADMIN_LOCATION_HEADERS = (
     "location ^~ /ecorex-agent/admin/api/",
     "location ^~ /ecorex-agent/api/admin/",
     "location ^~ /ecorex-agent/admin/",
+)
+LEGACY_POINTER_LOCATION_HEADER = (
+    "location = /ecorex-agent/public-bootstrap-index.json"
 )
 CONTROL_PLANE_ADMIN_ROUTE_CONTRACT = {
     "location = /ecorex-agent/admin": (
@@ -143,6 +178,7 @@ TRANSITION_PHASES = frozenset(
     {
         "prepared",
         "migrating",
+        "legacy_imported",
         "schema_ready",
         "target_ready",
         "routes_switched",
@@ -166,6 +202,32 @@ class _RecoverySourceSchemaIncompatible(CloudDeployError):
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
+class LegacyAdminMigrationSpec:
+    """Explicit first-activation authority for the fixed v0.2.9.2 source."""
+
+    source_version: str
+
+    @classmethod
+    def from_value(cls, value: Any) -> "LegacyAdminMigrationSpec | None":
+        if value is None:
+            return None
+        if not isinstance(value, Mapping) or set(value) != {"source_version"}:
+            raise CloudDeployError("legacy_admin_migration_spec_invalid")
+        spec = cls(source_version=str(value.get("source_version", "")))
+        if spec.source_version != "0.2.9.2":
+            raise CloudDeployError("legacy_admin_migration_spec_invalid")
+        return spec
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _PublicBootstrapSeedIdentity:
+    payload: bytes
+    sha256: str
+    size_bytes: int
+    legacy_exact_route: bool
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
 class CloudDeploymentSpec:
     release_id: str
     source_commit: str
@@ -183,6 +245,7 @@ class CloudDeploymentSpec:
     nginx_binary: Path = Path("/usr/sbin/nginx")
     nginx_server_config: Path = NGINX_SERVER_CONFIG
     systemctl_binary: Path = Path("/usr/bin/systemctl")
+    legacy_admin_migration: LegacyAdminMigrationSpec | None = None
 
     @classmethod
     def from_json(cls, path: Path) -> "CloudDeploymentSpec":
@@ -210,6 +273,7 @@ class CloudDeploymentSpec:
             "nginx_binary",
             "nginx_server_config",
             "systemctl_binary",
+            "legacy_admin_migration",
         }
         if set(raw) - expected:
             raise CloudDeployError("deployment_spec_unknown_field")
@@ -256,6 +320,9 @@ class CloudDeploymentSpec:
                 ),
                 systemctl_binary=Path(
                     str(raw.get("systemctl_binary", "/usr/bin/systemctl"))
+                ),
+                legacy_admin_migration=LegacyAdminMigrationSpec.from_value(
+                    raw.get("legacy_admin_migration")
                 ),
             )
         except (KeyError, TypeError, ValueError):
@@ -311,6 +378,11 @@ class CloudDeploymentSpec:
             raise CloudDeployError("nginx_server_config_outside_fence")
         if self.systemctl_binary != Path("/usr/bin/systemctl"):
             raise CloudDeployError("systemctl_binary_outside_fence")
+        if (
+            self.legacy_admin_migration is not None
+            and self.legacy_admin_migration.source_version != "0.2.9.2"
+        ):
+            raise CloudDeployError("legacy_admin_migration_spec_invalid")
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -364,6 +436,94 @@ def _canonical_json(value: Any) -> bytes:
     return json.dumps(
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
+
+
+def _utc_second(value: datetime | None = None) -> datetime:
+    selected = value or datetime.now(UTC)
+    if selected.tzinfo is None:
+        raise CloudDeployError("legacy_admin_migration_contract_invalid")
+    return selected.astimezone(UTC).replace(microsecond=0)
+
+
+def _utc_text(value: datetime) -> str:
+    return _utc_second(value).isoformat().replace("+00:00", "Z")
+
+
+def _parse_utc_text(value: Any) -> datetime:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        raise CloudDeployError("legacy_admin_migration_contract_invalid")
+    try:
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError:
+        raise CloudDeployError("legacy_admin_migration_contract_invalid") from None
+    normalized = _utc_second(parsed)
+    if _utc_text(normalized) != value:
+        raise CloudDeployError("legacy_admin_migration_contract_invalid")
+    return normalized
+
+
+def _legacy_migration_seed(
+    spec: CloudDeploymentSpec, *, as_of: datetime | None = None
+) -> dict[str, Any] | None:
+    if spec.legacy_admin_migration is None:
+        return None
+    return {
+        "source_version": "0.2.9.2",
+        "as_of": _utc_text(_utc_second(as_of)),
+        "source_database_sha256": None,
+        "source_snapshot_sha256": None,
+        "import_receipt_sha256": None,
+        "identity_records_sha256": None,
+    }
+
+
+def _normalize_legacy_migration_contract(
+    value: Any, *, phase: str
+) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    required = {
+        "source_version",
+        "as_of",
+        "source_database_sha256",
+        "source_snapshot_sha256",
+        "import_receipt_sha256",
+        "identity_records_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise CloudDeployError("activation_journal_invalid")
+    digests = (
+        value.get("source_database_sha256"),
+        value.get("source_snapshot_sha256"),
+        value.get("import_receipt_sha256"),
+        value.get("identity_records_sha256"),
+    )
+    if (
+        value.get("source_version") != "0.2.9.2"
+        or any(item is not None and not SHA256.fullmatch(str(item)) for item in digests)
+    ):
+        raise CloudDeployError("activation_journal_invalid")
+    try:
+        as_of = _utc_text(_parse_utc_text(value.get("as_of")))
+    except CloudDeployError:
+        raise CloudDeployError("activation_journal_invalid") from None
+    complete = all(item is not None for item in digests)
+    if phase in {
+        "legacy_imported",
+        "schema_ready",
+        "target_ready",
+        "routes_switched",
+        "state_written",
+    } and not complete:
+        raise CloudDeployError("activation_journal_invalid")
+    return {
+        "source_version": "0.2.9.2",
+        "as_of": as_of,
+        "source_database_sha256": digests[0],
+        "source_snapshot_sha256": digests[1],
+        "import_receipt_sha256": digests[2],
+        "identity_records_sha256": digests[3],
+    }
 
 
 def _validate_artifact(spec: CloudDeploymentSpec) -> Mapping[str, Any]:
@@ -592,8 +752,41 @@ def _state() -> Mapping[str, Any] | None:
     return _normalized_slot_state(value, "deployment_state_invalid")
 
 
+def _validate_legacy_migration_plan(
+    spec: CloudDeploymentSpec, state: Mapping[str, Any] | None
+) -> None:
+    if state is not None:
+        return
+    source_exists = LEGACY_ADMIN_DATABASE_PATH.exists()
+    if source_exists and spec.legacy_admin_migration is None:
+        raise CloudDeployError("legacy_admin_migration_required")
+    if spec.legacy_admin_migration is None:
+        return
+    if not source_exists:
+        raise CloudDeployError("legacy_admin_database_unavailable")
+    cutoff = _utc_second()
+    try:
+        import_v0292_admin_management(
+            LEGACY_ADMIN_DATABASE_PATH,
+            CONTROL_PLANE_DATABASE_PATH,
+            encryption_key=None,
+            dry_run=True,
+            as_of=cutoff,
+        )
+        export_v0292_legacy_identities(
+            LEGACY_ADMIN_DATABASE_PATH,
+            as_of=cutoff,
+        )
+    except (LegacyAdminManagementImportError, LegacyIdentityExportError):
+        raise CloudDeployError("legacy_admin_migration_preflight_failed") from None
+
+
 def build_plan(spec: CloudDeploymentSpec, *, inspect_files: bool = True) -> CloudDeploymentPlan:
     blockers: list[str] = []
+    try:
+        _target_preflight(spec, spec.target_machine_id_sha256)
+    except CloudDeployError as error:
+        blockers.append(error.code)
     if inspect_files:
         for check in (_validate_artifact, _validate_attestation):
             try:
@@ -608,6 +801,10 @@ def build_plan(spec: CloudDeploymentSpec, *, inspect_files: bool = True) -> Clou
         state = _state()
     except CloudDeployError as error:
         state = None
+        blockers.append(error.code)
+    try:
+        _validate_legacy_migration_plan(spec, state)
+    except CloudDeployError as error:
         blockers.append(error.code)
     try:
         pending_transition = _transition_journal()
@@ -628,9 +825,11 @@ def build_plan(spec: CloudDeploymentSpec, *, inspect_files: bool = True) -> Clou
         "recover_incomplete_activation_before_new_mutation",
         "stage_immutable_release",
         "prepare_exact_release_replica_storage_permissions",
+        "validate_and_seed_legacy_public_bootstrap_before_exact_route_switch",
         "install_signed_systemd_and_nginx_templates",
         "verify_root_ecorex_cloud_environment_files",
         "run_control_plane_gateway_image_schema_migrations",
+        "freeze_and_import_v0292_admin_and_identity_in_activation_journal",
         "run_exact_control_plane_and_image_storage_contract_checks",
         "stop_previous_slot_after_drain",
         "start_candidate_slot_and_wait_for_readiness",
@@ -680,11 +879,13 @@ def _run(
     code: str,
     environment: Mapping[str, str] | None = None,
     timeout: float = 180.0,
+    input_bytes: bytes | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     try:
         result = subprocess.run(
             list(command),
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL if input_bytes is None else None,
+            input=input_bytes,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=None if environment is None else dict(environment),
@@ -731,6 +932,7 @@ def _target_preflight(spec: CloudDeploymentSpec, confirmation: str) -> None:
         code="postgres_service_unavailable",
     )
     _validate_secret_environment_root()
+    _validate_base_environment_files()
 
 
 def _ecorex_cloud_gid() -> int:
@@ -827,6 +1029,16 @@ def _parse_env(path: Path, *, secret: bool) -> dict[str, str]:
     return values
 
 
+def _validate_base_environment_files() -> None:
+    """Read-only equivalent of the env dependency checks used at activation."""
+
+    for public_name, secret_name in ENV_NAMES.values():
+        _parse_env(CONFIG_ROOT / "config" / public_name, secret=False)
+        secret_path = SECRET_ROOT / secret_name
+        _validate_secret_environment_file(secret_path)
+        _parse_env(secret_path, secret=True)
+
+
 def _service_environment(service: str, slot: str) -> dict[str, str]:
     public_name, secret_name = ENV_NAMES[service]
     # Do not leak the invoking root shell's credentials into service/migration
@@ -921,6 +1133,7 @@ def _transition_journal() -> dict[str, Any] | None:
         "target_target_type",
         "target_state",
         "created_at_unix",
+        "legacy_admin_migration",
     }
     if not isinstance(value, Mapping) or set(value) != required:
         raise CloudDeployError("activation_journal_invalid")
@@ -964,6 +1177,9 @@ def _transition_journal() -> dict[str, Any] | None:
         "target_target_type": str(target_type),
         "target_state": target_state,
         "created_at_unix": created_at,
+        "legacy_admin_migration": _normalize_legacy_migration_contract(
+            value.get("legacy_admin_migration"), phase=str(phase)
+        ),
     }
     if payload != _canonical_json(normalized) + b"\n":
         raise CloudDeployError("activation_journal_invalid")
@@ -1045,7 +1261,14 @@ def _install_release(spec: CloudDeploymentSpec, manifest: Mapping[str, Any]) -> 
 
 
 def _legacy_admin_route_payload(source: bytes) -> tuple[bytes, bytes]:
-    """Extract the exact v0.x Admin locations and replace them with one include."""
+    """Extract v0.x Admin and retire its mutable-pointer slot alias.
+
+    The Admin locations remain available behind the reversible legacy include.
+    An existing exact Bootstrap-pointer location is deliberately not copied to
+    that include: the v1 cloud route owns the independent mutable object path.
+    A legacy catch-all ``/ecorex-agent/`` route may remain and is safely
+    shadowed by the new exact location.
+    """
 
     try:
         text = source.decode("utf-8")
@@ -1053,6 +1276,7 @@ def _legacy_admin_route_payload(source: bytes) -> tuple[bytes, bytes]:
         raise CloudDeployError("nginx_legacy_admin_route_invalid") from None
     lines = text.splitlines(keepends=True)
     spans: list[tuple[int, int]] = []
+    admin_spans: list[tuple[int, int]] = []
     for header in LEGACY_ADMIN_LOCATION_HEADERS:
         matches = [
             index
@@ -1062,6 +1286,29 @@ def _legacy_admin_route_payload(source: bytes) -> tuple[bytes, bytes]:
         if len(matches) != 1:
             raise CloudDeployError("nginx_legacy_admin_route_invalid")
         start = matches[0]
+        depth = 0
+        end: int | None = None
+        for index in range(start, len(lines)):
+            statement = lines[index].split("#", 1)[0]
+            depth += statement.count("{") - statement.count("}")
+            if depth == 0:
+                end = index + 1
+                break
+            if depth < 0:
+                break
+        if end is None or end <= start:
+            raise CloudDeployError("nginx_legacy_admin_route_invalid")
+        spans.append((start, end))
+        admin_spans.append((start, end))
+    pointer_matches = [
+        index
+        for index, line in enumerate(lines)
+        if line.strip() == f"{LEGACY_POINTER_LOCATION_HEADER} {{"
+    ]
+    if len(pointer_matches) > 1:
+        raise CloudDeployError("nginx_legacy_admin_route_invalid")
+    if pointer_matches:
+        start = pointer_matches[0]
         depth = 0
         end: int | None = None
         for index in range(start, len(lines)):
@@ -1091,16 +1338,53 @@ def _legacy_admin_route_payload(source: bytes) -> tuple[bytes, bytes]:
             rendered.append(line)
     legacy = "".join(
         "".join(lines[start:end]).rstrip("\r\n") + "\n\n"
-        for start, end in spans
+        for start, end in admin_spans
     )
     migrated = "".join(rendered)
     if (
         migrated.count(NGINX_ROUTE_INCLUDE) != 1
         or any(f"{header} {{" in migrated for header in LEGACY_ADMIN_LOCATION_HEADERS)
+        or f"{LEGACY_POINTER_LOCATION_HEADER} {{" in migrated
         or not legacy.strip()
     ):
         raise CloudDeployError("nginx_legacy_admin_route_invalid")
     return migrated.encode("utf-8"), legacy.encode("utf-8")
+
+
+def _without_legacy_pointer_location(source: bytes) -> bytes:
+    """Remove at most one pre-v1 exact pointer location from a server file."""
+
+    try:
+        text = source.decode("utf-8")
+    except UnicodeDecodeError:
+        raise CloudDeployError("nginx_legacy_admin_route_invalid") from None
+    lines = text.splitlines(keepends=True)
+    matches = [
+        index
+        for index, line in enumerate(lines)
+        if line.strip() == f"{LEGACY_POINTER_LOCATION_HEADER} {{"
+    ]
+    if not matches:
+        return source
+    if len(matches) != 1:
+        raise CloudDeployError("nginx_legacy_admin_route_invalid")
+    start = matches[0]
+    depth = 0
+    end: int | None = None
+    for index in range(start, len(lines)):
+        statement = lines[index].split("#", 1)[0]
+        depth += statement.count("{") - statement.count("}")
+        if depth == 0:
+            end = index + 1
+            break
+        if depth < 0:
+            break
+    if end is None or end <= start:
+        raise CloudDeployError("nginx_legacy_admin_route_invalid")
+    migrated = "".join((*lines[:start], *lines[end:]))
+    if f"{LEGACY_POINTER_LOCATION_HEADER} {{" in migrated:
+        raise CloudDeployError("nginx_legacy_admin_route_invalid")
+    return migrated.encode("utf-8")
 
 
 def _restore_symlink(link: Path, previous: Path | None) -> None:
@@ -1195,7 +1479,11 @@ def _validate_admin_route_resources() -> None:
         raise CloudDeployError("nginx_admin_route_wiring_invalid")
 
 
-def _install_legacy_admin_route_wiring(spec: CloudDeploymentSpec) -> None:
+def _install_legacy_admin_route_wiring(
+    spec: CloudDeploymentSpec,
+    *,
+    public_bootstrap_seed: _PublicBootstrapSeedIdentity,
+) -> None:
     """Move live v0.x Admin locations behind a reversible second-level include."""
 
     server_config = spec.nginx_server_config
@@ -1227,6 +1515,45 @@ def _install_legacy_admin_route_wiring(spec: CloudDeploymentSpec) -> None:
         ):
             raise CloudDeployError("nginx_admin_route_wiring_invalid")
         _validate_admin_route_resources()
+        migrated = _without_legacy_pointer_location(source)
+        if migrated != source:
+            _verify_public_bootstrap_seed_before_route_retire(
+                spec, public_bootstrap_seed
+            )
+            _atomic_write(
+                server_config,
+                migrated,
+                mode=stat.S_IMODE(metadata.st_mode),
+            )
+            try:
+                _run(
+                    [str(spec.nginx_binary), "-t"],
+                    code="nginx_configuration_invalid",
+                )
+                _run(
+                    [str(spec.systemctl_binary), "reload", "nginx.service"],
+                    code="nginx_reload_failed",
+                )
+            except CloudDeployError:
+                _atomic_write(
+                    server_config,
+                    source,
+                    mode=stat.S_IMODE(metadata.st_mode),
+                )
+                with contextlib.suppress(CloudDeployError):
+                    _run(
+                        [str(spec.nginx_binary), "-t"],
+                        code="nginx_restore_failed",
+                    )
+                    _run(
+                        [str(spec.systemctl_binary), "reload", "nginx.service"],
+                        code="nginx_restore_failed",
+                    )
+                raise
+        else:
+            _verify_public_bootstrap_seed_before_route_retire(
+                spec, public_bootstrap_seed
+            )
         return
     if include_count != 0:
         raise CloudDeployError("nginx_admin_route_wiring_invalid")
@@ -1245,6 +1572,9 @@ def _install_legacy_admin_route_wiring(spec: CloudDeploymentSpec) -> None:
     previous = active.resolve(strict=False) if active.exists() or active.is_symlink() else None
     _atomic_symlink(legacy, active)
     _validate_admin_route_resources()
+    _verify_public_bootstrap_seed_before_route_retire(
+        spec, public_bootstrap_seed
+    )
     _atomic_write(
         server_config, migrated, mode=stat.S_IMODE(metadata.st_mode)
     )
@@ -1270,6 +1600,9 @@ def _install_legacy_admin_route_wiring(spec: CloudDeploymentSpec) -> None:
 
 def _install_deployment_templates(spec: CloudDeploymentSpec, release: Path) -> None:
     _prepare_release_replica_storage()
+    _prepare_public_bootstrap_storage()
+    _install_publication_keyring(spec)
+    public_bootstrap_seed = _seed_legacy_public_bootstrap_pointer(spec)
     try:
         provider_bridge = validate_provider_bridge_materials()
         install_provider_bridge(provider_bridge)
@@ -1295,7 +1628,9 @@ def _install_deployment_templates(spec: CloudDeploymentSpec, release: Path) -> N
     active = NGINX_ROOT / "active-control-plane.conf"
     if not active.exists() and not active.is_symlink():
         _atomic_symlink(NGINX_ROOT / "control-plane-disabled.conf", active)
-    _install_legacy_admin_route_wiring(spec)
+    _install_legacy_admin_route_wiring(
+        spec, public_bootstrap_seed=public_bootstrap_seed
+    )
     _systemctl(spec, "daemon-reload", ())
 
 
@@ -1350,6 +1685,329 @@ def _prepare_release_replica_storage() -> None:
         raise CloudDeployError("release_replica_storage_invalid") from None
 
 
+def _prepare_public_bootstrap_storage() -> None:
+    """Provision the CP-owned, publicly readable mutable pointer directory."""
+
+    try:
+        environment = _parse_env(
+            CONFIG_ROOT / "config" / "control-plane.env", secret=False
+        )
+    except CloudDeployError:
+        raise CloudDeployError("public_bootstrap_storage_configuration_invalid") from None
+    if (
+        environment.get("ECOREX_CP_PUBLIC_BOOTSTRAP_INDEX_PATH")
+        != str(PUBLIC_BOOTSTRAP_INDEX_PATH)
+        or environment.get("ECOREX_CP_PUBLIC_BOOTSTRAP_INDEX_URL")
+        != PUBLIC_BOOTSTRAP_INDEX_URL
+    ):
+        raise CloudDeployError("public_bootstrap_storage_configuration_invalid")
+    download_root = PUBLIC_BOOTSTRAP_ROOT.parent
+    try:
+        download_metadata = download_root.lstat()
+        if (
+            stat.S_ISLNK(download_metadata.st_mode)
+            or not stat.S_ISDIR(download_metadata.st_mode)
+            or download_root.resolve(strict=True) != download_root
+        ):
+            raise OSError
+        PUBLIC_BOOTSTRAP_ROOT.mkdir(mode=0o755, exist_ok=True)
+        metadata = PUBLIC_BOOTSTRAP_ROOT.lstat()
+        if (
+            stat.S_ISLNK(metadata.st_mode)
+            or not stat.S_ISDIR(metadata.st_mode)
+            or PUBLIC_BOOTSTRAP_ROOT.resolve(strict=True) != PUBLIC_BOOTSTRAP_ROOT
+            or metadata.st_dev != download_metadata.st_dev
+        ):
+            raise OSError
+        shutil.chown(
+            PUBLIC_BOOTSTRAP_ROOT,
+            user="ecorex-cloud",
+            group="ecorex-storage",
+        )
+        os.chmod(PUBLIC_BOOTSTRAP_ROOT, 0o755)
+        if os.path.lexists(PUBLIC_BOOTSTRAP_INDEX_PATH):
+            pointer = PUBLIC_BOOTSTRAP_INDEX_PATH.lstat()
+            if (
+                stat.S_ISLNK(pointer.st_mode)
+                or not stat.S_ISREG(pointer.st_mode)
+                or pointer.st_dev != download_metadata.st_dev
+                or getattr(pointer, "st_nlink", 1) != 1
+            ):
+                raise OSError
+            shutil.chown(
+                PUBLIC_BOOTSTRAP_INDEX_PATH,
+                user="ecorex-cloud",
+                group="ecorex-storage",
+            )
+            os.chmod(PUBLIC_BOOTSTRAP_INDEX_PATH, 0o644)
+        _fsync_directory(PUBLIC_BOOTSTRAP_ROOT)
+        _fsync_directory(download_root)
+    except (LookupError, OSError):
+        raise CloudDeployError("public_bootstrap_storage_invalid") from None
+
+
+def _read_public_bootstrap_file(path: Path, *, code: str) -> bytes:
+    download_root = PUBLIC_BOOTSTRAP_ROOT.parent
+    try:
+        root = download_root.resolve(strict=True)
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(root)
+        before = path.lstat()
+        if (
+            path.is_symlink()
+            or not stat.S_ISREG(before.st_mode)
+            or getattr(before, "st_nlink", 1) != 1
+            or not 1 <= before.st_size <= MAX_PUBLIC_BOOTSTRAP_INDEX_BYTES
+        ):
+            raise OSError
+        identity = (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        )
+        with path.open("rb") as stream:
+            opened = os.fstat(stream.fileno())
+            payload = stream.read(MAX_PUBLIC_BOOTSTRAP_INDEX_BYTES + 1)
+            after = os.fstat(stream.fileno())
+        current = path.lstat()
+        if any(
+            (
+                item.st_dev,
+                item.st_ino,
+                item.st_size,
+                item.st_mtime_ns,
+            )
+            != identity
+            for item in (opened, after, current)
+        ) or len(payload) != before.st_size:
+            raise OSError
+        return payload
+    except (OSError, ValueError):
+        raise CloudDeployError(code) from None
+
+
+def _validate_public_bootstrap_seed_payload(
+    spec: CloudDeploymentSpec, payload: bytes
+) -> None:
+    try:
+        value = json.loads(payload.decode("utf-8"))
+        if not isinstance(value, Mapping):
+            raise PublicBootstrapIndexError("public index must be an object")
+        if value.get("status") == "unpublished":
+            validate_public_bootstrap_index(value, allow_expired_freshness=True)
+            return
+        release_raw, publication_raw = _public_pointer_keyrings(spec)
+        validate_public_bootstrap_index(
+            value,
+            verifier=Ed25519SignatureVerifier(release_raw),
+            freshness_verifier=Ed25519SignatureVerifier(publication_raw),
+            allow_expired_freshness=True,
+        )
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        PublicBootstrapIndexError,
+        VerificationError,
+        TypeError,
+        ValueError,
+    ):
+        raise CloudDeployError("legacy_public_bootstrap_seed_invalid") from None
+
+
+def _legacy_pointer_route_present(spec: CloudDeploymentSpec) -> bool:
+    try:
+        metadata = spec.nginx_server_config.lstat()
+        payload = spec.nginx_server_config.read_bytes()
+    except OSError:
+        raise CloudDeployError("nginx_server_configuration_unavailable") from None
+    if (
+        spec.nginx_server_config.is_symlink()
+        or not stat.S_ISREG(metadata.st_mode)
+        or not 1 <= len(payload) <= 2 * 1024 * 1024
+    ):
+        raise CloudDeployError("nginx_server_configuration_invalid")
+    count = payload.count(f"{LEGACY_POINTER_LOCATION_HEADER} {{".encode("ascii"))
+    if count > 1:
+        raise CloudDeployError("nginx_legacy_admin_route_invalid")
+    return count == 1
+
+
+def _seed_legacy_public_bootstrap_pointer(
+    spec: CloudDeploymentSpec,
+) -> _PublicBootstrapSeedIdentity:
+    """Seed the CP object before retiring the only live exact Nginx route.
+
+    A pre-existing target is accepted only when it is the exact validated
+    source bytes. That fail-closed CAS rule prevents a legacy publisher and a
+    partially started Control Plane from becoming competing authorities.
+    """
+
+    legacy_route = _legacy_pointer_route_present(spec)
+    if legacy_route:
+        source = _read_public_bootstrap_file(
+            LEGACY_PUBLIC_BOOTSTRAP_INDEX_PATH,
+            code="legacy_public_bootstrap_seed_unavailable",
+        )
+        _validate_public_bootstrap_seed_payload(spec, source)
+    else:
+        source = None
+    target_exists = os.path.lexists(PUBLIC_BOOTSTRAP_INDEX_PATH)
+    if target_exists:
+        target = _read_public_bootstrap_file(
+            PUBLIC_BOOTSTRAP_INDEX_PATH,
+            code="public_bootstrap_seed_target_invalid",
+        )
+        _validate_public_bootstrap_seed_payload(spec, target)
+        if source is not None and target != source:
+            raise CloudDeployError("public_bootstrap_seed_conflict")
+        payload = target
+    else:
+        if source is None:
+            source = (
+                _canonical_json(unpublished_public_bootstrap_index()) + b"\n"
+            )
+            _validate_public_bootstrap_seed_payload(spec, source)
+        _atomic_write(PUBLIC_BOOTSTRAP_INDEX_PATH, source, mode=0o644)
+        try:
+            shutil.chown(
+                PUBLIC_BOOTSTRAP_INDEX_PATH,
+                user="ecorex-cloud",
+                group="ecorex-storage",
+            )
+            os.chmod(PUBLIC_BOOTSTRAP_INDEX_PATH, 0o644)
+            _fsync_directory(PUBLIC_BOOTSTRAP_ROOT)
+        except (LookupError, OSError):
+            raise CloudDeployError("public_bootstrap_seed_write_failed") from None
+        payload = _read_public_bootstrap_file(
+            PUBLIC_BOOTSTRAP_INDEX_PATH,
+            code="public_bootstrap_seed_write_failed",
+        )
+        if payload != source:
+            raise CloudDeployError("public_bootstrap_seed_write_failed")
+        _validate_public_bootstrap_seed_payload(spec, payload)
+    return _PublicBootstrapSeedIdentity(
+        payload=payload,
+        sha256=hashlib.sha256(payload).hexdigest(),
+        size_bytes=len(payload),
+        legacy_exact_route=legacy_route,
+    )
+
+
+def _verify_public_bootstrap_seed_before_route_retire(
+    spec: CloudDeploymentSpec, seed: _PublicBootstrapSeedIdentity
+) -> None:
+    if not isinstance(seed, _PublicBootstrapSeedIdentity):
+        raise CloudDeployError("public_bootstrap_seed_identity_invalid")
+    route_present = _legacy_pointer_route_present(spec)
+    if route_present != seed.legacy_exact_route:
+        raise CloudDeployError("public_bootstrap_seed_identity_changed")
+    target = _read_public_bootstrap_file(
+        PUBLIC_BOOTSTRAP_INDEX_PATH,
+        code="public_bootstrap_seed_target_invalid",
+    )
+    _validate_public_bootstrap_seed_payload(spec, target)
+    if (
+        target != seed.payload
+        or len(target) != seed.size_bytes
+        or hashlib.sha256(target).hexdigest() != seed.sha256
+    ):
+        raise CloudDeployError("public_bootstrap_seed_identity_changed")
+    if route_present:
+        legacy = _read_public_bootstrap_file(
+            LEGACY_PUBLIC_BOOTSTRAP_INDEX_PATH,
+            code="legacy_public_bootstrap_seed_unavailable",
+        )
+        _validate_public_bootstrap_seed_payload(spec, legacy)
+        if (
+            legacy != seed.payload
+            or len(legacy) != seed.size_bytes
+            or hashlib.sha256(legacy).hexdigest() != seed.sha256
+        ):
+            raise CloudDeployError("legacy_public_bootstrap_seed_changed")
+
+
+def _encoded_public_keyring(
+    value: Any,
+    *,
+    code: str,
+) -> tuple[dict[str, str], dict[str, bytes]]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            raise CloudDeployError(code) from None
+    if not isinstance(value, Mapping) or not 1 <= len(value) <= 32:
+        raise CloudDeployError(code)
+    encoded: dict[str, str] = {}
+    raw: dict[str, bytes] = {}
+    for key_id, public_value in value.items():
+        if (
+            not isinstance(key_id, str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", key_id) is None
+            or not isinstance(public_value, str)
+        ):
+            raise CloudDeployError(code)
+        try:
+            public = base64.b64decode(public_value, validate=True)
+        except (TypeError, ValueError):
+            raise CloudDeployError(code) from None
+        if len(public) != 32 or base64.b64encode(public).decode("ascii") != public_value:
+            raise CloudDeployError(code)
+        encoded[key_id] = public_value
+        raw[key_id] = public
+    return encoded, raw
+
+
+def _public_pointer_keyring_material(
+    spec: CloudDeploymentSpec,
+) -> tuple[dict[str, str], dict[str, bytes], dict[str, str], dict[str, bytes]]:
+    try:
+        environment = _parse_env(
+            SECRET_ROOT / "control-plane.secret.env",
+            secret=True,
+        )
+        release_encoded, release_raw = _encoded_public_keyring(
+            environment.get("ECOREX_CP_RELEASE_PUBLIC_KEYS_JSON"),
+            code="public_pointer_release_keyring_invalid",
+        )
+        publication_encoded, publication_raw = _encoded_public_keyring(
+            environment.get("ECOREX_CP_PUBLICATION_PUBLIC_KEYS_JSON"),
+            code="public_pointer_publication_keyring_invalid",
+        )
+        configured_release, _configured_raw = _encoded_public_keyring(
+            _read_json(spec.release_keyring_path, "release_keyring_invalid"),
+            code="release_keyring_invalid",
+        )
+    except CloudDeployError:
+        raise
+    if release_encoded != configured_release:
+        raise CloudDeployError("public_pointer_release_keyring_mismatch")
+    if set(release_raw).intersection(publication_raw) or set(
+        release_raw.values()
+    ).intersection(publication_raw.values()):
+        raise CloudDeployError("public_pointer_trust_roles_overlap")
+    return release_encoded, release_raw, publication_encoded, publication_raw
+
+
+def _public_pointer_keyrings(
+    spec: CloudDeploymentSpec,
+) -> tuple[dict[str, bytes], dict[str, bytes]]:
+    _, release_raw, _, publication_raw = _public_pointer_keyring_material(spec)
+    return release_raw, publication_raw
+
+
+def _install_publication_keyring(spec: CloudDeploymentSpec) -> None:
+    """Materialize only public freshness keys for the root site authority."""
+
+    _, _, publication_encoded, _ = _public_pointer_keyring_material(spec)
+    _atomic_write(
+        PUBLICATION_KEYRING_PATH,
+        _canonical_json(publication_encoded) + b"\n",
+        mode=0o644,
+    )
+
+
 def _verify_nginx_wiring(spec: CloudDeploymentSpec) -> None:
     result = _run(
         [str(spec.nginx_binary), "-T"], code="nginx_configuration_invalid"
@@ -1360,6 +2018,14 @@ def _verify_nginx_wiring(spec: CloudDeploymentSpec) -> None:
         b"/etc/nginx/ecorex-cloud/active-control-plane.conf" not in result.stdout
         or b"/etc/nginx/ecorex-cloud/active-admin-route.conf" not in result.stdout
         or b"/ecorex-agent/admin/" not in result.stdout
+        or result.stdout.count(
+            b"location = /ecorex-agent/public-bootstrap-index.json"
+        )
+        != 1
+        or b"alias /srv/ecorex-agent-download/public-pointer/"
+        b"public-bootstrap-index.json;" not in result.stdout
+        or b"alias /srv/ecorex-agent-download/current/"
+        b"public-bootstrap-index.json;" in result.stdout
     ):
         raise CloudDeployError("nginx_route_not_wired")
 
@@ -1425,7 +2091,15 @@ def _run_service_command(
     code: str,
     environment: Mapping[str, str],
     timeout: float,
+    input_bytes: bytes | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
+    arguments: dict[str, Any] = {
+        "code": code,
+        "environment": environment,
+        "timeout": timeout,
+    }
+    if input_bytes is not None:
+        arguments["input_bytes"] = input_bytes
     return _run(
         [
             "/usr/sbin/runuser",
@@ -1435,9 +2109,7 @@ def _run_service_command(
             "--",
             *command,
         ],
-        code=code,
-        environment=environment,
-        timeout=timeout,
+        **arguments,
     )
 
 
@@ -1533,6 +2205,167 @@ def _stop_transition_writers(
     _stop_target_services(spec, journal["source_state"])
 
 
+def _legacy_target_environment(slot: str) -> tuple[Path, bytes, dict[str, str]]:
+    environment = _service_environment("control-plane", slot)
+    target = Path(str(environment.get("ECOREX_CP_DATABASE_PATH", "")))
+    if target != CONTROL_PLANE_DATABASE_PATH:
+        raise CloudDeployError("legacy_admin_target_outside_fence")
+    encoded = environment.get("ECOREX_CP_MODEL_CONFIG_ENCRYPTION_KEY_B64", "")
+    try:
+        key = base64.b64decode(encoded, validate=True)
+    except (ValueError, TypeError):
+        raise CloudDeployError("legacy_admin_encryption_key_invalid") from None
+    if len(key) != 32:
+        raise CloudDeployError("legacy_admin_encryption_key_invalid")
+    return target, key, environment
+
+
+def _legacy_identity_payload(records: Sequence[Mapping[str, object]]) -> bytes:
+    payload = b"".join(_canonical_json(dict(record)) + b"\n" for record in records)
+    if len(payload) > 8 * 1024 * 1024 or len(records) > 100_000:
+        raise CloudDeployError("legacy_identity_import_oversized")
+    return payload
+
+
+def _prepare_legacy_import_contract(
+    journal: Mapping[str, Any]
+) -> tuple[dict[str, Any], tuple[dict[str, object], ...]]:
+    contract = journal.get("legacy_admin_migration")
+    if contract is None:
+        return dict(journal), ()
+    normalized = _normalize_legacy_migration_contract(
+        contract, phase=str(journal.get("phase"))
+    )
+    assert normalized is not None
+    cutoff = _parse_utc_text(normalized["as_of"])
+    try:
+        report = import_v0292_admin_management(
+            LEGACY_ADMIN_DATABASE_PATH,
+            CONTROL_PLANE_DATABASE_PATH,
+            encryption_key=None,
+            dry_run=True,
+            as_of=cutoff,
+        )
+        records, identity_report = export_v0292_legacy_identities(
+            LEGACY_ADMIN_DATABASE_PATH,
+            as_of=cutoff,
+        )
+        source_digest_after = _sha256_file(LEGACY_ADMIN_DATABASE_PATH)
+    except (LegacyAdminManagementImportError, LegacyIdentityExportError):
+        raise CloudDeployError("legacy_admin_migration_inventory_failed") from None
+    observed = {
+        "source_version": "0.2.9.2",
+        "as_of": normalized["as_of"],
+        "source_database_sha256": report.source_file_sha256,
+        "source_snapshot_sha256": report.source_snapshot_sha256,
+        "import_receipt_sha256": report.import_receipt_sha256,
+        "identity_records_sha256": identity_report.records_sha256,
+    }
+    if source_digest_after != report.source_file_sha256:
+        raise CloudDeployError("legacy_admin_source_changed")
+    declared = tuple(normalized[key] for key in (
+        "source_database_sha256",
+        "source_snapshot_sha256",
+        "import_receipt_sha256",
+        "identity_records_sha256",
+    ))
+    if any(item is not None for item in declared):
+        if dict(normalized) != observed:
+            raise CloudDeployError("legacy_admin_migration_identity_changed")
+        return dict(journal), records
+    updated = dict(journal)
+    updated["legacy_admin_migration"] = observed
+    return _write_transition_journal(updated), records
+
+
+def _commit_legacy_admin_and_identity(
+    release: Path,
+    slot: str,
+    journal: Mapping[str, Any],
+    records: Sequence[Mapping[str, object]],
+) -> None:
+    contract = _normalize_legacy_migration_contract(
+        journal.get("legacy_admin_migration"), phase="legacy_imported"
+    )
+    if contract is None:
+        return
+    target, key, environment = _legacy_target_environment(slot)
+    cutoff = _parse_utc_text(contract["as_of"])
+    try:
+        report = import_v0292_admin_management(
+            LEGACY_ADMIN_DATABASE_PATH,
+            target,
+            encryption_key=key,
+            dry_run=False,
+            as_of=cutoff,
+        )
+    except LegacyAdminManagementImportError:
+        raise CloudDeployError("legacy_admin_import_failed") from None
+    if (
+        report.source_file_sha256 != contract["source_database_sha256"]
+        or report.source_snapshot_sha256 != contract["source_snapshot_sha256"]
+        or report.import_receipt_sha256 != contract["import_receipt_sha256"]
+    ):
+        raise CloudDeployError("legacy_admin_migration_identity_changed")
+    payload = _legacy_identity_payload(records)
+    if payload:
+        _run_service_command(
+            _service_command(release, "control-plane", "device", "legacy-import"),
+            code="legacy_identity_import_failed",
+            environment=environment,
+            timeout=600,
+            input_bytes=payload,
+        )
+
+
+def _legacy_admin_import_committed(journal: Mapping[str, Any]) -> bool:
+    contract = journal.get("legacy_admin_migration")
+    if contract is None:
+        return False
+    normalized = _normalize_legacy_migration_contract(
+        contract, phase=str(journal.get("phase"))
+    )
+    if normalized is None or normalized["import_receipt_sha256"] is None:
+        return False
+    target = CONTROL_PLANE_DATABASE_PATH
+    try:
+        if target.is_symlink() or not target.is_file():
+            return False
+        connection = sqlite3.connect(
+            f"{target.as_uri()}?mode=ro&nofollow=1",
+            uri=True,
+            timeout=30,
+            isolation_level=None,
+        )
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA query_only=ON")
+        row = connection.execute(
+            "SELECT operation,response_json FROM admin_ops_idempotency "
+            "WHERE actor_subject=? AND client_request_id=?",
+            (
+                "migration:v0.2.9.2",
+                "legacy-admin-" + str(normalized["import_receipt_sha256"])[:32],
+            ),
+        ).fetchone()
+        connection.close()
+    except (OSError, sqlite3.Error):
+        raise CloudDeployError("legacy_admin_import_receipt_unavailable") from None
+    if row is None:
+        return False
+    try:
+        payload = json.loads(str(row["response_json"]))
+    except (TypeError, json.JSONDecodeError):
+        raise CloudDeployError("legacy_admin_import_receipt_invalid") from None
+    if (
+        row["operation"] != "legacy.v0292.admin-management.import"
+        or not isinstance(payload, Mapping)
+        or payload.get("import_receipt_sha256")
+        != normalized["import_receipt_sha256"]
+    ):
+        raise CloudDeployError("legacy_admin_import_receipt_invalid")
+    return True
+
+
 def _ensure_activation_schema_ready(
     spec: CloudDeploymentSpec,
     journal: Mapping[str, Any],
@@ -1555,6 +2388,9 @@ def _ensure_activation_schema_ready(
     if phase == "prepared":
         effective = _advance_transition_journal(effective, "migrating")
         phase = "migrating"
+    if phase == "legacy_imported":
+        _stop_transition_writers(spec, effective)
+        return _advance_transition_journal(effective, "schema_ready")
     if phase != "migrating":
         raise CloudDeployError("activation_journal_invalid")
     target_state = effective.get("target_state")
@@ -1567,6 +2403,15 @@ def _ensure_activation_schema_ready(
         else _verify_transition_release(spec, target_state)
     )
     _schema_gate(release, str(target_state["active_slot"]))
+    effective, records = _prepare_legacy_import_contract(effective)
+    if effective.get("legacy_admin_migration") is not None:
+        _commit_legacy_admin_and_identity(
+            release,
+            str(target_state["active_slot"]),
+            effective,
+            records,
+        )
+        effective = _advance_transition_journal(effective, "legacy_imported")
     return _advance_transition_journal(effective, "schema_ready")
 
 
@@ -1750,6 +2595,7 @@ def _new_transition_journal(
     operation: str,
     source_state: Mapping[str, Any] | None,
     target_state: Mapping[str, Any] | None,
+    legacy_admin_migration: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if operation not in TRANSITION_OPERATIONS:
         raise CloudDeployError("activation_journal_invalid")
@@ -1773,6 +2619,9 @@ def _new_transition_journal(
             "target_target_type": "legacy" if normalized_target is None else "slot",
             "target_state": normalized_target,
             "created_at_unix": int(time.time()),
+            "legacy_admin_migration": _normalize_legacy_migration_contract(
+                legacy_admin_migration, phase="prepared"
+            ),
         }
     )
 
@@ -1881,7 +2730,7 @@ def _classify_transition_routes(journal: Mapping[str, Any]) -> str:
 def _transition_resolution(journal: Mapping[str, Any]) -> str:
     phase = str(journal["phase"])
     route_state = _classify_transition_routes(journal)
-    if phase in {"routes_switched", "state_written"}:
+    if phase in {"legacy_imported", "routes_switched", "state_written"}:
         return "target"
     # Before the durable routes_switched marker, route identity may nominate
     # the source, but recovery still schema-checks all four service roles. A
@@ -1893,6 +2742,14 @@ def _transition_resolution(journal: Mapping[str, Any]) -> str:
 def _restore_transition_source(
     spec: CloudDeploymentSpec, journal: Mapping[str, Any]
 ) -> None:
+    if (
+        journal.get("operation") == "activate"
+        and journal.get("legacy_admin_migration") is not None
+        and _legacy_admin_import_committed(journal)
+    ):
+        raise _RecoverySourceSchemaIncompatible(
+            "recovery_source_forbidden_after_target_write"
+        )
     source_state = journal["source_state"]
     target_state = journal["target_state"]
     # Recovery never checks or starts either side while the other side may
@@ -1957,6 +2814,16 @@ def _resolve_pending_transition(
     if (
         effective.get("operation") == "activate"
         and effective.get("phase") == "migrating"
+        and effective.get("legacy_admin_migration") is not None
+        and _legacy_admin_import_committed(effective)
+    ):
+        # The business-write receipt is the crash-safe authority for the
+        # narrow window between SQLite COMMIT and the next journal fsync.
+        # Once present, restarting legacy would create two authorities.
+        resolution = "target"
+    if (
+        effective.get("operation") == "activate"
+        and effective.get("phase") == "migrating"
         and resolution == "source"
     ):
         # A crash or deterministic migration failure must not strand a known
@@ -1969,7 +2836,10 @@ def _resolve_pending_transition(
             resolution = "target"
     if effective.get("operation") == "activate" and resolution == "target":
         effective = _ensure_activation_schema_ready(spec, effective)
-        resolution = _transition_resolution(effective)
+        # Recovery direction is monotonic. A target decision can be caused by
+        # accepted target writes even while Nginx still points at the source;
+        # recalculating from routes here would illegally revive that source.
+        resolution = "target"
     if resolution == "target":
         _complete_transition_target(spec, effective)
     else:
@@ -2024,6 +2894,7 @@ def deploy(spec: CloudDeploymentSpec, *, confirmation: str) -> Mapping[str, Any]
             return dict(recovered["target_state"])
         manifest = _validate_artifact(spec)
         prior = _state()
+        _validate_legacy_migration_plan(spec, prior)
         current = None if prior is None else str(prior["active_slot"])
         target = "blue" if current in {None, "green"} else "green"
         release = _install_release(spec, manifest)
@@ -2038,7 +2909,12 @@ def deploy(spec: CloudDeploymentSpec, *, confirmation: str) -> Mapping[str, Any]
             artifact_manifest_sha256=spec.artifact_manifest_sha256,
         )
         journal = _new_transition_journal(
-            operation="activate", source_state=prior, target_state=receipt
+            operation="activate",
+            source_state=prior,
+            target_state=receipt,
+            legacy_admin_migration=(
+                _legacy_migration_seed(spec) if prior is None else None
+            ),
         )
         # The migration publishes ``migrating`` before either writer set is
         # stopped.  It remains inside the compensation boundary so a
@@ -2071,7 +2947,11 @@ def deploy(spec: CloudDeploymentSpec, *, confirmation: str) -> Mapping[str, Any]
             # source; an incompatible or unverifiable source rolls forward.
             _clear_transition_journal()
         except (CloudDeployError, OSError) as error:
-            resolution = _compensate_transition(spec, journal)
+            # Always compensate from the newest durable authority. The local
+            # variable may predate a receipt written inside the migration
+            # helper immediately before a process/database failure.
+            durable = _transition_journal() or journal
+            resolution = _compensate_transition(spec, durable)
             if resolution == "target":
                 return receipt
             if isinstance(error, CloudDeployError):

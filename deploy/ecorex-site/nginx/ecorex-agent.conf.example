@@ -78,7 +78,7 @@ location = /ecorex-agent/index.html {
 }
 
 location = /ecorex-agent/public-bootstrap-index.json {
-    alias /srv/ecorex-agent-download/current/public-bootstrap-index.json;
+    alias /srv/ecorex-agent-download/public-pointer/public-bootstrap-index.json;
     default_type application/json;
     add_header Cache-Control "no-store" always;
     add_header X-Content-Type-Options "nosniff" always;
@@ -91,11 +91,10 @@ location ~ ^/ecorex-agent/(?<ecorex_public_asset>(?:site|styles)\.[0-9a-f]{12}\.
     add_header X-Content-Type-Options "nosniff" always;
 }
 
-# Immutable signed Candidate bytes. The release-id directory is populated in
-# the same staging tree before the ``current`` symlink is switched, so the CDN
-# origin and public pointer become visible atomically.
-location ~ ^/ecorex-agent/releases/(?<ecorex_release_asset>v1\.0\.0/(?:stable|canary)/release-(?:stable|canary)-[0-9a-f]{24}/[A-Za-z0-9][A-Za-z0-9._-]{0,255})$ {
-    alias /srv/ecorex-agent-download/v1-artifacts/$ecorex_release_asset;
+# Immutable signed Candidate bytes. Channel is internal replica state derived
+# from the signed release_id and is never exposed as a public URL segment.
+location ~ ^/ecorex-agent/releases/(?<ecorex_release_namespace>v1\.0\.0)/(?<ecorex_release_id>release-(?<ecorex_release_channel>stable|canary)-[0-9a-f]{24})/(?<ecorex_release_asset>[A-Za-z0-9][A-Za-z0-9._-]{0,179})$ {
+    alias /srv/ecorex-agent-download/v1-artifacts/$ecorex_release_namespace/$ecorex_release_channel/$ecorex_release_id/$ecorex_release_asset;
     autoindex off;
     sendfile on;
     tcp_nopush on;
@@ -104,6 +103,10 @@ location ~ ^/ecorex-agent/releases/(?<ecorex_release_asset>v1\.0\.0/(?:stable|ca
     add_header Cache-Control "public, max-age=31536000, immutable" always;
     add_header X-Content-Type-Options "nosniff" always;
     default_type application/octet-stream;
+}
+
+location /ecorex-agent/releases/ {
+    return 404;
 }
 
 location ^~ /ecorex-agent/downloads/ {

@@ -12,6 +12,16 @@ const MUTATION_HEADERS = {
 async function directGet(url, { headers = {} } = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
     const request = httpGet(url, { headers }, (response) => {
+      // Snapshot the exact on-wire header block while IncomingMessage owns it.
+      // Keeping a delayed closure over response.headers made the GA assertion
+      // depend on platform-specific response teardown timing on macOS arm64.
+      const responseHeaders = new Map();
+      for (let index = 0; index < response.rawHeaders.length; index += 2) {
+        const name = String(response.rawHeaders[index]).toLowerCase();
+        const values = responseHeaders.get(name) || [];
+        values.push(String(response.rawHeaders[index + 1]));
+        responseHeaders.set(name, values);
+      }
       const chunks = [];
       response.on("data", (chunk) => chunks.push(chunk));
       response.once("error", rejectPromise);
@@ -21,8 +31,8 @@ async function directGet(url, { headers = {} } = {}) {
           status: response.statusCode ?? 0,
           headers: {
             get(name) {
-              const value = response.headers[String(name).toLowerCase()];
-              return Array.isArray(value) ? value.join(", ") : value ?? null;
+              const values = responseHeaders.get(String(name).toLowerCase());
+              return values ? values.join(", ") : null;
             },
           },
           async json() { return JSON.parse(payload.toString("utf8")); },

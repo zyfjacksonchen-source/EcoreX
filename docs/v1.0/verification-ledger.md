@@ -2046,3 +2046,32 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | WSL Ubuntu Python 3.11.9 | 0 | `test_update_composition.py` plus `test_update_durability.py`: 23 passed. Focused lock/product-barrier set: 18 passed. Ruff, compileall and `git diff --check` pass. |
 | Independent review | 0 | No remaining P0/P1 in locking, production wiring or regression coverage. The original Linux full-suite path must still pass on a new PR head. |
 | Promotion | pending | Commit/push and a new five-job hosted matrix are mandatory before protected-main merge or any production mutation. |
+
+## Protected Stage and pre-signing contract closure - 2026-07-17
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| PR run `29526376684` | 0 | Head `a1cc16c8` passed Ubuntu quality/deterministic build, Windows x64, macOS arm64/x64 and cross-runner byte stability (5/5). PR #12 was squash-merged as exact main `de70b480f20acc1b5f19b740e67f6282f33037f8`. |
+| Platform Stage `29526938093` | 1 expected | Both macOS jobs stopped at Web tests because a delayed `IncomingMessage.headers` closure lost CSP/Set-Cookie; Windows stopped before dependency install because the uv-managed base is PEP 668 protected. No Core/Bootstrap/Pack artifact was accepted or reused. |
+| macOS GA helper correction | 0 | Raw on-wire headers are copied in the response callback. Exact Node 22.23.1: Web 180/180; GA file 3/3 repeated runs, eight tests each. |
+| Windows Stage isolation | 0 | Exact uv-managed Python 3.11.9 creates a disposable `RUNNER_TEMP` venv; no registry mutation and no `--break-system-packages`. Fresh local venv installed all 53 locked packages, imported Packaging/Playwright/NumPy/ONNX Runtime and passed dependency-lock validation. |
+| CDN canonical contract | 0 | Recipe, Candidate and replica agree on `https://dl.ecoremedia.net/ecorex-agent/releases/v1.0.0/<release_id>`. Recipe → signed manifest → real ASGI replica upload/finalize plus adjacent source tests: 4 passed. |
+| Dynamic Bootstrap pointer | 0 | Pointer moved outside immutable site slots to a CP-owned atomic object. Exact Nginx/Caddy route is unique; current/legacy aliases are forbidden. Separate release/publication keyrings verify authority/freshness signatures and reject tamper, unknown key, expiry and immutable target/source drift. |
+| Transactional legacy import | 0 | Explicit v0.2.9.2 migration authority, fixed cutoff/digests, stopped writers, idempotent Admin/identity commit and receipt-driven roll-forward are inside the activation journal. Failure before target write restores legacy; receipt after commit forbids source restart. Dry-run executes real read-only target preflight. |
+| Unified Linux regression | 0 | WSL Ubuntu, Python 3.11.9: 179 passed across cloud sidecar, Admin/identity/device migration, public pointer/site, Control Plane, replica and reproducibility suites. One unchanged Starlette multipart warning. |
+| Static gates | 0 | Ruff, compileall, source tree 753, dependency locks, 20 Runtime schema fragments, 11 server authorities, legacy cutoff, public-download gate and `git diff --check` pass. |
+| Release boundary | pending | Fix branch still requires a new protected five-job matrix, protected-main merge and a wholly new same-run three-platform Stage. Live gates remain `WAIVED`, never `passed`; production remains unchanged. |
+
+## Final Stage-correction audit - 2026-07-17
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Live old-site readback | 0 read-only | `/ecorex-agent/` 200; legacy `/admin/` 401; public Bootstrap pointer 404. No route, file or service mutation. |
+| First pointer continuity | 0 | Legacy exact route is retired only after stable source/target reads, schema or dual-key verification, and a second exact payload/size/SHA check. Missing old route initializes canonical `unpublished`; drift fails before Nginx mutation. |
+| CDN URL mapping | 0 | Public URL is `/releases/v1.0.0/<release_id>/<asset>`; Nginx/Caddy derive the private channel segment from signed `release_id` and reject unmatched paths. |
+| Windows Stage isolation | 0 | Venv path includes run ID, run attempt and matrix target; any residue at the exact path fails closed. |
+| Combined Python boundary | 0 | Exact Python 3.11.9: 193 passed, 12 platform-conditioned skips; one unchanged Starlette multipart warning. |
+| Candidate/CDN/public boundary | 0 | 40 passed, including recipe → signed manifest → real ASGI CDN finalize and canonical route checks. |
+| Web boundary | 0 | Exact Node 22.23.1: 180/180 passed. |
+| Independent review | 0 | No remaining P0/P1/P2; seed-to-retire TOCTOU, trust-role overlap, double-writer and rollback paths reviewed. |
+| Production promotion | pending | Commit, protected five-job PR, protected-main merge, same-run three-platform Stage, signing and cloud/public activation remain outstanding. |

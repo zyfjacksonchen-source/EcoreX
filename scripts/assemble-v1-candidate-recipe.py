@@ -100,10 +100,10 @@ def run(argv: list[str] | None = None) -> int:
                 {
                     "source_id": "cdn",
                     "kind": "ecorex-cdn",
-                    "base_url": (
-                        _environment("ECOREX_RELEASE_CDN_BASE_URL")
-                        + f"/{channel.value}"
-                    ),
+                    # This authority is already version-qualified.  Candidate
+                    # validation rejects any value other than /v<version> and
+                    # ReleaseBuilder appends the immutable release_id.
+                    "base_url": _environment("ECOREX_RELEASE_CDN_BASE_URL"),
                 },
             ],
             "inputs": inputs,

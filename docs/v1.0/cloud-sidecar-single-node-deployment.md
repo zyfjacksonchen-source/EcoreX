@@ -27,8 +27,9 @@
 python scripts/deploy-v1-cloud-sidecar.py --spec /etc/ecorex/cloud/deployment-spec.json
 ```
 
-不带 `--apply`/`--rollback` 永远只输出 dry-run 计划。当前仓库没有执行任何远程
-部署。
+不带 `--apply`/`--rollback` 永远只输出 dry-run 计划。远程传输和命令执行属于独立
+operator 边界，部署器本身不会隐式发起 SSH；每次生产执行必须另存签名授权、计划、
+激活 journal 与回读收据。
 
 ## 磁盘与加密硬前置
 
@@ -155,6 +156,18 @@ Control Plane 管理数据库。Provider origin 只可由固定部署 preset 提
 `REPLACE_ME`、关闭的 encryption 和 signer/provider 占位都是上线阻断值；
 正式配置必须按各生产 runbook 补全，不能作为默认生产值。
 
+首次从 v0.2.9.2 激活 v1 的 deployment spec 必须显式包含：
+
+```json
+"legacy_admin_migration": {
+  "source_version": "0.2.9.2"
+}
+```
+
+检测到固定 legacy Admin 数据库但缺少该授权时，dry-run/apply 均以
+`legacy_admin_migration_required` fail-closed。已有 v1 active slot 的后续部署不会
+再次导入。
+
 ## Dry-run、部署与目标围栏
 
 先执行 dry-run：
@@ -173,7 +186,7 @@ python scripts/deploy-v1-cloud-sidecar.py \
   --confirm-target <sha256-of-exact-/etc/machine-id>
 ```
 
-部署器同时验证：OS `alinux` major 4、aarch64、root、本机 machine-id hash 与 spec/
+dry-run 会实际执行同一套无副作用 target preflight，而不是只打印计划。部署器同时验证：OS `alinux` major 4、aarch64、root、本机 machine-id hash 与 spec/
 确认参数三者完全相等、固定二进制路径、Python 3.11.9、PostgreSQL 15、MinIO、
 systemd、Nginx、两个服务账号、PostgreSQL/MinIO systemd active。部署 spec 不能把
 artifact/keyring/attestation/二进制重定向到围栏外。
@@ -196,8 +209,10 @@ artifact/keyring/attestation/二进制重定向到围栏外。
    `migrating`；后者必须早于任何 writer stop；
 5. 先停止 target writer，再停止 source writer；首次 v1 激活的 source 是 legacy，
    同样必须显式停止 legacy Admin/Web writer；
-6. 在双侧 writer 均停止后，以新代码幂等执行 migrate + 完整 check，成功后 durable
-   记录 `schema_ready`；候选服务严禁在此标记前启动；
+6. 在双侧 writer 均停止后，以固定 cutoff 对 v0.2.9.2 Admin/identity 做只读 inventory，
+   将 source/database snapshot/Admin receipt/identity digest 写入 journal；幂等提交
+   Admin 与 identity import 后记录 `legacy_imported`，再执行完整 schema check 并
+   durable 记录 `schema_ready`；候选服务严禁在此标记前启动；
 7. 启动候选 slot，三个 `/health/ready` 均 200，Image Worker systemd 已启动；
 8. 原子替换 `active-control-plane.conf` symlink，`nginx -t` 后 reload；
 9. fsync 写入 `/var/lib/ecorex/cloud-deploy/active.json` 和 `current` symlink；
@@ -205,11 +220,12 @@ artifact/keyring/attestation/二进制重定向到围栏外。
 
 恢复同时读取 journal phase 和 `active-control-plane.conf` / `active-admin-route.conf`
 两个实际 symlink。`migrating` 表示 migration 可能执行了任意前缀：启动恢复先再次停止
-target/source 两侧 writer，重新验签 target release，幂等重跑 migrate + check，并 durable
+target/source 两侧 writer，重新验签 target release，幂等重跑 migrate/import/check，并 durable
 推进到 `schema_ready`，之后才允许选择恢复方向。路由明确仍指向 source 时，仅在旧 slot
 对当前 schema 的四个服务角色检查全部通过后恢复 source；检查不兼容则 roll-forward。
-首次 v1 激活的 legacy source 在 migration 开始后无法提供 v1 schema 兼容证明，因此必须
-roll-forward target。phase 为 `routes_switched`/`state_written`，或双 link 已指向 target、
+首次 v1 激活在任何 target business write 前失败会恢复 legacy；Admin import 的事务收据
+是 commit→journal fsync 窗口的权威，一旦该收据存在就绝不重启 legacy，而是幂等补齐
+identity import 并 roll-forward。phase 为 `legacy_imported`/`routes_switched`/`state_written`，或双 link 已指向 target、
 部分切换或无法判定时，也必须 roll-forward。两个方向都先停止两侧 writer，再检查并启动
 唯一目标；任何时刻不允许两个 writer 集合重叠。迁移或恢复失败保留 journal，下一次启动
 继续幂等收敛。首次 v1 激活把 legacy 记为 typed prior；明确回滚命令可受控启动 legacy

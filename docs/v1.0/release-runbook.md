@@ -146,22 +146,28 @@ python scripts/check-v1-public-download-site.py
 ecorex-release build-public-bootstrap-index `
   --release-dir C:\releases\1.0.0 `
   --publication-receipt C:\ecorex-admin\receipts\1.0.0-publication.json `
-  --output C:\srv\ecorex-agent-download\next\public-bootstrap-index.json `
+  --output C:\ecorex-admin\site-staging\RELEASE_ID\site\public-bootstrap-index.json `
   --trusted-key release-2026=BASE64_ED25519_PUBLIC_KEY
 ```
 
 The command reads the exact manifest through one bounded stable file
 descriptor, proves its byte SHA-256 against release metadata and the
 publication receipt, verifies the manifest plus the three supported Bootstrap
-signatures, and then performs a locked same-directory atomic replace. A failed
-parse, verification, schema check or replace leaves the previous pointer
-untouched. Persistent process-lock files live outside the served directory, so
-the public site cannot expose a lock artifact alongside discovery JSON.
+signatures, and writes a signed staging input through a locked same-directory
+atomic replace. It does not mutate the online pointer. The site deployer binds
+that exact initial authority into its signed authorization, while the Control
+Plane later owns the online object at
+`/srv/ecorex-agent-download/public-pointer/public-bootstrap-index.json` and
+renews only its bounded freshness envelope with the distinct publication key.
+A failed parse, verification, schema check or replace leaves the current public
+pointer untouched. Persistent process-lock files live outside the served
+directory, so the public site cannot expose a lock artifact alongside discovery
+JSON.
 
 The asset builder writes new digest-named JS/CSS before atomically rebinding
 `index.html`, then removes the old names; rerunning also cleans an unreferenced
-asset left by a crash before the HTML switch. `index.html` and
-`public-bootstrap-index.json` must be served with `no-store`.
+asset left by a crash before the HTML switch. `index.html` and the exact dynamic
+route `/ecorex-agent/public-bootstrap-index.json` must be served with `no-store`.
 The content-addressed JS/CSS/images and immutable release assets use a one-year
 immutable cache. The page retries the three manifest origins and compares the
 exact response bytes with the projected SHA-256 before it renders download

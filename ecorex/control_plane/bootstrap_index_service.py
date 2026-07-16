@@ -105,6 +105,14 @@ class FilesystemPublicIndexObjectStore:
                     0o600,
                 )
                 with os.fdopen(descriptor, "wb") as stream:
+                    # The pointer is intentionally public, while its parent is
+                    # writable only by the Control Plane identity.  The
+                    # service UMask is 0077, so set the final read-only mode on
+                    # the still-private temporary inode before publishing it.
+                    if hasattr(os, "fchmod"):
+                        os.fchmod(stream.fileno(), 0o644)
+                    else:  # pragma: no cover - Windows compatibility surface
+                        os.chmod(temporary, 0o644)
                     stream.write(payload)
                     stream.flush()
                     os.fsync(stream.fileno())

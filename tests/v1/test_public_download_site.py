@@ -35,6 +35,35 @@ def test_public_download_site_static_gate_passes() -> None:
     assert 'href="/admin/"' not in html
 
 
+def test_public_release_routes_hide_channel_but_map_to_channel_storage() -> None:
+    caddy = (
+        ROOT / "deploy/ecorex-site/caddy/ecorex-agent.routes.caddy"
+    ).read_text(encoding="utf-8")
+    nginx = (
+        ROOT / "deploy/ecorex-site/nginx/ecorex-agent.conf.example"
+    ).read_text(encoding="utf-8")
+
+    canonical = (
+        "/ecorex-agent/releases/v1.0.0/"
+        "release-stable-0123456789abcdef01234567/release-manifest.json"
+    )
+    assert "/stable/release-stable-" not in canonical
+    assert "(?P<release_channel>stable|canary)" in caddy
+    assert (
+        "/{re.ecorex_release_file.release_namespace}/"
+        "{re.ecorex_release_file.release_channel}/"
+        "{re.ecorex_release_file.release_id}/"
+        "{re.ecorex_release_file.release_asset}"
+    ) in caddy
+    assert "(?<ecorex_release_channel>stable|canary)" in nginx
+    assert (
+        "/v1-artifacts/$ecorex_release_namespace/"
+        "$ecorex_release_channel/$ecorex_release_id/$ecorex_release_asset"
+    ) in nginx
+    assert "handle /ecorex-agent/releases/*" in caddy
+    assert "location /ecorex-agent/releases/" in nginx
+
+
 def test_public_asset_builder_writes_new_hashes_before_switching_html(
     tmp_path: Path,
 ) -> None:

@@ -33,8 +33,20 @@ handle /api/v1/admin* {
     reverse_proxy 127.0.0.1:18084
 }
 
-handle_path /ecorex-agent/releases/* {
+@ecorex_release_file path_regexp ecorex_release_file ^/ecorex-agent/releases/(?P<release_namespace>v1\.0\.0)/(?P<release_id>release-(?P<release_channel>stable|canary)-[0-9a-f]{24})/(?P<release_asset>[A-Za-z0-9][A-Za-z0-9._-]{0,179})$
+handle @ecorex_release_file {
     root * /srv/ecorex-agent-download/v1-artifacts
+    rewrite * /{re.ecorex_release_file.release_namespace}/{re.ecorex_release_file.release_channel}/{re.ecorex_release_file.release_id}/{re.ecorex_release_file.release_asset}
+    file_server
+}
+
+handle /ecorex-agent/releases/* {
+    respond 404
+}
+
+handle /ecorex-agent/public-bootstrap-index.json {
+    root * /srv/ecorex-agent-download/public-pointer
+    rewrite * /public-bootstrap-index.json
     file_server
 }
 

@@ -1343,7 +1343,10 @@ def _release_sources(
                 # Dedicated EcoreX mirrors keep the release-id namespace.
                 ("/releases/download", f"/v{__version__}/{channel_suffix}")
                 if expected_kind is SourceKind.GITHUB_CN_MIRROR
-                else (f"/v{__version__}/{channel_suffix}",)
+                # The production CDN exposes one immutable version namespace.
+                # Channel remains durable replica state, but is not part of
+                # the signed public URL consumed by clients.
+                else (f"/v{__version__}",)
             )
         )
         if (

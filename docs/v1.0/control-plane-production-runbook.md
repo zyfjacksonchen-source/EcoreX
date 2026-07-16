@@ -62,7 +62,7 @@ Required non-secret settings:
 | `ECOREX_CP_RELEASE_PUBLIC_KEYS_JSON` | release-signing public-key ring |
 | `ECOREX_CP_PUBLICATION_PUBLIC_KEYS_JSON` | distinct online pointer-freshness public-key ring; neither key IDs nor SHA-256 fingerprints of raw Ed25519 keys may overlap release keys |
 | `ECOREX_CP_ROLLBACK_SIGNER_PUBLIC_KEYS_JSON` | independent server rollback key ring; key IDs and public-key fingerprints must be disjoint from release and publication roles |
-| `ECOREX_CP_PUBLIC_BOOTSTRAP_INDEX_PATH` | absolute shared-web-tier path ending in `public-bootstrap-index.json` |
+| `ECOREX_CP_PUBLIC_BOOTSTRAP_INDEX_PATH` | exactly `/srv/ecorex-agent-download/public-pointer/public-bootstrap-index.json`; outside every immutable site slot |
 | `ECOREX_CP_PUBLIC_BOOTSTRAP_INDEX_URL` | exact credential-free HTTPS readback URL for that object |
 | `ECOREX_CP_PUBLIC_BOOTSTRAP_READBACK_HOSTS` | comma-separated allowlist containing the readback URL host |
 | `ECOREX_CP_INSTANCE_ID` | stable signal-consumer identity for this process |

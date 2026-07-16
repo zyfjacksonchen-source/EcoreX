@@ -25,6 +25,7 @@ from ecorex.deployment.cloud_artifact import (
 from ecorex.release import (
     Ed25519MemorySigner,
     public_bootstrap_authority_signing_bytes,
+    public_bootstrap_freshness_signing_bytes,
 )
 
 
@@ -38,12 +39,8 @@ SIGNATURE = {
     "key_id": "test-release-key",
     "value": base64.b64encode(b"s" * 64).decode("ascii"),
 }
-FRESH_SIGNATURE = {
-    "algorithm": "ed25519",
-    "key_id": "test-freshness-key",
-    "value": base64.b64encode(b"f" * 64).decode("ascii"),
-}
 AUTHORIZATION_PRIVATE = Ed25519PrivateKey.from_private_bytes(b"k" * 32)
+FRESHNESS_PRIVATE = Ed25519PrivateKey.from_private_bytes(b"f" * 32)
 AUTHORIZATION_SIGNER = Ed25519MemorySigner(
     "ecorex-direct-release-test", AUTHORIZATION_PRIVATE
 )
@@ -98,6 +95,49 @@ def _canonical(value: object) -> bytes:
     ).encode()
 
 
+def _signature(
+    private: Ed25519PrivateKey,
+    *,
+    key_id: str,
+    payload: bytes,
+) -> dict[str, str]:
+    return {
+        "algorithm": "ed25519",
+        "key_id": key_id,
+        "value": base64.b64encode(private.sign(payload)).decode("ascii"),
+    }
+
+
+def _resign_freshness(
+    pointer: dict[str, object],
+    *,
+    issued_at: datetime,
+    expires_at: datetime,
+    key_id: str = "test-freshness-key",
+    private: Ed25519PrivateKey = FRESHNESS_PRIVATE,
+) -> None:
+    freshness = pointer["freshness"]
+    assert isinstance(freshness, dict)
+    issued = issued_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+    expires = expires_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+    authority_sha256 = str(freshness["authority_sha256"])
+    freshness.update(
+        {
+            "issued_at": issued,
+            "expires_at": expires,
+            "signature": _signature(
+                private,
+                key_id=key_id,
+                payload=public_bootstrap_freshness_signing_bytes(
+                    authority_sha256=authority_sha256,
+                    issued_at=issued,
+                    expires_at=expires,
+                ),
+            ),
+        }
+    )
+
+
 def _sources(file_name: str) -> list[dict[str, object]]:
     return [
         {
@@ -136,6 +176,22 @@ def _pointer() -> dict[str, object]:
         revision=RELEASE_ID,
         target=target,
     )
+    authority_signature = _signature(
+        AUTHORIZATION_PRIVATE,
+        key_id=AUTHORIZATION_SIGNER.key_id,
+        payload=authority_payload,
+    )
+    authority_sha256 = hashlib.sha256(authority_payload).hexdigest()
+    freshness_payload = public_bootstrap_freshness_signing_bytes(
+        authority_sha256=authority_sha256,
+        issued_at=issued_at,
+        expires_at=expires_at,
+    )
+    freshness_signature = _signature(
+        FRESHNESS_PRIVATE,
+        key_id="test-freshness-key",
+        payload=freshness_payload,
+    )
     bootstrap = []
     for artifact_id, platform, architecture, file_name in (
         ("bootstrap-windows-x64", "windows", "x64", "bootstrap-windows.zip"),
@@ -163,13 +219,13 @@ def _pointer() -> dict[str, object]:
             "sequence": 1,
             "revision": RELEASE_ID,
             "target": target,
-            "signature": SIGNATURE,
+            "signature": authority_signature,
         },
         "freshness": {
-            "authority_sha256": hashlib.sha256(authority_payload).hexdigest(),
+            "authority_sha256": authority_sha256,
             "issued_at": issued_at,
             "expires_at": expires_at,
-            "signature": FRESH_SIGNATURE,
+            "signature": freshness_signature,
         },
         "release": {
             "release_id": RELEASE_ID,
@@ -249,6 +305,19 @@ def _write_staging(paths: deployment.DeploymentPaths) -> Path:
             {AUTHORIZATION_SIGNER.key_id: base64.b64encode(public).decode("ascii")}
         )
     )
+    freshness_public = FRESHNESS_PRIVATE.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    paths.publication_keyring_path.write_bytes(
+        _canonical(
+            {
+                "test-freshness-key": base64.b64encode(freshness_public).decode(
+                    "ascii"
+                )
+            }
+        )
+    )
     return site
 
 
@@ -318,6 +387,15 @@ def _paths(tmp_path: Path) -> deployment.DeploymentPaths:
     return paths
 
 
+def _pointer_trust(
+    paths: deployment.DeploymentPaths,
+) -> deployment.PublicPointerTrust:
+    return deployment._read_public_pointer_trust(
+        paths,
+        expected_owner_uid=None,
+    )
+
+
 class _Controller:
     def __init__(self) -> None:
         self.validations = 0
@@ -336,9 +414,15 @@ class _Readback:
         site: deployment.ValidatedSite,
         *,
         admin_status: int = 200,
+        pointer_payload: bytes | None = None,
     ) -> None:
         self.site = site
         self.admin_status = admin_status
+        self.pointer_payload = (
+            site.public_index.payload
+            if pointer_payload is None
+            else pointer_payload
+        )
 
     def get(self, url: str, *, maximum_bytes: int) -> deployment.HttpReadback:
         del maximum_bytes
@@ -349,9 +433,8 @@ class _Readback:
                 200, {"cache-control": ("no-store",)}, value.payload
             )
         if relative == "public-bootstrap-index.json":
-            value = self.site.file(relative)
             return deployment.HttpReadback(
-                200, {"cache-control": ("no-store",)}, value.payload
+                200, {"cache-control": ("no-store",)}, self.pointer_payload
             )
         if relative == "admin/":
             return deployment.HttpReadback(
@@ -437,6 +520,9 @@ def _require_symlink(tmp_path: Path) -> None:
 def test_plan_binds_exact_published_site_without_mutation(tmp_path: Path) -> None:
     paths = _paths(tmp_path)
     _write_staging(paths)
+    site = deployment.validate_staged_site(
+        RELEASE_ID, paths=paths, expected_owner_uid=None
+    )
 
     result = deployment.plan(RELEASE_ID, paths=paths, expected_owner_uid=None)
 
@@ -444,6 +530,16 @@ def test_plan_binds_exact_published_site_without_mutation(tmp_path: Path) -> Non
     assert result["mutation_performed"] is False
     assert result["target"] == "https://dl.ecoremedia.net/ecorex-agent/"
     assert result["slot_action"] == "create"
+    assert "public-bootstrap-index.json" not in {
+        value.relative_path for value in site.files
+    }
+    authorization = json.loads(
+        (site.root.parent / "deployment-authorization.json").read_text()
+    )
+    assert (
+        authorization["authorization"]["public_index_sha256"]
+        == site.public_index.sha256
+    )
     assert not paths.slots_root.exists()
     assert not os.path.lexists(paths.current_path)
 
@@ -487,7 +583,8 @@ def test_readback_requires_no_store_immutable_assets_and_admin_route(
         RELEASE_ID, paths=paths, expected_owner_uid=None
     )
 
-    readback = deployment._verify_target_readback(site, _Readback(site))
+    trust = _pointer_trust(paths)
+    readback = deployment._verify_target_readback(site, _Readback(site), trust)
     assert readback["index"]["cache_control"] == "no-store"
     assert len(readback["assets"]) == 3
     assert readback["admin"]["status"] == 200
@@ -496,7 +593,7 @@ def test_readback_requires_no_store_immutable_assets_and_admin_route(
         deployment.PublicSiteDeployError, match="admin_route_readback_failed"
     ):
         deployment._verify_target_readback(
-            site, _Readback(site, admin_status=502)
+            site, _Readback(site, admin_status=502), trust
         )
 
     class BrokenAdminReadback(_Readback):
@@ -537,8 +634,95 @@ def test_readback_requires_no_store_immutable_assets_and_admin_route(
     ):
         with pytest.raises(deployment.PublicSiteDeployError, match=code):
             deployment._verify_target_readback(
-                site, BrokenAdminReadback(site, failure)
+                site, BrokenAdminReadback(site, failure), trust
             )
+
+
+def test_readback_accepts_only_freshness_renewal_for_authorized_target(
+    tmp_path: Path,
+) -> None:
+    paths = _paths(tmp_path)
+    _write_staging(paths)
+    site = deployment.validate_staged_site(
+        RELEASE_ID, paths=paths, expected_owner_uid=None
+    )
+    refreshed = json.loads(site.public_index.payload)
+    now = datetime.now(UTC).replace(microsecond=0)
+    _resign_freshness(
+        refreshed,
+        issued_at=now,
+        expires_at=now + timedelta(hours=2),
+    )
+    refreshed_payload = _canonical(refreshed)
+
+    readback = deployment._verify_target_readback(
+        site,
+        _Readback(site, pointer_payload=refreshed_payload),
+        _pointer_trust(paths),
+    )
+    assert readback["pointer"]["sha256"] == hashlib.sha256(
+        refreshed_payload
+    ).hexdigest()
+
+    rejected: list[dict[str, object]] = []
+    tampered = json.loads(refreshed_payload)
+    tampered["freshness"]["signature"]["value"] = base64.b64encode(
+        b"x" * 64
+    ).decode("ascii")
+    rejected.append(tampered)
+    unknown_key = json.loads(refreshed_payload)
+    unknown_key["freshness"]["signature"]["key_id"] = "unknown-freshness-key"
+    rejected.append(unknown_key)
+    expired = json.loads(refreshed_payload)
+    _resign_freshness(
+        expired,
+        issued_at=now - timedelta(hours=2),
+        expires_at=now - timedelta(hours=1),
+    )
+    rejected.append(expired)
+    for invalid in rejected:
+        with pytest.raises(
+            deployment.PublicSiteDeployError,
+            match="public_pointer_readback_failed",
+        ):
+            deployment._verify_target_readback(
+                site,
+                _Readback(site, pointer_payload=_canonical(invalid)),
+                _pointer_trust(paths),
+            )
+
+    drifted = json.loads(refreshed_payload)
+    drifted_digest = "7" * 64
+    drifted["authority"]["target"]["build_digest"] = drifted_digest
+    drifted["release"]["build_digest"] = drifted_digest
+    target = drifted["authority"]["target"]
+    authority_payload = public_bootstrap_authority_signing_bytes(
+        sequence=1,
+        revision=RELEASE_ID,
+        target=target,
+    )
+    drifted["freshness"]["authority_sha256"] = hashlib.sha256(
+        authority_payload
+    ).hexdigest()
+    drifted["authority"]["signature"] = _signature(
+        AUTHORIZATION_PRIVATE,
+        key_id=AUTHORIZATION_SIGNER.key_id,
+        payload=authority_payload,
+    )
+    _resign_freshness(
+        drifted,
+        issued_at=now,
+        expires_at=now + timedelta(hours=2),
+    )
+    with pytest.raises(
+        deployment.PublicSiteDeployError,
+        match="public_pointer_readback_failed",
+    ):
+        deployment._verify_target_readback(
+            site,
+            _Readback(site, pointer_payload=_canonical(drifted)),
+            _pointer_trust(paths),
+        )
 
 
 def test_authorization_rejects_receipt_site_key_and_domain_tampering(
@@ -716,23 +900,42 @@ def test_apply_creates_no_clobber_slot_atomic_pointer_and_root_receipt(
     assert result["status"] == "passed"
     assert paths.current_path.is_symlink()
     assert os.readlink(paths.current_path) == f"site-slots/{RELEASE_ID}"
+    slot = paths.slots_root / RELEASE_ID
+    assert not (slot / "public-bootstrap-index.json").exists()
+    immutable_before = {
+        path.relative_to(slot).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in slot.rglob("*")
+        if path.is_file()
+    }
     assert not paths.journal_path.exists()
     receipt = json.loads(Path(result["receipt"]).read_text())
     assert receipt["receipt_type"] == "ecorex-public-site-deployment"
     assert receipt["readback"]["admin"]["status"] == 200
     assert receipt["previous_target_type"] == "absent"
 
+    refreshed = json.loads(site.public_index.payload)
+    now = datetime.now(UTC).replace(microsecond=0)
+    _resign_freshness(
+        refreshed,
+        issued_at=now,
+        expires_at=now + timedelta(hours=2),
+    )
     second = deployment.apply(
         RELEASE_ID,
         confirm_target=deployment.PUBLIC_ORIGIN,
         paths=paths,
         controller=_Controller(),
-        client=_Readback(site),
+        client=_Readback(site, pointer_payload=_canonical(refreshed)),
         expected_owner_uid=None,
         enforce_server_fence=False,
     )
     assert second["idempotent"] is True
     assert second["receipt_sha256"] == result["receipt_sha256"]
+    assert immutable_before == {
+        path.relative_to(slot).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in slot.rglob("*")
+        if path.is_file()
+    }
 
 
 class _CurrentAwareReadback(_Readback):
@@ -750,6 +953,15 @@ class _CurrentAwareReadback(_Readback):
             return deployment.HttpReadback(200, {"cache-control": ("no-store",)}, body)
         if url == deployment.ADMIN_URL:
             return deployment.HttpReadback(502, {}, b"bad gateway")
+        if (
+            url == f"{deployment.PUBLIC_ORIGIN}public-bootstrap-index.json"
+            and self.paths.public_pointer_path.is_file()
+        ):
+            return deployment.HttpReadback(
+                200,
+                {"cache-control": ("no-store",)},
+                self.paths.public_pointer_path.read_bytes(),
+            )
         return super().get(url, maximum_bytes=maximum_bytes)
 
 
@@ -760,6 +972,9 @@ def test_failed_first_v1_activation_restores_legacy_directory_and_rechecks(
     _require_symlink(tmp_path)
     paths = _paths(tmp_path)
     _write_staging(paths)
+    pointer_before = (paths.staging_root / RELEASE_ID / "site" / "public-bootstrap-index.json").read_bytes()
+    paths.public_pointer_path.parent.mkdir(parents=True)
+    paths.public_pointer_path.write_bytes(pointer_before)
     paths.current_path.mkdir()
     legacy_html = b"<html>legacy-v0</html>"
     (paths.current_path / "index.html").write_bytes(legacy_html)
@@ -796,6 +1011,7 @@ def test_failed_first_v1_activation_restores_legacy_directory_and_rechecks(
     assert paths.download_root in synced
     assert paths.legacy_root in synced
     assert not any(paths.legacy_root.iterdir())
+    assert paths.public_pointer_path.read_bytes() == pointer_before
 
 
 def test_process_crash_after_pointer_switch_is_completed_from_journal(
@@ -932,7 +1148,10 @@ def test_conflicting_existing_slot_is_never_overwritten(tmp_path: Path) -> None:
         RELEASE_ID, paths=paths, expected_owner_uid=None
     )
     slot = paths.slots_root / RELEASE_ID
-    shutil.copytree(site.root, slot)
+    (slot / "assets").mkdir(parents=True)
+    for value in site.files:
+        target = slot / value.relative_path
+        target.write_bytes(value.payload)
     next(slot.glob("site.*.js")).write_text("conflicting bytes")
 
     with pytest.raises(deployment.PublicSiteDeployError, match="site_slot_file_mismatch"):

@@ -496,7 +496,7 @@ def _recipe(root: Path, inputs: list[dict[str, str]]) -> Path:
             {
                 "source_id": "cdn",
                 "kind": "ecorex-cdn",
-                "base_url": "https://cdn.example/ecorex/v1.0.0/canary",
+                "base_url": "https://cdn.example/ecorex/v1.0.0",
             },
         ],
         "inputs": inputs,
@@ -604,7 +604,7 @@ def test_candidate_builds_three_bootstraps_runtime_archives_and_eighteen_real_pa
         f"/v1.0.0-canary-{built.manifest.release_id.rsplit('-', 1)[1]}"
     )
     assert built.manifest.sources[2].base_url.endswith(
-        f"/canary/{built.manifest.release_id}"
+        f"/v1.0.0/{built.manifest.release_id}"
     )
     verifier = Ed25519SignatureVerifier({signer.key_id: public})
     verify_manifest_signature(built.manifest, verifier)
@@ -1290,7 +1290,7 @@ def test_recipe_assembler_uses_release_scoped_channel_roots(tmp_path: Path) -> N
     assert len(recipe["inputs"]) == 24
     assert recipe["sources"][0]["base_url"].endswith("/v1.0.0/canary")
     assert recipe["sources"][1]["base_url"].endswith("/releases/download")
-    assert recipe["sources"][2]["base_url"].endswith("/v1.0.0/canary")
+    assert recipe["sources"][2]["base_url"].endswith("/v1.0.0")
 
 
 def test_recipe_assembler_preserves_github_cn_proxy_namespace(tmp_path: Path) -> None:
@@ -1343,4 +1343,4 @@ def test_recipe_assembler_preserves_github_cn_proxy_namespace(tmp_path: Path) ->
     recipe = json.loads(output.read_text())
     assert recipe["sources"][0]["base_url"] == proxy_root
     assert recipe["sources"][1]["base_url"].endswith("/releases/download")
-    assert recipe["sources"][2]["base_url"].endswith("/v1.0.0/stable")
+    assert recipe["sources"][2]["base_url"].endswith("/v1.0.0")

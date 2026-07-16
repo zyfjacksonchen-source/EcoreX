@@ -1035,12 +1035,15 @@
   and Control Plane activation are distinct explicit environment-approved
   operations; defaults are no publication, dry-run and 1%.
 - Channel namespace: stable keeps the public GitHub tag `v1.0.0`; each canary
-  uses `v1.0.0-canary-<build-prefix>`. Mirror and CDN roots end in
-  `/v1.0.0/stable` or `/v1.0.0/canary`, then append the immutable `release_id`.
-  Source roots and the scoping mode participate in `build_digest`, while final
-  URLs are derived only after that digest exists. This prevents a canary draft
-  or prior canary build from owning the immutable tag/object prefix needed by
-  another Candidate or the formal release.
+  uses `v1.0.0-canary-<build-prefix>`. A dedicated domestic mirror may retain
+  `/v1.0.0/stable` or `/v1.0.0/canary`; a GitHub read-through accelerator instead
+  preserves the GitHub `releases/download/<tag>` namespace. The EcoreX CDN has
+  one public version root, `/ecorex-agent/releases/v1.0.0`, and appends only the
+  immutable `release_id`; channel remains internal replica state and is never a
+  public CDN path segment. Source roots and the scoping mode participate in
+  `build_digest`, while final URLs are derived only after that digest exists.
+  This prevents a canary draft or prior canary build from owning the immutable
+  tag/object prefix needed by another Candidate or the formal release.
 - Consequence: neither a PR nor a green source test can access signing/origin
   credentials. A missing Windows helper, browser/image adapter, platform
   Runtime closure, staging receipt, protected signer or origin credential

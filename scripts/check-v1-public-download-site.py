@@ -170,6 +170,11 @@ def main() -> int:
     )
     _require(
         "/ecorex-agent/public-bootstrap-index.json" in caddy
+        and "root * /srv/ecorex-agent-download/public-pointer" in caddy
+        and "(?P<release_channel>stable|canary)" in caddy
+        and "{re.ecorex_release_file.release_channel}" in caddy
+        and "handle /ecorex-agent/releases/*" in caddy
+        and "respond 404" in caddy
         and 'Cache-Control "no-store"' in caddy
         and "Content-Security-Policy" in caddy
         and "script-src 'self'" in caddy
@@ -193,6 +198,14 @@ def main() -> int:
     )
     _require(
         "location = /ecorex-agent/public-bootstrap-index.json" in nginx
+        and "alias /srv/ecorex-agent-download/public-pointer/"
+        "public-bootstrap-index.json;" in nginx
+        and "alias /srv/ecorex-agent-download/current/"
+        "public-bootstrap-index.json;" not in nginx
+        and "(?<ecorex_release_channel>stable|canary)" in nginx
+        and "/$ecorex_release_channel/$ecorex_release_id/" in nginx
+        and "location /ecorex-agent/releases/" in nginx
+        and "return 404;" in nginx
         and 'Cache-Control "no-store"' in nginx
         and "Content-Security-Policy" in nginx
         and "script-src 'self'" in nginx
