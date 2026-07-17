@@ -2257,3 +2257,14 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Fail-closed classifier | 0 local contract | Every browser lifecycle boundary now maps unexpected operational exceptions to a fixed allowlisted phase code without exception text, arguments or host paths. Cleanup cannot replace an earlier primary failure. Unknown codes remain redacted, mandatory HTTP/WebSocket guards remain enabled, and every classified outcome still fails Stage. |
 | Focused regression | 0 | Platform Pack staging passes 105 tests / 12 explicit platform skips. Phase injection covers driver, browser, context, guard, page, operation and runtime preparation/cleanup plus primary-error preservation. Ruff, Python compilation and tracked whitespace checks pass. |
 | Promotion | pending | The classifier requires protected PR/main verification, followed by a new same-run Stage that identifies the remaining browser lifecycle boundary. No output from `29580528963` may be reused. |
+
+## Observability WAL point-in-time sampling - 2026-07-17
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Protected Browser classifier | 0 | PR #27 run `29581272844` passed all five protected jobs. |
+| Exact-main observation | 1 expected | Exact-main run `29581812925` passed Windows x64 and both macOS jobs, then exposed one health-projection race in the quality job while 2317 other tests passed. Cross-runner stability was correctly withheld; the run is not release evidence. |
+| Root cause | 0 | System observability sampled the database and WAL with `exists()` followed by `stat()`. SQLite may legally unlink a WAL after its last reader closes or during checkpointing, so the two filesystem calls formed a TOCTOU window that could turn a normal point-in-time transition into an HTTP 500. |
+| Runtime correction | 0 local contract | Storage sampling now performs one `stat` syscall. A concurrent `FileNotFoundError` is a valid zero-byte point-in-time sample; permission and other real storage failures remain visible and are never reported as healthy. |
+| Focused regression | 0 | System observability passes 9 tests, including deterministic WAL disappearance and non-disappearance error propagation. Ruff, Python compilation and tracked whitespace checks pass. |
+| Promotion | pending | A fresh protected PR/main matrix and wholly new same-run three-platform Stage remain mandatory. |

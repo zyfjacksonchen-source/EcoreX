@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import contextmanager
 import json
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 import pytest
@@ -83,6 +84,45 @@ def test_system_sample_covers_runtime_storage_memory_and_redacted_services(tmp_p
     assert "[REDACTED:SECRET]" in encoded
     assert "[REDACTED:PATH:" in encoded
     assert "metrics" not in sample.to_dict(technical=False)
+
+
+def test_system_sample_treats_concurrent_wal_unlink_as_zero_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kernel = RuntimeKernel(tmp_path / "runtime.db")
+    service = SystemObservabilityService(kernel.database)
+    wal = Path(str(kernel.database.path) + "-wal")
+    original_stat = Path.stat
+
+    def disappearing_wal(path: Path, *args, **kwargs):
+        if path == wal:
+            raise FileNotFoundError(wal)
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", disappearing_wal)
+    sample = service.collect(persist=False)
+
+    assert sample.to_dict(technical=True)["metrics"]["storage"]["wal_bytes"] == 0
+
+
+def test_system_sample_does_not_hide_non_disappearance_storage_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kernel = RuntimeKernel(tmp_path / "runtime.db")
+    service = SystemObservabilityService(kernel.database)
+    wal = Path(str(kernel.database.path) + "-wal")
+    original_stat = Path.stat
+
+    def inaccessible_wal(path: Path, *args, **kwargs):
+        if path == wal:
+            raise PermissionError("wal metadata denied")
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", inaccessible_wal)
+    with pytest.raises(PermissionError, match="wal metadata denied"):
+        service.collect(persist=False)
 
 
 def test_health_transition_is_audited_and_survives_service_restart(tmp_path) -> None:

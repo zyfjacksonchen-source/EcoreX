@@ -33,6 +33,23 @@ def _stored_time(value: datetime) -> str:
     return value.astimezone(UTC).isoformat(timespec="microseconds")
 
 
+def _file_size_if_present(path: Path) -> int:
+    """Read one point-in-time size without an existence-check race.
+
+    SQLite may unlink the WAL immediately after the last connection closes or
+    during a checkpoint.  ``exists()`` followed by ``stat()`` therefore turns
+    normal WAL lifecycle churn into a health-endpoint failure.  A single stat
+    is the observation; disappearance before that syscall is a valid zero-byte
+    sample, while other filesystem errors still surface as real storage
+    failures.
+    """
+
+    try:
+        return path.stat().st_size
+    except FileNotFoundError:
+        return 0
+
+
 def _safe_provider_value(value: Any, *, depth: int = 0) -> Any:
     if depth > 6:
         return "omitted"
@@ -236,8 +253,8 @@ class SystemObservabilityService:
             except ValueError:
                 oldest_age = -1.0
         return {
-            "database_bytes": path.stat().st_size if path.exists() else 0,
-            "wal_bytes": Path(str(path) + "-wal").stat().st_size if Path(str(path) + "-wal").exists() else 0,
+            "database_bytes": _file_size_if_present(path),
+            "wal_bytes": _file_size_if_present(Path(str(path) + "-wal")),
             "jobs": jobs,
             "turns": turns,
             "interactions": interactions,
