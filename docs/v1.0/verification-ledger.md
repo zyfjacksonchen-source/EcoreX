@@ -2366,3 +2366,14 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Runtime correction | 0 local contract | Child launch now records a strict zero-or-errno field and never fabricates a return code. Socket cleanup records an exact boolean and cannot replace the network-denial errno. The evaluator requires successful child launch and cleanup, rejects malformed or boolean errno values, and emits separate allowlisted `child_launch_failed` or `network_cleanup_failed` codes. Non-dict child JSON is rejected without raising. |
 | Focused regression | 0 | Process and platform suites pass 137 tests / 14 explicit platform skips. The exact embedded parent and child scripts compile and execute unsandboxed while rejecting the host. All classifier and Stage allowlist branches, Ruff, Python compilation, dependency locks and tracked whitespace pass. |
 | Promotion | pending | Fresh protected PR/main verification and a wholly new same-run Stage are required. No output from `29602976932` may be reused. |
+
+## macOS Seatbelt interpreter handshake - 2026-07-18
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Protected structured-runtime baseline | 0 | PR #37 run `29603785165` and exact-main run `29604273489` passed all five jobs. The squash merge is exact main `ecc3d849598fa2b5da0ce0fa04ef151a1889f8ea`. |
+| Exact-main Stage `29604805336` | 1 expected | macOS arm64 still returned `macos_seatbelt_probe_process_nonzero`; macOS x64 and Windows were immediately cancelled and the entire run quarantined. Structured child launch and socket cleanup therefore did not identify the failure, leaving either pre-script interpreter startup or an abnormal in-script phase. |
+| Observability root cause | 0 | A process return code alone cannot distinguish sandbox-exec/Python startup failure from an exception after Python begins executing. Enumerating individual operations cannot close that evidence gap and creates repeated generic failures. |
+| Runtime correction | 0 local contract | The probe emits and flushes one fixed startup handshake as its first Python action. Successful output must contain exactly that marker plus one canonical JSON line. Every subsequent phase runs inside a top-level fail-closed envelope that emits only a fixed phase id; missing marker, interpreter-start failure and each fatal phase have explicit Stage allowlist codes. No exception text, stderr, path, argv, errno or provider detail is disclosed. |
+| Focused regression | 0 | Process and platform suites pass 137 tests / 14 explicit platform skips. The exact parent and child scripts compile and execute, the handshake is parsed, an unsandboxed host is rejected, every fixed code is covered, and Ruff, Python compilation, dependency locks and tracked whitespace pass. |
+| Promotion | pending | Fresh protected PR/main verification and a wholly new same-run Stage are required. No output from `29604805336` may be reused. |

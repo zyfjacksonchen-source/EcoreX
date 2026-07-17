@@ -28,6 +28,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import textwrap
 import threading
 import time
 from typing import Any, Mapping, Protocol
@@ -372,6 +373,7 @@ class MacOSSandboxExecBackend:
         outside: Path | None = None
         completed: _BoundedProcessResult | None = None
         value: Any = {}
+        script_started = False
         try:
             with tempfile.TemporaryDirectory(prefix=".ecorex-sandbox-probe-", dir=root) as raw:
                 probe_root = Path(raw).resolve(strict=True)
@@ -405,30 +407,111 @@ class MacOSSandboxExecBackend:
                     "print(json.dumps({'outside_write_errno':write_errno},"
                     "sort_keys=True,separators=(',',':')))\n"
                 )
-                script = (
-                    "import json,pathlib,socket,subprocess,sys;"
-                    "inside=pathlib.Path(sys.argv[1]);outside=pathlib.Path(sys.argv[2]);"
-                    "marker=inside.joinpath('child-started');port=int(sys.argv[3]);child_code=sys.argv[4];"
-                    "r={};"
-                    "\ntry: outside.read_text(); r['outside_read_errno']=0\nexcept OSError as exc: r['outside_read_errno']=exc.errno"
-                    "\ntry: outside.write_text('x'); r['outside_write_errno']=0\nexcept OSError as exc: r['outside_write_errno']=exc.errno"
-                    "\nsock=None"
-                    "\nr['network_close_ok']=True"
-                    "\ntry: sock=socket.socket(); r['network_errno']=sock.connect_ex(('127.0.0.1',port))"
-                    "\nexcept OSError as exc: r['network_errno']=exc.errno"
-                    "\nfinally:"
-                    "\n if sock is not None:"
-                    "\n  try: sock.close()"
-                    "\n  except OSError: r['network_close_ok']=False"
-                    "\ntry: inside.joinpath('ok').write_text('ok'); r['inside_write']=True\nexcept Exception: r['inside_write']=False"
-                    "\ntry: child=subprocess.run([sys.executable,'-I','-c',child_code,str(marker),str(outside)],capture_output=True); r['child_launch_errno']=0"
-                    "\nexcept OSError as exc: child=None; r['child_launch_errno']=exc.errno"
-                    "\nr['child_returncode']=child.returncode if child is not None else None;r['child_started']=marker.is_file();"
-                    "\ntry: child_value=json.loads(child.stdout.decode('utf-8')) if child is not None else {}\nexcept (UnicodeDecodeError,json.JSONDecodeError): child_value={}"
-                    "\nif not isinstance(child_value,dict): child_value={}"
-                    "\nr['child_write_errno']=child_value.get('outside_write_errno');"
-                    "print(json.dumps(r,sort_keys=True,separators=(',',':')))"
-                )
+                script = textwrap.dedent(
+                    """
+                    import json
+                    import pathlib
+                    import socket
+                    import subprocess
+                    import sys
+
+                    sys.stdout.write("ecorex-macos-seatbelt-probe-v1\\n")
+                    sys.stdout.flush()
+                    phase = "initialization"
+                    try:
+                        inside = pathlib.Path(sys.argv[1])
+                        outside = pathlib.Path(sys.argv[2])
+                        marker = inside / "child-started"
+                        port = int(sys.argv[3])
+                        child_code = sys.argv[4]
+                        result = {}
+
+                        phase = "outside_read"
+                        try:
+                            outside.read_text()
+                            result["outside_read_errno"] = 0
+                        except OSError as exc:
+                            result["outside_read_errno"] = exc.errno
+
+                        phase = "outside_write"
+                        try:
+                            outside.write_text("x")
+                            result["outside_write_errno"] = 0
+                        except OSError as exc:
+                            result["outside_write_errno"] = exc.errno
+
+                        phase = "network"
+                        network_socket = None
+                        result["network_close_ok"] = True
+                        try:
+                            network_socket = socket.socket()
+                            result["network_errno"] = network_socket.connect_ex(
+                                ("127.0.0.1", port)
+                            )
+                        except OSError as exc:
+                            result["network_errno"] = exc.errno
+                        finally:
+                            if network_socket is not None:
+                                try:
+                                    network_socket.close()
+                                except OSError:
+                                    result["network_close_ok"] = False
+
+                        phase = "workspace_write"
+                        try:
+                            (inside / "ok").write_text("ok")
+                            result["inside_write"] = True
+                        except Exception:
+                            result["inside_write"] = False
+
+                        phase = "child_launch"
+                        try:
+                            child = subprocess.run(
+                                [
+                                    sys.executable,
+                                    "-I",
+                                    "-c",
+                                    child_code,
+                                    str(marker),
+                                    str(outside),
+                                ],
+                                capture_output=True,
+                            )
+                            result["child_launch_errno"] = 0
+                        except OSError as exc:
+                            child = None
+                            result["child_launch_errno"] = exc.errno
+
+                        phase = "child_evidence"
+                        result["child_returncode"] = (
+                            child.returncode if child is not None else None
+                        )
+                        result["child_started"] = marker.is_file()
+                        try:
+                            child_value = (
+                                json.loads(child.stdout.decode("utf-8"))
+                                if child is not None
+                                else {}
+                            )
+                        except (UnicodeDecodeError, json.JSONDecodeError):
+                            child_value = {}
+                        if not isinstance(child_value, dict):
+                            child_value = {}
+                        result["child_write_errno"] = child_value.get(
+                            "outside_write_errno"
+                        )
+                        output = result
+                    except BaseException:
+                        output = {"fatal_phase": phase}
+                    try:
+                        output_line = json.dumps(
+                            output, sort_keys=True, separators=(",", ":")
+                        )
+                    except BaseException:
+                        output_line = '{"fatal_phase":"emit"}'
+                    sys.stdout.write(output_line + "\\n")
+                    """
+                ).lstrip()
                 policy = self._policy(
                     workspace_roots=workspace_roots,
                     python_executable=python_executable,
@@ -451,9 +534,16 @@ class MacOSSandboxExecBackend:
                     timeout_seconds=10,
                 )
                 if completed is not None:
+                    lines = completed.stdout.splitlines()
+                    script_started = bool(
+                        lines
+                        and lines[0] == b"ecorex-macos-seatbelt-probe-v1"
+                    )
                     try:
-                        value = json.loads(completed.stdout.decode("utf-8"))
-                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        value = json.loads(lines[1].decode("utf-8"))
+                        if len(lines) != 2:
+                            value = {}
+                    except (IndexError, UnicodeDecodeError, json.JSONDecodeError):
                         value = {}
                     try:
                         outside_unchanged = (
@@ -482,6 +572,7 @@ class MacOSSandboxExecBackend:
             value,
             outside_unchanged=outside_unchanged,
             child_marker_valid=child_marker_valid,
+            script_started=script_started,
         )
         ready = reason == "ready"
         self._last_probe = SandboxProbe(
@@ -585,6 +676,7 @@ def _macos_probe_result_complete(
     *,
     outside_unchanged: bool,
     child_marker_valid: bool,
+    script_started: bool = True,
 ) -> bool:
     return (
         _macos_probe_failure_reason(
@@ -592,6 +684,7 @@ def _macos_probe_result_complete(
             value,
             outside_unchanged=outside_unchanged,
             child_marker_valid=child_marker_valid,
+            script_started=script_started,
         )
         == "ready"
     )
@@ -603,6 +696,7 @@ def _macos_probe_failure_reason(
     *,
     outside_unchanged: bool,
     child_marker_valid: bool,
+    script_started: bool = True,
 ) -> str:
     expected_keys = {
         "child_launch_errno",
@@ -618,7 +712,28 @@ def _macos_probe_failure_reason(
     if completed is None:
         return "macos_seatbelt_probe_process_unavailable"
     if completed.returncode != 0:
+        if not script_started:
+            return "macos_seatbelt_probe_interpreter_start_failed"
         return "macos_seatbelt_probe_process_nonzero"
+    if not script_started:
+        return "macos_seatbelt_probe_handshake_missing"
+    fatal_phases = {
+        "child_evidence",
+        "child_launch",
+        "emit",
+        "initialization",
+        "network",
+        "outside_read",
+        "outside_write",
+        "workspace_write",
+    }
+    if (
+        isinstance(value, dict)
+        and set(value) == {"fatal_phase"}
+        and type(value["fatal_phase"]) is str
+        and value["fatal_phase"] in fatal_phases
+    ):
+        return f"macos_seatbelt_probe_{value['fatal_phase']}_failed"
     if not isinstance(value, dict) or set(value) != expected_keys:
         return "macos_seatbelt_probe_evidence_invalid"
     if not _is_zero_errno(value["child_launch_errno"]):

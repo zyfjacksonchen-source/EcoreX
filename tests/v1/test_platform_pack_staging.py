@@ -3867,7 +3867,7 @@ def test_macos_sandbox_failure_codes_are_explicitly_allowlisted() -> None:
     public_codes = stager["_MACOS_SANDBOX_FAILURE_CODES"]
     classify = stager["_sandbox_failure_code"]
 
-    assert len(public_codes) == 14
+    assert len(public_codes) == 22
     for code in public_codes:
         assert classify("macos", code) == code
         assert classify("windows", code) == "sandbox_boundary_probe_failed"

@@ -1027,6 +1027,55 @@ def test_macos_probe_failure_reasons_are_stable_and_non_disclosing() -> None:
             )
             == reason
         )
+    assert (
+        _macos_probe_failure_reason(
+            _BoundedProcessResult(returncode=1, stdout=b"", stderr=b""),
+            {},
+            outside_unchanged=False,
+            child_marker_valid=False,
+            script_started=False,
+        )
+        == "macos_seatbelt_probe_interpreter_start_failed"
+    )
+    assert (
+        _macos_probe_failure_reason(
+            completed,
+            {"fatal_phase": "child_evidence"},
+            outside_unchanged=False,
+            child_marker_valid=False,
+        )
+        == "macos_seatbelt_probe_child_evidence_failed"
+    )
+    assert (
+        _macos_probe_failure_reason(
+            completed,
+            passing,
+            outside_unchanged=True,
+            child_marker_valid=True,
+            script_started=False,
+        )
+        == "macos_seatbelt_probe_handshake_missing"
+    )
+    for invalid_phase in ([], {}, True, None, "unknown"):
+        assert (
+            _macos_probe_failure_reason(
+                completed,
+                {"fatal_phase": invalid_phase},
+                outside_unchanged=False,
+                child_marker_valid=False,
+            )
+            == "macos_seatbelt_probe_evidence_invalid"
+        )
+    assert (
+        _macos_probe_failure_reason(
+            completed,
+            {"fatal_phase": "network"},
+            outside_unchanged=False,
+            child_marker_valid=False,
+            script_started=False,
+        )
+        == "macos_seatbelt_probe_handshake_missing"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1074,7 +1123,8 @@ def test_macos_probe_preserves_completed_evidence_across_host_checks(
         if mode == "canary-missing":
             (probe_root / "child-started").write_bytes(b"started")
             outside.unlink()
-        stdout = b"not-json" if mode == "invalid-json" else json.dumps(passing).encode()
+        payload = b"not-json" if mode == "invalid-json" else json.dumps(passing).encode()
+        stdout = b"ecorex-macos-seatbelt-probe-v1\n" + payload + b"\n"
         return _BoundedProcessResult(returncode=0, stdout=stdout, stderr=b"")
 
     monkeypatch.setattr(sandbox_module, "_run_bounded_probe", bounded)

@@ -6286,3 +6286,12 @@ Both now produce typed evidence: child launch must report exact zero before a
 return code is accepted, and a constructed socket must close successfully
 without replacing the already captured denial errno. Provider text, paths and
 raw errno values remain private; Stage receives only fixed allowlisted codes.
+
+Even after structuring those operations, Stage still reported a non-zero
+sandbox process. A return code cannot prove whether the relocated interpreter
+executed any probe code. The probe now flushes one constant startup handshake
+as its first action and requires exactly one canonical JSON line after it.
+Every later operation is inside a top-level fixed-phase envelope. Future
+failures therefore distinguish interpreter startup, missing handshake and the
+precise in-probe phase without exposing stderr, exception text, host paths,
+arguments or errno values.
