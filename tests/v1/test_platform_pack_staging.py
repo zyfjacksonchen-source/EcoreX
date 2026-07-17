@@ -550,6 +550,141 @@ def test_browser_stage_surfaces_only_allowlisted_pack_smoke_error(
     assert redacted.value.code == "browser_pack_smoke_failed"
 
 
+def test_macos_browser_runtime_signs_every_expected_architecture_macho(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    prepare = stager["_prepare_macos_browser_runtime"]
+    globals_ = prepare.__globals__
+    runtime = tmp_path / "runtime"
+    driver = runtime / "python" / "playwright" / "driver" / "node"
+    chromium = runtime / "browser" / "chrome-mac" / "headless_shell"
+    for binary in (driver, chromium):
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        binary.write_bytes(b"\xcf\xfa\xed\xfe")
+        binary.chmod(0o755)
+    original_is_file = Path.is_file
+    monkeypatch.setattr(
+        Path,
+        "is_file",
+        lambda path: True
+        if path == Path("/usr/bin/codesign")
+        else original_is_file(path),
+    )
+    monkeypatch.setitem(
+        globals_,
+        "_macos_macho_files",
+        lambda _root: (driver, chromium),
+    )
+    monkeypatch.setitem(
+        globals_,
+        "_macos_architectures",
+        lambda _binary: ("arm64",),
+    )
+    commands: list[tuple[str, ...]] = []
+    monkeypatch.setitem(
+        globals_,
+        "_run",
+        lambda command, **_kwargs: commands.append(tuple(command)),
+    )
+    archive_checks: list[Path] = []
+    monkeypatch.setitem(
+        globals_,
+        "_assert_macos_browser_signature_archive_stability",
+        lambda root: archive_checks.append(root),
+    )
+
+    prepare(runtime, architecture="arm64")
+
+    assert archive_checks == [runtime]
+    codesign = str(Path("/usr/bin/codesign"))
+    assert commands == [
+        (
+            codesign,
+            "--force",
+            "--sign",
+            "-",
+            "--timestamp=none",
+            str(driver),
+        ),
+        (
+            codesign,
+            "--force",
+            "--sign",
+            "-",
+            "--timestamp=none",
+            str(chromium),
+        ),
+        (codesign, "--verify", "--strict", str(driver)),
+        (codesign, "--verify", "--strict", str(chromium)),
+    ]
+
+
+def test_macos_browser_runtime_rejects_wrong_architecture_before_signing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    prepare = stager["_prepare_macos_browser_runtime"]
+    globals_ = prepare.__globals__
+    stage_error = stager["StageError"]
+    runtime = tmp_path / "runtime"
+    binary = runtime / "driver" / "node"
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"\xcf\xfa\xed\xfe")
+    binary.chmod(0o755)
+    original_is_file = Path.is_file
+    monkeypatch.setattr(
+        Path,
+        "is_file",
+        lambda path: True
+        if path == Path("/usr/bin/codesign")
+        else original_is_file(path),
+    )
+    monkeypatch.setitem(globals_, "_macos_macho_files", lambda _root: (binary,))
+    monkeypatch.setitem(
+        globals_, "_macos_architectures", lambda _binary: ("x86_64",)
+    )
+
+    with pytest.raises(stage_error) as rejected:
+        prepare(runtime, architecture="arm64")
+    assert rejected.value.code == "browser_runtime_macho_architecture_invalid"
+
+
+def test_macos_browser_signature_gate_uses_archive_equivalent_round_trip(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    verify = stager["_assert_macos_browser_signature_archive_stability"]
+    globals_ = verify.__globals__
+    stage_error = stager["StageError"]
+    runtime = tmp_path / "runtime"
+    executable = runtime / "driver" / "node"
+    resource = runtime / "browser" / "resource.pak"
+    executable.parent.mkdir(parents=True)
+    resource.parent.mkdir(parents=True)
+    executable.write_bytes(b"signed-macho")
+    executable.chmod(0o755)
+    resource.write_bytes(b"resource")
+    monkeypatch.setitem(
+        globals_, "_macos_snapshot_signatures_valid", lambda _root: True
+    )
+
+    verify(runtime)
+
+    monkeypatch.setitem(
+        globals_, "_macos_snapshot_signatures_valid", lambda _root: False
+    )
+    with pytest.raises(stage_error) as nonportable:
+        verify(runtime)
+    assert (
+        nonportable.value.code
+        == "browser_runtime_macho_signature_not_portable"
+    )
+
+
 def test_browser_pack_guards_every_subrequest_and_denies_websockets(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

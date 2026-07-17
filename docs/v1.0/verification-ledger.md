@@ -2268,3 +2268,14 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Runtime correction | 0 local contract | Storage sampling now performs one `stat` syscall. A concurrent `FileNotFoundError` is a valid zero-byte point-in-time sample; permission and other real storage failures remain visible and are never reported as healthy. |
 | Focused regression | 0 | System observability passes 9 tests, including deterministic WAL disappearance and non-disappearance error propagation. Ruff, Python compilation and tracked whitespace checks pass. |
 | Promotion | pending | A fresh protected PR/main matrix and wholly new same-run three-platform Stage remain mandatory. |
+
+## Portable macOS Browser Runtime signatures - 2026-07-17
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Protected observability correction | 0 | PR #28 run `29582699977` and exact-main run `29583176487` passed all five protected jobs. The squash merge is exact main `a5170cc18fc5f1ecc65cfaf5f4ddd0fd1dbf93b9`. |
+| Exact-main Stage `29583698189` | 1 expected | Fresh macOS arm64 crossed Browser runtime extraction and returned the new exact `browser_pack_smoke_browser_driver_start_failed`. macOS x64 and Windows were cancelled, the one-use Windows runner unregistered and the whole run is quarantined. |
+| Root cause | 0 | The regular-file Browser payload copied Playwright's native driver/node, greenlet and Chromium Mach-O bytes without establishing the same archive-stable signature ownership already required for Core. A source signature may verify in the managed cache while failing after the signed ZIP representation is extracted. The driver therefore failed before browser launch. |
+| Runtime correction | 0 local contract | macOS Browser staging requires the target architecture slice in every final Mach-O, unconditionally ad-hoc signs every native member, strictly verifies each signature, round-trips the exact regular-file ZIP mode/digest representation, compares complete tree bindings and strictly verifies every Mach-O again in the extracted snapshot before inventory or archive admission. Links, special entries, duplicates, path drift, mode drift, missing members and digest drift fail closed. |
+| Focused regression | 0 | Platform Pack staging passes 108 tests / 12 explicit platform skips. Tests prove all-member signing and verification order, pre-sign architecture refusal, archive-equivalent binding and copied-signature refusal. Ruff, Python compilation and tracked whitespace checks pass. |
+| Promotion | pending | A protected PR/main matrix and wholly new same-run three-platform Stage are required. No receipt from `29583698189` may be reused. |

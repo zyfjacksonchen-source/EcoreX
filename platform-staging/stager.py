@@ -2858,7 +2858,11 @@ def _stage_packs(
         if pack_id in {"browser", "sandbox"}:
             _copy_regular(common, destination / common.name)
             _normalize_process_pack_descriptor(destination, pack_id=pack_id)
-    browser_inventory = _vendor_browser_runtime(root / "browser")
+    browser_inventory = _vendor_browser_runtime(
+        root / "browser",
+        platform=platform,
+        architecture=architecture,
+    )
     channel_inventory = _write_dependency_inventory(
         root / "channels",
         pack_id="channels",
@@ -3103,7 +3107,12 @@ def _validate_dependency_pack(
     return inventory
 
 
-def _vendor_browser_runtime(pack: Path) -> tuple[dict[str, str], ...]:
+def _vendor_browser_runtime(
+    pack: Path,
+    *,
+    platform: str,
+    architecture: str,
+) -> tuple[dict[str, str], ...]:
     try:
         distribution = importlib_metadata.distribution("playwright")
     except importlib_metadata.PackageNotFoundError:
@@ -3132,6 +3141,8 @@ def _vendor_browser_runtime(pack: Path) -> tuple[dict[str, str], ...]:
             / browser_root.name
             / executable.relative_to(browser_root).as_posix()
         ).as_posix()
+        if platform == "macos":
+            _prepare_macos_browser_runtime(runtime, architecture=architecture)
         records = _tree_records(runtime)
         archive = pack / "browser-runtime.zip"
         _write_zip(runtime, archive)
@@ -3147,6 +3158,119 @@ def _vendor_browser_runtime(pack: Path) -> tuple[dict[str, str], ...]:
             newline="\n",
         )
     return inventory
+
+
+def _prepare_macos_browser_runtime(runtime: Path, *, architecture: str) -> None:
+    """Own portable signatures for every Mach-O in the vendored Browser tree."""
+
+    expected_architecture = {"arm64": "arm64", "x64": "x86_64"}.get(architecture)
+    codesign = Path("/usr/bin/codesign")
+    if expected_architecture is None or not codesign.is_file():
+        raise StageError("browser_runtime_macho_tooling_missing")
+    try:
+        macho_files = _macos_macho_files(runtime)
+    except StageError:
+        raise StageError("browser_runtime_macho_invalid") from None
+    if not macho_files:
+        raise StageError("browser_runtime_macho_invalid")
+    for binary in macho_files:
+        try:
+            architectures = _macos_architectures(binary)
+        except StageError:
+            raise StageError("browser_runtime_macho_inspection_failed") from None
+        if expected_architecture not in architectures:
+            raise StageError("browser_runtime_macho_architecture_invalid")
+    # Source signatures can depend on filesystem metadata that the signed
+    # Browser archive does not preserve.  Canonically ad-hoc sign every final
+    # Mach-O, including Playwright's driver/node, greenlet and Chromium
+    # libraries, even when the source signature currently verifies.
+    for binary in macho_files:
+        _run(
+            (
+                str(codesign),
+                "--force",
+                "--sign",
+                "-",
+                "--timestamp=none",
+                str(binary),
+            ),
+            cwd=runtime,
+            environment=_runtime_environment(),
+            timeout=30,
+            code="browser_runtime_macho_signing_failed",
+        )
+    for binary in macho_files:
+        _run(
+            (str(codesign), "--verify", "--strict", str(binary)),
+            cwd=runtime,
+            environment=_runtime_environment(),
+            timeout=30,
+            code="browser_runtime_macho_signing_failed",
+        )
+    _assert_macos_browser_signature_archive_stability(runtime)
+
+
+def _assert_macos_browser_signature_archive_stability(runtime: Path) -> None:
+    """Prove signatures survive the exact regular-file ZIP representation."""
+
+    canonical_binding = _tree_binding_sha256(runtime)
+    expected = {record["path"]: record for record in _tree_records(runtime)}
+    with tempfile.TemporaryDirectory(
+        prefix=".ecorex-browser-signature-archive-",
+        dir=runtime.parent,
+    ) as temporary:
+        root = Path(temporary)
+        archive_path = root / "browser-runtime.zip"
+        snapshot = root / "snapshot"
+        snapshot.mkdir()
+        _write_zip(runtime, archive_path)
+        observed: set[str] = set()
+        try:
+            with zipfile.ZipFile(archive_path) as archive:
+                for member in archive.infolist():
+                    relative = PurePosixPath(member.filename)
+                    mode = member.external_attr >> 16
+                    record = expected.get(member.filename)
+                    if (
+                        member.is_dir()
+                        or relative.is_absolute()
+                        or any(part in {"", ".", ".."} for part in relative.parts)
+                        or member.filename in observed
+                        or record is None
+                        or stat.S_IFMT(mode) != stat.S_IFREG
+                        or stat.S_IMODE(mode) != record["mode"]
+                    ):
+                        raise StageError(
+                            "browser_runtime_macho_signature_archive_invalid"
+                        )
+                    payload = archive.read(member)
+                    if (
+                        len(payload) != record["size_bytes"]
+                        or hashlib.sha256(payload).hexdigest() != record["sha256"]
+                    ):
+                        raise StageError(
+                            "browser_runtime_macho_signature_archive_invalid"
+                        )
+                    observed.add(member.filename)
+                    destination = snapshot.joinpath(*relative.parts)
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_bytes(payload)
+                    destination.chmod(record["mode"])
+        except StageError:
+            raise
+        except (OSError, RuntimeError, zipfile.BadZipFile):
+            raise StageError(
+                "browser_runtime_macho_signature_archive_invalid"
+            ) from None
+        if observed != set(expected):
+            raise StageError("browser_runtime_macho_signature_archive_invalid")
+        if (
+            _tree_binding_sha256(runtime) != canonical_binding
+            or _tree_binding_sha256(snapshot) != canonical_binding
+        ):
+            raise StageError("browser_runtime_macho_signature_copy_invalid")
+        if not _macos_snapshot_signatures_valid(snapshot):
+            raise StageError("browser_runtime_macho_signature_not_portable")
 
 
 def _playwright_headless_shell(chromium_executable: Path) -> tuple[Path, Path]:
