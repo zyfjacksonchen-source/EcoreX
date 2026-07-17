@@ -1774,10 +1774,13 @@ def _run_macos_isolated_pack_probe(
         f'(deny file-map-executable (subpath "{_seatbelt_literal(path)}"))'
         for path in (framework_root,)
     )
-    source_framework_write_rules = "".join(
-        f'(deny file-write* (subpath "{_seatbelt_literal(path)}"))'
-        for path in (source_root, framework_root)
+    source_write_rules = (
+        f'(deny file-write* (subpath "{_seatbelt_literal(source_root)}"))'
     )
+    framework_write_rules = (
+        f'(deny file-write* (subpath "{_seatbelt_literal(framework_root)}"))'
+    )
+    source_framework_write_rules = f"{source_write_rules}{framework_write_rules}"
     isolation_rules = f"{source_rules}{framework_rules}"
     canonical_canary = core / "pack-python.json"
     try:
@@ -1924,6 +1927,8 @@ def _run_macos_isolated_pack_probe(
                     canonical_rules=canonical_rules,
                     source_rules=source_rules,
                     framework_rules=framework_rules,
+                    source_write_rules=source_write_rules,
+                    framework_write_rules=framework_write_rules,
                     source_framework_write_rules=source_framework_write_rules,
                     canonical_binding=canonical_binding,
                 )
@@ -2051,6 +2056,26 @@ def _macos_bootstrap_diagnostic_succeeds(
     return result.stdout.strip() == b"__ECOREX_PACK_BOOTSTRAP_OK__"
 
 
+def _macos_bootstrap_direct_succeeds(
+    *,
+    interpreter: Path,
+    cwd: Path,
+    temporary_directory: Path,
+) -> bool:
+    """Classify copied-interpreter launch separately from Seatbelt policy."""
+
+    try:
+        result = _run_macos_pack_probe_process(
+            _pack_python_bootstrap_probe_command(interpreter),
+            cwd=cwd,
+            code_prefix="pack_python_bootstrap_direct_diagnostic",
+            temporary_directory=temporary_directory,
+        )
+    except StageError:
+        return False
+    return result.stdout.strip() == b"__ECOREX_PACK_BOOTSTRAP_OK__"
+
+
 def _diagnose_macos_bootstrap_execution_failure(
     *,
     sandbox: Path,
@@ -2063,6 +2088,8 @@ def _diagnose_macos_bootstrap_execution_failure(
     canonical_rules: str,
     source_rules: str,
     framework_rules: str,
+    source_write_rules: str,
+    framework_write_rules: str,
     source_framework_write_rules: str,
     canonical_binding: str,
 ) -> str:
@@ -2083,7 +2110,15 @@ def _diagnose_macos_bootstrap_execution_failure(
         dir=canonical_core.parent,
     ) as diagnostic_temporary:
         diagnostic_parent = Path(diagnostic_temporary)
-        names = ("baseline", "source-denied", "framework-denied")
+        names = (
+            "direct",
+            "baseline",
+            "source-write-denied",
+            "framework-write-denied",
+            "all-write-denied",
+            "source-read-denied",
+            "framework-read-denied",
+        )
         roots = tuple(diagnostic_parent / name for name in names)
         cores = tuple(root / "core" for root in roots)
         temporary_directories = tuple(root / "tmp" for root in roots)
@@ -2095,55 +2130,11 @@ def _diagnose_macos_bootstrap_execution_failure(
         if any(not _macos_snapshot_signatures_valid(core) for core in cores):
             return "pack_python_sandbox_bootstrap_snapshot_signature_invalid"
 
-        existing_snapshot_rules = "".join(
-            f'(deny file-read* (subpath "{_seatbelt_literal(path)}"))'
-            f'(deny file-map-executable (subpath "{_seatbelt_literal(path)}"))'
-            f'(deny file-write* (subpath "{_seatbelt_literal(path)}"))'
-            for path in (baseline_root, isolated_root)
-        )
-        profiles: list[str] = []
-        for index, (root, core) in enumerate(zip(roots, cores, strict=True)):
-            peer_rules = "".join(
-                f'(deny file-read* (subpath "{_seatbelt_literal(peer)}"))'
-                f'(deny file-map-executable (subpath "{_seatbelt_literal(peer)}"))'
-                f'(deny file-write* (subpath "{_seatbelt_literal(peer)}"))'
-                for peer_index, peer in enumerate(roots)
-                if peer_index != index
-            )
-            own_core_write_rule = (
-                f'(deny file-write* (subpath "{_seatbelt_literal(core)}"))'
-            )
-            read_rules = ("", source_rules, framework_rules)[index]
-            profiles.append(
-                f"(version 1)(allow default){canonical_rules}"
-                f"{existing_snapshot_rules}{peer_rules}{own_core_write_rule}"
-                f"{source_framework_write_rules}{read_rules}"
-            )
-
-        baseline_ok = _macos_bootstrap_diagnostic_succeeds(
-            sandbox=sandbox,
-            profile=profiles[0],
+        direct_ok = _macos_bootstrap_direct_succeeds(
             interpreter=cores[0] / interpreter_relative,
             cwd=cores[0],
             temporary_directory=temporary_directories[0],
         )
-        source_ok = False
-        framework_ok = False
-        if baseline_ok:
-            source_ok = _macos_bootstrap_diagnostic_succeeds(
-                sandbox=sandbox,
-                profile=profiles[1],
-                interpreter=cores[1] / interpreter_relative,
-                cwd=cores[1],
-                temporary_directory=temporary_directories[1],
-            )
-            framework_ok = _macos_bootstrap_diagnostic_succeeds(
-                sandbox=sandbox,
-                profile=profiles[2],
-                interpreter=cores[2] / interpreter_relative,
-                cwd=cores[2],
-                temporary_directory=temporary_directories[2],
-            )
         if (
             _tree_binding_sha256(canonical_core) != canonical_binding
             or _tree_binding_sha256(baseline_core) != canonical_binding
@@ -2151,8 +2142,88 @@ def _diagnose_macos_bootstrap_execution_failure(
             or any(_tree_binding_sha256(core) != canonical_binding for core in cores)
         ):
             return "pack_python_probe_snapshot_mutated"
+        if not direct_ok:
+            return "pack_python_bootstrap_snapshot_direct_execution_failed"
+
+        existing_snapshot_rules = "".join(
+            f'(deny file-read* (subpath "{_seatbelt_literal(path)}"))'
+            f'(deny file-map-executable (subpath "{_seatbelt_literal(path)}"))'
+            f'(deny file-write* (subpath "{_seatbelt_literal(path)}"))'
+            for path in (baseline_root, isolated_root)
+        )
+        profiles: list[str] = []
+        for index, (root, core) in enumerate(
+            zip(roots[1:], cores[1:], strict=True),
+            start=1,
+        ):
+            peer_rules = "".join(
+                f'(deny file-read* (subpath "{_seatbelt_literal(peer)}"))'
+                f'(deny file-map-executable (subpath "{_seatbelt_literal(peer)}"))'
+                f'(deny file-write* (subpath "{_seatbelt_literal(peer)}"))'
+                for peer_index, peer in enumerate(roots)
+                if peer_index != index
+            )
+            policy_rules = (
+                "",
+                source_write_rules,
+                framework_write_rules,
+                source_framework_write_rules,
+                f"{source_framework_write_rules}{source_rules}",
+                f"{source_framework_write_rules}{framework_rules}",
+            )[index - 1]
+            profiles.append(
+                f"(version 1)(allow default){canonical_rules}"
+                f"{existing_snapshot_rules}{peer_rules}{policy_rules}"
+            )
+
+        def snapshots_are_bound() -> bool:
+            return (
+                _tree_binding_sha256(canonical_core) == canonical_binding
+                and _tree_binding_sha256(baseline_core) == canonical_binding
+                and _tree_binding_sha256(isolated_core) == canonical_binding
+                and all(
+                    _tree_binding_sha256(core) == canonical_binding for core in cores
+                )
+            )
+
+        def run_profile(index: int) -> bool:
+            return _macos_bootstrap_diagnostic_succeeds(
+                sandbox=sandbox,
+                profile=profiles[index],
+                interpreter=cores[index + 1] / interpreter_relative,
+                cwd=cores[index + 1],
+                temporary_directory=temporary_directories[index + 1],
+            )
+
+        baseline_ok = run_profile(0)
+        if not snapshots_are_bound():
+            return "pack_python_probe_snapshot_mutated"
         if not baseline_ok:
-            return "pack_python_sandbox_bootstrap_snapshot_execution_failed"
+            return "pack_python_sandbox_bootstrap_baseline_policy_failed"
+
+        source_write_ok = run_profile(1)
+        framework_write_ok = run_profile(2)
+        if not snapshots_are_bound():
+            return "pack_python_probe_snapshot_mutated"
+        if not source_write_ok and framework_write_ok:
+            return "pack_python_sandbox_bootstrap_source_write_dependency_failed"
+        if source_write_ok and not framework_write_ok:
+            return "pack_python_sandbox_bootstrap_framework_write_dependency_failed"
+        if not source_write_ok and not framework_write_ok:
+            return (
+                "pack_python_sandbox_bootstrap_source_and_framework_write_dependency_failed"
+            )
+
+        all_write_ok = run_profile(3)
+        if not snapshots_are_bound():
+            return "pack_python_probe_snapshot_mutated"
+        if not all_write_ok:
+            return "pack_python_sandbox_bootstrap_combined_write_policy_failed"
+
+        source_ok = run_profile(4)
+        framework_ok = run_profile(5)
+        if not snapshots_are_bound():
+            return "pack_python_probe_snapshot_mutated"
         if not source_ok and framework_ok:
             return "pack_python_sandbox_bootstrap_source_dependency_failed"
         if source_ok and not framework_ok:
