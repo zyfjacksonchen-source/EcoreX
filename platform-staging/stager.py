@@ -1506,6 +1506,14 @@ def _relocate_macos_python_closure(
             timeout=30,
             code="pack_python_macho_relocation_failed",
         )
+
+    # A source signature can verify in the toolcache while depending on
+    # metadata that a normal Core archive/extraction does not preserve.  Sign
+    # every final Mach-O, not only files changed by install_name_tool, so the
+    # canonical payload itself owns one copy-stable ad-hoc signature contract.
+    # The later isolated probe copies these exact bytes before execution.
+    final_macho_files = _macos_macho_files(closure)
+    for binary in final_macho_files:
         _run(
             (
                 "/usr/bin/codesign",
@@ -1520,6 +1528,7 @@ def _relocate_macos_python_closure(
             timeout=30,
             code="pack_python_macho_signing_failed",
         )
+    for binary in final_macho_files:
         _run(
             ("/usr/bin/codesign", "--verify", "--strict", str(binary)),
             cwd=closure,
@@ -1527,7 +1536,7 @@ def _relocate_macos_python_closure(
             timeout=30,
             code="pack_python_macho_signing_failed",
         )
-    for binary in _macos_macho_files(closure):
+    for binary in final_macho_files:
         for slice_architecture in _macos_architectures(binary):
             install_name = _macos_install_name(
                 binary,

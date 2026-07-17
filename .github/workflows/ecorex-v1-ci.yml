@@ -184,6 +184,7 @@ jobs:
           tests/v1/test_output_service.py
           tests/v1/test_runtime_state_machine_invariants.py
           tests/v1/test_release_builder.py
+          tests/v1/test_macos_codesign_contract.py
           tests/v1/test_update_manifest.py
           tests/v1/test_update_coordinator.py
 

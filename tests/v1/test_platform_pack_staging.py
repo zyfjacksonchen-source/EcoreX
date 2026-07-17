@@ -1369,12 +1369,14 @@ def test_macos_python_closure_rewrites_framework_loads_and_install_name(
     interpreter = closure / "bin" / "python3"
     library = closure / "lib" / "libpython3.11.dylib"
     helper = closure / "lib" / "libhelper.dylib"
+    stable = closure / "lib" / "libstable.dylib"
     interpreter.parent.mkdir(parents=True)
     library.parent.mkdir(parents=True)
     macho = b"\xcf\xfa\xed\xfe" + b"test-mach-o"
     interpreter.write_bytes(macho)
     library.write_bytes(macho)
     helper.write_bytes(macho)
+    stable.write_bytes(macho)
     source_prefix = tmp_path / "toolcache" / "Python" / "3.11.9" / "arm64"
     source_prefix.mkdir(parents=True)
     framework_python = "/Library/Frameworks/Python.framework/Versions/3.11/Python"
@@ -1382,6 +1384,7 @@ def test_macos_python_closure_rewrites_framework_loads_and_install_name(
         interpreter.resolve(): None,
         library.resolve(): framework_python,
         helper.resolve(): "@rpath/libhelper.dylib",
+        stable.resolve(): "@loader_path/libstable.dylib",
     }
     dependencies: dict[Path, list[str]] = {
         interpreter.resolve(): [
@@ -1391,6 +1394,7 @@ def test_macos_python_closure_rewrites_framework_loads_and_install_name(
         ],
         library.resolve(): ["/usr/lib/libSystem.B.dylib"],
         helper.resolve(): ["/usr/lib/libSystem.B.dylib"],
+        stable.resolve(): ["/usr/lib/libSystem.B.dylib"],
     }
     rpaths: dict[Path, list[str]] = {
         interpreter.resolve(): [
@@ -1399,6 +1403,7 @@ def test_macos_python_closure_rewrites_framework_loads_and_install_name(
         ],
         library.resolve(): [],
         helper.resolve(): [],
+        stable.resolve(): [],
     }
     commands: list[tuple[str, ...]] = []
     original_is_file = Path.is_file
@@ -1525,16 +1530,35 @@ def test_macos_python_closure_rewrites_framework_loads_and_install_name(
         for command in commands
         if command[:2] == ("/usr/bin/codesign", "--verify")
     }
-    assert (
-        modified
-        == signed
-        == verified
-        == {
-            interpreter.resolve(),
-            library.resolve(),
-            helper.resolve(),
-        }
+    assert modified == {
+        interpreter.resolve(),
+        library.resolve(),
+        helper.resolve(),
+    }
+    assert signed == verified == {
+        interpreter.resolve(),
+        library.resolve(),
+        helper.resolve(),
+        stable.resolve(),
+    }
+    relocation_indices = tuple(
+        index
+        for index, command in enumerate(commands)
+        if command[0] == "/usr/bin/install_name_tool"
     )
+    signing_indices = tuple(
+        index
+        for index, command in enumerate(commands)
+        if command[:2] == ("/usr/bin/codesign", "--force")
+    )
+    verification_indices = tuple(
+        index
+        for index, command in enumerate(commands)
+        if command[:2] == ("/usr/bin/codesign", "--verify")
+    )
+    assert relocation_indices and signing_indices and verification_indices
+    assert max(relocation_indices) < min(signing_indices)
+    assert max(signing_indices) < min(verification_indices)
     inspected = {
         (command[2], command[3], Path(command[4]).resolve())
         for command in commands
