@@ -3588,6 +3588,69 @@ def test_platform_supply_chain_scan_distinguishes_dependency_markers_from_secret
     assert evidence["secret_scan"] == "passed"
 
 
+def test_platform_supply_chain_scan_does_not_treat_opaque_native_bytes_as_tokens(
+    tmp_path: Path,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    token_like = b"ghp_abcdefghijklmnopqrstuvwxyz123456"
+    (tmp_path / "signed-native-member").write_bytes(
+        b"\xcf\xfa\xed\xfe\x00\x01" + token_like + b"\x00\xff\x80"
+    )
+    with zipfile.ZipFile(tmp_path / "browser-runtime.zip", "w") as archive:
+        archive.writestr(
+            "browser/native-member",
+            b"\x7fELF\x00\x01" + token_like + b"\x00\xff\x80",
+        )
+
+    evidence = stager["_supply_chain"](
+        tmp_path,
+        (),
+        lock_profile="runtime",
+        require_complete=False,
+    )
+
+    assert evidence["secret_scan"] == "passed"
+
+
+def test_platform_supply_chain_scan_rejects_private_key_inside_opaque_payload(
+    tmp_path: Path,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    private_key = (
+        b"-----BEGIN OPENSSH PRIVATE KEY-----\n"
+        b"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=\n"
+        b"-----END OPENSSH PRIVATE KEY-----\n"
+    )
+    (tmp_path / "native-member").write_bytes(
+        b"\xcf\xfa\xed\xfe\x00\xff" + private_key + b"\x00\x80"
+    )
+
+    with pytest.raises(stager["StageError"], match="stage_supply_chain_secret_match"):
+        stager["_supply_chain"](
+            tmp_path,
+            (),
+            lock_profile="runtime",
+            require_complete=False,
+        )
+
+
+def test_platform_supply_chain_scan_rejects_token_in_malformed_text_payload(
+    tmp_path: Path,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    (tmp_path / "malformed.py").write_bytes(
+        b"\xff\x00credential='ghp_abcdefghijklmnopqrstuvwxyz123456'\n"
+    )
+
+    with pytest.raises(stager["StageError"], match="stage_supply_chain_secret_match"):
+        stager["_supply_chain"](
+            tmp_path,
+            (),
+            lock_profile="runtime",
+            require_complete=False,
+        )
+
+
 @pytest.mark.parametrize(
     "payload",
     (

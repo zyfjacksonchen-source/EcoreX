@@ -39,45 +39,11 @@ from ecorex.release.macos_native_contract import (  # noqa: E402
     PYTHON_MACOS_DISTRIBUTION,
     PYTHON_MACOS_LICENSE,
 )
+from ecorex.release.secret_scan import detect_secret  # noqa: E402
 from ecorex.update import ReleaseManifest  # noqa: E402
 
 
 _FORBIDDEN_LICENSE = re.compile(r"(?:^|[^A-Z])(?:AGPL|GPL|SSPL)(?:[- .0-9]|$)", re.I)
-_SECRET_PATTERNS = (
-    re.compile(
-        rb"-----BEGIN ((?:RSA |EC |OPENSSH )?PRIVATE KEY)-----\r?\n"
-        rb"(?:[A-Za-z0-9+/=]{16,}\r?\n)+-----END \1-----"
-    ),
-    re.compile(rb"(?<![A-Za-z0-9+/=])AKIA[0-9A-Z]{16}(?![A-Za-z0-9+/=])"),
-    re.compile(rb"(?<![A-Za-z0-9+/=])gh[pousr]_[A-Za-z0-9]{20,}(?![A-Za-z0-9+/=])"),
-    re.compile(rb"(?<![A-Za-z0-9+/=])xox[baprs]-[A-Za-z0-9-]{10,}(?![A-Za-z0-9+/=])"),
-)
-_TEXT_SUFFIXES = frozenset(
-    {
-        ".cfg",
-        ".c",
-        ".cpp",
-        ".conf",
-        ".css",
-        ".env",
-        ".html",
-        ".ini",
-        ".js",
-        ".json",
-        ".md",
-        ".mjs",
-        ".key",
-        ".pem",
-        ".py",
-        ".sh",
-        ".toml",
-        ".ts",
-        ".tsx",
-        ".txt",
-        ".yaml",
-        ".yml",
-    }
-)
 _LICENSE_OVERRIDES = {
     "fastapi": "MIT",
     "websockets": "BSD-3-Clause",
@@ -242,7 +208,7 @@ def _scan_secret_files(files: tuple[Path, ...]) -> tuple[int, str]:
         if metadata.st_size > 4 * 1024 * 1024:
             continue
         payload = path.read_bytes()
-        if any(pattern.search(payload) for pattern in _SECRET_PATTERNS):
+        if detect_secret(payload, path.as_posix()):
             raise ValueError(f"secret_scan_match:{path.name}")
         inventory.append(
             {
@@ -823,7 +789,6 @@ def _scan_zip_members(archive: zipfile.ZipFile, *, depth: int) -> None:
         if member.is_dir():
             continue
         suffix = path.suffix.casefold()
-        name = path.name
         if suffix == ".zip" and depth == 0:
             if not 1 <= member.file_size <= 512 * 1024 * 1024:
                 raise ValueError("candidate_nested_archive_invalid")
@@ -835,17 +800,8 @@ def _scan_zip_members(archive: zipfile.ZipFile, *, depth: int) -> None:
             continue
         if member.file_size > 4 * 1024 * 1024:
             continue
-        if suffix not in _TEXT_SUFFIXES and name not in {
-            "runtime-config.json",
-            "storage-migrations.json",
-            "pack-python.json",
-            "ecorex-pack.json",
-            "ecorex-image-pack.json",
-            "browser-runtime.json",
-        }:
-            continue
         payload = archive.read(member)
-        if any(pattern.search(payload) for pattern in _SECRET_PATTERNS):
+        if detect_secret(payload, normalized):
             raise ValueError("candidate_archive_secret_match")
 
 

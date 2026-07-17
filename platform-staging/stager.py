@@ -66,6 +66,7 @@ from ecorex.release.dependency_lock import (  # noqa: E402
     load_dependency_lock_manifest,
 )
 from ecorex.release.web_bundle import scan_web_bundle  # noqa: E402
+from ecorex.release.secret_scan import detect_secret  # noqa: E402
 from ecorex.server.config import ProductRuntimeConfig  # noqa: E402
 
 
@@ -83,15 +84,6 @@ _RUNTIME_DISTRIBUTIONS = (
     "tzdata",
     "uvicorn",
     "websockets",
-)
-_SECRET_PATTERNS = (
-    re.compile(
-        rb"-----BEGIN ((?:RSA |EC |OPENSSH )?PRIVATE KEY)-----\r?\n"
-        rb"(?:[A-Za-z0-9+/=]{16,}\r?\n)+-----END \1-----"
-    ),
-    re.compile(rb"(?<![A-Za-z0-9+/=])AKIA[0-9A-Z]{16}(?![A-Za-z0-9+/=])"),
-    re.compile(rb"(?<![A-Za-z0-9+/=])gh[pousr]_[A-Za-z0-9]{20,}(?![A-Za-z0-9+/=])"),
-    re.compile(rb"(?<![A-Za-z0-9+/=])xox[baprs]-[A-Za-z0-9-]{10,}(?![A-Za-z0-9+/=])"),
 )
 _FIXED_TIME = (1980, 1, 1, 0, 0, 0)
 _MAX_FILE_BYTES = 512 * 1024 * 1024
@@ -2783,9 +2775,7 @@ def _write_runtime_config(core: Path, platform: str, architecture: str) -> str:
         "ECOREX_STAGE_RUNTIME_CONFIG_TEMPLATE_SHA256",
     )
     payload = _stable_bytes(source, 256 * 1024, "runtime_config_template_invalid")
-    if b".invalid" in payload or any(
-        pattern.search(payload) for pattern in _SECRET_PATTERNS
-    ):
+    if b".invalid" in payload or detect_secret(payload, "runtime-config.json"):
         raise StageError("runtime_config_template_not_production")
     try:
         raw = json.loads(payload.decode("utf-8"), object_pairs_hook=_unique_object)
@@ -4013,7 +4003,7 @@ def _supply_chain(
             _scan_archive_secrets(path)
         elif path.stat().st_size <= 4 * 1024 * 1024:
             payload = path.read_bytes()
-            if any(pattern.search(payload) for pattern in _SECRET_PATTERNS):
+            if detect_secret(payload, record["path"]):
                 raise StageError("stage_supply_chain_secret_match")
     return {
         "tree_sha256": hashlib.sha256(
@@ -4071,7 +4061,7 @@ def _scan_archive_secrets(path: Path) -> None:
                     raise StageError("stage_supply_chain_archive_invalid")
                 if member.file_size <= 4 * 1024 * 1024:
                     payload = archive.read(member)
-                    if any(pattern.search(payload) for pattern in _SECRET_PATTERNS):
+                    if detect_secret(payload, canonical):
                         raise StageError("stage_supply_chain_secret_match")
     except StageError:
         raise

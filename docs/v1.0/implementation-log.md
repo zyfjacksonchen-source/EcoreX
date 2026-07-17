@@ -6203,3 +6203,25 @@ fails before packaging can consume it. The real Web release contract no longer
 invokes Vite; destructive rehashing uses a temporary copy and a `finally`
 guard proves the production tree stayed byte-identical even when an
 intermediate assertion raises.
+
+## 2026-07-17 - Browser driver mode and release secret-scan closure
+
+Protected Stage runs after the portable macOS Browser-signature work exposed
+two independent boundaries. First, distribution closure copying normalized
+Playwright's private POSIX `driver/node` to `0644`; Playwright executes that
+file directly, so Browser startup could not cross the driver boundary. Browser
+staging now validates the exact pinned driver path and establishes `0755`
+before signing, inventory and ZIP binding. PR #30 and its exact-main CI both
+passed all five jobs, and the next fresh Stage crossed the Browser functional
+smoke.
+
+That Stage then found semantic drift between Stage and Candidate secret scans:
+Stage applied text-token regular expressions to signed opaque Browser bytes,
+while Candidate already limited those detectors to canonical text/config
+members. A shared release scanner now owns both gates. Complete PEM private
+keys remain blocked in every payload; AWS/GitHub/Slack token shapes are scanned
+from raw bytes for the fixed text/config path contract, including malformed
+UTF-8 and NUL-containing text. Opaque members remain protected by exact locks,
+tree binding, architecture and portable signature checks. Failed runs
+`29585694303` and `29588232914` are quarantined and cannot feed Candidate or
+publication.

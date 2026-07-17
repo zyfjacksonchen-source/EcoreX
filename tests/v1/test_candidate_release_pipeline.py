@@ -9,6 +9,7 @@ import re
 import runpy
 import subprocess
 import sys
+import zipfile
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -114,6 +115,31 @@ def test_supply_chain_uses_reviewed_license_for_inactive_marker_dependency(
             repository,
             {"fastapi": "0.120.4"},
         )
+
+
+def test_candidate_archive_uses_shared_text_and_private_key_secret_policy(
+    tmp_path: Path,
+) -> None:
+    repository = Path(__file__).resolve().parents[2]
+    module = runpy.run_path(
+        str(repository / "scripts/check-v1-candidate-supply-chain.py")
+    )
+    archive_path = tmp_path / "candidate.zip"
+    token_like = b"ghp_abcdefghijklmnopqrstuvwxyz123456"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("runtime/native-member", b"\xcf\xfa\xed\xfe\x00" + token_like)
+        archive.writestr("runtime/config.py", b"value = 'ordinary'\n")
+    module["_scan_archive"](archive_path)
+
+    private_key = (
+        b"-----BEGIN OPENSSH PRIVATE KEY-----\n"
+        b"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=\n"
+        b"-----END OPENSSH PRIVATE KEY-----\n"
+    )
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("runtime/native-member", b"\xcf\xfa\xed\xfe\x00" + private_key)
+    with pytest.raises(ValueError, match="candidate_archive_secret_match"):
+        module["_scan_archive"](archive_path)
 
 
 def _external_signer(tmp_path: Path) -> tuple[DigestPinnedExternalSigner, bytes, bytes]:
