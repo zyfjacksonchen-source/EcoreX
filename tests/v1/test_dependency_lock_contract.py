@@ -180,18 +180,50 @@ def test_workflow_gate_rejects_inline_command_beside_stage_runner(
         gate._validate_workflows(copied)
 
 
+def test_workflow_gate_rejects_removed_stage_clean_checkout_guard(
+    tmp_path: Path,
+) -> None:
+    gate = _dependency_gate_module()
+    copied = _workflow_fixture(tmp_path)
+    workflow = copied / ".github" / "workflows" / "ecorex-v1-platform-stage.yml"
+    source = workflow.read_text(encoding="utf-8")
+    marker = "          clean: true\n"
+    assert source.count(marker) == 1
+    workflow.write_text(source.replace(marker, "", 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="workflow_stage_checkout_clean_invalid"):
+        gate._validate_workflows(copied)
+
+
+def test_workflow_gate_rejects_clean_check_after_dependency_install(
+    tmp_path: Path,
+) -> None:
+    gate = _dependency_gate_module()
+    copied = _workflow_fixture(tmp_path)
+    workflow = copied / ".github" / "workflows" / "ecorex-v1-platform-stage.yml"
+    source = workflow.read_text(encoding="utf-8")
+    clean = "run: python scripts/run-v1-platform-stage-step.py clean-check"
+    install = "run: python scripts/run-v1-platform-stage-step.py install-dependencies"
+    assert source.count(clean) == source.count(install) == 1
+    source = source.replace(clean, "TEMP-CLEAN", 1).replace(install, clean, 1)
+    workflow.write_text(source.replace("TEMP-CLEAN", install, 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="workflow_stage_runner_binding_invalid"):
+        gate._validate_workflows(copied)
+
+
 @pytest.mark.parametrize(
     ("old", "new", "error"),
     (
         (
-            '        ("test Web", "npm", ("run", "test:v1"), "desktop"),\n',
+            '        ("test built Web", "npm", ("run", "test:v1"), "desktop"),\n',
             "",
             "platform_stage_runner_catalog_drift",
         ),
         (
-            '        ("test Web", "npm", ("run", "test:v1"), "desktop"),\n',
-            '        ("test Web", "npm", ("run", "test:v1"), "desktop"),\n'
-            '        ("test Web", "npm", ("run", "test:v1"), "desktop"),\n',
+            '        ("test built Web", "npm", ("run", "test:v1"), "desktop"),\n',
+            '        ("test built Web", "npm", ("run", "test:v1"), "desktop"),\n'
+            '        ("test built Web", "npm", ("run", "test:v1"), "desktop"),\n',
             "platform_stage_runner_catalog_drift",
         ),
         (

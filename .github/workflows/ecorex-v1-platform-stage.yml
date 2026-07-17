@@ -52,6 +52,7 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
+          clean: true
 
       - name: Set up Python 3.11
         if: ${{ runner.os != 'Windows' }}
@@ -118,6 +119,9 @@ jobs:
             "Python3_ROOT_DIR=$installRoot"
           ) | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           (Join-Path $installRoot "Scripts") | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Prove checkout workspace is clean before dependency installation
+        run: python scripts/run-v1-platform-stage-step.py clean-check
 
       - name: Set up Node 22 for the one final Web build
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

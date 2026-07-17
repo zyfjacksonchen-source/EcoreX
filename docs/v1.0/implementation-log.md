@@ -6171,7 +6171,35 @@ same single runner exit code. A real subprocess regression proves that a first
 command exiting 23 prevents a later successful command from running, and a
 workflow contract prevents the vulnerable multi-line blocks returning.
 The dependency-lock gate now treats that indirection as a new pinned trust
-boundary: it requires the two exact workflow bindings once each, rejects any
+boundary: it requires the three exact workflow bindings once each, rejects any
 adjacent inline dependency/build command, compares the AST literal catalog to
-all seven reviewed commands and pins the complete executable runner AST.
+all nine reviewed child commands and pins the complete executable runner AST.
 Missing, duplicate, argument-drift and execution-bypass mutations all fail.
+
+## 2026-07-17 - Hermetic Web dist build-before-test correction
+
+Fresh Stage run `29544524231` proved fail-fast was working on all three Stage
+platforms, but also exposed an ordering defect in the newly controlled catalog:
+`npm run test:v1` ran before the only production Web build. A clean checkout
+has no `desktop/dist`, so the GA test correctly stopped with `dist_missing` on
+Windows x64 and both macOS architectures. No failed Stage artifact was reused.
+
+The Stage first runs a cross-platform Python `clean-check` after the fixed
+Python toolchain is ready and before dependency installation. It rejects a
+pre-existing `desktop/dist` and any Git porcelain output without depending on
+Bash on Windows. The audited Web group is exactly six commands: `npm ci`,
+typecheck, one build, test, content-address validation and the read-only bundle
+gate. Stable tree digests before and after test and after both validators must
+match. The runner also compares all six resolved commands (executable, argv,
+cwd and order) with the audited catalog, so truncation or reordering fails
+closed. The dependency-lock expected catalog and complete runner AST pin move
+with this closure.
+
+CI and Candidate now give the workflow sole ownership of the one production
+Web build. They seal a canonical byte contract immediately after that build,
+run Web, Playwright and Python suites against it, then seal and compare a
+second contract. Any direct or indirect test-side mutation of `desktop/dist`
+fails before packaging can consume it. The real Web release contract no longer
+invokes Vite; destructive rehashing uses a temporary copy and a `finally`
+guard proves the production tree stayed byte-identical even when an
+intermediate assertion raises.

@@ -126,6 +126,38 @@ jobs:
       - name: Lint and compile Runtime
         run: python scripts/run-v1-lint.py --compile --output-format=github
 
+      # The workflow owns the one real Web build. Every Web and Python contract
+      # below consumes these exact bytes and must not rebuild desktop/dist.
+      - name: Install exact WebUI dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Reject high-severity WebUI dependency vulnerabilities
+        working-directory: desktop
+        run: npm audit --audit-level=high
+
+      - name: Type-check WebUI
+        working-directory: desktop
+        run: npm run typecheck
+
+      - name: Build content-addressed WebUI
+        working-directory: desktop
+        run: npm run build
+
+      - name: Seal the WebUI bytes before any acceptance suite
+        run: >-
+          python scripts/check-v1-reproducibility.py
+          --web-dist desktop/dist
+          --write-manifest .candidate/quality/web-dist-immutability/before/byte-contract.json
+
+      - name: Test the built WebUI
+        working-directory: desktop
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_FILE: ../.candidate/quality/playwright-report.json
+        run: |
+          npm run test:v1
+          npx playwright test --config=playwright.config.ts --reporter=json
+
       - name: Unit, contract and integration suites
         run: >-
           python -m pytest -q -p no:cacheprovider
@@ -155,17 +187,14 @@ jobs:
           python scripts/check-v1-runtime-schema-authority.py
           python scripts/check-v1-server-schema-authority.py
 
-      - name: Install, audit, type-check, test and build WebUI once
-        working-directory: desktop
-        env:
-          PLAYWRIGHT_JSON_OUTPUT_FILE: ../.candidate/quality/playwright-report.json
+      - name: Prove every acceptance suite consumed the WebUI read-only
         run: |
-          npm ci
-          npm audit --audit-level=high
-          npm run typecheck
-          npm run test:v1
-          npm run build
-          npx playwright test --config=playwright.config.ts --reporter=json
+          python scripts/check-v1-reproducibility.py \
+            --web-dist desktop/dist \
+            --write-manifest .candidate/quality/web-dist-immutability/after/byte-contract.json
+          python scripts/check-v1-reproducibility.py \
+            --compare-manifests .candidate/quality/web-dist-immutability \
+            --expected-count 2
 
       - name: Static product gates
         run: |

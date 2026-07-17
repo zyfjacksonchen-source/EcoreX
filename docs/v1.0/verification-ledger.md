@@ -2096,5 +2096,15 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Windows Stage forensics | 1 expected | The Windows log contained the same three GA Web-test failures as macOS, but multi-line PowerShell continued to a successful Web build and hid the native test exit code; the later Python closure probe became the reported terminal failure. No failed result is treated as passed. |
 | Command boundary | 0 | Dependency/Chromium install and final Web build use one fixed, repository-owned Python command-group runner. The first launch or child failure is the step result on Windows and macOS; commands after it are never invoked. |
 | Regression contract | 0 | A real child exits 23 before a marker-writing success child; the runner returns 23 and the marker remains absent. Static workflow coverage forbids restoring the vulnerable inline command blocks or `continue-on-error`. |
-| Dependency-lock closure | 0 | The gate requires both exact workflow runner bindings once, forbids adjacent inline dependency/build commands, AST-compares the seven-command literal catalog and pins the complete runner AST. Missing, duplicate, changed-argument and bypass mutations are rejected. |
+| Dependency-lock closure | 0 | The gate requires all three exact workflow runner bindings once, forbids adjacent inline dependency/build commands, AST-compares the nine-child-command literal catalog and pins the complete runner AST. Missing, duplicate, changed-argument and bypass mutations are rejected. |
 | Promotion | pending | A new protected matrix and wholly new same-run three-platform Stage remain mandatory before signing or production activation. |
+
+## Hermetic Web dist build-before-test correction - 2026-07-17
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Platform Stage `29544524231` | 1 expected | Windows x64 and macOS arm64/x64 all stopped at GA `dist_missing`: the controlled Web catalog tested before its only build on a clean workspace. Fail-fast operated correctly and no Stage output was accepted. |
+| Hermetic order | 0 | After fixed Python setup, cross-platform `clean-check` runs before dependency installation. The six-command Web catalog is `npm ci` → typecheck → one build → test → content-address validation → read-only bundle validation. GA and both validators consume the same digest-stable dist; no cached dist or repeated build is allowed. |
+| Clean-workspace regression | 0 | Tests reject dirty Git porcelain, pre-existing/early-created dist, truncated or reordered command shapes, test mutation and validator mutation. The resolved executable, argv, cwd and order of all six Web commands must exactly match the dependency-lock catalog and complete runner AST pin. |
+| CI/Candidate Web ownership | 0 | Each quality job performs exactly one workflow-owned build before Web, Playwright and Python suites. Canonical before/after byte contracts must compare exactly; the Python release contract is a read-only consumer and its exceptional path is guarded. |
+| Promotion | pending | A fresh same-run three-platform Stage remains mandatory before signing or production activation. |

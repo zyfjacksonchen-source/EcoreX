@@ -57,9 +57,10 @@ _ACTION_ENTRY_KEYS = {
 _MINIMUM_NODE24_RUNNER_VERSION = "2.327.1"
 _PLATFORM_STAGE_RUNNER_RELATIVE = Path("scripts/run-v1-platform-stage-step.py")
 _PLATFORM_STAGE_RUNNER_AST_SHA256 = (
-    "7de4c282c15992075c263c914662808d460e2f419434f3d9164fde0d2f309419"
+    "9fd7b9c80fd75776486776b3d05a234fa46e83122cc8f594c90ccafb77bcbce6"
 )
 _PLATFORM_STAGE_WORKFLOW_BINDINGS = (
+    "run: python scripts/run-v1-platform-stage-step.py clean-check",
     "run: python scripts/run-v1-platform-stage-step.py install-dependencies",
     "run: python scripts/run-v1-platform-stage-step.py build-web",
 )
@@ -91,8 +92,24 @@ _PLATFORM_STAGE_COMMAND_CATALOG = {
     "build-web": (
         ("install locked Web dependencies", "npm", ("ci",), "desktop"),
         ("typecheck Web", "npm", ("run", "typecheck"), "desktop"),
-        ("test Web", "npm", ("run", "test:v1"), "desktop"),
         ("build Web", "npm", ("run", "build"), "desktop"),
+        ("test built Web", "npm", ("run", "test:v1"), "desktop"),
+        (
+            "validate tested Web content addresses",
+            "python",
+            (
+                "scripts/check-v1-reproducibility.py",
+                "--web-dist",
+                "desktop/dist",
+            ),
+            ".",
+        ),
+        (
+            "validate tested Web bundle",
+            "node",
+            ("tools/check-v1-bundle.mjs", "dist"),
+            "desktop",
+        ),
     ),
 }
 
@@ -394,6 +411,21 @@ def _validate_platform_stage_workflow_binding(text: str) -> None:
     )
     if any(command in text for command in forbidden_inline_commands):
         raise ValueError("workflow_stage_runner_bypass_invalid")
+    clean_checkout_marker = "          clean: true"
+    if text.count(clean_checkout_marker) != 1:
+        raise ValueError("workflow_stage_checkout_clean_invalid")
+    clean_binding = _PLATFORM_STAGE_WORKFLOW_BINDINGS[0]
+    install_binding = _PLATFORM_STAGE_WORKFLOW_BINDINGS[1]
+    python_setup_markers = (
+        "- name: Set up Python 3.11",
+        "- name: Set up isolated Python 3.11 on Windows",
+    )
+    if (
+        any(text.count(marker) != 1 for marker in python_setup_markers)
+        or any(text.index(marker) >= text.index(clean_binding) for marker in python_setup_markers)
+        or text.index(clean_binding) >= text.index(install_binding)
+    ):
+        raise ValueError("workflow_stage_checkout_status_gate_invalid")
 
 
 def _validate_workflows(repo: Path) -> dict[str, object]:

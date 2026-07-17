@@ -67,15 +67,11 @@ jobs:
       - name: Lint v1 Python
         run: python scripts/run-v1-lint.py --compile --output-format=github
 
-      # The Python release-pipeline tests invoke the real Vite build. Install
-      # the reviewed Web lock before pytest so those tests exercise the same
-      # dependency closure as the later WebUI gates.
+      # The workflow owns the one real Web build. Every Web and Python contract
+      # below consumes these exact bytes and must not rebuild desktop/dist.
       - name: Install WebUI dependencies
         working-directory: desktop
         run: npm ci
-
-      - name: Test v1 Runtime
-        run: python -m pytest -q
 
       - name: Reject high-severity WebUI dependency vulnerabilities
         working-directory: desktop
@@ -85,13 +81,31 @@ jobs:
         working-directory: desktop
         run: npm run typecheck
 
-      - name: Test WebUI
-        working-directory: desktop
-        run: npm run test:v1
-
       - name: Build content-addressed WebUI
         working-directory: desktop
         run: npm run build
+
+      - name: Seal the WebUI bytes before any test
+        run: >-
+          python scripts/check-v1-reproducibility.py
+          --web-dist desktop/dist
+          --write-manifest .ci/web-dist-immutability/before/byte-contract.json
+
+      - name: Test the built WebUI
+        working-directory: desktop
+        run: npm run test:v1
+
+      - name: Test v1 Runtime against the built WebUI
+        run: python -m pytest -q
+
+      - name: Prove every test consumed the WebUI read-only
+        run: |
+          python scripts/check-v1-reproducibility.py \
+            --web-dist desktop/dist \
+            --write-manifest .ci/web-dist-immutability/after/byte-contract.json
+          python scripts/check-v1-reproducibility.py \
+            --compare-manifests .ci/web-dist-immutability \
+            --expected-count 2
 
       - name: Run v1 static product gates
         run: |
