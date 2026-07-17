@@ -495,6 +495,62 @@ def test_browser_stage_rejects_link_anywhere_in_headless_shell_tree(
     assert linked.value.code == "playwright_headless_shell_layout_invalid"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable-mode contract")
+def test_browser_stage_normalizes_only_the_pinned_playwright_driver_mode(
+    tmp_path: Path,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    python_root = tmp_path / "python"
+    driver = (
+        python_root
+        / "playwright"
+        / "driver"
+        / ("node.exe" if os.name == "nt" else "node")
+    )
+    ordinary = python_root / "playwright" / "driver" / "package" / "cli.js"
+    driver.parent.mkdir(parents=True)
+    ordinary.parent.mkdir(parents=True)
+    driver.write_bytes(b"driver")
+    ordinary.write_bytes(b"ordinary")
+    driver.chmod(0o644)
+    ordinary.chmod(0o644)
+
+    stager["_normalize_playwright_driver_mode"](
+        python_root,
+        platform="windows" if os.name == "nt" else "macos",
+    )
+
+    expected_driver_mode = 0o755
+    assert stat.S_IMODE(driver.stat().st_mode) == expected_driver_mode
+    assert stat.S_IMODE(ordinary.stat().st_mode) == 0o644
+    records = {item["path"]: item for item in stager["_tree_records"](python_root)}
+    driver_path = driver.relative_to(python_root).as_posix()
+    ordinary_path = ordinary.relative_to(python_root).as_posix()
+    assert records[driver_path]["mode"] == expected_driver_mode
+    assert records[ordinary_path]["mode"] == 0o644
+    archive = tmp_path / "runtime.zip"
+    stager["_write_zip"](python_root, archive)
+    with zipfile.ZipFile(archive) as payload:
+        assert (
+            stat.S_IMODE(payload.getinfo(driver_path).external_attr >> 16)
+            == expected_driver_mode
+        )
+        assert stat.S_IMODE(payload.getinfo(ordinary_path).external_attr >> 16) == 0o644
+
+
+def test_browser_stage_rejects_missing_pinned_playwright_driver(tmp_path: Path) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    python_root = tmp_path / "python"
+    python_root.mkdir()
+
+    with pytest.raises(stager["StageError"]) as missing:
+        stager["_normalize_playwright_driver_mode"](
+            python_root,
+            platform="windows" if os.name == "nt" else "macos",
+        )
+    assert missing.value.code == "playwright_driver_layout_invalid"
+
+
 def test_browser_stage_surfaces_only_allowlisted_pack_smoke_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

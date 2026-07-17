@@ -3134,6 +3134,7 @@ def _vendor_browser_runtime(
         inventory = _copy_distribution_closure(
             (distribution.metadata["Name"],), python_root
         )
+        _normalize_playwright_driver_mode(python_root, platform=platform)
         target_browser = runtime / "browser" / browser_root.name
         _copy_tree(browser_root, target_browser, excluded=frozenset({"__pycache__"}))
         relative_executable = (
@@ -3158,6 +3159,45 @@ def _vendor_browser_runtime(
             newline="\n",
         )
     return inventory
+
+
+def _normalize_playwright_driver_mode(python_root: Path, *, platform: str) -> None:
+    """Make the pinned Playwright driver executable without trusting wheel modes."""
+
+    driver = (
+        python_root
+        / "playwright"
+        / "driver"
+        / ("node.exe" if platform == "windows" else "node")
+    )
+    try:
+        metadata = driver.lstat()
+        resolved = driver.resolve(strict=True)
+        python_root_resolved = python_root.resolve(strict=True)
+    except OSError:
+        raise StageError("playwright_driver_layout_invalid") from None
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or bool(
+            getattr(metadata, "st_file_attributes", 0)
+            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        )
+        or not resolved.is_relative_to(python_root_resolved)
+    ):
+        raise StageError("playwright_driver_layout_invalid")
+    # Windows executes PE files independently of POSIX mode bits.  The archive
+    # still records the canonical non-executable data mode there; macOS/Linux
+    # must carry an explicit execute bit for create_subprocess_exec().
+    if platform == "windows":
+        return
+    try:
+        driver.chmod(0o755)
+        normalized = driver.lstat()
+    except OSError:
+        raise StageError("playwright_driver_mode_invalid") from None
+    if not stat.S_ISREG(normalized.st_mode) or stat.S_IMODE(normalized.st_mode) != 0o755:
+        raise StageError("playwright_driver_mode_invalid")
 
 
 def _prepare_macos_browser_runtime(runtime: Path, *, architecture: str) -> None:
