@@ -2416,3 +2416,13 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Protocol root cause | 0 | The stager constructed a validated fixed-code set, while its digest-pinned parent adapter forwarded only the older secret-scan hash diagnostic. The process boundary therefore intentionally discarded the new diagnostic before the workflow could observe it. |
 | Adapter correction | 0 local contract | The parent adapter owns an independent closed copy of the public Bootstrap code set and revalidates exact keys, sorted uniqueness, membership, count syntax, count bounds and count-to-set consistency before forwarding. Arbitrary values, raw output, paths and malformed diagnostics are dropped. The Stage failure code remains authoritative and fail closed. |
 | Promotion | pending | Protected PR/main verification and a wholly new same-run Stage are required. No output from `29615646417` may be reused. |
+
+## Canonical macOS Bootstrap test roots - 2026-07-18
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Protected forwarding baseline | 0 | PR #42 run `29616208127` and exact-main run `29616587415` passed all five protected jobs. The squash merge is exact main `0004afcbbce29305ead352ea0028d43de5c03cbf`. |
+| Exact-main Stage `29617026723` | 1 expected | The safe fixed-code set identified exactly `bootstrap_test_local_migration_failed`, `bootstrap_test_pointer_authority_failed` and `bootstrap_test_pointer_freshness_failed`. macOS x64 and Windows were cancelled, the one-use Windows runner unregistered and the full run is quarantined. |
+| Shared root cause | 0 | All three tests enter `ensureBootstrapStateDirectory`. On the hosted macOS arm64 image, Go's `t.TempDir()` is presented through a system temporary-path alias whose symlinks resolve to another canonical absolute path. The product security contract correctly rejects an install root containing a link, so the tests supplied an intentionally invalid fixture before reaching their assertions. Production's default user-data root is unchanged. |
+| Test correction | 0 local contract | Security-sensitive Bootstrap tests now resolve their harness temp directory, require a real non-link directory and pass the canonical absolute path into the product contract. `ensureBootstrapStateDirectory` is not weakened and no production alias or link becomes trusted. |
+| Promotion | pending | Protected PR/main verification and a wholly new same-run Stage are required. No output from `29617026723` may be reused. |

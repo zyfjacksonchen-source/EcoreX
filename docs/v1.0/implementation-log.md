@@ -6342,3 +6342,12 @@ older secret-scan hash diagnostic. The adapter now independently validates a
 closed copy of the public Bootstrap code set, sorted uniqueness, exact fields
 and bounded count consistency before forwarding. Raw tests, Go output, stderr,
 paths and malformed values remain private. The failed run is quarantined.
+
+Stage `29617026723` then identified the exact shared Bootstrap failures:
+pointer authority persistence, pointer freshness persistence and trusted local
+migration configuration. All three first call the install-root link guard.
+On hosted macOS, Go's test temp path is exposed through a system alias whose
+resolved canonical path differs, so the tests constructed an install root the
+product correctly rejects. The harness now resolves and validates a real,
+non-link canonical directory before invoking the security contract. Product
+link rejection is unchanged and the failed Stage remains quarantined.

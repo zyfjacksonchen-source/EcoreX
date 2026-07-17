@@ -27,6 +27,24 @@ func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, 
 	return function(request)
 }
 
+func canonicalTestTempDir(t *testing.T) string {
+	t.Helper()
+	raw := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	absolute, err := filepath.Abs(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := os.Lstat(absolute)
+	if err != nil || !metadata.IsDir() || metadata.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("canonical test directory is unsafe: %v", err)
+	}
+	return filepath.Clean(absolute)
+}
+
 func signedManifest(t *testing.T) (*manifest, *indexRelease, map[string]ed25519.PublicKey) {
 	t.Helper()
 	public, private, err := ed25519.GenerateKey(rand.Reader)
@@ -319,7 +337,7 @@ func TestPointerAuthorityIsSignedBoundAndMonotonic(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	root := t.TempDir()
+	root := canonicalTestTempDir(t)
 	if err := ensureBootstrapStateDirectory(root); err != nil {
 		t.Fatal(err)
 	}
@@ -404,7 +422,7 @@ func TestPointerFreshnessIsShortLivedRoleSeparatedAndMonotonic(t *testing.T) {
 	if err := validatePointerFreshness(authority, initial, publicationKeys, now); err != nil {
 		t.Fatal(err)
 	}
-	root := t.TempDir()
+	root := canonicalTestTempDir(t)
 	if err := ensureBootstrapStateDirectory(root); err != nil {
 		t.Fatal(err)
 	}
@@ -529,7 +547,7 @@ func TestPointerAuthorityRejectsNonFinalOrPreV1Version(t *testing.T) {
 }
 
 func TestFreshBootstrapStateDirectoryAndTrustedLocalMigrationSource(t *testing.T) {
-	parent := t.TempDir()
+	parent := canonicalTestTempDir(t)
 	root := filepath.Join(parent, "v1")
 	legacy := filepath.Join(parent, "v030")
 	if err := os.MkdirAll(root, 0o700); err != nil {

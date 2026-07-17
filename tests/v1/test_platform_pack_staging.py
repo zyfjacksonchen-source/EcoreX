@@ -3991,6 +3991,16 @@ def test_bootstrap_go_test_success_does_not_expose_output(
     )
 
 
+def test_bootstrap_security_tests_use_a_canonical_real_temp_root() -> None:
+    source = (ROOT / "platform-staging" / "bootstrap" / "main_test.go").read_text(
+        encoding="utf-8"
+    )
+    assert "resolved, err := filepath.EvalSymlinks(raw)" in source
+    assert "metadata.Mode()&os.ModeSymlink != 0" in source
+    assert source.count("canonicalTestTempDir(t)") == 3
+    assert source.count("ensureBootstrapStateDirectory(root)") == 3
+
+
 def test_office_pack_declares_formats_not_rendering() -> None:
     descriptor = json.loads(
         (PACKS / "office" / "ecorex-dependency-pack.json").read_text(encoding="utf-8")
