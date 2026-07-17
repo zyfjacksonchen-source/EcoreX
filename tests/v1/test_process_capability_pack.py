@@ -37,6 +37,8 @@ from ecorex.integration.pack_process import (
     _windows_kill_process_tree,
 )
 from ecorex.integration.sandbox import (
+    _BoundedProcessResult,
+    _macos_probe_result_complete,
     SandboxLaunchPlan,
     SandboxProbe,
     UnavailableSandboxBackend,
@@ -795,11 +797,8 @@ sys.stdout.write(json.dumps(response, sort_keys=True, separators=(",", ":")))
     adapter = ProcessCapabilityPackAdapter(
         pack, workspace_roots=(workspace,), python_executable=sys.executable
     )
-    if not adapter.sandbox_probe or not adapter.sandbox_probe.complete:
-        pytest.skip(
-            "this macOS host did not prove the full Seatbelt contract: "
-            + (adapter.sandbox_probe.reason if adapter.sandbox_probe else "no probe")
-        )
+    assert adapter.sandbox_probe is not None
+    assert adapter.sandbox_probe.complete, adapter.sandbox_probe.reason
     service = CapabilityService(
         builtin_capability_registry(), handlers=adapter.handlers()
     )
@@ -826,6 +825,85 @@ sys.stdout.write(json.dumps(response, sort_keys=True, separators=(",", ":")))
     assert result["outside_write"] is False
     assert result["child_escape"] is False
     assert result["network_errno"] in {1, 13}
+
+
+def test_macos_probe_evaluator_rejects_false_network_and_child_evidence() -> None:
+    completed = _BoundedProcessResult(returncode=0, stdout=b"{}", stderr=b"")
+    passing = {
+        "child_returncode": 0,
+        "child_started": True,
+        "child_write_errno": 1,
+        "inside_write": True,
+        "network_errno": 1,
+        "outside_read_errno": 1,
+        "outside_write_errno": 1,
+    }
+    assert _macos_probe_result_complete(
+        completed,
+        passing,
+        outside_unchanged=True,
+        child_marker_valid=True,
+    )
+    for field, value in (
+        ("child_returncode", 1),
+        ("child_started", False),
+        ("child_write_errno", 2),
+        ("inside_write", False),
+        ("network_errno", 61),
+        ("outside_read_errno", 5),
+        ("outside_write_errno", 2),
+    ):
+        rejected = dict(passing)
+        rejected[field] = value
+        assert not _macos_probe_result_complete(
+            completed,
+            rejected,
+            outside_unchanged=True,
+            child_marker_valid=True,
+        )
+    for invalid_errno in (True, False, "1", [], {}, None, 1.0):
+        for field in (
+            "child_write_errno",
+            "network_errno",
+            "outside_read_errno",
+            "outside_write_errno",
+        ):
+            rejected = dict(passing)
+            rejected[field] = invalid_errno
+            assert not _macos_probe_result_complete(
+                completed,
+                rejected,
+                outside_unchanged=True,
+                child_marker_valid=True,
+            )
+    for mutation in (
+        {key: value for key, value in passing.items() if key != "child_started"},
+        {**passing, "unexpected": False},
+    ):
+        assert not _macos_probe_result_complete(
+            completed,
+            mutation,
+            outside_unchanged=True,
+            child_marker_valid=True,
+        )
+    assert not _macos_probe_result_complete(
+        _BoundedProcessResult(returncode=1, stdout=b"{}", stderr=b""),
+        passing,
+        outside_unchanged=True,
+        child_marker_valid=True,
+    )
+    assert not _macos_probe_result_complete(
+        completed,
+        passing,
+        outside_unchanged=False,
+        child_marker_valid=True,
+    )
+    assert not _macos_probe_result_complete(
+        completed,
+        passing,
+        outside_unchanged=True,
+        child_marker_valid=False,
+    )
 
 
 def test_pack_bytes_are_revalidated_after_adapter_binding(tmp_path: Path) -> None:

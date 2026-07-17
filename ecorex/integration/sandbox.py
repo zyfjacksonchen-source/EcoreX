@@ -16,12 +16,14 @@ proves the complete contract.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import errno
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -364,24 +366,56 @@ class MacOSSandboxExecBackend:
                 reason="macos_sandbox_exec_untrusted",
             )
         root = workspace_roots[0]
+        outside_unchanged = False
+        child_marker_valid = False
+        listener: socket.socket | None = None
         try:
             outside: Path | None = None
             with tempfile.TemporaryDirectory(prefix=".ecorex-sandbox-probe-", dir=root) as raw:
                 probe_root = Path(raw).resolve(strict=True)
+                child_marker = probe_root / "child-started"
                 outside = Path(tempfile.gettempdir()).resolve() / (
                     "ecorex-sandbox-outside-" + os.urandom(8).hex()
                 )
-                outside.write_text("secret", encoding="utf-8")
+                if any(outside.is_relative_to(item.resolve(strict=True)) for item in workspace_roots):
+                    raise ValueError("outside canary overlaps workspace")
+                outside_canary = os.urandom(32).hex()
+                outside.write_text(outside_canary, encoding="utf-8")
+                listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                listener.bind(("127.0.0.1", 0))
+                listener.listen(1)
+                network_port = int(listener.getsockname()[1])
+                child_script = (
+                    "import json,os,pathlib,sys\n"
+                    "marker=pathlib.Path(sys.argv[1])\n"
+                    "outside=pathlib.Path(sys.argv[2])\n"
+                    "flags=os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,'O_NOFOLLOW',0)\n"
+                    "fd=os.open(marker,flags,0o600)\n"
+                    "try:\n"
+                    " os.write(fd,b'started')\n"
+                    "finally:\n"
+                    " os.close(fd)\n"
+                    "try:\n"
+                    " outside.write_text('child')\n"
+                    " write_errno=0\n"
+                    "except OSError as exc:\n"
+                    " write_errno=exc.errno\n"
+                    "print(json.dumps({'outside_write_errno':write_errno},"
+                    "sort_keys=True,separators=(',',':')))\n"
+                )
                 script = (
                     "import json,pathlib,socket,subprocess,sys;"
                     "inside=pathlib.Path(sys.argv[1]);outside=pathlib.Path(sys.argv[2]);"
+                    "marker=inside.joinpath('child-started');port=int(sys.argv[3]);child_code=sys.argv[4];"
                     "r={};"
-                    "\ntry: outside.read_text(); r['outside_read']=True\nexcept Exception: r['outside_read']=False"
-                    "\ntry: outside.write_text('x'); r['outside_write']=True\nexcept Exception: r['outside_write']=False"
-                    "\ntry: socket.create_connection(('127.0.0.1',9),timeout=.2); r['network']=True\nexcept Exception: r['network']=False"
+                    "\ntry: outside.read_text(); r['outside_read_errno']=0\nexcept OSError as exc: r['outside_read_errno']=exc.errno"
+                    "\ntry: outside.write_text('x'); r['outside_write_errno']=0\nexcept OSError as exc: r['outside_write_errno']=exc.errno"
+                    "\nsock=socket.socket();r['network_errno']=sock.connect_ex(('127.0.0.1',port));sock.close()"
                     "\ntry: inside.joinpath('ok').write_text('ok'); r['inside_write']=True\nexcept Exception: r['inside_write']=False"
-                    "\nchild=subprocess.run([sys.executable,'-c',\"import pathlib,sys;pathlib.Path(sys.argv[1]).write_text('child')\",str(outside)],capture_output=True);"
-                    "r['child_escape']=outside.exists() and outside.read_text(errors='ignore')=='child';"
+                    "\nchild=subprocess.run([sys.executable,'-I','-c',child_code,str(marker),str(outside)],capture_output=True);"
+                    "r['child_returncode']=child.returncode;r['child_started']=marker.is_file();"
+                    "\ntry: child_value=json.loads(child.stdout.decode('utf-8'))\nexcept (UnicodeDecodeError,json.JSONDecodeError): child_value={}"
+                    "\nr['child_write_errno']=child_value.get('outside_write_errno');"
                     "print(json.dumps(r,sort_keys=True,separators=(',',':')))"
                 )
                 policy = self._policy(
@@ -400,32 +434,32 @@ class MacOSSandboxExecBackend:
                         script,
                         str(probe_root),
                         str(outside),
+                        str(network_port),
+                        child_script,
                     ),
                     timeout_seconds=10,
                 )
                 if completed is None:
                     raise ValueError("bounded probe failed")
                 value = json.loads(completed.stdout.decode("utf-8"))
+                outside_unchanged = outside.read_text(encoding="utf-8") == outside_canary
+                child_marker_valid = _regular_file_bytes_equal(child_marker, b"started")
         except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
             value = {}
             completed = None
         finally:
+            if listener is not None:
+                listener.close()
             try:
                 if outside is not None:
                     outside.unlink(missing_ok=True)
             except OSError:
                 pass
-        ready = bool(
-            completed is not None
-            and completed.returncode == 0
-            and value
-            == {
-                "child_escape": False,
-                "inside_write": True,
-                "network": False,
-                "outside_read": False,
-                "outside_write": False,
-            }
+        ready = _macos_probe_result_complete(
+            completed,
+            value,
+            outside_unchanged=outside_unchanged,
+            child_marker_valid=child_marker_valid,
         )
         self._last_probe = SandboxProbe(
             backend_id="macos-seatbelt",
@@ -438,7 +472,6 @@ class MacOSSandboxExecBackend:
             process_tree_contained=ready,
         )
         return self._last_probe
-
     def launch_plan(
         self,
         *,
@@ -521,6 +554,56 @@ class _BoundedProcessResult:
     returncode: int
     stdout: bytes
     stderr: bytes
+
+
+def _macos_probe_result_complete(
+    completed: _BoundedProcessResult | None,
+    value: Any,
+    *,
+    outside_unchanged: bool,
+    child_marker_valid: bool,
+) -> bool:
+    expected_keys = {
+        "child_returncode",
+        "child_started",
+        "child_write_errno",
+        "inside_write",
+        "network_errno",
+        "outside_read_errno",
+        "outside_write_errno",
+    }
+    return bool(
+        completed is not None
+        and completed.returncode == 0
+        and isinstance(value, dict)
+        and set(value) == expected_keys
+        and type(value["child_returncode"]) is int
+        and value["child_returncode"] == 0
+        and value["child_started"] is True
+        and _is_denial_errno(value["child_write_errno"])
+        and value["inside_write"] is True
+        and _is_denial_errno(value["network_errno"])
+        and _is_denial_errno(value["outside_read_errno"])
+        and _is_denial_errno(value["outside_write_errno"])
+        and outside_unchanged
+        and child_marker_valid
+    )
+
+
+def _is_denial_errno(value: Any) -> bool:
+    return type(value) is int and value in {errno.EACCES, errno.EPERM}
+
+
+def _regular_file_bytes_equal(path: Path, expected: bytes) -> bool:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return False
+        actual = os.read(descriptor, len(expected) + 1)
+        return actual == expected
+    finally:
+        os.close(descriptor)
 
 
 def _run_bounded_probe(

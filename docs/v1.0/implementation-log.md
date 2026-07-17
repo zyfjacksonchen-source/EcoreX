@@ -6237,3 +6237,23 @@ controls: exact wheel hashes, tree/content binding, target architecture,
 relocation and portable signatures. This restores the Candidate scanner's
 historical native/text boundary while keeping Stage and Candidate on one
 implementation.
+
+## 2026-07-17 - macOS Seatbelt evidence-complete probe
+
+Fresh Stage `29596154340` crossed the corrected Browser and native payload
+boundaries, then failed at the macOS sandbox behavioral probe. The denial was
+real: after proving that the child could not write outside the workspace, the
+probe attempted to read the protected canary again from inside Seatbelt and
+turned the expected denial into an unhandled process failure. Its fixed closed
+loopback port could also return `ECONNREFUSED` without any sandbox policy.
+That run is quarantined and supplies no release evidence.
+
+The corrected probe separates trusted host evidence from untrusted sandbox
+evidence. The host creates a random canary and a live random loopback listener;
+the sandbox reports exact errno values for direct read/write, child write and
+network attempts. Readiness requires only `EACCES` or `EPERM`, an exact
+successful child report, a no-follow regular marker created before the child
+attempt, an unchanged host canary and exact typed JSON keys. Crashes, missing
+files, I/O errors, connection refusal, booleans masquerading as integers,
+malformed values and extra or absent evidence all fail closed. The real macOS
+test is now a release assertion instead of an environmental skip.
