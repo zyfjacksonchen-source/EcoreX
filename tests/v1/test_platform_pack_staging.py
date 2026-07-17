@@ -3862,6 +3862,21 @@ def test_dependency_probe_evidence_rejects_zero_result_ocr() -> None:
         stager["_validate_dependency_probe"]("ocr", value)
 
 
+def test_macos_sandbox_failure_codes_are_explicitly_allowlisted() -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    public_codes = stager["_MACOS_SANDBOX_FAILURE_CODES"]
+    classify = stager["_sandbox_failure_code"]
+
+    assert len(public_codes) == 12
+    for code in public_codes:
+        assert classify("macos", code) == code
+        assert classify("windows", code) == "sandbox_boundary_probe_failed"
+    assert (
+        classify("macos", "provider path /private/tmp/secret")
+        == "sandbox_boundary_probe_failed"
+    )
+
+
 def test_office_pack_declares_formats_not_rendering() -> None:
     descriptor = json.loads(
         (PACKS / "office" / "ecorex-dependency-pack.json").read_text(encoding="utf-8")

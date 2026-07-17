@@ -127,6 +127,22 @@ _BROWSER_SMOKE_PUBLIC_ERROR_CODES = frozenset(
         "pack_response_too_large",
     }
 )
+_MACOS_SANDBOX_FAILURE_CODES = frozenset(
+    {
+        "macos_seatbelt_probe_canary_changed",
+        "macos_seatbelt_probe_child_denial_unproven",
+        "macos_seatbelt_probe_child_marker_invalid",
+        "macos_seatbelt_probe_child_nonzero",
+        "macos_seatbelt_probe_child_not_started",
+        "macos_seatbelt_probe_evidence_invalid",
+        "macos_seatbelt_probe_network_denial_unproven",
+        "macos_seatbelt_probe_process_nonzero",
+        "macos_seatbelt_probe_process_unavailable",
+        "macos_seatbelt_probe_read_denial_unproven",
+        "macos_seatbelt_probe_workspace_write_failed",
+        "macos_seatbelt_probe_write_denial_unproven",
+    }
+)
 
 
 class StageError(RuntimeError):
@@ -3817,7 +3833,7 @@ def _sandbox_gates(
                 artifact_path=zipapp,
             )
         if not probe.complete:
-            raise StageError("sandbox_boundary_probe_failed")
+            raise StageError(_sandbox_failure_code(platform, probe.reason))
         _gate(evidence, "sandbox-boundary", {"probe": probe.to_dict()})
         _gate(
             evidence,
@@ -3840,6 +3856,12 @@ def _sandbox_gates(
     finally:
         zipapp.unlink(missing_ok=True)
         shutil.rmtree(workspace, ignore_errors=True)
+
+
+def _sandbox_failure_code(platform: str, reason: str) -> str:
+    if platform == "macos" and reason in _MACOS_SANDBOX_FAILURE_CODES:
+        return reason
+    return "sandbox_boundary_probe_failed"
 
 
 def _pack_request(

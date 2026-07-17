@@ -6257,3 +6257,15 @@ attempt, an unchanged host canary and exact typed JSON keys. Crashes, missing
 files, I/O errors, connection refusal, booleans masquerading as integers,
 malformed values and extra or absent evidence all fail closed. The real macOS
 test is now a release assertion instead of an environmental skip.
+
+The first protected Stage after that correction exposed one remaining macOS
+network-boundary detail: Seatbelt can reject `socket()` itself, before
+`connect_ex` can return an errno. The live-listener design remains authoritative,
+but socket construction and connection are now one explicit `OSError` boundary.
+Only `EACCES` or `EPERM` passes the unchanged strict evaluator; connection
+refusal, success and unrelated errors still fail closed. Stage `29598702668`
+was cancelled on its first platform failure and is fully quarantined. To stop
+future generic failures from forcing inference, each remaining evidence branch
+now has a fixed non-disclosing reason code. Stage emits only an explicit
+allowlist of those codes and never emits errno values, paths, commands or
+provider output.

@@ -38,6 +38,7 @@ from ecorex.integration.pack_process import (
 )
 from ecorex.integration.sandbox import (
     _BoundedProcessResult,
+    _macos_probe_failure_reason,
     _macos_probe_result_complete,
     SandboxLaunchPlan,
     SandboxProbe,
@@ -904,6 +905,106 @@ def test_macos_probe_evaluator_rejects_false_network_and_child_evidence() -> Non
         outside_unchanged=True,
         child_marker_valid=False,
     )
+
+
+def test_macos_probe_failure_reasons_are_stable_and_non_disclosing() -> None:
+    passing = {
+        "child_returncode": 0,
+        "child_started": True,
+        "child_write_errno": 1,
+        "inside_write": True,
+        "network_errno": 1,
+        "outside_read_errno": 1,
+        "outside_write_errno": 1,
+    }
+    completed = _BoundedProcessResult(returncode=0, stdout=b"{}", stderr=b"")
+    assert (
+        _macos_probe_failure_reason(
+            completed,
+            passing,
+            outside_unchanged=True,
+            child_marker_valid=True,
+        )
+        == "ready"
+    )
+    scenarios = (
+        (None, passing, True, True, "macos_seatbelt_probe_process_unavailable"),
+        (
+            _BoundedProcessResult(returncode=1, stdout=b"", stderr=b""),
+            passing,
+            True,
+            True,
+            "macos_seatbelt_probe_process_nonzero",
+        ),
+        (completed, {}, True, True, "macos_seatbelt_probe_evidence_invalid"),
+        (
+            completed,
+            {**passing, "child_returncode": 1},
+            True,
+            True,
+            "macos_seatbelt_probe_child_nonzero",
+        ),
+        (
+            completed,
+            {**passing, "child_started": False},
+            True,
+            True,
+            "macos_seatbelt_probe_child_not_started",
+        ),
+        (
+            completed,
+            {**passing, "child_write_errno": 61},
+            True,
+            True,
+            "macos_seatbelt_probe_child_denial_unproven",
+        ),
+        (
+            completed,
+            {**passing, "inside_write": False},
+            True,
+            True,
+            "macos_seatbelt_probe_workspace_write_failed",
+        ),
+        (
+            completed,
+            {**passing, "network_errno": 61},
+            True,
+            True,
+            "macos_seatbelt_probe_network_denial_unproven",
+        ),
+        (
+            completed,
+            {**passing, "outside_read_errno": 61},
+            True,
+            True,
+            "macos_seatbelt_probe_read_denial_unproven",
+        ),
+        (
+            completed,
+            {**passing, "outside_write_errno": 61},
+            True,
+            True,
+            "macos_seatbelt_probe_write_denial_unproven",
+        ),
+        (completed, passing, False, True, "macos_seatbelt_probe_canary_changed"),
+        (
+            completed,
+            passing,
+            True,
+            False,
+            "macos_seatbelt_probe_child_marker_invalid",
+        ),
+    )
+    for result, value, canary, marker, reason in scenarios:
+        assert (
+            _macos_probe_failure_reason(
+                result,
+                value,
+                outside_unchanged=canary,
+                child_marker_valid=marker,
+            )
+            == reason
+        )
 
 
 def test_pack_bytes_are_revalidated_after_adapter_binding(tmp_path: Path) -> None:

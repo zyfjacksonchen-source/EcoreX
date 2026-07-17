@@ -410,7 +410,10 @@ class MacOSSandboxExecBackend:
                     "r={};"
                     "\ntry: outside.read_text(); r['outside_read_errno']=0\nexcept OSError as exc: r['outside_read_errno']=exc.errno"
                     "\ntry: outside.write_text('x'); r['outside_write_errno']=0\nexcept OSError as exc: r['outside_write_errno']=exc.errno"
-                    "\nsock=socket.socket();r['network_errno']=sock.connect_ex(('127.0.0.1',port));sock.close()"
+                    "\nsock=None"
+                    "\ntry: sock=socket.socket(); r['network_errno']=sock.connect_ex(('127.0.0.1',port))"
+                    "\nexcept OSError as exc: r['network_errno']=exc.errno"
+                    "\nfinally:\n if sock is not None: sock.close()"
                     "\ntry: inside.joinpath('ok').write_text('ok'); r['inside_write']=True\nexcept Exception: r['inside_write']=False"
                     "\nchild=subprocess.run([sys.executable,'-I','-c',child_code,str(marker),str(outside)],capture_output=True);"
                     "r['child_returncode']=child.returncode;r['child_started']=marker.is_file();"
@@ -455,17 +458,18 @@ class MacOSSandboxExecBackend:
                     outside.unlink(missing_ok=True)
             except OSError:
                 pass
-        ready = _macos_probe_result_complete(
+        reason = _macos_probe_failure_reason(
             completed,
             value,
             outside_unchanged=outside_unchanged,
             child_marker_valid=child_marker_valid,
         )
+        ready = reason == "ready"
         self._last_probe = SandboxProbe(
             backend_id="macos-seatbelt",
             platform="macos",
             ready=ready,
-            reason="ready" if ready else "macos_seatbelt_probe_failed",
+            reason=reason,
             filesystem_read_scoped=ready,
             filesystem_write_scoped=ready,
             network_denied=ready,
@@ -563,6 +567,24 @@ def _macos_probe_result_complete(
     outside_unchanged: bool,
     child_marker_valid: bool,
 ) -> bool:
+    return (
+        _macos_probe_failure_reason(
+            completed,
+            value,
+            outside_unchanged=outside_unchanged,
+            child_marker_valid=child_marker_valid,
+        )
+        == "ready"
+    )
+
+
+def _macos_probe_failure_reason(
+    completed: _BoundedProcessResult | None,
+    value: Any,
+    *,
+    outside_unchanged: bool,
+    child_marker_valid: bool,
+) -> str:
     expected_keys = {
         "child_returncode",
         "child_started",
@@ -572,22 +594,34 @@ def _macos_probe_result_complete(
         "outside_read_errno",
         "outside_write_errno",
     }
-    return bool(
-        completed is not None
-        and completed.returncode == 0
-        and isinstance(value, dict)
-        and set(value) == expected_keys
-        and type(value["child_returncode"]) is int
-        and value["child_returncode"] == 0
-        and value["child_started"] is True
-        and _is_denial_errno(value["child_write_errno"])
-        and value["inside_write"] is True
-        and _is_denial_errno(value["network_errno"])
-        and _is_denial_errno(value["outside_read_errno"])
-        and _is_denial_errno(value["outside_write_errno"])
-        and outside_unchanged
-        and child_marker_valid
-    )
+    if completed is None:
+        return "macos_seatbelt_probe_process_unavailable"
+    if completed.returncode != 0:
+        return "macos_seatbelt_probe_process_nonzero"
+    if not isinstance(value, dict) or set(value) != expected_keys:
+        return "macos_seatbelt_probe_evidence_invalid"
+    if (
+        type(value["child_returncode"]) is not int
+        or value["child_returncode"] != 0
+    ):
+        return "macos_seatbelt_probe_child_nonzero"
+    if value["child_started"] is not True:
+        return "macos_seatbelt_probe_child_not_started"
+    if not _is_denial_errno(value["child_write_errno"]):
+        return "macos_seatbelt_probe_child_denial_unproven"
+    if value["inside_write"] is not True:
+        return "macos_seatbelt_probe_workspace_write_failed"
+    if not _is_denial_errno(value["network_errno"]):
+        return "macos_seatbelt_probe_network_denial_unproven"
+    if not _is_denial_errno(value["outside_read_errno"]):
+        return "macos_seatbelt_probe_read_denial_unproven"
+    if not _is_denial_errno(value["outside_write_errno"]):
+        return "macos_seatbelt_probe_write_denial_unproven"
+    if not outside_unchanged:
+        return "macos_seatbelt_probe_canary_changed"
+    if not child_marker_valid:
+        return "macos_seatbelt_probe_child_marker_invalid"
+    return "ready"
 
 
 def _is_denial_errno(value: Any) -> bool:
