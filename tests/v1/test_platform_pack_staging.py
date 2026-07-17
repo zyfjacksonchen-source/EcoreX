@@ -3877,6 +3877,101 @@ def test_macos_sandbox_failure_codes_are_explicitly_allowlisted() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("events", "expected"),
+    (
+        (
+            [
+                {
+                    "Action": "fail",
+                    "Package": "ecorex.local/bootstrap",
+                    "Test": "TestFreshBootstrapStateDirectoryAndTrustedLocalMigrationSource",
+                }
+            ],
+            "bootstrap_test_local_migration_failed",
+        ),
+        (
+            [
+                {
+                    "Action": "fail",
+                    "Package": "ecorex.local/bootstrap",
+                    "Test": "TestBoundedBufferFailsAtTheConfiguredLimit",
+                },
+                {
+                    "Action": "fail",
+                    "Package": "ecorex.local/bootstrap",
+                    "Test": "TestUnknown",
+                },
+            ],
+            "bootstrap_test_multiple_failed",
+        ),
+        (
+            [
+                {
+                    "Action": "fail",
+                    "Package": "ecorex.local/bootstrap",
+                    "Test": "TestUnknown",
+                }
+            ],
+            "bootstrap_test_unknown_failed",
+        ),
+        (
+            [
+                {
+                    "Action": "fail",
+                    "Package": "another/package",
+                    "Test": "TestFreshBootstrapStateDirectoryAndTrustedLocalMigrationSource",
+                }
+            ],
+            "bootstrap_test_package_failed",
+        ),
+    ),
+)
+def test_bootstrap_go_test_failures_are_fixed_and_non_disclosing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    events: list[dict[str, str]],
+    expected: str,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    result_type = stager["BoundedProcessResult"]
+
+    def failed(*_args: object, **_kwargs: object):
+        payload = b"\n".join(
+            json.dumps(event, separators=(",", ":")).encode("utf-8")
+            for event in events
+        )
+        return result_type(returncode=1, stdout=payload, stderr=b"private")
+
+    monkeypatch.setitem(
+        stager["_run_bootstrap_tests"].__globals__, "run_bounded_process", failed
+    )
+    with pytest.raises(stager["StageError"]) as raised:
+        stager["_run_bootstrap_tests"](
+            "go", source=tmp_path, environment={"GOTOOLCHAIN": "local"}
+        )
+    assert raised.value.code == expected
+    assert "private" not in str(raised.value)
+
+
+def test_bootstrap_go_test_success_does_not_expose_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    result_type = stager["BoundedProcessResult"]
+    monkeypatch.setitem(
+        stager["_run_bootstrap_tests"].__globals__,
+        "run_bounded_process",
+        lambda *_args, **_kwargs: result_type(
+            returncode=0, stdout=b"not-json", stderr=b"private"
+        ),
+    )
+    stager["_run_bootstrap_tests"](
+        "go", source=tmp_path, environment={"GOTOOLCHAIN": "local"}
+    )
+
+
 def test_office_pack_declares_formats_not_rendering() -> None:
     descriptor = json.loads(
         (PACKS / "office" / "ecorex-dependency-pack.json").read_text(encoding="utf-8")

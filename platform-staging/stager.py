@@ -153,6 +153,22 @@ _MACOS_SANDBOX_FAILURE_CODES = frozenset(
         "macos_seatbelt_probe_write_denial_unproven",
     }
 )
+_BOOTSTRAP_TEST_FAILURE_CODES = {
+    "TestManifestSignatureAndSourceBinding": "bootstrap_test_manifest_signature_failed",
+    "TestResumeDownloadRequiresExactContentRange": "bootstrap_test_resume_download_failed",
+    "TestDiscoveryUsesBoundedHTTPSServerClock": "bootstrap_test_discovery_clock_failed",
+    "TestCoreExtractionRejectsTraversal": "bootstrap_test_core_extraction_failed",
+    "TestSafeFileNameRejectsPlatformEscapes": "bootstrap_test_safe_filename_failed",
+    "TestPointerAuthorityIsSignedBoundAndMonotonic": "bootstrap_test_pointer_authority_failed",
+    "TestPointerFreshnessIsShortLivedRoleSeparatedAndMonotonic": "bootstrap_test_pointer_freshness_failed",
+    "TestPointerAuthorityHashMatchesTheCrossLanguageSigningVector": "bootstrap_test_pointer_hash_failed",
+    "TestFreshInstallRejectsPointerBelowSignedBootstrapFloor": "bootstrap_test_bootstrap_floor_failed",
+    "TestPointerAuthorityRejectsNonFinalOrPreV1Version": "bootstrap_test_version_policy_failed",
+    "TestFreshBootstrapStateDirectoryAndTrustedLocalMigrationSource": "bootstrap_test_local_migration_failed",
+    "TestBoundedBufferFailsAtTheConfiguredLimit": "bootstrap_test_bounded_buffer_failed",
+    "TestRequiredArtifactsIncludesEveryProductCapabilityPack": "bootstrap_test_required_artifacts_failed",
+    "TestTrustedLocalConfigRejectsBroadWriteACL": "bootstrap_test_local_config_acl_failed",
+}
 
 
 class StageError(RuntimeError):
@@ -2698,13 +2714,7 @@ def _build_bootstrap(
             "GOTOOLCHAIN": "local",
         }
     )
-    _run(
-        (go, "test", "-mod=readonly", "./..."),
-        cwd=source,
-        environment=environment,
-        timeout=180,
-        code="bootstrap_test_failed",
-    )
+    _run_bootstrap_tests(go, source=source, environment=environment)
     _run(
         (
             go,
@@ -4422,6 +4432,53 @@ def _run(
     if result.returncode != 0:
         raise StageError(code)
     return result
+
+
+def _run_bootstrap_tests(
+    go: str,
+    *,
+    source: Path,
+    environment: Mapping[str, str],
+) -> None:
+    """Run product-owned Go tests with bounded, non-disclosing classification."""
+
+    try:
+        result = run_bounded_process(
+            (go, "test", "-json", "-mod=readonly", "./..."),
+            payload=None,
+            cwd=source,
+            environment=environment,
+            timeout_seconds=180,
+            max_stdout_bytes=4 * 1024 * 1024,
+            max_stderr_bytes=1024 * 1024,
+        )
+    except (OSError, BoundedProcessError):
+        raise StageError("bootstrap_test_process_failed") from None
+    if result.returncode == 0:
+        return
+    failed_tests: set[str] = set()
+    for raw_line in result.stdout.splitlines():
+        try:
+            value = json.loads(raw_line.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if (
+            isinstance(value, dict)
+            and value.get("Action") == "fail"
+            and value.get("Package") == "ecorex.local/bootstrap"
+            and type(value.get("Test")) is str
+        ):
+            failed_tests.add(value["Test"])
+    if len(failed_tests) == 1 and failed_tests.issubset(
+        _BOOTSTRAP_TEST_FAILURE_CODES
+    ):
+        test_name = next(iter(failed_tests))
+        raise StageError(_BOOTSTRAP_TEST_FAILURE_CODES[test_name])
+    if len(failed_tests) > 1:
+        raise StageError("bootstrap_test_multiple_failed")
+    if failed_tests:
+        raise StageError("bootstrap_test_unknown_failed")
+    raise StageError("bootstrap_test_package_failed")
 
 
 def _runtime_environment() -> Mapping[str, str]:

@@ -6318,3 +6318,12 @@ directory is removed only after process cleanup on every terminal path.
 PR #38 and exact-main run `29606908819` passed the protected matrix (the
 quality job required one failed-job rerun after its first attempt timed out).
 Stage `29609800335` is quarantined and cannot feed Candidate or publication.
+
+The next fresh Stage (`29612323015`) crossed the interpreter and complete
+Seatbelt behavioral probe, validating the corrected workspace-write contract.
+It then reached the later Bootstrap build and returned the formerly generic
+`bootstrap_test_failed`. The bounded Go test runner now consumes Go's JSON
+event stream and maps only exact source-owned test identities to fixed public
+codes. Multiple, unknown/package and process-boundary failures remain distinct
+and fail closed; stderr, arbitrary output, host paths and toolchain details are
+never emitted. The failed Stage is quarantined in full.
