@@ -2426,3 +2426,13 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Shared root cause | 0 | All three tests enter `ensureBootstrapStateDirectory`. On the hosted macOS arm64 image, Go's `t.TempDir()` is presented through a system temporary-path alias whose symlinks resolve to another canonical absolute path. The product security contract correctly rejects an install root containing a link, so the tests supplied an intentionally invalid fixture before reaching their assertions. Production's default user-data root is unchanged. |
 | Test correction | 0 local contract | Security-sensitive Bootstrap tests now resolve their harness temp directory, require a real non-link directory and pass the canonical absolute path into the product contract. `ensureBootstrapStateDirectory` is not weakened and no production alias or link becomes trusted. |
 | Promotion | pending | Protected PR/main verification and a wholly new same-run Stage are required. No output from `29617026723` may be reused. |
+
+## Platform-stager stdout protocol isolation - 2026-07-18
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Protected canonical-root baseline | 0 | PR #43 run `29617557321` and exact-main run `29617969135` passed all five protected jobs. The squash merge is exact main `a99c8fb55124a03b67e29a5039ad8e907bfeff14`. |
+| Exact-main Stage `29618345433` | 1 expected | macOS arm64 completed the real stager with exit zero but the parent rejected its stdout as `platform_stager_response_invalid`. macOS x64 and Windows were cancelled, the one-use Windows runner unregistered and the full run is quarantined. |
+| Root cause | 0 | The successful macOS Pack sandbox probe printed a progress marker to stdout immediately before `main` wrote the single success JSON object. The strict parent correctly rejects the resulting two-message stream rather than parsing the last line. |
+| Protocol correction | 0 local contract | The progress print is removed; successful platform staging reserves stdout for exactly one protocol response. An AST contract gate rejects every future `print` not explicitly directed to stderr and requires exactly one fixed `sys.stdout.write` success response. Sandbox, probe and failure behavior are unchanged. |
+| Promotion | pending | Protected PR/main verification and a wholly new same-run Stage are required. No output from `29618345433` may be reused. |

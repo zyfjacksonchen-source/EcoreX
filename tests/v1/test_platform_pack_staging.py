@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import inspect
 import json
@@ -34,6 +35,36 @@ from ecorex.integration.pack_process import (
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKS = ROOT / "release" / "capability-packs"
+
+
+def test_platform_stager_reserves_stdout_for_its_single_protocol_response() -> None:
+    source = (ROOT / "platform-staging" / "stager.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    stdout_writes: list[ast.Call] = []
+    for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
+        if isinstance(call.func, ast.Name) and call.func.id == "print":
+            file_keyword = next(
+                (keyword.value for keyword in call.keywords if keyword.arg == "file"),
+                None,
+            )
+            assert (
+                isinstance(file_keyword, ast.Attribute)
+                and isinstance(file_keyword.value, ast.Name)
+                and file_keyword.value.id == "sys"
+                and file_keyword.attr == "stderr"
+            ), "platform stager progress must never contaminate protocol stdout"
+        if (
+            isinstance(call.func, ast.Attribute)
+            and call.func.attr == "write"
+            and isinstance(call.func.value, ast.Attribute)
+            and isinstance(call.func.value.value, ast.Name)
+            and call.func.value.value.id == "sys"
+            and call.func.value.attr == "stdout"
+        ):
+            stdout_writes.append(call)
+    assert len(stdout_writes) == 1
+    assert isinstance(stdout_writes[0].args[0], ast.Constant)
+    assert stdout_writes[0].args[0].value == '{"schema_version":1,"status":"passed"}'
 
 
 def _pack_python(payload: Path, *, platform: str = "windows") -> Path:

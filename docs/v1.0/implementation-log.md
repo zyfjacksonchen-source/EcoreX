@@ -6351,3 +6351,12 @@ resolved canonical path differs, so the tests constructed an install root the
 product correctly rejects. The harness now resolves and validates a real,
 non-link canonical directory before invoking the security contract. Product
 link rejection is unchanged and the failed Stage remains quarantined.
+
+PR #43 and exact-main run `29617969135` passed the protected matrix. Stage
+`29618345433` then completed the macOS arm64 adapter successfully, but its
+success path wrote a human progress marker to stdout before the one allowed
+JSON protocol response. The strict parent correctly rejected that mixed
+stream as `platform_stager_response_invalid`; the entire run is quarantined.
+The marker is removed rather than weakening the parser, and a static AST gate
+now reserves stdout for the single fixed success response while requiring all
+`print` calls to target stderr explicitly.

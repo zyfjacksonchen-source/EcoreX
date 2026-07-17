@@ -2078,7 +2078,6 @@ def _run_macos_isolated_pack_probe(
             raise StageError("pack_python_probe_snapshot_mutated")
     if result.stdout != baseline.stdout:
         raise StageError("pack_python_sandbox_probe_output_invalid")
-    print("macos_pack_python_sandbox_probe=passed", flush=True)
     return result
 
 
