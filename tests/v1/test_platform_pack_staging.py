@@ -2036,32 +2036,42 @@ def test_macos_pack_probe_denies_source_and_framework_reads(
     framework_root.mkdir(parents=True)
     core = tmp_path / "core"
     core.mkdir()
+    positive_canary = core / "pack-python.json"
+    positive_canary.write_bytes(b"signed-pack-manifest")
     interpreter = core / "pack-python" / "bin" / "python3"
     interpreter.parent.mkdir(parents=True)
     interpreter.write_bytes(b"python")
-    seen: list[tuple[str, ...]] = []
     original_is_file = Path.is_file
 
     def fake_is_file(path: Path) -> bool:
-        if path.as_posix() in {"/usr/bin/sandbox-exec", "/bin/cat"}:
+        if path.as_posix() in {
+            "/usr/bin/sandbox-exec",
+            "/usr/bin/true",
+            "/bin/cat",
+        }:
             return True
         return original_is_file(path)
-
-    def fake_run(command: tuple[str, ...], **kwargs: object) -> SimpleNamespace:
-        seen.append(command)
-        return SimpleNamespace(stdout=b"1.0.0\n")
 
     monkeypatch.setattr(Path, "is_file", fake_is_file)
     probe_globals = stager["_run_macos_isolated_pack_probe"].__globals__
     monkeypatch.setitem(probe_globals, "_PYTHON_FRAMEWORK_ROOT", framework_root)
-    monkeypatch.setitem(probe_globals, "_run", fake_run)
-    denial_commands: list[tuple[str, ...]] = []
+    commands: list[tuple[str, ...]] = []
 
     def fake_bounded_process(
         command: tuple[str, ...], **kwargs: object
     ) -> SimpleNamespace:
-        denial_commands.append(command)
-        return SimpleNamespace(returncode=1, stdout=b"", stderr=b"denied")
+        commands.append(command)
+        if Path(command[-2]).as_posix() == "/bin/cat":
+            if Path(command[-1]) == positive_canary:
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=b"signed-pack-manifest",
+                    stderr=b"",
+                )
+            return SimpleNamespace(returncode=1, stdout=b"", stderr=b"denied")
+        if command == probe or command[-len(probe) :] == probe:
+            return SimpleNamespace(returncode=0, stdout=b"1.0.0\n", stderr=b"")
+        return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
 
     monkeypatch.setitem(
         probe_globals,
@@ -2078,21 +2088,70 @@ def test_macos_pack_probe_denies_source_and_framework_reads(
     )
 
     assert result.stdout == b"1.0.0\n"
-    assert len(seen) == 1
-    assert len(denial_commands) == 1
-    command = seen[0]
+    assert len(commands) == 5
+    profile_check = commands[0]
+    assert Path(profile_check[-1]).as_posix() == "/usr/bin/true"
+    positive = commands[1]
+    assert Path(positive[-2]).as_posix() == "/bin/cat"
+    assert Path(positive[-1]) == positive_canary
+    baseline = commands[3]
+    assert baseline[-len(probe) :] == probe
+    command = commands[4]
     assert Path(command[0]).as_posix() == "/usr/bin/sandbox-exec"
     assert command[1] == "-p"
     assert command[3:] == probe
     profile = command[2]
+    core_literal = stager["_seatbelt_literal"](core.resolve())
+    write_rule = f'(deny file-write* (subpath "{core_literal}"))'
+    assert write_rule in baseline[2]
+    assert write_rule in profile
     source_literal = stager["_seatbelt_literal"](source_prefix.resolve())
     assert f'(deny file-read* (subpath "{source_literal}"))' in profile
     framework = stager["_seatbelt_literal"](framework_root)
     assert f'(deny file-read* (subpath "{framework}"))' in profile
-    denial = denial_commands[0]
+    assert f'(deny file-read* (subpath "{source_literal}"))' not in baseline[2]
+    assert f'(deny file-read* (subpath "{framework}"))' not in baseline[2]
+    denial = commands[2]
     assert Path(denial[0]).as_posix() == "/usr/bin/sandbox-exec"
     assert Path(denial[-2]).as_posix() == "/bin/cat"
     assert Path(denial[-1]) == source_canary
+
+
+@pytest.mark.parametrize(
+    ("returncode", "suffix"),
+    (
+        (81, "bootstrap_failed"),
+        (82, "native_imports_failed"),
+        (83, "asgi_imports_failed"),
+        (84, "resources_failed"),
+        (85, "tzdata_failed"),
+        (86, "execution_failed"),
+    ),
+)
+def test_macos_pack_probe_maps_only_fixed_failure_phases(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    returncode: int,
+    suffix: str,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    probe_globals = stager["_run_macos_pack_probe_process"].__globals__
+
+    def fake_bounded_process(
+        command: tuple[str, ...], **kwargs: object
+    ) -> SimpleNamespace:
+        return SimpleNamespace(returncode=returncode, stdout=b"", stderr=b"private")
+
+    monkeypatch.setitem(probe_globals, "run_bounded_process", fake_bounded_process)
+
+    with pytest.raises(stager["StageError"]) as raised:
+        stager["_run_macos_pack_probe_process"](
+            ("pack-python", "-c", "probe"),
+            cwd=tmp_path,
+            code_prefix="pack_python_probe",
+        )
+
+    assert raised.value.code == f"pack_python_probe_{suffix}"
 
 
 def test_pack_python_base_member_cannot_escape_closure_authority(
@@ -2202,7 +2261,12 @@ def test_platform_stager_bundles_and_forces_signed_iana_timezone_data() -> None:
     assert stager["_runtime_environment"]()["PYTHONTZPATH"] == ""
     probe = stager["_pack_python_probe_command"](Path("pack-python"))
     assert probe[:4] == ("pack-python", "-I", "-B", "-c")
-    assert "import certifi,cryptography,fastapi,httpx,pydantic,tzdata" in probe[4]
+    assert "import cryptography" in probe[4]
+    assert "import fastapi,httpx,pydantic,uvicorn,websockets" in probe[4]
+    assert "import certifi" in probe[4]
+    assert "import tzdata,zoneinfo" in probe[4]
+    for returncode in range(81, 86):
+        assert f"raise SystemExit({returncode})" in probe[4]
     assert "AdminWebAssets.load" in probe[4]
     assert "certifi.where" in probe[4]
     assert "from multipart.multipart import parse_options_header" in probe[4]

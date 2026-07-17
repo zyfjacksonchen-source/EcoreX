@@ -2134,3 +2134,13 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Early cleanup root cause | 0 | The workflow cleanup step is `always()` and can execute before dependencies exist. Its script now loads the stdlib-only leaf module directly after a regular/non-link check, avoiding the eager `ecorex.release` package graph and its Pydantic dependency. A `python -S remove` regression proves the pre-dependency path. |
 | Focused regression | 0 | Platform staging, full Candidate pipeline, ReleaseBuilder/SBOM and Runtime-config materialization: 118 passed / 10 explicit platform skips. Ruff, Python compilation, license-resource digest checks and tracked whitespace checks pass. Independent final audit reports zero P0/P1; real `otool`, relocation, codesign and isolated imports remain owned by a fresh dual-macOS Stage. |
 | Promotion | pending | A protected five-job PR matrix, protected-main merge and a wholly new same-run Windows/macOS Stage remain mandatory before signing, publication or production activation. |
+
+## macOS isolated pack-probe observability correction - 2026-07-17
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Exact-main Stage `29555840615` | 1 expected | Both macOS x64 and arm64 completed relocation and stopped at the former aggregate `pack_python_probe_failed`; Windows was still allowed to finish for evidence. The complete run is quarantined and no output may be reused. |
+| Evidence boundary | 0 | The old code collapsed interpreter startup, native imports, ASGI imports, packaged resources, tzdata and final stdout into one typed code while discarding bounded child output. Existing tests exercised only mocked command shape, so the observed code cannot safely identify which dependency to change. |
+| Fail-closed diagnostics | 0 local contract | Source-prefix and Python Framework denies remain unchanged. The fixed probe maps bootstrap, native-import, ASGI-import, resource and tzdata phases to stable exit codes without exporting stderr or host paths. Both the source-readable baseline and isolated probe deny writes to the completed Core. Profile execution, a positive in-Core read control and the negative source canary run before imports; the complete Core tree binding is reverified afterward. Unknown exit, timeout, bounded-output failure, canary ambiguity, mutation and output mismatch remain separate fail-closed errors. |
+| Focused regression | 0 | Platform staging: 78 passed / 9 explicit platform skips. Ruff, Python compilation and tracked whitespace checks pass. |
+| Promotion | pending | This change must pass the protected five-job matrix and merge to exact main. A fresh dual-macOS Stage must then supply the phase-specific real-host evidence before any root-cause correction or Candidate publication. |

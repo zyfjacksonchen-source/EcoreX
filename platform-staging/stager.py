@@ -687,6 +687,7 @@ def _build_python_closure(
         platform=platform,
         architecture=architecture,
     )
+    pre_probe_tree_sha256 = _tree_binding_sha256(core)
     probe = _pack_python_probe_command(interpreter)
     if platform == "macos":
         result = _run_macos_isolated_pack_probe(
@@ -704,7 +705,9 @@ def _build_python_closure(
             code="pack_python_probe_failed",
         )
     if result.stdout.strip() != __version__.encode("ascii"):
-        raise StageError("pack_python_probe_failed")
+        raise StageError("pack_python_probe_output_invalid")
+    if _tree_binding_sha256(core) != pre_probe_tree_sha256:
+        raise StageError("pack_python_probe_mutated_closure")
     # The independent post-write resolution above is the security boundary.
     # Reuse that immutable identity for the remaining synchronous stage instead
     # of scanning the exact same closure a third time before Pack staging.
@@ -1589,7 +1592,8 @@ def _run_macos_isolated_pack_probe(
 ) -> BoundedProcessResult:
     sandbox = Path("/usr/bin/sandbox-exec")
     cat = Path("/bin/cat")
-    if not sandbox.is_file() or not cat.is_file():
+    true = Path("/usr/bin/true")
+    if not sandbox.is_file() or not cat.is_file() or not true.is_file():
         raise StageError("pack_python_sandbox_probe_unavailable")
     source_canary = source_canary.resolve(strict=True)
     try:
@@ -1605,13 +1609,51 @@ def _run_macos_isolated_pack_probe(
         source_prefix.resolve(strict=True),
         _PYTHON_FRAMEWORK_ROOT,
     )
-    rules = "".join(
+    core = cwd.resolve(strict=True)
+    write_rule = (
+        f'(deny file-write* (subpath "{_seatbelt_literal(core)}"))'
+    )
+    isolation_rules = "".join(
         f'(deny file-read* (subpath "{_seatbelt_literal(path)}"))'
         f'(deny file-map-executable (subpath "{_seatbelt_literal(path)}"))'
         for path in denied
     )
-    profile = f"(version 1)(allow default){rules}"
+    baseline_profile = f"(version 1)(allow default){write_rule}"
+    profile = f"{baseline_profile}{isolation_rules}"
+    positive_canary = core / "pack-python.json"
     try:
+        positive_canary = positive_canary.resolve(strict=True)
+        positive_canary.relative_to(core)
+        positive_payload = _stable_bytes(
+            positive_canary,
+            64 * 1024,
+            "pack_python_sandbox_probe_invalid",
+        )
+    except (OSError, RuntimeError, ValueError):
+        raise StageError("pack_python_sandbox_probe_invalid") from None
+    try:
+        profile_check = run_bounded_process(
+            (str(sandbox), "-p", profile, str(true)),
+            payload=None,
+            cwd=cwd,
+            environment=_runtime_environment(),
+            timeout_seconds=30,
+            max_stdout_bytes=64 * 1024,
+            max_stderr_bytes=64 * 1024,
+        )
+        if profile_check.returncode != 0:
+            raise StageError("pack_python_sandbox_profile_invalid")
+        positive = run_bounded_process(
+            (str(sandbox), "-p", profile, str(cat), str(positive_canary)),
+            payload=None,
+            cwd=cwd,
+            environment=_runtime_environment(),
+            timeout_seconds=30,
+            max_stdout_bytes=64 * 1024,
+            max_stderr_bytes=64 * 1024,
+        )
+        if positive.returncode != 0 or positive.stdout != positive_payload:
+            raise StageError("pack_python_sandbox_probe_invalid")
         denial = run_bounded_process(
             (str(sandbox), "-p", profile, str(cat), str(source_canary)),
             payload=None,
@@ -1621,19 +1663,68 @@ def _run_macos_isolated_pack_probe(
             max_stdout_bytes=64 * 1024,
             max_stderr_bytes=64 * 1024,
         )
+    except StageError:
+        raise
     except (OSError, BoundedProcessError):
         raise StageError("pack_python_sandbox_probe_invalid") from None
-    if denial.returncode == 0:
+    if denial.returncode == 0 or denial.stdout:
         raise StageError("pack_python_sandbox_probe_not_enforced")
-    result = _run(
+    baseline = _run_macos_pack_probe_process(
+        (str(sandbox), "-p", baseline_profile, *probe),
+        cwd=cwd,
+        code_prefix="pack_python_probe",
+    )
+    result = _run_macos_pack_probe_process(
         (str(sandbox), "-p", profile, *probe),
         cwd=cwd,
-        environment=_runtime_environment(),
-        timeout=60,
-        code="pack_python_probe_failed",
+        code_prefix="pack_python_sandbox_probe",
     )
+    if result.stdout != baseline.stdout:
+        raise StageError("pack_python_sandbox_probe_output_invalid")
     print("macos_pack_python_sandbox_probe=passed", flush=True)
     return result
+
+
+_PACK_PROBE_FAILURE_PHASES = {
+    81: "bootstrap",
+    82: "native_imports",
+    83: "asgi_imports",
+    84: "resources",
+    85: "tzdata",
+}
+
+
+def _run_macos_pack_probe_process(
+    command: tuple[str, ...],
+    *,
+    cwd: Path,
+    code_prefix: str,
+) -> BoundedProcessResult:
+    """Run a fixed pack probe without crossing captured process details.
+
+    The probe uses fixed exit codes to identify its failed phase.  stderr may
+    contain host paths or loader details, so it remains inside the bounded
+    process boundary and only a stable typed code leaves this function.
+    """
+
+    try:
+        result = run_bounded_process(
+            command,
+            payload=None,
+            cwd=cwd,
+            environment=_runtime_environment(),
+            timeout_seconds=60,
+            max_stdout_bytes=4 * 1024 * 1024,
+            max_stderr_bytes=1024 * 1024,
+        )
+    except (OSError, BoundedProcessError):
+        raise StageError(f"{code_prefix}_execution_failed") from None
+    if result.returncode == 0:
+        return result
+    phase = _PACK_PROBE_FAILURE_PHASES.get(result.returncode)
+    if phase is None:
+        raise StageError(f"{code_prefix}_execution_failed")
+    raise StageError(f"{code_prefix}_{phase}_failed")
 
 
 def _compact_python_import_closure(
@@ -1817,18 +1908,39 @@ def _pack_python_probe_command(interpreter: Path) -> tuple[str, ...]:
         "-I",
         "-B",
         "-c",
-        (
-            "import certifi,cryptography,fastapi,httpx,pydantic,tzdata,uvicorn,websockets,ecorex,zoneinfo;"
-            "from pathlib import Path;"
-            "from ecorex.control_plane.admin_web.assets import AdminWebAssets;"
-            "from multipart.multipart import parse_options_header;"
-            "assert parse_options_header;"
-            "assert Path(certifi.where()).is_file();"
-            "assert len(AdminWebAssets.load().assets)==2;"
-            "zoneinfo.reset_tzpath(());zoneinfo.ZoneInfo.clear_cache();"
-            "assert zoneinfo.ZoneInfo('Asia/Shanghai').key == 'Asia/Shanghai';"
-            "print(ecorex.__version__)"
-        ),
+        """try:
+ import ecorex
+except BaseException:
+ raise SystemExit(81)
+try:
+ import cryptography
+ import pydantic_core
+ from cryptography.hazmat.bindings import _rust
+ assert _rust and pydantic_core
+except BaseException:
+ raise SystemExit(82)
+try:
+ import fastapi,httpx,pydantic,uvicorn,websockets
+ from multipart.multipart import parse_options_header
+ assert parse_options_header
+except BaseException:
+ raise SystemExit(83)
+try:
+ import certifi
+ from pathlib import Path
+ from ecorex.control_plane.admin_web.assets import AdminWebAssets
+ assert Path(certifi.where()).is_file()
+ assert len(AdminWebAssets.load().assets)==2
+except BaseException:
+ raise SystemExit(84)
+try:
+ import tzdata,zoneinfo
+ zoneinfo.reset_tzpath(())
+ zoneinfo.ZoneInfo.clear_cache()
+ assert zoneinfo.ZoneInfo('Asia/Shanghai').key == 'Asia/Shanghai'
+except BaseException:
+ raise SystemExit(85)
+print(ecorex.__version__)""",
     )
 
 
@@ -3226,6 +3338,16 @@ def _tree_records(root: Path) -> list[dict[str, Any]]:
     if not records:
         raise StageError("stage_tree_empty")
     return records
+
+
+def _tree_binding_sha256(root: Path) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            _tree_records(root),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def _write_zip(source: Path, destination: Path) -> None:
