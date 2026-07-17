@@ -146,53 +146,137 @@ def _cdp(arguments: Mapping[str, Any]) -> Mapping[str, Any]:
     if not target.startswith("data:text/html,"):
         _validate_public_url(target)
     timeout_ms = bounded_int(parameters.get("timeout_ms", 20_000), 100, 60_000)
-    with _browser_runtime() as runtime:
-        python_root = runtime / "python"
-        browser_executable = runtime / _runtime_descriptor(runtime)["browser_executable"]
-        sys.path.insert(0, str(python_root))
-        try:
-            from playwright.sync_api import Error as PlaywrightError
-            from playwright.sync_api import sync_playwright
-        except Exception:
-            raise ContractError("browser_runtime_import_failed") from None
-        try:
-            with sync_playwright() as playwright:
-                browser = playwright.chromium.launch(
-                    executable_path=str(browser_executable),
-                    headless=True,
-                    args=[
-                        "--disable-background-networking",
-                        "--disable-breakpad",
-                        "--disable-component-update",
-                        "--disable-default-apps",
-                        "--disable-extensions",
-                        "--disable-sync",
-                        "--metrics-recording-only",
-                        "--no-first-run",
-                    ],
+    try:
+        with _browser_runtime() as runtime:
+            python_root = runtime / "python"
+            browser_executable = (
+                runtime / _runtime_descriptor(runtime)["browser_executable"]
+            )
+            sys.path.insert(0, str(python_root))
+            try:
+                try:
+                    from playwright.sync_api import sync_playwright
+                except Exception:
+                    raise ContractError("browser_runtime_import_failed") from None
+                manager = _browser_phase(
+                    "browser_driver_start_failed",
+                    sync_playwright,
+                    retryable=True,
+                )
+                playwright = _browser_phase(
+                    "browser_driver_start_failed",
+                    manager.start,
+                    retryable=True,
                 )
                 try:
-                    context = browser.new_context(
-                        accept_downloads=False,
-                        service_workers="block",
-                        viewport={"width": 1280, "height": 800},
+                    browser = _browser_phase(
+                        "browser_launch_failed",
+                        lambda: playwright.chromium.launch(
+                            executable_path=str(browser_executable),
+                            headless=True,
+                            args=[
+                                "--disable-background-networking",
+                                "--disable-breakpad",
+                                "--disable-component-update",
+                                "--disable-default-apps",
+                                "--disable-extensions",
+                                "--disable-sync",
+                                "--metrics-recording-only",
+                                "--no-first-run",
+                            ],
+                        ),
+                        retryable=True,
                     )
-                    _install_browser_network_guard(context)
-                    page = context.new_page()
-                    page.set_default_timeout(timeout_ms)
-                    page.goto(target, wait_until="domcontentloaded", timeout=timeout_ms)
-                    result = _perform_page_operation(page, operation, parameters)
-                    context.close()
+                    try:
+                        context = _browser_phase(
+                            "browser_context_create_failed",
+                            lambda: browser.new_context(
+                                accept_downloads=False,
+                                service_workers="block",
+                                viewport={"width": 1280, "height": 800},
+                            ),
+                            retryable=True,
+                        )
+                        try:
+                            _browser_phase(
+                                "browser_network_guard_failed",
+                                lambda: _install_browser_network_guard(context),
+                            )
+                            page = _browser_phase(
+                                "browser_page_create_failed",
+                                context.new_page,
+                                retryable=True,
+                            )
+                            page.set_default_timeout(timeout_ms)
+                            _browser_phase(
+                                "browser_navigation_failed",
+                                lambda: page.goto(
+                                    target,
+                                    wait_until="domcontentloaded",
+                                    timeout=timeout_ms,
+                                ),
+                                retryable=True,
+                            )
+                            result = _browser_phase(
+                                "browser_page_operation_failed",
+                                lambda: _perform_page_operation(
+                                    page, operation, parameters
+                                ),
+                                retryable=True,
+                            )
+                        finally:
+                            _browser_cleanup_phase(
+                                "browser_context_close_failed",
+                                context.close,
+                                suppress=sys.exception() is not None,
+                            )
+                    finally:
+                        _browser_cleanup_phase(
+                            "browser_close_failed",
+                            browser.close,
+                            suppress=sys.exception() is not None,
+                        )
                 finally:
-                    browser.close()
-        except ContractError:
-            raise
-        except (PlaywrightError, TimeoutError):
-            raise ContractError("browser_operation_failed", retryable=True) from None
-        finally:
-            if sys.path and sys.path[0] == str(python_root):
-                sys.path.pop(0)
+                    _browser_cleanup_phase(
+                        "browser_driver_stop_failed",
+                        lambda: manager.__exit__(None, None, None),
+                        suppress=sys.exception() is not None,
+                    )
+            finally:
+                if sys.path and sys.path[0] == str(python_root):
+                    sys.path.pop(0)
+    except ContractError:
+        raise
+    except Exception:
+        raise ContractError("browser_runtime_cleanup_failed") from None
     return result
+
+
+def _browser_phase(
+    code: str,
+    operation: Any,
+    *,
+    retryable: bool = False,
+) -> Any:
+    try:
+        return operation()
+    except ContractError:
+        raise
+    except Exception:
+        raise ContractError(code, retryable=retryable) from None
+
+
+def _browser_cleanup_phase(
+    code: str,
+    operation: Any,
+    *,
+    suppress: bool,
+) -> None:
+    try:
+        operation()
+    except Exception:
+        if not suppress:
+            raise ContractError(code, retryable=True) from None
 
 
 def _install_browser_network_guard(context: Any) -> None:
@@ -276,15 +360,43 @@ def _browser_runtime() -> Iterator[Path]:
     # call a private TEMP/TMP domain and removes that domain after the child is
     # reaped, so the child must not turn an otherwise successful operation into
     # ``pack_internal_failure`` while trying to unlink its still-mapped DLL.
-    with tempfile.TemporaryDirectory(
-        prefix="ecorex-browser-runtime-",
-        ignore_cleanup_errors=os.name == "nt",
-    ) as raw:
-        root = Path(raw).resolve(strict=True)
+    temporary: tempfile.TemporaryDirectory[str] | None = None
+    try:
+        temporary = tempfile.TemporaryDirectory(
+            prefix="ecorex-browser-runtime-",
+            ignore_cleanup_errors=os.name == "nt",
+        )
+        root = Path(temporary.name).resolve(strict=True)
         archive_path = root / _RUNTIME_ARCHIVE
         archive_path.write_bytes(archive_payload)
         _extract_verified_runtime(archive_path, root / "payload", manifest)
+    except ContractError:
+        if temporary is not None:
+            try:
+                temporary.cleanup()
+            except Exception:
+                pass
+        raise
+    except Exception:
+        if temporary is not None:
+            try:
+                temporary.cleanup()
+            except Exception:
+                pass
+        raise ContractError("browser_runtime_prepare_failed") from None
+    try:
         yield root / "payload"
+    except BaseException:
+        try:
+            temporary.cleanup()
+        except Exception:
+            pass
+        raise
+    else:
+        try:
+            temporary.cleanup()
+        except Exception:
+            raise ContractError("browser_runtime_cleanup_failed") from None
 
 
 def _parse_runtime_manifest(payload: bytes, archive_payload: bytes) -> Mapping[str, Any]:

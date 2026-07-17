@@ -662,12 +662,10 @@ def test_browser_runtime_delegates_windows_native_cleanup_to_parent_temp_domain(
                 prefix=prefix,
                 ignore_cleanup_errors=ignore_cleanup_errors,
             )
+            self.name = str(tmp_path)
 
-        def __enter__(self) -> str:
-            return str(tmp_path)
-
-        def __exit__(self, *_args) -> None:
-            return None
+        def cleanup(self) -> None:
+            observed["cleaned"] = True
 
     monkeypatch.setattr(sys, "argv", [str(outer)])
     monkeypatch.setattr(browser["tempfile"], "TemporaryDirectory", Temporary)
@@ -688,7 +686,44 @@ def test_browser_runtime_delegates_windows_native_cleanup_to_parent_temp_domain(
     assert observed == {
         "prefix": "ecorex-browser-runtime-",
         "ignore_cleanup_errors": os.name == "nt",
+        "cleaned": True,
     }
+
+
+def test_browser_pack_phase_errors_are_fixed_and_cleanup_preserves_primary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(PACKS / "common"))
+    browser = runpy.run_path(str(PACKS / "browser" / "browser_pack.py"))
+    contract_error = browser["ContractError"]
+
+    with pytest.raises(contract_error) as phase:
+        browser["_browser_phase"](
+            "browser_network_guard_failed",
+            lambda: (_ for _ in ()).throw(AttributeError("private detail")),
+        )
+    assert phase.value.code == "browser_network_guard_failed"
+    assert "private detail" not in str(phase.value)
+
+    original = contract_error("browser_navigation_failed", retryable=True)
+    with pytest.raises(contract_error) as preserved:
+        try:
+            raise original
+        finally:
+            browser["_browser_cleanup_phase"](
+                "browser_close_failed",
+                lambda: (_ for _ in ()).throw(OSError("private cleanup detail")),
+                suppress=sys.exception() is not None,
+            )
+    assert preserved.value is original
+
+    with pytest.raises(contract_error) as cleanup:
+        browser["_browser_cleanup_phase"](
+            "browser_close_failed",
+            lambda: (_ for _ in ()).throw(OSError("private cleanup detail")),
+            suppress=False,
+        )
+    assert cleanup.value.code == "browser_close_failed"
 
 
 def test_sandbox_pack_acknowledges_exact_core_contract_and_fixed_shell(
