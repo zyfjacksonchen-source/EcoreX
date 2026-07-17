@@ -2235,3 +2235,14 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Runtime correction | 0 local contract | A canonical-database process coordinator now covers validation, schema transaction, immutable history receipt and WAL activation as one Runtime operation. Independent databases remain concurrent. InstallCoordinator remains the product-level cross-process owner for deployment migrations. |
 | Focused regression | 0 | The full image SQLite schema-manager suite passes 13 tests. A deterministic eight-manager overlap fixture proves that no schema/WAL phase overlaps for one database; an additional 50-round stress run completed 1600 migrations. Ruff and tracked whitespace checks pass. |
 | Promotion | pending | The correction requires a fresh protected five-job PR matrix, exact-main matrix and wholly new same-run three-platform Stage before any Candidate or production action. |
+
+## Relocatable Playwright browser payload correction - 2026-07-17
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Protected baseline | 0 | PR #25 run `29576754881` and exact-main run `29577191018` passed quality/deterministic build, Windows x64, macOS arm64/x64 and cross-runner byte stability. The squash merge is exact main `047f98cc5a737f4900a08108126bcdce9a66f9b7`. |
+| Exact-main Stage `29577801469` | 1 expected | Fresh macOS arm64 passed the corrected real Framework interpreter and reached the Browser Pack smoke, then returned `browser_pack_smoke_failed`. The entire run was immediately cancelled; macOS x64 and Windows outputs are quarantined, and the one-use Windows runner unregistered. |
+| Root cause | 0 | Playwright 1.52 exposes full `Chromium.app` through `chromium.executable_path`. The app contains required Framework aliases, while the regular-file-only Pack copier skipped directory symlinks and materialized a large file alias. The result was structurally incomplete and exceeded the bounded extracted-runtime budget before it could serve the smoke page. |
+| Runtime correction | 0 local contract | Browser staging now derives the same-revision `chromium_headless_shell-*` payload from the managed Playwright cache, requires one exact executable and rejects missing, ambiguous, linked, reparse or special entries. It never falls back to the full application. Stable allowlisted Pack failure codes are retained for diagnosis while unknown provider detail remains redacted. |
+| Focused regression | 0 | Platform Pack staging passes 104 tests / 12 explicit platform skips. Fixtures cover revision binding, missing and ambiguous payloads, tree links/reparse refusal and bounded smoke-code disclosure. Ruff, Python compilation and tracked whitespace checks pass; a real Playwright 1.52 / Chromium 1169 Windows headless-shell data-URL smoke also passed. |
+| Promotion | pending | A protected PR/main matrix and wholly new same-run three-platform Stage are required. No artifact or receipt from `29577801469` may be reused. |

@@ -107,6 +107,22 @@ _DEPENDENCY_PACK_ADAPTERS = {
     "ocr": "python-rapidocr-runtime-v1",
     "office": "python-office-formats-v1",
 }
+_BROWSER_SMOKE_PUBLIC_ERROR_CODES = frozenset(
+    {
+        "browser_operation_failed",
+        "browser_runtime_archive_incomplete",
+        "browser_runtime_archive_invalid",
+        "browser_runtime_archive_too_large",
+        "browser_runtime_digest_mismatch",
+        "browser_runtime_executable_missing",
+        "browser_runtime_import_failed",
+        "browser_runtime_manifest_invalid",
+        "browser_runtime_missing",
+        "pack_internal_failure",
+        "pack_response_invalid",
+        "pack_response_too_large",
+    }
+)
 
 
 class StageError(RuntimeError):
@@ -3084,17 +3100,12 @@ def _vendor_browser_runtime(pack: Path) -> tuple[dict[str, str], ...]:
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as playwright:
-            executable = Path(playwright.chromium.executable_path).resolve(strict=True)
+            chromium_executable = Path(
+                playwright.chromium.executable_path
+            ).resolve(strict=True)
     except Exception:
         raise StageError("playwright_chromium_unavailable") from None
-    browser_root = executable.parent
-    while browser_root.parent != browser_root and not (
-        browser_root.name.startswith("chromium-")
-        or browser_root.name.startswith("chromium_headless_shell-")
-    ):
-        browser_root = browser_root.parent
-    if browser_root.parent == browser_root:
-        raise StageError("playwright_chromium_layout_invalid")
+    browser_root, executable = _playwright_headless_shell(chromium_executable)
     with tempfile.TemporaryDirectory(prefix="ecorex-browser-stage-") as raw:
         runtime = Path(raw) / "runtime"
         python_root = runtime / "python"
@@ -3124,6 +3135,86 @@ def _vendor_browser_runtime(pack: Path) -> tuple[dict[str, str], ...]:
             newline="\n",
         )
     return inventory
+
+
+def _playwright_headless_shell(chromium_executable: Path) -> tuple[Path, Path]:
+    """Select Playwright's revision-matched, relocatable headless payload.
+
+    ``BrowserType.executable_path`` names the full Chromium application even
+    for a headless launch.  On macOS that application is a Framework bundle
+    whose required ``Resources``, ``Libraries``, ``Helpers`` and ``Current``
+    entries are symlinks.  The signed Browser Pack deliberately accepts only
+    regular files, so copying the application silently omitted those aliases
+    and produced a valid archive that Chromium could not launch.
+
+    ``playwright install chromium`` also installs the revision-matched
+    Chromium headless shell.  It is the fixed, relocatable executable intended
+    for headless automation and has a regular-file layout on every supported
+    Stage platform.  Bind it to the exact revision selected by Playwright and
+    fail closed instead of falling back to an unrepresentable app bundle.
+    """
+
+    chromium_root = chromium_executable.parent
+    while chromium_root.parent != chromium_root and re.fullmatch(
+        r"chromium-[0-9]+", chromium_root.name
+    ) is None:
+        chromium_root = chromium_root.parent
+    match = re.fullmatch(r"chromium-([0-9]+)", chromium_root.name)
+    if match is None:
+        raise StageError("playwright_chromium_layout_invalid")
+    cache_root = chromium_root.parent.resolve(strict=True)
+    shell_root = cache_root / f"chromium_headless_shell-{match.group(1)}"
+    try:
+        shell_metadata = shell_root.lstat()
+        resolved_shell_root = shell_root.resolve(strict=True)
+    except OSError:
+        raise StageError("playwright_headless_shell_unavailable") from None
+    if (
+        not stat.S_ISDIR(shell_metadata.st_mode)
+        or shell_root.is_symlink()
+        or bool(
+            getattr(shell_metadata, "st_file_attributes", 0)
+            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        )
+        or resolved_shell_root.parent != cache_root
+    ):
+        raise StageError("playwright_headless_shell_layout_invalid")
+    if os.name == "nt":
+        executable_relative = Path("chrome-win") / "headless_shell.exe"
+    elif sys.platform == "darwin":
+        executable_relative = Path("chrome-mac") / "headless_shell"
+    else:
+        executable_relative = Path("chrome-linux") / "headless_shell"
+    executable = resolved_shell_root / executable_relative
+    try:
+        for candidate in resolved_shell_root.rglob("*"):
+            metadata = candidate.lstat()
+            linked = candidate.is_symlink() or bool(
+                getattr(metadata, "st_file_attributes", 0)
+                & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+            )
+            if linked or not (
+                stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)
+            ):
+                raise StageError("playwright_headless_shell_layout_invalid")
+            if stat.S_ISDIR(metadata.st_mode):
+                continue
+        executable_metadata = executable.lstat()
+        resolved_executable = executable.resolve(strict=True)
+    except OSError:
+        raise StageError("playwright_headless_shell_layout_invalid") from None
+    if (
+        not stat.S_ISREG(executable_metadata.st_mode)
+        or executable.is_symlink()
+        or bool(
+            getattr(executable_metadata, "st_file_attributes", 0)
+            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        )
+        or (os.name != "nt" and not executable_metadata.st_mode & stat.S_IXUSR)
+        or not resolved_executable.is_relative_to(resolved_shell_root)
+    ):
+        raise StageError("playwright_headless_shell_layout_invalid")
+    return resolved_shell_root, resolved_executable
 
 
 def _core_gates(
@@ -3238,10 +3329,13 @@ def _browser_gates(
             },
         )
         response = _invoke_zipapp(interpreter, zipapp, request, timeout=60)
-        if response.get("status") != "completed" or "ecorex-stage-ready" not in str(
-            response.get("result")
-        ):
+        if response.get("status") != "completed":
+            public_code = response.get("error_code")
+            if public_code in _BROWSER_SMOKE_PUBLIC_ERROR_CODES:
+                raise StageError(f"browser_pack_smoke_{public_code}")
             raise StageError("browser_pack_smoke_failed")
+        if "ecorex-stage-ready" not in str(response.get("result")):
+            raise StageError("browser_pack_smoke_result_invalid")
         _gate(evidence, "browser-smoke", {"response_sha256": _json_sha256(response)})
         _gate(
             evidence,

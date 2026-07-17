@@ -393,6 +393,163 @@ def test_browser_pack_has_no_arbitrary_evaluate_operation(tmp_path: Path) -> Non
     assert response["error_code"] == "browser_operation_not_supported"
 
 
+def test_browser_stage_selects_revision_matched_relocatable_headless_shell(
+    tmp_path: Path,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    cache = tmp_path / "ms-playwright"
+    chromium = (
+        cache
+        / "chromium-1169"
+        / "chrome"
+        / ("chrome.exe" if os.name == "nt" else "Chromium")
+    )
+    chromium.parent.mkdir(parents=True)
+    chromium.write_bytes(b"full Chromium application")
+    chromium.chmod(0o755)
+    shell = (
+        cache
+        / "chromium_headless_shell-1169"
+        / (
+            "chrome-win"
+            if os.name == "nt"
+            else "chrome-mac"
+            if sys.platform == "darwin"
+            else "chrome-linux"
+        )
+        / ("headless_shell.exe" if os.name == "nt" else "headless_shell")
+    )
+    shell.parent.mkdir(parents=True)
+    shell.write_bytes(b"relocatable headless shell")
+    shell.chmod(0o755)
+
+    root, executable = stager["_playwright_headless_shell"](chromium.resolve())
+
+    assert root == (cache / "chromium_headless_shell-1169").resolve()
+    assert executable == shell.resolve()
+    assert "chromium-1169" not in executable.parts
+
+
+def test_browser_stage_rejects_missing_or_ambiguous_headless_shell(
+    tmp_path: Path,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    stage_error = stager["StageError"]
+    cache = tmp_path / "ms-playwright"
+    chromium = cache / "chromium-1169" / "chrome" / "Chromium"
+    chromium.parent.mkdir(parents=True)
+    chromium.write_bytes(b"full Chromium application")
+    chromium.chmod(0o755)
+
+    with pytest.raises(stage_error) as missing:
+        stager["_playwright_headless_shell"](chromium.resolve())
+    assert missing.value.code == "playwright_headless_shell_unavailable"
+
+    executable_name = "headless_shell.exe" if os.name == "nt" else "headless_shell"
+    for directory in ("one", "two"):
+        candidate = (
+            cache / "chromium_headless_shell-1169" / directory / executable_name
+        )
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_bytes(directory.encode())
+        candidate.chmod(0o755)
+    with pytest.raises(stage_error) as ambiguous:
+        stager["_playwright_headless_shell"](chromium.resolve())
+    assert ambiguous.value.code == "playwright_headless_shell_layout_invalid"
+
+
+def test_browser_stage_rejects_link_anywhere_in_headless_shell_tree(
+    tmp_path: Path,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    stage_error = stager["StageError"]
+    cache = tmp_path / "ms-playwright"
+    chromium = cache / "chromium-1169" / "chrome" / "Chromium"
+    chromium.parent.mkdir(parents=True)
+    chromium.write_bytes(b"full Chromium application")
+    chromium.chmod(0o755)
+    shell_root = cache / "chromium_headless_shell-1169"
+    executable = (
+        shell_root
+        / (
+            "chrome-win"
+            if os.name == "nt"
+            else "chrome-mac"
+            if sys.platform == "darwin"
+            else "chrome-linux"
+        )
+        / ("headless_shell.exe" if os.name == "nt" else "headless_shell")
+    )
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"relocatable headless shell")
+    executable.chmod(0o755)
+    outside = tmp_path / "outside-resource.pak"
+    outside.write_bytes(b"outside")
+    try:
+        (shell_root / "resource.pak").symlink_to(outside)
+    except OSError as error:
+        pytest.skip(f"symlink creation is unavailable: {error}")
+
+    with pytest.raises(stage_error) as linked:
+        stager["_playwright_headless_shell"](chromium.resolve())
+    assert linked.value.code == "playwright_headless_shell_layout_invalid"
+
+
+def test_browser_stage_surfaces_only_allowlisted_pack_smoke_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    stage_error = stager["StageError"]
+    pack = tmp_path / "browser"
+    pack.mkdir()
+    (pack / "ecorex-pack.json").write_bytes(
+        stager["_canonical_process_pack_descriptor"]("browser")
+    )
+    zipapp = tmp_path / "browser.pyz"
+    zipapp.write_bytes(b"bounded browser probe")
+    monkeypatch.setitem(
+        stager["_browser_gates"].__globals__,
+        "_temporary_zipapp",
+        lambda _pack: zipapp,
+    )
+    monkeypatch.setitem(
+        stager["_browser_gates"].__globals__,
+        "_invoke_zipapp",
+        lambda *_args, **_kwargs: {
+            "status": "failed",
+            "error_code": "browser_runtime_import_failed",
+        },
+    )
+
+    with pytest.raises(stage_error) as classified:
+        stager["_browser_gates"](
+            pack,
+            interpreter=Path(sys.executable),
+            inventory=(),
+            evidence=tmp_path / "evidence",
+        )
+    assert classified.value.code == "browser_pack_smoke_browser_runtime_import_failed"
+
+    zipapp.write_bytes(b"bounded browser probe")
+    monkeypatch.setitem(
+        stager["_browser_gates"].__globals__,
+        "_invoke_zipapp",
+        lambda *_args, **_kwargs: {
+            "status": "failed",
+            "error_code": "must_not_surface",
+        },
+    )
+    with pytest.raises(stage_error) as redacted:
+        stager["_browser_gates"](
+            pack,
+            interpreter=Path(sys.executable),
+            inventory=(),
+            evidence=tmp_path / "other-evidence",
+        )
+    assert redacted.value.code == "browser_pack_smoke_failed"
+
+
 def test_browser_pack_guards_every_subrequest_and_denies_websockets(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
