@@ -1,3 +1,4 @@
+.gitattributes text eol=lf
 *.sh text eol=lf
 *.bash text eol=lf
 *.css text eol=lf
@@ -15,3 +16,4 @@
 *.tsx text eol=lf
 *.yaml text eol=lf
 *.yml text eol=lf
+ecorex/release/licenses/macos-native/* binary

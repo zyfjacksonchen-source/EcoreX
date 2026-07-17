@@ -40,9 +40,18 @@ from ecorex.update import (
     core_delta_file_name,
     create_core_delta_archive,
 )
-from ecorex.update.manifest import portable_path_segment_key, validate_portable_path_segment
+from ecorex.update.manifest import (
+    portable_path_segment_key,
+    validate_portable_path_segment,
+)
 
 from .errors import ReleaseBuildError
+from .macos_native_contract import (
+    MACOS_NATIVE_COMPONENTS,
+    MACOS_NATIVE_LICENSES,
+    PYTHON_MACOS_DISTRIBUTION,
+    PYTHON_MACOS_LICENSE,
+)
 from .identity import release_tag
 from .models import (
     ArtifactBuildInput,
@@ -175,7 +184,9 @@ class ReleaseBuilder:
             raise TypeError("spec must be a ReleaseBuildSpec")
         destination_path = Path(destination)
         if os.path.lexists(destination_path):
-            raise ReleaseBuildError(f"release destination already exists: {destination_path}")
+            raise ReleaseBuildError(
+                f"release destination already exists: {destination_path}"
+            )
         destination_path.parent.mkdir(parents=True, exist_ok=True)
         _require_real_directory(destination_path.parent, "release destination parent")
         self._validate_spec(spec, destination_path)
@@ -213,7 +224,9 @@ class ReleaseBuilder:
         except (ReleaseBuildError, SigningError):
             raise
         except Exception as exc:
-            raise ReleaseBuildError(f"release build failed: {type(exc).__name__}") from exc
+            raise ReleaseBuildError(
+                f"release build failed: {type(exc).__name__}"
+            ) from exc
         finally:
             if not published and staging.exists():
                 _remove_staging_tree(staging, destination_path.parent)
@@ -276,9 +289,7 @@ class ReleaseBuilder:
             if definition.kind is ArtifactKind.CAPABILITY_PACK:
                 sidecar_id, sidecar_name = _pack_manifest_identity(definition)
                 if sidecar_id in seen_ids:
-                    raise ReleaseBuildError(
-                        f"duplicate artifact id: {sidecar_id!r}"
-                    )
+                    raise ReleaseBuildError(f"duplicate artifact id: {sidecar_id!r}")
                 sidecar_key = portable_path_segment_key(sidecar_name)
                 if sidecar_key in seen_names:
                     raise ReleaseBuildError(
@@ -446,8 +457,13 @@ class ReleaseBuilder:
                     )
                 )
 
-        if spec.web_bundle is not None and scan_web_bundle(spec.web_bundle) != scanned_web:
-            raise ReleaseBuildError("React dist changed while core artifacts were built")
+        if (
+            spec.web_bundle is not None
+            and scan_web_bundle(spec.web_bundle) != scanned_web
+        ):
+            raise ReleaseBuildError(
+                "React dist changed while core artifacts were built"
+            )
         build_digest = _build_digest(
             spec, built, scanned_web, product_migration_manifests
         )
@@ -484,8 +500,7 @@ class ReleaseBuilder:
                     (
                         position
                         for position, candidate in enumerate(built)
-                        if candidate.artifact_id
-                        == _artifact_identity(definition)[0]
+                        if candidate.artifact_id == _artifact_identity(definition)[0]
                     ),
                     None,
                 )
@@ -637,9 +652,9 @@ class ReleaseBuilder:
         sbom_sha256 = hashlib.sha256(sbom_bytes).hexdigest()
 
         manifest_path = staging / "release-manifest.json"
-        manifest_bytes = (manifest.to_json(include_signature=True, pretty=True) + "\n").encode(
-            "utf-8"
-        )
+        manifest_bytes = (
+            manifest.to_json(include_signature=True, pretty=True) + "\n"
+        ).encode("utf-8")
         _atomic_write_bytes(manifest_path, manifest_bytes)
 
         metadata_path = staging / "release-metadata.json"
@@ -672,7 +687,10 @@ class ReleaseBuilder:
         if spec.dependency_lock_sha256 is not None:
             metadata["python_dependency_lock_sha256"] = spec.dependency_lock_sha256
         _atomic_write_bytes(metadata_path, _pretty_json_bytes(metadata))
-        if spec.web_bundle is not None and scan_web_bundle(spec.web_bundle) != scanned_web:
+        if (
+            spec.web_bundle is not None
+            and scan_web_bundle(spec.web_bundle) != scanned_web
+        ):
             raise ReleaseBuildError("React dist changed during release construction")
         _fsync_directory(staging)
         return manifest, tuple(built), sbom_path, metadata_path, manifest_path
@@ -911,14 +929,18 @@ def _build_deterministic_zip(
                 if entry.is_directory:
                     archive.writestr(info, b"")
                 else:
-                    record = _write_zip_file(archive, info, entry, temporary, size_limit)
+                    record = _write_zip_file(
+                        archive, info, entry, temporary, size_limit
+                    )
                     records.append(record)
                 if temporary.stat().st_size > size_limit:
                     raise ReleaseBuildError(
                         f"artifact exceeds compressed size limit {size_limit}"
                     )
         if temporary.stat().st_size > size_limit:
-            raise ReleaseBuildError(f"artifact exceeds compressed size limit {size_limit}")
+            raise ReleaseBuildError(
+                f"artifact exceeds compressed size limit {size_limit}"
+            )
         with temporary.open("r+b") as stream:
             os.fsync(stream.fileno())
         os.replace(temporary, destination)
@@ -1116,10 +1138,8 @@ def _copy_verified_web_file(
         ) from None
     identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
     if (
-        (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
-        != identity
-        or (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-        != identity
+        (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) != identity
+        or (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != identity
         or (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns)
         != identity
         or digest.hexdigest() != record.sha256
@@ -1132,7 +1152,9 @@ def _scan_source_tree(
     executable_paths: Iterable[str],
 ) -> tuple[_SourceEntry, ...]:
     _require_real_directory(source, "artifact source directory")
-    explicit_executables = {_normalize_relative_path(value) for value in executable_paths}
+    explicit_executables = {
+        _normalize_relative_path(value) for value in executable_paths
+    }
     pending: list[tuple[Path, PurePosixPath]] = [(source, PurePosixPath())]
     entries: list[_SourceEntry] = []
     seen: dict[str, tuple[str, bool]] = {}
@@ -1143,16 +1165,22 @@ def _scan_source_tree(
         try:
             children = sorted(os.scandir(directory), key=lambda item: item.name)
         except OSError as exc:
-            raise ReleaseBuildError(f"cannot read artifact source directory: {directory}") from exc
+            raise ReleaseBuildError(
+                f"cannot read artifact source directory: {directory}"
+            ) from exc
         for child in children:
             path = Path(child.path)
             metadata = path.lstat()
             if _metadata_is_link_or_reparse(metadata):
-                raise ReleaseBuildError(f"source contains a link or reparse point: {path}")
+                raise ReleaseBuildError(
+                    f"source contains a link or reparse point: {path}"
+                )
             relative_path = relative_root / child.name
             relative = relative_path.as_posix()
             _validate_archive_path(relative_path)
-            key = "/".join(portable_path_segment_key(part) for part in relative_path.parts)
+            key = "/".join(
+                portable_path_segment_key(part) for part in relative_path.parts
+            )
             is_directory = child.is_dir(follow_symlinks=False)
             is_file = child.is_file(follow_symlinks=False)
             if not is_directory and not is_file:
@@ -1166,9 +1194,13 @@ def _scan_source_tree(
                 parent_key = "/".join(key_parts[:index])
                 previous = seen.get(parent_key)
                 if previous is not None and not previous[1]:
-                    raise ReleaseBuildError(f"file is used as a parent path: {relative!r}")
+                    raise ReleaseBuildError(
+                        f"file is used as a parent path: {relative!r}"
+                    )
             if is_file and any(existing.startswith(key + "/") for existing in seen):
-                raise ReleaseBuildError(f"file conflicts with a directory path: {relative!r}")
+                raise ReleaseBuildError(
+                    f"file conflicts with a directory path: {relative!r}"
+                )
             seen[key] = (relative, is_directory)
             if is_directory:
                 entries.append(
@@ -1408,20 +1440,26 @@ def _product_migration_manifest_payload(definition: ArtifactBuildInput) -> bytes
                 "product storage-migrations.json must be a regular non-link file"
             )
         if not 1 <= before.st_size <= MAX_STORAGE_MIGRATION_BYTES:
-            raise ReleaseBuildError(
-                "product storage-migrations.json size is invalid"
-            )
+            raise ReleaseBuildError("product storage-migrations.json size is invalid")
         with path.open("rb") as stream:
             opened = os.fstat(stream.fileno())
             payload = stream.read(MAX_STORAGE_MIGRATION_BYTES + 1)
             after = os.fstat(stream.fileno())
         current = path.lstat()
         identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-        if any(
-            (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
-            != identity
-            for metadata in (opened, after, current)
-        ) or len(payload) != before.st_size:
+        if (
+            any(
+                (
+                    metadata.st_dev,
+                    metadata.st_ino,
+                    metadata.st_size,
+                    metadata.st_mtime_ns,
+                )
+                != identity
+                for metadata in (opened, after, current)
+            )
+            or len(payload) != before.st_size
+        ):
             raise ReleaseBuildError(
                 "product storage-migrations.json changed while packaging"
             )
@@ -1461,9 +1499,7 @@ def _cyclonedx_sbom(
                 "type": "file",
                 "bom-ref": "dependency-lock:python",
                 "name": "requirements/locks/manifest.json",
-                "hashes": [
-                    {"alg": "SHA-256", "content": spec.dependency_lock_sha256}
-                ],
+                "hashes": [{"alg": "SHA-256", "content": spec.dependency_lock_sha256}],
                 "properties": [
                     {"name": "ecorex:dependency-lock", "value": "python-universal"},
                     {"name": "ecorex:python", "value": "3.11"},
@@ -1505,6 +1541,7 @@ def _cyclonedx_sbom(
                     ],
                 }
             )
+        components.extend(_macos_native_sbom_components(artifact))
     if web_bundle is not None:
         for record in web_bundle.files:
             components.append(
@@ -1561,6 +1598,246 @@ def _cyclonedx_sbom(
         },
         "components": components,
     }
+
+
+def _macos_native_sbom_components(
+    artifact: _BuiltArtifact,
+) -> list[dict[str, Any]]:
+    member_name = "bin/pack-python/native-components.json"
+    if artifact.kind != "core" or artifact.platform != "macos":
+        return []
+    records = {record.relative: record for record in artifact.files}
+    inventory_record = records.get(member_name)
+    if inventory_record is None:
+        if not any(relative.startswith("bin/pack-python/") for relative in records):
+            return []
+        raise ReleaseBuildError("macOS Core native component inventory is missing")
+    try:
+        with zipfile.ZipFile(artifact.path) as archive:
+            members = [
+                item for item in archive.infolist() if item.filename == member_name
+            ]
+            if (
+                len(members) != 1
+                or members[0].is_dir()
+                or members[0].file_size > 64 * 1024
+            ):
+                raise ReleaseBuildError(
+                    "macOS Core native component inventory is invalid"
+                )
+            payload = archive.read(members[0])
+        if hashlib.sha256(payload).hexdigest() != inventory_record.sha256:
+            raise ReleaseBuildError(
+                "macOS Core native component inventory digest mismatches"
+            )
+        value = json.loads(
+            payload.decode("utf-8"), object_pairs_hook=_unique_native_object
+        )
+    except ReleaseBuildError:
+        raise
+    except (OSError, UnicodeDecodeError, ValueError, zipfile.BadZipFile):
+        raise ReleaseBuildError(
+            "macOS Core native component inventory is invalid"
+        ) from None
+    expected_keys = {
+        "architecture",
+        "components",
+        "distribution",
+        "license_notice",
+        "license_texts",
+        "platform",
+        "schema_version",
+    }
+    if (
+        not isinstance(value, dict)
+        or set(value) != expected_keys
+        or value.get("schema_version") != 1
+        or value.get("platform") != "macos"
+        or value.get("architecture") != artifact.architecture
+        or value.get("distribution") != dict(PYTHON_MACOS_DISTRIBUTION)
+        or not isinstance(value.get("components"), list)
+    ):
+        raise ReleaseBuildError("macOS Core native component inventory is invalid")
+    native = value["components"]
+    license_texts = value.get("license_texts")
+    notice = value.get("license_notice")
+    if (
+        bool(native)
+        and notice
+        != {
+            "path": PYTHON_MACOS_LICENSE["path"],
+            "sha256": PYTHON_MACOS_LICENSE["sha256"],
+            "size_bytes": PYTHON_MACOS_LICENSE["size_bytes"],
+        }
+    ) or (not native and notice is not None):
+        raise ReleaseBuildError("macOS Core native component license notice is invalid")
+    if isinstance(notice, dict):
+        notice_record = records.get(f"bin/pack-python/{notice['path']}")
+        if (
+            notice_record is None
+            or notice_record.sha256 != notice["sha256"]
+            or notice_record.size != notice["size_bytes"]
+        ):
+            raise ReleaseBuildError(
+                "macOS Core native component license notice is missing"
+            )
+    if not isinstance(license_texts, list):
+        raise ReleaseBuildError("macOS Core native license text inventory is invalid")
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for component in native:
+        keys = {
+            "license",
+            "license_text",
+            "name",
+            "path",
+            "sha256",
+            "source_sha256",
+            "version",
+        }
+        if (
+            not isinstance(component, dict)
+            or set(component) != keys
+            or any(
+                not isinstance(component[key], str) or not component[key]
+                for key in keys
+            )
+            or component["path"] in seen
+        ):
+            raise ReleaseBuildError("macOS Core native component inventory is invalid")
+        seen.add(component["path"])
+        contract = MACOS_NATIVE_COMPONENTS.get(PurePosixPath(component["path"]).name)
+        if (
+            contract is None
+            or PurePosixPath(component["path"])
+            != PurePosixPath("lib") / PurePosixPath(component["path"]).name
+            or component["name"] != contract.name
+            or component["version"] != contract.version
+            or component["license"] != contract.license
+            or component["license_text"]
+            != MACOS_NATIVE_LICENSES[contract.license_text].archive_path
+            or component["source_sha256"] != contract.source_sha256
+        ):
+            raise ReleaseBuildError(
+                "macOS Core native component violates immutable contract"
+            )
+        packaged_path = f"bin/pack-python/{component['path']}"
+        record = records.get(packaged_path)
+        if record is None or record.sha256 != component["sha256"]:
+            raise ReleaseBuildError(
+                "macOS Core native component payload mismatches inventory"
+            )
+        license_value = component["license"]
+        license_text = MACOS_NATIVE_LICENSES[contract.license_text]
+        license_entry = (
+            {"license": {"id": license_value}}
+            if license_value in {"Apache-2.0", "TCL"}
+            else {"license": {"name": license_value}}
+        )
+        result.append(
+            {
+                "type": "library",
+                "bom-ref": (
+                    f"native:{artifact.platform}:{artifact.architecture}:"
+                    f"{component['path']}"
+                ),
+                "name": component["name"],
+                "version": component["version"],
+                "hashes": [{"alg": "SHA-256", "content": component["sha256"]}],
+                "licenses": [license_entry],
+                "externalReferences": [
+                    {
+                        "type": "distribution",
+                        "url": PYTHON_MACOS_DISTRIBUTION["url"],
+                        "hashes": [
+                            {
+                                "alg": "SHA-256",
+                                "content": PYTHON_MACOS_DISTRIBUTION["sha256"],
+                            }
+                        ],
+                    },
+                    {
+                        "type": "other",
+                        "url": license_text.source_url,
+                        "hashes": [
+                            {
+                                "alg": "SHA-256",
+                                "content": license_text.source_archive_sha256,
+                            }
+                        ],
+                    },
+                ],
+                "properties": [
+                    {"name": "ecorex:native-path", "value": component["path"]},
+                    {"name": "ecorex:packaged-in", "value": artifact.artifact_id},
+                    {
+                        "name": "ecorex:source-sha256",
+                        "value": component["source_sha256"],
+                    },
+                    {
+                        "name": "ecorex:distribution-size-bytes",
+                        "value": str(PYTHON_MACOS_DISTRIBUTION["size_bytes"]),
+                    },
+                    {
+                        "name": "ecorex:license-notice",
+                        "value": notice["path"] if isinstance(notice, dict) else "",
+                    },
+                    {
+                        "name": "ecorex:license-notice-sha256",
+                        "value": notice["sha256"] if isinstance(notice, dict) else "",
+                    },
+                    {
+                        "name": "ecorex:license-text",
+                        "value": license_text.archive_path,
+                    },
+                    {
+                        "name": "ecorex:license-text-sha256",
+                        "value": license_text.sha256,
+                    },
+                    {
+                        "name": "ecorex:license-source-internal-path",
+                        "value": license_text.source_internal_path,
+                    },
+                ],
+            }
+        )
+    expected_license_texts = [
+        {
+            "path": contract.archive_path,
+            "provenance": contract.provenance,
+            "sha256": contract.sha256,
+            "size_bytes": contract.size_bytes,
+            "source_archive_sha256": contract.source_archive_sha256,
+            "source_internal_path": contract.source_internal_path,
+            "source_url": contract.source_url,
+        }
+        for key, contract in sorted(MACOS_NATIVE_LICENSES.items())
+        if key
+        in {
+            MACOS_NATIVE_COMPONENTS[PurePosixPath(item["path"]).name].license_text
+            for item in native
+        }
+    ]
+    if license_texts != expected_license_texts:
+        raise ReleaseBuildError("macOS Core native license text inventory is invalid")
+    for license_text in expected_license_texts:
+        record = records.get(f"bin/pack-python/{license_text['path']}")
+        if (
+            record is None
+            or record.sha256 != license_text["sha256"]
+            or record.size != license_text["size_bytes"]
+        ):
+            raise ReleaseBuildError("macOS Core native license text is missing")
+    return result
+
+
+def _unique_native_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate native inventory key")
+        result[key] = value
+    return result
 
 
 def _normalize_relative_path(value: str) -> str:
@@ -1632,7 +1909,9 @@ def _pretty_json_bytes(value: Mapping[str, Any]) -> bytes:
 
 
 def _atomic_write_bytes(path: Path, payload: bytes) -> None:
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=path.parent
+    )
     temporary = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "wb") as stream:
@@ -1653,7 +1932,9 @@ def _remove_staging_tree(path: Path, parent: Path) -> None:
     try:
         resolved.relative_to(parent.resolve())
     except ValueError as exc:
-        raise ReleaseBuildError("refusing to clean staging outside release parent") from exc
+        raise ReleaseBuildError(
+            "refusing to clean staging outside release parent"
+        ) from exc
     shutil.rmtree(resolved)
     _fsync_directory(parent)
 

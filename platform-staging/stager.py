@@ -46,6 +46,12 @@ from ecorex.integration.sandbox import (  # noqa: E402
     probe_windows_appcontainer_helper,
 )
 from ecorex.release.models import WebBundleBuildInput  # noqa: E402
+from ecorex.release.macos_native_contract import (  # noqa: E402
+    MACOS_NATIVE_COMPONENTS,
+    MACOS_NATIVE_LICENSES,
+    PYTHON_MACOS_DISTRIBUTION,
+    PYTHON_MACOS_LICENSE,
+)
 from ecorex.pack_catalog import (  # noqa: E402
     CAPABILITY_PACK_SERVICE_IDS as PACK_SERVICES,
     CAPABILITY_PACK_TOOL_IDS as PACK_TOOLS,
@@ -67,9 +73,7 @@ _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_CODE = re.compile(r"^[a-z][a-z0-9_]{2,127}$")
 _SAFE_KEY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-_TARGETS = frozenset(
-    {("windows", "x64"), ("macos", "arm64"), ("macos", "x64")}
-)
+_TARGETS = frozenset({("windows", "x64"), ("macos", "arm64"), ("macos", "x64")})
 _RUNTIME_DISTRIBUTIONS = (
     "cryptography",
     "fastapi",
@@ -91,9 +95,7 @@ _SECRET_PATTERNS = (
 )
 _FIXED_TIME = (1980, 1, 1, 0, 0, 0)
 _MAX_FILE_BYTES = 512 * 1024 * 1024
-_IMPORT_ARCHIVE_NATIVE_SUFFIXES = frozenset(
-    {".dll", ".dylib", ".exe", ".pyd", ".so"}
-)
+_IMPORT_ARCHIVE_NATIVE_SUFFIXES = frozenset({".dll", ".dylib", ".exe", ".pyd", ".so"})
 _IMPORT_ARCHIVE_PURE_SUFFIXES = frozenset({".py", ".pyi", ".typed"})
 # These packages intentionally expose data through importlib.resources and are
 # covered by the isolated post-compaction Runtime probe.  Other packages with
@@ -120,7 +122,10 @@ def main() -> int:
         sys.stdout.write('{"schema_version":1,"status":"passed"}')
         return 0
     except StageError as error:
-        print(json.dumps({"code": error.code, "status": "failed"}, sort_keys=True), file=sys.stderr)
+        print(
+            json.dumps({"code": error.code, "status": "failed"}, sort_keys=True),
+            file=sys.stderr,
+        )
         return 1
     except BaseException:
         print('{"code":"platform_stage_failed","status":"failed"}', file=sys.stderr)
@@ -182,8 +187,12 @@ def _request() -> Mapping[str, Any]:
         or not parsed_index.path
     ):
         raise StageError("platform_stage_request_invalid")
-    repository = _absolute_directory(value.get("repo_root"), "platform_stage_repository_invalid")
-    output = _absolute_directory(value.get("output_root"), "platform_stage_output_invalid")
+    repository = _absolute_directory(
+        value.get("repo_root"), "platform_stage_repository_invalid"
+    )
+    output = _absolute_directory(
+        value.get("output_root"), "platform_stage_output_invalid"
+    )
     if repository != ROOT or any(output.iterdir()):
         raise StageError("platform_stage_path_invalid")
     if _git_commit(repository) != value["commit_sha"]:
@@ -340,9 +349,7 @@ def _build_native(platform: str, architecture: str, evidence: Path) -> Path:
                 for name in sorted(source_payloads)
             ).encode("utf-8")
             expected_source_set = hashlib.sha256(source_binding).hexdigest()
-            expected_toolchain_manifest = hashlib.sha256(
-                manifest_payload
-            ).hexdigest()
+            expected_toolchain_manifest = hashlib.sha256(manifest_payload).hexdigest()
             toolchain_manifest = authority_source / "toolchain-manifest.json"
             powershell = (
                 system_root
@@ -361,13 +368,7 @@ def _build_native(platform: str, architecture: str, evidence: Path) -> Path:
                 "-ExecutionPolicy",
                 "Bypass",
                 "-File",
-                str(
-                    ROOT
-                    / "platform-staging"
-                    / "native"
-                    / "windows"
-                    / "build.ps1"
-                ),
+                str(ROOT / "platform-staging" / "native" / "windows" / "build.ps1"),
                 "-OutputDirectory",
                 str(output),
                 "-SourceDirectory",
@@ -451,9 +452,7 @@ def _validate_windows_native_receipt(
             or re.fullmatch(r"14\.[0-9]+\.[0-9]+", manifest["msvc_tools_version"])
             is None
             or not isinstance(manifest.get("windows_sdk_version"), str)
-            or re.fullmatch(
-                r"10\.0\.[0-9]+\.0", manifest["windows_sdk_version"]
-            )
+            or re.fullmatch(r"10\.0\.[0-9]+\.0", manifest["windows_sdk_version"])
             is None
         ):
             raise ValueError("manifest")
@@ -480,25 +479,17 @@ def _validate_windows_native_receipt(
             if (
                 descriptor.get("file_name") != file_name
                 or not isinstance(descriptor.get("file_version"), str)
-                or re.fullmatch(
-                    r"[0-9]+(?:\.[0-9]+){3}", descriptor["file_version"]
-                )
+                or re.fullmatch(r"[0-9]+(?:\.[0-9]+){3}", descriptor["file_version"])
                 is None
                 or not isinstance(descriptor.get("product_version"), str)
-                or re.fullmatch(
-                    r"[0-9]+(?:\.[0-9]+){3}", descriptor["product_version"]
-                )
+                or re.fullmatch(r"[0-9]+(?:\.[0-9]+){3}", descriptor["product_version"])
                 is None
                 or not isinstance(descriptor.get("sha256"), str)
                 or _SHA256.fullmatch(descriptor["sha256"]) is None
                 or not isinstance(descriptor.get("authenticode_subject"), str)
                 or not descriptor["authenticode_subject"].strip()
-                or not isinstance(
-                    descriptor.get("authenticode_thumbprint"), str
-                )
-                or re.fullmatch(
-                    r"[0-9a-f]{40}", descriptor["authenticode_thumbprint"]
-                )
+                or not isinstance(descriptor.get("authenticode_thumbprint"), str)
+                or re.fullmatch(r"[0-9a-f]{40}", descriptor["authenticode_thumbprint"])
                 is None
             ):
                 raise ValueError(name)
@@ -552,11 +543,7 @@ def _validate_windows_native_receipt(
         }
         if not isinstance(receipt, dict) or set(receipt) != expected_receipt:
             raise ValueError("receipt")
-        digest_fields = {
-            name
-            for name in expected_receipt
-            if name.endswith("_sha256")
-        }
+        digest_fields = {name for name in expected_receipt if name.endswith("_sha256")}
         if any(
             not isinstance(receipt.get(name), str)
             or _SHA256.fullmatch(receipt[name]) is None
@@ -573,8 +560,7 @@ def _validate_windows_native_receipt(
         if source_root is None:
             source_root = ROOT / "platform-staging" / "native" / "windows"
         source_binding = "\0".join(
-            f"{name}={_sha256(source_root / name)}"
-            for name in sorted(source_names)
+            f"{name}={_sha256(source_root / name)}" for name in sorted(source_names)
         ).encode("utf-8")
         library_binding = "\0".join(
             f"{name}={libraries[name]}" for name in sorted(libraries)
@@ -589,18 +575,15 @@ def _validate_windows_native_receipt(
             or receipt.get("source_set_sha256")
             != hashlib.sha256(source_binding).hexdigest()
             or receipt.get("msvc_tools_version") != manifest["msvc_tools_version"]
-            or receipt.get("windows_sdk_version")
-            != manifest["windows_sdk_version"]
+            or receipt.get("windows_sdk_version") != manifest["windows_sdk_version"]
             or receipt.get("library_set_sha256")
             != hashlib.sha256(library_binding).hexdigest()
             or receipt.get("compiler_sha256") != tools["compiler"]["sha256"]
-            or receipt.get("compiler_file_version")
-            != tools["compiler"]["file_version"]
+            or receipt.get("compiler_file_version") != tools["compiler"]["file_version"]
             or receipt.get("compiler_authenticode_thumbprint")
             != tools["compiler"]["authenticode_thumbprint"]
             or receipt.get("linker_sha256") != tools["linker"]["sha256"]
-            or receipt.get("linker_file_version")
-            != tools["linker"]["file_version"]
+            or receipt.get("linker_file_version") != tools["linker"]["file_version"]
             or receipt.get("linker_authenticode_thumbprint")
             != tools["linker"]["authenticode_thumbprint"]
             or receipt.get("c1xx_sha256") != tools["c1xx"]["sha256"]
@@ -642,7 +625,11 @@ def _build_python_closure(
         target_stdlib = destination / "Lib"
     else:
         _copy_regular(executable, destination / "bin" / "python3", executable=True)
-        target_stdlib = destination / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        target_stdlib = (
+            destination
+            / "lib"
+            / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        )
         lib_dir = source_prefix / "lib"
         for source in sorted(lib_dir.glob("libpython*.dylib")):
             resolved_source = _base_runtime_regular_file(
@@ -657,7 +644,17 @@ def _build_python_closure(
     _copy_tree(
         stdlib,
         target_stdlib,
-        excluded=frozenset({"site-packages", "test", "tests", "idlelib", "tkinter", "ensurepip", "__pycache__"}),
+        excluded=frozenset(
+            {
+                "site-packages",
+                "test",
+                "tests",
+                "idlelib",
+                "tkinter",
+                "ensurepip",
+                "__pycache__",
+            }
+        ),
     )
     site_packages = target_stdlib / "site-packages"
     site_packages.mkdir(parents=True)
@@ -677,6 +674,7 @@ def _build_python_closure(
         _relocate_macos_python_closure(
             destination,
             source_prefix=source_prefix,
+            architecture=architecture,
         )
     manifest = build_pack_python_manifest(
         core,
@@ -698,7 +696,13 @@ def _build_python_closure(
             source_canary=executable,
         )
     else:
-        result = _run(probe, cwd=core, environment=_runtime_environment(), timeout=60, code="pack_python_probe_failed")
+        result = _run(
+            probe,
+            cwd=core,
+            environment=_runtime_environment(),
+            timeout=60,
+            code="pack_python_probe_failed",
+        )
     if result.stdout.strip() != __version__.encode("ascii"):
         raise StageError("pack_python_probe_failed")
     # The independent post-write resolution above is the security boundary.
@@ -762,9 +766,11 @@ def _base_runtime_member(
     except (OSError, RuntimeError, ValueError):
         raise StageError("pack_python_base_runtime_invalid") from None
     reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
-    if stat.S_ISLNK(candidate_metadata.st_mode) or bool(
-        getattr(candidate_metadata, "st_file_attributes", 0) & reparse
-    ) or bool(getattr(candidate_metadata, "st_reparse_tag", 0)):
+    if (
+        stat.S_ISLNK(candidate_metadata.st_mode)
+        or bool(getattr(candidate_metadata, "st_file_attributes", 0) & reparse)
+        or bool(getattr(candidate_metadata, "st_reparse_tag", 0))
+    ):
         raise StageError("pack_python_base_runtime_invalid")
 
     try:
@@ -862,9 +868,11 @@ def _macos_macho_files(root: Path) -> tuple[Path, ...]:
         except OSError:
             raise StageError("pack_python_macho_invalid") from None
         reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
-        if stat.S_ISLNK(metadata.st_mode) or bool(
-            getattr(metadata, "st_file_attributes", 0) & reparse
-        ) or bool(getattr(metadata, "st_reparse_tag", 0)):
+        if (
+            stat.S_ISLNK(metadata.st_mode)
+            or bool(getattr(metadata, "st_file_attributes", 0) & reparse)
+            or bool(getattr(metadata, "st_reparse_tag", 0))
+        ):
             raise StageError("pack_python_macho_invalid")
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_size < 4:
             continue
@@ -893,7 +901,9 @@ def _macos_architectures(path: Path) -> tuple[str, ...]:
     if (
         not architectures
         or len(architectures) != len(set(architectures))
-        or any(architecture not in {"arm64", "x86_64"} for architecture in architectures)
+        or any(
+            architecture not in {"arm64", "x86_64"} for architecture in architectures
+        )
     ):
         raise StageError("pack_python_macho_architecture_invalid")
     return architectures
@@ -942,9 +952,7 @@ def _macos_dependencies(
         line = raw.strip()
         if not line:
             continue
-        dependency, separator, metadata = line.rpartition(
-            " (compatibility version "
-        )
+        dependency, separator, metadata = line.rpartition(" (compatibility version ")
         if (
             not separator
             or not dependency
@@ -979,11 +987,7 @@ def _macos_rpaths(path: Path, *, architecture: str) -> tuple[str, ...]:
             continue
         if in_rpath and line.startswith("path "):
             value, separator, offset = line[5:].rpartition(" (offset ")
-            if (
-                not separator
-                or not value
-                or re.fullmatch(r"[0-9]+\)", offset) is None
-            ):
+            if not separator or not value or re.fullmatch(r"[0-9]+\)", offset) is None:
                 raise StageError("pack_python_macho_inspection_failed")
             rpaths.append(value)
             in_rpath = False
@@ -1005,9 +1009,7 @@ def _macos_dependency_requires_relocation(
     source_prefix: Path,
 ) -> bool:
     if dependency.startswith("@"):
-        if dependency.startswith(
-            ("@loader_path/", "@executable_path/", "@rpath/")
-        ):
+        if dependency.startswith(("@loader_path/", "@executable_path/", "@rpath/")):
             return False
         raise StageError("pack_python_macho_dependency_invalid")
     if not dependency.startswith("/"):
@@ -1015,10 +1017,7 @@ def _macos_dependency_requires_relocation(
     portable = PurePosixPath(dependency)
     if ".." in portable.parts or portable.as_posix() != dependency:
         raise StageError("pack_python_macho_dependency_invalid")
-    if any(
-        dependency.startswith(prefix)
-        for prefix in _MACOS_SYSTEM_LIBRARY_PREFIXES
-    ):
+    if any(dependency.startswith(prefix) for prefix in _MACOS_SYSTEM_LIBRARY_PREFIXES):
         return False
     # Any non-system absolute load path is not portable. This includes the
     # setup-python toolcache/base prefix, RUNNER_TEMP and Python.framework.
@@ -1047,9 +1046,7 @@ def _macos_rpath_requires_removal(
             return True
         return False
     if rpath.startswith("@executable_path/"):
-        target = (
-            closure / "bin" / rpath.removeprefix("@executable_path/")
-        ).resolve()
+        target = (closure / "bin" / rpath.removeprefix("@executable_path/")).resolve()
         try:
             target.relative_to(closure)
         except ValueError:
@@ -1070,25 +1067,24 @@ def _macos_relocation_target(
 ) -> tuple[Path, str]:
     candidates: list[Path] = []
     dependency_path = Path(dependency)
-    try:
-        relative = dependency_path.relative_to(source_prefix)
-    except ValueError:
-        pass
+    if dependency.startswith("@rpath/"):
+        candidates.extend(
+            path for path in macho_files if path.name == dependency_path.name
+        )
     else:
-        exact = closure / relative
-        if exact in macho_files:
-            candidates.append(exact)
-    candidates.extend(
-        path
-        for path in macho_files
-        if path.name == dependency_path.name and path not in candidates
-    )
-    if (
-        dependency_path.name == "Python"
-        and "Python.framework" in dependency_path.parts
-    ):
-        versioned = closure / "lib" / (
-            f"libpython{sys.version_info.major}.{sys.version_info.minor}.dylib"
+        try:
+            relative = dependency_path.relative_to(source_prefix)
+        except ValueError:
+            pass
+        else:
+            exact = closure / relative
+            if exact in macho_files:
+                candidates.append(exact)
+    if dependency_path.name == "Python" and "Python.framework" in dependency_path.parts:
+        versioned = (
+            closure
+            / "lib"
+            / (f"libpython{sys.version_info.major}.{sys.version_info.minor}.dylib")
         )
         if versioned in macho_files:
             candidates = [versioned]
@@ -1100,6 +1096,266 @@ def _macos_relocation_target(
     return target, relocated
 
 
+def _macos_base_dependency_source(
+    dependency: str,
+    *,
+    source_prefix: Path,
+) -> tuple[Path, PurePosixPath] | None:
+    """Resolve one exact CPython-framework dependency without basename guessing."""
+
+    if dependency.startswith("@") or any(
+        dependency.startswith(prefix) for prefix in _MACOS_SYSTEM_LIBRARY_PREFIXES
+    ):
+        return None
+    if not dependency.startswith("/"):
+        raise StageError("pack_python_macho_dependency_invalid")
+    portable = PurePosixPath(dependency)
+    if ".." in portable.parts or portable.as_posix() != dependency:
+        raise StageError("pack_python_macho_dependency_invalid")
+    candidate = Path(dependency)
+    try:
+        relative = candidate.relative_to(source_prefix)
+    except ValueError:
+        return None
+    if candidate.name == "Python" and "Python.framework" in candidate.parts:
+        # The framework image is intentionally staged as versioned libpython.
+        return None
+    code = "pack_python_macho_dependency_source_invalid"
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    try:
+        metadata = candidate.lstat()
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(source_prefix)
+        target_metadata = resolved.lstat()
+    except (OSError, RuntimeError, ValueError):
+        raise StageError(code) from None
+    if (
+        stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISREG(metadata.st_mode)
+        or bool(getattr(metadata, "st_file_attributes", 0) & reparse)
+        or bool(getattr(metadata, "st_reparse_tag", 0))
+        or resolved != candidate
+        or stat.S_ISLNK(target_metadata.st_mode)
+        or not stat.S_ISREG(target_metadata.st_mode)
+        or bool(getattr(target_metadata, "st_file_attributes", 0) & reparse)
+        or bool(getattr(target_metadata, "st_reparse_tag", 0))
+    ):
+        raise StageError(code)
+    component = MACOS_NATIVE_COMPONENTS.get(candidate.name)
+    if (
+        component is None
+        or PurePosixPath(relative.as_posix()) != PurePosixPath("lib") / candidate.name
+    ):
+        raise StageError("pack_python_macho_component_unclassified")
+    payload = _stable_bytes(
+        resolved,
+        _MAX_FILE_BYTES,
+        "pack_python_macho_dependency_source_invalid",
+    )
+    if hashlib.sha256(payload).hexdigest() != component.source_sha256:
+        raise StageError("pack_python_macho_dependency_source_digest_mismatch")
+    return resolved, PurePosixPath(relative.as_posix())
+
+
+def _materialize_macos_python_dependencies(
+    closure: Path,
+    *,
+    source_prefix: Path,
+) -> tuple[PurePosixPath, ...]:
+    """Copy the exact base-framework native dependency closure to a fixpoint."""
+
+    closure = closure.resolve(strict=True)
+    source_prefix = source_prefix.resolve(strict=True)
+    materialized: set[PurePosixPath] = set()
+    while True:
+        macho_files = _macos_macho_files(closure)
+        additions: dict[PurePosixPath, Path] = {}
+        for binary in macho_files:
+            for architecture in _macos_architectures(binary):
+                install_name = _macos_install_name(
+                    binary,
+                    architecture=architecture,
+                )
+                for dependency in _macos_dependencies(
+                    binary,
+                    architecture=architecture,
+                    install_name=install_name,
+                ):
+                    source = _macos_base_dependency_source(
+                        dependency,
+                        source_prefix=source_prefix,
+                    )
+                    if source is None:
+                        continue
+                    source_path, relative = source
+                    destination = (closure / Path(*relative.parts)).resolve()
+                    try:
+                        destination.relative_to(closure)
+                    except ValueError:
+                        raise StageError(
+                            "pack_python_macho_dependency_source_invalid"
+                        ) from None
+                    if destination.exists():
+                        contract = MACOS_NATIVE_COMPONENTS.get(relative.name)
+                        if (
+                            relative not in materialized
+                            or destination not in macho_files
+                            or contract is None
+                        ):
+                            raise StageError("pack_python_macho_dependency_collision")
+                        if _sha256(destination) != contract.source_sha256:
+                            raise StageError(
+                                "pack_python_macho_dependency_source_digest_mismatch"
+                            )
+                        continue
+                    prior = additions.setdefault(relative, source_path)
+                    if prior != source_path:
+                        raise StageError("pack_python_macho_dependency_collision")
+        if not additions:
+            break
+        for relative, source in sorted(
+            additions.items(), key=lambda item: item[0].as_posix().casefold()
+        ):
+            _copy_regular(
+                source,
+                closure / Path(*relative.parts),
+                executable=True,
+            )
+            contract = MACOS_NATIVE_COMPONENTS.get(relative.name)
+            if (
+                contract is None
+                or _sha256(closure / Path(*relative.parts)) != contract.source_sha256
+            ):
+                raise StageError("pack_python_macho_dependency_source_digest_mismatch")
+            materialized.add(relative)
+    return tuple(sorted(materialized, key=lambda item: item.as_posix().casefold()))
+
+
+def _materialize_macos_python_license(
+    closure: Path,
+    *,
+    materialized: tuple[PurePosixPath, ...],
+) -> None:
+    if not materialized:
+        return
+    try:
+        tuple(MACOS_NATIVE_COMPONENTS[path.name] for path in materialized)
+    except KeyError:
+        raise StageError("pack_python_macho_component_unclassified") from None
+    version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    source = _macos_installer_license_path(version)
+    payload = _stable_bytes(
+        source,
+        _MAX_FILE_BYTES,
+        "pack_python_macho_license_invalid",
+    )
+    if (
+        len(payload) != PYTHON_MACOS_LICENSE["size_bytes"]
+        or hashlib.sha256(payload).hexdigest() != PYTHON_MACOS_LICENSE["sha256"]
+        or any(payload.count(token) != 1 for token in PYTHON_MACOS_LICENSE["tokens"])
+    ):
+        raise StageError("pack_python_macho_license_invalid")
+    destination = closure / "licenses" / "python-macos-installer-License.rtf"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists() or destination.is_symlink():
+        raise StageError("pack_python_macho_license_collision")
+    destination.write_bytes(payload)
+    destination.chmod(0o644)
+    for license_key in sorted(
+        {MACOS_NATIVE_COMPONENTS[path.name].license_text for path in materialized}
+    ):
+        contract = MACOS_NATIVE_LICENSES[license_key]
+        source = ROOT / contract.repository_path
+        license_payload = _stable_bytes(
+            source, _MAX_FILE_BYTES, "pack_python_macho_license_invalid"
+        )
+        if (
+            len(license_payload) != contract.size_bytes
+            or hashlib.sha256(license_payload).hexdigest() != contract.sha256
+        ):
+            raise StageError("pack_python_macho_license_invalid")
+        license_destination = closure / Path(
+            *PurePosixPath(contract.archive_path).parts
+        )
+        license_destination.parent.mkdir(parents=True, exist_ok=True)
+        if license_destination.exists() or license_destination.is_symlink():
+            raise StageError("pack_python_macho_license_collision")
+        license_destination.write_bytes(license_payload)
+        license_destination.chmod(0o644)
+
+
+def _write_macos_native_inventory(
+    closure: Path,
+    *,
+    materialized: tuple[PurePosixPath, ...],
+    architecture: str,
+) -> None:
+    components: list[dict[str, str]] = []
+    for relative in materialized:
+        try:
+            contract = MACOS_NATIVE_COMPONENTS[relative.name]
+        except KeyError:
+            raise StageError("pack_python_macho_component_unclassified") from None
+        path = closure / Path(*relative.parts)
+        components.append(
+            {
+                "license": contract.license,
+                "license_text": MACOS_NATIVE_LICENSES[
+                    contract.license_text
+                ].archive_path,
+                "name": contract.name,
+                "path": relative.as_posix(),
+                "sha256": _sha256(path),
+                "source_sha256": contract.source_sha256,
+                "version": contract.version,
+            }
+        )
+    payload = {
+        "architecture": architecture,
+        "components": components,
+        "distribution": dict(PYTHON_MACOS_DISTRIBUTION),
+        "license_notice": (
+            {
+                "path": PYTHON_MACOS_LICENSE["path"],
+                "sha256": PYTHON_MACOS_LICENSE["sha256"],
+                "size_bytes": PYTHON_MACOS_LICENSE["size_bytes"],
+            }
+            if components
+            else None
+        ),
+        "license_texts": [
+            {
+                "path": contract.archive_path,
+                "provenance": contract.provenance,
+                "sha256": contract.sha256,
+                "size_bytes": contract.size_bytes,
+                "source_archive_sha256": contract.source_archive_sha256,
+                "source_internal_path": contract.source_internal_path,
+                "source_url": contract.source_url,
+            }
+            for key, contract in sorted(MACOS_NATIVE_LICENSES.items())
+            if key
+            in {
+                MACOS_NATIVE_COMPONENTS[path.name].license_text for path in materialized
+            }
+        ],
+        "platform": "macos",
+        "schema_version": 1,
+    }
+    inventory_path = closure / "native-components.json"
+    if inventory_path.exists() or inventory_path.is_symlink():
+        raise StageError("pack_python_macho_inventory_collision")
+    inventory_path.write_bytes(
+        (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode(
+            "utf-8"
+        )
+    )
+
+
+def _macos_installer_license_path(version: str) -> Path:
+    return Path("/Applications") / f"Python {version}" / "License.rtf"
+
+
 def _validate_macos_relative_dependency(
     dependency: str,
     *,
@@ -1108,9 +1364,7 @@ def _validate_macos_relative_dependency(
     macho_files: tuple[Path, ...],
 ) -> None:
     if dependency.startswith("@loader_path/"):
-        target = (
-            binary.parent / dependency.removeprefix("@loader_path/")
-        ).resolve()
+        target = (binary.parent / dependency.removeprefix("@loader_path/")).resolve()
     elif dependency.startswith("@executable_path/"):
         target = (
             closure / "bin" / dependency.removeprefix("@executable_path/")
@@ -1129,7 +1383,9 @@ def _relocate_macos_python_closure(
     closure: Path,
     *,
     source_prefix: Path,
+    architecture: str,
 ) -> None:
+    target_architecture = architecture
     closure = closure.resolve(strict=True)
     source_prefix = source_prefix.resolve(strict=True)
     required_tools = (
@@ -1140,35 +1396,43 @@ def _relocate_macos_python_closure(
     )
     if any(not tool.is_file() for tool in required_tools):
         raise StageError("pack_python_macho_tooling_missing")
+    materialized = _materialize_macos_python_dependencies(
+        closure,
+        source_prefix=source_prefix,
+    )
+    _materialize_macos_python_license(
+        closure,
+        materialized=materialized,
+    )
     macho_files = _macos_macho_files(closure)
     if not macho_files or closure / "bin" / "python3" not in macho_files:
         raise StageError("pack_python_macho_invalid")
     for binary in macho_files:
         architectures = _macos_architectures(binary)
         install_names = {
-            architecture: _macos_install_name(
+            slice_architecture: _macos_install_name(
                 binary,
-                architecture=architecture,
+                architecture=slice_architecture,
             )
-            for architecture in architectures
+            for slice_architecture in architectures
         }
         rpaths_by_architecture = {
-            architecture: _macos_rpaths(
+            slice_architecture: _macos_rpaths(
                 binary,
-                architecture=architecture,
+                architecture=slice_architecture,
             )
-            for architecture in architectures
+            for slice_architecture in architectures
         }
         rpaths = _common_macos_rpaths(rpaths_by_architecture)
         changes: list[tuple[str, str]] = []
         dependencies = tuple(
             dict.fromkeys(
                 dependency
-                for architecture in architectures
+                for slice_architecture in architectures
                 for dependency in _macos_dependencies(
                     binary,
-                    architecture=architecture,
-                    install_name=install_names[architecture],
+                    architecture=slice_architecture,
+                    install_name=install_names[slice_architecture],
                 )
             )
         )
@@ -1261,10 +1525,10 @@ def _relocate_macos_python_closure(
             code="pack_python_macho_signing_failed",
         )
     for binary in _macos_macho_files(closure):
-        for architecture in _macos_architectures(binary):
+        for slice_architecture in _macos_architectures(binary):
             install_name = _macos_install_name(
                 binary,
-                architecture=architecture,
+                architecture=slice_architecture,
             )
             if (
                 install_name is not None
@@ -1279,13 +1543,13 @@ def _relocate_macos_python_closure(
                 )
                 for rpath in _macos_rpaths(
                     binary,
-                    architecture=architecture,
+                    architecture=slice_architecture,
                 )
             ):
                 raise StageError("pack_python_macho_rpath_not_relocated")
             for dependency in _macos_dependencies(
                 binary,
-                architecture=architecture,
+                architecture=slice_architecture,
                 install_name=install_name,
             ):
                 if dependency.startswith(("@loader_path/", "@executable_path/")):
@@ -1302,6 +1566,11 @@ def _relocate_macos_python_closure(
                     )
                 ):
                     raise StageError("pack_python_macho_dependency_not_relocated")
+    _write_macos_native_inventory(
+        closure,
+        materialized=materialized,
+        architecture=target_architecture,
+    )
 
 
 def _seatbelt_literal(path: Path) -> str:
@@ -1393,12 +1662,12 @@ def _compact_python_import_closure(
     except ValueError:
         raise StageError("pack_python_import_layout_invalid") from None
     if platform == "windows":
-        archive_path = root / f"python{sys.version_info.major}{sys.version_info.minor}.zip"
+        archive_path = (
+            root / f"python{sys.version_info.major}{sys.version_info.minor}.zip"
+        )
     elif platform == "macos":
         archive_path = (
-            root
-            / "lib"
-            / f"python{sys.version_info.major}{sys.version_info.minor}.zip"
+            root / "lib" / f"python{sys.version_info.major}{sys.version_info.minor}.zip"
         )
     else:
         raise StageError("pack_python_import_layout_invalid")
@@ -1502,10 +1771,7 @@ def _zip_safe_import_entry(path: Path, *, allow_resources: bool) -> bool:
     files = _regular_import_tree(path)
     if not files:
         return False
-    if any(
-        item.suffix.casefold() in _IMPORT_ARCHIVE_NATIVE_SUFFIXES
-        for item in files
-    ):
+    if any(item.suffix.casefold() in _IMPORT_ARCHIVE_NATIVE_SUFFIXES for item in files):
         return False
     return allow_resources or all(
         item.suffix.casefold() in _IMPORT_ARCHIVE_PURE_SUFFIXES for item in files
@@ -1595,20 +1861,26 @@ def _build_bootstrap(
     go = shutil.which("go")
     if go is None:
         raise StageError("bootstrap_go_toolchain_unavailable")
-    version = _run(
-        (go, "version"),
-        cwd=ROOT,
-        environment=_build_environment(),
-        timeout=15,
-        code="bootstrap_go_toolchain_invalid",
-    ).stdout.decode("ascii", errors="ignore").strip()
+    version = (
+        _run(
+            (go, "version"),
+            cwd=ROOT,
+            environment=_build_environment(),
+            timeout=15,
+            code="bootstrap_go_toolchain_invalid",
+        )
+        .stdout.decode("ascii", errors="ignore")
+        .strip()
+    )
     if not version.startswith("go version go1.26.5 "):
         raise StageError("bootstrap_go_toolchain_invalid")
     source = ROOT / "platform-staging" / "bootstrap"
     if not (source / "go.mod").is_file() or not (source / "main.go").is_file():
         raise StageError("bootstrap_source_missing")
-    binary = destination / "bin" / (
-        "ecorex-bootstrap.exe" if platform == "windows" else "ecorex-bootstrap"
+    binary = (
+        destination
+        / "bin"
+        / ("ecorex-bootstrap.exe" if platform == "windows" else "ecorex-bootstrap")
     )
     binary.parent.mkdir(parents=True)
     sandbox_helper_sha256 = ""
@@ -1749,9 +2021,9 @@ def _build_bootstrap(
             "go_version": version,
             "module": "stdlib-only",
             "source_tree_sha256": hashlib.sha256(
-                json.dumps(source_records, sort_keys=True, separators=(",", ":")).encode(
-                    "utf-8"
-                )
+                json.dumps(
+                    source_records, sort_keys=True, separators=(",", ":")
+                ).encode("utf-8")
             ).hexdigest(),
         },
     )
@@ -1770,13 +2042,17 @@ def _build_bootstrap(
             "secret_scan": "passed",
         },
     )
+
+
 def _write_runtime_config(core: Path, platform: str, architecture: str) -> str:
     source = _pinned_environment_file(
         "ECOREX_STAGE_RUNTIME_CONFIG_TEMPLATE",
         "ECOREX_STAGE_RUNTIME_CONFIG_TEMPLATE_SHA256",
     )
     payload = _stable_bytes(source, 256 * 1024, "runtime_config_template_invalid")
-    if b".invalid" in payload or any(pattern.search(payload) for pattern in _SECRET_PATTERNS):
+    if b".invalid" in payload or any(
+        pattern.search(payload) for pattern in _SECRET_PATTERNS
+    ):
         raise StageError("runtime_config_template_not_production")
     try:
         raw = json.loads(payload.decode("utf-8"), object_pairs_hook=_unique_object)
@@ -1801,7 +2077,9 @@ def _write_runtime_config(core: Path, platform: str, architecture: str) -> str:
             }
             for pack_id in PACK_TOOLS
         ]
-        canonical = json.dumps(raw, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        canonical = json.dumps(raw, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
         config = ProductRuntimeConfig.from_bytes(canonical)
     except Exception:
         raise StageError("runtime_config_template_invalid") from None
@@ -1837,7 +2115,9 @@ def _stage_packs(
     native: Path,
     evidence: Path,
 ) -> None:
-    common = ROOT / "release" / "capability-packs" / "common" / "ecorex_pack_protocol.py"
+    common = (
+        ROOT / "release" / "capability-packs" / "common" / "ecorex_pack_protocol.py"
+    )
     for pack_id in PACK_TOOLS:
         source = ROOT / "release" / "capability-packs" / pack_id
         destination = root / pack_id
@@ -1924,7 +2204,9 @@ def _canonical_process_pack_descriptor(pack_id: str) -> bytes:
     ).encode("utf-8")
 
 
-def _normalize_process_pack_descriptor(pack: Path, *, pack_id: str) -> Mapping[str, Any]:
+def _normalize_process_pack_descriptor(
+    pack: Path, *, pack_id: str
+) -> Mapping[str, Any]:
     """Validate the source template, then emit Runtime-canonical bytes.
 
     Repository JSON files conventionally end in LF.  The signed process-pack
@@ -1953,11 +2235,14 @@ def _normalize_process_pack_descriptor(pack: Path, *, pack_id: str) -> Mapping[s
         raise StageError("capability_pack_descriptor_invalid")
     canonical = _canonical_process_pack_descriptor(pack_id)
     path.write_bytes(canonical)
-    if _stable_bytes(
-        path,
-        64 * 1024,
-        "capability_pack_descriptor_invalid",
-    ) != canonical:
+    if (
+        _stable_bytes(
+            path,
+            64 * 1024,
+            "capability_pack_descriptor_invalid",
+        )
+        != canonical
+    ):
         raise StageError("capability_pack_descriptor_invalid")
     return expected
 
@@ -2109,7 +2394,9 @@ def _vendor_browser_runtime(pack: Path) -> tuple[dict[str, str], ...]:
         runtime = Path(raw) / "runtime"
         python_root = runtime / "python"
         python_root.mkdir(parents=True)
-        inventory = _copy_distribution_closure((distribution.metadata["Name"],), python_root)
+        inventory = _copy_distribution_closure(
+            (distribution.metadata["Name"],), python_root
+        )
         target_browser = runtime / "browser" / browser_root.name
         _copy_tree(browser_root, target_browser, excluded=frozenset({"__pycache__"}))
         relative_executable = (
@@ -2231,7 +2518,11 @@ def _browser_gates(
             pack,
             pack_id="browser",
         )
-        _gate(evidence, "pack-contract", {"descriptor": descriptor, "zipapp_sha256": _sha256(zipapp)})
+        _gate(
+            evidence,
+            "pack-contract",
+            {"descriptor": descriptor, "zipapp_sha256": _sha256(zipapp)},
+        )
         request = _pack_request(
             "browser",
             "cdp",
@@ -2242,7 +2533,9 @@ def _browser_gates(
             },
         )
         response = _invoke_zipapp(interpreter, zipapp, request, timeout=60)
-        if response.get("status") != "completed" or "ecorex-stage-ready" not in str(response.get("result")):
+        if response.get("status") != "completed" or "ecorex-stage-ready" not in str(
+            response.get("result")
+        ):
             raise StageError("browser_pack_smoke_failed")
         _gate(evidence, "browser-smoke", {"response_sha256": _json_sha256(response)})
         _gate(
@@ -2271,8 +2564,14 @@ def _browser_gates(
 def _image_gates(pack: Path, *, interpreter: Path, evidence: Path) -> None:
     zipapp = _temporary_zipapp(pack)
     try:
-        descriptor = json.loads((pack / "ecorex-image-pack.json").read_text(encoding="utf-8"))
-        _gate(evidence, "pack-contract", {"descriptor": descriptor, "zipapp_sha256": _sha256(zipapp)})
+        descriptor = json.loads(
+            (pack / "ecorex-image-pack.json").read_text(encoding="utf-8")
+        )
+        _gate(
+            evidence,
+            "pack-contract",
+            {"descriptor": descriptor, "zipapp_sha256": _sha256(zipapp)},
+        )
         describe = {
             "schema_version": 1,
             "protocol": "ecorex-managed-image-bridge-v1",
@@ -2280,10 +2579,19 @@ def _image_gates(pack: Path, *, interpreter: Path, evidence: Path) -> None:
             "operation": "describe",
         }
         response = _invoke_zipapp(interpreter, zipapp, describe, timeout=10)
-        if response.get("status") != "completed" or response.get("provider_execution") is not False:
+        if (
+            response.get("status") != "completed"
+            or response.get("provider_execution") is not False
+        ):
             raise StageError("image_adapter_smoke_failed")
-        _gate(evidence, "image-adapter-smoke", {"response_sha256": _json_sha256(response)})
-        denied = {**describe, "operation": "execute", "request_id": "stage-image-provider-deny"}
+        _gate(
+            evidence, "image-adapter-smoke", {"response_sha256": _json_sha256(response)}
+        )
+        denied = {
+            **describe,
+            "operation": "execute",
+            "request_id": "stage-image-provider-deny",
+        }
         failure = _invoke_zipapp(interpreter, zipapp, denied, timeout=10)
         if failure.get("error_code") != "managed_image_core_required":
             raise StageError("image_provider_boundary_failed")
@@ -2443,7 +2751,9 @@ def _dependency_runtime_gates(
 def _validate_dependency_probe(pack_id: str, value: Mapping[str, Any]) -> None:
     isolation = value.get("isolation")
     result = value.get("result")
-    origins = isolation.get("module_origins") if isinstance(isolation, Mapping) else None
+    origins = (
+        isolation.get("module_origins") if isinstance(isolation, Mapping) else None
+    )
     expected_modules = (
         {"rapidocr_onnxruntime", "onnxruntime", "numpy", "PIL", "cv2", "pyclipper"}
         if pack_id == "ocr"
@@ -2513,7 +2823,11 @@ def _sandbox_gates(
             pack,
             pack_id="sandbox",
         )
-        _gate(evidence, "pack-contract", {"descriptor": descriptor, "zipapp_sha256": _sha256(zipapp)})
+        _gate(
+            evidence,
+            "pack-contract",
+            {"descriptor": descriptor, "zipapp_sha256": _sha256(zipapp)},
+        )
         if platform == "windows":
             helper = native / "ecorex-sandbox-host.exe"
             probe = probe_windows_appcontainer_helper(
@@ -2554,7 +2868,9 @@ def _sandbox_gates(
         shutil.rmtree(workspace, ignore_errors=True)
 
 
-def _pack_request(pack_id: str, tool_id: str, arguments: Mapping[str, Any]) -> Mapping[str, Any]:
+def _pack_request(
+    pack_id: str, tool_id: str, arguments: Mapping[str, Any]
+) -> Mapping[str, Any]:
     return {
         "schema_version": 1,
         "protocol": "ecorex-stdio-tool-v1",
@@ -2575,7 +2891,9 @@ def _pack_request(pack_id: str, tool_id: str, arguments: Mapping[str, Any]) -> M
     }
 
 
-def _invoke_zipapp(interpreter: Path, zipapp: Path, request: Mapping[str, Any], *, timeout: int) -> Mapping[str, Any]:
+def _invoke_zipapp(
+    interpreter: Path, zipapp: Path, request: Mapping[str, Any], *, timeout: int
+) -> Mapping[str, Any]:
     # Mirror the product Runtime's per-invocation TEMP ownership.  A Windows
     # child cannot unlink a native module while it is mapped, but after _run
     # reaps that child the parent can remove the complete private temp domain.
@@ -2586,7 +2904,9 @@ def _invoke_zipapp(interpreter: Path, zipapp: Path, request: Mapping[str, Any], 
             (str(interpreter), "-I", "-B", str(zipapp)),
             cwd=ROOT,
             environment=environment,
-            input_bytes=json.dumps(request, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+            input_bytes=json.dumps(
+                request, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8"),
             timeout=timeout,
             code="capability_pack_probe_failed",
         )
@@ -2631,7 +2951,9 @@ def _copy_distribution_closure(
         observed.add(canonical)
         name = str(distribution.metadata.get("Name") or requested)
         license_value = _distribution_license(distribution.metadata)
-        if not license_value or re.search(r"(?:^|[^A-Z])(?:AGPL|GPL|SSPL)(?:[- .0-9]|$)", license_value, re.I):
+        if not license_value or re.search(
+            r"(?:^|[^A-Z])(?:AGPL|GPL|SSPL)(?:[- .0-9]|$)", license_value, re.I
+        ):
             raise StageError("python_dependency_license_rejected")
         inventory.append(
             {"name": name, "version": distribution.version, "license": license_value}
@@ -2655,7 +2977,11 @@ def _copy_distribution_closure(
                     break
                 except ValueError:
                     continue
-            if relative is None or source.name == "__pycache__" or source.suffix in {".pyc", ".pyo"}:
+            if (
+                relative is None
+                or source.name == "__pycache__"
+                or source.suffix in {".pyc", ".pyo"}
+            ):
                 continue
             if resolved.is_file():
                 _copy_regular(resolved, destination / relative)
@@ -2665,12 +2991,16 @@ def _copy_distribution_closure(
         for raw_requirement in distribution.requires or ():
             try:
                 requirement = Requirement(raw_requirement)
-                if requirement.marker is not None and not requirement.marker.evaluate({"extra": ""}):
+                if requirement.marker is not None and not requirement.marker.evaluate(
+                    {"extra": ""}
+                ):
                     continue
             except (InvalidRequirement, ValueError):
                 raise StageError("python_dependency_metadata_invalid") from None
             dependency = canonicalize_name(requirement.name)
-            if dependency not in observed and dependency not in {canonicalize_name(item) for item in pending}:
+            if dependency not in observed and dependency not in {
+                canonicalize_name(item) for item in pending
+            }:
                 pending.append(requirement.name)
         pending.sort(key=canonicalize_name)
     inventory.sort(key=lambda item: canonicalize_name(item["name"]))
@@ -2679,7 +3009,11 @@ def _copy_distribution_closure(
 
 def _distribution_license(metadata: Message) -> str:
     value = metadata.get("License-Expression") or metadata.get("License")
-    if isinstance(value, str) and value.strip() and value.strip().casefold() not in {"unknown", "n/a"}:
+    if (
+        isinstance(value, str)
+        and value.strip()
+        and value.strip().casefold() not in {"unknown", "n/a"}
+    ):
         return value.strip()[:512]
     for classifier in metadata.get_all("Classifier") or ():
         prefix = "License :: OSI Approved :: "
@@ -2744,7 +3078,10 @@ def _scan_archive_secrets(path: Path) -> None:
                     or original != normalized
                     or normalized != expected
                     or relative.is_absolute()
-                    or any(part in {"", ".", ".."} or ":" in part for part in relative.parts)
+                    or any(
+                        part in {"", ".", ".."} or ":" in part
+                        for part in relative.parts
+                    )
                     or collision in seen
                     or member.flag_bits & 0x1
                     or stat.S_ISLNK(mode)
@@ -2782,9 +3119,7 @@ def _locked_inventory_evidence(
     profile_record = lock_set.profiles.get(profile)
     if profile_record is None:
         raise StageError("python_dependency_lock_invalid")
-    versions = _active_lock_versions(
-        lock_set.path.parent / profile_record["lock"]
-    )
+    versions = _active_lock_versions(lock_set.path.parent / profile_record["lock"])
     observed: dict[str, str] = {}
     for raw in distributions:
         name = canonicalize_name(str(raw.get("name") or ""))
@@ -2848,7 +3183,12 @@ def _active_lock_versions(path: Path) -> dict[str, str]:
 
 def _gate(root: Path, gate: str, details: Mapping[str, Any]) -> None:
     root.mkdir(parents=True, exist_ok=True)
-    value = {"schema_version": 1, "status": "passed", "gate": gate, "details": dict(details)}
+    value = {
+        "schema_version": 1,
+        "status": "passed",
+        "gate": gate,
+        "details": dict(details),
+    }
     (root / f"{gate}.json").write_text(
         json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n",
         encoding="utf-8",
@@ -2890,20 +3230,29 @@ def _tree_records(root: Path) -> list[dict[str, Any]]:
 
 def _write_zip(source: Path, destination: Path) -> None:
     records = _tree_records(source)
-    with zipfile.ZipFile(destination, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+    with zipfile.ZipFile(
+        destination, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=9
+    ) as archive:
         for record in records:
             info = zipfile.ZipInfo(record["path"], date_time=_FIXED_TIME)
             info.compress_type = zipfile.ZIP_DEFLATED
             info.create_system = 3
             info.external_attr = (stat.S_IFREG | int(record["mode"])) << 16
-            archive.writestr(info, source.joinpath(*PurePosixPath(record["path"]).parts).read_bytes())
+            archive.writestr(
+                info, source.joinpath(*PurePosixPath(record["path"]).parts).read_bytes()
+            )
 
 
-def _copy_tree(source: Path, destination: Path, *, excluded: frozenset[str] = frozenset()) -> None:
+def _copy_tree(
+    source: Path, destination: Path, *, excluded: frozenset[str] = frozenset()
+) -> None:
     source = source.resolve(strict=True)
     for path in sorted(source.rglob("*"), key=lambda item: item.as_posix().casefold()):
         relative = path.relative_to(source)
-        if any(part in excluded for part in relative.parts) or path.suffix in {".pyc", ".pyo"}:
+        if any(part in excluded for part in relative.parts) or path.suffix in {
+            ".pyc",
+            ".pyo",
+        }:
             continue
         metadata = path.lstat()
         if stat.S_ISLNK(metadata.st_mode) or bool(
@@ -2913,11 +3262,19 @@ def _copy_tree(source: Path, destination: Path, *, excluded: frozenset[str] = fr
             resolved = path.resolve(strict=True)
             if resolved.is_dir():
                 continue
-            _copy_regular(resolved, destination / relative, executable=bool(resolved.stat().st_mode & stat.S_IXUSR))
+            _copy_regular(
+                resolved,
+                destination / relative,
+                executable=bool(resolved.stat().st_mode & stat.S_IXUSR),
+            )
         elif path.is_dir():
             (destination / relative).mkdir(parents=True, exist_ok=True)
         elif path.is_file():
-            _copy_regular(path, destination / relative, executable=bool(metadata.st_mode & stat.S_IXUSR))
+            _copy_regular(
+                path,
+                destination / relative,
+                executable=bool(metadata.st_mode & stat.S_IXUSR),
+            )
         else:
             raise StageError("stage_source_entry_invalid")
 
@@ -2969,7 +3326,8 @@ def _stable_bytes(
     if (
         (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) != identity
         or (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != identity
-        or (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns) != identity
+        or (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns)
+        != identity
         or len(payload) != before.st_size
     ):
         raise StageError(code)
@@ -2984,7 +3342,11 @@ def _pinned_environment_file(path_name: str, digest_name: str) -> Path:
     path = Path(value)
     if not path.is_absolute():
         raise StageError("platform_stage_configuration_invalid")
-    payload = _stable_bytes(path.resolve(strict=True), _MAX_FILE_BYTES, "platform_stage_configuration_invalid")
+    payload = _stable_bytes(
+        path.resolve(strict=True),
+        _MAX_FILE_BYTES,
+        "platform_stage_configuration_invalid",
+    )
     if hashlib.sha256(payload).hexdigest() != digest:
         raise StageError("platform_stage_configuration_digest_mismatch")
     return path.resolve(strict=True)
@@ -3040,7 +3402,13 @@ def _runtime_environment() -> Mapping[str, str]:
 
 def _build_environment() -> Mapping[str, str]:
     result = dict(os.environ)
-    result.update({"SOURCE_DATE_EPOCH": "0", "PYTHONHASHSEED": "0", "PYTHONDONTWRITEBYTECODE": "1"})
+    result.update(
+        {
+            "SOURCE_DATE_EPOCH": "0",
+            "PYTHONHASHSEED": "0",
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+    )
     return result
 
 
@@ -3074,7 +3442,10 @@ def _host_target() -> tuple[str, str]:
         import platform as platform_module
 
         normalized = platform_module.machine().casefold()
-        return "macos", "arm64" if normalized in {"arm64", "aarch64"} else "x64" if normalized in {"x86_64", "amd64"} else "unsupported"
+        return "macos", "arm64" if normalized in {
+            "arm64",
+            "aarch64",
+        } else "x64" if normalized in {"x86_64", "amd64"} else "unsupported"
     return sys.platform, "unsupported"
 
 
@@ -3123,7 +3494,9 @@ def _sha256(path: Path) -> str:
 
 
 def _json_sha256(value: Mapping[str, Any]) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 def _reject_constant(_value: str) -> Any:

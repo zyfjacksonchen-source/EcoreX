@@ -33,6 +33,7 @@ from ecorex.release.candidate import (
     build_candidate,
     write_stage_receipt,
 )
+from ecorex.release.macos_native_contract import PYTHON_MACOS_DISTRIBUTION
 from ecorex.update import (
     Ed25519SignatureVerifier,
     ReleaseArtifact,
@@ -274,6 +275,25 @@ def _stages(root: Path, public: bytes) -> list[dict[str, str]]:
         pack_python.parent.mkdir(parents=True)
         pack_python.write_bytes(b"real relocatable pack interpreter fixture")
         pack_python.chmod(0o755)
+        if platform == "macos":
+            (core / "bin" / "pack-python" / "native-components.json").write_text(
+                json.dumps(
+                    {
+                        "architecture": architecture,
+                        "components": [],
+                        "distribution": dict(PYTHON_MACOS_DISTRIBUTION),
+                        "license_notice": None,
+                        "license_texts": [],
+                        "platform": "macos",
+                        "schema_version": 1,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
         (core / "pack-python.json").write_bytes(
             build_pack_python_manifest(
                 core,

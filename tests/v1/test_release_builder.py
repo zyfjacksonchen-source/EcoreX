@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import copy
 import json
 import os
+import runpy
 import shutil
 import stat
 import zipfile
@@ -101,12 +103,18 @@ def _signer() -> tuple[Ed25519MemorySigner, bytes, bytes]:
     return Ed25519MemorySigner("release-key-2026", private), public_raw, private_raw
 
 
-def test_builder_is_deterministic_and_uses_the_single_version_source(tmp_path: Path) -> None:
+def test_builder_is_deterministic_and_uses_the_single_version_source(
+    tmp_path: Path,
+) -> None:
     signer, public_key, private_raw = _signer()
     first_source = _source_tree(tmp_path / "source-a")
     second_source = _source_tree(tmp_path / "source-b")
-    first = ReleaseBuilder(signer).build(_spec(_input(first_source)), tmp_path / "release-a")
-    second = ReleaseBuilder(signer).build(_spec(_input(second_source)), tmp_path / "release-b")
+    first = ReleaseBuilder(signer).build(
+        _spec(_input(first_source)), tmp_path / "release-a"
+    )
+    second = ReleaseBuilder(signer).build(
+        _spec(_input(second_source)), tmp_path / "release-b"
+    )
 
     assert first.manifest.version == __version__
     assert first.manifest == second.manifest
@@ -119,12 +127,258 @@ def test_builder_is_deterministic_and_uses_the_single_version_source(tmp_path: P
 
     verifier = Ed25519SignatureVerifier({"release-key-2026": public_key})
     verify_manifest_signature(first.manifest, verifier)
-    verify_artifact_file(first_zip, first.manifest, first.manifest.artifacts[0], verifier)
+    verify_artifact_file(
+        first_zip, first.manifest, first.manifest.artifacts[0], verifier
+    )
     all_output = b"".join(
         path.read_bytes() for path in first.output_dir.iterdir() if path.is_file()
     )
     assert private_raw not in all_output
     assert "private" not in repr(signer).lower()
+
+
+def test_macos_native_inventory_emits_semantic_cyclonedx_component(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ecorex.release.builder as builder_module
+
+    signer, _, _ = _signer()
+    source = _source_tree(tmp_path / "source")
+    pack = source / "bin" / "pack-python"
+    library = pack / "lib" / "libssl.3.dylib"
+    notice = pack / "licenses" / "python-macos-installer-License.rtf"
+    license_contract = builder_module.MACOS_NATIVE_LICENSES["openssl"]
+    license_text = pack / license_contract.archive_path
+    library.parent.mkdir(parents=True)
+    notice.parent.mkdir(parents=True)
+    license_text.parent.mkdir(parents=True, exist_ok=True)
+    library.write_bytes(b"relocated-openssl")
+    notice.write_bytes(b"OpenSSL 3.0.13")
+    license_text.write_bytes(
+        (
+            Path(__file__).resolve().parents[2] / license_contract.repository_path
+        ).read_bytes()
+    )
+    notice_contract = {
+        "path": "licenses/python-macos-installer-License.rtf",
+        "size_bytes": len(notice.read_bytes()),
+        "sha256": hashlib.sha256(notice.read_bytes()).hexdigest(),
+        "tokens": (b"OpenSSL 3.0.13",),
+    }
+    monkeypatch.setattr(builder_module, "PYTHON_MACOS_LICENSE", notice_contract)
+    digest = hashlib.sha256(library.read_bytes()).hexdigest()
+    inventory = {
+        "architecture": "arm64",
+        "components": [
+            {
+                "license": "Apache-2.0",
+                "license_text": license_contract.archive_path,
+                "name": "OpenSSL",
+                "path": "lib/libssl.3.dylib",
+                "sha256": digest,
+                "source_sha256": (
+                    "22f984c4947e9ea11528ad86d219f145ae9cd45983e3850d34d781d1b38ce5d6"
+                ),
+                "version": "3.0.13",
+            }
+        ],
+        "distribution": dict(builder_module.PYTHON_MACOS_DISTRIBUTION),
+        "license_notice": {
+            "path": notice_contract["path"],
+            "sha256": notice_contract["sha256"],
+            "size_bytes": notice_contract["size_bytes"],
+        },
+        "license_texts": [
+            {
+                "path": license_contract.archive_path,
+                "provenance": license_contract.provenance,
+                "sha256": license_contract.sha256,
+                "size_bytes": license_contract.size_bytes,
+                "source_archive_sha256": license_contract.source_archive_sha256,
+                "source_internal_path": license_contract.source_internal_path,
+                "source_url": license_contract.source_url,
+            }
+        ],
+        "platform": "macos",
+        "schema_version": 1,
+    }
+    (pack / "native-components.json").write_text(
+        json.dumps(inventory, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    result = ReleaseBuilder(signer).build(
+        _spec(_input(source, platform="macos", architecture="arm64")),
+        tmp_path / "release",
+    )
+    sbom = json.loads(result.sbom_path.read_text(encoding="utf-8"))
+    component = next(
+        item
+        for item in sbom["components"]
+        if item["bom-ref"] == "native:macos:arm64:lib/libssl.3.dylib"
+    )
+
+    assert component["type"] == "library"
+    assert component["name"] == "OpenSSL"
+    assert component["version"] == "3.0.13"
+    assert component["licenses"] == [{"license": {"id": "Apache-2.0"}}]
+    assert component["hashes"] == [{"alg": "SHA-256", "content": digest}]
+    assert component["externalReferences"][1]["type"] == "other"
+    checker = runpy.run_path(
+        str(
+            Path(__file__).resolve().parents[2]
+            / "scripts"
+            / "check-v1-candidate-supply-chain.py"
+        )
+    )
+    checker["_verify_macos_native_sbom"].__globals__["PYTHON_MACOS_LICENSE"] = (
+        notice_contract
+    )
+    artifact = result.manifest.artifacts[0]
+    checker["_verify_macos_native_sbom"](
+        result.artifact_paths[artifact.artifact_id],
+        artifact,
+        sbom["components"],
+    )
+    with pytest.raises(ValueError, match="candidate_native_sbom_mismatch"):
+        checker["_verify_native_reference_union"](
+            [
+                "native:macos:arm64:lib/libssl.3.dylib",
+                "native:macos:x86_64:lib/libssl.3.dylib",
+            ],
+            {"native:macos:arm64:lib/libssl.3.dylib"},
+        )
+    mutations = []
+    for field, value in (
+        ("version", "tampered"),
+        ("licenses", [{"license": {"name": "Fake"}}]),
+    ):
+        changed = copy.deepcopy(sbom["components"])
+        target = next(
+            item
+            for item in changed
+            if item["bom-ref"] == "native:macos:arm64:lib/libssl.3.dylib"
+        )
+        target[field] = value
+        mutations.append(changed)
+    changed = copy.deepcopy(sbom["components"])
+    target = next(item for item in changed if item.get("type") == "library")
+    target["externalReferences"][0]["url"] = "https://invalid.example/pkg"
+    mutations.append(changed)
+    changed = copy.deepcopy(sbom["components"])
+    target = next(item for item in changed if item.get("type") == "library")
+    next(
+        item for item in target["properties"] if item["name"] == "ecorex:source-sha256"
+    )["value"] = "0" * 64
+    mutations.append(changed)
+    mutations.append(
+        [
+            item
+            for item in copy.deepcopy(sbom["components"])
+            if item.get("type") != "library"
+        ]
+    )
+    changed = copy.deepcopy(sbom["components"])
+    extra = copy.deepcopy(component)
+    extra["bom-ref"] = "native:macos:arm64:lib/extra.dylib"
+    changed.append(extra)
+    mutations.append(changed)
+    for changed in mutations:
+        with pytest.raises(ValueError, match="candidate_native_sbom_mismatch"):
+            checker["_verify_macos_native_sbom"](
+                result.artifact_paths[artifact.artifact_id],
+                artifact,
+                changed,
+            )
+
+    def rewritten_archive(
+        name: str,
+        mutate: object,
+    ) -> Path:
+        source_archive = result.artifact_paths[artifact.artifact_id]
+        destination = tmp_path / name
+        with (
+            zipfile.ZipFile(source_archive) as source_zip,
+            zipfile.ZipFile(
+                destination, "w", compression=zipfile.ZIP_DEFLATED
+            ) as output_zip,
+        ):
+            for info in source_zip.infolist():
+                payload = source_zip.read(info)
+                if (
+                    info.filename == "bin/pack-python/native-components.json"
+                    and mutate == "source"
+                ):
+                    value = json.loads(payload)
+                    value["components"][0]["source_sha256"] = "0" * 64
+                    payload = (
+                        json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+                    ).encode()
+                if (
+                    info.filename
+                    == "bin/pack-python/licenses/python-macos-installer-License.rtf"
+                    and mutate == "notice"
+                ):
+                    payload = b"tampered notice"
+                if (
+                    info.filename == f"bin/pack-python/{license_contract.archive_path}"
+                    and mutate == "license-text"
+                ):
+                    payload = b"x" * len(payload)
+                if (
+                    info.filename == "bin/pack-python/native-components.json"
+                    and mutate == "omit-component"
+                ):
+                    value = json.loads(payload)
+                    value["components"] = []
+                    value["license_notice"] = None
+                    value["license_texts"] = []
+                    payload = (
+                        json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+                    ).encode()
+                output_zip.writestr(info.filename, payload)
+        return destination
+
+    for name, mutation in (
+        ("bad-source.zip", "source"),
+        ("bad-notice.zip", "notice"),
+        ("bad-license-text.zip", "license-text"),
+        ("omitted-component.zip", "omit-component"),
+    ):
+        with pytest.raises(ValueError, match="candidate_native_inventory_invalid"):
+            checker["_verify_macos_native_sbom"](
+                rewritten_archive(name, mutation),
+                artifact,
+                sbom["components"],
+            )
+
+    component["version"] = "tampered"
+    with pytest.raises(ValueError, match="candidate_native_sbom_mismatch"):
+        checker["_verify_macos_native_sbom"](
+            result.artifact_paths[artifact.artifact_id],
+            artifact,
+            sbom["components"],
+        )
+
+
+def test_all_macos_native_license_texts_are_tracked_regular_exact_files() -> None:
+    from ecorex.release.macos_native_contract import (
+        MACOS_NATIVE_LICENSES,
+        MACOS_PACK_PYTHON_RUNTIME_DYLIBS,
+    )
+
+    root = Path(__file__).resolve().parents[2]
+    assert MACOS_PACK_PYTHON_RUNTIME_DYLIBS == frozenset(
+        {"lib/libpython3.11.dylib"}
+    )
+    for contract in MACOS_NATIVE_LICENSES.values():
+        path = root / contract.repository_path
+        assert path.is_file()
+        assert not path.is_symlink()
+        payload = path.read_bytes()
+        assert len(payload) == contract.size_bytes
+        assert hashlib.sha256(payload).hexdigest() == contract.sha256
 
 
 def test_release_scoped_builder_resolves_cn_proxy_to_github_tag(tmp_path: Path) -> None:
@@ -278,7 +532,13 @@ def test_builder_rejects_same_or_future_delta_base_version(tmp_path: Path) -> No
 def test_deterministic_zip_has_fixed_order_timestamp_and_modes(tmp_path: Path) -> None:
     signer, _public, _private = _signer()
     result = ReleaseBuilder(signer).build(
-        _spec(_input(_source_tree(tmp_path / "source"), platform="macos", architecture="arm64")),
+        _spec(
+            _input(
+                _source_tree(tmp_path / "source"),
+                platform="macos",
+                architecture="arm64",
+            )
+        ),
         tmp_path / "release",
     )
     package = next(iter(result.artifact_paths.values()))
@@ -289,7 +549,9 @@ def test_deterministic_zip_has_fixed_order_timestamp_and_modes(tmp_path: Path) -
             entry.filename for entry in entries
         )
         assert all(entry.date_time == (1980, 1, 1, 0, 0, 0) for entry in entries)
-        modes = {entry.filename: stat.S_IMODE(entry.external_attr >> 16) for entry in entries}
+        modes = {
+            entry.filename: stat.S_IMODE(entry.external_attr >> 16) for entry in entries
+        }
         assert modes["bin/ecorex"] == 0o755
         assert modes["config/defaults.json"] == 0o644
         assert modes["empty/"] == 0o755
@@ -306,15 +568,20 @@ def test_builder_emits_machine_verifiable_metadata_and_sbom(tmp_path: Path) -> N
 
     assert metadata["version"] == __version__
     assert metadata["build_digest"] == result.manifest.build_digest
-    assert metadata["manifest_sha256"] == hashlib.sha256(
-        result.manifest_path.read_bytes()
-    ).hexdigest()
-    assert metadata["sbom_sha256"] == hashlib.sha256(result.sbom_path.read_bytes()).hexdigest()
+    assert (
+        metadata["manifest_sha256"]
+        == hashlib.sha256(result.manifest_path.read_bytes()).hexdigest()
+    )
+    assert (
+        metadata["sbom_sha256"]
+        == hashlib.sha256(result.sbom_path.read_bytes()).hexdigest()
+    )
     assert sbom["bomFormat"] == "CycloneDX"
     assert sbom["specVersion"] == "1.5"
     assert any(
         component.get("name") == package.name
-        and component["hashes"][0]["content"] == hashlib.sha256(package.read_bytes()).hexdigest()
+        and component["hashes"][0]["content"]
+        == hashlib.sha256(package.read_bytes()).hexdigest()
         for component in sbom["components"]
     )
 
@@ -380,7 +647,9 @@ def test_builder_publishes_all_platform_cores_and_optional_bootstrap_together(
         )
 
 
-def test_builder_rejects_unsupported_target_and_portable_path_collision(tmp_path: Path) -> None:
+def test_builder_rejects_unsupported_target_and_portable_path_collision(
+    tmp_path: Path,
+) -> None:
     signer, _public, _private = _signer()
     source = _source_tree(tmp_path / "source")
     with pytest.raises(ReleaseBuildError, match="unsupported target"):
@@ -397,7 +666,9 @@ def test_builder_rejects_unsupported_target_and_portable_path_collision(tmp_path
         )
 
 
-def test_builder_rejects_links_without_publishing_partial_release(tmp_path: Path) -> None:
+def test_builder_rejects_links_without_publishing_partial_release(
+    tmp_path: Path,
+) -> None:
     signer, _public, _private = _signer()
     source = _source_tree(tmp_path / "source")
     link = source / "config" / "outside-link"
@@ -427,7 +698,9 @@ def test_builder_enforces_core_and_bootstrap_compressed_limits(
     builder = ReleaseBuilder(
         signer,
         max_core_bytes=limit if kind is ArtifactKind.CORE else 150 * 1024 * 1024,
-        max_bootstrap_bytes=limit if kind is ArtifactKind.BOOTSTRAP else 10 * 1024 * 1024,
+        max_bootstrap_bytes=limit
+        if kind is ArtifactKind.BOOTSTRAP
+        else 10 * 1024 * 1024,
     )
     destination = tmp_path / "release"
 
@@ -436,7 +709,9 @@ def test_builder_enforces_core_and_bootstrap_compressed_limits(
     assert not destination.exists()
 
 
-def test_builder_refuses_to_replace_an_existing_release_directory(tmp_path: Path) -> None:
+def test_builder_refuses_to_replace_an_existing_release_directory(
+    tmp_path: Path,
+) -> None:
     signer, _public, _private = _signer()
     source = _source_tree(tmp_path / "source")
     destination = tmp_path / "release"

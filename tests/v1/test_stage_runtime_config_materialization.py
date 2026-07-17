@@ -194,6 +194,35 @@ def test_cli_receipt_contains_identity_but_not_config_or_path(tmp_path: Path) ->
     assert str(output) not in serialized
 
 
+def test_cleanup_cli_runs_before_third_party_dependencies_are_installed(
+    tmp_path: Path,
+) -> None:
+    output = (tmp_path / "ecorex-runtime-config.json").resolve()
+    environment = dict(os.environ)
+    environment.pop("PYTHONHOME", None)
+    environment.pop("PYTHONPATH", None)
+    environment["ECOREX_STAGE_RUNTIME_CONFIG_SHA256"] = "a" * 64
+
+    result = subprocess.run(
+        (
+            sys.executable,
+            "-S",
+            str(ROOT / "scripts/materialize-v1-stage-runtime-config.py"),
+            "remove",
+            "--output",
+            str(output),
+        ),
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"schema_version": 1, "status": "absent"}
+
+
 def test_workflows_isolate_exact_windows_stage_and_privileged_runners() -> None:
     stage = (ROOT / ".github/workflows/ecorex-v1-platform-stage.yml").read_text(
         encoding="utf-8"

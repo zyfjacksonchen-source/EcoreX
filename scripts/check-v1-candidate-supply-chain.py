@@ -9,7 +9,7 @@ import io
 from importlib import metadata as importlib_metadata
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import stat
 import subprocess
@@ -31,6 +31,13 @@ from ecorex.release import (  # noqa: E402
 )
 from ecorex.release.dependency_lock import (  # noqa: E402
     load_dependency_lock_manifest,
+)
+from ecorex.release.macos_native_contract import (  # noqa: E402
+    MACOS_NATIVE_COMPONENTS,
+    MACOS_NATIVE_LICENSES,
+    MACOS_PACK_PYTHON_RUNTIME_DYLIBS,
+    PYTHON_MACOS_DISTRIBUTION,
+    PYTHON_MACOS_LICENSE,
 )
 from ecorex.update import ReleaseManifest  # noqa: E402
 
@@ -107,10 +114,7 @@ def _license_inventory(
             package = importlib_metadata.metadata(requested_name)
         except importlib_metadata.PackageNotFoundError:
             reviewed = _INACTIVE_MARKER_LICENSES.get(canonical_name)
-            if (
-                reviewed is None
-                or reviewed[0] != runtime_versions[canonical_name]
-            ):
+            if reviewed is None or reviewed[0] != runtime_versions[canonical_name]:
                 raise ValueError(f"license_package_missing:{requested_name}") from None
             python.append(
                 {
@@ -284,7 +288,12 @@ def _preflight(repo: Path) -> dict[str, Any]:
                 "status": "passed",
                 "file_count": secret_count,
                 "inventory_sha256": secret_digest,
-                "patterns": ["private-key", "aws-access-key", "github-token", "slack-token"],
+                "patterns": [
+                    "private-key",
+                    "aws-access-key",
+                    "github-token",
+                    "slack-token",
+                ],
             },
             "dependency-lock": {
                 "status": "passed",
@@ -310,9 +319,22 @@ def _release(release_dir: Path, dependency_lock_path: Path) -> dict[str, Any]:
     ):
         raise ValueError("candidate_sbom_invalid")
     components = sbom["components"]
+    references = [
+        component.get("bom-ref")
+        for component in components
+        if isinstance(component, dict)
+    ]
+    if (
+        any(not isinstance(reference, str) or not reference for reference in references)
+        or len(references) != len(components)
+        or len(set(references)) != len(references)
+    ):
+        raise ValueError("candidate_sbom_invalid")
     component_hashes: dict[str, str] = {}
     for component in components:
-        if not isinstance(component, dict) or not isinstance(component.get("name"), str):
+        if not isinstance(component, dict) or not isinstance(
+            component.get("name"), str
+        ):
             raise ValueError("candidate_sbom_invalid")
         hashes = component.get("hashes")
         if not isinstance(hashes, list):
@@ -320,7 +342,10 @@ def _release(release_dir: Path, dependency_lock_path: Path) -> dict[str, Any]:
         for item in hashes:
             if isinstance(item, dict) and item.get("alg") == "SHA-256":
                 component_hashes[component["name"]] = str(item.get("content") or "")
-    if component_hashes.get("requirements/locks/manifest.json") != dependency_lock.sha256:
+    if (
+        component_hashes.get("requirements/locks/manifest.json")
+        != dependency_lock.sha256
+    ):
         raise ValueError("candidate_dependency_lock_sbom_mismatch")
     metadata = json.loads((root / "release-metadata.json").read_text(encoding="utf-8"))
     if metadata.get("python_dependency_lock_sha256") != dependency_lock.sha256:
@@ -336,6 +361,7 @@ def _release(release_dir: Path, dependency_lock_path: Path) -> dict[str, Any]:
     ):
         raise ValueError("candidate_dependency_lock_sbom_mismatch")
     archives: list[dict[str, Any]] = []
+    expected_native_references: set[str] = set()
     for artifact in manifest.artifacts:
         path = root / artifact.file_name
         if not path.is_file() or path.stat().st_size != artifact.size_bytes:
@@ -347,7 +373,9 @@ def _release(release_dir: Path, dependency_lock_path: Path) -> dict[str, Any]:
             limit = MAX_CORE_BYTES
         elif artifact.artifact_id.startswith("bootstrap-"):
             limit = MAX_BOOTSTRAP_BYTES
-        elif artifact.artifact_id.startswith("capability-pack-") and not artifact.artifact_id.endswith("-manifest"):
+        elif artifact.artifact_id.startswith(
+            "capability-pack-"
+        ) and not artifact.artifact_id.endswith("-manifest"):
             limit = MAX_CAPABILITY_PACK_BYTES
         else:
             limit = 16 * 1024 * 1024
@@ -355,6 +383,10 @@ def _release(release_dir: Path, dependency_lock_path: Path) -> dict[str, Any]:
             raise ValueError("candidate_artifact_size_limit")
         if path.suffix == ".zip":
             _scan_archive(path)
+        if artifact.artifact_id.startswith("core-") and artifact.platform == "macos":
+            expected_native_references.update(
+                _verify_macos_native_sbom(path, artifact, components)
+            )
         archives.append(
             {
                 "artifact_id": artifact.artifact_id,
@@ -363,6 +395,7 @@ def _release(release_dir: Path, dependency_lock_path: Path) -> dict[str, Any]:
                 "limit_bytes": limit,
             }
         )
+    _verify_native_reference_union(references, expected_native_references)
     return {
         "schema_version": 1,
         "status": "passed",
@@ -378,6 +411,351 @@ def _release(release_dir: Path, dependency_lock_path: Path) -> dict[str, Any]:
             "secret-scan": {"status": "passed", "archives_scanned": len(archives)},
         },
     }
+
+
+def _verify_native_reference_union(references: list[str], expected: set[str]) -> None:
+    if {
+        reference for reference in references if reference.startswith("native:")
+    } != expected:
+        raise ValueError("candidate_native_sbom_mismatch")
+
+
+def _verify_macos_native_sbom(
+    archive_path: Path,
+    artifact: Any,
+    sbom_components: list[Any],
+) -> set[str]:
+    member = "bin/pack-python/native-components.json"
+    try:
+        with zipfile.ZipFile(archive_path) as archive:
+            if not any(
+                item.filename.startswith("bin/pack-python/")
+                for item in archive.infolist()
+            ):
+                return set()
+            matches = [item for item in archive.infolist() if item.filename == member]
+            if (
+                len(matches) != 1
+                or matches[0].is_dir()
+                or matches[0].file_size > 64 * 1024
+            ):
+                raise ValueError("candidate_native_inventory_invalid")
+            inventory = json.loads(
+                archive.read(matches[0]).decode("utf-8"),
+                object_pairs_hook=_unique_native_object,
+            )
+    except ValueError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, zipfile.BadZipFile):
+        raise ValueError("candidate_native_inventory_invalid") from None
+    if not isinstance(inventory, dict):
+        raise ValueError("candidate_native_inventory_invalid")
+    native = inventory.get("components")
+    notice = inventory.get("license_notice")
+    license_texts = inventory.get("license_texts")
+    if (
+        set(inventory)
+        != {
+            "architecture",
+            "components",
+            "distribution",
+            "license_notice",
+            "license_texts",
+            "platform",
+            "schema_version",
+        }
+        or inventory.get("schema_version") != 1
+        or inventory.get("platform") != "macos"
+        or inventory.get("architecture") != artifact.architecture
+        or inventory.get("distribution") != dict(PYTHON_MACOS_DISTRIBUTION)
+        or not isinstance(native, list)
+        or not isinstance(license_texts, list)
+        or (
+            bool(native)
+            and notice
+            != {
+                "path": PYTHON_MACOS_LICENSE["path"],
+                "sha256": PYTHON_MACOS_LICENSE["sha256"],
+                "size_bytes": PYTHON_MACOS_LICENSE["size_bytes"],
+            }
+        )
+        or (not native and notice is not None)
+    ):
+        raise ValueError("candidate_native_inventory_invalid")
+    try:
+        with zipfile.ZipFile(archive_path) as archive:
+            notice_path = f"bin/pack-python/{PYTHON_MACOS_LICENSE['path']}"
+            notice_members = [
+                item for item in archive.infolist() if item.filename == notice_path
+            ]
+            if bool(native) != (
+                len(notice_members) == 1
+                and not notice_members[0].is_dir()
+                and notice_members[0].file_size == PYTHON_MACOS_LICENSE["size_bytes"]
+            ):
+                raise ValueError("candidate_native_inventory_invalid")
+            if native:
+                notice_payload = archive.read(notice_members[0])
+                if hashlib.sha256(notice_payload).hexdigest() != PYTHON_MACOS_LICENSE[
+                    "sha256"
+                ] or any(
+                    notice_payload.count(token) != 1
+                    for token in PYTHON_MACOS_LICENSE["tokens"]
+                ):
+                    raise ValueError("candidate_native_inventory_invalid")
+            archive_members = {item.filename: item for item in archive.infolist()}
+            immediate_dylibs = {
+                item.filename.removeprefix("bin/pack-python/")
+                for item in archive.infolist()
+                if item.filename.startswith("bin/pack-python/lib/")
+                and "/" not in item.filename.removeprefix("bin/pack-python/lib/")
+                and item.filename.endswith(".dylib")
+                and not item.is_dir()
+            }
+            component_payloads = {
+                component.get("path"): archive.read(
+                    archive_members[f"bin/pack-python/{component.get('path')}"]
+                )
+                for component in native
+                if isinstance(component, dict)
+                and f"bin/pack-python/{component.get('path')}" in archive_members
+            }
+    except (OSError, KeyError, zipfile.BadZipFile):
+        raise ValueError("candidate_native_inventory_invalid") from None
+    indexed = {
+        item.get("bom-ref"): item
+        for item in sbom_components
+        if isinstance(item, dict) and isinstance(item.get("bom-ref"), str)
+    }
+    seen: set[str] = set()
+    expected_license_texts: set[str] = set()
+    for component in native:
+        expected_component_keys = {
+            "license",
+            "license_text",
+            "name",
+            "path",
+            "sha256",
+            "source_sha256",
+            "version",
+        }
+        path_value = component.get("path") if isinstance(component, dict) else None
+        path = PurePosixPath(path_value) if isinstance(path_value, str) else None
+        if (
+            not isinstance(component, dict)
+            or set(component) != expected_component_keys
+            or path is None
+            or path.is_absolute()
+            or not path.parts
+            or any(part in {"", ".", ".."} for part in path.parts)
+            or "\\" in path_value
+            or path.as_posix() != path_value
+            or path_value in seen
+            or path_value not in component_payloads
+            or hashlib.sha256(component_payloads[path_value]).hexdigest()
+            != component.get("sha256")
+        ):
+            raise ValueError("candidate_native_inventory_invalid")
+        seen.add(path_value)
+        contract = MACOS_NATIVE_COMPONENTS.get(path.name)
+        if (
+            contract is None
+            or path != PurePosixPath("lib") / path.name
+            or component["name"] != contract.name
+            or component["version"] != contract.version
+            or component["license"] != contract.license
+            or component["license_text"]
+            != MACOS_NATIVE_LICENSES[contract.license_text].archive_path
+            or component["source_sha256"] != contract.source_sha256
+        ):
+            raise ValueError("candidate_native_inventory_invalid")
+        expected_license_texts.add(contract.license_text)
+        reference = f"native:macos:{artifact.architecture}:{component.get('path', '')}"
+        emitted = indexed.get(reference)
+        hashes = emitted.get("hashes") if isinstance(emitted, dict) else None
+        licenses = emitted.get("licenses") if isinstance(emitted, dict) else None
+        external = (
+            emitted.get("externalReferences") if isinstance(emitted, dict) else None
+        )
+        property_items = (
+            emitted.get("properties", []) if isinstance(emitted, dict) else []
+        )
+        properties = {
+            item.get("name"): item.get("value")
+            for item in property_items
+            if isinstance(item, dict)
+        }
+        expected_property_names = {
+            "ecorex:distribution-size-bytes",
+            "ecorex:license-notice",
+            "ecorex:license-notice-sha256",
+            "ecorex:license-source-internal-path",
+            "ecorex:license-text",
+            "ecorex:license-text-sha256",
+            "ecorex:native-path",
+            "ecorex:packaged-in",
+            "ecorex:source-sha256",
+        }
+        license_text = MACOS_NATIVE_LICENSES[contract.license_text]
+        external_contract = {
+            (
+                "distribution",
+                PYTHON_MACOS_DISTRIBUTION["url"],
+                PYTHON_MACOS_DISTRIBUTION["sha256"],
+            ),
+            (
+                "other",
+                license_text.source_url,
+                license_text.source_archive_sha256,
+            ),
+        }
+        if (
+            not isinstance(emitted, dict)
+            or set(emitted)
+            != {
+                "bom-ref",
+                "externalReferences",
+                "hashes",
+                "licenses",
+                "name",
+                "properties",
+                "type",
+                "version",
+            }
+            or emitted.get("type") != "library"
+            or emitted.get("name") != component.get("name")
+            or emitted.get("version") != component.get("version")
+            or not isinstance(hashes, list)
+            or len(hashes) != 1
+            or any(
+                not isinstance(item, dict) or set(item) != {"alg", "content"}
+                for item in hashes
+            )
+            or {
+                (item.get("alg"), item.get("content"))
+                for item in hashes
+                if isinstance(item, dict)
+            }
+            != {("SHA-256", component.get("sha256"))}
+            or not isinstance(licenses, list)
+            or len(licenses) != 1
+            or not isinstance(external, list)
+            or len(external) != 2
+            or any(
+                not isinstance(item, dict)
+                or set(item) != {"hashes", "type", "url"}
+                or not isinstance(item.get("hashes"), list)
+                or len(item["hashes"]) != 1
+                or not isinstance(item["hashes"][0], dict)
+                or set(item["hashes"][0]) != {"alg", "content"}
+                for item in external
+            )
+            or {
+                (
+                    item.get("type"),
+                    item.get("url"),
+                    next(
+                        (
+                            digest.get("content")
+                            for digest in item.get("hashes", [])
+                            if isinstance(digest, dict)
+                            and digest.get("alg") == "SHA-256"
+                        ),
+                        None,
+                    ),
+                )
+                for item in external
+                if isinstance(item, dict)
+            }
+            != external_contract
+            or not isinstance(property_items, list)
+            or any(
+                not isinstance(item, dict) or set(item) != {"name", "value"}
+                for item in property_items
+            )
+            or len(property_items) != len(expected_property_names)
+            or len(properties) != len(expected_property_names)
+            or set(properties) != expected_property_names
+            or properties.get("ecorex:native-path") != component["path"]
+            or properties.get("ecorex:packaged-in") != artifact.artifact_id
+            or properties.get("ecorex:source-sha256") != component["source_sha256"]
+            or properties.get("ecorex:distribution-size-bytes")
+            != str(PYTHON_MACOS_DISTRIBUTION["size_bytes"])
+            or properties.get("ecorex:license-notice") != PYTHON_MACOS_LICENSE["path"]
+            or properties.get("ecorex:license-notice-sha256")
+            != PYTHON_MACOS_LICENSE["sha256"]
+            or properties.get("ecorex:license-text") != license_text.archive_path
+            or properties.get("ecorex:license-text-sha256") != license_text.sha256
+            or properties.get("ecorex:license-source-internal-path")
+            != license_text.source_internal_path
+        ):
+            raise ValueError("candidate_native_sbom_mismatch")
+        if set(licenses[0]) != {"license"}:
+            raise ValueError("candidate_native_sbom_mismatch")
+        license_record = licenses[0].get("license")
+        expected_license_record = (
+            {"id": component["license"]}
+            if component["license"] in {"Apache-2.0", "TCL"}
+            else {"name": component["license"]}
+        )
+        if license_record != expected_license_record:
+            raise ValueError("candidate_native_sbom_mismatch")
+    expected_references = {
+        f"native:macos:{artifact.architecture}:{component['path']}"
+        for component in native
+    }
+    actual_references = {
+        reference
+        for reference in indexed
+        if reference.startswith(f"native:macos:{artifact.architecture}:")
+    }
+    if actual_references != expected_references:
+        raise ValueError("candidate_native_sbom_mismatch")
+    allowed_runtime_dylibs = immediate_dylibs & MACOS_PACK_PYTHON_RUNTIME_DYLIBS
+    if immediate_dylibs - allowed_runtime_dylibs != seen:
+        raise ValueError("candidate_native_inventory_invalid")
+    expected_license_inventory = [
+        {
+            "path": contract.archive_path,
+            "provenance": contract.provenance,
+            "sha256": contract.sha256,
+            "size_bytes": contract.size_bytes,
+            "source_archive_sha256": contract.source_archive_sha256,
+            "source_internal_path": contract.source_internal_path,
+            "source_url": contract.source_url,
+        }
+        for key, contract in sorted(MACOS_NATIVE_LICENSES.items())
+        if key in expected_license_texts
+    ]
+    if license_texts != expected_license_inventory:
+        raise ValueError("candidate_native_inventory_invalid")
+    try:
+        with zipfile.ZipFile(archive_path) as archive:
+            for license_text in expected_license_inventory:
+                member_path = f"bin/pack-python/{license_text['path']}"
+                members = [
+                    item for item in archive.infolist() if item.filename == member_path
+                ]
+                if (
+                    len(members) != 1
+                    or members[0].is_dir()
+                    or members[0].file_size != license_text["size_bytes"]
+                    or hashlib.sha256(archive.read(members[0])).hexdigest()
+                    != license_text["sha256"]
+                ):
+                    raise ValueError("candidate_native_inventory_invalid")
+    except (OSError, zipfile.BadZipFile):
+        raise ValueError("candidate_native_inventory_invalid") from None
+    return expected_references
+
+
+def _unique_native_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("candidate_native_inventory_invalid")
+        result[key] = value
+    return result
 
 
 def _lock_versions(path: Path) -> dict[str, str]:
@@ -492,7 +870,11 @@ def run(argv: list[str] | None = None) -> int:
             else _release(args.release_dir, args.dependency_lock_manifest)
         )
         _write_report(args.report, report)
-        print(json.dumps({"ok": True, "report": str(args.report.resolve())}, sort_keys=True))
+        print(
+            json.dumps(
+                {"ok": True, "report": str(args.report.resolve())}, sort_keys=True
+            )
+        )
         return 0
     except Exception as exc:
         print(

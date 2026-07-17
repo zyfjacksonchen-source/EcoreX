@@ -4,7 +4,7 @@ import hashlib
 import inspect
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from email.message import Message
 import shlex
 import shutil
@@ -145,9 +145,12 @@ def _sandbox_shell_request(
         "stdout_limit_bytes": 4 * 1024 * 1024,
         "stderr_limit_bytes": 64 * 1024,
     }
-    contract["contract_id"] = "sandbox_" + hashlib.sha256(
-        json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    contract["contract_id"] = (
+        "sandbox_"
+        + hashlib.sha256(
+            json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
     request["context"]["sandbox_contract"] = contract
     return request
 
@@ -203,7 +206,9 @@ def test_pack_python_has_no_sys_executable_or_path_fallback(tmp_path: Path) -> N
     assert interpreter_parameter.default is inspect.Parameter.empty
 
 
-def test_pack_python_manifest_binds_interpreter_and_complete_closure(tmp_path: Path) -> None:
+def test_pack_python_manifest_binds_interpreter_and_complete_closure(
+    tmp_path: Path,
+) -> None:
     payload = tmp_path / "payload"
     payload.mkdir()
     interpreter = _pack_python(payload)
@@ -316,7 +321,9 @@ def test_pack_python_zero_byte_member_still_has_toctou_identity_fence(
     assert changed.value.code == "pack_python_closure_invalid"
 
 
-def test_pack_python_rejects_manifest_digest_change_and_symlink_escape(tmp_path: Path) -> None:
+def test_pack_python_rejects_manifest_digest_change_and_symlink_escape(
+    tmp_path: Path,
+) -> None:
     payload = tmp_path / "payload"
     payload.mkdir()
     interpreter = _pack_python(payload)
@@ -527,7 +534,9 @@ def test_browser_runtime_delegates_windows_native_cleanup_to_parent_temp_domain(
     }
 
 
-def test_sandbox_pack_acknowledges_exact_core_contract_and_fixed_shell(tmp_path: Path) -> None:
+def test_sandbox_pack_acknowledges_exact_core_contract_and_fixed_shell(
+    tmp_path: Path,
+) -> None:
     artifact = _zipapp(tmp_path, "sandbox")
     request = _request(
         "sandbox",
@@ -549,9 +558,12 @@ def test_sandbox_pack_acknowledges_exact_core_contract_and_fixed_shell(tmp_path:
         "stdout_limit_bytes": 4 * 1024 * 1024,
         "stderr_limit_bytes": 64 * 1024,
     }
-    contract["contract_id"] = "sandbox_" + hashlib.sha256(
-        json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    contract["contract_id"] = (
+        "sandbox_"
+        + hashlib.sha256(
+            json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
     request["context"]["sandbox_contract"] = contract
     response = _invoke(artifact, request)
     assert response["status"] == "completed"
@@ -572,7 +584,7 @@ def test_sandbox_pack_streams_and_stops_stdout_flood(tmp_path: Path) -> None:
         "stdout-flood.py",
         "import sys;"
         f"sys.stdout.buffer.write({marker.encode()!r}+b'x'*(600*1024));"
-        "sys.stdout.flush()"
+        "sys.stdout.flush()",
     )
 
     response = _invoke(artifact, _sandbox_shell_request(tmp_path, command))
@@ -592,7 +604,7 @@ def test_sandbox_pack_streams_and_stops_stderr_flood_without_leaking_it(
         "stderr-flood.py",
         "import sys;"
         f"sys.stderr.buffer.write({marker.encode()!r}+b'x'*(48*1024));"
-        "sys.stderr.flush()"
+        "sys.stderr.flush()",
     )
 
     response = _invoke(artifact, _sandbox_shell_request(tmp_path, command))
@@ -661,7 +673,7 @@ def test_sandbox_pack_preserves_bounded_unicode_output(tmp_path: Path) -> None:
         "unicode.py",
         "import sys;"
         f"sys.stdout.buffer.write({stdout.encode()!r});"
-        f"sys.stderr.buffer.write({stderr.encode()!r})"
+        f"sys.stderr.buffer.write({stderr.encode()!r})",
     )
 
     response = _invoke(artifact, _sandbox_shell_request(tmp_path, command))
@@ -832,17 +844,11 @@ def test_windows_native_receipt_is_bound_to_pinned_toolchain_and_binaries(
         ],
         "linker_sha256": tools["linker"]["sha256"],
         "linker_file_version": tools["linker"]["file_version"],
-        "linker_authenticode_thumbprint": tools["linker"][
-            "authenticode_thumbprint"
-        ],
+        "linker_authenticode_thumbprint": tools["linker"]["authenticode_thumbprint"],
         "c1xx_sha256": tools["c1xx"]["sha256"],
-        "c1xx_authenticode_thumbprint": tools["c1xx"][
-            "authenticode_thumbprint"
-        ],
+        "c1xx_authenticode_thumbprint": tools["c1xx"]["authenticode_thumbprint"],
         "c2_sha256": tools["c2"]["sha256"],
-        "c2_authenticode_thumbprint": tools["c2"][
-            "authenticode_thumbprint"
-        ],
+        "c2_authenticode_thumbprint": tools["c2"]["authenticode_thumbprint"],
         "runtime_launcher_sha256": hashlib.sha256(launcher.read_bytes()).hexdigest(),
         "sandbox_helper_sha256": hashlib.sha256(helper.read_bytes()).hexdigest(),
     }
@@ -927,9 +933,7 @@ def test_windows_native_build_rejects_injected_toolchain_environment_and_stale_o
         "LINK_FULLPATHRSP",
     }
     environment = {
-        key: value
-        for key, value in os.environ.items()
-        if key.upper() not in blocked
+        key: value for key, value in os.environ.items() if key.upper() not in blocked
     }
     environment[variable] = "/untrusted"
     powershell = (
@@ -1002,9 +1006,7 @@ def test_windows_native_build_clears_published_outputs_on_late_validation_failur
         "PSMODULEPATH",
     }
     environment = {
-        key: value
-        for key, value in os.environ.items()
-        if key.upper() not in blocked
+        key: value for key, value in os.environ.items() if key.upper() not in blocked
     }
     powershell = (
         Path(os.environ["SYSTEMROOT"])
@@ -1088,9 +1090,7 @@ def test_windows_native_caller_pin_rejects_authority_mutation_before_build_lock(
         "PSMODULEPATH",
     }
     environment = {
-        key: value
-        for key, value in os.environ.items()
-        if key.upper() not in blocked
+        key: value for key, value in os.environ.items() if key.upper() not in blocked
     }
     powershell = (
         Path(os.environ["SYSTEMROOT"])
@@ -1156,7 +1156,15 @@ def test_pack_sources_and_stage_scripts_have_no_placeholder_markers() -> None:
     forbidden = ("TODO", "fixture is packaging-only", "placeholder pack")
     for root in roots:
         for path in root.rglob("*"):
-            if path.is_file() and path.suffix.casefold() in {".py", ".json", ".md", ".c", ".cpp", ".ps1", ".sh"}:
+            if path.is_file() and path.suffix.casefold() in {
+                ".py",
+                ".json",
+                ".md",
+                ".c",
+                ".cpp",
+                ".ps1",
+                ".sh",
+            }:
                 text = path.read_text(encoding="utf-8")
                 assert not any(marker in text for marker in forbidden), path
 
@@ -1203,15 +1211,11 @@ def test_windows_pack_python_uses_base_interpreter_not_venv_launcher(
     (venv / "Scripts").mkdir(parents=True)
     venv_interpreter = venv / "Scripts" / "python.exe"
     venv_interpreter.write_bytes(b"venv-launcher-needs-pyvenv-cfg")
-    (venv / "pyvenv.cfg").write_text(
-        f"home = {base}\n", encoding="utf-8"
-    )
+    (venv / "pyvenv.cfg").write_text(f"home = {base}\n", encoding="utf-8")
     monkeypatch.setattr(sys, "base_prefix", str(base))
     monkeypatch.setattr(sys, "executable", str(venv_interpreter))
 
-    prefix, executable, stdlib = stager["_base_python_runtime_source"](
-        "windows"
-    )
+    prefix, executable, stdlib = stager["_base_python_runtime_source"]("windows")
 
     assert prefix == base.resolve()
     assert executable == base_interpreter.resolve()
@@ -1237,9 +1241,7 @@ def test_macos_pack_python_remains_anchored_to_versioned_base_runtime(
     monkeypatch.setattr(sys, "base_prefix", str(base))
     monkeypatch.setattr(sys, "executable", str(venv))
 
-    prefix, selected, selected_stdlib = stager["_base_python_runtime_source"](
-        "macos"
-    )
+    prefix, selected, selected_stdlib = stager["_base_python_runtime_source"]("macos")
 
     assert prefix == base.resolve()
     assert selected == interpreter.resolve()
@@ -1288,9 +1290,7 @@ def test_macos_base_runtime_dylib_link_cannot_escape_prefix(
     except (NotImplementedError, OSError) as error:
         pytest.skip(f"symlink creation is unavailable: {error}")
 
-    with pytest.raises(
-        stager["StageError"], match="pack_python_base_runtime_invalid"
-    ):
+    with pytest.raises(stager["StageError"], match="pack_python_base_runtime_invalid"):
         stager["_base_runtime_regular_file"](
             alias,
             prefix=prefix.resolve(),
@@ -1315,9 +1315,7 @@ def test_macos_base_runtime_dylib_link_requires_regular_target(
     except (NotImplementedError, OSError) as error:
         pytest.skip(f"symlink creation is unavailable: {error}")
 
-    with pytest.raises(
-        stager["StageError"], match="pack_python_base_runtime_invalid"
-    ):
+    with pytest.raises(stager["StageError"], match="pack_python_base_runtime_invalid"):
         stager["_base_runtime_regular_file"](
             alias,
             prefix=prefix.resolve(),
@@ -1355,9 +1353,7 @@ def test_macos_base_runtime_dylib_rejects_reparse_target(
 
     monkeypatch.setattr(Path, "lstat", fake_lstat)
 
-    with pytest.raises(
-        stager["StageError"], match="pack_python_base_runtime_invalid"
-    ):
+    with pytest.raises(stager["StageError"], match="pack_python_base_runtime_invalid"):
         stager["_base_runtime_regular_file"](
             candidate,
             prefix=prefix.resolve(),
@@ -1381,9 +1377,7 @@ def test_macos_python_closure_rewrites_framework_loads_and_install_name(
     helper.write_bytes(macho)
     source_prefix = tmp_path / "toolcache" / "Python" / "3.11.9" / "arm64"
     source_prefix.mkdir(parents=True)
-    framework_python = (
-        "/Library/Frameworks/Python.framework/Versions/3.11/Python"
-    )
+    framework_python = "/Library/Frameworks/Python.framework/Versions/3.11/Python"
     install_names: dict[Path, str | None] = {
         interpreter.resolve(): None,
         library.resolve(): framework_python,
@@ -1434,9 +1428,9 @@ def test_macos_python_closure_rewrites_framework_loads_and_install_name(
                 name = install_names[binary]
                 suffix = f"{name}\n" if name is not None else ""
                 return SimpleNamespace(
-                    stdout=(
-                        f"{binary} (architecture {command[2]}):\n{suffix}"
-                    ).encode("utf-8")
+                    stdout=(f"{binary} (architecture {command[2]}):\n{suffix}").encode(
+                        "utf-8"
+                    )
                 )
             if operation == "-L":
                 values = list(dependencies[binary])
@@ -1448,9 +1442,9 @@ def test_macos_python_closure_rewrites_framework_loads_and_install_name(
                     for value in values
                 )
                 return SimpleNamespace(
-                    stdout=(
-                        f"{binary} (architecture {command[2]}):\n{lines}"
-                    ).encode("utf-8")
+                    stdout=(f"{binary} (architecture {command[2]}):\n{lines}").encode(
+                        "utf-8"
+                    )
                 )
             assert operation == "-l"
             lines = "".join(
@@ -1473,8 +1467,7 @@ def test_macos_python_closure_rewrites_framework_loads_and_install_name(
                 if operation == "-change":
                     old, new = command[index + 1 : index + 3]
                     dependencies[binary] = [
-                        new if value == old else value
-                        for value in dependencies[binary]
+                        new if value == old else value for value in dependencies[binary]
                     ]
                     index += 3
                     continue
@@ -1495,6 +1488,12 @@ def test_macos_python_closure_rewrites_framework_loads_and_install_name(
     stager["_relocate_macos_python_closure"](
         closure,
         source_prefix=source_prefix,
+        architecture="x64",
+    )
+
+    assert (
+        json.loads((closure / "native-components.json").read_text())["architecture"]
+        == "x64"
     )
 
     assert dependencies[interpreter.resolve()] == [
@@ -1505,9 +1504,7 @@ def test_macos_python_closure_rewrites_framework_loads_and_install_name(
     assert install_names[library.resolve()] == "@loader_path/libpython3.11.dylib"
     assert install_names[helper.resolve()] == "@loader_path/libhelper.dylib"
     assert rpaths[interpreter.resolve()] == []
-    assert not any(
-        "-delete_all_rpaths" in command for command in commands
-    )
+    assert not any("-delete_all_rpaths" in command for command in commands)
     assert any(
         "-delete_rpath" in command
         for command in commands
@@ -1528,11 +1525,16 @@ def test_macos_python_closure_rewrites_framework_loads_and_install_name(
         for command in commands
         if command[:2] == ("/usr/bin/codesign", "--verify")
     }
-    assert modified == signed == verified == {
-        interpreter.resolve(),
-        library.resolve(),
-        helper.resolve(),
-    }
+    assert (
+        modified
+        == signed
+        == verified
+        == {
+            interpreter.resolve(),
+            library.resolve(),
+            helper.resolve(),
+        }
+    )
     inspected = {
         (command[2], command[3], Path(command[4]).resolve())
         for command in commands
@@ -1572,6 +1574,354 @@ def test_macos_rpath_dependency_requires_unique_closure_target(
         )
 
 
+def test_macos_absolute_dependency_never_falls_back_to_same_basename(
+    tmp_path: Path,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    closure = tmp_path / "closure"
+    binary = closure / "bin" / "python3"
+    unrelated = closure / "wheel" / "libcrypto.3.dylib"
+    for path in (binary, unrelated):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\xcf\xfa\xed\xfe-macho")
+    source_prefix = tmp_path / "source"
+    source_prefix.mkdir()
+
+    with pytest.raises(
+        stager["StageError"], match="pack_python_macho_dependency_unresolved"
+    ):
+        stager["_macos_relocation_target"](
+            "/outside/base/lib/libcrypto.3.dylib",
+            binary=binary.resolve(),
+            closure=closure.resolve(),
+            source_prefix=source_prefix.resolve(),
+            macho_files=(binary.resolve(), unrelated.resolve()),
+        )
+
+
+def test_macos_base_dependencies_materialize_recursively_to_fixpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    closure = tmp_path / "closure"
+    interpreter = closure / "bin" / "python3"
+    source_prefix = tmp_path / "source"
+    first_source = source_prefix / "lib" / "libssl.3.dylib"
+    second_source = source_prefix / "lib" / "libcrypto.3.dylib"
+    for path in (interpreter, first_source, second_source):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\xcf\xfa\xed\xfe-macho")
+
+    globals_ = stager["_materialize_macos_python_dependencies"].__globals__
+    monkeypatch.setitem(
+        globals_,
+        "_macos_architectures",
+        lambda _path: ("x86_64",),
+    )
+    monkeypatch.setitem(
+        globals_,
+        "_macos_install_name",
+        lambda _path, *, architecture: None,
+    )
+
+    def fake_dependencies(
+        path: Path,
+        *,
+        architecture: str,
+        install_name: str | None,
+    ) -> tuple[str, ...]:
+        del architecture, install_name
+        if path.name == "python3":
+            return ("fixture:first",)
+        if path.name == "libssl.3.dylib":
+            return ("fixture:second",)
+        return ("/usr/lib/libSystem.B.dylib",)
+
+    def fake_source(
+        dependency: str,
+        *,
+        source_prefix: Path,
+    ) -> tuple[Path, PurePosixPath] | None:
+        del source_prefix
+        if dependency == "fixture:first":
+            return first_source.resolve(), PurePosixPath("lib/libssl.3.dylib")
+        if dependency == "fixture:second":
+            return second_source.resolve(), PurePosixPath("lib/libcrypto.3.dylib")
+        return None
+
+    monkeypatch.setitem(globals_, "_macos_dependencies", fake_dependencies)
+    monkeypatch.setitem(globals_, "_macos_base_dependency_source", fake_source)
+    source_hashes = {
+        "libssl.3.dylib": hashlib.sha256(first_source.read_bytes()).hexdigest(),
+        "libcrypto.3.dylib": hashlib.sha256(second_source.read_bytes()).hexdigest(),
+    }
+    monkeypatch.setitem(
+        globals_,
+        "MACOS_NATIVE_COMPONENTS",
+        {
+            name: SimpleNamespace(source_sha256=digest)
+            for name, digest in source_hashes.items()
+        },
+    )
+
+    materialized = stager["_materialize_macos_python_dependencies"](
+        closure,
+        source_prefix=source_prefix,
+    )
+
+    assert materialized == (
+        PurePosixPath("lib/libcrypto.3.dylib"),
+        PurePosixPath("lib/libssl.3.dylib"),
+    )
+    assert (
+        closure / "lib" / "libssl.3.dylib"
+    ).read_bytes() == first_source.read_bytes()
+    assert (
+        closure / "lib" / "libcrypto.3.dylib"
+    ).read_bytes() == second_source.read_bytes()
+
+
+def test_macos_base_dependency_rejects_preexisting_closure_collision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    closure = tmp_path / "closure"
+    interpreter = closure / "bin" / "python3"
+    preexisting = closure / "lib" / "libssl.3.dylib"
+    source_prefix = tmp_path / "source"
+    trusted_source = source_prefix / "lib" / "libssl.3.dylib"
+    for path in (interpreter, preexisting, trusted_source):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\xcf\xfa\xed\xfe-macho")
+
+    globals_ = stager["_materialize_macos_python_dependencies"].__globals__
+    monkeypatch.setitem(globals_, "_macos_architectures", lambda _path: ("arm64",))
+    monkeypatch.setitem(
+        globals_,
+        "_macos_install_name",
+        lambda _path, *, architecture: None,
+    )
+    monkeypatch.setitem(
+        globals_,
+        "_macos_dependencies",
+        lambda path, **_kwargs: (
+            ("fixture:libssl",)
+            if path.name == "python3"
+            else ("/usr/lib/libSystem.B.dylib",)
+        ),
+    )
+    monkeypatch.setitem(
+        globals_,
+        "_macos_base_dependency_source",
+        lambda dependency, **_kwargs: (
+            (trusted_source.resolve(), PurePosixPath("lib/libssl.3.dylib"))
+            if dependency == "fixture:libssl"
+            else None
+        ),
+    )
+    monkeypatch.setitem(
+        globals_,
+        "MACOS_NATIVE_COMPONENTS",
+        {
+            "libssl.3.dylib": SimpleNamespace(
+                source_sha256=hashlib.sha256(trusted_source.read_bytes()).hexdigest()
+            )
+        },
+    )
+
+    with pytest.raises(
+        stager["StageError"], match="pack_python_macho_dependency_collision"
+    ):
+        stager["_materialize_macos_python_dependencies"](
+            closure,
+            source_prefix=source_prefix,
+        )
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin", reason="POSIX absolute dependency fixture"
+)
+def test_macos_base_dependency_source_is_exact_confined_and_regular(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    source_prefix = tmp_path / "source"
+    dependency = source_prefix / "lib" / "libncursesw.5.dylib"
+    dependency.parent.mkdir(parents=True)
+    dependency.write_bytes(b"\xcf\xfa\xed\xfe-macho")
+    globals_ = stager["_macos_base_dependency_source"].__globals__
+    original_contract = globals_["MACOS_NATIVE_COMPONENTS"]
+    contract = original_contract[dependency.name]
+    monkeypatch.setitem(
+        globals_,
+        "MACOS_NATIVE_COMPONENTS",
+        {
+            **original_contract,
+            dependency.name: SimpleNamespace(
+                source_sha256=hashlib.sha256(dependency.read_bytes()).hexdigest(),
+                name=contract.name,
+                version=contract.version,
+                license=contract.license,
+                notice_token=contract.notice_token,
+            ),
+        },
+    )
+
+    resolved = stager["_macos_base_dependency_source"](
+        dependency.as_posix(),
+        source_prefix=source_prefix.resolve(),
+    )
+
+    assert resolved == (
+        dependency.resolve(),
+        PurePosixPath("lib/libncursesw.5.dylib"),
+    )
+    assert (
+        stager["_macos_base_dependency_source"](
+            (tmp_path / "outside.dylib").as_posix(),
+            source_prefix=source_prefix.resolve(),
+        )
+        is None
+    )
+    monkeypatch.setitem(globals_, "MACOS_NATIVE_COMPONENTS", original_contract)
+    with pytest.raises(
+        stager["StageError"],
+        match="pack_python_macho_dependency_source_digest_mismatch",
+    ):
+        stager["_macos_base_dependency_source"](
+            dependency.as_posix(),
+            source_prefix=source_prefix.resolve(),
+        )
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="POSIX symlink fixture")
+def test_macos_base_dependency_source_rejects_symlink(
+    tmp_path: Path,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    source_prefix = tmp_path / "source"
+    target = source_prefix / "lib" / "target.dylib"
+    dependency = source_prefix / "lib" / "libssl.3.dylib"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"\xcf\xfa\xed\xfe-macho")
+    dependency.symlink_to(target)
+
+    with pytest.raises(
+        stager["StageError"],
+        match="pack_python_macho_dependency_source_invalid",
+    ):
+        stager["_macos_base_dependency_source"](
+            dependency.as_posix(),
+            source_prefix=source_prefix.resolve(),
+        )
+
+
+def test_macos_materialized_framework_dylib_requires_matching_installer_notice(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    closure = tmp_path / "closure"
+    closure.mkdir()
+    license_path = tmp_path / "License.rtf"
+    license_path.write_bytes(b"OpenSSL 3.0.13\nNCurses 5.9\n")
+    globals_ = stager["_materialize_macos_python_license"].__globals__
+    monkeypatch.setitem(
+        globals_,
+        "_macos_installer_license_path",
+        lambda _version: license_path,
+    )
+    monkeypatch.setitem(
+        globals_,
+        "PYTHON_MACOS_LICENSE",
+        {
+            "path": "licenses/python-macos-installer-License.rtf",
+            "size_bytes": len(license_path.read_bytes()),
+            "sha256": hashlib.sha256(license_path.read_bytes()).hexdigest(),
+            "tokens": (b"OpenSSL 3.0.13", b"NCurses 5.9"),
+        },
+    )
+
+    stager["_materialize_macos_python_license"](
+        closure,
+        materialized=(
+            PurePosixPath("lib/libssl.3.dylib"),
+            PurePosixPath("lib/libncursesw.5.dylib"),
+        ),
+    )
+
+    copied = closure / "licenses" / "python-macos-installer-License.rtf"
+    assert copied.read_bytes() == license_path.read_bytes()
+    license_path.write_bytes(b"OpenSSL 3.0.13 only\n")
+    with pytest.raises(stager["StageError"], match="pack_python_macho_license_invalid"):
+        stager["_materialize_macos_python_license"](
+            tmp_path / "second-closure",
+            materialized=(PurePosixPath("lib/libncursesw.5.dylib"),),
+        )
+
+
+def test_macos_materialized_native_inventory_is_canonical_and_complete(
+    tmp_path: Path,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    closure = tmp_path / "closure"
+    library = closure / "lib" / "libssl.3.dylib"
+    notice = closure / "licenses" / "python-macos-installer-License.rtf"
+    library.parent.mkdir(parents=True)
+    notice.parent.mkdir(parents=True)
+    library.write_bytes(b"relocated-libssl")
+    notice.write_bytes(b"OpenSSL 3.0.13")
+
+    stager["_write_macos_native_inventory"](
+        closure,
+        materialized=(PurePosixPath("lib/libssl.3.dylib"),),
+        architecture="arm64",
+    )
+
+    raw = (closure / "native-components.json").read_bytes()
+    assert raw.endswith(b"\n")
+    value = json.loads(raw)
+    assert value["architecture"] == "arm64"
+    assert value["license_notice"]["path"] == (
+        "licenses/python-macos-installer-License.rtf"
+    )
+    assert value["distribution"]["sha256"] == (
+        "b6cfdee2571ca56ee895043ca1e7110fb78a878cee3eb0c21accb2de34d24b55"
+    )
+    assert value["components"] == [
+        {
+            "license": "Apache-2.0",
+            "license_text": "licenses/native/openssl-3.0.13-LICENSE.txt",
+            "name": "OpenSSL",
+            "path": "lib/libssl.3.dylib",
+            "sha256": hashlib.sha256(library.read_bytes()).hexdigest(),
+            "source_sha256": (
+                "22f984c4947e9ea11528ad86d219f145ae9cd45983e3850d34d781d1b38ce5d6"
+            ),
+            "version": "3.0.13",
+        }
+    ]
+
+
+def test_macos_any_unclassified_materialized_library_fails_license_gate(
+    tmp_path: Path,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    closure = tmp_path / "closure"
+    closure.mkdir()
+
+    with pytest.raises(
+        stager["StageError"], match="pack_python_macho_component_unclassified"
+    ):
+        stager["_materialize_macos_python_license"](
+            closure,
+            materialized=(PurePosixPath("lib/libfuture.1.dylib"),),
+        )
+
+
 @pytest.mark.parametrize(
     "dependency",
     ("@unknown/libpython.dylib", "/usr/lib/../tmp/libpython.dylib"),
@@ -1608,9 +1958,7 @@ def test_macos_lipo_architecture_contract_supports_thin_and_fat(
         assert command == ("/usr/bin/lipo", "-archs", str(binary))
         return SimpleNamespace(stdout=output)
 
-    monkeypatch.setitem(
-        stager["_macos_architectures"].__globals__, "_run", fake_run
-    )
+    monkeypatch.setitem(stager["_macos_architectures"].__globals__, "_run", fake_run)
 
     assert stager["_macos_architectures"](binary) == expected
 
@@ -1756,9 +2104,7 @@ def test_pack_python_base_member_cannot_escape_closure_authority(
     outside = tmp_path / "outside-python"
     outside.write_bytes(b"untrusted")
 
-    with pytest.raises(
-        stager["StageError"], match="pack_python_base_runtime_invalid"
-    ):
+    with pytest.raises(stager["StageError"], match="pack_python_base_runtime_invalid"):
         stager["_base_runtime_member"](
             outside,
             prefix=prefix.resolve(),
@@ -1785,9 +2131,7 @@ def test_pack_python_base_member_rejects_original_symlink(
     except (NotImplementedError, OSError) as error:
         pytest.skip(f"symlink creation is unavailable: {error}")
 
-    with pytest.raises(
-        stager["StageError"], match="pack_python_base_runtime_invalid"
-    ):
+    with pytest.raises(stager["StageError"], match="pack_python_base_runtime_invalid"):
         stager["_base_runtime_member"](
             candidate,
             prefix=prefix.resolve(),
@@ -1834,9 +2178,7 @@ def test_pack_python_base_member_rejects_original_link_marker_before_resolve(
             return simulated_link
         return original_lstat(path)
 
-    def reject_candidate_resolve(
-        path: Path, strict: bool = False
-    ) -> Path:
+    def reject_candidate_resolve(path: Path, strict: bool = False) -> Path:
         if path == candidate:
             raise AssertionError("link candidate must be rejected before resolve")
         return original_resolve(path, strict=strict)
@@ -1844,9 +2186,7 @@ def test_pack_python_base_member_rejects_original_link_marker_before_resolve(
     monkeypatch.setattr(Path, "lstat", fake_lstat)
     monkeypatch.setattr(Path, "resolve", reject_candidate_resolve)
 
-    with pytest.raises(
-        stager["StageError"], match="pack_python_base_runtime_invalid"
-    ):
+    with pytest.raises(stager["StageError"], match="pack_python_base_runtime_invalid"):
         stager["_base_runtime_member"](
             candidate,
             prefix=resolved_prefix,
@@ -1900,7 +2240,9 @@ def test_platform_stager_compacts_only_zip_safe_runtime_imports(
         platform="windows",
     )
 
-    archive_path = runtime / f"python{sys.version_info.major}{sys.version_info.minor}.zip"
+    archive_path = (
+        runtime / f"python{sys.version_info.major}{sys.version_info.minor}.zip"
+    )
     assert evidence["relative_path"] == archive_path.name
     assert evidence["member_count"] == 5
     with zipfile.ZipFile(archive_path) as archive:
@@ -1942,7 +2284,9 @@ def test_platform_supply_chain_scans_compacted_import_archive(
     with zipfile.ZipFile(unsafe_root / "python311.zip", "w") as output:
         output.writestr("Package/module.py", b"first = True\n")
         output.writestr("package/module.py", b"second = True\n")
-    with pytest.raises(stager["StageError"], match="stage_supply_chain_archive_invalid"):
+    with pytest.raises(
+        stager["StageError"], match="stage_supply_chain_archive_invalid"
+    ):
         stager["_supply_chain"](
             unsafe_root,
             (),
@@ -1954,7 +2298,9 @@ def test_platform_supply_chain_scans_compacted_import_archive(
     noncanonical_root.mkdir()
     with zipfile.ZipFile(noncanonical_root / "python311.zip", "w") as output:
         output.writestr("package//module.py", b"value = True\n")
-    with pytest.raises(stager["StageError"], match="stage_supply_chain_archive_invalid"):
+    with pytest.raises(
+        stager["StageError"], match="stage_supply_chain_archive_invalid"
+    ):
         stager["_supply_chain"](
             noncanonical_root,
             (),
@@ -1997,10 +2343,13 @@ def test_platform_stager_emits_runtime_canonical_process_pack_descriptor(
     assert observed == expected
     assert (pack / "ecorex-pack.json").read_bytes() == canonical
     assert not canonical.endswith(b"\n")
-    assert stager["_read_canonical_process_pack_descriptor"](
-        pack,
-        pack_id=pack_id,
-    ) == expected
+    assert (
+        stager["_read_canonical_process_pack_descriptor"](
+            pack,
+            pack_id=pack_id,
+        )
+        == expected
+    )
 
     (pack / "__main__.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
     artifact = tmp_path / f"{pack_id}.zip"
@@ -2014,8 +2363,7 @@ def test_platform_stager_emits_runtime_canonical_process_pack_descriptor(
                 pack_id=pack_id,
                 runtime_api_version="1.0.0",
                 tools=tuple(
-                    SimpleNamespace(tool_id=tool_id)
-                    for tool_id in expected["tools"]
+                    SimpleNamespace(tool_id=tool_id) for tool_id in expected["tools"]
                 ),
             ),
         )
@@ -2051,10 +2399,7 @@ def test_windows_gui_launcher_and_embedded_cli_are_probed_separately() -> None:
     source = (ROOT / "platform-staging" / "stager.py").read_text(encoding="utf-8")
 
     assert '(str(launcher), "--help")' in source
-    assert (
-        '(str(interpreter), "-I", "-B", "-m", "ecorex.server", "--help")'
-        in source
-    )
+    assert '(str(interpreter), "-I", "-B", "-m", "ecorex.server", "--help")' in source
     assert 'if b"serve" not in cli_help.stdout:' in source
     assert 'if b"serve" not in launch.stdout:' not in source
 
@@ -2170,9 +2515,7 @@ def test_dependency_inventory_is_deterministic_and_binds_pack_payload(
         staged[1] / "runtime-inventory.json"
     ).read_bytes()
     (staged[0] / "connector-contracts.json").write_bytes(b"{}")
-    with pytest.raises(
-        stager["StageError"], match="dependency_pack_payload_mismatch"
-    ):
+    with pytest.raises(stager["StageError"], match="dependency_pack_payload_mismatch"):
         stager["_validate_dependency_pack"](
             staged[0],
             pack_id="channels",
@@ -2254,9 +2597,7 @@ def test_dependency_probe_evidence_rejects_zero_result_ocr() -> None:
 
 def test_office_pack_declares_formats_not_rendering() -> None:
     descriptor = json.loads(
-        (PACKS / "office" / "ecorex-dependency-pack.json").read_text(
-            encoding="utf-8"
-        )
+        (PACKS / "office" / "ecorex-dependency-pack.json").read_text(encoding="utf-8")
     )
     stager_source = (ROOT / "platform-staging" / "stager.py").read_text(
         encoding="utf-8"
@@ -2274,8 +2615,7 @@ def test_bootstrap_requires_the_complete_six_pack_set() -> None:
     )
 
     assert (
-        '[]string{"browser", "channels", "image", "ocr", "office", "sandbox"}'
-        in source
+        '[]string{"browser", "channels", "image", "ocr", "office", "sandbox"}' in source
     )
     assert 'strings.HasPrefix(item.ArtifactID, "capability-pack-")' in source
     assert "unexpected host Capability Pack" in source

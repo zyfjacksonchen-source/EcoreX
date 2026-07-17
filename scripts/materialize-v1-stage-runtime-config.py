@@ -4,22 +4,45 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 from pathlib import Path
+import stat
 import sys
 import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+_MODULE_PATH = ROOT / "ecorex" / "release" / "stage_runtime_config.py"
 
-from ecorex.release.stage_runtime_config import (  # noqa: E402
-    StageRuntimeConfigError,
-    materialize_stage_runtime_config,
-    remove_stage_runtime_config,
-)
+
+def _load_runtime_config_module() -> object:
+    """Load the stdlib-only leaf without importing the release package graph.
+
+    The workflow's cleanup step is ``always()`` and can run before dependency
+    installation. Importing ``ecorex.release`` would eagerly require Pydantic
+    and make cleanup fail precisely on an early Stage failure.
+    """
+
+    metadata = _MODULE_PATH.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or _MODULE_PATH.is_symlink():
+        raise RuntimeError("stage_runtime_config_module_invalid")
+    specification = importlib.util.spec_from_file_location(
+        "_ecorex_stage_runtime_config_leaf",
+        _MODULE_PATH,
+    )
+    if specification is None or specification.loader is None:
+        raise RuntimeError("stage_runtime_config_module_invalid")
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module
+
+
+_runtime_config = _load_runtime_config_module()
+StageRuntimeConfigError = _runtime_config.StageRuntimeConfigError
+materialize_stage_runtime_config = _runtime_config.materialize_stage_runtime_config
+remove_stage_runtime_config = _runtime_config.remove_stage_runtime_config
 
 
 def _parser() -> argparse.ArgumentParser:
