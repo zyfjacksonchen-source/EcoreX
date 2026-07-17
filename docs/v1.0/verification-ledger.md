@@ -2075,3 +2075,26 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Web boundary | 0 | Exact Node 22.23.1: 180/180 passed. |
 | Independent review | 0 | No remaining P0/P1/P2; seed-to-retire TOCTOU, trust-role overlap, double-writer and rollback paths reviewed. |
 | Production promotion | pending | Commit, protected five-job PR, protected-main merge, same-run three-platform Stage, signing and cloud/public activation remain outstanding. |
+
+## Exact-main Stage runtime-source correction - 2026-07-17
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Protected PR matrix | 0 | PR #13 run `29531945083`, attempt 3, passed quality/deterministic build, Windows x64, macOS arm64/x64 and cross-runner byte stability. Squash merge produced exact main `c042e4a3997e8289bd24b33ae600a2ba5b249a4c`. |
+| Production drift preflight | 0 read-only | Old Web/Admin/services/Nginx and the 47-user legacy database remain healthy and unchanged; v1 pointer, keyrings, current slot and units are not active. |
+| Exact-main Stage `29541415646` | 1 expected | Windows emitted typed `pack_python_probe_failed` after a venv launcher reported `No pyvenv.cfg file`; both macOS jobs failed three GA assertions because the test client observed empty CSP/Cookie headers. No successful Stage artifact was accepted or reused. |
+| Windows Python closure | 0 | Interpreter, stdlib and DLLs are selected from one resolved `sys.base_prefix`; venv launchers, prefix escape, symlink/reparse and unstable identity fail closed. Platform-staging suite: 52 passed / 1 explicit skip. |
+| macOS GA header projection | 0 | Response callback snapshots Node 22 `headersDistinct` with a raw-wire fallback; repeated Set-Cookie values remain distinct and accessors cannot mutate the snapshot. |
+| Exact Web boundary | 0 | Node 22.23.1: 181/181 passed, including the new teardown-stable header test and the three assertions that failed on both macOS runners. |
+| Static correction gates | 0 | Ruff, Python compilation and tracked whitespace checks pass locally. |
+| Publication | pending | Fix commit, protected PR matrix, exact-main merge and a fresh same-run Windows/macOS Stage remain mandatory before signing or activation. |
+
+## Platform Stage cross-shell fail-fast correction - 2026-07-17
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Windows Stage forensics | 1 expected | The Windows log contained the same three GA Web-test failures as macOS, but multi-line PowerShell continued to a successful Web build and hid the native test exit code; the later Python closure probe became the reported terminal failure. No failed result is treated as passed. |
+| Command boundary | 0 | Dependency/Chromium install and final Web build use one fixed, repository-owned Python command-group runner. The first launch or child failure is the step result on Windows and macOS; commands after it are never invoked. |
+| Regression contract | 0 | A real child exits 23 before a marker-writing success child; the runner returns 23 and the marker remains absent. Static workflow coverage forbids restoring the vulnerable inline command blocks or `continue-on-error`. |
+| Dependency-lock closure | 0 | The gate requires both exact workflow runner bindings once, forbids adjacent inline dependency/build commands, AST-compares the seven-command literal catalog and pins the complete runner AST. Missing, duplicate, changed-argument and bypass mutations are rejected. |
+| Promotion | pending | A new protected matrix and wholly new same-run three-platform Stage remain mandatory before signing or production activation. |

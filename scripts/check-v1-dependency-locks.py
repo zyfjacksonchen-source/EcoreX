@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 from pathlib import Path
@@ -54,6 +55,46 @@ _ACTION_ENTRY_KEYS = {
     "verification",
 }
 _MINIMUM_NODE24_RUNNER_VERSION = "2.327.1"
+_PLATFORM_STAGE_RUNNER_RELATIVE = Path("scripts/run-v1-platform-stage-step.py")
+_PLATFORM_STAGE_RUNNER_AST_SHA256 = (
+    "7de4c282c15992075c263c914662808d460e2f419434f3d9164fde0d2f309419"
+)
+_PLATFORM_STAGE_WORKFLOW_BINDINGS = (
+    "run: python scripts/run-v1-platform-stage-step.py install-dependencies",
+    "run: python scripts/run-v1-platform-stage-step.py build-web",
+)
+_PLATFORM_STAGE_COMMAND_CATALOG = {
+    "install-dependencies": (
+        (
+            "install locked platform-stage Python profile",
+            "python",
+            (
+                "scripts/install-v1-python-profile.py",
+                "--profile",
+                "platform-stage",
+            ),
+            ".",
+        ),
+        (
+            "validate Python dependency locks",
+            "python",
+            ("scripts/check-v1-dependency-locks.py",),
+            ".",
+        ),
+        (
+            "install managed Chromium",
+            "python",
+            ("-m", "playwright", "install", "chromium"),
+            ".",
+        ),
+    ),
+    "build-web": (
+        ("install locked Web dependencies", "npm", ("ci",), "desktop"),
+        ("typecheck Web", "npm", ("run", "typecheck"), "desktop"),
+        ("test Web", "npm", ("run", "test:v1"), "desktop"),
+        ("build Web", "npm", ("run", "build"), "desktop"),
+    ),
+}
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -297,6 +338,64 @@ def _load_action_lock(repo: Path) -> tuple[dict[str, tuple[str, str]], dict[str,
     return approved, value
 
 
+def _validate_platform_stage_runner(repo: Path) -> None:
+    path = repo / _PLATFORM_STAGE_RUNNER_RELATIVE
+    try:
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(path))
+    except (OSError, UnicodeError, SyntaxError):
+        raise ValueError("platform_stage_runner_invalid") from None
+    catalog_assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        and any(
+            isinstance(target, ast.Name) and target.id == "COMMAND_CATALOG"
+            for target in (
+                node.targets if isinstance(node, ast.Assign) else (node.target,)
+            )
+        )
+    ]
+    if len(catalog_assignments) != 1:
+        raise ValueError("platform_stage_runner_catalog_invalid")
+    assignment = catalog_assignments[0]
+    try:
+        catalog = ast.literal_eval(assignment.value)
+    except (ValueError, TypeError):
+        raise ValueError("platform_stage_runner_catalog_invalid") from None
+    if catalog != _PLATFORM_STAGE_COMMAND_CATALOG:
+        raise ValueError("platform_stage_runner_catalog_drift")
+    canonical_ast = ast.dump(
+        tree,
+        annotate_fields=True,
+        include_attributes=False,
+    ).encode("utf-8")
+    if hashlib.sha256(canonical_ast).hexdigest() != _PLATFORM_STAGE_RUNNER_AST_SHA256:
+        raise ValueError("platform_stage_runner_implementation_drift")
+
+
+def _validate_platform_stage_workflow_binding(text: str) -> None:
+    lines = tuple(line.strip() for line in text.splitlines())
+    runner_marker = str(_PLATFORM_STAGE_RUNNER_RELATIVE).replace("\\", "/")
+    runner_lines = tuple(line for line in lines if runner_marker in line)
+    if runner_lines != _PLATFORM_STAGE_WORKFLOW_BINDINGS:
+        raise ValueError("workflow_stage_runner_binding_invalid")
+    for binding in _PLATFORM_STAGE_WORKFLOW_BINDINGS:
+        if lines.count(binding) != 1:
+            raise ValueError("workflow_stage_runner_binding_invalid")
+    forbidden_inline_commands = (
+        "scripts/install-v1-python-profile.py",
+        "scripts/check-v1-dependency-locks.py",
+        "playwright install chromium",
+        "npm ci",
+        "npm run typecheck",
+        "npm run test:v1",
+        "npm run build",
+    )
+    if any(command in text for command in forbidden_inline_commands):
+        raise ValueError("workflow_stage_runner_bypass_invalid")
+
+
 def _validate_workflows(repo: Path) -> dict[str, object]:
     approved_actions, action_lock = _load_action_lock(repo)
     workflow_profiles = {
@@ -306,8 +405,11 @@ def _validate_workflows(repo: Path) -> dict[str, object]:
             "node": True,
         },
         "ecorex-v1-platform-stage.yml": {
-            "profiles": {"platform-stage": 1},
-            "npm_ci": 1,
+            # Dependency commands are deliberately indirect here. The exact
+            # workflow bindings and the complete runner AST/catalog are
+            # validated below instead of weakening the old inline contract.
+            "profiles": {},
+            "npm_ci": 0,
             "node": True,
         },
         # Source quality plus the isolated shared-storage and protected soak
@@ -354,6 +456,10 @@ def _validate_workflows(repo: Path) -> dict[str, object]:
         path.name: path.read_text(encoding="utf-8")
         for path in workflow_paths
     }
+    _validate_platform_stage_workflow_binding(
+        workflows["ecorex-v1-platform-stage.yml"]
+    )
+    _validate_platform_stage_runner(repo)
     for name, contract in workflow_profiles.items():
         text = workflows.get(name)
         if text is None or "python -m pip install" in text or re.search(r"\bnpm install\b", text):

@@ -1190,6 +1190,169 @@ def test_platform_stager_binds_installed_runtime_inventory_to_hash_lock() -> Non
         )
 
 
+def test_windows_pack_python_uses_base_interpreter_not_venv_launcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    base = tmp_path / "cpython-base"
+    base.mkdir()
+    (base / "Lib").mkdir()
+    base_interpreter = base / "python.exe"
+    base_interpreter.write_bytes(b"real-cpython-interpreter")
+    venv = tmp_path / "build-venv"
+    (venv / "Scripts").mkdir(parents=True)
+    venv_interpreter = venv / "Scripts" / "python.exe"
+    venv_interpreter.write_bytes(b"venv-launcher-needs-pyvenv-cfg")
+    (venv / "pyvenv.cfg").write_text(
+        f"home = {base}\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(sys, "base_prefix", str(base))
+    monkeypatch.setattr(sys, "executable", str(venv_interpreter))
+
+    prefix, executable, stdlib = stager["_base_python_runtime_source"](
+        "windows"
+    )
+
+    assert prefix == base.resolve()
+    assert executable == base_interpreter.resolve()
+    assert executable.read_bytes() == b"real-cpython-interpreter"
+    assert executable != venv_interpreter.resolve()
+    assert stdlib == (base / "Lib").resolve()
+
+
+def test_macos_pack_python_remains_anchored_to_versioned_base_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    base = tmp_path / "cpython-base"
+    interpreter = base / "bin" / f"python{version}"
+    stdlib = base / "lib" / f"python{version}"
+    interpreter.parent.mkdir(parents=True)
+    stdlib.mkdir(parents=True)
+    interpreter.write_bytes(b"macos-base-cpython")
+    venv = tmp_path / "venv" / "bin" / "python"
+    venv.parent.mkdir(parents=True)
+    venv.write_bytes(b"venv-python")
+    monkeypatch.setattr(sys, "base_prefix", str(base))
+    monkeypatch.setattr(sys, "executable", str(venv))
+
+    prefix, selected, selected_stdlib = stager["_base_python_runtime_source"](
+        "macos"
+    )
+
+    assert prefix == base.resolve()
+    assert selected == interpreter.resolve()
+    assert selected_stdlib == stdlib.resolve()
+
+
+def test_pack_python_base_member_cannot_escape_closure_authority(
+    tmp_path: Path,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    prefix = tmp_path / "base"
+    prefix.mkdir()
+    outside = tmp_path / "outside-python"
+    outside.write_bytes(b"untrusted")
+
+    with pytest.raises(
+        stager["StageError"], match="pack_python_base_runtime_invalid"
+    ):
+        stager["_base_runtime_member"](
+            outside,
+            prefix=prefix.resolve(),
+            directory=False,
+        )
+
+
+@pytest.mark.parametrize("directory", [False, True], ids=["file", "directory"])
+def test_pack_python_base_member_rejects_original_symlink(
+    tmp_path: Path,
+    directory: bool,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    prefix = tmp_path / "base"
+    prefix.mkdir()
+    target = prefix / ("real-directory" if directory else "real-file")
+    if directory:
+        target.mkdir()
+    else:
+        target.write_bytes(b"real-runtime-member")
+    candidate = prefix / ("directory-link" if directory else "file-link")
+    try:
+        candidate.symlink_to(target, target_is_directory=directory)
+    except (NotImplementedError, OSError) as error:
+        pytest.skip(f"symlink creation is unavailable: {error}")
+
+    with pytest.raises(
+        stager["StageError"], match="pack_python_base_runtime_invalid"
+    ):
+        stager["_base_runtime_member"](
+            candidate,
+            prefix=prefix.resolve(),
+            directory=directory,
+        )
+
+
+@pytest.mark.parametrize("directory", [False, True], ids=["file", "directory"])
+@pytest.mark.parametrize("marker", ["symlink", "reparse"])
+def test_pack_python_base_member_rejects_original_link_marker_before_resolve(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    directory: bool,
+    marker: str,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    prefix = tmp_path / "base"
+    prefix.mkdir()
+    candidate = prefix / ("reparse-directory" if directory else "reparse-file")
+    if directory:
+        candidate.mkdir()
+    else:
+        candidate.write_bytes(b"runtime-member")
+    resolved_prefix = prefix.resolve()
+    original_lstat = Path.lstat
+    original_resolve = Path.resolve
+    candidate_metadata = original_lstat(candidate)
+    simulated_link = SimpleNamespace(
+        st_mode=(
+            stat.S_IFLNK | stat.S_IMODE(candidate_metadata.st_mode)
+            if marker == "symlink"
+            else candidate_metadata.st_mode
+        ),
+        st_file_attributes=(
+            getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+            if marker == "reparse"
+            else 0
+        ),
+        st_reparse_tag=0,
+    )
+
+    def fake_lstat(path: Path) -> object:
+        if path == candidate:
+            return simulated_link
+        return original_lstat(path)
+
+    def reject_candidate_resolve(
+        path: Path, strict: bool = False
+    ) -> Path:
+        if path == candidate:
+            raise AssertionError("link candidate must be rejected before resolve")
+        return original_resolve(path, strict=strict)
+
+    monkeypatch.setattr(Path, "lstat", fake_lstat)
+    monkeypatch.setattr(Path, "resolve", reject_candidate_resolve)
+
+    with pytest.raises(
+        stager["StageError"], match="pack_python_base_runtime_invalid"
+    ):
+        stager["_base_runtime_member"](
+            candidate,
+            prefix=resolved_prefix,
+            directory=directory,
+        )
+
+
 def test_platform_stager_bundles_and_forces_signed_iana_timezone_data() -> None:
     stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
 

@@ -629,10 +629,8 @@ def _build_python_closure(
 ]:
     destination = core / "bin" / "pack-python"
     destination.mkdir(parents=True)
-    source_prefix = Path(sys.base_prefix).resolve(strict=True)
-    stdlib = Path(sysconfig.get_path("stdlib")).resolve(strict=True)
+    source_prefix, executable, stdlib = _base_python_runtime_source(platform)
     if platform == "windows":
-        executable = Path(sys.executable).resolve(strict=True)
         _copy_regular(executable, destination / "python.exe", executable=True)
         for pattern in ("python*.dll", "vcruntime*.dll", "LICENSE*.txt"):
             for source in sorted(source_prefix.glob(pattern)):
@@ -643,7 +641,6 @@ def _build_python_closure(
             _copy_tree(dlls, destination / "DLLs")
         target_stdlib = destination / "Lib"
     else:
-        executable = Path(sys.executable).resolve(strict=True)
         _copy_regular(executable, destination / "bin" / "python3", executable=True)
         target_stdlib = destination / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}"
         lib_dir = source_prefix / "lib"
@@ -688,6 +685,84 @@ def _build_python_closure(
     # Reuse that immutable identity for the remaining synchronous stage instead
     # of scanning the exact same closure a third time before Pack staging.
     return inventory, interpreter, identity
+
+
+def _base_python_runtime_source(platform: str) -> tuple[Path, Path, Path]:
+    """Resolve the redistributable CPython root, never a venv launcher.
+
+    On Windows a venv's ``Scripts/python.exe`` is a launcher whose home is
+    supplied by the external ``pyvenv.cfg``. Copying it creates a package that
+    only works while the build venv still exists. The base installation owns
+    the real interpreter, DLLs and standard library copied into the closure.
+    macOS keeps the existing resolved-interpreter behavior, but anchors the
+    candidate explicitly below the same base prefix for closure identity.
+    """
+
+    try:
+        prefix = Path(sys.base_prefix).resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise StageError("pack_python_base_runtime_invalid") from None
+    version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    if platform == "windows":
+        executable_candidate = prefix / "python.exe"
+        stdlib_candidate = prefix / "Lib"
+    elif platform == "macos":
+        executable_candidate = prefix / "bin" / f"python{version}"
+        stdlib_candidate = prefix / "lib" / f"python{version}"
+    else:
+        raise StageError("pack_python_base_runtime_invalid")
+    executable = _base_runtime_member(
+        executable_candidate,
+        prefix=prefix,
+        directory=False,
+    )
+    stdlib = _base_runtime_member(
+        stdlib_candidate,
+        prefix=prefix,
+        directory=True,
+    )
+    # Stable-read the actual interpreter before any closure bytes are copied.
+    # _copy_regular repeats this identity check at the copy boundary.
+    _stable_bytes(
+        executable,
+        _MAX_FILE_BYTES,
+        "pack_python_base_runtime_invalid",
+    )
+    return prefix, executable, stdlib
+
+
+def _base_runtime_member(
+    candidate: Path,
+    *,
+    prefix: Path,
+    directory: bool,
+) -> Path:
+    try:
+        candidate_metadata = candidate.lstat()
+    except (OSError, RuntimeError, ValueError):
+        raise StageError("pack_python_base_runtime_invalid") from None
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    if stat.S_ISLNK(candidate_metadata.st_mode) or bool(
+        getattr(candidate_metadata, "st_file_attributes", 0) & reparse
+    ) or bool(getattr(candidate_metadata, "st_reparse_tag", 0)):
+        raise StageError("pack_python_base_runtime_invalid")
+
+    try:
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(prefix)
+        target_metadata = resolved.lstat()
+    except (OSError, RuntimeError, ValueError):
+        raise StageError("pack_python_base_runtime_invalid") from None
+    attributes = getattr(target_metadata, "st_file_attributes", 0)
+    if (
+        stat.S_ISLNK(target_metadata.st_mode)
+        or bool(attributes & reparse)
+        or bool(getattr(target_metadata, "st_reparse_tag", 0))
+        or (directory and not stat.S_ISDIR(target_metadata.st_mode))
+        or (not directory and not stat.S_ISREG(target_metadata.st_mode))
+    ):
+        raise StageError("pack_python_base_runtime_invalid")
+    return resolved
 
 
 def _compact_python_import_closure(

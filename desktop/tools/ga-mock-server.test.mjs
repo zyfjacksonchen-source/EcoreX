@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { get as httpGet } from "node:http";
+import { createServer as createHttpServer, get as httpGet } from "node:http";
 import test from "node:test";
 
 import { createGaMockServer } from "./ga-mock-server.mjs";
@@ -9,32 +9,66 @@ const MUTATION_HEADERS = {
   "X-EcoreX-CSRF": "ga-csrf-token-0123456789abcdef0123456789abcdef",
 };
 
+function snapshotResponseHeaders(response) {
+  const copied = new Map();
+  const distinct = response.headersDistinct;
+  if (distinct && typeof distinct === "object") {
+    for (const [name, rawValues] of Object.entries(distinct)) {
+      const values = Array.isArray(rawValues) ? rawValues : [rawValues];
+      copied.set(
+        name.toLowerCase(),
+        Object.freeze(values.map((value) => String(value))),
+      );
+    }
+  }
+
+  // headersDistinct is available on supported Node 22, but retain an exact
+  // wire-level fallback so this test helper remains diagnostic on older Node.
+  if (copied.size === 0) {
+    const rawHeaders = [...response.rawHeaders];
+    for (let index = 0; index < rawHeaders.length; index += 2) {
+      const name = String(rawHeaders[index]).toLowerCase();
+      const values = copied.get(name) || [];
+      copied.set(name, [...values, String(rawHeaders[index + 1])]);
+    }
+  }
+  if (copied.size === 0) {
+    for (const [name, rawValue] of Object.entries(response.headers)) {
+      const values = Array.isArray(rawValue) ? rawValue : [rawValue];
+      copied.set(name.toLowerCase(), values.map((value) => String(value)));
+    }
+  }
+  for (const [name, values] of copied) {
+    copied.set(name, Object.freeze([...values]));
+  }
+
+  return Object.freeze({
+    get(name) {
+      const values = copied.get(String(name).toLowerCase());
+      return values ? values.join(", ") : null;
+    },
+    getSetCookie() {
+      return [...(copied.get("set-cookie") || [])];
+    },
+  });
+}
+
 async function directGet(url, { headers = {} } = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
     const request = httpGet(url, { headers }, (response) => {
-      // Snapshot the exact on-wire header block while IncomingMessage owns it.
-      // Keeping a delayed closure over response.headers made the GA assertion
-      // depend on platform-specific response teardown timing on macOS arm64.
-      const responseHeaders = new Map();
-      for (let index = 0; index < response.rawHeaders.length; index += 2) {
-        const name = String(response.rawHeaders[index]).toLowerCase();
-        const values = responseHeaders.get(name) || [];
-        values.push(String(response.rawHeaders[index + 1]));
-        responseHeaders.set(name, values);
-      }
+      // IncomingMessage and its socket are lifecycle-owned by Node. Copy every
+      // value before attaching body listeners so macOS teardown/reuse cannot
+      // alter the assertions that run after end.
+      const status = response.statusCode ?? 0;
+      const responseHeaders = snapshotResponseHeaders(response);
       const chunks = [];
       response.on("data", (chunk) => chunks.push(chunk));
       response.once("error", rejectPromise);
       response.once("end", () => {
         const payload = Buffer.concat(chunks);
         resolvePromise({
-          status: response.statusCode ?? 0,
-          headers: {
-            get(name) {
-              const values = responseHeaders.get(String(name).toLowerCase());
-              return values ? values.join(", ") : null;
-            },
-          },
+          status,
+          headers: responseHeaders,
           async json() { return JSON.parse(payload.toString("utf8")); },
           async text() { return payload.toString("utf8"); },
         });
@@ -43,6 +77,40 @@ async function directGet(url, { headers = {} } = {}) {
     request.once("error", rejectPromise);
   });
 }
+
+test("direct GA client keeps a normalized header snapshot after response teardown", async (context) => {
+  const cookies = [
+    "ecorex_ga_session=1; Path=/; SameSite=Strict",
+    "ecorex_ga_expiry=1; Expires=Wed, 21 Oct 2026 07:28:00 GMT; Path=/; HttpOnly",
+  ];
+  const server = createHttpServer((_request, response) => {
+    response.writeHead(200, {
+      "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+      "Set-Cookie": cookies,
+    });
+    response.end("headers-ok");
+  });
+  await new Promise((resolvePromise, rejectPromise) => {
+    server.once("error", rejectPromise);
+    server.listen(0, "127.0.0.1", resolvePromise);
+  });
+  context.after(() => new Promise((resolvePromise, rejectPromise) => {
+    server.close((error) => error ? rejectPromise(error) : resolvePromise());
+  }));
+
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const response = await directGet(`http://127.0.0.1:${address.port}/`);
+  assert.equal(await response.text(), "headers-ok");
+  assert.equal(
+    response.headers.get("CONTENT-SECURITY-POLICY"),
+    "default-src 'none'; frame-ancestors 'none'",
+  );
+  assert.deepEqual(response.headers.getSetCookie(), cookies);
+  const mutableCopy = response.headers.getSetCookie();
+  mutableCopy.pop();
+  assert.deepEqual(response.headers.getSetCookie(), cookies);
+});
 
 async function readUntil(response, marker) {
   assert.ok(response.body);
@@ -220,7 +288,9 @@ test("GA frame reload preserves one browser session while a fresh session resets
   context.after(() => harness.close());
   const frameUrl = `${harness.url}/__ga/frame-app?scenario=artifact&theme=light`;
   const firstFrame = await directGet(frameUrl);
-  const sessionCookie = firstFrame.headers.get("set-cookie")?.split(";", 1)[0] || "";
+  const responseCookies = firstFrame.headers.getSetCookie();
+  assert.equal(responseCookies.length, 1);
+  const sessionCookie = responseCookies[0]?.split(";", 1)[0] || "";
   assert.equal(sessionCookie, "ecorex_ga_session=1");
 
   const pinned = await fetch(`${harness.url}/api/v1/threads/thread-ga/pin`, {

@@ -107,6 +107,9 @@ def test_workflow_actions_are_exact_reviewed_node24_revisions() -> None:
 def _workflow_fixture(tmp_path: Path) -> Path:
     copied = tmp_path / "repo"
     shutil.copytree(ROOT / ".github", copied / ".github")
+    scripts = copied / "scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy2(ROOT / "scripts" / "run-v1-platform-stage-step.py", scripts)
     bootstrap = copied / "platform-staging" / "bootstrap"
     bootstrap.mkdir(parents=True)
     shutil.copy2(ROOT / "platform-staging" / "bootstrap" / "go.mod", bootstrap)
@@ -114,6 +117,110 @@ def _workflow_fixture(tmp_path: Path) -> Path:
     locks.mkdir(parents=True)
     shutil.copy2(LOCK_ROOT / "github-actions.json", locks)
     return copied
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    (
+        pytest.param("", id="missing"),
+        pytest.param(
+            "        run: python scripts/run-v1-platform-stage-step.py "
+            "install-dependencies\n"
+            "        run: python scripts/run-v1-platform-stage-step.py "
+            "install-dependencies",
+            id="duplicate",
+        ),
+        pytest.param(
+            "        run: python scripts/run-v1-platform-stage-step.py "
+            "install-dependencies-extra",
+            id="changed-argument",
+        ),
+        pytest.param(
+            "        run: python scripts/run-v1-platform-stage-step.py "
+            "install-dependencies && exit 0",
+            id="shell-bypass",
+        ),
+    ),
+)
+def test_workflow_gate_rejects_stage_runner_binding_drift(
+    tmp_path: Path,
+    replacement: str,
+) -> None:
+    gate = _dependency_gate_module()
+    copied = _workflow_fixture(tmp_path)
+    workflow = copied / ".github" / "workflows" / "ecorex-v1-platform-stage.yml"
+    source = workflow.read_text(encoding="utf-8")
+    binding = (
+        "        run: python scripts/run-v1-platform-stage-step.py "
+        "install-dependencies"
+    )
+    assert source.count(binding) == 1
+    workflow.write_text(
+        source.replace(binding, replacement, 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="workflow_stage_runner_binding_invalid"):
+        gate._validate_workflows(copied)
+
+
+def test_workflow_gate_rejects_inline_command_beside_stage_runner(
+    tmp_path: Path,
+) -> None:
+    gate = _dependency_gate_module()
+    copied = _workflow_fixture(tmp_path)
+    workflow = copied / ".github" / "workflows" / "ecorex-v1-platform-stage.yml"
+    source = workflow.read_text(encoding="utf-8")
+    workflow.write_text(
+        source + "\n# bypass\n# npm run build\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="workflow_stage_runner_bypass_invalid"):
+        gate._validate_workflows(copied)
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "error"),
+    (
+        (
+            '        ("test Web", "npm", ("run", "test:v1"), "desktop"),\n',
+            "",
+            "platform_stage_runner_catalog_drift",
+        ),
+        (
+            '        ("test Web", "npm", ("run", "test:v1"), "desktop"),\n',
+            '        ("test Web", "npm", ("run", "test:v1"), "desktop"),\n'
+            '        ("test Web", "npm", ("run", "test:v1"), "desktop"),\n',
+            "platform_stage_runner_catalog_drift",
+        ),
+        (
+            '("run", "test:v1")',
+            '("run", "test:v2")',
+            "platform_stage_runner_catalog_drift",
+        ),
+        (
+            "    return run_commands(commands)\n",
+            "    return 0\n",
+            "platform_stage_runner_implementation_drift",
+        ),
+    ),
+)
+def test_workflow_gate_rejects_stage_runner_catalog_or_execution_bypass(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    error: str,
+) -> None:
+    gate = _dependency_gate_module()
+    copied = _workflow_fixture(tmp_path)
+    runner = copied / gate._PLATFORM_STAGE_RUNNER_RELATIVE
+    source = runner.read_text(encoding="utf-8")
+    assert source.count(old) == 1
+    runner.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=error):
+        gate._validate_workflows(copied)
 
 
 def test_action_lock_rejects_unverified_or_noncanonical_revision(tmp_path: Path) -> None:

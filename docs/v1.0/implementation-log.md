@@ -6115,3 +6115,63 @@ skips; the complete Candidate/CDN/public set passes 40 tests; exact Node
 P0/P1/P2.  Live/CDP/model/image acceptance remains explicitly `WAIVED`, not
 passed.  A new protected PR matrix and wholly new exact-main Stage are still
 required before signing or production mutation.
+
+## 2026-07-17 - Exact-main Stage runtime-source and header-snapshot correction
+
+GitHub Actions billing was restored and PR #13 run `29531945083`, attempt 3,
+passed the complete five-job matrix.  PR #13 was squash-merged as exact main
+`c042e4a3997e8289bd24b33ae600a2ba5b249a4c`.  Read-only production drift
+verification still found the v0.2.9.2 site and services authoritative, the
+legacy SQLite database healthy and unchanged, and no premature v1 slot,
+pointer, keyring or systemd activation.
+
+Protected exact-main Stage run `29541415646` then failed closed and produced no
+reusable success artifact.  On Windows the new isolated Stage venv exposed a
+second-order packaging defect: the Python closure copied `sys.executable`,
+which was the venv launcher and required an external `pyvenv.cfg`.  The signed
+closure probe therefore exited 106 with `No pyvenv.cfg file`.  The stager now
+selects the real versioned interpreter, standard library and DLL closure from
+one resolved `sys.base_prefix`, rejects symlink/reparse/prefix escape and
+stable-reads the interpreter at the copy boundary.  Regression tests prove a
+venv launcher is never selected and preserve the macOS versioned-base contract.
+
+Both macOS Stage jobs independently exposed a Node response-header projection
+defect in the GA helper.  The three failed assertions read CSP and Set-Cookie
+as empty even though the server emitted them.  The client now snapshots the
+Node 22 `headersDistinct` projection synchronously inside the response
+callback, retains a raw-wire fallback, preserves repeated Set-Cookie values and
+returns only immutable-copy accessors after response teardown.  A dedicated
+loopback test verifies case-normalized CSP and two distinct cookies after the
+socket lifecycle ends.
+
+Local correction evidence uses stable Python 3.11.9 and exact Node 22.23.1:
+the complete platform-pack staging file passes 52 tests with one explicit
+platform skip; Ruff and Python compilation pass; WebUI passes 181/181 tests.
+The failed Stage remains quarantined.  A new protected PR matrix, new exact-main
+merge and wholly new same-run three-platform Stage are mandatory before direct
+admission, signing or production mutation.
+
+## 2026-07-17 - Cross-shell Platform Stage fail-fast correction
+
+Forensic review of exact-main Stage run `29541415646` found that Windows had
+also reported the same three GA Web-test failures seen on macOS. They did not
+stop the Windows job: GitHub Actions used PowerShell for the multi-line `run`
+block, a native `npm run test:v1` non-zero status was followed by a successful
+`npm run build`, and the step therefore appeared successful. The later Python
+closure failure became the visible Windows terminal error. Those three GA
+failures were real and are not reclassified as passed.
+
+Both multi-command Stage blocks now delegate to one repository-owned Python
+runner with fixed command catalogs and no shell command interpolation. It
+executes sequentially, streams each child directly to the job log, and returns
+immediately with a non-zero status on launch failure or the first failed child;
+no later command can overwrite that status on PowerShell. Bash keeps its
+normal `-e -o pipefail` workflow wrapper, while both shells now observe the
+same single runner exit code. A real subprocess regression proves that a first
+command exiting 23 prevents a later successful command from running, and a
+workflow contract prevents the vulnerable multi-line blocks returning.
+The dependency-lock gate now treats that indirection as a new pinned trust
+boundary: it requires the two exact workflow bindings once each, rejects any
+adjacent inline dependency/build command, compares the AST literal catalog to
+all seven reviewed commands and pins the complete executable runner AST.
+Missing, duplicate, argument-drift and execution-bypass mutations all fail.

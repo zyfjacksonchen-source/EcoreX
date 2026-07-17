@@ -134,10 +134,7 @@ jobs:
           cache-dependency-path: platform-staging/bootstrap/go.mod
 
       - name: Install exact stage dependencies and managed Chromium
-        run: |
-          python scripts/install-v1-python-profile.py --profile platform-stage
-          python scripts/check-v1-dependency-locks.py
-          python -m playwright install chromium
+        run: python scripts/run-v1-platform-stage-step.py install-dependencies
 
       - name: Materialize digest-fenced production Runtime config
         env:
@@ -149,12 +146,7 @@ jobs:
           --receipt .candidate/stage-runtime-config-materialization.json
 
       - name: Build the final content-addressed Web dist
-        working-directory: desktop
-        run: |
-          npm ci
-          npm run typecheck
-          npm run test:v1
-          npm run build
+        run: python scripts/run-v1-platform-stage-step.py build-web
 
       - name: Build real Core and six Packs with the source-pinned stager
         env:
