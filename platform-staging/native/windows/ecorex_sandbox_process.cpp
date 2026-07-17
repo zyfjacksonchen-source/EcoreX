@@ -101,6 +101,77 @@ bool WriteAll(HANDLE handle, const char* data, size_t size) {
   return true;
 }
 
+bool ReadVariableTokenInformation(HANDLE token, TOKEN_INFORMATION_CLASS kind,
+                                  std::vector<unsigned char>* buffer) {
+  if (token == nullptr || buffer == nullptr) return false;
+  DWORD bytes = 0;
+  if (GetTokenInformation(token, kind, nullptr, 0, &bytes) ||
+      GetLastError() != ERROR_INSUFFICIENT_BUFFER || bytes == 0) {
+    return false;
+  }
+  buffer->assign(bytes, 0);
+  return GetTokenInformation(token, kind, buffer->data(), bytes, &bytes) != FALSE;
+}
+
+bool AttestSuspendedAppContainerToken(HANDLE process, PSID expected_sid,
+                                      DWORD* failure) {
+  if (failure) *failure = ERROR_ACCESS_DENIED;
+  if (process == nullptr || expected_sid == nullptr || !IsValidSid(expected_sid)) {
+    return false;
+  }
+  HANDLE token = nullptr;
+  if (!OpenProcessToken(process, TOKEN_QUERY, &token)) {
+    if (failure) *failure = GetLastError();
+    return false;
+  }
+  DWORD is_appcontainer = 0;
+  DWORD bytes = 0;
+  bool ok = GetTokenInformation(token, TokenIsAppContainer, &is_appcontainer,
+                                sizeof(is_appcontainer), &bytes) != FALSE &&
+            is_appcontainer != 0;
+  std::vector<unsigned char> appcontainer_buffer;
+  if (ok) {
+    ok = ReadVariableTokenInformation(token, TokenAppContainerSid,
+                                      &appcontainer_buffer);
+  }
+  if (ok) {
+    const auto* identity = reinterpret_cast<const TOKEN_APPCONTAINER_INFORMATION*>(
+        appcontainer_buffer.data());
+    ok = identity->TokenAppContainer != nullptr &&
+         IsValidSid(identity->TokenAppContainer) &&
+         EqualSid(identity->TokenAppContainer, expected_sid);
+  }
+  std::vector<unsigned char> integrity_buffer;
+  if (ok) {
+    ok = ReadVariableTokenInformation(token, TokenIntegrityLevel,
+                                      &integrity_buffer);
+  }
+  if (ok) {
+    const auto* mandatory = reinterpret_cast<const TOKEN_MANDATORY_LABEL*>(
+        integrity_buffer.data());
+    ok = mandatory->Label.Sid != nullptr && IsValidSid(mandatory->Label.Sid) &&
+         IsWellKnownSid(mandatory->Label.Sid, WinLowLabelSid);
+  }
+  std::vector<unsigned char> capability_buffer;
+  if (ok) {
+    ok = ReadVariableTokenInformation(token, TokenCapabilities,
+                                      &capability_buffer);
+  }
+  if (ok) {
+    const auto* capabilities = reinterpret_cast<const TOKEN_GROUPS*>(
+        capability_buffer.data());
+    // SECURITY_CAPABILITIES is deliberately empty: accepting any capability
+    // (especially an Internet capability) would invalidate network denial.
+    ok = capabilities->GroupCount == 0;
+  }
+  const DWORD observed_error = ok ? ERROR_SUCCESS : GetLastError();
+  CloseHandle(token);
+  if (failure) {
+    *failure = observed_error == ERROR_SUCCESS ? ERROR_ACCESS_DENIED : observed_error;
+  }
+  return ok;
+}
+
 std::optional<std::string> ReadInput(DWORD limit) {
   const HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
   if (input == nullptr || input == INVALID_HANDLE_VALUE) return std::nullopt;
@@ -318,6 +389,19 @@ ChildResult Launch(const std::filesystem::path& executable,
   if (!created) {
     result.stage = "create_process";
     result.win32_error = creation_error;
+    CloseHandle(parent_stdin);
+    CloseHandle(parent_stdout);
+    CloseHandle(parent_stderr);
+    CloseHandle(job);
+    return result;
+  }
+  if (appcontainer_sid != nullptr &&
+      !AttestSuspendedAppContainerToken(process.hProcess, appcontainer_sid,
+                                        &result.win32_error)) {
+    result.stage = "child_token_identity";
+    TerminateProcess(process.hProcess, 70);
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
     CloseHandle(parent_stdin);
     CloseHandle(parent_stdout);
     CloseHandle(parent_stderr);

@@ -645,8 +645,15 @@ def _build_python_closure(
         target_stdlib = destination / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}"
         lib_dir = source_prefix / "lib"
         for source in sorted(lib_dir.glob("libpython*.dylib")):
-            if source.is_file():
-                _copy_regular(source, destination / "lib" / source.name, executable=True)
+            resolved_source = _base_runtime_regular_file(
+                source,
+                prefix=source_prefix,
+            )
+            _copy_regular(
+                resolved_source,
+                destination / "lib" / source.name,
+                executable=True,
+            )
     _copy_tree(
         stdlib,
         target_stdlib,
@@ -666,6 +673,11 @@ def _build_python_closure(
         site_packages=site_packages,
         platform=platform,
     )
+    if platform == "macos":
+        _relocate_macos_python_closure(
+            destination,
+            source_prefix=source_prefix,
+        )
     manifest = build_pack_python_manifest(
         core,
         platform=platform,
@@ -678,7 +690,15 @@ def _build_python_closure(
         architecture=architecture,
     )
     probe = _pack_python_probe_command(interpreter)
-    result = _run(probe, cwd=core, environment=_runtime_environment(), timeout=60, code="pack_python_probe_failed")
+    if platform == "macos":
+        result = _run_macos_isolated_pack_probe(
+            probe,
+            cwd=core,
+            source_prefix=source_prefix,
+            source_canary=executable,
+        )
+    else:
+        result = _run(probe, cwd=core, environment=_runtime_environment(), timeout=60, code="pack_python_probe_failed")
     if result.stdout.strip() != __version__.encode("ascii"):
         raise StageError("pack_python_probe_failed")
     # The independent post-write resolution above is the security boundary.
@@ -763,6 +783,588 @@ def _base_runtime_member(
     ):
         raise StageError("pack_python_base_runtime_invalid")
     return resolved
+
+
+def _base_runtime_regular_file(candidate: Path, *, prefix: Path) -> Path:
+    """Resolve a versioned base-runtime file link without weakening authority.
+
+    Official macOS CPython layouts expose one or more ``libpython*.dylib``
+    aliases as POSIX symlinks.  Copying the link itself is forbidden, but its
+    resolved target is valid when it remains inside the already resolved base
+    prefix and is a regular, non-link, non-reparse file.  Returning the resolved
+    target also removes a candidate-link swap from the later stable read.
+    """
+
+    code = "pack_python_base_runtime_invalid"
+    try:
+        prefix = prefix.resolve(strict=True)
+        candidate_metadata = candidate.lstat()
+    except (OSError, RuntimeError, ValueError):
+        raise StageError(code) from None
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    candidate_attributes = getattr(candidate_metadata, "st_file_attributes", 0)
+    if (
+        bool(candidate_attributes & reparse)
+        or bool(getattr(candidate_metadata, "st_reparse_tag", 0))
+        or not (
+            stat.S_ISREG(candidate_metadata.st_mode)
+            or stat.S_ISLNK(candidate_metadata.st_mode)
+        )
+    ):
+        raise StageError(code)
+    try:
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(prefix)
+        target_metadata = resolved.lstat()
+    except (OSError, RuntimeError, ValueError):
+        raise StageError(code) from None
+    target_attributes = getattr(target_metadata, "st_file_attributes", 0)
+    if (
+        stat.S_ISLNK(target_metadata.st_mode)
+        or not stat.S_ISREG(target_metadata.st_mode)
+        or bool(target_attributes & reparse)
+        or bool(getattr(target_metadata, "st_reparse_tag", 0))
+    ):
+        raise StageError(code)
+    return resolved
+
+
+_MACHO_MAGICS = frozenset(
+    {
+        b"\xca\xfe\xba\xbe",
+        b"\xbe\xba\xfe\xca",
+        b"\xca\xfe\xba\xbf",
+        b"\xbf\xba\xfe\xca",
+        b"\xfe\xed\xfa\xce",
+        b"\xce\xfa\xed\xfe",
+        b"\xfe\xed\xfa\xcf",
+        b"\xcf\xfa\xed\xfe",
+    }
+)
+_MACOS_SYSTEM_LIBRARY_PREFIXES = (
+    "/System/Library/",
+    "/usr/lib/",
+)
+_PYTHON_FRAMEWORK_ROOT = Path("/Library/Frameworks/Python.framework")
+
+
+def _macos_macho_files(root: Path) -> tuple[Path, ...]:
+    try:
+        resolved_root = root.resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        raise StageError("pack_python_macho_invalid") from None
+    result: list[Path] = []
+    for path in sorted(
+        resolved_root.rglob("*"), key=lambda value: value.as_posix().casefold()
+    ):
+        try:
+            metadata = path.lstat()
+        except OSError:
+            raise StageError("pack_python_macho_invalid") from None
+        reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        if stat.S_ISLNK(metadata.st_mode) or bool(
+            getattr(metadata, "st_file_attributes", 0) & reparse
+        ) or bool(getattr(metadata, "st_reparse_tag", 0)):
+            raise StageError("pack_python_macho_invalid")
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size < 4:
+            continue
+        try:
+            with path.open("rb") as stream:
+                magic = stream.read(4)
+        except OSError:
+            raise StageError("pack_python_macho_invalid") from None
+        if magic in _MACHO_MAGICS:
+            result.append(path)
+    return tuple(result)
+
+
+def _macos_architectures(path: Path) -> tuple[str, ...]:
+    result = _run(
+        ("/usr/bin/lipo", "-archs", str(path)),
+        cwd=path.parent,
+        environment=_runtime_environment(),
+        timeout=30,
+        code="pack_python_macho_inspection_failed",
+    )
+    try:
+        architectures = tuple(result.stdout.decode("ascii").strip().split())
+    except UnicodeDecodeError:
+        raise StageError("pack_python_macho_inspection_failed") from None
+    if (
+        not architectures
+        or len(architectures) != len(set(architectures))
+        or any(architecture not in {"arm64", "x86_64"} for architecture in architectures)
+    ):
+        raise StageError("pack_python_macho_architecture_invalid")
+    return architectures
+
+
+def _macos_install_name(path: Path, *, architecture: str) -> str | None:
+    result = _run(
+        ("/usr/bin/otool", "-arch", architecture, "-D", str(path)),
+        cwd=path.parent,
+        environment=_runtime_environment(),
+        timeout=30,
+        code="pack_python_macho_inspection_failed",
+    )
+    try:
+        lines = [
+            line.strip()
+            for line in result.stdout.decode("utf-8").splitlines()[1:]
+            if line.strip()
+        ]
+    except UnicodeDecodeError:
+        raise StageError("pack_python_macho_inspection_failed") from None
+    if len(lines) > 1:
+        raise StageError("pack_python_macho_inspection_failed")
+    return lines[0] if lines else None
+
+
+def _macos_dependencies(
+    path: Path,
+    *,
+    architecture: str,
+    install_name: str | None,
+) -> tuple[str, ...]:
+    result = _run(
+        ("/usr/bin/otool", "-arch", architecture, "-L", str(path)),
+        cwd=path.parent,
+        environment=_runtime_environment(),
+        timeout=30,
+        code="pack_python_macho_inspection_failed",
+    )
+    try:
+        lines = result.stdout.decode("utf-8").splitlines()
+    except UnicodeDecodeError:
+        raise StageError("pack_python_macho_inspection_failed") from None
+    dependencies: list[str] = []
+    for raw in lines[1:]:
+        line = raw.strip()
+        if not line:
+            continue
+        dependency, separator, metadata = line.rpartition(
+            " (compatibility version "
+        )
+        if (
+            not separator
+            or not dependency
+            or not metadata.endswith(")")
+            or ", current version " not in metadata
+        ):
+            raise StageError("pack_python_macho_inspection_failed")
+        dependencies.append(dependency)
+    if install_name is not None and dependencies and dependencies[0] == install_name:
+        dependencies.pop(0)
+    return tuple(dependencies)
+
+
+def _macos_rpaths(path: Path, *, architecture: str) -> tuple[str, ...]:
+    result = _run(
+        ("/usr/bin/otool", "-arch", architecture, "-l", str(path)),
+        cwd=path.parent,
+        environment=_runtime_environment(),
+        timeout=30,
+        code="pack_python_macho_inspection_failed",
+    )
+    try:
+        lines = result.stdout.decode("utf-8").splitlines()
+    except UnicodeDecodeError:
+        raise StageError("pack_python_macho_inspection_failed") from None
+    rpaths: list[str] = []
+    in_rpath = False
+    for raw in lines:
+        line = raw.strip()
+        if line.startswith("cmd "):
+            in_rpath = line == "cmd LC_RPATH"
+            continue
+        if in_rpath and line.startswith("path "):
+            value, separator, offset = line[5:].rpartition(" (offset ")
+            if (
+                not separator
+                or not value
+                or re.fullmatch(r"[0-9]+\)", offset) is None
+            ):
+                raise StageError("pack_python_macho_inspection_failed")
+            rpaths.append(value)
+            in_rpath = False
+    return tuple(rpaths)
+
+
+def _common_macos_rpaths(
+    rpaths_by_architecture: Mapping[str, tuple[str, ...]],
+) -> tuple[str, ...]:
+    values = tuple(rpaths_by_architecture.values())
+    if not values or len(set(values)) != 1:
+        raise StageError("pack_python_macho_architecture_drift")
+    return values[0]
+
+
+def _macos_dependency_requires_relocation(
+    dependency: str,
+    *,
+    source_prefix: Path,
+) -> bool:
+    if dependency.startswith("@"):
+        if dependency.startswith(
+            ("@loader_path/", "@executable_path/", "@rpath/")
+        ):
+            return False
+        raise StageError("pack_python_macho_dependency_invalid")
+    if not dependency.startswith("/"):
+        raise StageError("pack_python_macho_dependency_invalid")
+    portable = PurePosixPath(dependency)
+    if ".." in portable.parts or portable.as_posix() != dependency:
+        raise StageError("pack_python_macho_dependency_invalid")
+    if any(
+        dependency.startswith(prefix)
+        for prefix in _MACOS_SYSTEM_LIBRARY_PREFIXES
+    ):
+        return False
+    # Any non-system absolute load path is not portable. This includes the
+    # setup-python toolcache/base prefix, RUNNER_TEMP and Python.framework.
+    return True
+
+
+def _macos_rpath_requires_removal(
+    rpath: str,
+    *,
+    binary: Path,
+    closure: Path,
+) -> bool:
+    if rpath.startswith("@") and not rpath.startswith(
+        ("@loader_path/", "@executable_path/", "@rpath/")
+    ):
+        raise StageError("pack_python_macho_rpath_invalid")
+    if rpath.startswith("/"):
+        portable = PurePosixPath(rpath)
+        if ".." in portable.parts or portable.as_posix() != rpath:
+            raise StageError("pack_python_macho_rpath_invalid")
+    if rpath.startswith("@loader_path/"):
+        target = (binary.parent / rpath.removeprefix("@loader_path/")).resolve()
+        try:
+            target.relative_to(closure)
+        except ValueError:
+            return True
+        return False
+    if rpath.startswith("@executable_path/"):
+        target = (
+            closure / "bin" / rpath.removeprefix("@executable_path/")
+        ).resolve()
+        try:
+            target.relative_to(closure)
+        except ValueError:
+            return True
+        return False
+    if any(rpath.startswith(prefix) for prefix in _MACOS_SYSTEM_LIBRARY_PREFIXES):
+        return False
+    return True
+
+
+def _macos_relocation_target(
+    dependency: str,
+    *,
+    binary: Path,
+    closure: Path,
+    source_prefix: Path,
+    macho_files: tuple[Path, ...],
+) -> tuple[Path, str]:
+    candidates: list[Path] = []
+    dependency_path = Path(dependency)
+    try:
+        relative = dependency_path.relative_to(source_prefix)
+    except ValueError:
+        pass
+    else:
+        exact = closure / relative
+        if exact in macho_files:
+            candidates.append(exact)
+    candidates.extend(
+        path
+        for path in macho_files
+        if path.name == dependency_path.name and path not in candidates
+    )
+    if (
+        dependency_path.name == "Python"
+        and "Python.framework" in dependency_path.parts
+    ):
+        versioned = closure / "lib" / (
+            f"libpython{sys.version_info.major}.{sys.version_info.minor}.dylib"
+        )
+        if versioned in macho_files:
+            candidates = [versioned]
+    if len(candidates) != 1:
+        raise StageError("pack_python_macho_dependency_unresolved")
+    target = candidates[0]
+    relative_target = os.path.relpath(target, binary.parent).replace(os.sep, "/")
+    relocated = f"@loader_path/{relative_target}"
+    return target, relocated
+
+
+def _validate_macos_relative_dependency(
+    dependency: str,
+    *,
+    binary: Path,
+    closure: Path,
+    macho_files: tuple[Path, ...],
+) -> None:
+    if dependency.startswith("@loader_path/"):
+        target = (
+            binary.parent / dependency.removeprefix("@loader_path/")
+        ).resolve()
+    elif dependency.startswith("@executable_path/"):
+        target = (
+            closure / "bin" / dependency.removeprefix("@executable_path/")
+        ).resolve()
+    else:
+        return
+    try:
+        target.relative_to(closure)
+    except ValueError:
+        raise StageError("pack_python_macho_dependency_invalid") from None
+    if target not in macho_files:
+        raise StageError("pack_python_macho_dependency_unresolved")
+
+
+def _relocate_macos_python_closure(
+    closure: Path,
+    *,
+    source_prefix: Path,
+) -> None:
+    closure = closure.resolve(strict=True)
+    source_prefix = source_prefix.resolve(strict=True)
+    required_tools = (
+        Path("/usr/bin/lipo"),
+        Path("/usr/bin/otool"),
+        Path("/usr/bin/install_name_tool"),
+        Path("/usr/bin/codesign"),
+    )
+    if any(not tool.is_file() for tool in required_tools):
+        raise StageError("pack_python_macho_tooling_missing")
+    macho_files = _macos_macho_files(closure)
+    if not macho_files or closure / "bin" / "python3" not in macho_files:
+        raise StageError("pack_python_macho_invalid")
+    for binary in macho_files:
+        architectures = _macos_architectures(binary)
+        install_names = {
+            architecture: _macos_install_name(
+                binary,
+                architecture=architecture,
+            )
+            for architecture in architectures
+        }
+        rpaths_by_architecture = {
+            architecture: _macos_rpaths(
+                binary,
+                architecture=architecture,
+            )
+            for architecture in architectures
+        }
+        rpaths = _common_macos_rpaths(rpaths_by_architecture)
+        changes: list[tuple[str, str]] = []
+        dependencies = tuple(
+            dict.fromkeys(
+                dependency
+                for architecture in architectures
+                for dependency in _macos_dependencies(
+                    binary,
+                    architecture=architecture,
+                    install_name=install_names[architecture],
+                )
+            )
+        )
+        for dependency in dependencies:
+            if dependency.startswith(("@loader_path/", "@executable_path/")):
+                _validate_macos_relative_dependency(
+                    dependency,
+                    binary=binary,
+                    closure=closure,
+                    macho_files=macho_files,
+                )
+                continue
+            if dependency.startswith("@rpath/"):
+                _, relocated = _macos_relocation_target(
+                    dependency,
+                    binary=binary,
+                    closure=closure,
+                    source_prefix=source_prefix,
+                    macho_files=macho_files,
+                )
+                changes.append((dependency, relocated))
+                continue
+            if not _macos_dependency_requires_relocation(
+                dependency,
+                source_prefix=source_prefix,
+            ):
+                continue
+            _, relocated = _macos_relocation_target(
+                dependency,
+                binary=binary,
+                closure=closure,
+                source_prefix=source_prefix,
+                macho_files=macho_files,
+            )
+            changes.append((dependency, relocated))
+        expected_install_name = f"@loader_path/{binary.name}"
+        relocated_install_name = (
+            expected_install_name
+            if any(
+                install_name is not None and install_name != expected_install_name
+                for install_name in install_names.values()
+            )
+            else None
+        )
+        removed_rpaths = tuple(
+            rpath
+            for rpath in rpaths
+            if _macos_rpath_requires_removal(
+                rpath,
+                binary=binary,
+                closure=closure,
+            )
+        )
+        if not changes and relocated_install_name is None and not removed_rpaths:
+            continue
+        command: list[str] = ["/usr/bin/install_name_tool"]
+        if relocated_install_name is not None:
+            command.extend(("-id", relocated_install_name))
+        for old, new in changes:
+            command.extend(("-change", old, new))
+        for rpath in removed_rpaths:
+            command.extend(("-delete_rpath", rpath))
+        command.append(str(binary))
+        _run(
+            tuple(command),
+            cwd=closure,
+            environment=_runtime_environment(),
+            timeout=30,
+            code="pack_python_macho_relocation_failed",
+        )
+        _run(
+            (
+                "/usr/bin/codesign",
+                "--force",
+                "--sign",
+                "-",
+                "--timestamp=none",
+                str(binary),
+            ),
+            cwd=closure,
+            environment=_runtime_environment(),
+            timeout=30,
+            code="pack_python_macho_signing_failed",
+        )
+        _run(
+            ("/usr/bin/codesign", "--verify", "--strict", str(binary)),
+            cwd=closure,
+            environment=_runtime_environment(),
+            timeout=30,
+            code="pack_python_macho_signing_failed",
+        )
+    for binary in _macos_macho_files(closure):
+        for architecture in _macos_architectures(binary):
+            install_name = _macos_install_name(
+                binary,
+                architecture=architecture,
+            )
+            if (
+                install_name is not None
+                and install_name != f"@loader_path/{binary.name}"
+            ):
+                raise StageError("pack_python_macho_install_name_not_relocated")
+            if any(
+                _macos_rpath_requires_removal(
+                    rpath,
+                    binary=binary,
+                    closure=closure,
+                )
+                for rpath in _macos_rpaths(
+                    binary,
+                    architecture=architecture,
+                )
+            ):
+                raise StageError("pack_python_macho_rpath_not_relocated")
+            for dependency in _macos_dependencies(
+                binary,
+                architecture=architecture,
+                install_name=install_name,
+            ):
+                if dependency.startswith(("@loader_path/", "@executable_path/")):
+                    _validate_macos_relative_dependency(
+                        dependency,
+                        binary=binary,
+                        closure=closure,
+                        macho_files=macho_files,
+                    )
+                elif dependency.startswith("@rpath/") or (
+                    _macos_dependency_requires_relocation(
+                        dependency,
+                        source_prefix=source_prefix,
+                    )
+                ):
+                    raise StageError("pack_python_macho_dependency_not_relocated")
+
+
+def _seatbelt_literal(path: Path) -> str:
+    if not path.is_absolute():
+        raise StageError("pack_python_sandbox_probe_invalid")
+    value = str(path)
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _run_macos_isolated_pack_probe(
+    probe: tuple[str, ...],
+    *,
+    cwd: Path,
+    source_prefix: Path,
+    source_canary: Path,
+) -> BoundedProcessResult:
+    sandbox = Path("/usr/bin/sandbox-exec")
+    cat = Path("/bin/cat")
+    if not sandbox.is_file() or not cat.is_file():
+        raise StageError("pack_python_sandbox_probe_unavailable")
+    source_canary = source_canary.resolve(strict=True)
+    try:
+        source_canary.relative_to(source_prefix.resolve(strict=True))
+    except (OSError, RuntimeError, ValueError):
+        raise StageError("pack_python_sandbox_probe_invalid") from None
+    _stable_bytes(
+        source_canary,
+        _MAX_FILE_BYTES,
+        "pack_python_sandbox_probe_invalid",
+    )
+    denied = (
+        source_prefix.resolve(strict=True),
+        _PYTHON_FRAMEWORK_ROOT,
+    )
+    rules = "".join(
+        f'(deny file-read* (subpath "{_seatbelt_literal(path)}"))'
+        f'(deny file-map-executable (subpath "{_seatbelt_literal(path)}"))'
+        for path in denied
+    )
+    profile = f"(version 1)(allow default){rules}"
+    try:
+        denial = run_bounded_process(
+            (str(sandbox), "-p", profile, str(cat), str(source_canary)),
+            payload=None,
+            cwd=cwd,
+            environment=_runtime_environment(),
+            timeout_seconds=30,
+            max_stdout_bytes=64 * 1024,
+            max_stderr_bytes=64 * 1024,
+        )
+    except (OSError, BoundedProcessError):
+        raise StageError("pack_python_sandbox_probe_invalid") from None
+    if denial.returncode == 0:
+        raise StageError("pack_python_sandbox_probe_not_enforced")
+    result = _run(
+        (str(sandbox), "-p", profile, *probe),
+        cwd=cwd,
+        environment=_runtime_environment(),
+        timeout=60,
+        code="pack_python_probe_failed",
+    )
+    print("macos_pack_python_sandbox_probe=passed", flush=True)
+    return result
 
 
 def _compact_python_import_closure(

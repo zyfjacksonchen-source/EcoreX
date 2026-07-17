@@ -1246,6 +1246,507 @@ def test_macos_pack_python_remains_anchored_to_versioned_base_runtime(
     assert selected_stdlib == stdlib.resolve()
 
 
+def test_macos_base_runtime_dylib_link_resolves_inside_prefix(
+    tmp_path: Path,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    prefix = tmp_path / "base"
+    lib = prefix / "lib"
+    lib.mkdir(parents=True)
+    target = lib / "libpython3.11.9.dylib"
+    target.write_bytes(b"versioned-macos-libpython")
+    alias = lib / "libpython3.11.dylib"
+    try:
+        alias.symlink_to(target.name)
+    except (NotImplementedError, OSError) as error:
+        pytest.skip(f"symlink creation is unavailable: {error}")
+
+    resolved = stager["_base_runtime_regular_file"](
+        alias,
+        prefix=prefix.resolve(),
+    )
+
+    assert resolved == target.resolve()
+    destination = tmp_path / "closure" / alias.name
+    stager["_copy_regular"](resolved, destination, executable=True)
+    assert destination.read_bytes() == target.read_bytes()
+    assert not destination.is_symlink()
+
+
+def test_macos_base_runtime_dylib_link_cannot_escape_prefix(
+    tmp_path: Path,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    prefix = tmp_path / "base"
+    lib = prefix / "lib"
+    lib.mkdir(parents=True)
+    outside = tmp_path / "outside.dylib"
+    outside.write_bytes(b"outside-authority")
+    alias = lib / "libpython3.11.dylib"
+    try:
+        alias.symlink_to(outside)
+    except (NotImplementedError, OSError) as error:
+        pytest.skip(f"symlink creation is unavailable: {error}")
+
+    with pytest.raises(
+        stager["StageError"], match="pack_python_base_runtime_invalid"
+    ):
+        stager["_base_runtime_regular_file"](
+            alias,
+            prefix=prefix.resolve(),
+        )
+
+
+@pytest.mark.parametrize("target_kind", ["directory", "broken"])
+def test_macos_base_runtime_dylib_link_requires_regular_target(
+    tmp_path: Path,
+    target_kind: str,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    prefix = tmp_path / "base"
+    lib = prefix / "lib"
+    lib.mkdir(parents=True)
+    target = lib / "invalid-target"
+    if target_kind == "directory":
+        target.mkdir()
+    alias = lib / "libpython3.11.dylib"
+    try:
+        alias.symlink_to(target.name, target_is_directory=target_kind == "directory")
+    except (NotImplementedError, OSError) as error:
+        pytest.skip(f"symlink creation is unavailable: {error}")
+
+    with pytest.raises(
+        stager["StageError"], match="pack_python_base_runtime_invalid"
+    ):
+        stager["_base_runtime_regular_file"](
+            alias,
+            prefix=prefix.resolve(),
+        )
+
+
+def test_macos_base_runtime_dylib_rejects_reparse_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    prefix = tmp_path / "base"
+    prefix.mkdir()
+    candidate = prefix / "libpython3.11.dylib"
+    candidate.write_bytes(b"runtime-library")
+    original_lstat = Path.lstat
+    calls = 0
+
+    def fake_lstat(path: Path) -> object:
+        nonlocal calls
+        metadata = original_lstat(path)
+        if path == candidate:
+            calls += 1
+            if calls >= 2:
+                return SimpleNamespace(
+                    st_mode=metadata.st_mode,
+                    st_file_attributes=getattr(
+                        stat,
+                        "FILE_ATTRIBUTE_REPARSE_POINT",
+                        0x400,
+                    ),
+                    st_reparse_tag=1,
+                )
+        return metadata
+
+    monkeypatch.setattr(Path, "lstat", fake_lstat)
+
+    with pytest.raises(
+        stager["StageError"], match="pack_python_base_runtime_invalid"
+    ):
+        stager["_base_runtime_regular_file"](
+            candidate,
+            prefix=prefix.resolve(),
+        )
+
+
+def test_macos_python_closure_rewrites_framework_loads_and_install_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    closure = tmp_path / "closure"
+    interpreter = closure / "bin" / "python3"
+    library = closure / "lib" / "libpython3.11.dylib"
+    helper = closure / "lib" / "libhelper.dylib"
+    interpreter.parent.mkdir(parents=True)
+    library.parent.mkdir(parents=True)
+    macho = b"\xcf\xfa\xed\xfe" + b"test-mach-o"
+    interpreter.write_bytes(macho)
+    library.write_bytes(macho)
+    helper.write_bytes(macho)
+    source_prefix = tmp_path / "toolcache" / "Python" / "3.11.9" / "arm64"
+    source_prefix.mkdir(parents=True)
+    framework_python = (
+        "/Library/Frameworks/Python.framework/Versions/3.11/Python"
+    )
+    install_names: dict[Path, str | None] = {
+        interpreter.resolve(): None,
+        library.resolve(): framework_python,
+        helper.resolve(): "@rpath/libhelper.dylib",
+    }
+    dependencies: dict[Path, list[str]] = {
+        interpreter.resolve(): [
+            framework_python,
+            "@rpath/libhelper.dylib",
+            "/usr/lib/libSystem.B.dylib",
+        ],
+        library.resolve(): ["/usr/lib/libSystem.B.dylib"],
+        helper.resolve(): ["/usr/lib/libSystem.B.dylib"],
+    }
+    rpaths: dict[Path, list[str]] = {
+        interpreter.resolve(): [
+            str(source_prefix / "lib"),
+            "@loader_path/../../../../outside-closure",
+        ],
+        library.resolve(): [],
+        helper.resolve(): [],
+    }
+    commands: list[tuple[str, ...]] = []
+    original_is_file = Path.is_file
+
+    def fake_is_file(path: Path) -> bool:
+        if path.as_posix() in {
+            "/usr/bin/lipo",
+            "/usr/bin/otool",
+            "/usr/bin/install_name_tool",
+            "/usr/bin/codesign",
+        }:
+            return True
+        return original_is_file(path)
+
+    def fake_run(
+        command: tuple[str, ...],
+        **kwargs: object,
+    ) -> SimpleNamespace:
+        commands.append(command)
+        tool = command[0]
+        if command[:2] == ("/usr/bin/lipo", "-archs"):
+            return SimpleNamespace(stdout=b"arm64 x86_64\n")
+        if command[:2] == ("/usr/bin/otool", "-arch"):
+            operation = command[3]
+            binary = Path(command[4]).resolve()
+            if operation == "-D":
+                name = install_names[binary]
+                suffix = f"{name}\n" if name is not None else ""
+                return SimpleNamespace(
+                    stdout=(
+                        f"{binary} (architecture {command[2]}):\n{suffix}"
+                    ).encode("utf-8")
+                )
+            if operation == "-L":
+                values = list(dependencies[binary])
+                name = install_names[binary]
+                if name is not None:
+                    values.insert(0, name)
+                lines = "".join(
+                    f"\t{value} (compatibility version 1.0.0, current version 1.0.0)\n"
+                    for value in values
+                )
+                return SimpleNamespace(
+                    stdout=(
+                        f"{binary} (architecture {command[2]}):\n{lines}"
+                    ).encode("utf-8")
+                )
+            assert operation == "-l"
+            lines = "".join(
+                "Load command 0\n"
+                "          cmd LC_RPATH\n"
+                "      cmdsize 48\n"
+                f"         path {value} (offset 12)\n"
+                for value in rpaths[binary]
+            )
+            return SimpleNamespace(stdout=lines.encode("utf-8"))
+        if tool == "/usr/bin/install_name_tool":
+            binary = Path(command[-1]).resolve()
+            index = 1
+            while index < len(command) - 1:
+                operation = command[index]
+                if operation == "-id":
+                    install_names[binary] = command[index + 1]
+                    index += 2
+                    continue
+                if operation == "-change":
+                    old, new = command[index + 1 : index + 3]
+                    dependencies[binary] = [
+                        new if value == old else value
+                        for value in dependencies[binary]
+                    ]
+                    index += 3
+                    continue
+                assert operation == "-delete_rpath"
+                rpaths[binary].remove(command[index + 1])
+                index += 2
+            return SimpleNamespace(stdout=b"")
+        assert tool == "/usr/bin/codesign"
+        return SimpleNamespace(stdout=b"")
+
+    monkeypatch.setattr(Path, "is_file", fake_is_file)
+    monkeypatch.setitem(
+        stager["_relocate_macos_python_closure"].__globals__,
+        "_run",
+        fake_run,
+    )
+
+    stager["_relocate_macos_python_closure"](
+        closure,
+        source_prefix=source_prefix,
+    )
+
+    assert dependencies[interpreter.resolve()] == [
+        "@loader_path/../lib/libpython3.11.dylib",
+        "@loader_path/../lib/libhelper.dylib",
+        "/usr/lib/libSystem.B.dylib",
+    ]
+    assert install_names[library.resolve()] == "@loader_path/libpython3.11.dylib"
+    assert install_names[helper.resolve()] == "@loader_path/libhelper.dylib"
+    assert rpaths[interpreter.resolve()] == []
+    assert not any(
+        "-delete_all_rpaths" in command for command in commands
+    )
+    assert any(
+        "-delete_rpath" in command
+        for command in commands
+        if command[0] == "/usr/bin/install_name_tool"
+    )
+    modified = {
+        Path(command[-1]).resolve()
+        for command in commands
+        if command[0] == "/usr/bin/install_name_tool"
+    }
+    signed = {
+        Path(command[-1]).resolve()
+        for command in commands
+        if command[:2] == ("/usr/bin/codesign", "--force")
+    }
+    verified = {
+        Path(command[-1]).resolve()
+        for command in commands
+        if command[:2] == ("/usr/bin/codesign", "--verify")
+    }
+    assert modified == signed == verified == {
+        interpreter.resolve(),
+        library.resolve(),
+        helper.resolve(),
+    }
+    inspected = {
+        (command[2], command[3], Path(command[4]).resolve())
+        for command in commands
+        if command[:2] == ("/usr/bin/otool", "-arch")
+    }
+    assert {
+        (architecture, operation, binary)
+        for architecture in ("arm64", "x86_64")
+        for operation in ("-D", "-L", "-l")
+        for binary in (interpreter.resolve(), library.resolve(), helper.resolve())
+    }.issubset(inspected)
+
+
+def test_macos_rpath_dependency_requires_unique_closure_target(
+    tmp_path: Path,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    closure = tmp_path / "closure"
+    binary = closure / "bin" / "python3"
+    first = closure / "one" / "libduplicate.dylib"
+    second = closure / "two" / "libduplicate.dylib"
+    for path in (binary, first, second):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\xcf\xfa\xed\xfe-macho")
+    source_prefix = tmp_path / "source"
+    source_prefix.mkdir()
+
+    with pytest.raises(
+        stager["StageError"], match="pack_python_macho_dependency_unresolved"
+    ):
+        stager["_macos_relocation_target"](
+            "@rpath/libduplicate.dylib",
+            binary=binary.resolve(),
+            closure=closure.resolve(),
+            source_prefix=source_prefix.resolve(),
+            macho_files=(binary.resolve(), first.resolve(), second.resolve()),
+        )
+
+
+@pytest.mark.parametrize(
+    "dependency",
+    ("@unknown/libpython.dylib", "/usr/lib/../tmp/libpython.dylib"),
+)
+def test_macos_dependency_rejects_unknown_token_and_dot_segments(
+    dependency: str,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+
+    with pytest.raises(
+        stager["StageError"], match="pack_python_macho_dependency_invalid"
+    ):
+        stager["_macos_dependency_requires_relocation"](
+            dependency,
+            source_prefix=Path("/trusted/base"),
+        )
+
+
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    ((b"arm64\n", ("arm64",)), (b"x86_64 arm64\n", ("x86_64", "arm64"))),
+)
+def test_macos_lipo_architecture_contract_supports_thin_and_fat(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    output: bytes,
+    expected: tuple[str, ...],
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    binary = tmp_path / "binary"
+    binary.write_bytes(b"\xca\xfe\xba\xbf-fat")
+
+    def fake_run(command: tuple[str, ...], **kwargs: object) -> SimpleNamespace:
+        assert command == ("/usr/bin/lipo", "-archs", str(binary))
+        return SimpleNamespace(stdout=output)
+
+    monkeypatch.setitem(
+        stager["_macos_architectures"].__globals__, "_run", fake_run
+    )
+
+    assert stager["_macos_architectures"](binary) == expected
+
+
+def test_macos_fat_rpath_drift_fails_before_install_name_tool() -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+
+    with pytest.raises(
+        stager["StageError"], match="pack_python_macho_architecture_drift"
+    ):
+        stager["_common_macos_rpaths"](
+            {
+                "arm64": ("@loader_path/arm",),
+                "x86_64": ("@loader_path/intel",),
+            }
+        )
+
+
+def test_macos_otool_parsers_preserve_spaces_and_parentheses(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    binary = tmp_path / "binary"
+    binary.write_bytes(b"\xcf\xfa\xed\xfe-thin")
+    dependency = (
+        "/private/tool cache/lib (compatibility version archive)/libpython.dylib"
+    )
+    rpath = "@loader_path/runtime (offset archive)/lib"
+
+    def fake_run(command: tuple[str, ...], **kwargs: object) -> SimpleNamespace:
+        operation = command[3]
+        if operation == "-L":
+            return SimpleNamespace(
+                stdout=(
+                    f"{binary} (architecture arm64):\n"
+                    f"\t{dependency} (compatibility version 1.0.0, "
+                    "current version 1.0.0)\n"
+                ).encode("utf-8")
+            )
+        assert operation == "-l"
+        return SimpleNamespace(
+            stdout=(
+                "Load command 0\n"
+                "          cmd LC_RPATH\n"
+                "      cmdsize 96\n"
+                f"         path {rpath} (offset 12)\n"
+            ).encode("utf-8")
+        )
+
+    parser_globals = stager["_macos_dependencies"].__globals__
+    monkeypatch.setitem(parser_globals, "_run", fake_run)
+
+    assert stager["_macos_dependencies"](
+        binary,
+        architecture="arm64",
+        install_name=None,
+    ) == (dependency,)
+    assert stager["_macos_rpaths"](
+        binary,
+        architecture="arm64",
+    ) == (rpath,)
+
+
+def test_macos_pack_probe_denies_source_and_framework_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    source_prefix = tmp_path / "toolcache-python"
+    source_prefix.mkdir()
+    source_canary = source_prefix / "python-source-canary"
+    source_canary.write_bytes(b"readable-before-sandbox")
+    framework_root = tmp_path / "Library" / "Frameworks" / "Python.framework"
+    framework_root.mkdir(parents=True)
+    core = tmp_path / "core"
+    core.mkdir()
+    interpreter = core / "pack-python" / "bin" / "python3"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_bytes(b"python")
+    seen: list[tuple[str, ...]] = []
+    original_is_file = Path.is_file
+
+    def fake_is_file(path: Path) -> bool:
+        if path.as_posix() in {"/usr/bin/sandbox-exec", "/bin/cat"}:
+            return True
+        return original_is_file(path)
+
+    def fake_run(command: tuple[str, ...], **kwargs: object) -> SimpleNamespace:
+        seen.append(command)
+        return SimpleNamespace(stdout=b"1.0.0\n")
+
+    monkeypatch.setattr(Path, "is_file", fake_is_file)
+    probe_globals = stager["_run_macos_isolated_pack_probe"].__globals__
+    monkeypatch.setitem(probe_globals, "_PYTHON_FRAMEWORK_ROOT", framework_root)
+    monkeypatch.setitem(probe_globals, "_run", fake_run)
+    denial_commands: list[tuple[str, ...]] = []
+
+    def fake_bounded_process(
+        command: tuple[str, ...], **kwargs: object
+    ) -> SimpleNamespace:
+        denial_commands.append(command)
+        return SimpleNamespace(returncode=1, stdout=b"", stderr=b"denied")
+
+    monkeypatch.setitem(
+        probe_globals,
+        "run_bounded_process",
+        fake_bounded_process,
+    )
+    probe = (str(interpreter), "-I", "-B", "-c", "full-pack-probe")
+
+    result = stager["_run_macos_isolated_pack_probe"](
+        probe,
+        cwd=core,
+        source_prefix=source_prefix,
+        source_canary=source_canary,
+    )
+
+    assert result.stdout == b"1.0.0\n"
+    assert len(seen) == 1
+    assert len(denial_commands) == 1
+    command = seen[0]
+    assert Path(command[0]).as_posix() == "/usr/bin/sandbox-exec"
+    assert command[1] == "-p"
+    assert command[3:] == probe
+    profile = command[2]
+    source_literal = stager["_seatbelt_literal"](source_prefix.resolve())
+    assert f'(deny file-read* (subpath "{source_literal}"))' in profile
+    framework = stager["_seatbelt_literal"](framework_root)
+    assert f'(deny file-read* (subpath "{framework}"))' in profile
+    denial = denial_commands[0]
+    assert Path(denial[0]).as_posix() == "/usr/bin/sandbox-exec"
+    assert Path(denial[-2]).as_posix() == "/bin/cat"
+    assert Path(denial[-1]) == source_canary
+
+
 def test_pack_python_base_member_cannot_escape_closure_authority(
     tmp_path: Path,
 ) -> None:

@@ -235,7 +235,7 @@ class WindowsAppContainerSandboxBackend:
             and all(root.is_dir() for root in self.read_roots)
             and receipt.get("schema_version") == 1
             and receipt.get("contract")
-            == "windows-appcontainer-stable-provision-v2"
+            == "windows-appcontainer-stable-provision-v3"
             and receipt.get("helper_sha256") == digest
             and isinstance(receipt.get("slot_digest"), str)
             and _SHA256.fullmatch(str(receipt.get("slot_digest"))) is not None

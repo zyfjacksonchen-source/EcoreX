@@ -327,7 +327,7 @@ def test_product_resolver_injects_the_slot_owned_windows_sandbox_helper(
             {
                 "security_provision": {
                     "schema_version": 1,
-                    "contract": "windows-appcontainer-stable-provision-v2",
+                    "contract": "windows-appcontainer-stable-provision-v3",
                     "helper_sha256": hashlib.sha256(helper.read_bytes()).hexdigest(),
                     "slot_digest": "0" * 64,
                     "root_security_sha256": "1" * 64,

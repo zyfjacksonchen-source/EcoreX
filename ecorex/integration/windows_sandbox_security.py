@@ -35,8 +35,8 @@ from .windows_path_identity import windows_invariant_path_key
 
 _MAX_CONFIG_BYTES = 256 * 1024
 _PREPARATION_FILE = ".sandbox-security-preparation.json"
-_STABLE_PROVISION_CONTRACT = "windows-appcontainer-stable-provision-v2"
-_STRICT_INHERITANCE_PROOF = "immutable-read-tree-mutable-workspace-acl-v2"
+_STABLE_PROVISION_CONTRACT = "windows-appcontainer-stable-provision-v3"
+_STRICT_INHERITANCE_PROOF = "immutable-read-tree-mutable-workspace-acl-mic-v3"
 _RECEIPT_KEYS = {
     "appcontainer_sid",
     "cpu_rate_hard_cap",

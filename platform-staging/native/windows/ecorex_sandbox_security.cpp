@@ -319,7 +319,10 @@ bool ApplyGrant(const std::filesystem::path& path, PSID sid, DWORD permissions,
   LocalPointer owned_descriptor(descriptor);
   EXPLICIT_ACCESSW access{};
   access.grfAccessPermissions = permissions;
-  access.grfAccessMode = GRANT_ACCESS;
+  // SET_ACCESS converges an existing explicit Package-SID ACE instead of
+  // unioning a stale over-broad grant.  Inherited over-broad authority cannot
+  // be rewritten here and is rejected by the effective-rights attestation.
+  access.grfAccessMode = SET_ACCESS;
   access.grfInheritance = directory ? SUB_CONTAINERS_AND_OBJECTS_INHERIT : NO_INHERITANCE;
   access.Trustee.TrusteeForm = TRUSTEE_IS_SID;
   access.Trustee.TrusteeType = TRUSTEE_IS_USER;
@@ -355,45 +358,6 @@ bool RemoveGrant(const std::filesystem::path& path, PSID sid) {
                                nullptr) == ERROR_SUCCESS;
 }
 
-bool ApplyLowIntegrity(const std::filesystem::path& path, bool directory) {
-  const wchar_t* sddl = directory ? L"S:(ML;OICI;NW;;;LW)" : L"S:(ML;;NW;;;LW)";
-  PSECURITY_DESCRIPTOR descriptor = nullptr;
-  if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
-          sddl, SDDL_REVISION_1, &descriptor, nullptr)) {
-    return false;
-  }
-  LocalPointer owned_descriptor(descriptor);
-  PACL label = nullptr;
-  BOOL present = FALSE;
-  BOOL defaulted = FALSE;
-  if (!GetSecurityDescriptorSacl(descriptor, &present, &label, &defaulted) || !present) {
-    return false;
-  }
-  return SetNamedSecurityInfoW(const_cast<LPWSTR>(path.c_str()), SE_FILE_OBJECT,
-                               LABEL_SECURITY_INFORMATION, nullptr, nullptr, nullptr,
-                               label) == ERROR_SUCCESS;
-}
-
-bool RemoveIntegrityLabel(const std::filesystem::path& path) {
-  std::array<unsigned char, sizeof(ACL)> storage{};
-  auto* empty = reinterpret_cast<PACL>(storage.data());
-  if (!InitializeAcl(empty, static_cast<DWORD>(storage.size()), ACL_REVISION)) return false;
-  return SetNamedSecurityInfoW(const_cast<LPWSTR>(path.c_str()), SE_FILE_OBJECT,
-                               LABEL_SECURITY_INFORMATION, nullptr, nullptr, nullptr,
-                               empty) == ERROR_SUCCESS;
-}
-
-bool PrepareProbeWorkspace(const std::filesystem::path& workspace, PSID sid) {
-  std::error_code error;
-  if (sid == nullptr || !std::filesystem::is_directory(workspace, error) || error) {
-    return false;
-  }
-  return ApplyGrant(workspace, sid,
-                    GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE | DELETE,
-                    true) &&
-         ApplyLowIntegrity(workspace, true);
-}
-
 bool GrantsPermissions(const std::filesystem::path& path, PSID sid,
                        DWORD permissions, bool require_inheritance) {
   PACL acl = nullptr;
@@ -409,6 +373,20 @@ bool GrantsPermissions(const std::filesystem::path& path, PSID sid,
       FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_GENERIC_EXECUTE, FILE_ALL_ACCESS};
   DWORD required = permissions;
   MapGenericMask(&required, &mapping);
+  TRUSTEEW trustee{};
+  trustee.TrusteeForm = TRUSTEE_IS_SID;
+  trustee.TrusteeType = TRUSTEE_IS_USER;
+  trustee.ptstrName = static_cast<LPWSTR>(sid);
+  ACCESS_MASK effective = 0;
+  if (GetEffectiveRightsFromAclW(acl, &trustee, &effective) != ERROR_SUCCESS) {
+    return false;
+  }
+  MapGenericMask(&effective, &mapping);
+  // The Package SID is a capability boundary, not merely one possible path
+  // to the requested rights.  Its effective rights must be exact so another
+  // ACE type cannot silently add write/delete/owner/DACL authority to a
+  // read-only runtime root.
+  if (effective != required) return false;
   DWORD granted = 0;
   bool inheritance = !require_inheritance;
   for (DWORD index = 0; index < acl->AceCount; ++index) {
@@ -442,36 +420,54 @@ bool GrantsPermissions(const std::filesystem::path& path, PSID sid,
   return (granted & required) == required && inheritance;
 }
 
-bool HasLowIntegrity(const std::filesystem::path& path, bool require_inheritance) {
+// AppContainer access uses Windows' dual-principal DACL check.  Microsoft
+// documents that a Low-IL AppContainer may use a resource whose mandatory
+// label is Medium or lower when both the user and exact Package SID grant the
+// requested access.  Therefore we must not rewrite user-owned SACLs (which can
+// require SeRelabelPrivilege on service runners).  We attest the existing MIC
+// boundary instead: an absent label is the Windows-defined Medium default;
+// explicit Untrusted/Low/Medium labels are accepted; High/System are rejected.
+bool ResourceIntegrityAtMostMedium(const std::filesystem::path& path) {
   PACL label = nullptr;
   PSECURITY_DESCRIPTOR descriptor = nullptr;
-  if (GetNamedSecurityInfoW(const_cast<LPWSTR>(path.c_str()), SE_FILE_OBJECT,
-                            LABEL_SECURITY_INFORMATION, nullptr, nullptr, nullptr,
-                            &label, &descriptor) != ERROR_SUCCESS || label == nullptr) {
+  const DWORD queried = GetNamedSecurityInfoW(
+      const_cast<LPWSTR>(path.c_str()), SE_FILE_OBJECT,
+      LABEL_SECURITY_INFORMATION, nullptr, nullptr, nullptr, &label, &descriptor);
+  if (queried != ERROR_SUCCESS) {
     if (descriptor) LocalFree(descriptor);
     return false;
   }
   LocalPointer owned_descriptor(descriptor);
+  if (label == nullptr) return true;
+  DWORD mandatory_labels = 0;
   for (DWORD index = 0; index < label->AceCount; ++index) {
     void* raw = nullptr;
     if (!GetAce(label, index, &raw)) return false;
     const auto* header = static_cast<const ACE_HEADER*>(raw);
     if (header->AceType != SYSTEM_MANDATORY_LABEL_ACE_TYPE) continue;
+    if (++mandatory_labels > 1) return false;
     const auto* ace = static_cast<const SYSTEM_MANDATORY_LABEL_ACE*>(raw);
     PSID integrity_sid = const_cast<DWORD*>(&ace->SidStart);
-    const DWORD count = *GetSidSubAuthorityCount(integrity_sid);
-    if (count == 0) continue;
-    const DWORD level = *GetSidSubAuthority(integrity_sid, count - 1);
-    const bool inheritance =
-        !require_inheritance ||
-        (header->AceFlags & (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)) ==
-            (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE);
-    if (level == SECURITY_MANDATORY_LOW_RID &&
-        (ace->Mask & SYSTEM_MANDATORY_LABEL_NO_WRITE_UP) != 0 && inheritance) {
-      return true;
+    if (!IsValidSid(integrity_sid)) return false;
+    if (!IsWellKnownSid(integrity_sid, WinUntrustedLabelSid) &&
+        !IsWellKnownSid(integrity_sid, WinLowLabelSid) &&
+        !IsWellKnownSid(integrity_sid, WinMediumLabelSid)) {
+      return false;
     }
   }
-  return false;
+  // A SACL without a mandatory label has the same Medium default as no SACL.
+  return true;
+}
+
+bool PrepareProbeWorkspace(const std::filesystem::path& workspace, PSID sid) {
+  std::error_code error;
+  if (sid == nullptr || !std::filesystem::is_directory(workspace, error) || error ||
+      !ResourceIntegrityAtMostMedium(workspace)) {
+    return false;
+  }
+  return ApplyGrant(workspace, sid,
+                    GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE | DELETE,
+                    true);
 }
 
 std::optional<std::string> SecurityDescriptorText(const std::filesystem::path& path) {
@@ -674,6 +670,10 @@ bool AttestSecurity(const SecurityRoots& request, PSID sid, bool full,
       if (failure) *failure = "read_metadata";
       return false;
     }
+    if (root && !ResourceIntegrityAtMostMedium(path)) {
+      if (failure) *failure = "read_label";
+      return false;
+    }
     if (root && !GrantsPermissions(
                     path, sid, GENERIC_READ | GENERIC_EXECUTE, directory)) {
       if (failure) *failure = "read_acl";
@@ -699,7 +699,7 @@ bool AttestSecurity(const SecurityRoots& request, PSID sid, bool full,
       if (failure) *failure = "workspace_acl";
       return false;
     }
-    if (root && !HasLowIntegrity(path, directory)) {
+    if (root && !ResourceIntegrityAtMostMedium(path)) {
       if (failure) *failure = "workspace_label";
       return false;
     }
@@ -736,7 +736,8 @@ bool ProvisionSecurity(const SecurityRoots& request, PSID sid) {
     if (scan_error || existing > 1) return false;
     std::error_code error;
     const bool directory = std::filesystem::is_directory(path, error);
-    if (error || !ApplyGrant(path, sid, GENERIC_READ | GENERIC_EXECUTE, directory)) {
+    if (error || !ResourceIntegrityAtMostMedium(path) ||
+        !ApplyGrant(path, sid, GENERIC_READ | GENERIC_EXECUTE, directory)) {
       return false;
     }
   }
@@ -744,10 +745,10 @@ bool ProvisionSecurity(const SecurityRoots& request, PSID sid) {
     std::error_code error;
     const bool directory = std::filesystem::is_directory(path, error);
     if (error ||
+        !ResourceIntegrityAtMostMedium(path) ||
         !ApplyGrant(path, sid,
                     GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE | DELETE,
-                    directory) ||
-        !ApplyLowIntegrity(path, directory)) {
+                    directory)) {
       return false;
     }
   }
@@ -761,7 +762,7 @@ bool RepairSecurity(const SecurityRoots& request, PSID sid) {
   for (const auto& path : read_nodes) {
     std::error_code error;
     const bool directory = std::filesystem::is_directory(path, error);
-    if (error) return false;
+    if (error || !ResourceIntegrityAtMostMedium(path)) return false;
     if (!GrantsPermissions(path, sid, GENERIC_READ | GENERIC_EXECUTE, directory) &&
         !ApplyGrant(path, sid, GENERIC_READ | GENERIC_EXECUTE, directory)) {
       return false;
@@ -779,9 +780,7 @@ bool RepairSecurity(const SecurityRoots& request, PSID sid) {
                     directory)) {
       return false;
     }
-    if (!HasLowIntegrity(path, directory) && !ApplyLowIntegrity(path, directory)) {
-      return false;
-    }
+    if (!ResourceIntegrityAtMostMedium(path)) return false;
   }
   return true;
 }
@@ -803,7 +802,10 @@ bool UnprovisionDomainSecurity(const SecurityRoots& request, PSID sid) {
   if (!CollectSecurityNodes(request, true, &read_nodes, &workspace_nodes)) return false;
   std::reverse(workspace_nodes.begin(), workspace_nodes.end());
   for (const auto& path : workspace_nodes) {
-    if (!RemoveGrant(path, sid) || !RemoveIntegrityLabel(path)) return false;
+    // Cleanup revokes only the product-owned Package SID ACE.  The original
+    // user/system SACL was never changed and must remain byte-for-byte owned by
+    // its authority.
+    if (!RemoveGrant(path, sid)) return false;
   }
   return true;
 }
@@ -937,7 +939,7 @@ int SecurityCommand(const std::wstring& operation, int argc, wchar_t** argv) {
   const char* inheritance_proof =
       (operation == L"repair" || request->mode == L"strict" ||
        (operation == L"attest" && request->mode == L"full"))
-          ? "immutable-read-tree-mutable-workspace-acl-v2"
+          ? "immutable-read-tree-mutable-workspace-acl-mic-v3"
           : (operation == L"provision" ? "fresh-empty-roots-v1"
                                          : "root-identity-no-reparse-tree-v1");
   std::cout << "{\"appcontainer_sid\":\"" << Utf8(*sid_text)
