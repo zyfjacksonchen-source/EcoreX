@@ -833,11 +833,13 @@ sys.stdout.write(json.dumps(response, sort_keys=True, separators=(",", ":")))
 def test_macos_probe_evaluator_rejects_false_network_and_child_evidence() -> None:
     completed = _BoundedProcessResult(returncode=0, stdout=b"{}", stderr=b"")
     passing = {
+        "child_launch_errno": 0,
         "child_returncode": 0,
         "child_started": True,
         "child_write_errno": 1,
         "inside_write": True,
         "network_errno": 1,
+        "network_close_ok": True,
         "outside_read_errno": 1,
         "outside_write_errno": 1,
     }
@@ -849,6 +851,7 @@ def test_macos_probe_evaluator_rejects_false_network_and_child_evidence() -> Non
     )
     for field, value in (
         ("child_returncode", 1),
+        ("child_launch_errno", 13),
         ("child_started", False),
         ("child_write_errno", 2),
         ("inside_write", False),
@@ -867,6 +870,7 @@ def test_macos_probe_evaluator_rejects_false_network_and_child_evidence() -> Non
     for invalid_errno in (True, False, "1", [], {}, None, 1.0):
         for field in (
             "child_write_errno",
+            "child_launch_errno",
             "network_errno",
             "outside_read_errno",
             "outside_write_errno",
@@ -911,11 +915,13 @@ def test_macos_probe_evaluator_rejects_false_network_and_child_evidence() -> Non
 
 def test_macos_probe_failure_reasons_are_stable_and_non_disclosing() -> None:
     passing = {
+        "child_launch_errno": 0,
         "child_returncode": 0,
         "child_started": True,
         "child_write_errno": 1,
         "inside_write": True,
         "network_errno": 1,
+        "network_close_ok": True,
         "outside_read_errno": 1,
         "outside_write_errno": 1,
     }
@@ -939,6 +945,13 @@ def test_macos_probe_failure_reasons_are_stable_and_non_disclosing() -> None:
             "macos_seatbelt_probe_process_nonzero",
         ),
         (completed, {}, True, True, "macos_seatbelt_probe_evidence_invalid"),
+        (
+            completed,
+            {**passing, "child_launch_errno": 13},
+            True,
+            True,
+            "macos_seatbelt_probe_child_launch_failed",
+        ),
         (
             completed,
             {**passing, "child_returncode": 1},
@@ -973,6 +986,13 @@ def test_macos_probe_failure_reasons_are_stable_and_non_disclosing() -> None:
             True,
             True,
             "macos_seatbelt_probe_network_denial_unproven",
+        ),
+        (
+            completed,
+            {**passing, "network_close_ok": False},
+            True,
+            True,
+            "macos_seatbelt_probe_network_cleanup_failed",
         ),
         (
             completed,
@@ -1031,11 +1051,13 @@ def test_macos_probe_preserves_completed_evidence_across_host_checks(
     artifact = workspace / "probe.pyz"
     artifact.write_bytes(b"fixture")
     passing = {
+        "child_launch_errno": 0,
         "child_returncode": 0,
         "child_started": True,
         "child_write_errno": 1,
         "inside_write": True,
         "network_errno": 1,
+        "network_close_ok": True,
         "outside_read_errno": 1,
         "outside_write_errno": 1,
     }

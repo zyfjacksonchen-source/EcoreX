@@ -6278,3 +6278,11 @@ an outer catch that replaced already captured process and JSON evidence with
 Captured subprocess evidence is now immutable. Host checks translate only to
 their own fixed failure facts, and cleanup can never replace a primary result;
 `process_unavailable` is reserved for the actual bounded runner boundary.
+
+The next classified Stage reached the bounded sandbox process but returned
+`macos_seatbelt_probe_process_nonzero`. The only remaining unstructured
+operations inside the probe were child-process launch and socket cleanup.
+Both now produce typed evidence: child launch must report exact zero before a
+return code is accepted, and a constructed socket must close successfully
+without replacing the already captured denial errno. Provider text, paths and
+raw errno values remain private; Stage receives only fixed allowlisted codes.

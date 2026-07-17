@@ -413,13 +413,19 @@ class MacOSSandboxExecBackend:
                     "\ntry: outside.read_text(); r['outside_read_errno']=0\nexcept OSError as exc: r['outside_read_errno']=exc.errno"
                     "\ntry: outside.write_text('x'); r['outside_write_errno']=0\nexcept OSError as exc: r['outside_write_errno']=exc.errno"
                     "\nsock=None"
+                    "\nr['network_close_ok']=True"
                     "\ntry: sock=socket.socket(); r['network_errno']=sock.connect_ex(('127.0.0.1',port))"
                     "\nexcept OSError as exc: r['network_errno']=exc.errno"
-                    "\nfinally:\n if sock is not None: sock.close()"
+                    "\nfinally:"
+                    "\n if sock is not None:"
+                    "\n  try: sock.close()"
+                    "\n  except OSError: r['network_close_ok']=False"
                     "\ntry: inside.joinpath('ok').write_text('ok'); r['inside_write']=True\nexcept Exception: r['inside_write']=False"
-                    "\nchild=subprocess.run([sys.executable,'-I','-c',child_code,str(marker),str(outside)],capture_output=True);"
-                    "r['child_returncode']=child.returncode;r['child_started']=marker.is_file();"
-                    "\ntry: child_value=json.loads(child.stdout.decode('utf-8'))\nexcept (UnicodeDecodeError,json.JSONDecodeError): child_value={}"
+                    "\ntry: child=subprocess.run([sys.executable,'-I','-c',child_code,str(marker),str(outside)],capture_output=True); r['child_launch_errno']=0"
+                    "\nexcept OSError as exc: child=None; r['child_launch_errno']=exc.errno"
+                    "\nr['child_returncode']=child.returncode if child is not None else None;r['child_started']=marker.is_file();"
+                    "\ntry: child_value=json.loads(child.stdout.decode('utf-8')) if child is not None else {}\nexcept (UnicodeDecodeError,json.JSONDecodeError): child_value={}"
+                    "\nif not isinstance(child_value,dict): child_value={}"
                     "\nr['child_write_errno']=child_value.get('outside_write_errno');"
                     "print(json.dumps(r,sort_keys=True,separators=(',',':')))"
                 )
@@ -599,11 +605,13 @@ def _macos_probe_failure_reason(
     child_marker_valid: bool,
 ) -> str:
     expected_keys = {
+        "child_launch_errno",
         "child_returncode",
         "child_started",
         "child_write_errno",
         "inside_write",
         "network_errno",
+        "network_close_ok",
         "outside_read_errno",
         "outside_write_errno",
     }
@@ -613,6 +621,8 @@ def _macos_probe_failure_reason(
         return "macos_seatbelt_probe_process_nonzero"
     if not isinstance(value, dict) or set(value) != expected_keys:
         return "macos_seatbelt_probe_evidence_invalid"
+    if not _is_zero_errno(value["child_launch_errno"]):
+        return "macos_seatbelt_probe_child_launch_failed"
     if (
         type(value["child_returncode"]) is not int
         or value["child_returncode"] != 0
@@ -626,6 +636,8 @@ def _macos_probe_failure_reason(
         return "macos_seatbelt_probe_workspace_write_failed"
     if not _is_denial_errno(value["network_errno"]):
         return "macos_seatbelt_probe_network_denial_unproven"
+    if value["network_close_ok"] is not True:
+        return "macos_seatbelt_probe_network_cleanup_failed"
     if not _is_denial_errno(value["outside_read_errno"]):
         return "macos_seatbelt_probe_read_denial_unproven"
     if not _is_denial_errno(value["outside_write_errno"]):
@@ -639,6 +651,10 @@ def _macos_probe_failure_reason(
 
 def _is_denial_errno(value: Any) -> bool:
     return type(value) is int and value in {errno.EACCES, errno.EPERM}
+
+
+def _is_zero_errno(value: Any) -> bool:
+    return type(value) is int and value == 0
 
 
 def _regular_file_bytes_equal(path: Path, expected: bytes) -> bool:
