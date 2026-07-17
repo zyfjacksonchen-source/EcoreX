@@ -6225,3 +6225,15 @@ UTF-8 and NUL-containing text. Opaque members remain protected by exact locks,
 tree binding, architecture and portable signature checks. Failed runs
 `29585694303` and `29588232914` are quarantined and cannot feed Candidate or
 publication.
+
+The next non-disclosing Stage locator refined that boundary. The remaining
+complete-PEM match was not in Browser or product configuration: its location
+and content hashes mapped exactly to the original, hash-locked macOS arm64
+`opencv-python==5.0.0.93` `libgnutls.30.dylib` member. Secret-shape detection is
+therefore now defined by canonical text/config paths for every detector,
+including PEM. It still scans raw bytes, so malformed text cannot evade the
+gate. Opaque native members are admitted only through the stronger applicable
+controls: exact wheel hashes, tree/content binding, target architecture,
+relocation and portable signatures. This restores the Candidate scanner's
+historical native/text boundary while keeping Stage and Candidate on one
+implementation.

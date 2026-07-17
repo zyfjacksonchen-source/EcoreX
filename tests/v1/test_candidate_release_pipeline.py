@@ -138,6 +138,10 @@ def test_candidate_archive_uses_shared_text_and_private_key_secret_policy(
     )
     with zipfile.ZipFile(archive_path, "w") as archive:
         archive.writestr("runtime/native-member", b"\xcf\xfa\xed\xfe\x00" + private_key)
+    module["_scan_archive"](archive_path)
+
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("runtime/credential.pem", b"\xff\x00" + private_key)
     with pytest.raises(ValueError, match="candidate_archive_secret_match"):
         module["_scan_archive"](archive_path)
 

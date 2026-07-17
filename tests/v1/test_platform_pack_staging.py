@@ -3623,7 +3623,7 @@ def test_platform_supply_chain_scan_does_not_treat_opaque_native_bytes_as_tokens
     assert evidence["secret_scan"] == "passed"
 
 
-def test_platform_supply_chain_scan_rejects_private_key_inside_opaque_payload(
+def test_platform_supply_chain_scan_treats_opaque_private_key_fixture_as_native_data(
     tmp_path: Path,
 ) -> None:
     stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
@@ -3634,6 +3634,26 @@ def test_platform_supply_chain_scan_rejects_private_key_inside_opaque_payload(
     )
     (tmp_path / "native-member").write_bytes(
         b"\xcf\xfa\xed\xfe\x00\xff" + private_key + b"\x00\x80"
+    )
+
+    evidence = stager["_supply_chain"](
+        tmp_path,
+        (),
+        lock_profile="runtime",
+        require_complete=False,
+    )
+
+    assert evidence["secret_scan"] == "passed"
+
+
+def test_platform_supply_chain_scan_rejects_private_key_in_text_contract(
+    tmp_path: Path,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    (tmp_path / "credential.pem").write_bytes(
+        b"\xff\x00-----BEGIN OPENSSH PRIVATE KEY-----\n"
+        b"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=\n"
+        b"-----END OPENSSH PRIVATE KEY-----\n"
     )
 
     with pytest.raises(stager["StageError"], match="stage_supply_chain_secret_match"):

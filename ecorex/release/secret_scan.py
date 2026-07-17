@@ -56,14 +56,14 @@ TEXT_SECRET_FILENAMES = frozenset(
 def detect_secret(payload: bytes, logical_path: str) -> str | None:
     """Return a stable detector id without returning matched credential bytes."""
 
-    if _PRIVATE_KEY.search(payload):
-        return "private_key"
     path = PurePosixPath(logical_path.replace("\\", "/"))
     if (
         path.suffix.casefold() not in TEXT_SECRET_SUFFIXES
         and path.name not in TEXT_SECRET_FILENAMES
     ):
         return None
+    if _PRIVATE_KEY.search(payload):
+        return "private_key"
     for detector_id, pattern in _TEXT_DETECTORS:
         if pattern.search(payload):
             return detector_id
