@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -80,6 +82,7 @@ def test_clean_checkout_uses_git_porcelain_without_bash(
                 "git-fixed",
                 "status",
                 "--porcelain=v1",
+                "-z",
                 "--untracked-files=all",
             ),
             tmp_path,
@@ -92,6 +95,7 @@ def test_clean_checkout_uses_git_porcelain_without_bash(
 def test_clean_checkout_rejects_dirty_tree_and_preexisting_dist(
     tmp_path: Path,
     monkeypatch: object,
+    capsys: object,
 ) -> None:
     calls = 0
 
@@ -100,11 +104,28 @@ def test_clean_checkout_rejects_dirty_tree_and_preexisting_dist(
     ) -> subprocess.CompletedProcess[bytes]:
         nonlocal calls
         calls += 1
-        return subprocess.CompletedProcess(argv, 0, stdout=b"?? untracked\n", stderr=b"")
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout=b"?? line-one\nline-two\0 M tracked.txt\0",
+            stderr=b"",
+        )
 
     monkeypatch.setattr(STAGE_STEP.shutil, "which", lambda name: "git-fixed")
 
     assert STAGE_STEP.check_clean_checkout(root=tmp_path, runner=dirty_runner) == 75
+    stderr = capsys.readouterr().err
+    assert "line-one\nline-two" not in stderr
+    diagnostic_line = next(
+        line for line in stderr.splitlines() if line.startswith("stage_checkout_dirty=")
+    )
+    diagnostic = json.loads(diagnostic_line.removeprefix("stage_checkout_dirty="))
+    assert diagnostic["entry_count"] == 2
+    assert diagnostic["records_truncated"] is False
+    assert base64.urlsafe_b64decode(diagnostic["record_b64"][0]) == (
+        b"?? line-one\nline-two"
+    )
+    assert len(diagnostic["sha256"]) == 64
     (tmp_path / "desktop" / "dist").mkdir(parents=True)
     assert STAGE_STEP.check_clean_checkout(root=tmp_path, runner=dirty_runner) == 75
     assert calls == 1

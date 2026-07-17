@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from dataclasses import dataclass
 import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -167,6 +169,7 @@ def check_clean_checkout(
                 git,
                 "status",
                 "--porcelain=v1",
+                "-z",
                 "--untracked-files=all",
             ),
             cwd=root,
@@ -184,6 +187,24 @@ def check_clean_checkout(
         print("stage_checkout_status_failed", file=sys.stderr, flush=True)
         return _exit_code(int(result.returncode))
     if result.stdout:
+        records = tuple(record for record in result.stdout.split(b"\0") if record)
+        diagnostic = {
+            "byte_count": len(result.stdout),
+            "entry_count": len(records),
+            "record_b64": [
+                base64.urlsafe_b64encode(record[:2048]).decode("ascii")
+                for record in records[:32]
+            ],
+            "records_truncated": len(records) > 32
+            or any(len(record) > 2048 for record in records[:32]),
+            "sha256": hashlib.sha256(result.stdout).hexdigest(),
+        }
+        print(
+            "stage_checkout_dirty="
+            + json.dumps(diagnostic, sort_keys=True, separators=(",", ":")),
+            file=sys.stderr,
+            flush=True,
+        )
         print("stage_checkout_not_clean", file=sys.stderr, flush=True)
         return 75
     print("stage_checkout_clean", flush=True)

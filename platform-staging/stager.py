@@ -1605,80 +1605,178 @@ def _run_macos_isolated_pack_probe(
         _MAX_FILE_BYTES,
         "pack_python_sandbox_probe_invalid",
     )
-    denied = (
-        source_prefix.resolve(strict=True),
-        _PYTHON_FRAMEWORK_ROOT,
-    )
     core = cwd.resolve(strict=True)
-    write_rule = (
-        f'(deny file-write* (subpath "{_seatbelt_literal(core)}"))'
-    )
+    try:
+        interpreter_relative = Path(probe[0]).resolve(strict=True).relative_to(core)
+    except (OSError, RuntimeError, ValueError):
+        raise StageError("pack_python_sandbox_probe_invalid") from None
+    canonical_binding = _tree_binding_sha256(core)
+    denied = (source_prefix.resolve(strict=True), _PYTHON_FRAMEWORK_ROOT)
     isolation_rules = "".join(
         f'(deny file-read* (subpath "{_seatbelt_literal(path)}"))'
         f'(deny file-map-executable (subpath "{_seatbelt_literal(path)}"))'
         for path in denied
     )
-    baseline_profile = f"(version 1)(allow default){write_rule}"
-    profile = f"{baseline_profile}{isolation_rules}"
-    positive_canary = core / "pack-python.json"
+    canonical_canary = core / "pack-python.json"
     try:
-        positive_canary = positive_canary.resolve(strict=True)
-        positive_canary.relative_to(core)
-        positive_payload = _stable_bytes(
-            positive_canary,
+        canonical_canary = canonical_canary.resolve(strict=True)
+        canonical_canary.relative_to(core)
+        _stable_bytes(
+            canonical_canary,
             64 * 1024,
             "pack_python_sandbox_probe_invalid",
         )
     except (OSError, RuntimeError, ValueError):
         raise StageError("pack_python_sandbox_probe_invalid") from None
-    try:
-        profile_check = run_bounded_process(
-            (str(sandbox), "-p", profile, str(true)),
-            payload=None,
-            cwd=cwd,
-            environment=_runtime_environment(),
-            timeout_seconds=30,
-            max_stdout_bytes=64 * 1024,
-            max_stderr_bytes=64 * 1024,
+    with tempfile.TemporaryDirectory(
+        prefix=".ecorex-pack-baseline-",
+        dir=core.parent,
+    ) as baseline_temporary, tempfile.TemporaryDirectory(
+        prefix=".ecorex-pack-isolated-",
+        dir=core.parent,
+    ) as isolated_temporary:
+        baseline_root = Path(baseline_temporary)
+        isolated_root = Path(isolated_temporary)
+        baseline_core = baseline_root / "core"
+        isolated_core = isolated_root / "core"
+        baseline_temp = baseline_root / "tmp"
+        isolated_temp = isolated_root / "tmp"
+        baseline_temp.mkdir()
+        isolated_temp.mkdir()
+        _copy_tree(core, baseline_core)
+        _copy_tree(core, isolated_core)
+        if (
+            _tree_binding_sha256(baseline_core) != canonical_binding
+            or _tree_binding_sha256(isolated_core) != canonical_binding
+        ):
+            raise StageError("pack_python_probe_snapshot_invalid")
+        canonical_rules = (
+            f'(deny file-read* (subpath "{_seatbelt_literal(core)}"))'
+            f'(deny file-map-executable (subpath "{_seatbelt_literal(core)}"))'
+            f'(deny file-write* (subpath "{_seatbelt_literal(core)}"))'
         )
+        baseline_cross_rules = (
+            f'(deny file-read* (subpath "{_seatbelt_literal(isolated_root)}"))'
+            f'(deny file-map-executable (subpath "{_seatbelt_literal(isolated_root)}"))'
+            f'(deny file-write* (subpath "{_seatbelt_literal(isolated_root)}"))'
+        )
+        isolated_cross_rules = (
+            f'(deny file-read* (subpath "{_seatbelt_literal(baseline_root)}"))'
+            f'(deny file-map-executable (subpath "{_seatbelt_literal(baseline_root)}"))'
+            f'(deny file-write* (subpath "{_seatbelt_literal(baseline_root)}"))'
+        )
+        # Canonical Core is never executed.  Both verified snapshots exist
+        # before either probe runs, and each profile denies canonical Core plus
+        # every read, executable map and write against the peer snapshot.
+        baseline_profile = (
+            f"(version 1)(allow default){canonical_rules}{baseline_cross_rules}"
+        )
+        profile = (
+            f"(version 1)(allow default){canonical_rules}{isolated_cross_rules}"
+            f"{isolation_rules}"
+        )
+        positive_canary = isolated_core / "pack-python.json"
+        positive_payload = _stable_bytes(
+            positive_canary,
+            64 * 1024,
+            "pack_python_sandbox_probe_invalid",
+        )
+        try:
+            profile_check = run_bounded_process(
+                (str(sandbox), "-p", profile, str(true)),
+                payload=None,
+                cwd=isolated_core,
+                environment=_runtime_environment(),
+                timeout_seconds=30,
+                max_stdout_bytes=64 * 1024,
+                max_stderr_bytes=64 * 1024,
+            )
+            positive = run_bounded_process(
+                (str(sandbox), "-p", profile, str(cat), str(positive_canary)),
+                payload=None,
+                cwd=isolated_core,
+                environment=_runtime_environment(),
+                timeout_seconds=30,
+                max_stdout_bytes=64 * 1024,
+                max_stderr_bytes=64 * 1024,
+            )
+            source_denial = run_bounded_process(
+                (str(sandbox), "-p", profile, str(cat), str(source_canary)),
+                payload=None,
+                cwd=isolated_core,
+                environment=_runtime_environment(),
+                timeout_seconds=30,
+                max_stdout_bytes=64 * 1024,
+                max_stderr_bytes=64 * 1024,
+            )
+            canonical_denial = run_bounded_process(
+                (str(sandbox), "-p", profile, str(cat), str(canonical_canary)),
+                payload=None,
+                cwd=isolated_core,
+                environment=_runtime_environment(),
+                timeout_seconds=30,
+                max_stdout_bytes=64 * 1024,
+                max_stderr_bytes=64 * 1024,
+            )
+        except (OSError, BoundedProcessError):
+            raise StageError("pack_python_sandbox_probe_invalid") from None
         if profile_check.returncode != 0:
             raise StageError("pack_python_sandbox_profile_invalid")
-        positive = run_bounded_process(
-            (str(sandbox), "-p", profile, str(cat), str(positive_canary)),
-            payload=None,
-            cwd=cwd,
-            environment=_runtime_environment(),
-            timeout_seconds=30,
-            max_stdout_bytes=64 * 1024,
-            max_stderr_bytes=64 * 1024,
-        )
         if positive.returncode != 0 or positive.stdout != positive_payload:
             raise StageError("pack_python_sandbox_probe_invalid")
-        denial = run_bounded_process(
-            (str(sandbox), "-p", profile, str(cat), str(source_canary)),
-            payload=None,
-            cwd=cwd,
-            environment=_runtime_environment(),
-            timeout_seconds=30,
-            max_stdout_bytes=64 * 1024,
-            max_stderr_bytes=64 * 1024,
+        if (
+            source_denial.returncode == 0
+            or source_denial.stdout
+            or canonical_denial.returncode == 0
+            or canonical_denial.stdout
+        ):
+            raise StageError("pack_python_sandbox_probe_not_enforced")
+        # The security-bearing source-denied probe always runs first.  The
+        # source-readable baseline is diagnostic only and cannot seed shared
+        # state for the isolated decision.
+        isolated_interpreter = isolated_core / interpreter_relative
+        isolated_probe = (str(isolated_interpreter), *probe[1:])
+        isolated_bootstrap_command = _pack_python_bootstrap_probe_command(
+            isolated_interpreter
         )
-    except StageError:
-        raise
-    except (OSError, BoundedProcessError):
-        raise StageError("pack_python_sandbox_probe_invalid") from None
-    if denial.returncode == 0 or denial.stdout:
-        raise StageError("pack_python_sandbox_probe_not_enforced")
-    baseline = _run_macos_pack_probe_process(
-        (str(sandbox), "-p", baseline_profile, *probe),
-        cwd=cwd,
-        code_prefix="pack_python_probe",
-    )
-    result = _run_macos_pack_probe_process(
-        (str(sandbox), "-p", profile, *probe),
-        cwd=cwd,
-        code_prefix="pack_python_sandbox_probe",
-    )
+        isolated_bootstrap = _run_macos_pack_probe_process(
+            (str(sandbox), "-p", profile, *isolated_bootstrap_command),
+            cwd=isolated_core,
+            code_prefix="pack_python_sandbox_bootstrap_probe",
+            temporary_directory=isolated_temp,
+        )
+        if isolated_bootstrap.stdout.strip() != b"__ECOREX_PACK_BOOTSTRAP_OK__":
+            raise StageError("pack_python_sandbox_bootstrap_probe_output_invalid")
+        result = _run_macos_pack_probe_process(
+            (str(sandbox), "-p", profile, *isolated_probe),
+            cwd=isolated_core,
+            code_prefix="pack_python_sandbox_probe",
+            temporary_directory=isolated_temp,
+        )
+        baseline_interpreter = baseline_core / interpreter_relative
+        baseline_probe = (str(baseline_interpreter), *probe[1:])
+        baseline_bootstrap_command = _pack_python_bootstrap_probe_command(
+            baseline_interpreter
+        )
+        baseline_bootstrap = _run_macos_pack_probe_process(
+            (str(sandbox), "-p", baseline_profile, *baseline_bootstrap_command),
+            cwd=baseline_core,
+            code_prefix="pack_python_bootstrap_probe",
+            temporary_directory=baseline_temp,
+        )
+        if baseline_bootstrap.stdout.strip() != b"__ECOREX_PACK_BOOTSTRAP_OK__":
+            raise StageError("pack_python_bootstrap_probe_output_invalid")
+        baseline = _run_macos_pack_probe_process(
+            (str(sandbox), "-p", baseline_profile, *baseline_probe),
+            cwd=baseline_core,
+            code_prefix="pack_python_probe",
+            temporary_directory=baseline_temp,
+        )
+        if (
+            _tree_binding_sha256(baseline_core) != canonical_binding
+            or _tree_binding_sha256(isolated_core) != canonical_binding
+        ):
+            raise StageError("pack_python_probe_snapshot_mutated")
     if result.stdout != baseline.stdout:
         raise StageError("pack_python_sandbox_probe_output_invalid")
     print("macos_pack_python_sandbox_probe=passed", flush=True)
@@ -1692,6 +1790,13 @@ _PACK_PROBE_FAILURE_PHASES = {
     84: "resources",
     85: "tzdata",
 }
+_PACK_PROBE_FAILURE_MARKERS = {
+    b"__ECOREX_PACK_PROBE_BOOTSTRAP_FAILED__": "bootstrap",
+    b"__ECOREX_PACK_PROBE_NATIVE_IMPORTS_FAILED__": "native_imports",
+    b"__ECOREX_PACK_PROBE_ASGI_IMPORTS_FAILED__": "asgi_imports",
+    b"__ECOREX_PACK_PROBE_RESOURCES_FAILED__": "resources",
+    b"__ECOREX_PACK_PROBE_TZDATA_FAILED__": "tzdata",
+}
 
 
 def _run_macos_pack_probe_process(
@@ -1699,6 +1804,7 @@ def _run_macos_pack_probe_process(
     *,
     cwd: Path,
     code_prefix: str,
+    temporary_directory: Path | None = None,
 ) -> BoundedProcessResult:
     """Run a fixed pack probe without crossing captured process details.
 
@@ -1707,12 +1813,20 @@ def _run_macos_pack_probe_process(
     process boundary and only a stable typed code leaves this function.
     """
 
+    environment = dict(_runtime_environment())
+    if temporary_directory is not None:
+        try:
+            temporary_directory = temporary_directory.resolve(strict=True)
+        except (OSError, RuntimeError):
+            raise StageError(f"{code_prefix}_execution_failed") from None
+        value = str(temporary_directory)
+        environment.update({"TEMP": value, "TMP": value, "TMPDIR": value})
     try:
         result = run_bounded_process(
             command,
             payload=None,
             cwd=cwd,
-            environment=_runtime_environment(),
+            environment=environment,
             timeout_seconds=60,
             max_stdout_bytes=4 * 1024 * 1024,
             max_stderr_bytes=1024 * 1024,
@@ -1722,6 +1836,8 @@ def _run_macos_pack_probe_process(
     if result.returncode == 0:
         return result
     phase = _PACK_PROBE_FAILURE_PHASES.get(result.returncode)
+    if phase is None:
+        phase = _PACK_PROBE_FAILURE_MARKERS.get(result.stdout.strip())
     if phase is None:
         raise StageError(f"{code_prefix}_execution_failed")
     raise StageError(f"{code_prefix}_{phase}_failed")
@@ -1911,6 +2027,7 @@ def _pack_python_probe_command(interpreter: Path) -> tuple[str, ...]:
         """try:
  import ecorex
 except BaseException:
+ print('__ECOREX_PACK_PROBE_BOOTSTRAP_FAILED__')
  raise SystemExit(81)
 try:
  import cryptography
@@ -1918,12 +2035,14 @@ try:
  from cryptography.hazmat.bindings import _rust
  assert _rust and pydantic_core
 except BaseException:
+ print('__ECOREX_PACK_PROBE_NATIVE_IMPORTS_FAILED__')
  raise SystemExit(82)
 try:
  import fastapi,httpx,pydantic,uvicorn,websockets
  from multipart.multipart import parse_options_header
  assert parse_options_header
 except BaseException:
+ print('__ECOREX_PACK_PROBE_ASGI_IMPORTS_FAILED__')
  raise SystemExit(83)
 try:
  import certifi
@@ -1932,6 +2051,7 @@ try:
  assert Path(certifi.where()).is_file()
  assert len(AdminWebAssets.load().assets)==2
 except BaseException:
+ print('__ECOREX_PACK_PROBE_RESOURCES_FAILED__')
  raise SystemExit(84)
 try:
  import tzdata,zoneinfo
@@ -1939,8 +2059,19 @@ try:
  zoneinfo.ZoneInfo.clear_cache()
  assert zoneinfo.ZoneInfo('Asia/Shanghai').key == 'Asia/Shanghai'
 except BaseException:
+ print('__ECOREX_PACK_PROBE_TZDATA_FAILED__')
  raise SystemExit(85)
 print(ecorex.__version__)""",
+    )
+
+
+def _pack_python_bootstrap_probe_command(interpreter: Path) -> tuple[str, ...]:
+    return (
+        str(interpreter),
+        "-I",
+        "-B",
+        "-c",
+        "print('__ECOREX_PACK_BOOTSTRAP_OK__')",
     )
 
 

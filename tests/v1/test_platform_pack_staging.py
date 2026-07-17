@@ -2042,6 +2042,7 @@ def test_macos_pack_probe_denies_source_and_framework_reads(
     interpreter.parent.mkdir(parents=True)
     interpreter.write_bytes(b"python")
     original_is_file = Path.is_file
+    environments: list[dict[str, str]] = []
 
     def fake_is_file(path: Path) -> bool:
         if path.as_posix() in {
@@ -2061,16 +2062,26 @@ def test_macos_pack_probe_denies_source_and_framework_reads(
         command: tuple[str, ...], **kwargs: object
     ) -> SimpleNamespace:
         commands.append(command)
+        environments.append(dict(kwargs["environment"]))  # type: ignore[arg-type]
         if Path(command[-2]).as_posix() == "/bin/cat":
-            if Path(command[-1]) == positive_canary:
+            if (
+                Path(command[-1]).name == "pack-python.json"
+                and Path(command[-1]) != positive_canary
+            ):
                 return SimpleNamespace(
                     returncode=0,
                     stdout=b"signed-pack-manifest",
                     stderr=b"",
                 )
             return SimpleNamespace(returncode=1, stdout=b"", stderr=b"denied")
-        if command == probe or command[-len(probe) :] == probe:
+        if command == probe or command[-4:] == probe[1:]:
             return SimpleNamespace(returncode=0, stdout=b"1.0.0\n", stderr=b"")
+        if command[-1] == "print('__ECOREX_PACK_BOOTSTRAP_OK__')":
+            return SimpleNamespace(
+                returncode=0,
+                stdout=b"__ECOREX_PACK_BOOTSTRAP_OK__\n",
+                stderr=b"",
+            )
         return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
 
     monkeypatch.setitem(
@@ -2088,33 +2099,53 @@ def test_macos_pack_probe_denies_source_and_framework_reads(
     )
 
     assert result.stdout == b"1.0.0\n"
-    assert len(commands) == 5
+    assert len(commands) == 8
     profile_check = commands[0]
     assert Path(profile_check[-1]).as_posix() == "/usr/bin/true"
     positive = commands[1]
     assert Path(positive[-2]).as_posix() == "/bin/cat"
-    assert Path(positive[-1]) == positive_canary
-    baseline = commands[3]
-    assert baseline[-len(probe) :] == probe
-    command = commands[4]
+    assert Path(positive[-1]).name == "pack-python.json"
+    assert Path(positive[-1]) != positive_canary
+    source_denial = commands[2]
+    assert Path(source_denial[-2]).as_posix() == "/bin/cat"
+    assert Path(source_denial[-1]) == source_canary
+    canonical_denial = commands[3]
+    assert Path(canonical_denial[-2]).as_posix() == "/bin/cat"
+    assert Path(canonical_denial[-1]) == positive_canary
+    isolated_bootstrap = commands[4]
+    assert isolated_bootstrap[-1] == "print('__ECOREX_PACK_BOOTSTRAP_OK__')"
+    command = commands[5]
     assert Path(command[0]).as_posix() == "/usr/bin/sandbox-exec"
     assert command[1] == "-p"
-    assert command[3:] == probe
+    assert command[-4:] == probe[1:]
     profile = command[2]
-    core_literal = stager["_seatbelt_literal"](core.resolve())
-    write_rule = f'(deny file-write* (subpath "{core_literal}"))'
-    assert write_rule in baseline[2]
-    assert write_rule in profile
+    baseline_bootstrap = commands[6]
+    assert baseline_bootstrap[-1] == "print('__ECOREX_PACK_BOOTSTRAP_OK__')"
+    baseline = commands[7]
+    assert baseline[-4:] == probe[1:]
+    assert environments[4]["TMPDIR"] == environments[5]["TMPDIR"]
+    assert environments[6]["TMPDIR"] == environments[7]["TMPDIR"]
+    assert environments[4]["TMPDIR"] != environments[6]["TMPDIR"]
+    isolated_root_literal = stager["_seatbelt_literal"](
+        Path(environments[4]["TMPDIR"]).parent
+    )
+    baseline_root_literal = stager["_seatbelt_literal"](
+        Path(environments[6]["TMPDIR"]).parent
+    )
+    assert f'(deny file-write* (subpath "{baseline_root_literal}"))' in profile
+    assert f'(deny file-write* (subpath "{isolated_root_literal}"))' in baseline[2]
     source_literal = stager["_seatbelt_literal"](source_prefix.resolve())
     assert f'(deny file-read* (subpath "{source_literal}"))' in profile
     framework = stager["_seatbelt_literal"](framework_root)
     assert f'(deny file-read* (subpath "{framework}"))' in profile
+    core_literal = stager["_seatbelt_literal"](core.resolve())
+    assert f'(deny file-read* (subpath "{core_literal}"))' in profile
+    assert f'(deny file-read* (subpath "{core_literal}"))' in baseline[2]
+    assert f'(deny file-write* (subpath "{core_literal}"))' in profile
+    assert f'(deny file-write* (subpath "{core_literal}"))' in baseline[2]
     assert f'(deny file-read* (subpath "{source_literal}"))' not in baseline[2]
     assert f'(deny file-read* (subpath "{framework}"))' not in baseline[2]
-    denial = commands[2]
-    assert Path(denial[0]).as_posix() == "/usr/bin/sandbox-exec"
-    assert Path(denial[-2]).as_posix() == "/bin/cat"
-    assert Path(denial[-1]) == source_canary
+    assert Path(source_denial[0]).as_posix() == "/usr/bin/sandbox-exec"
 
 
 @pytest.mark.parametrize(
@@ -2152,6 +2183,34 @@ def test_macos_pack_probe_maps_only_fixed_failure_phases(
         )
 
     assert raised.value.code == f"pack_python_probe_{suffix}"
+
+
+def test_macos_pack_probe_recovers_phase_when_sandbox_normalizes_exit_code(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    probe_globals = stager["_run_macos_pack_probe_process"].__globals__
+
+    def fake_bounded_process(
+        command: tuple[str, ...], **kwargs: object
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            returncode=1,
+            stdout=b"__ECOREX_PACK_PROBE_NATIVE_IMPORTS_FAILED__\n",
+            stderr=b"private",
+        )
+
+    monkeypatch.setitem(probe_globals, "run_bounded_process", fake_bounded_process)
+
+    with pytest.raises(stager["StageError"]) as raised:
+        stager["_run_macos_pack_probe_process"](
+            ("sandbox-exec", "pack-python"),
+            cwd=tmp_path,
+            code_prefix="pack_python_sandbox_probe",
+        )
+
+    assert raised.value.code == "pack_python_sandbox_probe_native_imports_failed"
 
 
 def test_pack_python_base_member_cannot_escape_closure_authority(
