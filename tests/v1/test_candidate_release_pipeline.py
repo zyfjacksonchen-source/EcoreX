@@ -894,6 +894,49 @@ def test_stage_receipt_accepts_non_secret_dependency_marker_substrings(
     )
 
 
+def test_stage_receipt_does_not_treat_opaque_native_bytes_as_tokens(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "image"
+    source.mkdir()
+    (source / "ecorex-image-pack.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "pack_id": "image",
+                "runtime_api_version": "1.0.0",
+                "tools": ["imagegen", "vision"],
+                "adapter": "core-managed-image-v1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (source / "__main__.py").write_text(
+        "raise SystemExit('managed bridge test')\n",
+        encoding="utf-8",
+    )
+    (source / "signed-native-member").write_bytes(
+        b"\xcf\xfa\xed\xfe\x00\x01ghp_abcdefghijklmnopqrstuvwxyz123456\x00\xff\x80"
+    )
+
+    receipt = write_stage_receipt(
+        source_dir=source,
+        destination=tmp_path / "receipt.json",
+        stage_id="image-macos-arm64",
+        commit_sha=COMMIT,
+        workflow_run_id=RUN_ID,
+        producer_executable_sha256=STAGER_SHA256,
+        producer_adapter_sha256=None,
+        kind="capability-pack",
+        platform="macos",
+        architecture="arm64",
+        pack_id="image",
+        gate_evidence=_gate_evidence("image"),
+    )
+
+    assert json.loads(receipt.read_text(encoding="utf-8"))["source_tree_file_count"] == 3
+
+
 def test_candidate_cli_writes_typed_failure_when_protected_signer_is_missing(
     tmp_path: Path,
 ) -> None:

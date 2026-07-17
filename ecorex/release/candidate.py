@@ -48,6 +48,7 @@ from .models import (
     ReleaseBuildSpec,
     WebBundleBuildInput,
 )
+from .secret_scan import detect_secret
 from .signing import SigningError
 
 
@@ -97,15 +98,7 @@ _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _MAX_JSON_BYTES = 2 * 1024 * 1024
 _MAX_STAGE_FILES = 50_000
 _MAX_STAGE_BYTES = 2 * 1024 * 1024 * 1024
-_SECRET_PATTERNS = (
-    re.compile(
-        rb"-----BEGIN ((?:RSA |EC |OPENSSH )?PRIVATE KEY)-----\r?\n"
-        rb"(?:[A-Za-z0-9+/=]{16,}\r?\n)+-----END \1-----"
-    ),
-    re.compile(rb"(?<![A-Za-z0-9+/=])AKIA[0-9A-Z]{16}(?![A-Za-z0-9+/=])"),
-    re.compile(rb"(?<![A-Za-z0-9+/=])gh[pousr]_[A-Za-z0-9]{20,}(?![A-Za-z0-9+/=])"),
-    re.compile(rb"(?<![A-Za-z0-9+/=])xox[baprs]-[A-Za-z0-9-]{10,}(?![A-Za-z0-9+/=])"),
-)
+_MAX_SECRET_SCAN_BYTES = 4 * 1024 * 1024
 
 
 class CandidateBuildError(RuntimeError):
@@ -479,7 +472,7 @@ def scan_stage_tree(source_dir: str | os.PathLike[str]) -> StageTree:
             total += metadata.st_size
             if total > _MAX_STAGE_BYTES:
                 raise CandidateBuildError("stage_source_size_limit")
-            sha256 = _stable_file_sha256(path, metadata)
+            sha256 = _stable_file_sha256(path, metadata, logical_path=relative)
             record = {
                 "path": relative,
                 "size_bytes": metadata.st_size,
@@ -1471,9 +1464,14 @@ def _read_regular_bytes(path: Path, *, code: str) -> bytes:
     return payload
 
 
-def _stable_file_sha256(path: Path, before: os.stat_result) -> str:
+def _stable_file_sha256(
+    path: Path,
+    before: os.stat_result,
+    *,
+    logical_path: str,
+) -> str:
     digest = hashlib.sha256()
-    tail = b""
+    scan_payload = bytearray() if before.st_size <= _MAX_SECRET_SCAN_BYTES else None
     try:
         with path.open("rb") as stream:
             opened = os.fstat(stream.fileno())
@@ -1481,10 +1479,8 @@ def _stable_file_sha256(path: Path, before: os.stat_result) -> str:
                 raise CandidateBuildError("stage_source_changed")
             while chunk := stream.read(1024 * 1024):
                 digest.update(chunk)
-                window = tail + chunk
-                if any(pattern.search(window) for pattern in _SECRET_PATTERNS):
-                    raise CandidateBuildError("stage_source_secret_detected")
-                tail = window[-256:]
+                if scan_payload is not None:
+                    scan_payload.extend(chunk)
             after = os.fstat(stream.fileno())
         current = path.lstat()
     except CandidateBuildError:
@@ -1494,6 +1490,8 @@ def _stable_file_sha256(path: Path, before: os.stat_result) -> str:
     identity = _stat_identity(before)
     if _stat_identity(opened) != identity or _stat_identity(after) != identity or _stat_identity(current) != identity:
         raise CandidateBuildError("stage_source_changed")
+    if scan_payload is not None and detect_secret(bytes(scan_payload), logical_path):
+        raise CandidateBuildError("stage_source_secret_detected")
     return digest.hexdigest()
 
 

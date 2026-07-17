@@ -6360,3 +6360,13 @@ stream as `platform_stager_response_invalid`; the entire run is quarantined.
 The marker is removed rather than weakening the parser, and a static AST gate
 now reserves stdout for the single fixed success response while requiring all
 `print` calls to target stderr explicitly.
+
+PR #44 and exact-main run `29619217940` passed the protected matrix. The next
+Stage (`29619611874`) crossed the corrected protocol, then failed while the
+parent generated receipts because receipt hashing applied raw credential
+regexes to every opaque native byte stream. The stager's supply-chain gate had
+already passed the same tree using the centralized path-aware policy. Receipt
+generation now reuses that policy and its bounded text-contract scope while
+preserving streaming hashes and stable-file identity checks. Actual secrets in
+text contracts remain rejected; token-shaped Mach-O/native bytes no longer
+produce a false credential result. The failed run remains quarantined.

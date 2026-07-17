@@ -2436,3 +2436,13 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Root cause | 0 | The successful macOS Pack sandbox probe printed a progress marker to stdout immediately before `main` wrote the single success JSON object. The strict parent correctly rejects the resulting two-message stream rather than parsing the last line. |
 | Protocol correction | 0 local contract | The progress print is removed; successful platform staging reserves stdout for exactly one protocol response. An AST contract gate rejects every future `print` not explicitly directed to stderr and requires exactly one fixed `sys.stdout.write` success response. Sandbox, probe and failure behavior are unchanged. |
 | Promotion | pending | Protected PR/main verification and a wholly new same-run Stage are required. No output from `29618345433` may be reused. |
+
+## Unified Stage secret-shape policy - 2026-07-18
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Protected stdout baseline | 0 | PR #44 run `29618871855` and exact-main run `29619217940` passed all five protected jobs. The squash merge is exact main `5e5856daae6c7ae9bed7c604570bf6c90d1e6066`. |
+| Exact-main Stage `29619611874` | 1 expected | macOS arm64 crossed the corrected single-response protocol and returned `stage_source_secret_detected` while the parent generated Stage receipts. macOS x64 and Windows were cancelled, the one-use Windows runner unregistered and the full run is quarantined. |
+| Root cause | 0 | The stager supply-chain gate uses the shared path-aware secret policy and had passed the same final tree. Receipt generation instead applied raw token regexes to every opaque native byte stream, so signed Mach-O/runtime bytes could be classified as credentials even though the source-owned policy intentionally scans only bounded text contracts. |
+| Policy correction | 0 local contract | Stage receipt hashing now uses the same centralized `detect_secret` policy and the same 4 MiB text-contract bound as the attested stager supply-chain gate. Hashing, identity checks and size limits remain streaming and unchanged; real secret shapes in text contracts still fail closed. A macOS opaque-native regression fixture proves token-shaped binary bytes are not treated as credentials. |
+| Promotion | pending | Protected PR/main verification and a wholly new same-run Stage are required. No output from `29619611874` may be reused. |
