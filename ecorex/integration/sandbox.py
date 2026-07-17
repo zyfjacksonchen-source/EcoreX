@@ -49,16 +49,25 @@ class SandboxProbe:
     platform: str
     ready: bool
     reason: str
-    filesystem_read_scoped: bool = False
+    filesystem_read_scope: str = "unverified"
     filesystem_write_scoped: bool = False
     network_denied: bool = False
     process_tree_contained: bool = False
 
     @property
+    def effective_filesystem_read_scope(self) -> str:
+        if self.filesystem_read_scope in {
+            "host-unrestricted",
+            "workspace-and-runtime",
+        }:
+            return self.filesystem_read_scope
+        return "unverified"
+
+    @property
     def complete(self) -> bool:
-        return self.ready and all(
+        return self.ready and self.reason == "ready" and all(
             (
-                self.filesystem_read_scoped,
+                self.effective_filesystem_read_scope != "unverified",
                 self.filesystem_write_scoped,
                 self.network_denied,
                 self.process_tree_contained,
@@ -71,7 +80,10 @@ class SandboxProbe:
             "platform": self.platform,
             "ready": self.complete,
             "reason": self.reason,
-            "filesystem_read_scoped": self.filesystem_read_scoped,
+            "filesystem_read_scoped": (
+                self.effective_filesystem_read_scope == "workspace-and-runtime"
+            ),
+            "filesystem_read_scope": self.effective_filesystem_read_scope,
             "filesystem_write_scoped": self.filesystem_write_scoped,
             "network_denied": self.network_denied,
             "process_tree_contained": self.process_tree_contained,
@@ -194,7 +206,7 @@ def probe_windows_appcontainer_helper(
         platform="windows",
         ready=ready,
         reason="ready" if ready else "windows_appcontainer_probe_failed",
-        filesystem_read_scoped=ready,
+        filesystem_read_scope=("workspace-and-runtime" if ready else "unverified"),
         filesystem_write_scoped=ready,
         network_denied=ready,
         process_tree_contained=ready,
@@ -409,6 +421,7 @@ class MacOSSandboxExecBackend:
                 )
                 script = textwrap.dedent(
                     """
+                    import hashlib
                     import json
                     import pathlib
                     import socket
@@ -428,10 +441,12 @@ class MacOSSandboxExecBackend:
 
                         phase = "outside_read"
                         try:
-                            outside.read_text()
-                            result["outside_read_errno"] = 0
-                        except OSError as exc:
-                            result["outside_read_errno"] = exc.errno
+                            result["outside_read_match"] = (
+                                hashlib.sha256(outside.read_bytes()).hexdigest()
+                                == sys.argv[5]
+                            )
+                        except OSError:
+                            result["outside_read_match"] = False
 
                         phase = "outside_write"
                         try:
@@ -530,6 +545,7 @@ class MacOSSandboxExecBackend:
                         str(outside),
                         str(network_port),
                         child_script,
+                        hashlib.sha256(outside_canary.encode("utf-8")).hexdigest(),
                     ),
                     timeout_seconds=10,
                 )
@@ -580,7 +596,7 @@ class MacOSSandboxExecBackend:
             platform="macos",
             ready=ready,
             reason=reason,
-            filesystem_read_scoped=ready,
+            filesystem_read_scope=("host-unrestricted" if ready else "unverified"),
             filesystem_write_scoped=ready,
             network_denied=ready,
             process_tree_contained=ready,
@@ -625,14 +641,11 @@ class MacOSSandboxExecBackend:
         python_executable: Path,
         artifact_path: Path,
     ) -> str:
-        read_rules = [
-            '(subpath "/System")',
-            '(subpath "/usr/lib")',
-            '(subpath "/Library/Apple")',
-            f'(literal "{_seatbelt_escape(str(python_executable))}")',
-            f'(subpath "{_seatbelt_escape(str(python_executable.parent.parent))}")',
-            f'(literal "{_seatbelt_escape(str(artifact_path))}")',
-        ]
+        # workspace-write deliberately permits reads while restricting writes
+        # to the selected workspaces and denying network.  This matches the
+        # user-facing profile and avoids a brittle, interpreter-specific read
+        # allowlist that can prevent signed Python builds from starting.
+        del python_executable, artifact_path
         workspace_rules = [
             f'(subpath "{_seatbelt_escape(str(root))}")' for root in workspace_roots
         ]
@@ -643,8 +656,7 @@ class MacOSSandboxExecBackend:
                 "(allow process*)",
                 "(allow sysctl-read)",
                 "(allow mach-lookup)",
-                "(allow file-read-metadata)",
-                "(allow file-read* " + " ".join((*read_rules, *workspace_rules)) + ")",
+                "(allow file-read*)",
                 "(allow file-write* " + " ".join(workspace_rules) + ")",
                 "(deny network*)",
             )
@@ -706,7 +718,7 @@ def _macos_probe_failure_reason(
         "inside_write",
         "network_errno",
         "network_close_ok",
-        "outside_read_errno",
+        "outside_read_match",
         "outside_write_errno",
     }
     if completed is None:
@@ -753,8 +765,8 @@ def _macos_probe_failure_reason(
         return "macos_seatbelt_probe_network_denial_unproven"
     if value["network_close_ok"] is not True:
         return "macos_seatbelt_probe_network_cleanup_failed"
-    if not _is_denial_errno(value["outside_read_errno"]):
-        return "macos_seatbelt_probe_read_denial_unproven"
+    if value["outside_read_match"] is not True:
+        return "macos_seatbelt_probe_read_policy_unproven"
     if not _is_denial_errno(value["outside_write_errno"]):
         return "macos_seatbelt_probe_write_denial_unproven"
     if not outside_unchanged:

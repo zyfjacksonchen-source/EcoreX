@@ -6295,3 +6295,26 @@ Every later operation is inside a top-level fixed-phase envelope. Future
 failures therefore distinguish interpreter startup, missing handshake and the
 precise in-probe phase without exposing stderr, exception text, host paths,
 arguments or errno values.
+
+## 2026-07-18 - Truthful macOS workspace-write semantics
+
+The startup handshake isolated the remaining Stage failure to the Seatbelt
+read policy rather than Python or probe logic. A deny-default list of selected
+Framework paths cannot productize the dynamic read closure of a signed Python
+distribution. More importantly, it did not match the user-visible
+workspace-write profile: this profile permits reads, scopes writes to chosen
+workspaces and denies network.
+
+The macOS backend now implements and behaviorally proves that exact contract.
+Read evidence is a digest match for a host canary, never its content; direct
+and inherited outside writes remain denied, workspace writes succeed and the
+live network listener remains unreachable. The runtime no longer publishes a
+false `workspace-only` read claim: sandbox probes carry a canonical read scope
+which is bound into the Pack contract id. Invocation TEMP/TMP also lives in a
+private hidden directory under the selected workspace, so normal office tools
+can use temporary files without receiving broader write authority. The
+directory is removed only after process cleanup on every terminal path.
+
+PR #38 and exact-main run `29606908819` passed the protected matrix (the
+quality job required one failed-job rerun after its first attempt timed out).
+Stage `29609800335` is quarantined and cannot feed Candidate or publication.

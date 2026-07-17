@@ -148,7 +148,7 @@ _MACOS_SANDBOX_FAILURE_CODES = frozenset(
         "macos_seatbelt_probe_outside_write_failed",
         "macos_seatbelt_probe_process_nonzero",
         "macos_seatbelt_probe_process_unavailable",
-        "macos_seatbelt_probe_read_denial_unproven",
+        "macos_seatbelt_probe_read_policy_unproven",
         "macos_seatbelt_probe_workspace_write_failed",
         "macos_seatbelt_probe_write_denial_unproven",
     }

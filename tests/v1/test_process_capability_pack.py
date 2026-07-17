@@ -137,10 +137,20 @@ import json
 import os
 from pathlib import Path
 import sys
+import tempfile
 
 request = json.load(sys.stdin)
+Path(os.environ["TEMP"], "pack-temp-write").write_text("ok", encoding="utf-8")
+with tempfile.NamedTemporaryFile() as temporary:
+    tempfile_parent = str(Path(temporary.name).parent)
 Path(request["context"]["workspace_roots"][0], ".pack-temp-observation").write_text(
-    os.environ.get("TEMP", "") + "\\n" + os.environ.get("TMP", ""),
+    os.environ.get("TEMP", "")
+    + "\\n"
+    + os.environ.get("TMP", "")
+    + "\\n"
+    + os.environ.get("TMPDIR", "")
+    + "\\n"
+    + tempfile_parent,
     encoding="utf-8",
 )
 result = {
@@ -180,7 +190,7 @@ class _UnitContractSandboxBackend:
             platform="test",
             ready=True,
             reason="ready",
-            filesystem_read_scoped=True,
+            filesystem_read_scope="workspace-and-runtime",
             filesystem_write_scoped=True,
             network_denied=True,
             process_tree_contained=True,
@@ -236,11 +246,15 @@ def test_browser_pack_process_is_executable_and_parent_secrets_are_absent(
         "workspace_count": 1,
         "parent_secret_present": False,
     }
-    observed_temp, observed_tmp = (
+    observed_temp, observed_tmp, observed_tmpdir, tempfile_parent = (
         workspace / ".pack-temp-observation"
     ).read_text(encoding="utf-8").splitlines()
     assert observed_temp == observed_tmp
-    assert Path(observed_temp).name.startswith("ecorex-pack-call-")
+    if os.name != "nt":
+        assert observed_tmpdir == observed_temp
+    assert Path(tempfile_parent) == Path(observed_temp)
+    assert Path(observed_temp).name.startswith(".ecorex-pack-call-")
+    assert Path(observed_temp).is_relative_to(workspace.resolve())
     assert not Path(observed_temp).exists()
 
 
@@ -406,7 +420,7 @@ def test_sandbox_pack_receives_backend_authoritative_permission_snapshot(
     assert result.value["approved"] is True
     assert result.value["idempotency_key"] == "job:tool"
     assert result.value["sandbox_os_enforced"] is True
-    assert result.value["read_scope"] == "workspace-only"
+    assert result.value["read_scope"] == "workspace-and-runtime"
     assert result.value["write_scope"] == "workspace-only"
     assert result.value["network_scope"] == "denied"
     assert result.value["process_tree_scope"] == "contained-inherited"
@@ -547,6 +561,7 @@ def test_pack_crash_is_contained_as_one_stable_tool_failure(tmp_path: Path) -> N
             )
         )
     assert raised.value.code == "pack_process_exited"
+    assert not tuple(workspace.glob(".ecorex-pack-call-*"))
 
 
 def test_descriptor_must_match_the_outer_signed_tool_contract(tmp_path: Path) -> None:
@@ -647,6 +662,7 @@ def test_output_flood_is_killed_without_growing_the_runtime_response(
             )
         )
     assert raised.value.code == "pack_process_output_too_large"
+    assert not tuple(workspace.glob(".ecorex-pack-call-*"))
 
 
 def test_shell_timeout_kills_the_process_and_returns_one_bounded_failure(
@@ -690,6 +706,7 @@ def test_shell_timeout_kills_the_process_and_returns_one_bounded_failure(
             )
         )
     assert raised.value.code == "pack_process_timeout"
+    assert not tuple(workspace.glob(".ecorex-pack-call-*"))
 
 
 def test_shell_pack_must_acknowledge_the_exact_sandbox_handshake(
@@ -746,7 +763,7 @@ sys.stdout.write(json.dumps({
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS Seatbelt real-host contract")
-def test_macos_workspace_sandbox_denies_outside_read_write_network_and_child_escape(
+def test_macos_workspace_sandbox_allows_read_and_denies_outside_write_network_and_child_escape(
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -824,7 +841,7 @@ sys.stdout.write(json.dumps(response, sort_keys=True, separators=(",", ":")))
         )
     ).value
     assert result["inside_write"] is True
-    assert result["outside_read"] is False
+    assert result["outside_read"] is True
     assert result["outside_write"] is False
     assert result["child_escape"] is False
     assert result["network_errno"] in {1, 13}
@@ -840,7 +857,7 @@ def test_macos_probe_evaluator_rejects_false_network_and_child_evidence() -> Non
         "inside_write": True,
         "network_errno": 1,
         "network_close_ok": True,
-        "outside_read_errno": 1,
+        "outside_read_match": True,
         "outside_write_errno": 1,
     }
     assert _macos_probe_result_complete(
@@ -856,7 +873,7 @@ def test_macos_probe_evaluator_rejects_false_network_and_child_evidence() -> Non
         ("child_write_errno", 2),
         ("inside_write", False),
         ("network_errno", 61),
-        ("outside_read_errno", 5),
+        ("outside_read_match", False),
         ("outside_write_errno", 2),
     ):
         rejected = dict(passing)
@@ -872,7 +889,6 @@ def test_macos_probe_evaluator_rejects_false_network_and_child_evidence() -> Non
             "child_write_errno",
             "child_launch_errno",
             "network_errno",
-            "outside_read_errno",
             "outside_write_errno",
         ):
             rejected = dict(passing)
@@ -883,6 +899,15 @@ def test_macos_probe_evaluator_rejects_false_network_and_child_evidence() -> Non
                 outside_unchanged=True,
                 child_marker_valid=True,
             )
+    for invalid_read_match in (False, 1, "true", [], {}, None, 1.0):
+        rejected = dict(passing)
+        rejected["outside_read_match"] = invalid_read_match
+        assert not _macos_probe_result_complete(
+            completed,
+            rejected,
+            outside_unchanged=True,
+            child_marker_valid=True,
+        )
     for mutation in (
         {key: value for key, value in passing.items() if key != "child_started"},
         {**passing, "unexpected": False},
@@ -913,6 +938,41 @@ def test_macos_probe_evaluator_rejects_false_network_and_child_evidence() -> Non
     )
 
 
+def test_sandbox_probe_reports_a_truthful_read_scope() -> None:
+    common = {
+        "backend_id": "unit",
+        "platform": "test",
+        "ready": True,
+        "reason": "ready",
+        "filesystem_write_scoped": True,
+        "network_denied": True,
+        "process_tree_contained": True,
+    }
+    scoped = SandboxProbe(**common, filesystem_read_scope="workspace-and-runtime")
+    unrestricted = SandboxProbe(
+        **common, filesystem_read_scope="host-unrestricted"
+    )
+    unverified = SandboxProbe(**common)
+    invalid = SandboxProbe(
+        **common,
+        filesystem_read_scope="unknown",
+    )
+    contradictory = SandboxProbe(
+        **{**common, "reason": "probe_failed"},
+        filesystem_read_scope="workspace-and-runtime",
+    )
+
+    assert scoped.complete
+    assert scoped.to_dict()["filesystem_read_scope"] == "workspace-and-runtime"
+    assert unrestricted.complete
+    assert unrestricted.to_dict()["filesystem_read_scoped"] is False
+    assert unrestricted.to_dict()["filesystem_read_scope"] == "host-unrestricted"
+    assert not unverified.complete
+    assert unverified.to_dict()["filesystem_read_scope"] == "unverified"
+    assert not invalid.complete
+    assert not contradictory.complete
+
+
 def test_macos_probe_failure_reasons_are_stable_and_non_disclosing() -> None:
     passing = {
         "child_launch_errno": 0,
@@ -922,7 +982,7 @@ def test_macos_probe_failure_reasons_are_stable_and_non_disclosing() -> None:
         "inside_write": True,
         "network_errno": 1,
         "network_close_ok": True,
-        "outside_read_errno": 1,
+        "outside_read_match": True,
         "outside_write_errno": 1,
     }
     completed = _BoundedProcessResult(returncode=0, stdout=b"{}", stderr=b"")
@@ -996,10 +1056,10 @@ def test_macos_probe_failure_reasons_are_stable_and_non_disclosing() -> None:
         ),
         (
             completed,
-            {**passing, "outside_read_errno": 61},
+            {**passing, "outside_read_match": False},
             True,
             True,
-            "macos_seatbelt_probe_read_denial_unproven",
+            "macos_seatbelt_probe_read_policy_unproven",
         ),
         (
             completed,
@@ -1107,7 +1167,7 @@ def test_macos_probe_preserves_completed_evidence_across_host_checks(
         "inside_write": True,
         "network_errno": 1,
         "network_close_ok": True,
-        "outside_read_errno": 1,
+        "outside_read_match": True,
         "outside_write_errno": 1,
     }
 
@@ -1116,8 +1176,8 @@ def test_macos_probe_preserves_completed_evidence_across_host_checks(
 
     def bounded(command: tuple[str, ...], *, timeout_seconds: float):
         del timeout_seconds
-        probe_root = Path(command[-4])
-        outside = Path(command[-3])
+        probe_root = Path(command[-5])
+        outside = Path(command[-4])
         if mode == "bounded-unavailable":
             return None
         if mode == "canary-missing":

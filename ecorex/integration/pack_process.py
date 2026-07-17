@@ -260,11 +260,15 @@ class ProcessCapabilityPackAdapter:
         if not 1 <= len(payload) <= MAX_REQUEST_BYTES:
             raise CapabilityPackProcessError("pack_request_too_large")
         await asyncio.to_thread(_verify_pack_artifact, self.pack)
-        temporary_root = await asyncio.to_thread(_create_pack_invocation_temp)
+        temporary_root = await asyncio.to_thread(
+            _create_pack_invocation_temp, self.workspace_roots[0]
+        )
         child_environment = dict(self._child_environment)
         child_environment.update(
             {"TEMP": str(temporary_root), "TMP": str(temporary_root)}
         )
+        if os.name != "nt":
+            child_environment["TMPDIR"] = str(temporary_root)
         try:
             return await self._invoke_process(
                 tool_id=tool_id,
@@ -443,7 +447,7 @@ class ProcessCapabilityPackAdapter:
                 backend_id=probe.backend_id,
                 os_enforced=True,
                 workspace_roots_sha256=roots_digest,
-                filesystem_read_scope="workspace-only",
+                filesystem_read_scope=probe.effective_filesystem_read_scope,
                 filesystem_write_scope="workspace-only",
                 network_scope="denied",
                 process_tree_scope="contained-inherited",
@@ -506,8 +510,10 @@ class _ProcessPackToolHandler:
         return await self._adapter.invoke(self._tool_id, arguments, context)
 
 
-def _create_pack_invocation_temp() -> Path:
-    root = Path(tempfile.mkdtemp(prefix="ecorex-pack-call-")).resolve(strict=True)
+def _create_pack_invocation_temp(workspace_root: Path) -> Path:
+    root = Path(
+        tempfile.mkdtemp(prefix=".ecorex-pack-call-", dir=workspace_root)
+    ).resolve(strict=True)
     root.chmod(0o700)
     return root
 
