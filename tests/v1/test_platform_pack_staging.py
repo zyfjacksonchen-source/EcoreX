@@ -2145,7 +2145,266 @@ def test_macos_pack_probe_denies_source_and_framework_reads(
     assert f'(deny file-write* (subpath "{core_literal}"))' in baseline[2]
     assert f'(deny file-read* (subpath "{source_literal}"))' not in baseline[2]
     assert f'(deny file-read* (subpath "{framework}"))' not in baseline[2]
+    for command_with_profile in (
+        isolated_bootstrap,
+        command,
+        baseline_bootstrap,
+        baseline,
+    ):
+        assert f'(deny file-write* (subpath "{source_literal}"))' in (
+            command_with_profile[2]
+        )
+        assert f'(deny file-write* (subpath "{framework}"))' in (
+            command_with_profile[2]
+        )
     assert Path(source_denial[0]).as_posix() == "/usr/bin/sandbox-exec"
+
+
+def test_macos_pack_probe_classifies_bootstrap_only_after_combined_denial_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    source_prefix = tmp_path / "toolcache-python"
+    source_prefix.mkdir()
+    source_canary = source_prefix / "python-source-canary"
+    source_canary.write_bytes(b"readable-before-sandbox")
+    framework_root = tmp_path / "Library" / "Frameworks" / "Python.framework"
+    framework_root.mkdir(parents=True)
+    core = tmp_path / "core"
+    core.mkdir()
+    (core / "pack-python.json").write_bytes(b"signed-pack-manifest")
+    interpreter = core / "pack-python" / "bin" / "python3"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_bytes(b"python")
+    interpreter.chmod(0o755)
+    original_is_file = Path.is_file
+
+    def fake_is_file(path: Path) -> bool:
+        if path.as_posix() in {
+            "/usr/bin/sandbox-exec",
+            "/usr/bin/true",
+            "/bin/cat",
+        }:
+            return True
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", fake_is_file)
+    probe_globals = stager["_run_macos_isolated_pack_probe"].__globals__
+    monkeypatch.setitem(probe_globals, "_PYTHON_FRAMEWORK_ROOT", framework_root)
+    commands: list[tuple[str, ...]] = []
+
+    def fake_bounded_process(
+        command: tuple[str, ...], **kwargs: object
+    ) -> SimpleNamespace:
+        commands.append(command)
+        if Path(command[-2]).as_posix() == "/bin/cat":
+            if Path(command[-1]).name == "pack-python.json" and Path(
+                command[-1]
+            ) != (core / "pack-python.json"):
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=b"signed-pack-manifest",
+                    stderr=b"",
+                )
+            return SimpleNamespace(returncode=1, stdout=b"", stderr=b"denied")
+        if command[-1] == "print('__ECOREX_PACK_BOOTSTRAP_OK__')":
+            return SimpleNamespace(returncode=1, stdout=b"", stderr=b"private")
+        return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+
+    diagnosed_after: list[int] = []
+
+    def fake_diagnostic(**kwargs: object) -> str:
+        diagnosed_after.append(len(commands))
+        assert stager["_seatbelt_literal"](source_prefix.resolve()) in str(
+            kwargs["source_rules"]
+        )
+        assert stager["_seatbelt_literal"](framework_root.resolve()) in str(
+            kwargs["framework_rules"]
+        )
+        write_rules = str(kwargs["source_framework_write_rules"])
+        assert stager["_seatbelt_literal"](source_prefix.resolve()) in write_rules
+        assert stager["_seatbelt_literal"](framework_root.resolve()) in write_rules
+        return "pack_python_sandbox_bootstrap_source_dependency_failed"
+
+    monkeypatch.setitem(probe_globals, "run_bounded_process", fake_bounded_process)
+    monkeypatch.setitem(
+        probe_globals,
+        "_diagnose_macos_bootstrap_execution_failure",
+        fake_diagnostic,
+    )
+
+    with pytest.raises(stager["StageError"]) as raised:
+        stager["_run_macos_isolated_pack_probe"](
+            (str(interpreter), "-I", "-B", "-c", "full-pack-probe"),
+            cwd=core,
+            source_prefix=source_prefix,
+            source_canary=source_canary,
+        )
+
+    assert raised.value.code == (
+        "pack_python_sandbox_bootstrap_source_dependency_failed"
+    )
+    assert diagnosed_after == [5]
+    assert commands[4][-1] == "print('__ECOREX_PACK_BOOTSTRAP_OK__')"
+    combined_profile = commands[4][2]
+    assert stager["_seatbelt_literal"](source_prefix.resolve()) in combined_profile
+    assert stager["_seatbelt_literal"](framework_root.resolve()) in combined_profile
+
+
+@pytest.mark.parametrize(
+    ("outcomes", "expected"),
+    (
+        (
+            (False,),
+            "pack_python_sandbox_bootstrap_snapshot_execution_failed",
+        ),
+        (
+            (True, False, True),
+            "pack_python_sandbox_bootstrap_source_dependency_failed",
+        ),
+        (
+            (True, True, False),
+            "pack_python_sandbox_bootstrap_framework_dependency_failed",
+        ),
+        (
+            (True, False, False),
+            "pack_python_sandbox_bootstrap_source_and_framework_dependency_failed",
+        ),
+        (
+            (True, True, True),
+            "pack_python_sandbox_bootstrap_combined_policy_failed",
+        ),
+    ),
+)
+def test_macos_bootstrap_diagnostic_maps_only_stable_failure_classes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    outcomes: tuple[bool, ...],
+    expected: str,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    diagnostic_globals = stager[
+        "_diagnose_macos_bootstrap_execution_failure"
+    ].__globals__
+    canonical_core = tmp_path / "canonical" / "core"
+    baseline_core = tmp_path / "baseline" / "core"
+    isolated_core = tmp_path / "isolated" / "core"
+    interpreter = canonical_core / "pack-python" / "bin" / "python3"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_bytes(b"python")
+    stager["_copy_tree"](canonical_core, baseline_core)
+    stager["_copy_tree"](canonical_core, isolated_core)
+    binding = stager["_tree_binding_sha256"](canonical_core)
+    observed: list[tuple[str, Path]] = []
+    remaining = list(outcomes)
+
+    monkeypatch.setitem(
+        diagnostic_globals,
+        "_macos_snapshot_signatures_valid",
+        lambda _root: True,
+    )
+
+    def fake_succeeds(**kwargs: object) -> bool:
+        observed.append((str(kwargs["profile"]), Path(kwargs["temporary_directory"])))
+        return remaining.pop(0)
+
+    monkeypatch.setitem(
+        diagnostic_globals,
+        "_macos_bootstrap_diagnostic_succeeds",
+        fake_succeeds,
+    )
+
+    result = stager["_diagnose_macos_bootstrap_execution_failure"](
+        sandbox=Path("/usr/bin/sandbox-exec"),
+        canonical_core=canonical_core,
+        baseline_core=baseline_core,
+        isolated_core=isolated_core,
+        baseline_root=baseline_core.parent,
+        isolated_root=isolated_core.parent,
+        interpreter_relative=Path("pack-python/bin/python3"),
+        canonical_rules="canonical-rules;",
+        source_rules="source-deny;",
+        framework_rules="framework-deny;",
+        source_framework_write_rules="source-framework-write-deny;",
+        canonical_binding=binding,
+    )
+
+    assert result == expected
+    assert not remaining
+    assert len({temporary for _profile, temporary in observed}) == len(observed)
+    if len(observed) == 3:
+        diagnostic_roots = tuple(temporary.parent for _profile, temporary in observed)
+        for index, (profile, temporary) in enumerate(observed):
+            assert "canonical-rules;" in profile
+            assert "source-framework-write-deny;" in profile
+            own_core = stager["_seatbelt_literal"](temporary.parent / "core")
+            assert f'(deny file-write* (subpath "{own_core}"))' in profile
+            for peer_index, peer in enumerate(diagnostic_roots):
+                if peer_index == index:
+                    continue
+                literal = stager["_seatbelt_literal"](peer)
+                assert f'(deny file-read* (subpath "{literal}"))' in profile
+                assert f'(deny file-map-executable (subpath "{literal}"))' in profile
+                assert f'(deny file-write* (subpath "{literal}"))' in profile
+        assert "source-deny;" not in observed[0][0]
+        assert "framework-deny;" not in observed[0][0]
+        assert "source-deny;" in observed[1][0]
+        assert "framework-deny;" in observed[2][0]
+
+
+def test_macos_bootstrap_diagnostic_rejects_invalid_snapshot_signature(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    diagnostic_globals = stager[
+        "_diagnose_macos_bootstrap_execution_failure"
+    ].__globals__
+    canonical_core = tmp_path / "canonical" / "core"
+    baseline_core = tmp_path / "baseline" / "core"
+    isolated_core = tmp_path / "isolated" / "core"
+    canonical_core.mkdir(parents=True)
+    (canonical_core / "member").write_bytes(b"member")
+    stager["_copy_tree"](canonical_core, baseline_core)
+    stager["_copy_tree"](canonical_core, isolated_core)
+    binding = stager["_tree_binding_sha256"](canonical_core)
+    called = False
+
+    monkeypatch.setitem(
+        diagnostic_globals,
+        "_macos_snapshot_signatures_valid",
+        lambda root: root == baseline_core,
+    )
+
+    def unexpected_probe(**_kwargs: object) -> bool:
+        nonlocal called
+        called = True
+        return True
+
+    monkeypatch.setitem(
+        diagnostic_globals,
+        "_macos_bootstrap_diagnostic_succeeds",
+        unexpected_probe,
+    )
+
+    result = stager["_diagnose_macos_bootstrap_execution_failure"](
+        sandbox=Path("/usr/bin/sandbox-exec"),
+        canonical_core=canonical_core,
+        baseline_core=baseline_core,
+        isolated_core=isolated_core,
+        baseline_root=baseline_core.parent,
+        isolated_root=isolated_core.parent,
+        interpreter_relative=Path("pack-python/bin/python3"),
+        canonical_rules="canonical-rules;",
+        source_rules="source-deny;",
+        framework_rules="framework-deny;",
+        source_framework_write_rules="source-framework-write-deny;",
+        canonical_binding=binding,
+    )
+
+    assert result == "pack_python_sandbox_bootstrap_snapshot_signature_invalid"
+    assert called is False
 
 
 @pytest.mark.parametrize(

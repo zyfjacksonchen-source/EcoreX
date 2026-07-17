@@ -1611,12 +1611,23 @@ def _run_macos_isolated_pack_probe(
     except (OSError, RuntimeError, ValueError):
         raise StageError("pack_python_sandbox_probe_invalid") from None
     canonical_binding = _tree_binding_sha256(core)
-    denied = (source_prefix.resolve(strict=True), _PYTHON_FRAMEWORK_ROOT)
-    isolation_rules = "".join(
+    source_root = source_prefix.resolve(strict=True)
+    framework_root = _PYTHON_FRAMEWORK_ROOT
+    source_rules = "".join(
         f'(deny file-read* (subpath "{_seatbelt_literal(path)}"))'
         f'(deny file-map-executable (subpath "{_seatbelt_literal(path)}"))'
-        for path in denied
+        for path in (source_root,)
     )
+    framework_rules = "".join(
+        f'(deny file-read* (subpath "{_seatbelt_literal(path)}"))'
+        f'(deny file-map-executable (subpath "{_seatbelt_literal(path)}"))'
+        for path in (framework_root,)
+    )
+    source_framework_write_rules = "".join(
+        f'(deny file-write* (subpath "{_seatbelt_literal(path)}"))'
+        for path in (source_root, framework_root)
+    )
+    isolation_rules = f"{source_rules}{framework_rules}"
     canonical_canary = core / "pack-python.json"
     try:
         canonical_canary = canonical_canary.resolve(strict=True)
@@ -1670,10 +1681,11 @@ def _run_macos_isolated_pack_probe(
         # every read, executable map and write against the peer snapshot.
         baseline_profile = (
             f"(version 1)(allow default){canonical_rules}{baseline_cross_rules}"
+            f"{source_framework_write_rules}"
         )
         profile = (
             f"(version 1)(allow default){canonical_rules}{isolated_cross_rules}"
-            f"{isolation_rules}"
+            f"{source_framework_write_rules}{isolation_rules}"
         )
         positive_canary = isolated_core / "pack-python.json"
         positive_payload = _stable_bytes(
@@ -1739,12 +1751,42 @@ def _run_macos_isolated_pack_probe(
         isolated_bootstrap_command = _pack_python_bootstrap_probe_command(
             isolated_interpreter
         )
-        isolated_bootstrap = _run_macos_pack_probe_process(
-            (str(sandbox), "-p", profile, *isolated_bootstrap_command),
-            cwd=isolated_core,
-            code_prefix="pack_python_sandbox_bootstrap_probe",
-            temporary_directory=isolated_temp,
-        )
+        try:
+            isolated_bootstrap = _run_macos_pack_probe_process(
+                (str(sandbox), "-p", profile, *isolated_bootstrap_command),
+                cwd=isolated_core,
+                code_prefix="pack_python_sandbox_bootstrap_probe",
+                temporary_directory=isolated_temp,
+            )
+        except StageError as exc:
+            if exc.code != "pack_python_sandbox_bootstrap_probe_execution_failed":
+                raise
+            try:
+                diagnostic_code = _diagnose_macos_bootstrap_execution_failure(
+                    sandbox=sandbox,
+                    canonical_core=core,
+                    baseline_core=baseline_core,
+                    isolated_core=isolated_core,
+                    baseline_root=baseline_root,
+                    isolated_root=isolated_root,
+                    interpreter_relative=interpreter_relative,
+                    canonical_rules=canonical_rules,
+                    source_rules=source_rules,
+                    framework_rules=framework_rules,
+                    source_framework_write_rules=source_framework_write_rules,
+                    canonical_binding=canonical_binding,
+                )
+            except (OSError, RuntimeError, StageError):
+                diagnostic_code = (
+                    "pack_python_sandbox_bootstrap_diagnostic_execution_failed"
+                )
+            if (
+                _tree_binding_sha256(core) != canonical_binding
+                or _tree_binding_sha256(baseline_core) != canonical_binding
+                or _tree_binding_sha256(isolated_core) != canonical_binding
+            ):
+                raise StageError("pack_python_probe_snapshot_mutated") from None
+            raise StageError(diagnostic_code) from None
         if isolated_bootstrap.stdout.strip() != b"__ECOREX_PACK_BOOTSTRAP_OK__":
             raise StageError("pack_python_sandbox_bootstrap_probe_output_invalid")
         result = _run_macos_pack_probe_process(
@@ -1773,7 +1815,8 @@ def _run_macos_isolated_pack_probe(
             temporary_directory=baseline_temp,
         )
         if (
-            _tree_binding_sha256(baseline_core) != canonical_binding
+            _tree_binding_sha256(core) != canonical_binding
+            or _tree_binding_sha256(baseline_core) != canonical_binding
             or _tree_binding_sha256(isolated_core) != canonical_binding
         ):
             raise StageError("pack_python_probe_snapshot_mutated")
@@ -1781,6 +1824,174 @@ def _run_macos_isolated_pack_probe(
         raise StageError("pack_python_sandbox_probe_output_invalid")
     print("macos_pack_python_sandbox_probe=passed", flush=True)
     return result
+
+
+def _macos_snapshot_signatures_valid(root: Path) -> bool:
+    """Verify copied Mach-O signatures without allowing diagnostics to escape."""
+
+    codesign = Path("/usr/bin/codesign")
+    if not codesign.is_file():
+        return False
+    try:
+        binaries = _macos_macho_files(root)
+    except StageError:
+        return False
+    if not binaries:
+        return False
+    for binary in binaries:
+        try:
+            result = run_bounded_process(
+                (str(codesign), "--verify", "--strict", str(binary)),
+                payload=None,
+                cwd=root,
+                environment=_runtime_environment(),
+                timeout_seconds=30,
+                max_stdout_bytes=64 * 1024,
+                max_stderr_bytes=64 * 1024,
+            )
+        except (OSError, BoundedProcessError):
+            return False
+        if result.returncode != 0:
+            return False
+    return True
+
+
+def _macos_bootstrap_diagnostic_succeeds(
+    *,
+    sandbox: Path,
+    profile: str,
+    interpreter: Path,
+    cwd: Path,
+    temporary_directory: Path,
+) -> bool:
+    try:
+        result = _run_macos_pack_probe_process(
+            (
+                str(sandbox),
+                "-p",
+                profile,
+                *_pack_python_bootstrap_probe_command(interpreter),
+            ),
+            cwd=cwd,
+            code_prefix="pack_python_bootstrap_diagnostic",
+            temporary_directory=temporary_directory,
+        )
+    except StageError:
+        return False
+    return result.stdout.strip() == b"__ECOREX_PACK_BOOTSTRAP_OK__"
+
+
+def _diagnose_macos_bootstrap_execution_failure(
+    *,
+    sandbox: Path,
+    canonical_core: Path,
+    baseline_core: Path,
+    isolated_core: Path,
+    baseline_root: Path,
+    isolated_root: Path,
+    interpreter_relative: Path,
+    canonical_rules: str,
+    source_rules: str,
+    framework_rules: str,
+    source_framework_write_rules: str,
+    canonical_binding: str,
+) -> str:
+    """Return one non-sensitive failure class after the real isolation failed.
+
+    The combined source-and-Framework denial has already run before this
+    function is called.  These probes are diagnostic only: every branch still
+    fails Stage, uses its own temporary directory and keeps canonical Core plus
+    the peer snapshot denied.
+    """
+
+    if not _macos_snapshot_signatures_valid(baseline_core) or not (
+        _macos_snapshot_signatures_valid(isolated_core)
+    ):
+        return "pack_python_sandbox_bootstrap_snapshot_signature_invalid"
+    with tempfile.TemporaryDirectory(
+        prefix=".ecorex-pack-diagnostics-",
+        dir=canonical_core.parent,
+    ) as diagnostic_temporary:
+        diagnostic_parent = Path(diagnostic_temporary)
+        names = ("baseline", "source-denied", "framework-denied")
+        roots = tuple(diagnostic_parent / name for name in names)
+        cores = tuple(root / "core" for root in roots)
+        temporary_directories = tuple(root / "tmp" for root in roots)
+        for core, temporary in zip(cores, temporary_directories, strict=True):
+            temporary.mkdir(parents=True)
+            _copy_tree(canonical_core, core)
+        if any(_tree_binding_sha256(core) != canonical_binding for core in cores):
+            return "pack_python_sandbox_bootstrap_diagnostic_snapshot_invalid"
+        if any(not _macos_snapshot_signatures_valid(core) for core in cores):
+            return "pack_python_sandbox_bootstrap_snapshot_signature_invalid"
+
+        existing_snapshot_rules = "".join(
+            f'(deny file-read* (subpath "{_seatbelt_literal(path)}"))'
+            f'(deny file-map-executable (subpath "{_seatbelt_literal(path)}"))'
+            f'(deny file-write* (subpath "{_seatbelt_literal(path)}"))'
+            for path in (baseline_root, isolated_root)
+        )
+        profiles: list[str] = []
+        for index, (root, core) in enumerate(zip(roots, cores, strict=True)):
+            peer_rules = "".join(
+                f'(deny file-read* (subpath "{_seatbelt_literal(peer)}"))'
+                f'(deny file-map-executable (subpath "{_seatbelt_literal(peer)}"))'
+                f'(deny file-write* (subpath "{_seatbelt_literal(peer)}"))'
+                for peer_index, peer in enumerate(roots)
+                if peer_index != index
+            )
+            own_core_write_rule = (
+                f'(deny file-write* (subpath "{_seatbelt_literal(core)}"))'
+            )
+            read_rules = ("", source_rules, framework_rules)[index]
+            profiles.append(
+                f"(version 1)(allow default){canonical_rules}"
+                f"{existing_snapshot_rules}{peer_rules}{own_core_write_rule}"
+                f"{source_framework_write_rules}{read_rules}"
+            )
+
+        baseline_ok = _macos_bootstrap_diagnostic_succeeds(
+            sandbox=sandbox,
+            profile=profiles[0],
+            interpreter=cores[0] / interpreter_relative,
+            cwd=cores[0],
+            temporary_directory=temporary_directories[0],
+        )
+        source_ok = False
+        framework_ok = False
+        if baseline_ok:
+            source_ok = _macos_bootstrap_diagnostic_succeeds(
+                sandbox=sandbox,
+                profile=profiles[1],
+                interpreter=cores[1] / interpreter_relative,
+                cwd=cores[1],
+                temporary_directory=temporary_directories[1],
+            )
+            framework_ok = _macos_bootstrap_diagnostic_succeeds(
+                sandbox=sandbox,
+                profile=profiles[2],
+                interpreter=cores[2] / interpreter_relative,
+                cwd=cores[2],
+                temporary_directory=temporary_directories[2],
+            )
+        if (
+            _tree_binding_sha256(canonical_core) != canonical_binding
+            or _tree_binding_sha256(baseline_core) != canonical_binding
+            or _tree_binding_sha256(isolated_core) != canonical_binding
+            or any(_tree_binding_sha256(core) != canonical_binding for core in cores)
+        ):
+            return "pack_python_probe_snapshot_mutated"
+        if not baseline_ok:
+            return "pack_python_sandbox_bootstrap_snapshot_execution_failed"
+        if not source_ok and framework_ok:
+            return "pack_python_sandbox_bootstrap_source_dependency_failed"
+        if source_ok and not framework_ok:
+            return "pack_python_sandbox_bootstrap_framework_dependency_failed"
+        if not source_ok and not framework_ok:
+            return (
+                "pack_python_sandbox_bootstrap_source_and_framework_dependency_failed"
+            )
+        return "pack_python_sandbox_bootstrap_combined_policy_failed"
 
 
 _PACK_PROBE_FAILURE_PHASES = {
