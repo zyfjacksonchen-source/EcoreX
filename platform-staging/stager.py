@@ -179,7 +179,26 @@ class StageError(RuntimeError):
         diagnostic: Mapping[str, str] | None = None,
     ) -> None:
         self.code = code if _SAFE_CODE.fullmatch(str(code)) else "platform_stage_failed"
-        self.diagnostic = diagnostic if self.code == "stage_supply_chain_secret_match" else None
+        self.diagnostic = None
+        if self.code == "stage_supply_chain_secret_match":
+            self.diagnostic = diagnostic
+        elif self.code == "bootstrap_test_multiple_failed" and diagnostic is not None:
+            failed_codes = str(diagnostic.get("failed_codes", "")).split(",")
+            failure_count = str(diagnostic.get("failure_count", ""))
+            allowed_codes = set(_BOOTSTRAP_TEST_FAILURE_CODES.values()) | {
+                "bootstrap_test_unknown_failed"
+            }
+            if (
+                2 <= len(failed_codes) <= len(_BOOTSTRAP_TEST_FAILURE_CODES) + 1
+                and failed_codes == sorted(set(failed_codes))
+                and all(code in allowed_codes for code in failed_codes)
+                and failure_count.isdigit()
+                and len(failed_codes) <= int(failure_count) <= 64
+            ):
+                self.diagnostic = {
+                    "failed_codes": ",".join(failed_codes),
+                    "failure_count": failure_count,
+                }
         super().__init__(self.code)
 
 
@@ -4475,7 +4494,21 @@ def _run_bootstrap_tests(
         test_name = next(iter(failed_tests))
         raise StageError(_BOOTSTRAP_TEST_FAILURE_CODES[test_name])
     if len(failed_tests) > 1:
-        raise StageError("bootstrap_test_multiple_failed")
+        failed_codes = sorted(
+            {
+                _BOOTSTRAP_TEST_FAILURE_CODES.get(
+                    test_name, "bootstrap_test_unknown_failed"
+                )
+                for test_name in failed_tests
+            }
+        )
+        raise StageError(
+            "bootstrap_test_multiple_failed",
+            diagnostic={
+                "failed_codes": ",".join(failed_codes),
+                "failure_count": str(len(failed_tests)),
+            },
+        )
     if failed_tests:
         raise StageError("bootstrap_test_unknown_failed")
     raise StageError("bootstrap_test_package_failed")

@@ -3952,6 +3952,25 @@ def test_bootstrap_go_test_failures_are_fixed_and_non_disclosing(
         )
     assert raised.value.code == expected
     assert "private" not in str(raised.value)
+    if expected == "bootstrap_test_multiple_failed":
+        assert raised.value.diagnostic == {
+            "failed_codes": (
+                "bootstrap_test_bounded_buffer_failed,"
+                "bootstrap_test_unknown_failed"
+            ),
+            "failure_count": "2",
+        }
+    else:
+        assert raised.value.diagnostic is None
+
+
+def test_bootstrap_multiple_failure_diagnostic_rejects_unfixed_content() -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    error = stager["StageError"](
+        "bootstrap_test_multiple_failed",
+        diagnostic={"failed_codes": "private/path", "failure_count": "2"},
+    )
+    assert error.diagnostic is None
 
 
 def test_bootstrap_go_test_success_does_not_expose_output(

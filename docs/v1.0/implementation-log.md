@@ -6327,3 +6327,11 @@ event stream and maps only exact source-owned test identities to fixed public
 codes. Multiple, unknown/package and process-boundary failures remain distinct
 and fail closed; stderr, arbitrary output, host paths and toolchain details are
 never emitted. The failed Stage is quarantined in full.
+
+Stage `29614152095` then proved that more than one source-owned Bootstrap test
+failed. A multi-test result now carries only a sorted set of fixed allowlisted
+public test codes plus a bounded count. `StageError` independently validates
+that contract and drops any arbitrary value, duplicate, path-shaped content or
+out-of-range count. This preserves the non-disclosure boundary while allowing
+the next clean Stage to identify the shared product cause. The entire failed
+run remains quarantined.

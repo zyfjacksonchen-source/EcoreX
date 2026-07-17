@@ -2397,3 +2397,12 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Evidence boundary | 0 | The bounded Go test process retained output privately but collapsed every compilation, package and named product-test failure to one code. Provider text must remain private, but a source-owned test identity is safe and necessary to distinguish a product regression from toolchain or package startup failure. |
 | Fail-closed classifier | 0 local contract | Bootstrap tests now use Go's JSON event stream inside the existing bounded process supervisor. Only one exact allowlisted source-owned test name maps to a fixed failure code; multiple, unknown/package, launch, timeout, malformed and output-overflow outcomes receive separate fixed codes. stderr, arbitrary output, paths and toolchain text never cross the Stage boundary. Every classified result still fails Stage. |
 | Promotion | pending | The classifier requires protected PR/main verification and a wholly new same-run Stage. No output from `29612323015` may be reused. |
+
+## Bootstrap multi-test fixed-code evidence - 2026-07-18
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Protected classifier baseline | 0 | PR #40 run `29613128502` and exact-main run `29613597925` passed all five protected jobs. The squash merge is exact main `317360cdda278044ca3daf4b182ebe69720a4157`. |
+| Exact-main Stage `29614152095` | 1 expected | macOS arm64 returned `bootstrap_test_multiple_failed`; macOS x64 and Windows were cancelled, the one-use Windows runner unregistered and the whole run is quarantined. The failure is therefore within at least two source-owned Bootstrap tests rather than package startup or one test. |
+| Evidence refinement | 0 local contract | A multiple-test result may carry only a sorted, deduplicated set of fixed allowlisted public test codes and a bounded decimal count. The Stage error constructor independently revalidates both fields; unknown strings, paths, output, duplicates, oversized counts and arbitrary diagnostics are discarded. Go output and stderr remain private and the result still fails Stage. |
+| Promotion | pending | This evidence refinement requires protected PR/main verification and a wholly new same-run Stage. No output from `29614152095` may be reused. |
