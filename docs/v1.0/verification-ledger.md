@@ -2179,3 +2179,13 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Focused regression | 0 | Platform staging plus Stage fail-fast, dependency-lock and real codesign contracts: 115 passed / 10 explicit platform skips on Windows. The relocation test includes an untouched Mach-O and proves all relocation commands precede every signing command and every signing command precedes strict verification. A Darwin-only hosted test signs two ordinary copies, requires identical bytes and strictly verifies a third archive-equivalent copy. Ruff, Python compilation and tracked whitespace checks pass. |
 | Independent review | 0 | P0/P1 = 0. The only initial P2 was missing real Darwin determinism/copy coverage; the protected platform matrix now runs the dedicated real `codesign` test on both macOS arm64 and x64. |
 | Promotion | pending | A protected PR/main matrix and a wholly new same-run three-platform Stage remain mandatory before Candidate signing or production activation. |
+
+## Hosted checkout line-ending normalization - 2026-07-17
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Protected signing baseline | 0 | PR #21 run `29563677066` and exact-main run `29564066950` passed all five jobs, including real deterministic/copy-stable `codesign` on macOS arm64/x64. The squash merge is exact main `9b3a9cb8ca8fea3674306cddce06ca7776c09512`. |
+| Exact-main Stage `29564828460` | 1 expected | Fresh macOS arm64 stopped before dependency installation with strict `stage_checkout_not_clean`. The bounded NUL-porcelain evidence identified exactly `docs/ecorex/goal-ledger.md` and `docs/ecorex/v0.1.12/release-manifest.md`; Windows and macOS x64 were cancelled, JIT runner 31 unregistered and the whole run is quarantined. |
+| Root cause | 0 | Those are the repository's only two `i/mixed` Git blobs while `.gitattributes` declares `text eol=lf`. A hosted checkout may correctly normalize their working-tree bytes to LF and immediately appear dirty against the historical mixed-EOL index blob. No setup-python or product writer modified their semantic content. |
+| Canonical correction | 0 local contract | `git add --renormalize` converts both index blobs to LF without ignoring, cleaning or resetting Stage drift. `git ls-files --eol` reports `i/lf` for both; staged word diff contains only newline normalization. The strict clean-check and bounded evidence contract remain unchanged. |
+| Promotion | pending | A protected PR/main matrix and wholly new same-run three-platform Stage are required. No output from `29564828460` may be reused. |

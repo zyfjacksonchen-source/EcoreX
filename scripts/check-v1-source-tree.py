@@ -85,6 +85,29 @@ def check(root: Path = ROOT) -> None:
         if value
     }
     violations: list[str] = []
+    eol_result = subprocess.run(
+        ("git", "ls-files", "--eol", "-z"),
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    if eol_result.returncode != 0:
+        raise ValueError("v1_source_git_eol_inventory_unavailable")
+    try:
+        eol_records = tuple(
+            record.decode("utf-8")
+            for record in eol_result.stdout.split(b"\0")
+            if record
+        )
+    except UnicodeDecodeError:
+        raise ValueError("v1_source_git_eol_inventory_invalid") from None
+    for record in eol_records:
+        metadata, separator, relative = record.partition("\t")
+        if not separator or not relative:
+            raise ValueError("v1_source_git_eol_inventory_invalid")
+        index_eol = metadata.split(maxsplit=1)[0]
+        if index_eol in {"i/mixed", "i/crlf"}:
+            violations.append(f"index-eol:{relative}")
     for path in files:
         relative = path.relative_to(root).as_posix()
         metadata = path.lstat()

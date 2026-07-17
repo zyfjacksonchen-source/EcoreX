@@ -589,6 +589,63 @@ def test_source_tree_checker_detects_relevant_untracked_file(tmp_path: Path) -> 
         checker.check(tmp_path)
 
 
+@pytest.mark.parametrize(
+    "payload",
+    (
+        b"first\r\nsecond\n",
+        b"first\r\nsecond\r\n",
+    ),
+)
+def test_source_tree_checker_rejects_non_lf_index_in_any_tracked_file(
+    tmp_path: Path, payload: bytes,
+) -> None:
+    checker = _module("ecorex_v1_source_checker_eol", "scripts/check-v1-source-tree.py")
+    (tmp_path / "ecorex").mkdir()
+    (tmp_path / "ecorex" / "module.py").write_bytes(b"value = True\n")
+    historical = tmp_path / "docs" / "historical.md"
+    historical.parent.mkdir()
+    historical.write_bytes(payload)
+    subprocess.run(("git", "init", "-q"), cwd=tmp_path, check=True)
+    subprocess.run(
+        ("git", "-c", "core.autocrlf=false", "add", "--", "."),
+        cwd=tmp_path,
+        check=True,
+    )
+
+    with pytest.raises(ValueError, match="index-eol:docs/historical.md"):
+        checker.check(tmp_path)
+
+
+def test_source_tree_checker_does_not_reject_binary_index_eol(tmp_path: Path) -> None:
+    checker = _module(
+        "ecorex_v1_source_checker_binary_eol", "scripts/check-v1-source-tree.py"
+    )
+    source = tmp_path / "ecorex" / "module.py"
+    source.parent.mkdir()
+    source.write_bytes(b"value = True\n")
+    binary = tmp_path / "fixtures" / "payload.bin"
+    binary.parent.mkdir()
+    binary.write_bytes(b"\x00\r\n\xff")
+    subprocess.run(("git", "init", "-q"), cwd=tmp_path, check=True)
+    subprocess.run(("git", "add", "--", "."), cwd=tmp_path, check=True)
+
+    checker.check(tmp_path)
+
+
+def test_source_tree_checker_cli_error_is_json_safe(monkeypatch, capsys) -> None:
+    checker = _module("ecorex_v1_source_checker_json_safe", "scripts/check-v1-source-tree.py")
+
+    def fail() -> None:
+        raise ValueError('index-eol:docs/control\tline\n"quoted.md')
+
+    monkeypatch.setattr(checker, "check", fail)
+    assert checker.main() == 1
+    output = capsys.readouterr().err
+    parsed = json.loads(output)
+    assert parsed["ok"] is False
+    assert parsed["error"] == 'index-eol:docs/control\tline\n"quoted.md'
+
+
 def test_source_tree_checker_includes_every_workflow_file(tmp_path: Path) -> None:
     checker = _module("ecorex_v1_source_checker_workflow", "scripts/check-v1-source-tree.py")
     subprocess.run(("git", "init", "-q"), cwd=tmp_path, check=True)
