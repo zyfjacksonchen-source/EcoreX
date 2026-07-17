@@ -46,6 +46,25 @@ _SECRET_PATTERNS = (
     re.compile(rb"(?<![A-Za-z0-9+/=])xox[baprs]-[A-Za-z0-9-]{10,}(?![A-Za-z0-9+/=])"),
 )
 _STAGER_TIMEOUT_SECONDS = 45 * 60
+_BOOTSTRAP_TEST_PUBLIC_CODES = frozenset(
+    {
+        "bootstrap_test_bootstrap_floor_failed",
+        "bootstrap_test_bounded_buffer_failed",
+        "bootstrap_test_core_extraction_failed",
+        "bootstrap_test_discovery_clock_failed",
+        "bootstrap_test_local_config_acl_failed",
+        "bootstrap_test_local_migration_failed",
+        "bootstrap_test_manifest_signature_failed",
+        "bootstrap_test_pointer_authority_failed",
+        "bootstrap_test_pointer_freshness_failed",
+        "bootstrap_test_pointer_hash_failed",
+        "bootstrap_test_required_artifacts_failed",
+        "bootstrap_test_resume_download_failed",
+        "bootstrap_test_safe_filename_failed",
+        "bootstrap_test_unknown_failed",
+        "bootstrap_test_version_policy_failed",
+    }
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -164,7 +183,7 @@ def _adapter_failure_code(stderr: bytes) -> str | None:
 
 
 def _adapter_failure_diagnostic(stderr: bytes) -> dict[str, str] | None:
-    """Retain only the fixed non-secret classifier and hashes from Stage."""
+    """Retain only fixed, independently validated non-secret diagnostics."""
 
     try:
         text = stderr.decode("utf-8")
@@ -175,9 +194,31 @@ def _adapter_failure_diagnostic(stderr: bytes) -> dict[str, str] | None:
             value = json.loads(line)
         except (json.JSONDecodeError, RecursionError):
             continue
-        if not isinstance(value, dict) or value.get("code") != "stage_supply_chain_secret_match":
+        if not isinstance(value, dict):
             continue
         diagnostic = value.get("diagnostic")
+        if value.get("code") == "bootstrap_test_multiple_failed":
+            if not isinstance(diagnostic, dict) or set(diagnostic) != {
+                "failed_codes",
+                "failure_count",
+            }:
+                return None
+            failed_codes = str(diagnostic.get("failed_codes", "")).split(",")
+            failure_count = str(diagnostic.get("failure_count", ""))
+            if (
+                2 <= len(failed_codes) <= len(_BOOTSTRAP_TEST_PUBLIC_CODES)
+                and failed_codes == sorted(set(failed_codes))
+                and all(code in _BOOTSTRAP_TEST_PUBLIC_CODES for code in failed_codes)
+                and failure_count.isdigit()
+                and len(failed_codes) <= int(failure_count) <= 64
+            ):
+                return {
+                    "failed_codes": ",".join(failed_codes),
+                    "failure_count": failure_count,
+                }
+            return None
+        if value.get("code") != "stage_supply_chain_secret_match":
+            continue
         if not isinstance(diagnostic, dict) or set(diagnostic) != {
             "content_sha256",
             "detector_id",

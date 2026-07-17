@@ -273,6 +273,46 @@ def test_platform_stager_accepts_only_hashed_secret_scan_diagnostic() -> None:
     assert module["_adapter_failure_diagnostic"](unsafe) is None
 
 
+def test_platform_stager_accepts_only_fixed_bootstrap_test_diagnostic() -> None:
+    repository = Path(__file__).resolve().parents[2]
+    module = runpy.run_path(
+        str(repository / "scripts/invoke-v1-platform-stager.py")
+    )
+    safe = json.dumps(
+        {
+            "code": "bootstrap_test_multiple_failed",
+            "diagnostic": {
+                "failed_codes": (
+                    "bootstrap_test_bounded_buffer_failed,"
+                    "bootstrap_test_local_migration_failed"
+                ),
+                "failure_count": "2",
+            },
+            "status": "failed",
+        }
+    ).encode()
+    assert module["_adapter_failure_diagnostic"](safe) == {
+        "failed_codes": (
+            "bootstrap_test_bounded_buffer_failed,"
+            "bootstrap_test_local_migration_failed"
+        ),
+        "failure_count": "2",
+    }
+    assert (
+        module["_adapter_failure_diagnostic"](
+            safe.replace(
+                b"bootstrap_test_local_migration_failed", b"/private/runner/path"
+            )
+        )
+        is None
+    )
+
+    stager = runpy.run_path(str(repository / "platform-staging/stager.py"))
+    assert module["_BOOTSTRAP_TEST_PUBLIC_CODES"] == frozenset(
+        {*stager["_BOOTSTRAP_TEST_FAILURE_CODES"].values(), "bootstrap_test_unknown_failed"}
+    )
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows Job Object tree contract")
 def test_windows_job_kills_descendant_after_root_exits_with_inherited_pipe(
     tmp_path: Path,

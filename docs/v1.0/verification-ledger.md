@@ -2406,3 +2406,13 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Exact-main Stage `29614152095` | 1 expected | macOS arm64 returned `bootstrap_test_multiple_failed`; macOS x64 and Windows were cancelled, the one-use Windows runner unregistered and the whole run is quarantined. The failure is therefore within at least two source-owned Bootstrap tests rather than package startup or one test. |
 | Evidence refinement | 0 local contract | A multiple-test result may carry only a sorted, deduplicated set of fixed allowlisted public test codes and a bounded decimal count. The Stage error constructor independently revalidates both fields; unknown strings, paths, output, duplicates, oversized counts and arbitrary diagnostics are discarded. Go output and stderr remain private and the result still fails Stage. |
 | Promotion | pending | This evidence refinement requires protected PR/main verification and a wholly new same-run Stage. No output from `29614152095` may be reused. |
+
+## Platform-stager Bootstrap diagnostic forwarding - 2026-07-18
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Protected fixed-set baseline | 0 | PR #41 run `29614785313` and exact-main run `29615227588` passed all five protected jobs. The squash merge is exact main `11aca8408f470cbabc7ef77850a048454b106aad`. |
+| Exact-main Stage `29615646417` | 1 expected | macOS arm64 again returned `bootstrap_test_multiple_failed`, but the repository-owned invocation adapter emitted no safe diagnostic. macOS x64 and Windows were cancelled, the one-use Windows runner unregistered and the whole run is quarantined. |
+| Protocol root cause | 0 | The stager constructed a validated fixed-code set, while its digest-pinned parent adapter forwarded only the older secret-scan hash diagnostic. The process boundary therefore intentionally discarded the new diagnostic before the workflow could observe it. |
+| Adapter correction | 0 local contract | The parent adapter owns an independent closed copy of the public Bootstrap code set and revalidates exact keys, sorted uniqueness, membership, count syntax, count bounds and count-to-set consistency before forwarding. Arbitrary values, raw output, paths and malformed diagnostics are dropped. The Stage failure code remains authoritative and fail closed. |
+| Promotion | pending | Protected PR/main verification and a wholly new same-run Stage are required. No output from `29615646417` may be reused. |

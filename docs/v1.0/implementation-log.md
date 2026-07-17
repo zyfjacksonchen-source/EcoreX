@@ -6335,3 +6335,10 @@ that contract and drops any arbitrary value, duplicate, path-shaped content or
 out-of-range count. This preserves the non-disclosure boundary while allowing
 the next clean Stage to identify the shared product cause. The entire failed
 run remains quarantined.
+
+The following Stage (`29615646417`) generated the fixed multi-test set inside
+the stager, but the digest-pinned parent adapter still forwarded only the
+older secret-scan hash diagnostic. The adapter now independently validates a
+closed copy of the public Bootstrap code set, sorted uniqueness, exact fields
+and bounded count consistency before forwarding. Raw tests, Go output, stderr,
+paths and malformed values remain private. The failed run is quarantined.
