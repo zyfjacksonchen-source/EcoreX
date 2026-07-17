@@ -1224,17 +1224,27 @@ def test_windows_pack_python_uses_base_interpreter_not_venv_launcher(
     assert stdlib == (base / "Lib").resolve()
 
 
-def test_macos_pack_python_remains_anchored_to_versioned_base_runtime(
+def test_macos_pack_python_selects_real_framework_app_interpreter(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
     version = f"{sys.version_info.major}.{sys.version_info.minor}"
     base = tmp_path / "cpython-base"
-    interpreter = base / "bin" / f"python{version}"
+    trampoline = base / "bin" / f"python{version}"
+    interpreter = (
+        base
+        / "Resources"
+        / "Python.app"
+        / "Contents"
+        / "MacOS"
+        / "Python"
+    )
     stdlib = base / "lib" / f"python{version}"
+    trampoline.parent.mkdir(parents=True)
     interpreter.parent.mkdir(parents=True)
     stdlib.mkdir(parents=True)
-    interpreter.write_bytes(b"macos-base-cpython")
+    trampoline.write_bytes(b"framework-trampoline-needs-python-app")
+    interpreter.write_bytes(b"real-macos-framework-cpython")
     venv = tmp_path / "venv" / "bin" / "python"
     venv.parent.mkdir(parents=True)
     venv.write_bytes(b"venv-python")
@@ -1245,7 +1255,80 @@ def test_macos_pack_python_remains_anchored_to_versioned_base_runtime(
 
     assert prefix == base.resolve()
     assert selected == interpreter.resolve()
+    assert selected.read_bytes() == b"real-macos-framework-cpython"
+    assert selected != trampoline.resolve()
     assert selected_stdlib == stdlib.resolve()
+
+
+def test_macos_pack_python_never_falls_back_to_framework_trampoline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    base = tmp_path / "cpython-base"
+    trampoline = base / "bin" / f"python{version}"
+    stdlib = base / "lib" / f"python{version}"
+    trampoline.parent.mkdir(parents=True)
+    stdlib.mkdir(parents=True)
+    trampoline.write_bytes(b"framework-trampoline-needs-python-app")
+    monkeypatch.setattr(sys, "base_prefix", str(base))
+
+    with pytest.raises(stager["StageError"], match="pack_python_base_runtime_invalid"):
+        stager["_base_python_runtime_source"]("macos")
+
+
+def test_macos_pack_python_refuses_linked_framework_app_interpreter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    base = tmp_path / "cpython-base"
+    trampoline = base / "bin" / f"python{version}"
+    interpreter = (
+        base
+        / "Resources"
+        / "Python.app"
+        / "Contents"
+        / "MacOS"
+        / "Python"
+    )
+    stdlib = base / "lib" / f"python{version}"
+    trampoline.parent.mkdir(parents=True)
+    interpreter.parent.mkdir(parents=True)
+    stdlib.mkdir(parents=True)
+    trampoline.write_bytes(b"framework-trampoline-needs-python-app")
+    try:
+        interpreter.symlink_to(trampoline)
+    except (NotImplementedError, OSError) as error:
+        pytest.skip(f"symlink creation is unavailable: {error}")
+    monkeypatch.setattr(sys, "base_prefix", str(base))
+
+    with pytest.raises(stager["StageError"], match="pack_python_base_runtime_invalid"):
+        stager["_base_python_runtime_source"]("macos")
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="requires the real python.org macOS Framework installation",
+)
+def test_macos_pack_python_real_framework_source_is_the_app_interpreter() -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    prefix, interpreter, stdlib = stager["_base_python_runtime_source"]("macos")
+    expected = (
+        prefix
+        / "Resources"
+        / "Python.app"
+        / "Contents"
+        / "MacOS"
+        / "Python"
+    )
+    version = f"{sys.version_info.major}.{sys.version_info.minor}"
+
+    assert interpreter == expected
+    assert interpreter.is_file()
+    assert not interpreter.is_symlink()
+    assert stdlib == prefix / "lib" / f"python{version}"
+    assert os.uname().machine in stager["_macos_architectures"](interpreter)
 
 
 def test_macos_base_runtime_dylib_link_resolves_inside_prefix(

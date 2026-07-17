@@ -5,6 +5,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import runpy
+import stat
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -28,6 +30,33 @@ from ecorex.deployment.cloud_artifact_builder import (
     create_detached_signature_response,
 )
 from ecorex.release import Ed25519MemorySigner
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX cloud mode transport contract")
+def test_cloud_transport_archive_preserves_only_approved_modes(tmp_path: Path) -> None:
+    script = runpy.run_path(
+        str(
+            Path(__file__).resolve().parents[2]
+            / "scripts/build-v1-linux-cloud-artifact.py"
+        )
+    )
+    source = tmp_path / "source"
+    (source / "venv/bin").mkdir(parents=True)
+    executable = source / "venv/bin/ecorex-runtime"
+    regular = source / "manifest.json"
+    executable.write_bytes(b"runtime")
+    regular.write_bytes(b"manifest")
+    executable.chmod(0o755)
+    regular.chmod(0o644)
+    archive = tmp_path / "cloud.tar"
+
+    script["_pack"](source, archive)
+    output = tmp_path / "output"
+    script["_unpack"](archive, output)
+
+    assert (output / "venv/bin/ecorex-runtime").read_bytes() == b"runtime"
+    assert stat.S_IMODE((output / "venv/bin/ecorex-runtime").stat().st_mode) == 0o755
+    assert stat.S_IMODE((output / "manifest.json").stat().st_mode) == 0o644
 
 
 REQUIRED = (

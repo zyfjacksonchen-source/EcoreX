@@ -17,16 +17,40 @@ import os
 from pathlib import Path
 import sqlite3
 import stat
+import threading
 from typing import Any, Mapping, Sequence
 
 
 CURRENT_SQLITE_IMAGE_SCHEMA_VERSION = 1
 SQLITE_IMAGE_SCHEMA_RECEIPT_VERSION = 1
 _HEX_DIGEST = frozenset("0123456789abcdef")
+_MIGRATION_LOCKS_GUARD = threading.Lock()
+_MIGRATION_LOCKS: dict[str, threading.RLock] = {}
 
 
 class SQLiteImageSchemaError(RuntimeError):
     """The SQLite image schema is absent, unknown, drifted, or too new."""
+
+
+def _migration_lock(path: Path) -> threading.RLock:
+    """Return the process-local coordinator for one canonical database path.
+
+    SQLite serializes the schema transaction itself, but switching journal
+    mode must happen after that transaction commits.  Without one lock around
+    both phases, another migrator can acquire ``BEGIN EXCLUSIVE`` in the gap
+    and make the first migrator's WAL activation fail with ``database is
+    locked``.  InstallCoordinator prevents cross-process deployment races;
+    this lock closes the runtime's same-process/thread race without
+    serializing independent image databases.
+    """
+
+    key = os.path.normcase(str(path))
+    with _MIGRATION_LOCKS_GUARD:
+        lock = _MIGRATION_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _MIGRATION_LOCKS[key] = lock
+        return lock
 
 
 SQLITE_IMAGE_SCHEMA_HISTORY_SQL = """
@@ -339,6 +363,10 @@ class SQLiteImageSchemaManager:
         if target_version != CURRENT_SQLITE_IMAGE_SCHEMA_VERSION:
             raise ValueError("SQLite image schema migration target is invalid")
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        with _migration_lock(self.path):
+            return self._migrate_locked()
+
+    def _migrate_locked(self) -> SQLiteImageSchemaReceipt:
         _require_regular_database_or_absent(self.path)
         connection = self._connect(read_only=False)
         try:

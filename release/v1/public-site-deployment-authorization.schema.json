@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ecorex.local/schemas/v1/public-site-deployment-authorization.schema.json",
+  "title": "EcoreX public-site deployment authorization v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "document_type", "authorization", "signature"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "document_type": {"const": "ecorex.public-site-deployment-authorization"},
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["release_id", "version", "admission_id", "admission_sha256", "site_tree_sha256", "public_index_sha256", "admin_identity_sha256"],
+      "properties": {
+        "release_id": {"type": "string"},
+        "version": {"type": "string", "pattern": "^1\\.[0-9]+\\.[0-9]+$"},
+        "admission_id": {"type": "string"},
+        "admission_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "site_tree_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "public_index_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "admin_identity_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "key_id", "value"],
+      "properties": {
+        "algorithm": {"const": "ed25519"},
+        "key_id": {"type": "string"},
+        "value": {"type": "string", "contentEncoding": "base64"}
+      }
+    }
+  }
+}

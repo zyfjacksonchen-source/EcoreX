@@ -576,6 +576,9 @@ jobs:
       actions: read
       contents: read
       id-token: write
+    outputs:
+      candidate_artifact_id: ${{ steps.signed_candidate.outputs.artifact-id }}
+      candidate_artifact_sha256: ${{ steps.signed_candidate.outputs.artifact-digest }}
     steps:
       - name: Checkout exact protected commit without persisted credentials
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -795,6 +798,7 @@ jobs:
           python scripts/write-v1-gate-receipts.py --gate sbom --gate size-scan --evidence-file .candidate/output/release-supply-chain.json "${common[@]}"
 
       - name: Upload immutable Candidate and pre-publication evidence
+        id: signed_candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ecorex-v1-candidate-${{ inputs.channel }}
@@ -805,9 +809,299 @@ jobs:
           include-hidden-files: true
           retention-days: 30
 
+  cloud-build-unsigned:
+    name: Build immutable unsigned Linux cloud runtime
+    needs: build-and-sign
+    environment:
+      name: ecorex-cloud-build
+    runs-on: [self-hosted, linux, arm64, ecorex-cloud-build]
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      unsigned_tree_artifact_id: ${{ steps.unsigned_cloud_tree.outputs.artifact-id }}
+      unsigned_tree_artifact_sha256: ${{ steps.unsigned_cloud_tree.outputs.artifact-digest }}
+      signing_handoff_artifact_id: ${{ steps.cloud_signing_handoff.outputs.artifact-id }}
+      signing_handoff_artifact_sha256: ${{ steps.cloud_signing_handoff.outputs.artifact-digest }}
+    steps:
+      - name: Checkout the exact protected Candidate source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.9"
+
+      - name: Install exact cloud build dependencies
+        run: python scripts/install-v1-python-profile.py --profile cloud
+
+      - name: Download the exact signed Candidate identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.build-and-sign.outputs.candidate_artifact_id }}
+          ARTIFACT_SHA256: ${{ needs.build-and-sign.outputs.candidate_artifact_sha256 }}
+        run: |
+          curl --fail --location --silent --show-error \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            --output .candidate.zip \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip"
+          python scripts/extract-v1-workflow-artifact.py \
+            --archive .candidate.zip \
+            --expected-sha256 "$ARTIFACT_SHA256" \
+            --output .candidate \
+            --required-root output \
+            --required-root gates \
+            --receipt .candidate/extraction.json
+
+      - name: Build the immutable Linux aarch64 cloud tree
+        env:
+          ECOREX_CLOUD_BUILD_RELEASE_ROOT: ${{ vars.ECOREX_CLOUD_BUILD_RELEASE_ROOT }}
+        run: |
+          release_id="$(python -c 'import json; print(json.load(open(".candidate/output/release/release-manifest.json", encoding="utf-8"))["release_id"])')"
+          python scripts/build-v1-linux-cloud-artifact.py build \
+            --source-root . \
+            --artifact-root .cloud/artifact \
+            --handoff-root .cloud/handoff \
+            --release-id "$release_id" \
+            --expected-commit "${{ github.sha }}"
+          mkdir -p .cloud/package
+          python scripts/build-v1-linux-cloud-artifact.py pack \
+            --artifact-root .cloud/artifact \
+            --archive .cloud/package/cloud-artifact.tar
+
+      - name: Upload unsigned cloud tree without signing authority
+        id: unsigned_cloud_tree
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ecorex-v1-cloud-tree-${{ inputs.channel }}-${{ github.run_id }}
+          path: .cloud/package/cloud-artifact.tar
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
+
+      - name: Upload detached manifest handoff without cloud tree
+        id: cloud_signing_handoff
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ecorex-v1-cloud-handoff-${{ inputs.channel }}-${{ github.run_id }}
+          path: .cloud/handoff
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
+
+  cloud-sign:
+    name: Sign only the detached cloud manifest
+    needs: cloud-build-unsigned
+    environment:
+      name: ecorex-release-signing-${{ inputs.channel }}
+    runs-on: [self-hosted, linux, x64, ecorex-release-sign]
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    outputs:
+      signature_artifact_id: ${{ steps.cloud_signature.outputs.artifact-id }}
+      signature_artifact_sha256: ${{ steps.cloud_signature.outputs.artifact-digest }}
+    steps:
+      - name: Checkout exact signing authority
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.9"
+
+      - name: Install exact signer dependencies
+        run: python scripts/install-v1-python-profile.py --profile runtime
+
+      - name: Download exact unsigned handoff by artifact ID and digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.cloud-build-unsigned.outputs.signing_handoff_artifact_id }}
+          ARTIFACT_SHA256: ${{ needs.cloud-build-unsigned.outputs.signing_handoff_artifact_sha256 }}
+        run: |
+          curl --fail --location --silent --show-error \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            --output .cloud-unsigned.zip \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip"
+          python scripts/extract-v1-workflow-artifact.py \
+            --archive .cloud-unsigned.zip \
+            --expected-sha256 "$ARTIFACT_SHA256" \
+            --output .cloud/handoff \
+            --required-root cloud-unsigned-signature-descriptor.json \
+            --required-root cloud-release-manifest.json \
+            --required-root cloud-release-manifest.signing-payload \
+            --required-root cloud-build-receipt.json \
+            --receipt .cloud/handoff-extraction.json
+
+      - name: Sign detached canonical bytes without executing the artifact
+        env:
+          ECOREX_RELEASE_SIGNER_EXECUTABLE: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE }}
+          ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256 }}
+          ECOREX_RELEASE_SIGNER_ADAPTER: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER }}
+          ECOREX_RELEASE_SIGNER_ADAPTER_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER_SHA256 }}
+          ECOREX_RELEASE_SIGNER_KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          ECOREX_RELEASE_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+        run: >-
+          python scripts/sign-v1-cloud-artifact.py
+          --descriptor .cloud/handoff/cloud-unsigned-signature-descriptor.json
+          --payload .cloud/handoff/cloud-release-manifest.signing-payload
+          --output .cloud/cloud-signature-response.json
+
+      - name: Upload only detached signature response
+        id: cloud_signature
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ecorex-v1-cloud-signature-${{ inputs.channel }}-${{ github.run_id }}
+          path: .cloud/cloud-signature-response.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
+
+  cloud-finalize:
+    name: Attach and verify signed cloud runtime on isolated builder
+    needs:
+      - cloud-build-unsigned
+      - cloud-sign
+    environment:
+      name: ecorex-cloud-build
+    runs-on: [self-hosted, linux, arm64, ecorex-cloud-build]
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      cloud_artifact_id: ${{ steps.signed_cloud.outputs.artifact-id }}
+      cloud_artifact_sha256: ${{ steps.signed_cloud.outputs.artifact-digest }}
+    steps:
+      - name: Checkout exact finalization authority
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.9"
+
+      - name: Install exact cloud verification dependencies
+        run: python scripts/install-v1-python-profile.py --profile cloud
+
+      - name: Download exact unsigned cloud bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.cloud-build-unsigned.outputs.unsigned_tree_artifact_id }}
+          ARTIFACT_SHA256: ${{ needs.cloud-build-unsigned.outputs.unsigned_tree_artifact_sha256 }}
+        run: |
+          curl --fail --location --silent --show-error \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            --output .cloud-unsigned.zip \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip"
+          python scripts/extract-v1-workflow-artifact.py \
+            --archive .cloud-unsigned.zip \
+            --expected-sha256 "$ARTIFACT_SHA256" \
+            --output .cloud/package \
+            --required-root cloud-artifact.tar \
+            --receipt .cloud/unsigned-tree-extraction.json
+          python scripts/build-v1-linux-cloud-artifact.py unpack \
+            --archive .cloud/package/cloud-artifact.tar \
+            --artifact-root .cloud/artifact
+
+      - name: Download exact detached manifest handoff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.cloud-build-unsigned.outputs.signing_handoff_artifact_id }}
+          ARTIFACT_SHA256: ${{ needs.cloud-build-unsigned.outputs.signing_handoff_artifact_sha256 }}
+        run: |
+          curl --fail --location --silent --show-error \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            --output .cloud-handoff.zip \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip"
+          python scripts/extract-v1-workflow-artifact.py \
+            --archive .cloud-handoff.zip \
+            --expected-sha256 "$ARTIFACT_SHA256" \
+            --output .cloud/handoff \
+            --required-root cloud-unsigned-signature-descriptor.json \
+            --required-root cloud-release-manifest.json \
+            --required-root cloud-release-manifest.signing-payload \
+            --required-root cloud-build-receipt.json \
+            --receipt .cloud/handoff-extraction.json
+
+      - name: Download exact detached signature response
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.cloud-sign.outputs.signature_artifact_id }}
+          ARTIFACT_SHA256: ${{ needs.cloud-sign.outputs.signature_artifact_sha256 }}
+        run: |
+          mkdir -p .signature
+          curl --fail --location --silent --show-error \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            --output .cloud-signature.zip \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip"
+          python scripts/extract-v1-workflow-artifact.py \
+            --archive .cloud-signature.zip \
+            --expected-sha256 "$ARTIFACT_SHA256" \
+            --output .signature \
+            --required-root cloud-signature-response.json \
+            --receipt .signature/extraction.json
+
+      - name: Attach signature and reverify complete POSIX tree
+        env:
+          RELEASE_KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          RELEASE_PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('.cloud/release-keyring.json').write_text(
+              json.dumps({os.environ['RELEASE_KEY_ID']: os.environ['RELEASE_PUBLIC_KEY']}, sort_keys=True),
+              encoding='utf-8',
+          )
+          PY
+          python scripts/build-v1-linux-cloud-artifact.py attach \
+            --artifact-root .cloud/artifact \
+            --handoff-root .cloud/handoff \
+            --signature-response .signature/cloud-signature-response.json \
+            --release-keyring .cloud/release-keyring.json
+          rm .cloud/release-keyring.json
+
+      - name: Upload only finalized signed cloud runtime
+        id: signed_cloud
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ecorex-v1-cloud-${{ inputs.channel }}-${{ github.run_id }}
+          path: .cloud/artifact
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
+
   live-acceptance:
     name: Production model, image and Chrome CDP acceptance
-    needs: build-and-sign
+    needs:
+      - build-and-sign
+      - cloud-finalize
     environment:
       name: ecorex-live-acceptance
     runs-on: [self-hosted, windows, x64, ecorex-live-acceptance]
@@ -832,10 +1126,44 @@ jobs:
         run: python scripts/install-v1-python-profile.py --profile runtime
 
       - name: Download the exact signed Candidate before exercising providers
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: ecorex-v1-candidate-${{ inputs.channel }}
-          path: .candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.build-and-sign.outputs.candidate_artifact_id }}
+          ARTIFACT_SHA256: ${{ needs.build-and-sign.outputs.candidate_artifact_sha256 }}
+        shell: pwsh
+        run: |
+          Invoke-WebRequest `
+            -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = "application/vnd.github+json"; "X-GitHub-Api-Version" = "2026-03-10" } `
+            -Uri "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/actions/artifacts/$env:ARTIFACT_ID/zip" `
+            -OutFile .candidate.zip
+          python scripts/extract-v1-workflow-artifact.py `
+            --archive .candidate.zip `
+            --expected-sha256 $env:ARTIFACT_SHA256 `
+            --output .candidate `
+            --required-root output `
+            --required-root gates `
+            --receipt .candidate/extraction.json
+
+      - name: Download the exact signed cloud runtime for the same Candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.cloud-finalize.outputs.cloud_artifact_id }}
+          ARTIFACT_SHA256: ${{ needs.cloud-finalize.outputs.cloud_artifact_sha256 }}
+        shell: pwsh
+        run: |
+          Invoke-WebRequest `
+            -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = "application/vnd.github+json"; "X-GitHub-Api-Version" = "2026-03-10" } `
+            -Uri "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/actions/artifacts/$env:ARTIFACT_ID/zip" `
+            -OutFile .cloud-signed.zip
+          python scripts/extract-v1-workflow-artifact.py `
+            --archive .cloud-signed.zip `
+            --expected-sha256 $env:ARTIFACT_SHA256 `
+            --output .candidate/output/cloud `
+            --required-root cloud-release-manifest.json `
+            --required-root cloud-release-manifest.sig.json `
+            --required-root deployment `
+            --required-root venv `
+            --receipt .candidate/output/cloud-extraction.json
 
       - name: Run digest-pinned production acceptance without environment secrets
         env:

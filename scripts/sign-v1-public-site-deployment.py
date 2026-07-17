@@ -25,6 +25,7 @@ from ecorex.deployment.public_site import (  # noqa: E402
     sign_public_site_authorization,
     verify_public_site_authorization,
 )
+from ecorex.release.protected_deployment import verify_admission  # noqa: E402
 from ecorex.release import DigestPinnedExternalSigner  # noqa: E402
 from ecorex.release.evidence_io import write_new_json_file  # noqa: E402
 
@@ -43,6 +44,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--release-id", required=True)
     parser.add_argument("--staging-release-dir", required=True, type=Path)
     parser.add_argument("--cloud-artifact-root", required=True, type=Path)
+    parser.add_argument("--protected-admission", type=Path)
     return parser
 
 
@@ -90,6 +92,22 @@ def run(argv: list[str] | None = None) -> int:
             authorization_expected=False,
         )
         signer = _signer()
+        if args.protected_admission is not None:
+            admission_path = args.protected_admission.resolve(strict=True)
+            expected_path = release_stage / "protected-deployment-admission.json"
+            if admission_path != expected_path or site.admission is None:
+                raise ValueError("site_authorization_admission_identity_mismatch")
+            deployment_key_id = _required("ECOREX_DEPLOYMENT_SIGNER_KEY_ID")
+            try:
+                deployment_public = base64.b64decode(
+                    _required("ECOREX_DEPLOYMENT_SIGNER_PUBLIC_KEY"), validate=True
+                )
+            except (TypeError, ValueError):
+                raise ValueError("site_authorization_admission_key_invalid") from None
+            verify_admission(
+                site.admission,
+                public_keys={deployment_key_id: deployment_public},
+            )
         admin_identity = build_admin_deployment_identity(
             args.cloud_artifact_root,
             public_keys={signer.key_id: signer.public_key_bytes},
@@ -97,6 +115,12 @@ def run(argv: list[str] | None = None) -> int:
         if admin_identity["cloud_version"] != site.version:
             raise ValueError("admin_cloud_version_mismatch")
         site = dataclasses.replace(site, admin_identity=admin_identity)
+        if site.authority_schema_version == 2:
+            write_new_json_file(
+                dict(admin_identity),
+                release_stage / "admin-deployment-identity.json",
+                code="admin_deployment_identity_exists",
+            )
         authorization = sign_public_site_authorization(site, signer=signer)
         verify_public_site_authorization(
             site,

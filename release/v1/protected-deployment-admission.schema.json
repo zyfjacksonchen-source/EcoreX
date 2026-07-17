@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ecorex.local/schemas/v1/protected-deployment-admission.schema.json",
+  "title": "EcoreX protected deployment admission v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "document_type", "admission", "signature"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "document_type": {"const": "ecorex.protected-deployment-admission"},
+    "admission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admission_id", "repository", "commit_sha", "channel", "candidate", "gates", "targets", "decision", "issued_at", "expires_at"],
+      "properties": {
+        "admission_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+        "repository": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$"},
+        "commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "channel": {"enum": ["canary", "stable"]},
+        "candidate": {"$ref": "#/$defs/candidate"},
+        "gates": {"$ref": "#/$defs/gates"},
+        "targets": {"$ref": "#/$defs/targets"},
+        "decision": {"$ref": "#/$defs/decision"},
+        "issued_at": {"type": "string", "format": "date-time"},
+        "expires_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "signature": {"$ref": "#/$defs/signature"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workflow_run_id", "run_attempt", "artifact_id", "artifact_sha256", "release_id", "version", "build_digest"],
+      "properties": {
+        "workflow_run_id": {"type": "integer", "minimum": 1},
+        "run_attempt": {"type": "integer", "minimum": 1},
+        "artifact_id": {"type": "integer", "minimum": 1},
+        "artifact_sha256": {"$ref": "#/$defs/sha256"},
+        "release_id": {"type": "string"},
+        "version": {"type": "string", "pattern": "^1\\.[0-9]+\\.[0-9]+$"},
+        "build_digest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate", "cdp_acceptance", "image_soak", "live_image", "live_model", "signature"],
+      "properties": {
+        "candidate": {"$ref": "#/$defs/sha256"},
+        "cdp_acceptance": {"$ref": "#/$defs/sha256"},
+        "image_soak": {"$ref": "#/$defs/sha256"},
+        "live_image": {"$ref": "#/$defs/sha256"},
+        "live_model": {"$ref": "#/$defs/sha256"},
+        "signature": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "targets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cloud", "control_plane", "public_site"],
+      "properties": {
+        "cloud": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["artifact_sha256", "manifest_sha256"],
+          "properties": {"artifact_sha256": {"$ref": "#/$defs/sha256"}, "manifest_sha256": {"$ref": "#/$defs/sha256"}}
+        },
+        "control_plane": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["release_manifest_sha256"],
+          "properties": {"release_manifest_sha256": {"$ref": "#/$defs/sha256"}}
+        },
+        "public_site": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tree_sha256", "public_index_sha256"],
+          "properties": {"tree_sha256": {"$ref": "#/$defs/sha256"}, "public_index_sha256": {"$ref": "#/$defs/sha256"}}
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "rollout_percentage"],
+      "properties": {
+        "mode": {"enum": ["create", "create-and-activate"]},
+        "rollout_percentage": {"type": "integer", "minimum": 1, "maximum": 100}
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "key_id", "value"],
+      "properties": {
+        "algorithm": {"const": "ed25519"},
+        "key_id": {"type": "string"},
+        "value": {"type": "string", "contentEncoding": "base64"}
+      }
+    }
+  }
+}

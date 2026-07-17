@@ -957,12 +957,14 @@ def test_candidate_and_publication_workflows_are_split_and_default_safe() -> Non
     assert "scripts/select-v1-accepted-candidate.py" in publication
     assert "scripts/verify-v1-accepted-candidate.py" in publication
     assert "actions/artifacts/${CANDIDATE_ARTIFACT_ID}/zip" in publication
-    assert publication.count("curl --fail --location --silent --show-error") == 2
-    assert publication.count("X-GitHub-Api-Version: 2026-03-10") == 4
+    assert publication.count("curl --fail --location --silent --show-error") == 6
+    assert publication.count("X-GitHub-Api-Version: 2026-03-10") == 8
     assert "steps.candidate.outputs.artifact_sha256" in publication
     assert "scripts/extract-v1-workflow-artifact.py" in publication
     assert "publication_artifact_sha256:" in publication
     assert "actions/download-artifact" not in publication
+    assert publication.count("artifact-id") >= 5
+    assert publication.count("artifact-digest") >= 5
     assert "ecorex-release-publication-${{ inputs.channel }}" in publication
     assert "contents: write" in publication
     assert "id-token: write" in publication
@@ -1001,15 +1003,15 @@ def test_candidate_and_publication_workflows_are_split_and_default_safe() -> Non
     assert "bootstrap-index-stage-receipt.json" in publication
     assert "bootstrap-index-publication-receipt.json" in publication
     assert "ecorex-v1-publication-result-${{ inputs.channel }}-${{ github.run_id }}" in publication
-    assert publication.index("activate-public-bootstrap-index") < publication.index(
-        "Assemble stable active-and-readback evidence"
-    )
-    assert publication.index("Assemble stable active-and-readback evidence") < publication.index(
-        "Publish release then activate stable rollout"
-    )
-    assert publication.index("Publish release then activate stable rollout") < publication.index(
-        "Retain publication receipts, signed evidence and recovery journal"
-    )
+    assert publication.index(
+        "Execute server-local atomic cloud and public-site authorities"
+    ) < publication.index("Assemble final stable evidence after Bootstrap activation")
+    assert publication.index(
+        "Assemble final stable evidence after Bootstrap activation"
+    ) < publication.index("Re-authenticate admission then activate rollout")
+    assert "if: ${{ inputs.publication_mode == 'create-and-activate' }}" in publication
+    assert "--mode \"${{ inputs.publication_mode }}\"" in publication
+    assert "--rollout-percentage \"${{ inputs.rollout_percentage }}\"" in publication
 
 
 def test_every_external_action_in_v1_workflows_is_commit_pinned() -> None:

@@ -200,6 +200,9 @@ jobs:
       actions: read
       contents: write
       id-token: write
+    outputs:
+      result_artifact_id: ${{ steps.publication_result.outputs.artifact-id }}
+      result_artifact_sha256: ${{ steps.publication_result.outputs.artifact-digest }}
     steps:
       - name: Checkout exact protected publication authority
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -376,13 +379,12 @@ jobs:
           --journal .candidate/output/promotion-journal.json
           --percentage "${{ inputs.rollout_percentage }}"
 
-      - name: Create or activate canary rollout
+      - name: Create paused canary rollout
         if: ${{ inputs.channel == 'canary' }}
         env:
           ECOREX_CONTROL_PLANE_URL: ${{ vars.ECOREX_CONTROL_PLANE_URL }}
           ECOREX_CONTROL_PLANE_HOSTS: ${{ vars.ECOREX_CONTROL_PLANE_HOSTS }}
           ECOREX_CONTROL_PLANE_TOKEN: ${{ secrets.ECOREX_CONTROL_PLANE_TOKEN }}
-          PUBLICATION_MODE: ${{ inputs.publication_mode }}
           KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
           PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
         run: |
@@ -395,11 +397,10 @@ jobs:
             --journal .candidate/output/promotion-journal.json
             --percentage "${{ inputs.rollout_percentage }}"
           )
-          if [[ "$PUBLICATION_MODE" == "create-and-activate" ]]; then args+=(--activate); fi
           ecorex-release "${args[@]}"
 
-      - name: CAS-activate and publicly read back the stable Bootstrap index
-        if: ${{ inputs.channel == 'stable' && inputs.publication_mode == 'create-and-activate' }}
+      - name: Defer stable Bootstrap activation to admitted production job
+        if: ${{ false }}
         env:
           ECOREX_BOOTSTRAP_INDEX_TOKEN: ${{ secrets.ECOREX_BOOTSTRAP_INDEX_TOKEN }}
           KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
@@ -418,8 +419,8 @@ jobs:
           --trusted-key "$KEY_ID=$PUBLIC_KEY"
           --trusted-publication-key "$PUBLICATION_KEY_ID=$PUBLICATION_PUBLIC_KEY"
 
-      - name: Assemble stable active-and-readback evidence
-        if: ${{ inputs.channel == 'stable' && inputs.publication_mode == 'create-and-activate' }}
+      - name: Defer stable final evidence to admitted production job
+        if: ${{ false }}
         run: >-
           python scripts/assemble-v1-release-evidence.py
           --phase finalize
@@ -431,8 +432,8 @@ jobs:
           --expected-workflow-run-id ${{ inputs.candidate_run_id }}
           --output .candidate/output/release-evidence-unsigned.json
 
-      - name: Sign stable active-and-readback gate bundle
-        if: ${{ inputs.channel == 'stable' && inputs.publication_mode == 'create-and-activate' }}
+      - name: Defer stable final evidence signing to admitted production job
+        if: ${{ false }}
         env:
           ECOREX_RELEASE_SIGNER_EXECUTABLE: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE }}
           ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256 }}
@@ -446,8 +447,8 @@ jobs:
           --manifest .candidate/output/release/release-manifest.json
           --output .candidate/output/release-evidence.json
 
-      - name: Publish release then activate stable rollout
-        if: ${{ inputs.channel == 'stable' && inputs.publication_mode == 'create-and-activate' }}
+      - name: Defer stable rollout activation to admitted production job
+        if: ${{ false }}
         env:
           ECOREX_CONTROL_PLANE_URL: ${{ vars.ECOREX_CONTROL_PLANE_URL }}
           ECOREX_CONTROL_PLANE_HOSTS: ${{ vars.ECOREX_CONTROL_PLANE_HOSTS }}
@@ -468,10 +469,469 @@ jobs:
 
       - name: Retain publication receipts, signed evidence and recovery journal
         if: ${{ always() }}
+        id: publication_result
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ecorex-v1-publication-result-${{ inputs.channel }}-${{ github.run_id }}
-          path: .candidate/output
+          path: |
+            .candidate/output
+            .candidate/gates
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 90
+
+  authorize-production:
+    name: Authorize exact prepared bytes for production
+    if: ${{ inputs.publication_mode != 'verify-only' }}
+    needs:
+      - validate-request
+      - publish-and-promote
+    environment:
+      name: ecorex-deployment-authorization
+    runs-on: [self-hosted, linux, x64, ecorex-deployment-authorize]
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    outputs:
+      deployment_artifact_id: ${{ steps.authorized_deployment.outputs.artifact-id }}
+      deployment_artifact_sha256: ${{ steps.authorized_deployment.outputs.artifact-digest }}
+    steps:
+      - name: Checkout the exact protected deployment authority
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.9"
+
+      - name: Download exact prepared publication result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.publish-and-promote.outputs.result_artifact_id }}
+          ARTIFACT_SHA256: ${{ needs.publish-and-promote.outputs.result_artifact_sha256 }}
+        run: |
+          curl --fail --location --silent --show-error \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            --output .publication-result.zip \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip"
+          python scripts/extract-v1-workflow-artifact.py \
+            --archive .publication-result.zip \
+            --expected-sha256 "$ARTIFACT_SHA256" \
+            --output .candidate \
+            --required-root output \
+            --required-root gates \
+            --receipt .candidate/publication-result-extraction.json
+
+      - name: Materialize the exact public-site input tree
+        run: |
+          release_id="$(python -c 'import json; print(json.load(open(".candidate/output/release/release-manifest.json"))["release_id"])')"
+          mkdir -p ".candidate/site-staging/$release_id"
+          cp -a deploy/ecorex-site ".candidate/site-staging/$release_id/site"
+          cp .candidate/output/public-bootstrap-index.json \
+            ".candidate/site-staging/$release_id/site/public-bootstrap-index.json"
+
+      - name: Assemble immutable production identity and administrator decision
+        env:
+          CANDIDATE_ARTIFACT_SHA256: ${{ needs.validate-request.outputs.publication_artifact_sha256 }}
+        run: >-
+          python scripts/assemble-v1-protected-deployment-admission.py
+          --candidate-root .candidate
+          --site-root ".candidate/site-staging/$(python -c 'import json; print(json.load(open(\".candidate/output/release/release-manifest.json\"))[\"release_id\"])')/site"
+          --repository "${GITHUB_REPOSITORY}"
+          --commit-sha "${GITHUB_SHA}"
+          --channel "${{ inputs.channel }}"
+          --candidate-run-id "${{ inputs.candidate_run_id }}"
+          --candidate-run-attempt "${{ inputs.candidate_run_attempt }}"
+          --candidate-artifact-id "${{ inputs.candidate_artifact_id }}"
+          --candidate-artifact-sha256 "$CANDIDATE_ARTIFACT_SHA256"
+          --mode "${{ inputs.publication_mode }}"
+          --rollout-percentage "${{ inputs.rollout_percentage }}"
+          --output .candidate/protected-deployment-admission-unsigned.json
+
+      - name: Sign and self-verify protected deployment admission
+        env:
+          ECOREX_DEPLOYMENT_SIGNER_EXECUTABLE: ${{ vars.ECOREX_DEPLOYMENT_SIGNER_EXECUTABLE }}
+          ECOREX_DEPLOYMENT_SIGNER_EXECUTABLE_SHA256: ${{ vars.ECOREX_DEPLOYMENT_SIGNER_EXECUTABLE_SHA256 }}
+          ECOREX_DEPLOYMENT_SIGNER_ADAPTER: ${{ vars.ECOREX_DEPLOYMENT_SIGNER_ADAPTER }}
+          ECOREX_DEPLOYMENT_SIGNER_ADAPTER_SHA256: ${{ vars.ECOREX_DEPLOYMENT_SIGNER_ADAPTER_SHA256 }}
+          ECOREX_DEPLOYMENT_SIGNER_KEY_ID: ${{ vars.ECOREX_DEPLOYMENT_SIGNER_KEY_ID }}
+          ECOREX_DEPLOYMENT_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_DEPLOYMENT_SIGNER_PUBLIC_KEY }}
+        run: >-
+          python scripts/sign-v1-protected-deployment-admission.py
+          --unsigned .candidate/protected-deployment-admission-unsigned.json
+          --output .candidate/protected-deployment-admission.json
+
+      - name: Bind admission and sign public-site authorization v2
+        env:
+          ECOREX_RELEASE_SIGNER_EXECUTABLE: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE }}
+          ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256 }}
+          ECOREX_RELEASE_SIGNER_ADAPTER: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER }}
+          ECOREX_RELEASE_SIGNER_ADAPTER_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER_SHA256 }}
+          ECOREX_RELEASE_SIGNER_KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          ECOREX_RELEASE_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+          ECOREX_DEPLOYMENT_SIGNER_KEY_ID: ${{ vars.ECOREX_DEPLOYMENT_SIGNER_KEY_ID }}
+          ECOREX_DEPLOYMENT_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_DEPLOYMENT_SIGNER_PUBLIC_KEY }}
+        run: |
+          release_id="$(python -c 'import json; print(json.load(open(".candidate/output/release/release-manifest.json"))["release_id"])')"
+          release_stage=".candidate/site-staging/$release_id"
+          cp .candidate/protected-deployment-admission.json \
+            "$release_stage/protected-deployment-admission.json"
+          python scripts/sign-v1-public-site-deployment.py \
+            --release-id "$release_id" \
+            --staging-release-dir "$release_stage" \
+            --cloud-artifact-root .candidate/output/cloud \
+            --protected-admission "$release_stage/protected-deployment-admission.json"
+
+      - name: Upload only exact prepared bytes and their signed admission
+        id: authorized_deployment
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ecorex-v1-authorized-deployment-${{ inputs.channel }}-${{ github.run_id }}
+          path: |
+            .candidate/output
+            .candidate/gates
+            .candidate/site-staging
+            .candidate/protected-deployment-admission.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
+
+  deploy-production:
+    name: Deploy admitted cloud, public site and rollout
+    if: ${{ inputs.publication_mode == 'create-and-activate' }}
+    needs: authorize-production
+    environment:
+      name: ecorex-production-deployment-${{ inputs.channel }}
+    runs-on: [self-hosted, linux, x64, ecorex-production-deploy]
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      deployment_result_artifact_id: ${{ steps.production_deployment.outputs.artifact-id }}
+      deployment_result_artifact_sha256: ${{ steps.production_deployment.outputs.artifact-digest }}
+    steps:
+      - name: Checkout immutable production executor
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.9"
+
+      - name: Download only the admitted production bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.authorize-production.outputs.deployment_artifact_id }}
+          ARTIFACT_SHA256: ${{ needs.authorize-production.outputs.deployment_artifact_sha256 }}
+        run: |
+          curl --fail --location --silent --show-error \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            --output .authorized-deployment.zip \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip"
+          python scripts/extract-v1-workflow-artifact.py \
+            --archive .authorized-deployment.zip \
+            --expected-sha256 "$ARTIFACT_SHA256" \
+            --output .deployment \
+            --required-root output \
+            --required-root gates \
+            --required-root site-staging \
+            --required-root protected-deployment-admission.json \
+            --receipt .deployment/authorized-deployment-extraction.json
+
+      - name: Re-authenticate admission at the mutation boundary
+        env:
+          KEY_ID: ${{ vars.ECOREX_DEPLOYMENT_SIGNER_KEY_ID }}
+          PUBLIC_KEY: ${{ vars.ECOREX_DEPLOYMENT_SIGNER_PUBLIC_KEY }}
+        run: >-
+          python scripts/verify-v1-protected-deployment-admission.py
+          --admission .deployment/protected-deployment-admission.json
+          --trusted-key "$KEY_ID=$PUBLIC_KEY"
+          --repository "${GITHUB_REPOSITORY}"
+          --commit-sha "${GITHUB_SHA}"
+          --candidate-run-id "${{ inputs.candidate_run_id }}"
+          --candidate-artifact-id "${{ inputs.candidate_artifact_id }}"
+          --channel "${{ inputs.channel }}"
+          --mode "${{ inputs.publication_mode }}"
+          --rollout-percentage "${{ inputs.rollout_percentage }}"
+
+      - name: Execute server-local atomic cloud and public-site authorities
+        env:
+          ECOREX_PRODUCTION_CLOUD_SPEC: ${{ vars.ECOREX_PRODUCTION_CLOUD_SPEC }}
+          ECOREX_PRODUCTION_PUBLIC_SITE_ROOT: ${{ vars.ECOREX_PRODUCTION_PUBLIC_SITE_ROOT }}
+          ECOREX_BOOTSTRAP_INDEX_TOKEN: ${{ secrets.ECOREX_BOOTSTRAP_INDEX_TOKEN }}
+          ECOREX_CONTROL_PLANE_TOKEN: ${{ secrets.ECOREX_CONTROL_PLANE_TOKEN }}
+          ECOREX_CONTROL_PLANE_URL: ${{ vars.ECOREX_CONTROL_PLANE_URL }}
+          ECOREX_CONTROL_PLANE_HOSTS: ${{ vars.ECOREX_CONTROL_PLANE_HOSTS }}
+          BOOTSTRAP_INDEX_PUBLICATION_CONFIG: ${{ vars.ECOREX_BOOTSTRAP_INDEX_PUBLICATION_CONFIG }}
+          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+          PUBLICATION_KEY_ID: ${{ vars.ECOREX_PUBLICATION_SIGNER_KEY_ID }}
+          PUBLICATION_PUBLIC_KEY: ${{ vars.ECOREX_PUBLICATION_SIGNER_PUBLIC_KEY }}
+          PUBLICATION_MODE: ${{ inputs.publication_mode }}
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+        run: |
+          test -n "$ECOREX_PRODUCTION_CLOUD_SPEC"
+          test -n "$ECOREX_PRODUCTION_PUBLIC_SITE_ROOT"
+          cloud_manifest_sha="$(python -c 'import json; print(json.load(open(".deployment/protected-deployment-admission.json"))["admission"]["targets"]["cloud"]["manifest_sha256"])')"
+          release_id="$(python -c 'import json; print(json.load(open(".deployment/protected-deployment-admission.json"))["admission"]["candidate"]["release_id"])')"
+          cloud_upload_root="/srv/ecorex-upload/${release_id}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          test ! -e "$cloud_upload_root"
+          install -d -m 0700 "$cloud_upload_root"
+          cp -a .deployment/output/cloud/. "$cloud_upload_root/"
+          ECOREX_CLOUD_UPLOAD_ROOT="$cloud_upload_root" \
+          ECOREX_CLOUD_MANIFEST_SHA256="$cloud_manifest_sha" \
+          ECOREX_CLOUD_RELEASE_ID="$release_id" \
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          source = Path(os.environ['ECOREX_PRODUCTION_CLOUD_SPEC'])
+          value = json.loads(source.read_text(encoding='utf-8'))
+          artifact = Path(os.environ['ECOREX_CLOUD_UPLOAD_ROOT'])
+          manifest = artifact / 'cloud-release-manifest.json'
+          observed = hashlib.sha256(manifest.read_bytes()).hexdigest()
+          expected = os.environ['ECOREX_CLOUD_MANIFEST_SHA256']
+          if observed != expected:
+              raise SystemExit('admitted_cloud_manifest_mismatch')
+          manifest_value = json.loads(manifest.read_text(encoding='utf-8'))
+          value.update({
+              'release_id': os.environ['ECOREX_CLOUD_RELEASE_ID'],
+              'source_commit': os.environ['GITHUB_SHA'],
+              'dependency_lock_manifest_sha256': manifest_value['dependency_lock_manifest_sha256'],
+              'artifact_root': str(artifact),
+              'artifact_manifest_sha256': expected,
+          })
+          target = Path('.deployment/production-cloud-spec.json')
+          target.write_text(json.dumps(value, sort_keys=True, separators=(',', ':')) + '\n', encoding='utf-8')
+          target.chmod(0o600)
+          PY
+          python scripts/deploy-v1-cloud-sidecar.py \
+            --spec .deployment/production-cloud-spec.json \
+            --apply \
+            --confirm-target "$cloud_manifest_sha"
+          target_stage="$ECOREX_PRODUCTION_PUBLIC_SITE_ROOT/site-staging/$release_id"
+          test ! -e "$target_stage"
+          install -d -m 0700 "$target_stage"
+          cp -a ".deployment/site-staging/$release_id/." "$target_stage/"
+          python scripts/deploy-v1-public-site.py \
+            --apply \
+            --release-id "$release_id" \
+            --confirm-target "https://dl.ecoremedia.net/ecorex-agent/"
+          if [[ "$RELEASE_CHANNEL" == "stable" && "$PUBLICATION_MODE" == "create-and-activate" ]]; then
+            ecorex-release activate-public-bootstrap-index \
+              --release-dir .deployment/output/release \
+              --publication-receipt .deployment/output/publication-receipt.json \
+              --index .deployment/output/public-bootstrap-index.json \
+              --stage-receipt .deployment/output/bootstrap-index-stage-receipt.json \
+              --publication-config "$BOOTSTRAP_INDEX_PUBLICATION_CONFIG" \
+              --receipt .deployment/output/bootstrap-index-publication-receipt.json \
+              --trusted-key "$KEY_ID=$PUBLIC_KEY" \
+              --trusted-publication-key "$PUBLICATION_KEY_ID=$PUBLICATION_PUBLIC_KEY"
+          fi
+
+      - name: Upload atomic activation journals
+        if: ${{ always() }}
+        id: production_deployment
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ecorex-v1-production-deployment-${{ inputs.channel }}-${{ github.run_id }}
+          path: .deployment
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 90
+
+  authorize-finalization:
+    name: Sign post-activation evidence without production credentials
+    if: ${{ inputs.publication_mode == 'create-and-activate' }}
+    needs: deploy-production
+    environment:
+      name: ecorex-deployment-authorization
+    runs-on: [self-hosted, linux, x64, ecorex-deployment-authorize]
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    outputs:
+      finalized_artifact_id: ${{ steps.finalized_deployment.outputs.artifact-id }}
+      finalized_artifact_sha256: ${{ steps.finalized_deployment.outputs.artifact-digest }}
+    steps:
+      - name: Checkout exact protected evidence authority
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download deployment journal and exact admitted bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.deploy-production.outputs.deployment_result_artifact_id }}
+          ARTIFACT_SHA256: ${{ needs.deploy-production.outputs.deployment_result_artifact_sha256 }}
+        run: |
+          curl --fail --location --silent --show-error \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            --output .production-deployment.zip \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip"
+          python scripts/extract-v1-workflow-artifact.py \
+            --archive .production-deployment.zip \
+            --expected-sha256 "$ARTIFACT_SHA256" \
+            --output .deployment \
+            --required-root output \
+            --required-root gates \
+            --required-root site-staging \
+            --required-root protected-deployment-admission.json \
+            --required-root authorized-deployment-extraction.json \
+            --required-root production-cloud-spec.json \
+            --receipt .deployment/production-deployment-extraction.json
+
+      - name: Assemble final stable evidence after Bootstrap activation
+        if: ${{ inputs.channel == 'stable' }}
+        run: >-
+          python scripts/assemble-v1-release-evidence.py
+          --phase finalize
+          --receipts-dir .deployment/gates
+          --manifest .deployment/output/release/release-manifest.json
+          --publication-receipt .deployment/output/publication-receipt.json
+          --bootstrap-index-receipt .deployment/output/bootstrap-index-publication-receipt.json
+          --expected-commit "${{ github.sha }}"
+          --expected-workflow-run-id "${{ inputs.candidate_run_id }}"
+          --output .deployment/output/release-evidence-unsigned.json
+
+      - name: Sign final stable evidence
+        if: ${{ inputs.channel == 'stable' }}
+        env:
+          ECOREX_RELEASE_SIGNER_EXECUTABLE: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE }}
+          ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256 }}
+          ECOREX_RELEASE_SIGNER_ADAPTER: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER }}
+          ECOREX_RELEASE_SIGNER_ADAPTER_SHA256: ${{ vars.ECOREX_RELEASE_SIGNER_ADAPTER_SHA256 }}
+          ECOREX_RELEASE_SIGNER_KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          ECOREX_RELEASE_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+        run: >-
+          python scripts/sign-v1-release-gate-bundle.py
+          --unsigned .deployment/output/release-evidence-unsigned.json
+          --manifest .deployment/output/release/release-manifest.json
+          --output .deployment/output/release-evidence.json
+
+      - name: Upload final evidence for rollout activation
+        id: finalized_deployment
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ecorex-v1-finalized-deployment-${{ inputs.channel }}-${{ github.run_id }}
+          path: .deployment
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 90
+
+  activate-rollout:
+    name: Activate admitted rollout with final signed evidence
+    if: ${{ inputs.publication_mode == 'create-and-activate' }}
+    needs: authorize-finalization
+    environment:
+      name: ecorex-production-deployment-${{ inputs.channel }}
+    runs-on: [self-hosted, linux, x64, ecorex-production-deploy]
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout immutable production executor
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download only final signed deployment evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.authorize-finalization.outputs.finalized_artifact_id }}
+          ARTIFACT_SHA256: ${{ needs.authorize-finalization.outputs.finalized_artifact_sha256 }}
+        run: |
+          curl --fail --location --silent --show-error \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            --output .finalized-deployment.zip \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip"
+          python scripts/extract-v1-workflow-artifact.py \
+            --archive .finalized-deployment.zip \
+            --expected-sha256 "$ARTIFACT_SHA256" \
+            --output .deployment \
+            --required-root output \
+            --required-root gates \
+            --required-root site-staging \
+            --required-root protected-deployment-admission.json \
+            --required-root authorized-deployment-extraction.json \
+            --required-root production-cloud-spec.json \
+            --required-root production-deployment-extraction.json \
+            --receipt .deployment/finalized-deployment-extraction.json
+
+      - name: Re-authenticate admission then activate rollout
+        env:
+          ECOREX_CONTROL_PLANE_TOKEN: ${{ secrets.ECOREX_CONTROL_PLANE_TOKEN }}
+          ECOREX_CONTROL_PLANE_URL: ${{ vars.ECOREX_CONTROL_PLANE_URL }}
+          ECOREX_CONTROL_PLANE_HOSTS: ${{ vars.ECOREX_CONTROL_PLANE_HOSTS }}
+          ADMISSION_KEY_ID: ${{ vars.ECOREX_DEPLOYMENT_SIGNER_KEY_ID }}
+          ADMISSION_PUBLIC_KEY: ${{ vars.ECOREX_DEPLOYMENT_SIGNER_PUBLIC_KEY }}
+          KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+        run: |
+          python scripts/verify-v1-protected-deployment-admission.py \
+            --admission .deployment/protected-deployment-admission.json \
+            --trusted-key "$ADMISSION_KEY_ID=$ADMISSION_PUBLIC_KEY" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --commit-sha "${GITHUB_SHA}" \
+            --candidate-run-id "${{ inputs.candidate_run_id }}" \
+            --candidate-artifact-id "${{ inputs.candidate_artifact_id }}" \
+            --channel "${{ inputs.channel }}" \
+            --mode "${{ inputs.publication_mode }}" \
+            --rollout-percentage "${{ inputs.rollout_percentage }}"
+          ecorex-release promote \
+            --phase auto \
+            --manifest .deployment/output/release/release-manifest.json \
+            --evidence .deployment/output/release-evidence.json \
+            --publication-receipt .deployment/output/publication-receipt.json \
+            --trusted-key "$KEY_ID=$PUBLIC_KEY" \
+            --journal .deployment/output/promotion-journal.json \
+            --percentage "${{ inputs.rollout_percentage }}" \
+            --activate
+
+  finalize-production:
+    name: Independent public and admin readback
+    if: ${{ inputs.publication_mode == 'create-and-activate' }}
+    needs:
+      - deploy-production
+      - authorize-finalization
+      - activate-rollout
+    environment:
+      name: ecorex-production-readback
+    runs-on: [self-hosted, linux, x64, ecorex-production-readback]
+    timeout-minutes: 15
+    permissions: {}
+    steps:
+      - name: Read back production without deployment credentials
+        env:
+          ECOREX_PUBLIC_ORIGIN: ${{ vars.ECOREX_PUBLIC_ORIGIN }}
+          ECOREX_ADMIN_HEALTH_URL: ${{ vars.ECOREX_ADMIN_HEALTH_URL }}
+        run: |
+          curl --fail --silent --show-error --location \
+            --max-time 30 "$ECOREX_PUBLIC_ORIGIN" >/dev/null
+          curl --fail --silent --show-error --location \
+            --max-time 30 "$ECOREX_ADMIN_HEALTH_URL" | grep -F '"status":"ready"'

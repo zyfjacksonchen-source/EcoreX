@@ -449,7 +449,7 @@ def _validate_workflows(repo: Path) -> dict[str, object]:
         # provenance verification and signed gate finalization use the smaller
         # runtime profile. Publication is deliberately a separate workflow.
         "ecorex-v1-candidate.yml": {
-            "profiles": {"cloud": 3, "dev": 3, "runtime": 3},
+            "profiles": {"cloud": 5, "dev": 3, "runtime": 4},
             "npm_ci": 1,
             "node": True,
         },

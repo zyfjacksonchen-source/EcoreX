@@ -27,6 +27,7 @@ from ecorex.release import (
     public_bootstrap_authority_signing_bytes,
     public_bootstrap_freshness_signing_bytes,
 )
+from ecorex.release.protected_deployment import sign_admission
 
 
 RELEASE_ID = "release-stable-0123456789abcdef01234567"
@@ -43,6 +44,10 @@ AUTHORIZATION_PRIVATE = Ed25519PrivateKey.from_private_bytes(b"k" * 32)
 FRESHNESS_PRIVATE = Ed25519PrivateKey.from_private_bytes(b"f" * 32)
 AUTHORIZATION_SIGNER = Ed25519MemorySigner(
     "ecorex-direct-release-test", AUTHORIZATION_PRIVATE
+)
+DEPLOYMENT_PRIVATE = Ed25519PrivateKey.from_private_bytes(b"d" * 32)
+DEPLOYMENT_SIGNER = Ed25519MemorySigner(
+    "ecorex-protected-deployment-test", DEPLOYMENT_PRIVATE
 )
 ADMIN_INDEX = b"<html><head><title>EcoreX Admin 1.0.0</title></head></html>"
 ADMIN_CSS = b"body{color:CanvasText}"
@@ -315,6 +320,119 @@ def _write_staging(paths: deployment.DeploymentPaths) -> Path:
                 "test-freshness-key": base64.b64encode(freshness_public).decode(
                     "ascii"
                 )
+            }
+        )
+    )
+    return site
+
+
+def _site_tree_sha256(site: Path) -> str:
+    records = []
+    for path in sorted(value for value in site.rglob("*") if value.is_file()):
+        relative = path.relative_to(site).as_posix()
+        if relative == "public-bootstrap-index.json":
+            continue
+        payload = path.read_bytes()
+        records.append(
+            {
+                "path": relative,
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "size_bytes": len(payload),
+            }
+        )
+    return hashlib.sha256(
+        json.dumps(records, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _convert_staging_to_protected_v2(
+    paths: deployment.DeploymentPaths,
+) -> Path:
+    site = _write_staging(paths)
+    release = site.parent
+    (release / "deployment-authorization.json").unlink()
+    (release / "direct-deployable.json").unlink()
+    now = datetime.now(UTC).replace(microsecond=0)
+    pointer_sha = hashlib.sha256(
+        (site / "public-bootstrap-index.json").read_bytes()
+    ).hexdigest()
+    admission = sign_admission(
+        {
+            "admission_id": "deploy-public-site-test",
+            "repository": "owner/ecorex",
+            "commit_sha": "a" * 40,
+            "channel": "stable",
+            "candidate": {
+                "workflow_run_id": 10,
+                "run_attempt": 1,
+                "artifact_id": 20,
+                "artifact_sha256": "1" * 64,
+                "release_id": RELEASE_ID,
+                "version": "1.0.0",
+                "build_digest": BUILD_DIGEST,
+            },
+            "gates": {
+                "candidate": "1" * 64,
+                "cdp_acceptance": "2" * 64,
+                "image_soak": "3" * 64,
+                "live_image": "4" * 64,
+                "live_model": "5" * 64,
+                "signature": "6" * 64,
+            },
+            "targets": {
+                "cloud": {
+                    "artifact_sha256": "7" * 64,
+                    "manifest_sha256": "8" * 64,
+                },
+                "control_plane": {
+                    "release_manifest_sha256": MANIFEST_SHA256,
+                },
+                "public_site": {
+                    "tree_sha256": _site_tree_sha256(site),
+                    "public_index_sha256": pointer_sha,
+                },
+            },
+            "decision": {
+                "mode": "create-and-activate",
+                "rollout_percentage": 100,
+            },
+            "issued_at": now.isoformat().replace("+00:00", "Z"),
+            "expires_at": (now + timedelta(hours=1))
+            .isoformat()
+            .replace("+00:00", "Z"),
+        },
+        signer=DEPLOYMENT_SIGNER,
+    )
+    (release / "protected-deployment-admission.json").write_bytes(
+        _canonical(admission)
+    )
+    unsigned = deployment._validate_unsigned_staged_site(
+        RELEASE_ID,
+        paths=paths,
+        expected_owner_uid=None,
+        authorization_expected=False,
+    )
+    admin = _admin_identity()
+    (release / "admin-deployment-identity.json").write_bytes(_canonical(admin))
+    unsigned = dataclasses.replace(unsigned, admin_identity=admin)
+    authorization = deployment.sign_public_site_authorization(
+        unsigned, signer=AUTHORIZATION_SIGNER
+    )
+    assert authorization["schema_version"] == 2
+    assert "waiver_sha256" not in authorization["authorization"]
+    (release / "deployment-authorization.json").write_bytes(
+        _canonical(authorization)
+    )
+    deployment_public = DEPLOYMENT_PRIVATE.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    paths.deployment_keyring_path.write_bytes(
+        _canonical(
+            {
+                DEPLOYMENT_SIGNER.key_id: base64.b64encode(
+                    deployment_public
+                ).decode("ascii")
             }
         )
     )
@@ -936,6 +1054,79 @@ def test_apply_creates_no_clobber_slot_atomic_pointer_and_root_receipt(
         for path in slot.rglob("*")
         if path.is_file()
     }
+
+
+def test_protected_v2_plan_apply_readback_and_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_symlink(tmp_path)
+    paths = _paths(tmp_path)
+    _convert_staging_to_protected_v2(paths)
+    site = deployment.validate_staged_site(
+        RELEASE_ID, paths=paths, expected_owner_uid=None
+    )
+    assert site.authority_schema_version == 2
+    assert site.admission is not None
+    planned = deployment.plan(
+        RELEASE_ID, paths=paths, expected_owner_uid=None
+    )
+    assert planned["mutation_performed"] is False
+    assert not paths.current_path.exists()
+
+    _enable_portable_apply(monkeypatch)
+    result = deployment.apply(
+        RELEASE_ID,
+        confirm_target=deployment.PUBLIC_ORIGIN,
+        paths=paths,
+        controller=_Controller(),
+        client=_Readback(site),
+        expected_owner_uid=None,
+        enforce_server_fence=False,
+    )
+
+    assert result["status"] == "passed"
+    assert paths.current_path.is_symlink()
+    assert not paths.journal_path.exists()
+    receipt = json.loads(Path(result["receipt"]).read_text())
+    assert receipt["site_tree_sha256"] == site.tree_sha256
+    assert (
+        receipt["deployment_authorization_sha256"]
+        == site.authorization_sha256
+    )
+    assert receipt["readback"]["admin"]["status"] == 200
+
+
+def test_protected_v2_rejects_admission_and_admin_tampering(
+    tmp_path: Path,
+) -> None:
+    paths = _paths(tmp_path)
+    site = _convert_staging_to_protected_v2(paths)
+    admission_path = site.parent / "protected-deployment-admission.json"
+    admission = json.loads(admission_path.read_text())
+    admission["admission"]["decision"]["rollout_percentage"] = 1
+    admission_path.write_bytes(_canonical(admission))
+    with pytest.raises(
+        deployment.PublicSiteDeployError,
+        match="protected_deployment_admission_rejected",
+    ):
+        deployment.validate_staged_site(
+            RELEASE_ID, paths=paths, expected_owner_uid=None
+        )
+
+    shutil.rmtree(paths.staging_root)
+    site = _convert_staging_to_protected_v2(paths)
+    admin_path = site.parent / "admin-deployment-identity.json"
+    admin = json.loads(admin_path.read_text())
+    admin["index"]["sha256"] = "0" * 64
+    admin_path.write_bytes(_canonical(admin))
+    with pytest.raises(
+        deployment.PublicSiteDeployError,
+        match="site_authorization_identity_mismatch",
+    ):
+        deployment.validate_staged_site(
+            RELEASE_ID, paths=paths, expected_owner_uid=None
+        )
 
 
 class _CurrentAwareReadback(_Readback):

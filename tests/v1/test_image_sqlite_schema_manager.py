@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 import hashlib
 import json
 import sqlite3
+import threading
+import time
 
 import pytest
 
@@ -251,6 +253,44 @@ def test_migration_is_concurrent_versioned_and_has_one_history_row(tmp_path) -> 
     assert hashlib.sha256(history[0][1].encode("utf-8")).hexdigest() == history[0][2]
     assert json.loads(history[0][1])["migration_checksum"] == history[0][0]
     assert domain_tables == _DOMAIN_TABLES
+
+
+def test_migration_serializes_schema_and_wal_phases_per_database(
+    tmp_path, monkeypatch
+) -> None:
+    database = tmp_path / "serialized-image.sqlite3"
+    real_activate_wal = SQLiteImageSchemaManager._activate_wal
+    state_lock = threading.Lock()
+    active = 0
+    peak = 0
+
+    def slow_activate_wal(connection):
+        nonlocal active, peak
+        with state_lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            time.sleep(0.01)
+            real_activate_wal(connection)
+        finally:
+            with state_lock:
+                active -= 1
+
+    monkeypatch.setattr(
+        SQLiteImageSchemaManager,
+        "_activate_wal",
+        staticmethod(slow_activate_wal),
+    )
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        receipts = list(
+            pool.map(
+                lambda _index: SQLiteImageSchemaManager(database).migrate(),
+                range(8),
+            )
+        )
+
+    assert peak == 1
+    assert all(receipt == receipts[0] for receipt in receipts)
 
 
 def test_deployment_cli_migrates_then_validates(tmp_path, capsys) -> None:

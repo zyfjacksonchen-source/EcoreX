@@ -143,6 +143,34 @@ _STAGE_VARIABLES = frozenset(
         "ECOREX_PUBLICATION_PUBLIC_KEYS_JSON",
     }
 )
+_DEPLOYMENT_SIGNER_VARIABLES = frozenset(
+    {
+        "ECOREX_DEPLOYMENT_SIGNER_EXECUTABLE",
+        "ECOREX_DEPLOYMENT_SIGNER_EXECUTABLE_SHA256",
+        "ECOREX_DEPLOYMENT_SIGNER_ADAPTER",
+        "ECOREX_DEPLOYMENT_SIGNER_ADAPTER_SHA256",
+        "ECOREX_DEPLOYMENT_SIGNER_KEY_ID",
+        "ECOREX_DEPLOYMENT_SIGNER_PUBLIC_KEY",
+    }
+)
+_PRODUCTION_DEPLOYMENT_VARIABLES = frozenset(
+    {
+        "ECOREX_DEPLOYMENT_SIGNER_KEY_ID",
+        "ECOREX_DEPLOYMENT_SIGNER_PUBLIC_KEY",
+        "ECOREX_PRODUCTION_CLOUD_SPEC",
+        "ECOREX_PRODUCTION_PUBLIC_SITE_ROOT",
+        "ECOREX_BOOTSTRAP_INDEX_PUBLICATION_CONFIG",
+        "ECOREX_CONTROL_PLANE_URL",
+        "ECOREX_CONTROL_PLANE_HOSTS",
+        "ECOREX_RELEASE_SIGNER_KEY_ID",
+        "ECOREX_RELEASE_SIGNER_PUBLIC_KEY",
+        "ECOREX_PUBLICATION_SIGNER_KEY_ID",
+        "ECOREX_PUBLICATION_SIGNER_PUBLIC_KEY",
+    }
+)
+_PRODUCTION_DEPLOYMENT_SECRETS = frozenset(
+    {"ECOREX_BOOTSTRAP_INDEX_TOKEN", "ECOREX_CONTROL_PLANE_TOKEN"}
+)
 
 
 def default_release_repository_contract() -> ReleaseRepositoryContract:
@@ -198,6 +226,33 @@ def default_release_repository_contract() -> ReleaseRepositoryContract:
                 ),
             ),
             EnvironmentContract(
+                "ecorex-cloud-build",
+                _SIGNER_VARIABLES | {"ECOREX_CLOUD_BUILD_RELEASE_ROOT"},
+            ),
+            EnvironmentContract(
+                "ecorex-deployment-authorization",
+                _DEPLOYMENT_SIGNER_VARIABLES | _SIGNER_VARIABLES,
+            ),
+            EnvironmentContract(
+                "ecorex-production-deployment-canary",
+                _PRODUCTION_DEPLOYMENT_VARIABLES,
+                _PRODUCTION_DEPLOYMENT_SECRETS,
+            ),
+            EnvironmentContract(
+                "ecorex-production-deployment-stable",
+                _PRODUCTION_DEPLOYMENT_VARIABLES,
+                _PRODUCTION_DEPLOYMENT_SECRETS,
+            ),
+            EnvironmentContract(
+                "ecorex-production-readback",
+                frozenset(
+                    {
+                        "ECOREX_PUBLIC_ORIGIN",
+                        "ECOREX_ADMIN_HEALTH_URL",
+                    }
+                ),
+            ),
+            EnvironmentContract(
                 "ecorex-release-publication-canary",
                 publication_variables,
                 _PUBLICATION_SECRETS,
@@ -226,6 +281,28 @@ def default_release_repository_contract() -> ReleaseRepositoryContract:
             RunnerContract(
                 "release-publication",
                 frozenset({"self-hosted", "linux", "x64", "ecorex-release-publish"}),
+            ),
+            RunnerContract(
+                "cloud-build",
+                frozenset({"self-hosted", "linux", "arm64", "ecorex-cloud-build"}),
+            ),
+            RunnerContract(
+                "deployment-authorize",
+                frozenset(
+                    {"self-hosted", "linux", "x64", "ecorex-deployment-authorize"}
+                ),
+            ),
+            RunnerContract(
+                "production-deploy",
+                frozenset(
+                    {"self-hosted", "linux", "x64", "ecorex-production-deploy"}
+                ),
+            ),
+            RunnerContract(
+                "production-readback",
+                frozenset(
+                    {"self-hosted", "linux", "x64", "ecorex-production-readback"}
+                ),
             ),
         ),
     )
@@ -412,6 +489,10 @@ def evaluate_release_repository(
         role_matches.get("release-sign", set()),
         role_matches.get("release-publication", set()),
         role_matches.get("live-acceptance", set()),
+        role_matches.get("cloud-build", set()),
+        role_matches.get("deployment-authorize", set()),
+        role_matches.get("production-deploy", set()),
+        role_matches.get("production-readback", set()),
     )
     if any(left & right for index, left in enumerate(isolated) for right in isolated[index + 1 :]):
         findings.append(

@@ -725,8 +725,11 @@ def _base_python_runtime_source(platform: str) -> tuple[Path, Path, Path]:
     supplied by the external ``pyvenv.cfg``. Copying it creates a package that
     only works while the build venv still exists. The base installation owns
     the real interpreter, DLLs and standard library copied into the closure.
-    macOS keeps the existing resolved-interpreter behavior, but anchors the
-    candidate explicitly below the same base prefix for closure identity.
+    The python.org macOS Framework installs ``bin/pythonX.Y`` as a trampoline
+    that executes ``Resources/Python.app/Contents/MacOS/Python`` relative to
+    its original Framework layout.  Copying that trampoline alone produces a
+    package that can never start.  The closure therefore copies the real app
+    interpreter while still anchoring it below the same base prefix.
     """
 
     try:
@@ -738,7 +741,14 @@ def _base_python_runtime_source(platform: str) -> tuple[Path, Path, Path]:
         executable_candidate = prefix / "python.exe"
         stdlib_candidate = prefix / "Lib"
     elif platform == "macos":
-        executable_candidate = prefix / "bin" / f"python{version}"
+        executable_candidate = (
+            prefix
+            / "Resources"
+            / "Python.app"
+            / "Contents"
+            / "MacOS"
+            / "Python"
+        )
         stdlib_candidate = prefix / "lib" / f"python{version}"
     else:
         raise StageError("pack_python_base_runtime_invalid")

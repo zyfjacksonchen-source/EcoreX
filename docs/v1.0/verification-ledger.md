@@ -2214,3 +2214,24 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Focused regression | 0 | Platform staging: 100 passed / 9 explicit Windows skips. Ruff, Python compilation and tracked whitespace checks pass; one unchanged Starlette multipart warning remains. Direct failure invokes no sandbox, a boundary failure invokes exactly one profile, write failures cannot reach read diagnostics, and snapshot mutation takes priority over the stage result. |
 | Independent review | 0 | Final read-only review reports P0/P1 = 0. Its sole P2 identified unconditional execution of all six sandbox diagnostics after an already classified failure; the classifier now short-circuits in boundary, write, combined-write and read stages while rebinding every tree before each result. |
 | Promotion | pending | A protected PR/main matrix and wholly new same-run three-platform Stage must identify the execution boundary before any functional change, Candidate signing or production activation. No output from `29569824355` may be reused. |
+
+## macOS Framework interpreter source correction - 2026-07-17
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Protected classifier baseline | 0 | The seven-snapshot execution classifier passed its protected PR/main matrix before a fresh Stage was started from exact main. |
+| Exact-main Stage `29572046960` | 1 expected | Fresh macOS arm64 passed strict checkout, closure materialization, Mach-O relocation, canonical signing and archive-equivalent signature verification. Its independent no-sandbox copied snapshot then returned the fixed `pack_python_bootstrap_snapshot_direct_execution_failed`; macOS x64 and Windows were cancelled and the whole run is quarantined. |
+| Root cause | 0 | actions/setup-python 3.11.9 installs the official python.org Framework. `Versions/3.11/bin/python3.11` is a small trampoline whose embedded contract executes the sibling `Resources/Python.app/Contents/MacOS/Python`. The old source selector copied only that trampoline to `pack-python/bin/python3`; the required relative app bundle was intentionally absent, so every copied closure was structurally unable to start regardless of sandbox policy or signature validity. |
+| Runtime source correction | 0 local contract | macOS closure construction now copies the real Framework app interpreter at `Resources/Python.app/Contents/MacOS/Python`, confined to the resolved base prefix and accepted only as a regular non-link/non-reparse file. It never falls back to the Framework trampoline. Existing architecture inspection, exact dependency materialization, relocation, full Mach-O signing, copy-stability, isolated bootstrap and complete import probes remain mandatory. |
+| Focused regression | 0 | Platform staging: 101 passed / 11 explicit platform skips on Windows. Fixture tests prove real-app selection, trampoline non-fallback and link refusal. A Darwin-only protected test binds the actual installed Framework path and interpreter architecture. Ruff, Python compilation and tracked whitespace checks are required before promotion. |
+| Promotion | pending | The correction must pass the protected five-job matrix and exact-main verification. Only a wholly new same-run three-platform Stage may supply release evidence; no output from `29572046960` may be reused. |
+
+## SQLite image migration WAL serialization - 2026-07-17
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Protected matrix observation | 1 expected | PR #25 run `29575525003` passed Windows x64 and both macOS compatibility jobs, then the quality job exposed one concurrent image-schema migration failure while 2311 other tests passed. Cross-runner stability was correctly withheld and the run is not release evidence. |
+| Root cause | 0 | SQLite serializes `BEGIN EXCLUSIVE`, but `journal_mode=WAL` must run after that transaction commits. Independent manager instances in the same Runtime could enter a second schema transaction in the commit-to-WAL gap and make the first WAL transition fail with a transient lock. |
+| Runtime correction | 0 local contract | A canonical-database process coordinator now covers validation, schema transaction, immutable history receipt and WAL activation as one Runtime operation. Independent databases remain concurrent. InstallCoordinator remains the product-level cross-process owner for deployment migrations. |
+| Focused regression | 0 | The full image SQLite schema-manager suite passes 13 tests. A deterministic eight-manager overlap fixture proves that no schema/WAL phase overlaps for one database; an additional 50-round stress run completed 1600 migrations. Ruff and tracked whitespace checks pass. |
+| Promotion | pending | The correction requires a fresh protected five-job PR matrix, exact-main matrix and wholly new same-run three-platform Stage before any Candidate or production action. |

@@ -239,7 +239,9 @@ def test_candidate_workflow_cannot_publish_the_pre_acceptance_artifact() -> None
     )
     live_job = source.index("  live-acceptance:")
     accepted = source[live_job:]
-    assert "needs: build-and-sign" in accepted
+    assert "needs:" in accepted
+    assert "- build-and-sign" in accepted
+    assert "- cloud-finalize" in accepted
     assert "name: ecorex-live-acceptance" in accepted
     assert "run-v1-protected-live-acceptance.py" in accepted
     assert accepted.count("bind-v1-release-gate-evidence.py") == 3

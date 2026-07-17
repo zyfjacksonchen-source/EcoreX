@@ -35,6 +35,17 @@ from ecorex.release.evidence_io import (
     strict_json_loads,
 )
 from ecorex.release.process_boundary import run_bounded_process
+from ecorex.release.protected_deployment import (
+    PUBLIC_SITE_DOCUMENT_TYPE,
+    PUBLIC_SITE_DOMAIN,
+    PUBLIC_SITE_SCHEMA_VERSION,
+    ProtectedDeploymentAdmissionError,
+    admission_sha256,
+    canonical_json as canonical_protected_json,
+    public_site_v2_payload,
+    validate_admission_payload,
+    verify_admission,
+)
 from ecorex.update import Ed25519SignatureVerifier, SignatureVerifier
 
 try:  # The read-only planner remains importable on Windows release workers.
@@ -93,6 +104,7 @@ RELEASE_KEYRING_PATH = Path("/etc/ecorex/cloud/release-public-keys.json")
 PUBLICATION_KEYRING_PATH = Path(
     "/etc/ecorex/cloud/publication-public-keys.json"
 )
+DEPLOYMENT_KEYRING_PATH = Path("/etc/ecorex/cloud/deployment-public-keys.json")
 
 PUBLIC_SITE_AUTHORIZATION_DOMAIN = b"ecorex.public-site-deployment.v1\0"
 PUBLIC_SITE_AUTHORIZATION_TYPE = "ecorex.public-site-deployment-authorization"
@@ -159,6 +171,7 @@ class DeploymentPaths:
     lock_path: Path = LOCK_PATH
     release_keyring_path: Path = RELEASE_KEYRING_PATH
     publication_keyring_path: Path = PUBLICATION_KEYRING_PATH
+    deployment_keyring_path: Path = DEPLOYMENT_KEYRING_PATH
 
     @classmethod
     def for_test(cls, root: Path) -> "DeploymentPaths":
@@ -181,6 +194,7 @@ class DeploymentPaths:
             publication_keyring_path=(
                 root / "config" / "publication-public-keys.json"
             ),
+            deployment_keyring_path=root / "config" / "deployment-public-keys.json",
         )
 
     @classmethod
@@ -215,6 +229,7 @@ class DeploymentPaths:
             lock_path=unused / "deploy.lock",
             release_keyring_path=unused / "release-public-keys.json",
             publication_keyring_path=unused / "publication-public-keys.json",
+            deployment_keyring_path=unused / "deployment-public-keys.json",
         )
 
 
@@ -245,6 +260,8 @@ class ValidatedSite:
     direct_receipt_sha256: str
     authorization_sha256: str | None
     admin_identity: Mapping[str, Any] | None
+    admission: Mapping[str, Any] | None = None
+    authority_schema_version: int = 1
 
     def file(self, relative_path: str) -> SiteFile:
         if relative_path == self.public_index.relative_path:
@@ -465,6 +482,55 @@ def _validate_direct_receipt(
     return parsed, payload
 
 
+def _validate_protected_admission_file(
+    path: Path,
+    *,
+    expected_release_id: str,
+    expected_owner_uid: int | None,
+) -> tuple[dict[str, Any], bytes]:
+    payload = _read_site_file(
+        path,
+        maximum_bytes=2 * 1024 * 1024,
+        code="protected_deployment_admission_invalid",
+    )
+    try:
+        document = strict_json_loads(
+            payload, code="protected_deployment_admission_invalid"
+        )
+        if (
+            not isinstance(document, dict)
+            or payload != canonical_protected_json(document) + b"\n"
+            or document.get("schema_version") != 1
+            or document.get("document_type")
+            != "ecorex.protected-deployment-admission"
+            or not isinstance(document.get("admission"), Mapping)
+        ):
+            raise ValueError
+        body = validate_admission_payload(document["admission"])
+    except (ValueError, ProtectedDeploymentAdmissionError):
+        raise PublicSiteDeployError(
+            "protected_deployment_admission_invalid"
+        ) from None
+    try:
+        metadata = path.lstat()
+    except OSError:
+        raise PublicSiteDeployError(
+            "protected_deployment_admission_invalid"
+        ) from None
+    if expected_owner_uid is not None and (
+        metadata.st_uid != expected_owner_uid or metadata.st_mode & 0o022
+    ):
+        raise PublicSiteDeployError(
+            "protected_deployment_admission_not_root_owned"
+        )
+    candidate = body["candidate"]
+    if candidate["release_id"] != expected_release_id:
+        raise PublicSiteDeployError(
+            "protected_deployment_admission_identity_mismatch"
+        )
+    return document, payload
+
+
 def _validate_unsigned_staged_site(
     release_id: str,
     *,
@@ -489,7 +555,6 @@ def _validate_unsigned_staged_site(
         raise PublicSiteDeployError("product_download_root_invalid")
     release_stage = paths.staging_root / release_id
     site_root = release_stage / "site"
-    receipt_path = release_stage / "direct-deployable.json"
     _require_secure_path(
         release_stage,
         code="site_staging_invalid",
@@ -499,11 +564,24 @@ def _validate_unsigned_staged_site(
         stage_entries = {entry.name for entry in release_stage.iterdir()}
     except OSError:
         raise PublicSiteDeployError("site_staging_invalid") from None
-    expected_stage_entries = {"site", "direct-deployable.json"}
+    legacy_entries = {"site", "direct-deployable.json"}
+    protected_entries = {"site", "protected-deployment-admission.json"}
     if authorization_expected:
-        expected_stage_entries.add("deployment-authorization.json")
-    if stage_entries != expected_stage_entries:
+        legacy_entries.add("deployment-authorization.json")
+        protected_entries.update(
+            {
+                "deployment-authorization.json",
+                "admin-deployment-identity.json",
+            }
+        )
+    is_protected = stage_entries == protected_entries
+    if not is_protected and stage_entries != legacy_entries:
         raise PublicSiteDeployError("site_staging_contains_unexpected_entries")
+    receipt_path = release_stage / (
+        "protected-deployment-admission.json"
+        if is_protected
+        else "direct-deployable.json"
+    )
     _require_secure_path(
         site_root,
         code="site_staging_invalid",
@@ -520,11 +598,32 @@ def _validate_unsigned_staged_site(
                 or metadata.st_dev != device
             ):
                 raise PublicSiteDeployError("production_staging_layout_invalid")
-    receipt, receipt_payload = _validate_direct_receipt(
-        receipt_path,
-        expected_release_id=release_id,
-        expected_owner_uid=expected_owner_uid,
-    )
+    admission_document: dict[str, Any] | None = None
+    if is_protected:
+        admission_document, receipt_payload = _validate_protected_admission_file(
+            receipt_path,
+            expected_release_id=release_id,
+            expected_owner_uid=expected_owner_uid,
+        )
+        admission_body = admission_document["admission"]
+        candidate = admission_body["candidate"]
+        receipt = {
+            "version": candidate["version"],
+            "manifest_sha256": admission_body["targets"]["control_plane"][
+                "release_manifest_sha256"
+            ],
+            "waiver_sha256": admission_sha256(admission_document),
+            "publication_receipt_sha256": "",
+            "public_index_sha256": admission_body["targets"]["public_site"][
+                "public_index_sha256"
+            ],
+        }
+    else:
+        receipt, receipt_payload = _validate_direct_receipt(
+            receipt_path,
+            expected_release_id=release_id,
+            expected_owner_uid=expected_owner_uid,
+        )
     if expected_owner_uid is not None:
         receipt_metadata = receipt_path.lstat()
         if (
@@ -684,6 +783,10 @@ def _validate_unsigned_staged_site(
     release = pointer.get("release")
     authority = pointer.get("authority")
     target = authority.get("target") if isinstance(authority, dict) else None
+    if is_protected and isinstance(release, dict):
+        receipt["publication_receipt_sha256"] = release.get(
+            "publication_receipt_sha256"
+        )
     if (
         pointer.get("status") != "published"
         or not isinstance(release, dict)
@@ -724,6 +827,16 @@ def _validate_unsigned_staged_site(
         }
         for value in ordered
     ]
+    tree_sha256 = _sha256(_canonical_json(tree))
+    if is_protected:
+        assert admission_document is not None
+        expected_tree = admission_document["admission"]["targets"]["public_site"][
+            "tree_sha256"
+        ]
+        if tree_sha256 != expected_tree:
+            raise PublicSiteDeployError(
+                "protected_deployment_site_tree_mismatch"
+            )
     return ValidatedSite(
         root=site_root,
         release_id=release_id,
@@ -733,12 +846,14 @@ def _validate_unsigned_staged_site(
         publication_receipt_sha256=str(receipt["publication_receipt_sha256"]),
         public_index_sha256=pointer_file.sha256,
         waiver_sha256=str(receipt["waiver_sha256"]),
-        tree_sha256=_sha256(_canonical_json(tree)),
+        tree_sha256=tree_sha256,
         files=ordered,
         public_index=pointer_file,
         direct_receipt_sha256=_sha256(receipt_payload),
         authorization_sha256=None,
         admin_identity=None,
+        admission=admission_document,
+        authority_schema_version=(2 if is_protected else 1),
     )
 
 
@@ -1010,16 +1125,37 @@ def sign_public_site_authorization(site: ValidatedSite, *, signer: Any) -> dict[
         r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", key_id
     ) is None:
         raise PublicSiteDeployError("site_authorization_signer_invalid")
+    if site.authority_schema_version == 2:
+        if site.admission is None or site.admin_identity is None:
+            raise PublicSiteDeployError("site_authorization_identity_mismatch")
+        body = public_site_v2_payload(
+            admission=site.admission["admission"],
+            admission_digest=admission_sha256(site.admission),
+            release_id=site.release_id,
+            site_tree_sha256=site.tree_sha256,
+            public_index_sha256=site.public_index_sha256,
+            admin_identity_sha256=_sha256(
+                canonical_protected_json(dict(site.admin_identity)) + b"\n"
+            ),
+        )
+        signing_bytes = PUBLIC_SITE_DOMAIN + canonical_protected_json(body)
+    else:
+        body = public_site_authorization_payload(site)
+        signing_bytes = public_site_authorization_signing_bytes(site)
     try:
-        signature = signer.sign(public_site_authorization_signing_bytes(site))
+        signature = signer.sign(signing_bytes)
     except Exception:
         raise PublicSiteDeployError("site_authorization_signing_failed") from None
     if not isinstance(signature, bytes) or len(signature) != 64:
         raise PublicSiteDeployError("site_authorization_signature_invalid")
     return {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": (
+            PUBLIC_SITE_SCHEMA_VERSION
+            if site.authority_schema_version == 2
+            else SCHEMA_VERSION
+        ),
         "document_type": PUBLIC_SITE_AUTHORIZATION_TYPE,
-        "authorization": public_site_authorization_payload(site),
+        "authorization": body,
         "signature": {
             "algorithm": "ed25519",
             "key_id": key_id,
@@ -1103,15 +1239,38 @@ def verify_public_site_authorization(
     *,
     public_keys: Mapping[str, bytes],
 ) -> None:
-    if (
-        set(authorization)
-        != {"schema_version", "document_type", "authorization", "signature"}
-        or authorization.get("schema_version") != SCHEMA_VERSION
-        or authorization.get("document_type") != PUBLIC_SITE_AUTHORIZATION_TYPE
-        or authorization.get("authorization")
-        != public_site_authorization_payload(site)
-    ):
-        raise PublicSiteDeployError("site_authorization_identity_mismatch")
+    if authorization.get("schema_version") == PUBLIC_SITE_SCHEMA_VERSION:
+        if site.admission is None or site.admin_identity is None:
+            raise PublicSiteDeployError("site_authorization_identity_mismatch")
+        expected = public_site_v2_payload(
+            admission=site.admission["admission"],
+            admission_digest=admission_sha256(site.admission),
+            release_id=site.release_id,
+            site_tree_sha256=site.tree_sha256,
+            public_index_sha256=site.public_index_sha256,
+            admin_identity_sha256=_sha256(
+                canonical_protected_json(dict(site.admin_identity)) + b"\n"
+            ),
+        )
+        if (
+            set(authorization)
+            != {"schema_version", "document_type", "authorization", "signature"}
+            or authorization.get("document_type") != PUBLIC_SITE_DOCUMENT_TYPE
+            or authorization.get("authorization") != expected
+        ):
+            raise PublicSiteDeployError("site_authorization_identity_mismatch")
+        signing_bytes = PUBLIC_SITE_DOMAIN + canonical_protected_json(expected)
+    else:
+        signing_bytes = public_site_authorization_signing_bytes(site)
+        if (
+            set(authorization)
+            != {"schema_version", "document_type", "authorization", "signature"}
+            or authorization.get("schema_version") != SCHEMA_VERSION
+            or authorization.get("document_type") != PUBLIC_SITE_AUTHORIZATION_TYPE
+            or authorization.get("authorization")
+            != public_site_authorization_payload(site)
+        ):
+            raise PublicSiteDeployError("site_authorization_identity_mismatch")
     signature = authorization.get("signature")
     if (
         not isinstance(signature, Mapping)
@@ -1128,7 +1287,7 @@ def verify_public_site_authorization(
             raise ValueError
         Ed25519PublicKey.from_public_bytes(public).verify(
             raw_signature,
-            public_site_authorization_signing_bytes(site),
+            signing_bytes,
         )
     except (InvalidSignature, TypeError, ValueError):
         raise PublicSiteDeployError("site_authorization_signature_rejected") from None
@@ -1180,11 +1339,34 @@ def validate_staged_site(
     ):
         raise PublicSiteDeployError("site_authorization_invalid")
     authorization_body = authorization.get("authorization")
-    admin_identity = (
-        authorization_body.get("admin")
-        if isinstance(authorization_body, Mapping)
-        else None
-    )
+    if site.authority_schema_version == 2:
+        admin_path = (
+            paths.staging_root / release_id / "admin-deployment-identity.json"
+        )
+        admin_payload = _read_site_file(
+            admin_path,
+            maximum_bytes=2 * 1024 * 1024,
+            code="admin_deployment_identity_invalid",
+        )
+        try:
+            admin_identity = strict_json_loads(
+                admin_payload, code="admin_deployment_identity_invalid"
+            )
+        except ValueError:
+            raise PublicSiteDeployError(
+                "admin_deployment_identity_invalid"
+            ) from None
+        if (
+            not isinstance(admin_identity, dict)
+            or admin_payload != _canonical_json(admin_identity) + b"\n"
+        ):
+            raise PublicSiteDeployError("admin_deployment_identity_invalid")
+    else:
+        admin_identity = (
+            authorization_body.get("admin")
+            if isinstance(authorization_body, Mapping)
+            else None
+        )
     if not isinstance(admin_identity, Mapping):
         raise PublicSiteDeployError("admin_deployment_identity_missing")
     validate_admin_deployment_identity(admin_identity, version=site.version)
@@ -1194,6 +1376,19 @@ def validate_staged_site(
         expected_owner_uid=expected_owner_uid,
         code="release_keyring_invalid",
     )
+    if site.authority_schema_version == 2:
+        assert site.admission is not None
+        deployment_keys = _read_public_keyring(
+            paths.deployment_keyring_path,
+            expected_owner_uid=expected_owner_uid,
+            code="deployment_keyring_invalid",
+        )
+        try:
+            verify_admission(site.admission, public_keys=deployment_keys)
+        except ProtectedDeploymentAdmissionError:
+            raise PublicSiteDeployError(
+                "protected_deployment_admission_rejected"
+            ) from None
     verify_public_site_authorization(site, authorization, public_keys=keys)
     # Re-scan after authorization verification so a same-UID staging mutation
     # cannot replace site bytes after the signed tree was accepted.
@@ -2340,11 +2535,19 @@ def _normalize_staging_tree(
             create=False,
         )
     try:
-        if {entry.name for entry in release.iterdir()} != {
+        entries = {entry.name for entry in release.iterdir()}
+        legacy_entries = {
             "site",
             "direct-deployable.json",
             "deployment-authorization.json",
-        }:
+        }
+        protected_entries = {
+            "site",
+            "protected-deployment-admission.json",
+            "deployment-authorization.json",
+            "admin-deployment-identity.json",
+        }
+        if entries not in (legacy_entries, protected_entries):
             raise OSError
         root_names = {entry.name for entry in site.iterdir()}
         if "assets" not in root_names:
@@ -2352,8 +2555,7 @@ def _normalize_staging_tree(
         file_paths = [
             entry for entry in site.iterdir() if entry.name != "assets"
         ] + list(assets.iterdir()) + [
-            release / "direct-deployable.json",
-            release / "deployment-authorization.json",
+            release / name for name in entries if name != "site"
         ]
         for path in file_paths:
             metadata = path.lstat()
