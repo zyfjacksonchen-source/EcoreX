@@ -1489,6 +1489,11 @@ def test_macos_python_closure_rewrites_framework_loads_and_install_name(
         "_run",
         fake_run,
     )
+    monkeypatch.setitem(
+        stager["_relocate_macos_python_closure"].__globals__,
+        "_assert_macos_signature_copy_stability",
+        lambda _closure: commands.append(("portable-signature-gate",)),
+    )
 
     stager["_relocate_macos_python_closure"](
         closure,
@@ -1559,6 +1564,12 @@ def test_macos_python_closure_rewrites_framework_loads_and_install_name(
     assert relocation_indices and signing_indices and verification_indices
     assert max(relocation_indices) < min(signing_indices)
     assert max(signing_indices) < min(verification_indices)
+    portable_gate_index = commands.index(("portable-signature-gate",))
+    assert max(verification_indices) < portable_gate_index
+    assert any(
+        index > portable_gate_index and command[:2] == ("/usr/bin/otool", "-arch")
+        for index, command in enumerate(commands)
+    )
     inspected = {
         (command[2], command[3], Path(command[4]).resolve())
         for command in commands
@@ -2664,6 +2675,99 @@ def test_platform_stager_compacts_only_zip_safe_runtime_imports(
     assert (packages / "native_pkg" / "speedups.pyd").is_file()
     assert (packages / "native_pkg" / "__init__.py").is_file()
     assert (packages / "policy.pth").is_file()
+
+
+def test_platform_stager_prunes_only_cpython_macos_build_support(
+    tmp_path: Path,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    stdlib = tmp_path / "lib" / f"python{version}"
+    config = stdlib / f"config-{sys.version_info.major}.{sys.version_info.minor}-darwin"
+    config.mkdir(parents=True)
+    libpython = b"\xcf\xfa\xed\xfe" + b"canonical-libpython"
+    (stdlib.parent / f"libpython{version}.dylib").write_bytes(libpython)
+    payloads = {
+        "Makefile": b"makefile",
+        "Setup": b"setup",
+        "Setup.bootstrap": b"setup-bootstrap",
+        "Setup.local": b"setup-local",
+        "Setup.stdlib": b"setup-stdlib",
+        "config.c": b"config-c",
+        "config.c.in": b"config-c-in",
+        "install-sh": b"install-sh",
+        f"libpython{version}.a": libpython,
+        f"libpython{version}.dylib": libpython,
+        "makesetup": b"makesetup",
+        "python-config.py": b"python-config",
+        "python.o": b"\xcf\xfa\xed\xfe" + b"object",
+    }
+    for name, payload in payloads.items():
+        (config / name).write_bytes(payload)
+    preserved = stdlib / "configparser"
+    preserved.mkdir()
+    (preserved / "__init__.py").write_text("value = True\n", encoding="utf-8")
+
+    stager["_prune_macos_cpython_build_support"](stdlib)
+
+    assert not config.exists()
+    assert (preserved / "__init__.py").is_file()
+
+
+def test_platform_stager_refuses_unknown_cpython_build_support_member(
+    tmp_path: Path,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    stdlib = tmp_path / "lib" / f"python{version}"
+    config = stdlib / f"config-{version}-darwin"
+    config.mkdir(parents=True)
+    (stdlib.parent / f"libpython{version}.dylib").write_bytes(b"canonical")
+    (config / "unexpected-runtime.dylib").write_bytes(b"runtime")
+
+    with pytest.raises(
+        stager["StageError"], match="pack_python_build_support_contract_mismatch"
+    ):
+        stager["_prune_macos_cpython_build_support"](stdlib)
+    assert (config / "unexpected-runtime.dylib").is_file()
+
+
+@pytest.mark.parametrize("suffix", (".a", ".bc", ".obj", ".rlib", ".O"))
+def test_platform_stager_rejects_unclassified_macos_build_object(
+    tmp_path: Path, suffix: str,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    runtime = tmp_path / "pack-python"
+    archive = runtime / "site-packages" / f"unexpected{suffix}"
+    archive.parent.mkdir(parents=True)
+    archive.write_bytes(b"!<arch>\n")
+
+    with pytest.raises(
+        stager["StageError"], match="pack_python_build_object_unclassified"
+    ):
+        stager["_reject_macos_build_objects"](runtime)
+
+
+def test_platform_stager_rejects_nonportable_full_macos_signature_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    closure = tmp_path / "pack-python"
+    closure.mkdir()
+    (closure / "member").write_bytes(b"signed-bytes")
+    monkeypatch.setitem(
+        stager,
+        "_macos_snapshot_signatures_valid",
+        lambda _root: False,
+    )
+    stager["_assert_macos_signature_copy_stability"].__globals__.update(
+        {"_macos_snapshot_signatures_valid": stager["_macos_snapshot_signatures_valid"]}
+    )
+
+    with pytest.raises(
+        stager["StageError"], match="pack_python_macho_signature_not_portable"
+    ):
+        stager["_assert_macos_signature_copy_stability"](closure)
 
 
 def test_platform_supply_chain_scans_compacted_import_archive(

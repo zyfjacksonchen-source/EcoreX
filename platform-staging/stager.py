@@ -656,6 +656,8 @@ def _build_python_closure(
             }
         ),
     )
+    if platform == "macos":
+        _prune_macos_cpython_build_support(target_stdlib)
     site_packages = target_stdlib / "site-packages"
     site_packages.mkdir(parents=True)
     inventory = _copy_distribution_closure(_RUNTIME_DISTRIBUTIONS, site_packages)
@@ -664,6 +666,8 @@ def _build_python_closure(
         site_packages / "ecorex",
         excluded=frozenset({"__pycache__"}),
     )
+    if platform == "macos":
+        _reject_macos_build_objects(destination)
     _compact_python_import_closure(
         destination,
         target_stdlib=target_stdlib,
@@ -756,6 +760,143 @@ def _base_python_runtime_source(platform: str) -> tuple[Path, Path, Path]:
         "pack_python_base_runtime_invalid",
     )
     return prefix, executable, stdlib
+
+
+def _prune_macos_cpython_build_support(stdlib: Path) -> None:
+    """Remove CPython link-time support that is not part of the Runtime.
+
+    The official macOS distribution keeps link-time ``libpython*.a`` aliases
+    and object files below ``config-X.Y-*``.  Generic copying materializes the
+    aliases as duplicate Framework images under build-only names.  They are
+    compiler inputs, not Runtime members, and can acquire signature metadata
+    that cannot survive the product's byte-only archive and snapshot contract.
+    """
+
+    try:
+        root = stdlib.resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        raise StageError("pack_python_build_support_invalid") from None
+    prefix = f"config-{sys.version_info.major}.{sys.version_info.minor}"
+    version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    expected_members = frozenset(
+        {
+            "Makefile",
+            "Setup",
+            "Setup.bootstrap",
+            "Setup.local",
+            "Setup.stdlib",
+            "config.c",
+            "config.c.in",
+            "install-sh",
+            f"libpython{version}.a",
+            f"libpython{version}.dylib",
+            "makesetup",
+            "python-config.py",
+            "python.o",
+        }
+    )
+    canonical_libpython = root.parent / f"libpython{version}.dylib"
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    for candidate in sorted(root.iterdir(), key=lambda path: path.name.casefold()):
+        if candidate.name != prefix and not candidate.name.startswith(prefix + "-"):
+            continue
+        try:
+            metadata = candidate.lstat()
+            resolved = candidate.resolve(strict=True)
+            resolved.relative_to(root)
+            if (
+                resolved.parent != root
+                or stat.S_ISLNK(metadata.st_mode)
+                or not stat.S_ISDIR(metadata.st_mode)
+                or bool(getattr(metadata, "st_file_attributes", 0) & reparse)
+                or bool(getattr(metadata, "st_reparse_tag", 0))
+            ):
+                raise StageError("pack_python_build_support_invalid")
+            members = tuple(sorted(candidate.iterdir(), key=lambda path: path.name))
+            if frozenset(member.name for member in members) != expected_members:
+                raise StageError("pack_python_build_support_contract_mismatch")
+            identities: dict[Path, tuple[int, int, int, int]] = {}
+            payloads: dict[str, bytes] = {}
+            for member in members:
+                member_metadata = member.lstat()
+                if (
+                    stat.S_ISLNK(member_metadata.st_mode)
+                    or bool(
+                        getattr(member_metadata, "st_file_attributes", 0) & reparse
+                    )
+                    or bool(getattr(member_metadata, "st_reparse_tag", 0))
+                    or not stat.S_ISREG(member_metadata.st_mode)
+                ):
+                    raise StageError("pack_python_build_support_invalid")
+                identities[member] = (
+                    member_metadata.st_dev,
+                    member_metadata.st_ino,
+                    member_metadata.st_size,
+                    member_metadata.st_mtime_ns,
+                )
+                payloads[member.name] = _stable_bytes(
+                    member,
+                    _MAX_FILE_BYTES,
+                    "pack_python_build_support_invalid",
+                    minimum=0,
+                )
+            canonical_payload = _stable_bytes(
+                canonical_libpython,
+                _MAX_FILE_BYTES,
+                "pack_python_build_support_invalid",
+            )
+            for alias in (f"libpython{version}.a", f"libpython{version}.dylib"):
+                if payloads[alias] != canonical_payload:
+                    raise StageError("pack_python_build_support_contract_mismatch")
+            for name, payload in payloads.items():
+                if name not in {"python.o", f"libpython{version}.a", f"libpython{version}.dylib"}:
+                    if payload[:4] in _MACHO_MAGICS:
+                        raise StageError("pack_python_build_support_contract_mismatch")
+            for member in members:
+                current = member.lstat()
+                identity = (
+                    current.st_dev,
+                    current.st_ino,
+                    current.st_size,
+                    current.st_mtime_ns,
+                )
+                if identity != identities[member]:
+                    raise StageError("pack_python_build_support_invalid")
+                member.unlink()
+            current_directory = candidate.lstat()
+            current_identity = (
+                current_directory.st_dev,
+                current_directory.st_ino,
+            )
+            original_identity = (metadata.st_dev, metadata.st_ino)
+            if current_identity != original_identity:
+                raise StageError("pack_python_build_support_invalid")
+            candidate.rmdir()
+        except StageError:
+            raise
+        except (OSError, RuntimeError, ValueError):
+            raise StageError("pack_python_build_support_invalid") from None
+
+
+def _reject_macos_build_objects(runtime: Path) -> None:
+    """Fail closed if an unclassified compiler object remains in the Runtime."""
+
+    try:
+        root = runtime.resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        raise StageError("pack_python_build_object_unclassified") from None
+    for path in root.rglob("*"):
+        if path.suffix.casefold() not in {
+            ".a",
+            ".bc",
+            ".la",
+            ".lo",
+            ".o",
+            ".obj",
+            ".rlib",
+        }:
+            continue
+        raise StageError("pack_python_build_object_unclassified")
 
 
 def _base_runtime_member(
@@ -1536,6 +1677,7 @@ def _relocate_macos_python_closure(
             timeout=30,
             code="pack_python_macho_signing_failed",
         )
+    _assert_macos_signature_copy_stability(closure)
     for binary in final_macho_files:
         for slice_architecture in _macos_architectures(binary):
             install_name = _macos_install_name(
@@ -1863,6 +2005,25 @@ def _macos_snapshot_signatures_valid(root: Path) -> bool:
         if result.returncode != 0:
             return False
     return True
+
+
+def _assert_macos_signature_copy_stability(closure: Path) -> None:
+    """Prove the full Runtime owns portable, byte-embedded signatures."""
+
+    canonical_binding = _tree_binding_sha256(closure)
+    with tempfile.TemporaryDirectory(
+        prefix=".ecorex-signature-copy-",
+        dir=closure.parent,
+    ) as temporary:
+        snapshot = Path(temporary) / "core"
+        _copy_tree(closure, snapshot)
+        if (
+            _tree_binding_sha256(closure) != canonical_binding
+            or _tree_binding_sha256(snapshot) != canonical_binding
+        ):
+            raise StageError("pack_python_macho_signature_copy_invalid")
+        if not _macos_snapshot_signatures_valid(snapshot):
+            raise StageError("pack_python_macho_signature_not_portable")
 
 
 def _macos_bootstrap_diagnostic_succeeds(
