@@ -6269,3 +6269,12 @@ future generic failures from forcing inference, each remaining evidence branch
 now has a fixed non-disclosing reason code. Stage emits only an explicit
 allowlist of those codes and never emits errno values, paths, commands or
 provider output.
+
+The classified Stage then exposed `macos_seatbelt_probe_process_unavailable`.
+The bounded process was not necessarily unavailable: host validation opened
+the child marker before evaluation, and any missing/refused marker raised into
+an outer catch that replaced already captured process and JSON evidence with
+`None`. Canary and cleanup errors had the same evidence-collapse shape.
+Captured subprocess evidence is now immutable. Host checks translate only to
+their own fixed failure facts, and cleanup can never replace a primary result;
+`process_unavailable` is reserved for the actual bounded runner boundary.

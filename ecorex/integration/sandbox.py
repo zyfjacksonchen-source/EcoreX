@@ -369,8 +369,10 @@ class MacOSSandboxExecBackend:
         outside_unchanged = False
         child_marker_valid = False
         listener: socket.socket | None = None
+        outside: Path | None = None
+        completed: _BoundedProcessResult | None = None
+        value: Any = {}
         try:
-            outside: Path | None = None
             with tempfile.TemporaryDirectory(prefix=".ecorex-sandbox-probe-", dir=root) as raw:
                 probe_root = Path(raw).resolve(strict=True)
                 child_marker = probe_root / "child-started"
@@ -442,17 +444,28 @@ class MacOSSandboxExecBackend:
                     ),
                     timeout_seconds=10,
                 )
-                if completed is None:
-                    raise ValueError("bounded probe failed")
-                value = json.loads(completed.stdout.decode("utf-8"))
-                outside_unchanged = outside.read_text(encoding="utf-8") == outside_canary
-                child_marker_valid = _regular_file_bytes_equal(child_marker, b"started")
+                if completed is not None:
+                    try:
+                        value = json.loads(completed.stdout.decode("utf-8"))
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        value = {}
+                    try:
+                        outside_unchanged = (
+                            outside.read_text(encoding="utf-8") == outside_canary
+                        )
+                    except OSError:
+                        outside_unchanged = False
+                    child_marker_valid = _regular_file_bytes_equal(
+                        child_marker, b"started"
+                    )
         except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
-            value = {}
-            completed = None
+            pass
         finally:
             if listener is not None:
-                listener.close()
+                try:
+                    listener.close()
+                except OSError:
+                    pass
             try:
                 if outside is not None:
                     outside.unlink(missing_ok=True)
@@ -630,14 +643,24 @@ def _is_denial_errno(value: Any) -> bool:
 
 def _regular_file_bytes_equal(path: Path, expected: bytes) -> bool:
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags)
     try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        descriptor = os.open(path, flags)
+    except OSError:
+        return False
+    try:
+        try:
+            status = os.fstat(descriptor)
+            actual = os.read(descriptor, len(expected) + 1)
+        except OSError:
             return False
-        actual = os.read(descriptor, len(expected) + 1)
+        if not stat.S_ISREG(status.st_mode):
+            return False
         return actual == expected
     finally:
-        os.close(descriptor)
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
 
 
 def _run_bounded_probe(

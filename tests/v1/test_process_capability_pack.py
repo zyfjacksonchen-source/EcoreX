@@ -10,12 +10,14 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 import zipfile
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 import pytest
 
+import ecorex.integration.sandbox as sandbox_module
 import ecorex.server.pack_resolver as pack_resolver_module
 from ecorex.capabilities import (
     ApprovalRequiredError,
@@ -1005,6 +1007,63 @@ def test_macos_probe_failure_reasons_are_stable_and_non_disclosing() -> None:
             )
             == reason
         )
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_reason"),
+    (
+        ("marker-missing", "macos_seatbelt_probe_child_marker_invalid"),
+        ("canary-missing", "macos_seatbelt_probe_canary_changed"),
+        ("invalid-json", "macos_seatbelt_probe_evidence_invalid"),
+        ("bounded-unavailable", "macos_seatbelt_probe_process_unavailable"),
+    ),
+)
+def test_macos_probe_preserves_completed_evidence_across_host_checks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    expected_reason: str,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    executable = tmp_path / "sandbox-exec"
+    executable.write_bytes(b"fixture")
+    artifact = workspace / "probe.pyz"
+    artifact.write_bytes(b"fixture")
+    passing = {
+        "child_returncode": 0,
+        "child_started": True,
+        "child_write_errno": 1,
+        "inside_write": True,
+        "network_errno": 1,
+        "outside_read_errno": 1,
+        "outside_write_errno": 1,
+    }
+
+    monkeypatch.setattr(sandbox_module, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(sandbox_module, "_trusted_system_file", lambda _: executable)
+
+    def bounded(command: tuple[str, ...], *, timeout_seconds: float):
+        del timeout_seconds
+        probe_root = Path(command[-4])
+        outside = Path(command[-3])
+        if mode == "bounded-unavailable":
+            return None
+        if mode == "canary-missing":
+            (probe_root / "child-started").write_bytes(b"started")
+            outside.unlink()
+        stdout = b"not-json" if mode == "invalid-json" else json.dumps(passing).encode()
+        return _BoundedProcessResult(returncode=0, stdout=stdout, stderr=b"")
+
+    monkeypatch.setattr(sandbox_module, "_run_bounded_probe", bounded)
+    probe = sandbox_module.MacOSSandboxExecBackend(executable).probe(
+        workspace_roots=(workspace,),
+        python_executable=Path(sys.executable),
+        artifact_path=artifact,
+    )
+
+    assert not probe.ready
+    assert probe.reason == expected_reason
 
 
 def test_pack_bytes_are_revalidated_after_adapter_binding(tmp_path: Path) -> None:
