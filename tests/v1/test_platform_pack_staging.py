@@ -3434,13 +3434,24 @@ def test_platform_supply_chain_scans_compacted_import_archive(
             b"TOKEN = 'ghp_abcdefghijklmnopqrstuvwxyz123456'\n",
         )
 
-    with pytest.raises(stager["StageError"], match="stage_supply_chain_secret_match"):
+    with pytest.raises(
+        stager["StageError"], match="stage_supply_chain_secret_match"
+    ) as rejected:
         stager["_supply_chain"](
             tmp_path,
             (),
             lock_profile="runtime",
             require_complete=False,
         )
+    archive_payload = b"TOKEN = 'ghp_abcdefghijklmnopqrstuvwxyz123456'\n"
+    assert rejected.value.diagnostic == {
+        "content_sha256": hashlib.sha256(archive_payload).hexdigest(),
+        "detector_id": "github_token",
+        "kind": "archive_member",
+        "location_sha256": hashlib.sha256(
+            b"python311.zip!/module.py"
+        ).hexdigest(),
+    }
 
     unsafe_root = tmp_path / "unsafe"
     unsafe_root.mkdir()
@@ -3642,13 +3653,23 @@ def test_platform_supply_chain_scan_rejects_token_in_malformed_text_payload(
         b"\xff\x00credential='ghp_abcdefghijklmnopqrstuvwxyz123456'\n"
     )
 
-    with pytest.raises(stager["StageError"], match="stage_supply_chain_secret_match"):
+    with pytest.raises(
+        stager["StageError"], match="stage_supply_chain_secret_match"
+    ) as rejected:
         stager["_supply_chain"](
             tmp_path,
             (),
             lock_profile="runtime",
             require_complete=False,
         )
+    assert rejected.value.diagnostic == {
+        "content_sha256": hashlib.sha256(
+            (tmp_path / "malformed.py").read_bytes()
+        ).hexdigest(),
+        "detector_id": "github_token",
+        "kind": "regular",
+        "location_sha256": hashlib.sha256(b"malformed.py").hexdigest(),
+    }
 
 
 @pytest.mark.parametrize(

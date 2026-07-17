@@ -4,6 +4,7 @@ import os
 import hashlib
 import json
 from pathlib import Path
+import runpy
 import subprocess
 import sys
 import time
@@ -240,6 +241,36 @@ def test_platform_stager_wrapper_retains_only_adapter_public_failure_code(
     assert "must-not-surface" not in (output / "stage-failure.json").read_text(
         encoding="utf-8"
     )
+
+
+def test_platform_stager_accepts_only_hashed_secret_scan_diagnostic() -> None:
+    repository = Path(__file__).resolve().parents[2]
+    module = runpy.run_path(
+        str(repository / "scripts/invoke-v1-platform-stager.py")
+    )
+    location = "a" * 64
+    content = "b" * 64
+    safe = json.dumps(
+        {
+            "code": "stage_supply_chain_secret_match",
+            "diagnostic": {
+                "content_sha256": content,
+                "detector_id": "github_token",
+                "kind": "archive_member",
+                "location_sha256": location,
+            },
+            "status": "failed",
+        }
+    ).encode()
+
+    assert module["_adapter_failure_diagnostic"](safe) == {
+        "content_sha256": content,
+        "detector_id": "github_token",
+        "kind": "archive_member",
+        "location_sha256": location,
+    }
+    unsafe = safe.replace(location.encode(), b"/private/runner/path")
+    assert module["_adapter_failure_diagnostic"](unsafe) is None
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Job Object tree contract")

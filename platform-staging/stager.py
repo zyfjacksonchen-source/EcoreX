@@ -130,8 +130,14 @@ _BROWSER_SMOKE_PUBLIC_ERROR_CODES = frozenset(
 
 
 class StageError(RuntimeError):
-    def __init__(self, code: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        diagnostic: Mapping[str, str] | None = None,
+    ) -> None:
         self.code = code if _SAFE_CODE.fullmatch(str(code)) else "platform_stage_failed"
+        self.diagnostic = diagnostic if self.code == "stage_supply_chain_secret_match" else None
         super().__init__(self.code)
 
 
@@ -142,8 +148,11 @@ def main() -> int:
         sys.stdout.write('{"schema_version":1,"status":"passed"}')
         return 0
     except StageError as error:
+        failure: dict[str, Any] = {"code": error.code, "status": "failed"}
+        if error.diagnostic is not None:
+            failure["diagnostic"] = error.diagnostic
         print(
-            json.dumps({"code": error.code, "status": "failed"}, sort_keys=True),
+            json.dumps(failure, sort_keys=True),
             file=sys.stderr,
         )
         return 1
@@ -4000,11 +4009,17 @@ def _supply_chain(
     for record in records:
         path = root.joinpath(*PurePosixPath(record["path"]).parts)
         if path.suffix.casefold() == ".zip":
-            _scan_archive_secrets(path)
+            _scan_archive_secrets(path, logical_path=record["path"])
         elif path.stat().st_size <= 4 * 1024 * 1024:
             payload = path.read_bytes()
-            if detect_secret(payload, record["path"]):
-                raise StageError("stage_supply_chain_secret_match")
+            detector_id = detect_secret(payload, record["path"])
+            if detector_id:
+                raise _secret_match_error(
+                    detector_id,
+                    record["path"],
+                    payload,
+                    kind="regular",
+                )
     return {
         "tree_sha256": hashlib.sha256(
             json.dumps(records, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -4021,7 +4036,7 @@ def _supply_chain(
     }
 
 
-def _scan_archive_secrets(path: Path) -> None:
+def _scan_archive_secrets(path: Path, *, logical_path: str) -> None:
     try:
         with zipfile.ZipFile(path) as archive:
             members = archive.infolist()
@@ -4061,12 +4076,36 @@ def _scan_archive_secrets(path: Path) -> None:
                     raise StageError("stage_supply_chain_archive_invalid")
                 if member.file_size <= 4 * 1024 * 1024:
                     payload = archive.read(member)
-                    if detect_secret(payload, canonical):
-                        raise StageError("stage_supply_chain_secret_match")
+                    detector_id = detect_secret(payload, canonical)
+                    if detector_id:
+                        raise _secret_match_error(
+                            detector_id,
+                            f"{logical_path}!/{canonical}",
+                            payload,
+                            kind="archive_member",
+                        )
     except StageError:
         raise
     except (OSError, zipfile.BadZipFile, RuntimeError):
         raise StageError("stage_supply_chain_archive_invalid") from None
+
+
+def _secret_match_error(
+    detector_id: str,
+    logical_path: str,
+    payload: bytes,
+    *,
+    kind: str,
+) -> StageError:
+    return StageError(
+        "stage_supply_chain_secret_match",
+        diagnostic={
+            "content_sha256": hashlib.sha256(payload).hexdigest(),
+            "detector_id": detector_id,
+            "kind": kind,
+            "location_sha256": hashlib.sha256(logical_path.encode("utf-8")).hexdigest(),
+        },
+    )
 
 
 def _locked_inventory_evidence(

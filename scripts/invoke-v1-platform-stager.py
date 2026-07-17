@@ -163,6 +163,40 @@ def _adapter_failure_code(stderr: bytes) -> str | None:
     return None
 
 
+def _adapter_failure_diagnostic(stderr: bytes) -> dict[str, str] | None:
+    """Retain only the fixed non-secret classifier and hashes from Stage."""
+
+    try:
+        text = stderr.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    for line in reversed(text.splitlines()):
+        try:
+            value = json.loads(line)
+        except (json.JSONDecodeError, RecursionError):
+            continue
+        if not isinstance(value, dict) or value.get("code") != "stage_supply_chain_secret_match":
+            continue
+        diagnostic = value.get("diagnostic")
+        if not isinstance(diagnostic, dict) or set(diagnostic) != {
+            "content_sha256",
+            "detector_id",
+            "kind",
+            "location_sha256",
+        }:
+            return None
+        if (
+            diagnostic.get("detector_id")
+            not in {"aws_access_key", "github_token", "private_key", "slack_token"}
+            or diagnostic.get("kind") not in {"archive_member", "regular"}
+            or _SHA256.fullmatch(str(diagnostic.get("content_sha256"))) is None
+            or _SHA256.fullmatch(str(diagnostic.get("location_sha256"))) is None
+        ):
+            return None
+        return {key: str(diagnostic[key]) for key in sorted(diagnostic)}
+    return None
+
+
 def run(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     output = args.output_root.resolve()
@@ -228,6 +262,15 @@ def run(argv: list[str] | None = None) -> int:
                 f"platform_stager_{type(exc).__name__.casefold()}"
             ) from None
         if result.returncode != 0:
+            diagnostic = _adapter_failure_diagnostic(result.stderr)
+            if diagnostic is not None:
+                print(
+                    json.dumps(
+                        {"event": "platform_stage_safe_diagnostic", **diagnostic},
+                        sort_keys=True,
+                    ),
+                    file=sys.stderr,
+                )
             raise CandidateBuildError(
                 _adapter_failure_code(result.stderr) or "platform_stager_rejected"
             )
