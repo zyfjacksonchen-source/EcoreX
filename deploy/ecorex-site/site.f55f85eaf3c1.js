@@ -74,9 +74,13 @@ function signature(value, label) {
   });
 }
 
-function sourceList(value, label, fileName) {
-  if (!Array.isArray(value) || value.length !== SOURCE_ORDER.length) {
-    throw new Error(`${label} 必须包含三个有序下载源`);
+export function sourceList(value, label, fileName) {
+  if (
+    !Array.isArray(value)
+    || value.length < 1
+    || value.length > SOURCE_ORDER.length
+  ) {
+    throw new Error(`${label} 必须包含一至三个有序下载源`);
   }
   const ids = new Set();
   return Object.freeze(value.map((raw, index) => {
@@ -113,12 +117,15 @@ function sourceList(value, label, fileName) {
 }
 
 function sameSources(reference, candidate, label) {
-  if (candidate.some((source, index) => (
+  if (
+    candidate.length !== reference.length
+    || candidate.some((source, index) => (
     source.sourceId !== reference[index].sourceId ||
     source.kind !== reference[index].kind ||
     source.priority !== reference[index].priority ||
     source.baseUrl !== reference[index].baseUrl
-  ))) {
+    ))
+  ) {
     throw new Error(`${label} 下载源身份与清单不一致`);
   }
 }
@@ -395,7 +402,7 @@ export async function verifyManifestBytes(
       clearTimeout(timeout);
     }
   }
-  throw new Error("三个来源的签名清单均未通过 exact SHA-256 字节核对");
+  throw new Error("所有发布源的签名清单均未通过 exact SHA-256 字节核对");
 }
 
 function createElement(tag, className, value) {
@@ -467,17 +474,23 @@ function renderArtifactCard(grid, release, artifact, recommended) {
   primary.download = artifact.fileName;
   article.append(primary);
 
-  const details = createElement("details", "source-fallbacks");
-  details.append(createElement("summary", "", "备用下载源"));
-  const sourceLabels = ["国内 GitHub 镜像", "GitHub Releases", "EcoreX CDN"];
-  artifact.sources.forEach((source, index) => {
-    const link = createElement("a", "", sourceLabels[index]);
-    link.href = source.url;
-    link.rel = "noopener noreferrer";
-    link.download = artifact.fileName;
-    details.append(link);
-  });
-  article.append(details);
+  if (artifact.sources.length > 1) {
+    const details = createElement("details", "source-fallbacks");
+    details.append(createElement("summary", "", "备用下载源"));
+    const sourceLabels = {
+      "github-cn-mirror": "国内 GitHub 镜像",
+      "github-release": "GitHub Releases",
+      "ecorex-cdn": "EcoreX CDN",
+    };
+    artifact.sources.slice(1).forEach((source) => {
+      const link = createElement("a", "", sourceLabels[source.kind]);
+      link.href = source.url;
+      link.rel = "noopener noreferrer";
+      link.download = artifact.fileName;
+      details.append(link);
+    });
+    article.append(details);
+  }
   grid.append(article);
 }
 
@@ -489,7 +502,7 @@ function renderIndex(index, manifestCheck = null) {
     const card = createElement("article", "download-card");
     card.append(createElement("span", "platform-icon", "···"));
     card.append(createElement("h3", "", "v1.0 Bootstrap 尚未发布"));
-    card.append(createElement("p", "", "三平台制品和三个发布源全部通过签名与一致性门禁后，下载才会开启。"));
+    card.append(createElement("p", "", "三平台制品通过签名与一致性门禁后，下载才会开启。"));
     card.append(createElement("span", "download-link is-disabled", "不可下载"));
     grid.append(card);
     return;

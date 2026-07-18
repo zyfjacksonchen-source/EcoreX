@@ -144,6 +144,52 @@ const source = await readFile(sourcePath, "utf8");
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
 const contract = await import(moduleUrl);
 
+const oneSource = contract.sourceList(
+  [
+    {
+      source_id: "mirror",
+      kind: "github-cn-mirror",
+      priority: 0,
+      url: "https://mirror.example/EcoreX.exe",
+    },
+  ],
+  "sources",
+  "EcoreX.exe",
+);
+assert.equal(oneSource.length, 1);
+assert.equal(oneSource[0].kind, "github-cn-mirror");
+assert.equal(contract.sourceList(
+  [
+    {
+      source_id: "mirror",
+      kind: "github-cn-mirror",
+      priority: 0,
+      url: "https://mirror.example/EcoreX.exe",
+    },
+    {
+      source_id: "github",
+      kind: "github-release",
+      priority: 1,
+      url: "https://github.example/EcoreX.exe",
+    },
+  ],
+  "sources",
+  "EcoreX.exe",
+).length, 2);
+assert.throws(() => contract.sourceList([], "sources", "EcoreX.exe"));
+assert.throws(() => contract.sourceList(
+  [
+    {
+      source_id: "github",
+      kind: "github-release",
+      priority: 0,
+      url: "https://github.example/EcoreX.exe",
+    },
+  ],
+  "sources",
+  "EcoreX.exe",
+));
+
 assert.deepEqual(
   contract.normalizePublicIndex({
     schema_version: 1,

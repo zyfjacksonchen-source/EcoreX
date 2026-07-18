@@ -13,7 +13,7 @@ if [ "$(id -u)" -eq 0 ]; then
     ECOREX_SERVER_SIGNER_KEY_ROOT=/var/lib/ecorex/signing-keys \
     ECOREX_SERVER_SIGNER_ENCRYPTION_ATTESTATION_SHA256="$attestation" \
     /opt/ecorex/cloud/current/venv/bin/python3.11 \
-    /opt/ecorex/cloud/current/deployment/signers/ecorex-v1-server-sign-publication.py
+    /opt/ecorex/cloud/current/deployment/signers/ecorex-v1-server-sign-device-lease.py
 fi
 
 [ "$(id -un)" = "ecorex-cloud" ] || exit 1
@@ -21,4 +21,4 @@ exec /usr/bin/env \
   ECOREX_SERVER_SIGNER_KEY_ROOT=/var/lib/ecorex/signing-keys \
   ECOREX_SERVER_SIGNER_ENCRYPTION_ATTESTATION_SHA256="$attestation" \
   /opt/ecorex/cloud/current/venv/bin/python3.11 \
-  /opt/ecorex/cloud/current/deployment/signers/ecorex-v1-server-sign-publication.py
+  /opt/ecorex/cloud/current/deployment/signers/ecorex-v1-server-sign-device-lease.py
