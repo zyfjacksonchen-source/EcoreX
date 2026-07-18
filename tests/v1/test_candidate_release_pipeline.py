@@ -669,6 +669,10 @@ def test_candidate_builds_three_bootstraps_runtime_archives_and_eighteen_real_pa
             artifact,
             verifier,
         )
+    for artifact_id in ("core-macos-arm64", "core-macos-x64"):
+        with zipfile.ZipFile(built.artifact_paths[artifact_id]) as archive:
+            interpreter = archive.getinfo("bin/pack-python/bin/python3")
+            assert (interpreter.external_attr >> 16) & 0o777 == 0o755
     all_bytes = b"".join(path.read_bytes() for path in built.output_dir.iterdir())
     assert private not in all_bytes
     receipt = json.loads((tmp_path / "candidate-receipt.json").read_text())

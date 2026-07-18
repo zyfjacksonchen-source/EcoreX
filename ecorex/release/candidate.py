@@ -778,12 +778,15 @@ def _stage_input(
     )
     if kind == "core":
         executable = "bin/ecorex.exe" if platform == "windows" else "bin/ecorex"
+        executable_paths = (executable,)
+        if platform == "macos":
+            executable_paths += ("bin/pack-python/bin/python3",)
         definition = ArtifactBuildInput(
             source_dir=frozen_source,
             kind=ArtifactKind.CORE,
             platform=platform,
             architecture=architecture,
-            executable_paths=(executable,),
+            executable_paths=executable_paths,
             product_runtime=True,
         )
         stage_key = ("core", platform, architecture)
