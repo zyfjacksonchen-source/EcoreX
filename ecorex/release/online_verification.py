@@ -87,6 +87,7 @@ class OnlineVerificationLimits:
     maximum_total_bytes: int = 16 * 1024 * 1024 * 1024
     maximum_redirects: int = 3
     chunk_bytes: int = 1024 * 1024
+    inter_request_delay_seconds: float = 0.0
 
     def __post_init__(self) -> None:
         if (
@@ -101,6 +102,7 @@ class OnlineVerificationLimits:
             or not 0 <= self.maximum_redirects <= 5
             or isinstance(self.chunk_bytes, bool)
             or not 64 * 1024 <= self.chunk_bytes <= 4 * 1024 * 1024
+            or not 0 <= self.inter_request_delay_seconds <= 10
         ):
             raise OnlinePublicationVerificationError("online_limits_invalid")
 
@@ -271,6 +273,8 @@ class OnlinePublicationVerifier:
                     publication_policy=policy,
                     completed=completed,
                 )
+                if self.limits.inter_request_delay_seconds:
+                    self._sleep(self.limits.inter_request_delay_seconds)
         source_receipts: dict[str, list[dict[str, object]]] = {}
         for source in required_sources:
             source_receipts[source.source_id] = [
@@ -459,6 +463,11 @@ class OnlinePublicationVerifier:
             headers = {
                 "Accept": "application/octet-stream",
                 "Accept-Encoding": "identity",
+                # Several domestic read-through mirrors keep the previous
+                # response socket alive but stop delivering the next large
+                # asset.  Publication verification values correctness over
+                # connection reuse, so isolate every immutable asset transfer.
+                "Connection": "close",
             }
             if (
                 self._github_token

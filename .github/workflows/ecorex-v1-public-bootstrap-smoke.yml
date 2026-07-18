@@ -19,6 +19,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  # v1.0.1 public pointer is verified by all three real host architectures.
   ECOREX_PUBLIC_BOOTSTRAP_INDEX: https://dl.ecoremedia.net/ecorex-agent/public-bootstrap-index.json
 
 jobs:
