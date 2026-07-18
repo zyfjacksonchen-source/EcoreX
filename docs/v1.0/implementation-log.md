@@ -6562,3 +6562,53 @@ identity. This makes v1-to-v1 rollback independent of the candidate commit
 without weakening any signed boundary. The combined Cloud sidecar and
 artifact-builder coverage passes 91 tests with 16 platform-specific skips;
 Ruff and tracked-diff validation pass.
+
+## 2026-07-18 - Exact v1.0.0 production publication completed
+
+The exact source commit `b923bb3a0ec5b08d7f12418a30caff7f5bc71edb`
+was packaged as the signed Cloud release
+`ecorex-cloud-v1.0.0-b923bb3a0ec5`. Its signed manifest SHA-256 is
+`a5cfd2a3900079e507df66abf9e52cef449b12e785209daedf949581e9ea9558`
+and its payload SHA-256 is
+`7786428778a40af79f978ef0de3f16395f0cc0297900105cafd8aac323e3e7ea`.
+Dry-run, migration, four-service phased readiness, route activation and the
+post-activation health gate passed. Green is active; every blue and legacy
+service is inactive; the Cloud journal is absent.
+
+The signed Stable pointer was activated through the production device-identity
+and Bootstrap publication service rather than by replacing the public file.
+It now targets `release-stable-b3f2eadd4b3cd0de88fc99ed`, sequence 1, with
+index SHA-256
+`3a2d5f24e90c4e4cd39bcde244d2eebe3945a9c87097f1e3715525f2c765a620`.
+The short-lived release-admin token existed only inside the production process.
+
+The first public-site apply correctly rolled back when its fixed loopback HTTPS
+readback reached the Provider Bridge default certificate. The source route was
+still valid; the failure exposed a real boundary mismatch: public TLS is
+terminated before the origin while the Provider Bridge already owns
+`127.0.0.1:443`. A dedicated root-owned `dl.ecoremedia.net` SNI vhost and
+separate local readback CA/leaf were installed as a one-time host bootstrap.
+Nginx now selects the public readback certificate for that SNI while retaining
+all provider SNI certificates on the same listener. Certificate and hostname
+verification remain enabled; no `-k`, HTTP readback or broad route fallback was
+introduced.
+
+The recovered second apply atomically switched
+`current -> site-slots/release-stable-b3f2eadd4b3cd0de88fc99ed`.
+The public site receipt SHA-256 is
+`1ac04fce81bb9403911008638629f728edfaf3d2c5ffa8492032624841c3da67`.
+The deployed site tree SHA-256 is
+`eccf1b99072615fcbaed8cfd2db54aa30e9cbcb8b7251a5ee4ad1a9265ee94dd`.
+Main HTML, dynamic pointer, all hashed assets, Cloud-bound Admin index/assets,
+Admin CSP/version header and Admin ready body passed exact HTTPS readback.
+The activation journal is absent. This loopback SNI bootstrap persists, so
+subsequent releases use the normal signed pointer plus dry-run/apply flow
+without repeating the production TLS repair.
+
+The reviewed SSH publication adapter required one path selector which the
+digest-pinned signer boundary previously stripped:
+`ECOREX_SSH_SIGNER_CREDENTIAL_FILE`. The boundary now forwards only that
+explicit selector, never its credential bytes or arbitrary secret-shaped
+variables. Focused external-signer, SSH-adapter, Bootstrap-index and public-site
+coverage passes 28 tests with seven platform skips; Ruff and tracked-diff
+validation pass.

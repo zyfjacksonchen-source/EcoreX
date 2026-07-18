@@ -9,8 +9,8 @@
     "dirty_worktree_preserved": true
   },
   "current_milestone": "direct_production_publication",
-  "current_batch": "The first exact v1 activation is healthy in production. Release-root publication and cross-commit compensation defects found by the replacement candidate are fixed and locally verified; a new exact signed candidate, public Web/Admin switch and browser acceptance remain.",
-  "last_verified_batch": "On 2026-07-18, production was restored to a healthy four-service v1 release after a pre-route-switch replacement-candidate failure. Transport now publishes complete release roots as 0555 and recovery validates each release against its own signed source commit. Cloud sidecar and artifact-builder coverage passed 91 tests/16 skips; Ruff and diff validation passed.",
+  "current_batch": "Exact Cloud b923bb3a and Stable Web/Admin are active in production with signed pointer, exact HTTPS readback and durable receipts. Chrome real-user acceptance remains because Chrome is not currently running on the operator workstation.",
+  "last_verified_batch": "On 2026-07-18, Green Cloud ecorex-cloud-v1.0.0-b923bb3a0ec5 and release-stable-b3f2eadd4b3cd0de88fc99ed were activated. The public site receipt is 1ac04fce81bb9403911008638629f728edfaf3d2c5ffa8492032624841c3da67; current targets the immutable slot and the activation journal is absent.",
   "recovery_document": "docs/v1.0/implementation-log.md",
   "verification_document": "docs/v1.0/verification-ledger.md",
   "milestones": [
@@ -19,13 +19,11 @@
     {"id": "capability_policy", "status": "completed"},
     {"id": "office_artifacts_connectors", "status": "completed"},
     {"id": "thin_webui_design_system", "status": "completed"},
-    {"id": "release_update_control_plane", "status": "in_progress"},
+    {"id": "release_update_control_plane", "status": "completed"},
     {"id": "migration_ga_gates", "status": "in_progress"}
   ],
   "remaining_local_work": [
-    "commit and push the verified release-root and cross-commit recovery corrections without touching the user-owned .artifacts tree",
-    "build, sign and activate one exact replacement Cloud artifact from that commit",
-    "atomically publish the matching WebUI and Admin bytes, then complete external and browser readback"
+    "complete Chrome/CDP real-user acceptance after Chrome is launched"
   ],
   "external_blockers": [
     "Gemini's retained legacy proxy currently returns HTTP 502 and must remain inactive unless a later real probe passes",

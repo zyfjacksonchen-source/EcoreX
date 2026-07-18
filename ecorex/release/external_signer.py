@@ -62,6 +62,10 @@ _ALLOWED_ENVIRONMENT = frozenset(
         "AZURE_TENANT_ID",
         "GOOGLE_CLOUD_PROJECT",
         "GOOGLE_PROJECT",
+        # Path-only selector for the reviewed SSH publication adapter. The
+        # credential bytes remain in the bounded, non-link local file and are
+        # never copied into this process environment, argv, output or receipt.
+        "ECOREX_SSH_SIGNER_CREDENTIAL_FILE",
     }
 )
 

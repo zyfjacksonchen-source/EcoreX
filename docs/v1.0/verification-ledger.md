@@ -2493,3 +2493,14 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Signed one-use availability repair | 0 production | The exact installed release was reverified before its root was sealed `0555`; compensation explicitly used the previous signed release identity. The journal cleared and the prior v1 release restored all four active services and both public routes. |
 | Immutable release-root publication | 0 local | Extraction is private until complete, then root-owned `0555`; install/recovery fully validates and seals safe root-owned `0555`/`0700`/`0755` real directories before atomic publication. Symlink, foreign owner and group-writable inputs fail closed. |
 | Cross-commit v1 compensation | 0 local | Recovery reads the prior release's own strict lowercase 40-hex commit from its signed manifest and performs full artifact validation against that identity. Combined Cloud sidecar/artifact-builder suite: 91 passed / 16 platform skips. Ruff and `git diff --check` passed. |
+
+## Exact v1.0.0 production activation - 2026-07-18
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Exact Cloud artifact | 0 production | `ecorex-cloud-v1.0.0-b923bb3a0ec5`; signed manifest `a5cfd2a3…9558`, payload `77864287…e7ea`; Green four-service readiness passed, all Blue/legacy units inactive, journal absent. |
+| Stable Bootstrap authority | 0 production | Production device identity minted an in-process short-lived release-admin lease; the normal stage/activate API committed sequence 1 for `release-stable-b3f2eadd4b3cd0de88fc99ed`, pointer `3a2d5f24…5a620`. No token or credential left the remote process and the public file was not overwritten manually. |
+| First public-site attempt | 1 expected with automatic rollback | Fixed loopback readback reached the Provider Bridge certificate on `127.0.0.1:443`; exact certificate validation failed and the old public site remained active. This proved rollback and durable recovery before any success claim. |
+| Loopback SNI root cause | 0 one-time production bootstrap | Installed an isolated `dl.ecoremedia.net` readback leaf/CA and SNI vhost on the shared loopback listener. Hostname and CA verification stay enabled; Provider Bridge SNI routes remain separate. The control persists across releases. |
+| Public Web/Admin activation | 0 production | `current` points to the immutable Stable slot; site tree `eccf1b99…94dd`; receipt `1ac04fce…a67`; index/pointer/cache policy, every hashed asset, Admin index/CSS/JS, CSP, version header and ready body passed exact HTTPS readback; journal absent. |
+| SSH signer selector boundary | 0 local | Only `ECOREX_SSH_SIGNER_CREDENTIAL_FILE` crosses the digest-pinned adapter as a path selector; credential bytes and arbitrary secret variables remain unavailable. Focused suites: 28 passed / seven skips; Ruff and diff checks passed. |
