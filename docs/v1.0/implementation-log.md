@@ -6446,3 +6446,14 @@ classified its alternate result as a protocol failure. The activation
 contract now requests `b64_json` for both generation and edit without relaxing
 PNG, dimensions, count, size, status, content-type, redirect or digest checks.
 The focused model-activation and management suite passes 22 tests.
+
+The follow-up binary-header diagnostic found the second provider-specific
+contract mismatch: the approved legacy proxy ignores the requested 1024px
+square and returns a valid 1254px square while declaring `size=auto`.
+Arbitrary dimensions remain rejected. For the Image 2 slots only, a native
+square within one-half to two times the requested edge is now admitted by the
+activation probe and normalized inside the bounded image worker to the exact
+requested dimensions. The adapter requires identical aspect ratio, PNG input,
+decoded-memory and byte limits, and revalidates the normalized PNG before CAS
+publication. The expanded activation, management and direct-provider suite
+passes 42 tests.
