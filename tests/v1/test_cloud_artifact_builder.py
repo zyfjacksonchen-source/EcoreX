@@ -182,6 +182,10 @@ def _handoff(root: Path, handoff: Path) -> tuple[dict, bytes]:
         "architecture": "aarch64",
         "python_version": "3.11.9",
         "dependency_lock_manifest_sha256": "b" * 64,
+        "dependency_transport": {
+            "index_url": "https://pypi.org/simple",
+            "verification": "pip-require-hashes",
+        },
         "dependency_locks": {},
         "application_wheel": {},
         "artifact_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),

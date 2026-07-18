@@ -678,6 +678,7 @@ def _validate_handoff(
         "architecture",
         "python_version",
         "dependency_lock_manifest_sha256",
+        "dependency_transport",
         "dependency_locks",
         "application_wheel",
         "artifact_manifest_sha256",
@@ -688,6 +689,7 @@ def _validate_handoff(
         "posix_mode_contract",
         "verification",
     }
+    dependency_transport = receipt.get("dependency_transport")
     if (
         not isinstance(descriptor, dict)
         or not isinstance(receipt, dict)
@@ -698,6 +700,10 @@ def _validate_handoff(
         or receipt.get("source_commit") != manifest.get("source_commit")
         or receipt.get("dependency_lock_manifest_sha256")
         != manifest.get("dependency_lock_manifest_sha256")
+        or not isinstance(dependency_transport, Mapping)
+        or set(dependency_transport) != {"index_url", "verification"}
+        or dependency_transport.get("index_url") not in APPROVED_CLOUD_PIP_INDEX_URLS
+        or dependency_transport.get("verification") != "pip-require-hashes"
         or descriptor.get("source_commit") != manifest.get("source_commit")
         or descriptor.get("release_id") != manifest.get("release_id")
         or descriptor.get("version") != manifest.get("version")
