@@ -69,9 +69,19 @@ def test_draft_upload_resume_and_publish_are_digest_fenced(tmp_path: Path) -> No
     digest = hashlib.sha256(payload).hexdigest()
     calls: list[tuple[str, str]] = []
     uploaded = False
+    draft_published = False
+
+    def asset_payload() -> dict:
+        result = _asset(package.name, payload)
+        if not draft_published:
+            result["browser_download_url"] = (
+                "https://github.com/acme/ecorex/releases/download/"
+                f"untagged-c1935de23995d4876c39/{package.name}"
+            )
+        return result
 
     def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal uploaded
+        nonlocal uploaded, draft_published
         calls.append((request.method, str(request.url)))
         assert request.headers["authorization"] == (
             "Bearer github-installation-token-secret"
@@ -98,7 +108,7 @@ def test_draft_upload_resume_and_publish_are_digest_fenced(tmp_path: Path) -> No
         if request.method == "GET" and request.url.path.endswith(
             "/releases/77/assets"
         ):
-            assets = [_asset(package.name, payload)] if uploaded else []
+            assets = [asset_payload()] if uploaded else []
             return httpx.Response(
                 200,
                 json=assets,
@@ -110,11 +120,12 @@ def test_draft_upload_resume_and_publish_are_digest_fenced(tmp_path: Path) -> No
             uploaded = True
             return httpx.Response(
                 201,
-                json=_asset(package.name, payload),
+                json=asset_payload(),
                 headers={"content-type": "application/json"},
             )
         if request.method == "PATCH" and request.url.path.endswith("/releases/77"):
             assert json.loads(request.content) == {"draft": False}
+            draft_published = True
             return httpx.Response(
                 200,
                 json=_release(draft=False),
@@ -137,9 +148,11 @@ def test_draft_upload_resume_and_publish_are_digest_fenced(tmp_path: Path) -> No
     first = publisher.ensure_asset(draft, package, expected_sha256=digest)
     second = publisher.ensure_asset(draft, package, expected_sha256=digest)
     published = publisher.publish(draft)
+    public = publisher.ensure_asset(published, package, expected_sha256=digest)
 
     assert first == second
     assert first.sha256 == digest
+    assert public.browser_download_url.endswith(f"/v1.0.0/{package.name}")
     assert published.draft is False
     assert sum(
         method == "POST" and "uploads.github.com" in url

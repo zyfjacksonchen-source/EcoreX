@@ -150,8 +150,12 @@ def main() -> int:
         _require(
             "export async function verifyManifestBytes" in javascript
             and "await sha256Hex(payload" in javascript
-            and "await verifyManifestBytes(index.release.manifest)" in javascript,
-            "public JS must fail closed on exact manifest-byte SHA-256 verification",
+            and "verifyManifestBytes(index.release.manifest)" in javascript
+            and "The downloaded Bootstrap is the signature authority" in javascript,
+            (
+                "public JS must attempt exact manifest-byte SHA-256 verification "
+                "without treating browser CORS as release authority"
+            ),
             errors,
         )
         _require(

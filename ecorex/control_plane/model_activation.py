@@ -290,6 +290,7 @@ class HTTPSModelConnectionTester:
                     "size": "1024x1024",
                     "quality": "low",
                     "output_format": "png",
+                    "response_format": "b64_json",
                 },
             )
         elif configuration.modality == "image_edit":
@@ -307,6 +308,7 @@ class HTTPSModelConnectionTester:
                     "size": "1024x1024",
                     "quality": "low",
                     "output_format": "png",
+                    "response_format": "b64_json",
                 },
                 files={
                     "image": (
@@ -319,7 +321,7 @@ class HTTPSModelConnectionTester:
         else:
             raise _ProbeFailure("provider_test_unconfigured")
         value = self._json_response(response)
-        self._validate_image(value)
+        self._validate_image(value, configuration)
 
     async def _request(
         self,
@@ -449,7 +451,10 @@ class HTTPSModelConnectionTester:
         return content
 
     @staticmethod
-    def _validate_image(value: Mapping[str, Any]) -> None:
+    def _validate_image(
+        value: Mapping[str, Any],
+        configuration: ActiveModelConfiguration,
+    ) -> None:
         data = value.get("data")
         if not isinstance(data, list) or len(data) != 1:
             raise _ProbeFailure("provider_test_protocol")
@@ -468,7 +473,13 @@ class HTTPSModelConnectionTester:
         ):
             raise _ProbeFailure("provider_test_protocol")
         width, height = struct.unpack(">II", payload[16:24])
-        if (width, height) != (_IMAGE_EDGE, _IMAGE_EDGE):
+        exact = (width, height) == (_IMAGE_EDGE, _IMAGE_EDGE)
+        bounded_native_square = (
+            configuration.local_model_id in {"gpt-image-2", "gpt-image-2-edit"}
+            and width == height
+            and _IMAGE_EDGE // 2 <= width <= _IMAGE_EDGE * 2
+        )
+        if not exact and not bounded_native_square:
             raise _ProbeFailure("provider_test_protocol")
 
     @staticmethod

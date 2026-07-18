@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from io import BytesIO
 import json
 
 import httpx
+from PIL import Image
 import pytest
 
 from ecorex.control_plane.management_models import ActiveModelConfiguration
@@ -198,9 +200,12 @@ def test_image_probe_exercises_the_actual_operation(
             assert body["model"] == "gpt-image-2"
             assert body["size"] == "1024x1024"
             assert body["output_format"] == "png"
+            assert body["response_format"] == "b64_json"
         else:
             assert b'name="model"' in request.content
             assert b"gpt-image-2" in request.content
+            assert b'name="response_format"' in request.content
+            assert b"b64_json" in request.content
             assert b'filename="ecorex-activation.png"' in request.content
             assert b"\x89PNG\r\n\x1a\n" in request.content
         return httpx.Response(
@@ -216,6 +221,31 @@ def test_image_probe_exercises_the_actual_operation(
     result = run_test(handler, model)
     assert result.passed
     assert paths == ["/v1/models", path]
+
+
+def test_image_probe_accepts_bounded_native_square_for_runtime_normalization() -> None:
+    output = BytesIO()
+    image = Image.new("RGB", (1254, 1254), (230, 120, 30))
+    image.save(output, format="PNG")
+    image.close()
+    native = output.getvalue()
+    model = configuration(
+        modality="image_generation",
+        preset="openai_compatible_image",
+        local_model_id="gpt-image-2",
+        upstream_model_id="gpt-image-2",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/models":
+            return catalog("gpt-image-2")
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/json"},
+            json={"data": [{"b64_json": base64.b64encode(native).decode("ascii")}]},
+        )
+
+    assert run_test(handler, model).passed
 
 
 def test_uncertain_submission_is_never_retried() -> None:

@@ -6392,3 +6392,223 @@ The resumption authorization does not by itself prove any remote mutation.
 Production remains unchanged until the authenticated release authority accepts
 the exact immutable release evidence and the post-activation Web/Admin readback
 succeeds.
+
+## 2026-07-18 - Direct-production continuation: model-gateway admission hold
+
+The direct Stable candidate was published through the signed release boundary,
+and the server-side Cloud sidecar was advanced only as far as its durable
+pre-route migration journal.  The legacy Web/Admin/API services were restored
+and remain the active public route while this journal is incomplete; neither
+the new WebUI nor `/admin/` has been claimed as live.
+
+The v0.2.9.2 administrator migration preserved 40 live users, excluded seven
+deleted users, retained eligible conversation/project data independently, and
+imported six encrypted model drafts.  Deleted conversations are not revived.
+The retained-key revalidation flow created auditable new revisions and made
+real catalog/inference probes without exposing a key, endpoint credential,
+prompt body, response body, or generated image.
+
+Only the existing Doubao chat slot passed and is active.  The primary
+`gpt-5.6-sol`, Gemini, Image 2 and Image 2 Edit probes correctly remain
+inactive because their fixed HTTPS bridge upstreams are unreachable from the
+production host; the retained DeepSeek revision returned an incompatible
+provider response contract.  The historic OpenAI/Gemini endpoints are
+public-HTTP-only addresses, so v1 intentionally will not send a retained key
+to them.  This is a release hold, not a failed-open fallback.
+
+The production Control Plane and Gateway origin maps now include the existing
+loopback TLS Image bridge.  Final Cloud and public Web/Admin activation remains
+blocked until a reachable, trusted HTTPS upstream (or an equivalently secure
+operator-managed egress path) is supplied for the primary/image providers and
+passes the same real activation probe.
+
+The product owner subsequently supplied the missing authority: retain the
+historic public-HTTP provider addresses. The bridge now has a distinct
+root-owned public-HTTP waiver which accepts only a pinned global IP literal.
+It does not permit hostnames, redirects, Admin-supplied origins or arbitrary
+paths; the loopback-facing side remains TLS and exposes only the fixed model
+routes. The focused bridge and sidecar regression passes 93 tests with seven
+explicit Windows/platform skips.
+
+The exact `74800e60` source was then installed as the production bridge
+authority. Its root-owned spec now pins the historic OpenAI/Image and Gemini
+global-IP origins under that waiver; validation, `nginx -t`, graceful reload
+and every loopback TLS route probe passed as one rollback-capable operation.
+The retained-key workflow subsequently activated GPT-5.6 SOL, DeepSeek and
+Doubao. Gemini's legacy proxy reached its inference route but returned HTTP
+502, so that revision remains rejected rather than being advertised.
+
+Both Image 2 operations reached the legacy provider and returned valid
+base64-encoded PNG result fields when the compatibility request explicitly
+selected `b64_json`. The activation request previously omitted that selector,
+so the provider was reachable while the strict v1 validator correctly
+classified its alternate result as a protocol failure. The activation
+contract now requests `b64_json` for both generation and edit without relaxing
+PNG, dimensions, count, size, status, content-type, redirect or digest checks.
+The focused model-activation and management suite passes 22 tests.
+
+The follow-up binary-header diagnostic found the second provider-specific
+contract mismatch: the approved legacy proxy ignores the requested 1024px
+square and returns a valid 1254px square while declaring `size=auto`.
+Arbitrary dimensions remain rejected. For the Image 2 slots only, a native
+square within one-half to two times the requested edge is now admitted by the
+activation probe and normalized inside the bounded image worker to the exact
+requested dimensions. The adapter requires identical aspect ratio, PNG input,
+decoded-memory and byte limits, and revalidates the normalized PNG before CAS
+publication. The expanded activation, management and direct-provider suite
+passes 42 tests.
+
+The first durable activation recovery then exposed two deployment-contract
+defects before route switch. The public origin-map helper had written JSON
+without the single-quote envelope required to make systemd and the migration
+parser observe identical bytes; both affected public files were atomically
+rerendered and all six public/secret environment files now pass the same
+parser. The recovered blue slot next failed with `203/EXEC` because its fixed
+slot directory was root:root `0750`, preventing the `ecorex-cloud` service
+identity from traversing the otherwise valid immutable interpreter path.
+
+The deployer now owns a fixed slot-directory contract: real directory, same
+filesystem, root owner, `ecorex-cloud` group and mode `0750`, applied both
+while staging and before any recovery start. A candidate that fails health is
+also stopped before the error escapes, preventing an unattended systemd
+restart loop. The failed candidate units were stopped and the still-
+authoritative legacy Web/Admin/usage services were restored before continuing.
+The Cloud sidecar suite passes 69 tests with seven explicit platform skips.
+
+After the slot became executable, the exact production sandbox exposed a CAS
+contract conflict. The Control Plane, Image API and Image Worker must create
+setgid `ecorex-storage` descendants so independently sandboxed processes can
+share content without world access. Their unit templates nevertheless enabled
+`RestrictSUIDSGID`, causing a random health-prefix directory to stop at the
+umask-reduced `2700` state before the required `2770` chmod. The same probes
+outside systemd had passed, explaining the environment-dependent failure.
+
+`RestrictSUIDSGID` remains enabled for the Gateway, which never writes the
+shared CAS, and is removed only from the three CAS-writing units. The CAS now
+also closes the `mkdir`/permission-preparation crash window: an existing
+directory is repaired only when it is empty, owned by the current service UID,
+already in the configured storage GID and has exactly the expected
+umask-reduced mode. Startup cleanup and quota walks apply the same rule, so an
+unrelated stale health-prefix cannot poison every future probe. Any content,
+foreign identity or other mode still fails closed. The combined CAS and
+sidecar suite passes 75 tests with eight explicit platform skips.
+
+The next recovery reached all three v1 HTTP lifecycles and exposed a separate
+listener-allocation defect before route switch: Image API and Image Worker
+both inherited the slot's single image port. The Worker therefore failed with
+an address-in-use error even though both processes were individually healthy.
+Every slot now reserves a fourth, globally unique Worker port and writes a
+dedicated `image-worker.env`; recovery schema checks also use that exact
+environment. The readiness gate continues to probe the Image API while
+separately requiring the Worker unit to be active. The Cloud sidecar suite
+passes 74 tests with seven explicit platform skips.
+
+Forced shutdown during that failed start also found an independent provider
+lifecycle race. `DynamicManagedImageProvider.aclose()` previously cleared and
+closed cached providers while health or job calls still held them, causing a
+late release to report an unbalanced reference count. Closing now enters a
+draining state, rejects new acquisitions, lets existing calls release, and
+closes each provider exactly once. Concurrent or cancelled close callers share
+the same shielded completion and cannot interrupt the underlying drain.
+Focused image configuration, provider and production-runtime coverage passes
+46 tests.
+
+The dedicated Worker listener exposed one final cross-process startup race.
+The generic CAS write probe briefly published a non-image sentinel as a normal
+business blob. A concurrent Image recovery scan could enumerate that digest
+between `put` and `delete`, reject it as an invalid orphan image, and abort
+startup; the probe then deleted the evidence, which explained why a standalone
+Worker probe and the final directory audit both passed.
+
+The write probe now remains an unpublished attempt file inside a real digest
+shard. Create, permission/identity/length/content/digest verification, delete,
+fsync, quota and usage checks all run under one volume-wide interprocess lock.
+A crash residue is covered by the existing bounded attempt cleanup. Image
+orphan recovery also converges idempotently when two processes race to publish
+the same valid metadata record, while mismatched content or state still fails
+closed.
+
+Candidate services now start in phases for deterministic readiness as well:
+Control Plane, Gateway and Image API must all return ready before the Worker
+starts; the Worker must return ready on its dedicated listener before all four
+endpoints and the unit state are rechecked. Deploy, journal recovery and
+rollback share this path, and any failure stops the complete slot in reverse
+order. The Cloud sidecar suite passes 78 tests with seven platform skips; the
+CAS/Image/Control Plane adjacency suite passes 51 tests with one platform skip.
+
+The first exact v1 activation then completed: the durable journal cleared,
+all four blue services became active, the legacy services stopped and both
+public Control Plane and Admin routes switched to v1. Building and attempting
+the next immutable candidate exposed two v1-to-v1 release-management defects
+before its route switch. The transport kept the unpack root at private mode
+`0700`, so the installed service identity could not traverse an otherwise
+valid signed release. Compensation also validated the previous release with
+the target release's source commit, incorrectly producing
+`artifact_target_mismatch` whenever those commits differed. A one-use,
+signed, exact-release repair sealed the installed root and restored the
+previous known-good release; all four services and both v1 routes returned
+healthy, and the activation journal was absent.
+
+The product path now owns both invariants. Transport extraction remains private
+until every member has been verified, then publishes the complete root as
+root-owned `0555`. Installation and journal recovery accept only a real,
+non-link, root-owned `0555`, `0700` or `0755` directory, perform the full
+signature/digest/release validation, seal that exact inode to `0555`, and
+publish it by one atomic rename. Foreign ownership, group/other write bits,
+symlinks and unsafe modes still fail closed. Compensation reads a strict
+40-character lowercase hexadecimal source commit from the signed manifest of
+the release being restored and then revalidates that release against its own
+identity. This makes v1-to-v1 rollback independent of the candidate commit
+without weakening any signed boundary. The combined Cloud sidecar and
+artifact-builder coverage passes 91 tests with 16 platform-specific skips;
+Ruff and tracked-diff validation pass.
+
+## 2026-07-18 - Exact v1.0.0 production publication completed
+
+The exact source commit `b923bb3a0ec5b08d7f12418a30caff7f5bc71edb`
+was packaged as the signed Cloud release
+`ecorex-cloud-v1.0.0-b923bb3a0ec5`. Its signed manifest SHA-256 is
+`a5cfd2a3900079e507df66abf9e52cef449b12e785209daedf949581e9ea9558`
+and its payload SHA-256 is
+`7786428778a40af79f978ef0de3f16395f0cc0297900105cafd8aac323e3e7ea`.
+Dry-run, migration, four-service phased readiness, route activation and the
+post-activation health gate passed. Green is active; every blue and legacy
+service is inactive; the Cloud journal is absent.
+
+The signed Stable pointer was activated through the production device-identity
+and Bootstrap publication service rather than by replacing the public file.
+It now targets `release-stable-b3f2eadd4b3cd0de88fc99ed`, sequence 1, with
+index SHA-256
+`3a2d5f24e90c4e4cd39bcde244d2eebe3945a9c87097f1e3715525f2c765a620`.
+The short-lived release-admin token existed only inside the production process.
+
+The first public-site apply correctly rolled back when its fixed loopback HTTPS
+readback reached the Provider Bridge default certificate. The source route was
+still valid; the failure exposed a real boundary mismatch: public TLS is
+terminated before the origin while the Provider Bridge already owns
+`127.0.0.1:443`. A dedicated root-owned `dl.ecoremedia.net` SNI vhost and
+separate local readback CA/leaf were installed as a one-time host bootstrap.
+Nginx now selects the public readback certificate for that SNI while retaining
+all provider SNI certificates on the same listener. Certificate and hostname
+verification remain enabled; no `-k`, HTTP readback or broad route fallback was
+introduced.
+
+The recovered second apply atomically switched
+`current -> site-slots/release-stable-b3f2eadd4b3cd0de88fc99ed`.
+The public site receipt SHA-256 is
+`1ac04fce81bb9403911008638629f728edfaf3d2c5ffa8492032624841c3da67`.
+The deployed site tree SHA-256 is
+`eccf1b99072615fcbaed8cfd2db54aa30e9cbcb8b7251a5ee4ad1a9265ee94dd`.
+Main HTML, dynamic pointer, all hashed assets, Cloud-bound Admin index/assets,
+Admin CSP/version header and Admin ready body passed exact HTTPS readback.
+The activation journal is absent. This loopback SNI bootstrap persists, so
+subsequent releases use the normal signed pointer plus dry-run/apply flow
+without repeating the production TLS repair.
+
+The reviewed SSH publication adapter required one path selector which the
+digest-pinned signer boundary previously stripped:
+`ECOREX_SSH_SIGNER_CREDENTIAL_FILE`. The boundary now forwards only that
+explicit selector, never its credential bytes or arbitrary secret-shaped
+variables. Focused external-signer, SSH-adapter, Bootstrap-index and public-site
+coverage passes 28 tests with seven platform skips; Ruff and tracked-diff
+validation pass.

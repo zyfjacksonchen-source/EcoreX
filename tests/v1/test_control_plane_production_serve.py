@@ -282,6 +282,24 @@ def test_production_provider_migrates_checks_serves_and_drains(tmp_path: Path) -
     second.lifecycle.force_close()
 
 
+def test_migration_initializes_missing_control_plane_work_directories(
+    tmp_path: Path,
+) -> None:
+    config, secrets, _auth_private = _material(tmp_path)
+    backup = tmp_path / "database" / "new-backups"
+    spool = tmp_path / "database" / "new-share-spool"
+    assert not backup.exists() and not spool.exists()
+    configured = replace(
+        config,
+        backup_directory=backup.absolute(),
+        share_spool_directory=spool.absolute(),
+    )
+
+    SingleNodeSQLiteS3Provider(FakeS3Factory()).migrate(configured, secrets)
+
+    assert backup.is_dir() and spool.is_dir()
+
+
 def test_serve_never_creates_or_migrates_missing_storage(tmp_path: Path) -> None:
     config, secrets, _private = _material(tmp_path)
     provider = SingleNodeSQLiteS3Provider(FakeS3Factory())

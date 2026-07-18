@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
 from types import SimpleNamespace
 
@@ -170,6 +171,88 @@ def test_artifact_byte_tamper_is_rejected_before_staging(tmp_path: Path) -> None
         deployment._validate_artifact(spec)
 
 
+@pytest.mark.skipif(
+    os.name == "nt" or deployment._effective_user_id() != 0,
+    reason="requires root-owned POSIX release directories",
+)
+@pytest.mark.parametrize("source_mode", (0o700, 0o755))
+def test_install_release_seals_new_and_existing_legacy_private_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source_mode: int
+) -> None:
+    spec, source = _signed_artifact(tmp_path)
+    source.chmod(source_mode)
+    release_root = tmp_path / "installed-releases"
+    monkeypatch.setattr(deployment, "RELEASE_ROOT", release_root)
+    manifest = deployment._validate_artifact(spec)
+
+    destination = deployment._install_release(spec, manifest)
+
+    assert stat.S_IMODE(destination.lstat().st_mode) == 0o555
+    destination.chmod(0o700)
+
+    recovered = deployment._install_release(spec, manifest)
+
+    assert recovered == destination
+    assert stat.S_IMODE(destination.lstat().st_mode) == 0o555
+
+
+@pytest.mark.skipif(
+    os.name == "nt" or deployment._effective_user_id() != 0,
+    reason="requires root-owned POSIX release directories",
+)
+@pytest.mark.parametrize("malicious_state", ("symlink", "foreign", "unsafe-mode"))
+def test_install_release_rejects_malicious_existing_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    malicious_state: str,
+) -> None:
+    spec, source = _signed_artifact(tmp_path)
+    source.chmod(0o700)
+    release_root = tmp_path / "installed-releases"
+    monkeypatch.setattr(deployment, "RELEASE_ROOT", release_root)
+    manifest = deployment._validate_artifact(spec)
+    release_root.mkdir()
+    destination = release_root / spec.release_id
+    if malicious_state == "symlink":
+        destination.symlink_to(source, target_is_directory=True)
+        expected = "release_directory_identity_invalid"
+    else:
+        shutil.copytree(source, destination)
+        if malicious_state == "foreign":
+            os.chown(destination, 65534, 65534)
+            expected = "release_directory_identity_invalid"
+        else:
+            destination.chmod(0o775)
+            expected = "release_directory_mode_invalid"
+
+    with pytest.raises(deployment.CloudDeployError, match=expected):
+        deployment._install_release(spec, manifest)
+
+
+@pytest.mark.skipif(
+    os.name == "nt" or deployment._effective_user_id() != 0,
+    reason="requires root-owned POSIX release directories",
+)
+def test_existing_legacy_private_release_is_verified_before_mode_repair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec, source = _signed_artifact(tmp_path)
+    source.chmod(0o700)
+    release_root = tmp_path / "installed-releases"
+    monkeypatch.setattr(deployment, "RELEASE_ROOT", release_root)
+    manifest = deployment._validate_artifact(spec)
+    destination = deployment._install_release(spec, manifest)
+    destination.chmod(0o700)
+    (destination / "venv/bin/ecorex-image").write_bytes(b"tampered")
+
+    with pytest.raises(
+        deployment.CloudDeployError, match="artifact_file_digest_mismatch"
+    ):
+        deployment._install_release(spec, manifest)
+
+    assert stat.S_IMODE(destination.lstat().st_mode) == 0o700
+
+
 @pytest.mark.skipif(os.name == "nt", reason="Windows does not expose POSIX modes")
 def test_artifact_executable_mode_tamper_is_rejected_before_staging(
     tmp_path: Path,
@@ -194,6 +277,100 @@ def test_artifact_manifest_is_bound_to_expected_source_and_lock(tmp_path: Path) 
             deployment.dataclasses.replace(
                 spec, dependency_lock_manifest_sha256="d" * 64
             )
+        )
+
+
+def test_transition_release_uses_its_signed_source_commit_not_target_spec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec, source = _signed_artifact(tmp_path)
+    release_root = tmp_path / "releases"
+    release = release_root / spec.release_id
+    release_root.mkdir()
+    shutil.copytree(source, release)
+    monkeypatch.setattr(deployment, "RELEASE_ROOT", release_root)
+    monkeypatch.setattr(
+        deployment, "_release_directory_identity", lambda _release: (1, 1)
+    )
+    monkeypatch.setattr(
+        deployment, "_seal_release_directory", lambda _release, _identity: None
+    )
+    monkeypatch.setattr(deployment, "_verify_staged_runtime", lambda _release: None)
+    target_spec = deployment.dataclasses.replace(spec, source_commit="c" * 40)
+
+    verified = deployment._verify_transition_release(
+        target_spec,
+        {
+            "active_release_id": spec.release_id,
+            "artifact_manifest_sha256": spec.artifact_manifest_sha256,
+        },
+    )
+
+    assert verified == release
+
+
+@pytest.mark.skipif(
+    os.name == "nt" or deployment._effective_user_id() != 0,
+    reason="requires root-owned POSIX release directories",
+)
+def test_transition_recovery_repairs_verified_legacy_private_release_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec, source = _signed_artifact(tmp_path)
+    release_root = tmp_path / "releases"
+    release = release_root / spec.release_id
+    release_root.mkdir()
+    shutil.copytree(source, release)
+    release.chmod(0o700)
+    monkeypatch.setattr(deployment, "RELEASE_ROOT", release_root)
+    monkeypatch.setattr(deployment, "_verify_staged_runtime", lambda _release: None)
+
+    deployment._verify_transition_release(
+        deployment.dataclasses.replace(spec, source_commit="c" * 40),
+        {
+            "active_release_id": spec.release_id,
+            "artifact_manifest_sha256": spec.artifact_manifest_sha256,
+        },
+    )
+
+    assert stat.S_IMODE(release.lstat().st_mode) == 0o555
+
+
+@pytest.mark.parametrize("source_commit", (None, "", "A" * 40, "a" * 39, "../bad"))
+def test_transition_release_rejects_missing_or_malformed_manifest_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_commit: str | None,
+) -> None:
+    spec, source = _signed_artifact(tmp_path)
+    manifest_path = source / "cloud-release-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if source_commit is None:
+        del manifest["source_commit"]
+    else:
+        manifest["source_commit"] = source_commit
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    release_root = tmp_path / "releases"
+    release = release_root / spec.release_id
+    release_root.mkdir()
+    shutil.copytree(source, release)
+    monkeypatch.setattr(deployment, "RELEASE_ROOT", release_root)
+    monkeypatch.setattr(
+        deployment, "_release_directory_identity", lambda _release: (1, 1)
+    )
+
+    with pytest.raises(
+        deployment.CloudDeployError, match="artifact_manifest_invalid"
+    ):
+        deployment._verify_transition_release(
+            deployment.dataclasses.replace(spec, source_commit="c" * 40),
+            {
+                "active_release_id": spec.release_id,
+                "artifact_manifest_sha256": _sha(manifest_path),
+            },
         )
 
 
@@ -346,7 +523,7 @@ def test_read_only_plan_executes_real_target_preflight_and_surfaces_dependency(
     assert "postgres_service_unavailable" in plan.blockers
 
 
-def test_schema_gate_runs_real_checks_and_blocks_incompatible_minio(
+def test_schema_migration_and_contract_gates_are_separated_for_legacy_import(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     release = tmp_path / "release"
@@ -364,17 +541,19 @@ def test_schema_gate_runs_real_checks_and_blocks_incompatible_minio(
 
     monkeypatch.setattr(deployment, "_run", run)
 
+    deployment._schema_gate(release, "blue")
+
     with pytest.raises(
         deployment.CloudDeployError, match="image_production_contract_failed"
     ):
-        deployment._schema_gate(release, "blue")
+        deployment._production_contract_gate(release, "blue")
 
     assert [command[-2:] for command, _ in calls] == [
         ("schema", "migrate"),
-        ("schema", "check"),
+        ("schema", "migrate"),
         ("schema", "migrate"),
         ("schema", "check"),
-        ("schema", "migrate"),
+        ("schema", "check"),
         ("schema", "check"),
     ]
 
@@ -504,9 +683,213 @@ def test_local_cas_units_do_not_depend_on_minio_and_secrets_require_mount() -> N
         source = (root / name).read_text(encoding="utf-8")
         assert "/var/lib/ecorex/cas" in source
         assert "SupplementaryGroups=ecorex-storage" in source
+        assert "RestrictSUIDSGID=true" not in source
+        assert "setgid ecorex-storage directories" in source
+    gateway = (root / "ecorex-gateway@.service").read_text(encoding="utf-8")
+    assert "RestrictSUIDSGID=true" in gateway
     minio = (root / "minio.service").read_text(encoding="utf-8")
     assert "EnvironmentFile=/var/lib/ecorex/secrets/minio.secret.env" in minio
     assert "/etc/ecorex/cloud/secrets/" not in minio
+
+
+def test_slot_ports_are_unique_and_image_processes_never_share_a_listener() -> None:
+    allocated = [
+        port
+        for slot_ports in deployment.PORTS.values()
+        for port in slot_ports.values()
+    ]
+
+    assert len(allocated) == len(set(allocated))
+    for slot in deployment.SLOTS:
+        ports = deployment.PORTS[slot]
+        assert set(ports) == {
+            "control_plane",
+            "gateway",
+            "image",
+            "image_worker",
+        }
+        assert ports["image"] != ports["image_worker"]
+
+
+def test_image_units_use_separate_slot_environment_files() -> None:
+    root = Path("deploy/ecorex-cloud-sidecar/systemd")
+    api = (root / "ecorex-image-api@.service").read_text(encoding="utf-8")
+    worker = (root / "ecorex-image-worker@.service").read_text(encoding="utf-8")
+
+    assert "EnvironmentFile=/etc/ecorex/cloud/slots/%i/image.env" in api
+    assert "EnvironmentFile=/etc/ecorex/cloud/slots/%i/image-worker.env" not in api
+    assert "EnvironmentFile=/etc/ecorex/cloud/slots/%i/image-worker.env" in worker
+    assert "EnvironmentFile=/etc/ecorex/cloud/slots/%i/image.env" not in worker
+
+
+def test_slot_environment_assigns_distinct_image_api_and_worker_ports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_root = tmp_path / "config-root"
+    release = tmp_path / "release"
+    symlinks: list[tuple[Path, Path]] = []
+    monkeypatch.setattr(deployment, "CONFIG_ROOT", config_root)
+    monkeypatch.setattr(deployment, "SLOT_ROOT", tmp_path / "slots")
+    monkeypatch.setattr(
+        deployment, "_prepare_slot_runtime_directory", lambda _slot: None
+    )
+
+    def write(path: Path, payload: bytes, mode: int = 0o640) -> None:
+        del mode
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+
+    monkeypatch.setattr(deployment, "_atomic_write", write)
+    monkeypatch.setattr(
+        deployment,
+        "_atomic_symlink",
+        lambda target, link: symlinks.append((Path(target), Path(link))),
+    )
+
+    deployment._write_slot_environment("blue", release)
+
+    api = deployment._parse_env(
+        config_root / "slots" / "blue" / "image.env", secret=False
+    )
+    worker = deployment._parse_env(
+        config_root / "slots" / "blue" / "image-worker.env", secret=False
+    )
+    assert api == {
+        "ECOREX_IMAGE_BIND_HOST": "127.0.0.1",
+        "ECOREX_IMAGE_BIND_PORT": str(deployment.PORTS["blue"]["image"]),
+        "ECOREX_IMAGE_INSTANCE_ID": "ecorex-image-blue",
+    }
+    assert worker == {
+        "ECOREX_IMAGE_BIND_HOST": "127.0.0.1",
+        "ECOREX_IMAGE_BIND_PORT": str(
+            deployment.PORTS["blue"]["image_worker"]
+        ),
+        "ECOREX_IMAGE_INSTANCE_ID": "ecorex-image-worker-blue",
+    }
+    assert api["ECOREX_IMAGE_BIND_PORT"] != worker["ECOREX_IMAGE_BIND_PORT"]
+    assert symlinks == [(release, tmp_path / "slots" / "blue" / "current")]
+
+
+def test_final_health_rechecks_all_endpoints_and_requires_active_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requested: list[str] = []
+    commands: list[tuple[str, ...]] = []
+
+    class ReadyResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return b'{"status":"ready"}'
+
+    def open_ready(request, *, timeout: float):
+        assert timeout == 2.0
+        requested.append(request.full_url)
+        return ReadyResponse()
+
+    def run(command, **_kwargs):
+        commands.append(tuple(command))
+        return SimpleNamespace(stdout=b"active\n", stderr=b"", returncode=0)
+
+    monkeypatch.setattr(deployment.urllib.request, "urlopen", open_ready)
+    monkeypatch.setattr(deployment, "_run", run)
+    spec = _spec(tmp_path)
+
+    deployment._wait_health(spec, "blue", timeout_seconds=0.1)
+
+    ports = deployment.PORTS["blue"]
+    assert requested == [
+        f"http://127.0.0.1:{ports['control_plane']}/health/ready",
+        f"http://127.0.0.1:{ports['gateway']}/health/ready",
+        f"http://127.0.0.1:{ports['image']}/health/ready",
+        f"http://127.0.0.1:{ports['image_worker']}/health/ready",
+    ]
+    assert commands == [
+        (
+            str(spec.systemctl_binary),
+            "is-active",
+            "ecorex-image-worker@blue.service",
+        )
+    ]
+
+
+def test_worker_health_polls_only_the_dedicated_worker_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requested: list[str] = []
+
+    class ReadyResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return b'{"status":"ready"}'
+
+    def open_ready(request, *, timeout: float):
+        assert timeout == 2.0
+        requested.append(request.full_url)
+        return ReadyResponse()
+
+    monkeypatch.setattr(deployment.urllib.request, "urlopen", open_ready)
+
+    deployment._wait_worker_health(
+        _spec(tmp_path), "green", timeout_seconds=0.1
+    )
+
+    assert requested == [
+        "http://127.0.0.1:"
+        f"{deployment.PORTS['green']['image_worker']}/health/ready"
+    ]
+
+
+def test_recovery_checks_worker_with_its_dedicated_slot_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    environments: list[tuple[str, str]] = []
+    checks: list[tuple[tuple[str, ...], str]] = []
+
+    def environment(service: str, slot: str) -> dict[str, str]:
+        environments.append((service, slot))
+        return {"ECOREX_TEST_ENVIRONMENT": service}
+
+    def run(command, *, environment, **_kwargs):
+        checks.append(
+            (
+                tuple(command),
+                environment["ECOREX_TEST_ENVIRONMENT"],
+            )
+        )
+        return SimpleNamespace(stdout=b"", stderr=b"", returncode=0)
+
+    monkeypatch.setattr(deployment, "_service_environment", environment)
+    monkeypatch.setattr(deployment, "_run_service_command", run)
+
+    deployment._recovery_schema_check(tmp_path / "release", "green", source=False)
+
+    assert environments == [
+        ("control-plane", "green"),
+        ("gateway", "green"),
+        ("image", "green"),
+        ("image-worker", "green"),
+    ]
+    worker_command, worker_environment = checks[-1]
+    assert worker_command[-3:] == (
+        "ecorex.image_orchestrator.production",
+        "schema",
+        "check",
+    )
+    assert worker_environment == "image-worker"
 
 
 def _legacy_nginx_server() -> str:
@@ -1173,7 +1556,9 @@ def test_deploy_does_not_switch_admin_route_before_candidate_health(
     monkeypatch.setattr(deployment, "_schema_gate", lambda *_args: None)
     monkeypatch.setattr(deployment, "_systemctl", lambda *_args: None)
     monkeypatch.setattr(
-        deployment, "_wait_health", lambda *_args: events.append("candidate_healthy")
+        deployment,
+        "_start_target_services",
+        lambda *_args: events.append("candidate_healthy"),
     )
 
     def switch(*_args) -> None:
@@ -1404,6 +1789,11 @@ def test_activation_schema_boundary_is_durable_before_first_legacy_writer_stop(
         "_schema_gate",
         lambda _release, slot: events.append(("schema", slot)),
     )
+    monkeypatch.setattr(
+        deployment,
+        "_production_contract_gate",
+        lambda _release, slot: events.append(("contracts", slot)),
+    )
 
     result = deployment._ensure_activation_schema_ready(
         _spec(tmp_path), journal, target_release=tmp_path / "release"
@@ -1415,6 +1805,7 @@ def test_activation_schema_boundary_is_durable_before_first_legacy_writer_stop(
         ("stop", tuple(reversed(deployment._slot_units("blue")))),
         ("stop", tuple(reversed(deployment.LEGACY_SERVICE_NAMES))),
         ("schema", "blue"),
+        ("contracts", "blue"),
         ("journal", "schema_ready"),
     ]
 
@@ -1453,6 +1844,11 @@ def test_legacy_commit_runs_only_after_both_writer_sets_are_fenced(
     )
     monkeypatch.setattr(
         deployment,
+        "_production_contract_gate",
+        lambda *_args: events.append("contracts_checked"),
+    )
+    monkeypatch.setattr(
+        deployment,
         "_prepare_legacy_import_contract",
         lambda value: (
             {**value, "legacy_admin_migration": _legacy_migration_contract()},
@@ -1476,6 +1872,7 @@ def test_legacy_commit_runs_only_after_both_writer_sets_are_fenced(
         "schema_ready",
         "legacy_business_write",
         ("journal", "legacy_imported"),
+        "contracts_checked",
         ("journal", "schema_ready"),
     ]
 
@@ -1507,6 +1904,52 @@ def test_configured_deployment_platform_admin_is_created_after_management_import
     assert user.status == "active"
     assert user.display_name == "EcoreX 管理员"
     assert user.organization_id == "ecorex-production"
+
+
+def test_legacy_identity_inventory_skips_deleted_suspended_and_unusable_accounts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    records = tuple({"account_id": account_id} for account_id in (
+        "active-user",
+        "suspended-user",
+        "deleted-user",
+    ))
+
+    class Repository:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def active_public_catalog(self):
+            return [{"local_model_id": "gpt-5.6-sol"}]
+
+        def get_user(self, account_id: str):
+            if account_id == "deleted-user":
+                raise deployment.AdminManagementNotFound("missing")
+            return SimpleNamespace(
+                account_id=account_id,
+                status="active" if account_id == "active-user" else "suspended",
+            )
+
+    monkeypatch.setattr(deployment, "AdminManagementRepository", Repository)
+
+    assert deployment._eligible_legacy_identity_records(
+        records,
+        target=tmp_path / "control-plane.sqlite3",
+        encryption_key=b"a" * 32,
+    ) == (records[0],)
+
+    class EmptyCatalogRepository(Repository):
+        def active_public_catalog(self):
+            return []
+
+    monkeypatch.setattr(
+        deployment, "AdminManagementRepository", EmptyCatalogRepository
+    )
+    assert deployment._eligible_legacy_identity_records(
+        records,
+        target=tmp_path / "control-plane.sqlite3",
+        encryption_key=b"a" * 32,
+    ) == ()
 
 
 def test_crash_after_admin_commit_forces_idempotent_rollforward_without_legacy(
@@ -1663,6 +2106,11 @@ def test_migrating_recovery_reruns_schema_before_target_can_start(
     )
     monkeypatch.setattr(
         deployment,
+        "_production_contract_gate",
+        lambda _release, slot: events.append(("contracts", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
         "_advance_transition_journal",
         lambda value, phase: events.append(("journal", phase))
         or {**value, "phase": phase},
@@ -1679,8 +2127,21 @@ def test_migrating_recovery_reruns_schema_before_target_can_start(
     )
     monkeypatch.setattr(
         deployment,
+        "_wait_api_health",
+        lambda _spec, slot: events.append(("api-health", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_wait_worker_health",
+        lambda _spec, slot: events.append(("worker-health", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
         "_wait_health",
         lambda _spec, slot: events.append(("health", slot)),
+    )
+    monkeypatch.setattr(
+        deployment, "_prepare_slot_runtime_directory", lambda _slot: None
     )
     monkeypatch.setattr(deployment, "_switch_nginx", lambda *_args: None)
     monkeypatch.setattr(deployment, "_write_slot_projection", lambda *_args: None)
@@ -1689,9 +2150,10 @@ def test_migrating_recovery_reruns_schema_before_target_can_start(
     assert deployment._resolve_pending_transition(_spec(tmp_path), journal) == "target"
 
     migration_index = events.index(("migrate", "green"))
+    contract_index = events.index(("contracts", "green"))
     schema_ready_index = events.index(("journal", "schema_ready"))
     start_index = next(i for i, event in enumerate(events) if event[0] == "start")
-    assert migration_index < schema_ready_index < start_index
+    assert migration_index < contract_index < schema_ready_index < start_index
 
 
 def test_migrating_first_release_restores_immutable_legacy_source(
@@ -1887,8 +2349,21 @@ def test_source_recovery_stops_target_writer_before_starting_source(
     )
     monkeypatch.setattr(
         deployment,
+        "_wait_api_health",
+        lambda _spec, slot: events.append(("api-health", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_wait_worker_health",
+        lambda _spec, slot: events.append(("worker-health", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
         "_wait_health",
         lambda _spec, slot: events.append(("health", slot)),
+    )
+    monkeypatch.setattr(
+        deployment, "_prepare_slot_runtime_directory", lambda _slot: None
     )
     monkeypatch.setattr(
         deployment,
@@ -1912,7 +2387,13 @@ def test_source_recovery_stops_target_writer_before_starting_source(
         ("stop", tuple(reversed(deployment._slot_units("blue")))),
         ("verify", "blue"),
         ("schema", "blue"),
-        ("start", tuple(deployment._slot_units("blue"))),
+        ("start", tuple(deployment._slot_api_units("blue"))),
+        ("api-health", "blue"),
+        (
+            "start",
+            (deployment._unit(deployment.IMAGE_WORKER_SERVICE_NAME, "blue"),),
+        ),
+        ("worker-health", "blue"),
         ("health", "blue"),
         ("routes", "blue"),
         ("state", "blue"),
@@ -1950,8 +2431,21 @@ def test_target_roll_forward_stops_source_writer_then_reverifies_and_rebuilds(
     )
     monkeypatch.setattr(
         deployment,
+        "_wait_api_health",
+        lambda _spec, slot: events.append(("api-health", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_wait_worker_health",
+        lambda _spec, slot: events.append(("worker-health", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
         "_wait_health",
         lambda _spec, slot: events.append(("health", slot)),
+    )
+    monkeypatch.setattr(
+        deployment, "_prepare_slot_runtime_directory", lambda _slot: None
     )
     monkeypatch.setattr(
         deployment,
@@ -1976,11 +2470,180 @@ def test_target_roll_forward_stops_source_writer_then_reverifies_and_rebuilds(
         ("stop", tuple(reversed(deployment._slot_units("blue")))),
         ("verify", "green"),
         ("schema", "green"),
-        ("start", tuple(deployment._slot_units("green"))),
+        ("start", tuple(deployment._slot_api_units("green"))),
+        ("api-health", "green"),
+        (
+            "start",
+            (deployment._unit(deployment.IMAGE_WORKER_SERVICE_NAME, "green"),),
+        ),
+        ("worker-health", "green"),
         ("health", "green"),
         ("routes", "green"),
         ("state", "green"),
         "journal_clear",
+    ]
+
+
+def test_slot_runtime_directory_is_service_group_traversable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    slot_root = tmp_path / "cloud" / "slots"
+    ownership: list[tuple[Path, str, str]] = []
+    monkeypatch.setattr(deployment, "SLOT_ROOT", slot_root)
+    monkeypatch.setattr(deployment, "_fsync_directory", lambda _path: None)
+    monkeypatch.setattr(
+        deployment.shutil,
+        "chown",
+        lambda path, *, user, group: ownership.append((Path(path), user, group)),
+    )
+
+    deployment._prepare_slot_runtime_directory("blue")
+
+    directory = slot_root / "blue"
+    assert directory.is_dir()
+    if os.name != "nt":
+        assert stat.S_IMODE(directory.stat().st_mode) == 0o750
+    assert ownership == [(directory, "root", "ecorex-cloud")]
+
+
+def test_slot_start_is_staged_before_worker_and_rechecks_all_health(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[object] = []
+    monkeypatch.setattr(
+        deployment,
+        "_prepare_slot_runtime_directory",
+        lambda slot: events.append(("prepare", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_systemctl",
+        lambda _spec, verb, units: events.append((verb, tuple(units))),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_wait_api_health",
+        lambda _spec, slot: events.append(("api-health", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_wait_worker_health",
+        lambda _spec, slot: events.append(("worker-health", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_wait_health",
+        lambda _spec, slot: events.append(("final-health", slot)),
+    )
+
+    deployment._start_target_services(
+        _spec(tmp_path),
+        _slot_state("ecorex-cloud-v1.0.0-target", "blue"),
+    )
+
+    assert events == [
+        ("prepare", "blue"),
+        ("start", tuple(deployment._slot_api_units("blue"))),
+        ("api-health", "blue"),
+        (
+            "start",
+            (deployment._unit(deployment.IMAGE_WORKER_SERVICE_NAME, "blue"),),
+        ),
+        ("worker-health", "blue"),
+        ("final-health", "blue"),
+    ]
+
+
+def test_api_health_failure_stops_all_slot_units_without_starting_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[object] = []
+    monkeypatch.setattr(
+        deployment, "_prepare_slot_runtime_directory", lambda _slot: None
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_systemctl",
+        lambda _spec, verb, units: events.append((verb, tuple(units))),
+    )
+
+    def unhealthy(_spec, slot):
+        events.append(("api-health", slot))
+        raise deployment.CloudDeployError("service_health_failed")
+
+    monkeypatch.setattr(deployment, "_wait_api_health", unhealthy)
+    monkeypatch.setattr(
+        deployment,
+        "_wait_worker_health",
+        lambda *_args: pytest.fail("worker phase started after API health failure"),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_wait_health",
+        lambda *_args: pytest.fail("final phase started after API health failure"),
+    )
+    with pytest.raises(deployment.CloudDeployError, match="service_health_failed"):
+        deployment._start_target_services(
+            _spec(tmp_path),
+            _slot_state("ecorex-cloud-v1.0.0-target", "blue"),
+        )
+
+    units = deployment._slot_units("blue")
+    assert events == [
+        ("start", tuple(deployment._slot_api_units("blue"))),
+        ("api-health", "blue"),
+        ("stop", tuple(reversed(units))),
+    ]
+
+
+@pytest.mark.parametrize("failure_stage", ("worker", "final"))
+def test_worker_or_final_health_failure_stops_all_slot_units_in_reverse_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_stage: str
+) -> None:
+    events: list[object] = []
+    monkeypatch.setattr(
+        deployment, "_prepare_slot_runtime_directory", lambda _slot: None
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_systemctl",
+        lambda _spec, verb, units: events.append((verb, tuple(units))),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_wait_api_health",
+        lambda _spec, slot: events.append(("api-health", slot)),
+    )
+
+    def worker_health(_spec, slot):
+        events.append(("worker-health", slot))
+        if failure_stage == "worker":
+            raise deployment.CloudDeployError("service_health_failed")
+
+    def final_health(_spec, slot):
+        events.append(("final-health", slot))
+        if failure_stage == "final":
+            raise deployment.CloudDeployError("service_health_failed")
+
+    monkeypatch.setattr(deployment, "_wait_worker_health", worker_health)
+    monkeypatch.setattr(deployment, "_wait_health", final_health)
+    with pytest.raises(deployment.CloudDeployError, match="service_health_failed"):
+        deployment._start_target_services(
+            _spec(tmp_path),
+            _slot_state("ecorex-cloud-v1.0.0-target", "green"),
+        )
+
+    units = deployment._slot_units("green")
+    assert events == [
+        ("start", tuple(deployment._slot_api_units("green"))),
+        ("api-health", "green"),
+        (
+            "start",
+            (deployment._unit(deployment.IMAGE_WORKER_SERVICE_NAME, "green"),),
+        ),
+        ("worker-health", "green"),
+        *((("final-health", "green"),) if failure_stage == "final" else ()),
+        ("stop", tuple(reversed(units))),
     ]
 
 
@@ -2164,7 +2827,7 @@ def test_post_route_commit_failures_roll_forward_and_return_success(
     monkeypatch.setattr(deployment, "_verify_nginx_wiring", lambda *_args: None)
     monkeypatch.setattr(deployment, "_schema_gate", lambda *_args: None)
     monkeypatch.setattr(deployment, "_systemctl", lambda *_args: None)
-    monkeypatch.setattr(deployment, "_wait_health", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_start_target_services", lambda *_args: None)
     monkeypatch.setattr(deployment, "_switch_nginx", lambda *_args: None)
     monkeypatch.setattr(
         deployment,

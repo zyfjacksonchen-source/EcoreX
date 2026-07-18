@@ -25,6 +25,7 @@ def _signer_for_adapter(
     source: str,
     *,
     timeout_seconds: float = 3,
+    extra_environment: dict[str, str] | None = None,
 ) -> tuple[DigestPinnedExternalSigner, bytes]:
     private = Ed25519PrivateKey.generate()
     private_raw = private.private_bytes(
@@ -49,6 +50,7 @@ def _signer_for_adapter(
         environment={
             **os.environ,
             "ACTIONS_ID_TOKEN_REQUEST_TOKEN": base64.b64encode(private_raw).decode(),
+            **(extra_environment or {}),
         },
         timeout_seconds=timeout_seconds,
     )
@@ -76,6 +78,43 @@ sys.stdout.write(base64.b64encode(signature).decode("ascii") + "\\n")
 
     Ed25519PublicKey.from_public_bytes(public).verify(signature, payload)
     assert signer.public_key_bytes == public
+    assert len(signer.receipts) == 1
+
+
+def test_external_signer_forwards_only_the_ssh_credential_path_selector(
+    tmp_path: Path,
+) -> None:
+    credential = tmp_path / "server.txt"
+    credential.write_text("non-secret-fixture-path", encoding="utf-8")
+    signer, public = _signer_for_adapter(
+        tmp_path,
+        """\
+import base64
+import os
+import sys
+from pathlib import Path
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+payload = sys.stdin.buffer.read()
+credential = Path(os.environ["ECOREX_SSH_SIGNER_CREDENTIAL_FILE"])
+if credential.read_text(encoding="utf-8") != "non-secret-fixture-path":
+    raise RuntimeError
+if "ECOREX_UNREVIEWED_SECRET" in os.environ:
+    raise RuntimeError
+seed = base64.b64decode(os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"], validate=True)
+signature = Ed25519PrivateKey.from_private_bytes(seed).sign(payload)
+sys.stdout.write(base64.b64encode(signature).decode("ascii") + "\\n")
+""",
+        extra_environment={
+            "ECOREX_SSH_SIGNER_CREDENTIAL_FILE": str(credential),
+            "ECOREX_UNREVIEWED_SECRET": "must-not-cross",
+        },
+    )
+
+    payload = b"publication signer environment payload"
+    signature = signer.sign(payload)
+
+    Ed25519PublicKey.from_public_bytes(public).verify(signature, payload)
     assert len(signer.receipts) == 1
 
 

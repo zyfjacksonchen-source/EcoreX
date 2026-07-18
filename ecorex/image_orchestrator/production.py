@@ -1180,14 +1180,20 @@ class PostgresS3ManagedImageProvider:
         config: ImageProductionConfig,
         secrets: ImageSecretProvider,
     ) -> ImageProductionReport:
+        """Migrate only durable prerequisites, before dynamic models exist.
+
+        First activation imports legacy administrator model configuration only
+        after all writer schemas are migrated.  Resolving or probing that
+        dynamic configuration here would turn a valid first migration into a
+        chicken-and-egg failure.  ``check`` and process composition retain the
+        full provider/model readiness gate after the import is committed.
+        """
+
         self._static_dependencies(config, secrets)
         receipt = PostgresImageSchemaManager(config.postgres_dsn).migrate()
-        storage, _content_store, provider, _resolver = self._external_dependencies(
-            config, secrets
-        )
+        storage, _content_store = self._content_storage(config)
         try:
             storage.validate_controls(write_probe=True)
-            asyncio.run(_probe_and_close_provider(provider))
         finally:
             storage.close()
         return ImageProductionReport(
@@ -1197,7 +1203,7 @@ class PostgresS3ManagedImageProvider:
             receipt,
             True,
             config.content_storage_mode == "s3",
-            True,
+            False,
             True,
         )
 

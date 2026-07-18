@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -99,6 +100,65 @@ func TestManifestSignatureAndSourceBinding(t *testing.T) {
 	}
 }
 
+func TestManifestAllowsSignedDiscoverySourcePrefix(t *testing.T) {
+	value, discovery, keys := signedManifest(t)
+	discovery.Manifest.Sources = discovery.Manifest.Sources[:1]
+	if err := validateManifest(value, discovery, keys); err != nil {
+		t.Fatalf("signed one-source Stable discovery was rejected: %v", err)
+	}
+	discovery.Manifest.Sources[0].URL = "https://mirror.example/replayed.json"
+	if err := validateManifest(value, discovery, keys); err == nil {
+		t.Fatal("unbound one-source discovery was accepted")
+	}
+}
+
+func TestMinimalEnvironmentPreservesHostArchitectureWithoutSecrets(t *testing.T) {
+	t.Setenv("PROCESSOR_ARCHITECTURE", "AMD64")
+	t.Setenv("PROCESSOR_ARCHITEW6432", "AMD64")
+	t.Setenv("ECOREX_TEST_SECRET", "must-not-cross")
+	observed := map[string]string{}
+	for _, item := range minimalEnvironment() {
+		name, value, ok := strings.Cut(item, "=")
+		if !ok {
+			t.Fatalf("malformed environment entry: %q", item)
+		}
+		observed[strings.ToUpper(name)] = value
+	}
+	if observed["PROCESSOR_ARCHITECTURE"] != "AMD64" ||
+		observed["PROCESSOR_ARCHITEW6432"] != "AMD64" {
+		t.Fatal("minimal environment removed the Windows host architecture")
+	}
+	if _, leaked := observed["ECOREX_TEST_SECRET"]; leaked {
+		t.Fatal("minimal environment leaked a non-allowlisted value")
+	}
+}
+
+func TestRuntimeDataDirectoriesAreProvisionedBeforeFirstHealth(t *testing.T) {
+	root := canonicalTestTempDir(t)
+	if err := ensureRuntimeDataDirectories(root); err != nil {
+		t.Fatalf("Runtime data directories were not provisioned: %v", err)
+	}
+	for _, name := range []string{"state", "workspace"} {
+		path := filepath.Join(root, name)
+		metadata, err := os.Lstat(path)
+		resolved, resolveErr := filepath.EvalSymlinks(path)
+		if err != nil || !metadata.IsDir() || metadata.Mode()&os.ModeSymlink != 0 ||
+			resolveErr != nil || !samePath(path, resolved) {
+			t.Fatalf("Runtime data directory %q is unsafe: %v / %v", name, err, resolveErr)
+		}
+	}
+}
+
+func TestRuntimeDataDirectoryRejectsAFileCollision(t *testing.T) {
+	root := canonicalTestTempDir(t)
+	if err := os.WriteFile(filepath.Join(root, "state"), []byte("collision"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureRuntimeDataDirectories(root); err == nil {
+		t.Fatal("Runtime data directory accepted a file collision")
+	}
+}
+
 func TestResumeDownloadRequiresExactContentRange(t *testing.T) {
 	payload := []byte("0123456789abcdef")
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -134,6 +194,101 @@ func TestResumeDownloadRequiresExactContentRange(t *testing.T) {
 	observed, err := os.ReadFile(destination)
 	if err != nil || !bytes.Equal(observed, payload) {
 		t.Fatalf("resumed bytes mismatch: %v", err)
+	}
+}
+
+func TestArtifactDownloadResumesAcrossSignedSources(t *testing.T) {
+	payload := []byte("0123456789abcdef")
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(payload)
+	item := artifact{
+		ArtifactID:   "core-windows-x64",
+		Platform:     "windows",
+		Architecture: "x64",
+		FileName:     "core.zip",
+		SizeBytes:    int64(len(payload)),
+		SHA256:       hex.EncodeToString(digest[:]),
+	}
+	release := &manifest{
+		ReleaseID:   "release-stable-000000000000000000000001",
+		Version:     "1.0.0",
+		BuildDigest: fmt.Sprintf("%064x", 1),
+		Sources: []source{
+			{SourceID: "mirror", Kind: "github-cn-mirror", Priority: 0, BaseURL: "https://mirror.example/v1"},
+			{SourceID: "github", Kind: "github-release", Priority: 1, BaseURL: "https://github.example/v1"},
+		},
+	}
+	signingPayload := strings.Join([]string{
+		"ecorex-artifact-v1",
+		release.ReleaseID,
+		release.Version,
+		release.BuildDigest,
+		item.ArtifactID,
+		item.Platform,
+		item.Architecture,
+		item.FileName,
+		strconv.FormatInt(item.SizeBytes, 10),
+		item.SHA256,
+		"",
+	}, "\n")
+	item.Signature = signature{
+		Algorithm: "ed25519",
+		KeyID:     "release-key",
+		Value:     base64.StdEncoding.EncodeToString(ed25519.Sign(private, []byte(signingPayload))),
+	}
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		headers := make(http.Header)
+		body := payload
+		status := http.StatusOK
+		contentLength := int64(len(body))
+		if request.URL.Host == "mirror.example" {
+			if request.Header.Get("Range") != "bytes=0-15" {
+				t.Fatalf("initial source was not bounded: %q", request.Header.Get("Range"))
+			}
+			body = payload[:5]
+			contentLength = -1
+			status = http.StatusPartialContent
+			headers.Set("Content-Range", "bytes 0-15/16")
+		} else {
+			if request.Header.Get("Range") != "bytes=5-15" {
+				t.Fatalf("fallback did not resume the verified partial: %q", request.Header.Get("Range"))
+			}
+			body = payload[5:]
+			status = http.StatusPartialContent
+			contentLength = int64(len(body))
+			headers.Set("Content-Range", "bytes 5-15/16")
+		}
+		return &http.Response{
+			StatusCode:    status,
+			Header:        headers,
+			Body:          io.NopCloser(bytes.NewReader(body)),
+			ContentLength: contentLength,
+			Request:       request,
+		}, nil
+	})}
+	destination := filepath.Join(t.TempDir(), item.FileName)
+	if err := downloadArtifact(
+		context.Background(),
+		client,
+		release,
+		item,
+		destination,
+		map[string]ed25519.PublicKey{"release-key": public},
+	); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(installed, payload) {
+		t.Fatal("resumed artifact bytes differ")
+	}
+	if _, err := os.Lstat(destination + ".partial"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("verified partial was not atomically committed")
 	}
 }
 

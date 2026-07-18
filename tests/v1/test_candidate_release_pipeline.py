@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 import pytest
 from jsonschema import Draft202012Validator
 
+from ecorex._version import __version__
 from ecorex.release import (
     DigestPinnedExternalSigner,
     candidate_receipt_signing_payload,
@@ -51,6 +52,7 @@ from ecorex.update import (
 COMMIT = "a" * 40
 RUN_ID = 123456
 STAGER_SHA256 = hashlib.sha256(b"pinned-platform-stager").hexdigest()
+PRODUCT_VERSION = __version__
 
 
 def _sha(path: Path) -> str:
@@ -206,7 +208,7 @@ def _runtime_config(platform: str, architecture: str, public: bytes) -> bytes:
     value = {
         "schema_version": 1,
         "identity": {
-            "version": "1.0.0",
+            "version": PRODUCT_VERSION,
             "platform": platform,
             "architecture": architecture,
         },
@@ -252,11 +254,11 @@ def _runtime_config(platform: str, architecture: str, public: bytes) -> bytes:
                 "pack_id": pack_id,
                 "manifest": (
                     f"capability-packs/{pack_id}/ecorex-capability-pack-{pack_id}-"
-                    f"{platform}-{architecture}-1.0.0.json"
+                    f"{platform}-{architecture}-{PRODUCT_VERSION}.json"
                 ),
                 "artifact": (
                     f"capability-packs/{pack_id}/ecorex-capability-pack-{pack_id}-"
-                    f"{platform}-{architecture}-1.0.0.zip"
+                    f"{platform}-{architecture}-{PRODUCT_VERSION}.zip"
                 ),
             }
             for pack_id in PACK_TOOLS
@@ -536,7 +538,9 @@ def _recipe(root: Path, inputs: list[dict[str, str]]) -> Path:
             {
                 "source_id": "github-cn",
                 "kind": "github-cn-mirror",
-                "base_url": "https://mirror.example/ecorex/v1.0.0/canary",
+                "base_url": (
+                    f"https://mirror.example/ecorex/v{PRODUCT_VERSION}/canary"
+                ),
             },
             {
                 "source_id": "github",
@@ -546,7 +550,7 @@ def _recipe(root: Path, inputs: list[dict[str, str]]) -> Path:
             {
                 "source_id": "cdn",
                 "kind": "ecorex-cdn",
-                "base_url": "https://cdn.example/ecorex/v1.0.0",
+                "base_url": f"https://cdn.example/ecorex/v{PRODUCT_VERSION}",
             },
         ],
         "inputs": inputs,
@@ -651,10 +655,10 @@ def test_candidate_builds_three_bootstraps_runtime_archives_and_eighteen_real_pa
         f"/canary/{built.manifest.release_id}"
     )
     assert built.manifest.sources[1].base_url.endswith(
-        f"/v1.0.0-canary-{built.manifest.release_id.rsplit('-', 1)[1]}"
+        f"/v{PRODUCT_VERSION}-canary-{built.manifest.release_id.rsplit('-', 1)[1]}"
     )
     assert built.manifest.sources[2].base_url.endswith(
-        f"/v1.0.0/{built.manifest.release_id}"
+        f"/v{PRODUCT_VERSION}/{built.manifest.release_id}"
     )
     verifier = Ed25519SignatureVerifier({signer.key_id: public})
     verify_manifest_signature(built.manifest, verifier)
@@ -1358,8 +1362,12 @@ def test_recipe_assembler_uses_release_scoped_channel_roots(tmp_path: Path) -> N
     output = tmp_path / "recipe.json"
     environment = {
         **os.environ,
-        "ECOREX_RELEASE_MIRROR_BASE_URL": "https://mirror.example/ecorex/v1.0.0",
-        "ECOREX_RELEASE_CDN_BASE_URL": "https://cdn.example/ecorex/v1.0.0",
+        "ECOREX_RELEASE_MIRROR_BASE_URL": (
+            f"https://mirror.example/ecorex/v{PRODUCT_VERSION}"
+        ),
+        "ECOREX_RELEASE_CDN_BASE_URL": (
+            f"https://cdn.example/ecorex/v{PRODUCT_VERSION}"
+        ),
     }
     result = subprocess.run(
         [
@@ -1383,9 +1391,11 @@ def test_recipe_assembler_uses_release_scoped_channel_roots(tmp_path: Path) -> N
     assert result.returncode == 0, result.stderr.decode(errors="replace")
     recipe = json.loads(output.read_text())
     assert len(recipe["inputs"]) == 24
-    assert recipe["sources"][0]["base_url"].endswith("/v1.0.0/canary")
+    assert recipe["sources"][0]["base_url"].endswith(
+        f"/v{PRODUCT_VERSION}/canary"
+    )
     assert recipe["sources"][1]["base_url"].endswith("/releases/download")
-    assert recipe["sources"][2]["base_url"].endswith("/v1.0.0")
+    assert recipe["sources"][2]["base_url"].endswith(f"/v{PRODUCT_VERSION}")
 
 
 def test_recipe_assembler_preserves_github_cn_proxy_namespace(tmp_path: Path) -> None:
@@ -1430,7 +1440,8 @@ def test_recipe_assembler_preserves_github_cn_proxy_namespace(tmp_path: Path) ->
             **os.environ,
             "ECOREX_RELEASE_MIRROR_BASE_URL": proxy_root,
             "ECOREX_RELEASE_CDN_BASE_URL": (
-                "https://dl.ecoremedia.net/ecorex-agent/releases/v1.0.0"
+                "https://dl.ecoremedia.net/ecorex-agent/releases/"
+                f"v{PRODUCT_VERSION}"
             ),
         },
     )
@@ -1438,4 +1449,4 @@ def test_recipe_assembler_preserves_github_cn_proxy_namespace(tmp_path: Path) ->
     recipe = json.loads(output.read_text())
     assert recipe["sources"][0]["base_url"] == proxy_root
     assert recipe["sources"][1]["base_url"].endswith("/releases/download")
-    assert recipe["sources"][2]["base_url"].endswith("/v1.0.0")
+    assert recipe["sources"][2]["base_url"].endswith(f"/v{PRODUCT_VERSION}")

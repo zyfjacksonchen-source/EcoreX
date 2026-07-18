@@ -41,6 +41,9 @@ CA_BUNDLE_PATH = Path("/var/lib/ecorex/config/provider-bridge-ca.pem")
 SERVER_CERT_PATH = TLS_ROOT / "provider-bridge.crt"
 SERVER_KEY_PATH = TLS_ROOT / "provider-bridge.key"
 LEGACY_HTTP_WAIVER = "ecorex-v1-legacy-provider-http-upstream-waiver"
+LEGACY_PUBLIC_HTTP_WAIVER = (
+    "ecorex-v1-legacy-provider-public-http-upstream-waiver"
+)
 
 _HOST = re.compile(r"^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$|^[a-z0-9]$")
 _BASE_PATH = re.compile(r"^/(?:[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*)?$")
@@ -90,9 +93,18 @@ class ProviderUpstream:
             or (
                 self.scheme == "http"
                 and (
-                    self.legacy_http_waiver != LEGACY_HTTP_WAIVER
-                    or parsed_ip is None
-                    or not _is_safe_plaintext_endpoint(parsed_ip)
+                    parsed_ip is None
+                    or (
+                        self.legacy_http_waiver == LEGACY_HTTP_WAIVER
+                        and not _is_safe_plaintext_endpoint(parsed_ip)
+                    )
+                    or (
+                        self.legacy_http_waiver
+                        == LEGACY_PUBLIC_HTTP_WAIVER
+                        and not parsed_ip.is_global
+                    )
+                    or self.legacy_http_waiver
+                    not in {LEGACY_HTTP_WAIVER, LEGACY_PUBLIC_HTTP_WAIVER}
                 )
             )
             or (
@@ -238,6 +250,7 @@ __all__ = [
     "BRIDGE_ROUTES",
     "CA_BUNDLE_PATH",
     "LEGACY_HTTP_WAIVER",
+    "LEGACY_PUBLIC_HTTP_WAIVER",
     "ProviderBridgeConfigurationError",
     "ProviderBridgeSpec",
     "ProviderUpstream",

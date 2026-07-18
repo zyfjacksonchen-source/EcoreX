@@ -93,7 +93,7 @@ location ~ ^/ecorex-agent/(?<ecorex_public_asset>(?:site|styles)\.[0-9a-f]{12}\.
 
 # Immutable signed Candidate bytes. Channel is internal replica state derived
 # from the signed release_id and is never exposed as a public URL segment.
-location ~ ^/ecorex-agent/releases/(?<ecorex_release_namespace>v1\.0\.0)/(?<ecorex_release_id>release-(?<ecorex_release_channel>stable|canary)-[0-9a-f]{24})/(?<ecorex_release_asset>[A-Za-z0-9][A-Za-z0-9._-]{0,179})$ {
+location ~ "^/ecorex-agent/releases/(?<ecorex_release_namespace>v1\.0\.0)/(?<ecorex_release_id>release-(?<ecorex_release_channel>stable|canary)-[0-9a-f]{24})/(?<ecorex_release_asset>[A-Za-z0-9][A-Za-z0-9._-]{0,179})$" {
     alias /srv/ecorex-agent-download/v1-artifacts/$ecorex_release_namespace/$ecorex_release_channel/$ecorex_release_id/$ecorex_release_asset;
     autoindex off;
     sendfile on;

@@ -12,7 +12,7 @@ SupplementaryGroups=ecorex-storage
 UMask=0077
 EnvironmentFile=/etc/ecorex/cloud/config/image.env
 EnvironmentFile=/var/lib/ecorex/secrets/image.secret.env
-EnvironmentFile=/etc/ecorex/cloud/slots/%i/image.env
+EnvironmentFile=/etc/ecorex/cloud/slots/%i/image-worker.env
 ExecStart=/opt/ecorex/cloud/slots/%i/current/venv/bin/python3.11 -m ecorex.image_orchestrator.production worker
 Restart=on-failure
 RestartSec=3s
@@ -29,7 +29,8 @@ ProtectControlGroups=true
 ProtectClock=true
 ProtectHostname=true
 LockPersonality=true
-RestrictSUIDSGID=true
+# The attested CAS creates setgid ecorex-storage directories so API and
+# worker processes share objects without broadening permissions.
 RestrictRealtime=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallArchitectures=native

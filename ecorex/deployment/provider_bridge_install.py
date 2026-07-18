@@ -13,6 +13,7 @@ import ssl
 import stat
 import subprocess
 import tempfile
+import time
 from typing import Callable
 
 try:
@@ -508,6 +509,8 @@ def install_provider_bridge(
     hosts_path: Path = PROVIDER_BRIDGE_HOSTS_PATH,
     run_command: Callable[[tuple[str, ...], str], None] = _run,
     probe: Callable[[ValidatedProviderBridge], None] = probe_provider_bridge,
+    sleeper: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
 ) -> None:
     """Install both managed files or restore their exact previous bytes."""
 
@@ -533,7 +536,24 @@ def install_provider_bridge(
                 ("/usr/bin/systemctl", "reload", "nginx.service"),
                 "provider_bridge_nginx_reload_failed",
             )
-        probe(materials)
+            # A graceful Nginx reload can leave an old worker accepting the
+            # loopback socket for a short interval.  Retry only the bounded
+            # post-reload readiness probe; certificate or route failures still
+            # fail closed and restore the exact prior files.
+            deadline = clock() + 12.0
+            while True:
+                try:
+                    probe(materials)
+                    break
+                except ProviderBridgeInstallError as error:
+                    if (
+                        error.code != "provider_bridge_loopback_probe_failed"
+                        or clock() >= deadline
+                    ):
+                        raise
+                    sleeper(0.25)
+        else:
+            probe(materials)
     except (ProviderBridgeInstallError, OSError) as error:
         try:
             if old_nginx is None:

@@ -568,6 +568,32 @@ def test_wrong_output_dimensions_and_transport_secrets_fail_closed() -> None:
     asyncio.run(secret_transport_error())
 
 
+def test_bounded_native_square_is_normalized_to_the_requested_size() -> None:
+    native = _image_bytes("RGB", (1254, 1254), (12, 34, 56), format="PNG")
+
+    async def scenario() -> None:
+        response = httpx.Response(
+            200,
+            json={"data": [{"b64_json": base64.b64encode(native).decode()}]},
+        )
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda _request: response)
+        )
+        provider = _provider(client)
+        result = await provider.submit(
+            _job(), idempotency_key="provider-idempotency-0001"
+        )
+        assert result.payload is not None
+        assert result.payload != native
+        with Image.open(BytesIO(result.payload)) as normalized:
+            assert normalized.format == "PNG"
+            assert normalized.size == (1024, 1024)
+            normalized.verify()
+        await client.aclose()
+
+    asyncio.run(scenario())
+
+
 def test_retry_after_http_date_is_bounded() -> None:
     now = datetime(2026, 7, 16, tzinfo=UTC)
     assert OpenAICompatibleImageProvider._retry_after(

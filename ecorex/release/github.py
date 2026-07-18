@@ -424,8 +424,44 @@ class GitHubReleasePublisher:
             f"{quote(self.repository, safe='')}/releases/download/"
             f"{quote(release.tag_name, safe='')}/{quote(receipt.name, safe='')}"
         )
-        if receipt.browser_download_url != expected:
-            raise GitHubPublicationError("github_asset_url_identity_conflict")
+        if receipt.browser_download_url == expected:
+            return
+
+        # GitHub deliberately exposes an ``untagged-<opaque>`` download URL
+        # while a release is still a draft.  The final tag URL does not exist
+        # until the draft is published, so refusing that URL makes every real
+        # draft-only upload fail after the first asset.  Keep the exception
+        # deliberately narrow: it is accepted only for a draft, on this exact
+        # repository, with the exact asset basename.  Callers must re-read the
+        # assets after publication; a published release only accepts the
+        # canonical tag URL above.
+        if release.draft and self._is_github_draft_asset_url(
+            receipt.browser_download_url,
+            receipt.name,
+        ):
+            return
+        raise GitHubPublicationError("github_asset_url_identity_conflict")
+
+    def _is_github_draft_asset_url(self, url: str, asset_name: str) -> bool:
+        parsed = urlsplit(url)
+        expected_prefix = (
+            f"/{quote(self.owner, safe='')}/{quote(self.repository, safe='')}"
+            "/releases/download/untagged-"
+        )
+        expected_suffix = f"/{quote(asset_name, safe='')}"
+        opaque = parsed.path.removeprefix(expected_prefix).removesuffix(expected_suffix)
+        return (
+            parsed.scheme == "https"
+            and parsed.hostname == "github.com"
+            and parsed.port in {None, 443}
+            and not parsed.username
+            and not parsed.password
+            and not parsed.query
+            and not parsed.fragment
+            and parsed.path.startswith(expected_prefix)
+            and parsed.path.endswith(expected_suffix)
+            and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{5,127}", opaque) is not None
+        )
 
     def _asset_from_json(self, value: Any) -> GitHubAssetReceipt:
         if not isinstance(value, Mapping):

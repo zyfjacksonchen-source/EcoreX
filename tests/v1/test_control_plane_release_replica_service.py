@@ -18,6 +18,7 @@ from fastapi import FastAPI
 import httpx
 import pytest
 
+from ecorex._version import __version__
 from ecorex.control_plane.release_replica import (
     CDNReleaseReplicaService,
     CloudReleaseReplicaAuditSink,
@@ -50,8 +51,8 @@ from ecorex.update import (
 TOKEN_CURRENT = "c" * 48
 TOKEN_NEXT = "n" * 48
 PUBLIC_ROOT = "https://dl.ecoremedia.net/ecorex-agent/releases"
-RELEASE_NAMESPACE = "v1.0.0"
-PRODUCT_VERSION = "1.0.0"
+PRODUCT_VERSION = __version__
+RELEASE_NAMESPACE = f"v{PRODUCT_VERSION}"
 
 
 @pytest.fixture
@@ -655,8 +656,16 @@ def test_production_nginx_and_systemd_keep_replica_boundary_narrow() -> None:
     ).read_text(encoding="utf-8")
     deployer = Path("ecorex/deployment/cloud_sidecar.py").read_text(encoding="utf-8")
     assert "location /ecorex-agent/releases/" in routes
-    assert "(?<release_namespace>v" in routes
+    assert 'location ~ "^/ecorex-agent/releases/(?<release_namespace>v' in routes
     assert "proxy_request_buffering off" in routes
+    legacy_gateway_route = routes.split(
+        "location = /ecorex-agent/api/v1/responses {", 1
+    )[1].split("}\n", 1)[0]
+    assert "rewrite ^ /api/v1/model/stream break;" in legacy_gateway_route
+    assert "proxy_pass $ecorex_gateway;" in legacy_gateway_route
+    assert "proxy_request_buffering off;" in legacy_gateway_route
+    assert "proxy_buffering off;" in legacy_gateway_route
+    assert "X-Accel-Buffering no always;" in legacy_gateway_route
     assert routes.count("location ^~ /api/v1/bootstrap-index/ {") == 1
     bootstrap_route = routes.split(
         "location ^~ /api/v1/bootstrap-index/ {", 1
@@ -673,8 +682,14 @@ def test_production_nginx_and_systemd_keep_replica_boundary_narrow() -> None:
         "ECOREX_CP_RELEASE_REPLICA_STORAGE_ROOT="
         "/srv/ecorex-agent-download/v1-artifacts"
     ) in public_environment
-    assert "ECOREX_CP_RELEASE_REPLICA_NAMESPACE=v1.0.0" in public_environment
-    assert "ECOREX_CP_RELEASE_REPLICA_PRODUCT_VERSION=1.0.0" in public_environment
+    assert (
+        f"ECOREX_CP_RELEASE_REPLICA_NAMESPACE={RELEASE_NAMESPACE}"
+        in public_environment
+    )
+    assert (
+        f"ECOREX_CP_RELEASE_REPLICA_PRODUCT_VERSION={PRODUCT_VERSION}"
+        in public_environment
+    )
     assert "ECOREX_CP_RELEASE_REPLICA_TOKEN_CURRENT=" in secret_environment
     assert "ECOREX_CP_RELEASE_REPLICA_TOKEN_NEXT=" in secret_environment
     assert 'shutil.chown(directory, user="ecorex-cloud", group="ecorex-storage")' in deployer
@@ -720,11 +735,11 @@ def test_replica_audit_sink_is_durable_redacted_and_idempotent(tmp_path: Path) -
 @pytest.mark.parametrize(
     "namespace,version",
     [
-        ("1.0.0", "1.0.0"),
-        ("v01.0.0", "01.0.0"),
-        ("v1.0.1", "1.0.0"),
-        ("v1.0.0", "1.0.1"),
-        ("v1.0.0/../v1.0.1", "1.0.0"),
+        (PRODUCT_VERSION, PRODUCT_VERSION),
+        (f"v0{PRODUCT_VERSION}", f"0{PRODUCT_VERSION}"),
+        ("v1.0.0", PRODUCT_VERSION),
+        (RELEASE_NAMESPACE, "1.0.0"),
+        (f"{RELEASE_NAMESPACE}/../v9.9.9", PRODUCT_VERSION),
     ],
 )
 def test_service_rejects_namespace_and_product_version_drift(
@@ -765,8 +780,8 @@ def test_cloud_deployer_prepares_only_configured_namespace(
                 f"ECOREX_CP_RELEASE_REPLICA_STORAGE_ROOT={root}",
                 "ECOREX_CP_RELEASE_REPLICA_PUBLIC_ROOT="
                 "https://dl.ecoremedia.net/ecorex-agent/releases",
-                "ECOREX_CP_RELEASE_REPLICA_NAMESPACE=v1.0.0",
-                "ECOREX_CP_RELEASE_REPLICA_PRODUCT_VERSION=1.0.0",
+                f"ECOREX_CP_RELEASE_REPLICA_NAMESPACE={RELEASE_NAMESPACE}",
+                f"ECOREX_CP_RELEASE_REPLICA_PRODUCT_VERSION={PRODUCT_VERSION}",
             )
         )
         + "\n",
@@ -778,15 +793,15 @@ def test_cloud_deployer_prepares_only_configured_namespace(
     synced: list[Path] = []
     monkeypatch.setattr(cloud_deployment, "_fsync_directory", synced.append)
     cloud_deployment._prepare_release_replica_storage()
-    assert (root / "v1.0.0" / "stable").is_dir()
-    assert (root / "v1.0.0" / "canary").is_dir()
-    assert synced == [root / "v1.0.0", root]
-    assert not (root / "v1.0.1").exists()
+    assert (root / RELEASE_NAMESPACE / "stable").is_dir()
+    assert (root / RELEASE_NAMESPACE / "canary").is_dir()
+    assert synced == [root / RELEASE_NAMESPACE, root]
+    assert not (root / "v9.9.9").exists()
 
     environment_path.write_text(
         environment_path.read_text(encoding="utf-8").replace(
-            "ECOREX_CP_RELEASE_REPLICA_NAMESPACE=v1.0.0",
-            "ECOREX_CP_RELEASE_REPLICA_NAMESPACE=v1.0.1",
+            f"ECOREX_CP_RELEASE_REPLICA_NAMESPACE={RELEASE_NAMESPACE}",
+            "ECOREX_CP_RELEASE_REPLICA_NAMESPACE=v9.9.9",
         ),
         encoding="utf-8",
     )

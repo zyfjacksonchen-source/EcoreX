@@ -161,8 +161,18 @@ CONTROL_PLANE_ADMIN_ROUTE_CONTRACT = {
 
 SLOTS = ("blue", "green")
 PORTS = {
-    "blue": {"control_plane": 18771, "gateway": 18772, "image": 18773},
-    "green": {"control_plane": 18871, "gateway": 18872, "image": 18873},
+    "blue": {
+        "control_plane": 18771,
+        "gateway": 18772,
+        "image": 18773,
+        "image_worker": 18774,
+    },
+    "green": {
+        "control_plane": 18871,
+        "gateway": 18872,
+        "image": 18873,
+        "image_worker": 18874,
+    },
 }
 SERVICE_NAMES = (
     "ecorex-control-plane",
@@ -170,6 +180,8 @@ SERVICE_NAMES = (
     "ecorex-image-api",
     "ecorex-image-worker",
 )
+API_SERVICE_NAMES = SERVICE_NAMES[:-1]
+IMAGE_WORKER_SERVICE_NAME = SERVICE_NAMES[-1]
 LEGACY_SERVICE_NAMES = (
     "ecorex-admin-api.service",
     "ecorex-usage-panel-api.service",
@@ -179,6 +191,7 @@ ENV_NAMES = {
     "control-plane": ("control-plane.env", "control-plane.secret.env"),
     "gateway": ("gateway.env", "gateway.secret.env"),
     "image": ("image.env", "image.secret.env"),
+    "image-worker": ("image.env", "image.secret.env"),
 }
 SAFE_RELEASE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{5,127}\Z")
 SAFE_ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{0,127}\Z")
@@ -1252,20 +1265,85 @@ def _atomic_symlink(target: Path, link: Path) -> None:
     os.replace(temporary, link)
 
 
+_RELEASE_DIRECTORY_MODE = 0o555
+_RECOVERABLE_RELEASE_DIRECTORY_MODES = frozenset(
+    {_RELEASE_DIRECTORY_MODE, 0o700, 0o755}
+)
+
+
+def _release_directory_identity(path: Path) -> tuple[int, int]:
+    try:
+        metadata = path.lstat()
+        resolved = path.resolve(strict=True)
+    except OSError:
+        raise CloudDeployError("release_directory_invalid") from None
+    if (
+        path.is_symlink()
+        or not stat.S_ISDIR(metadata.st_mode)
+        or resolved != path
+        or metadata.st_uid != 0
+        or metadata.st_gid != 0
+    ):
+        raise CloudDeployError("release_directory_identity_invalid")
+    if (
+        stat.S_IMODE(metadata.st_mode)
+        not in _RECOVERABLE_RELEASE_DIRECTORY_MODES
+    ):
+        raise CloudDeployError("release_directory_mode_invalid")
+    return metadata.st_dev, metadata.st_ino
+
+
+def _seal_release_directory(path: Path, identity: tuple[int, int]) -> None:
+    try:
+        metadata = path.lstat()
+        if (
+            path.is_symlink()
+            or not stat.S_ISDIR(metadata.st_mode)
+            or (metadata.st_dev, metadata.st_ino) != identity
+            or metadata.st_uid != 0
+            or metadata.st_gid != 0
+            or stat.S_IMODE(metadata.st_mode)
+            not in _RECOVERABLE_RELEASE_DIRECTORY_MODES
+        ):
+            raise OSError
+        if stat.S_IMODE(metadata.st_mode) != _RELEASE_DIRECTORY_MODE:
+            path.chmod(_RELEASE_DIRECTORY_MODE)
+        sealed = path.lstat()
+        if (
+            path.is_symlink()
+            or not stat.S_ISDIR(sealed.st_mode)
+            or (sealed.st_dev, sealed.st_ino) != identity
+            or sealed.st_uid != 0
+            or sealed.st_gid != 0
+            or stat.S_IMODE(sealed.st_mode) != _RELEASE_DIRECTORY_MODE
+        ):
+            raise OSError
+    except OSError:
+        raise CloudDeployError("release_directory_seal_failed") from None
+
+
 def _install_release(spec: CloudDeploymentSpec, manifest: Mapping[str, Any]) -> Path:
+    del manifest
     destination = RELEASE_ROOT / spec.release_id
-    if destination.exists():
+    if destination.exists() or destination.is_symlink():
+        identity = _release_directory_identity(destination)
         staged_spec = dataclasses.replace(spec, artifact_root=destination)
         _validate_artifact(staged_spec)
+        _seal_release_directory(destination, identity)
         return destination
     temporary = RELEASE_ROOT / f".{spec.release_id}.staging-{os.getpid()}"
-    if temporary.exists():
+    if temporary.exists() or temporary.is_symlink():
         raise CloudDeployError("release_staging_collision")
     RELEASE_ROOT.mkdir(parents=True, exist_ok=True, mode=0o755)
     try:
         shutil.copytree(spec.artifact_root, temporary, symlinks=False)
+        identity = _release_directory_identity(temporary)
         staged_spec = dataclasses.replace(spec, artifact_root=temporary)
         _validate_artifact(staged_spec)
+        _seal_release_directory(temporary, identity)
+        # The sealed, fully verified inode is published by one atomic rename.
+        # Do not introduce a fallible post-publication step that could leave a
+        # new release visible without a completed install result.
         os.replace(temporary, destination)
     except CloudDeployError:
         shutil.rmtree(temporary, ignore_errors=True)
@@ -2047,6 +2125,7 @@ def _verify_nginx_wiring(spec: CloudDeploymentSpec) -> None:
 
 
 def _write_slot_environment(slot: str, release: Path) -> None:
+    _prepare_slot_runtime_directory(slot)
     ports = PORTS[slot]
     values = {
         "control-plane": {
@@ -2063,6 +2142,11 @@ def _write_slot_environment(slot: str, release: Path) -> None:
             "ECOREX_IMAGE_BIND_PORT": str(ports["image"]),
             "ECOREX_IMAGE_INSTANCE_ID": f"ecorex-image-{slot}",
         },
+        "image-worker": {
+            "ECOREX_IMAGE_BIND_HOST": "127.0.0.1",
+            "ECOREX_IMAGE_BIND_PORT": str(ports["image_worker"]),
+            "ECOREX_IMAGE_INSTANCE_ID": f"ecorex-image-worker-{slot}",
+        },
     }
     for service, environment in values.items():
         payload = "".join(f"{name}={value}\n" for name, value in environment.items())
@@ -2071,6 +2155,38 @@ def _write_slot_environment(slot: str, release: Path) -> None:
             payload.encode("ascii"),
         )
     _atomic_symlink(release, SLOT_ROOT / slot / "current")
+
+
+def _prepare_slot_runtime_directory(slot: str) -> None:
+    """Make the fixed slot traversable only by root and the service group."""
+
+    if slot not in SLOTS:
+        raise CloudDeployError("slot_runtime_directory_invalid")
+    directory = SLOT_ROOT / slot
+    try:
+        SLOT_ROOT.mkdir(parents=True, exist_ok=True, mode=0o755)
+        root_metadata = SLOT_ROOT.lstat()
+        if (
+            stat.S_ISLNK(root_metadata.st_mode)
+            or not stat.S_ISDIR(root_metadata.st_mode)
+            or SLOT_ROOT.resolve(strict=True) != SLOT_ROOT
+        ):
+            raise OSError
+        directory.mkdir(mode=0o750, exist_ok=True)
+        metadata = directory.lstat()
+        if (
+            stat.S_ISLNK(metadata.st_mode)
+            or not stat.S_ISDIR(metadata.st_mode)
+            or directory.resolve(strict=True) != directory
+            or metadata.st_dev != root_metadata.st_dev
+        ):
+            raise OSError
+        shutil.chown(directory, user="root", group="ecorex-cloud")
+        os.chmod(directory, 0o750)
+        _fsync_directory(directory)
+        _fsync_directory(SLOT_ROOT)
+    except OSError:
+        raise CloudDeployError("slot_runtime_directory_invalid") from None
 
 
 _SERVICE_MODULES = {
@@ -2130,6 +2246,14 @@ def _run_service_command(
 
 
 def _schema_gate(release: Path, slot: str) -> None:
+    """Apply idempotent storage migrations before legacy model import.
+
+    The image provider's dynamic model configuration is authoritative in the
+    Control Plane.  On a first v0.2.9.2 migration that configuration does not
+    exist until the legacy Admin import is committed, so provider readiness is
+    deliberately checked in the post-import contract gate below.
+    """
+
     for service in _SERVICE_MODULES:
         environment = _service_environment(service, slot)
         _run_service_command(
@@ -2138,6 +2262,13 @@ def _schema_gate(release: Path, slot: str) -> None:
             environment=environment,
             timeout=600,
         )
+
+
+def _production_contract_gate(release: Path, slot: str) -> None:
+    """Validate all live provider/storage contracts after model import."""
+
+    for service in _SERVICE_MODULES:
+        environment = _service_environment(service, slot)
         # These checks intentionally execute the real S3 control/write/read/
         # delete probes.  MinIO is never accepted on API-compatibility faith.
         _run_service_command(
@@ -2149,18 +2280,18 @@ def _schema_gate(release: Path, slot: str) -> None:
 
 
 _RECOVERY_SCHEMA_SERVICES = (
-    ("control-plane", "control-plane"),
-    ("gateway", "gateway"),
-    ("image-api", "image"),
-    ("image-worker", "image"),
+    ("control-plane", "control-plane", "control-plane"),
+    ("gateway", "gateway", "gateway"),
+    ("image-api", "image", "image"),
+    ("image-worker", "image", "image-worker"),
 )
 
 
 def _recovery_schema_check(
     release: Path, slot: str, *, source: bool
 ) -> None:
-    for service_name, runtime_service in _RECOVERY_SCHEMA_SERVICES:
-        environment = _service_environment(runtime_service, slot)
+    for service_name, runtime_service, environment_service in _RECOVERY_SCHEMA_SERVICES:
+        environment = _service_environment(environment_service, slot)
         try:
             _run_service_command(
                 _service_command(release, runtime_service, "schema", "check"),
@@ -2189,6 +2320,10 @@ def _slot_units(slot: str) -> list[str]:
     return [_unit(service, slot) for service in SERVICE_NAMES]
 
 
+def _slot_api_units(slot: str) -> list[str]:
+    return [_unit(service, slot) for service in API_SERVICE_NAMES]
+
+
 def _stop_target_services(
     spec: CloudDeploymentSpec, state: Mapping[str, Any] | None
 ) -> None:
@@ -2208,8 +2343,20 @@ def _start_target_services(
         _systemctl(spec, "is-active", LEGACY_SERVICE_NAMES)
         return
     slot = str(state["active_slot"])
-    _systemctl(spec, "start", _slot_units(slot))
-    _wait_health(spec, slot)
+    _prepare_slot_runtime_directory(slot)
+    units = _slot_units(slot)
+    try:
+        _systemctl(spec, "start", _slot_api_units(slot))
+        _wait_api_health(spec, slot)
+        _systemctl(spec, "start", (_unit(IMAGE_WORKER_SERVICE_NAME, slot),))
+        _wait_worker_health(spec, slot)
+        _wait_health(spec, slot)
+    except CloudDeployError:
+        # Recovery may be re-entered repeatedly. A candidate that cannot
+        # become healthy must never remain in systemd's restart loop while
+        # the still-authoritative source serves traffic.
+        _systemctl(spec, "stop", reversed(units))
+        raise
 
 
 def _stop_transition_writers(
@@ -2328,7 +2475,13 @@ def _commit_legacy_admin_and_identity(
         encryption_key=key,
         environment=environment,
     )
-    payload = _legacy_identity_payload(records)
+    payload = _legacy_identity_payload(
+        _eligible_legacy_identity_records(
+            records,
+            target=target,
+            encryption_key=key,
+        )
+    )
     if payload:
         _run_service_command(
             _service_command(release, "control-plane", "device", "legacy-import"),
@@ -2337,6 +2490,46 @@ def _commit_legacy_admin_and_identity(
             timeout=600,
             input_bytes=payload,
         )
+
+
+def _eligible_legacy_identity_records(
+    records: Sequence[Mapping[str, object]],
+    *,
+    target: Path,
+    encryption_key: bytes,
+) -> tuple[Mapping[str, object], ...]:
+    """Keep legacy credentials only for live, currently usable accounts.
+
+    A v0.2.9.2 credential can outlive its user record.  Importing that mapping
+    would revive a deleted identity or make the all-or-nothing device import
+    fail.  Credentials also cannot produce a valid device lease until an
+    administrator has an active public model catalog.  Preserve neither kind
+    of unusable mapping; users, conversations and project data are migrated
+    independently by their own authoritative paths.
+    """
+
+    try:
+        repository = AdminManagementRepository(target, encryption_key=encryption_key)
+        catalog = repository.active_public_catalog()
+    except Exception:
+        raise CloudDeployError("legacy_identity_account_inventory_failed") from None
+    if not catalog:
+        return ()
+
+    eligible: list[Mapping[str, object]] = []
+    for record in records:
+        account_id = record.get("account_id")
+        if not isinstance(account_id, str) or not account_id:
+            raise CloudDeployError("legacy_identity_record_invalid")
+        try:
+            user = repository.get_user(account_id)
+        except AdminManagementNotFound:
+            continue
+        except Exception:
+            raise CloudDeployError("legacy_identity_account_inventory_failed") from None
+        if user.status == "active":
+            eligible.append(record)
+    return tuple(eligible)
 
 
 def _ensure_configured_deployment_platform_admin(
@@ -2483,18 +2676,13 @@ def _ensure_activation_schema_ready(
             records,
         )
         effective = _advance_transition_journal(effective, "legacy_imported")
+    _production_contract_gate(release, str(target_state["active_slot"]))
     return _advance_transition_journal(effective, "schema_ready")
 
 
-def _wait_health(
-    spec: CloudDeploymentSpec, slot: str, *, timeout_seconds: float = 120.0
+def _wait_endpoints(
+    endpoints: Sequence[str], *, timeout_seconds: float
 ) -> None:
-    ports = PORTS[slot]
-    endpoints = (
-        f"http://127.0.0.1:{ports['control_plane']}/health/ready",
-        f"http://127.0.0.1:{ports['gateway']}/health/ready",
-        f"http://127.0.0.1:{ports['image']}/health/ready",
-    )
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         ready = True
@@ -2507,17 +2695,56 @@ def _wait_health(
             except Exception:
                 ready = False
         if ready:
-            _run(
-                [
-                    str(spec.systemctl_binary),
-                    "is-active",
-                    _unit("ecorex-image-worker", slot),
-                ],
-                code="image_worker_unavailable",
-            )
             return
         time.sleep(1.0)
     raise CloudDeployError("candidate_readiness_failed")
+
+
+def _slot_health_endpoints(slot: str) -> tuple[str, str, str, str]:
+    ports = PORTS[slot]
+    return (
+        f"http://127.0.0.1:{ports['control_plane']}/health/ready",
+        f"http://127.0.0.1:{ports['gateway']}/health/ready",
+        f"http://127.0.0.1:{ports['image']}/health/ready",
+        f"http://127.0.0.1:{ports['image_worker']}/health/ready",
+    )
+
+
+def _wait_api_health(
+    spec: CloudDeploymentSpec, slot: str, *, timeout_seconds: float = 120.0
+) -> None:
+    del spec
+    _wait_endpoints(
+        _slot_health_endpoints(slot)[:3],
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def _wait_worker_health(
+    spec: CloudDeploymentSpec, slot: str, *, timeout_seconds: float = 120.0
+) -> None:
+    del spec
+    _wait_endpoints(
+        _slot_health_endpoints(slot)[3:],
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def _wait_health(
+    spec: CloudDeploymentSpec, slot: str, *, timeout_seconds: float = 120.0
+) -> None:
+    _wait_endpoints(
+        _slot_health_endpoints(slot),
+        timeout_seconds=timeout_seconds,
+    )
+    _run(
+        [
+            str(spec.systemctl_binary),
+            "is-active",
+            _unit(IMAGE_WORKER_SERVICE_NAME, slot),
+        ],
+        code="image_worker_unavailable",
+    )
 
 
 def _nginx_target(slot: str) -> Path:
@@ -2712,18 +2939,29 @@ def _verify_transition_release(
     spec: CloudDeploymentSpec, state: Mapping[str, Any]
 ) -> Path:
     release = _release_for_state(state)
+    identity = _release_directory_identity(release)
     manifest = release / "cloud-release-manifest.json"
     digest = _sha256_file(manifest)
     declared = state.get("artifact_manifest_sha256")
     if declared is not None and declared != digest:
         raise CloudDeployError("artifact_manifest_digest_mismatch")
+    manifest_value = _read_json(manifest, "artifact_manifest_invalid")
+    if not isinstance(manifest_value, Mapping):
+        raise CloudDeployError("artifact_manifest_invalid")
+    source_commit = manifest_value.get("source_commit")
+    if not isinstance(source_commit, str) or re.fullmatch(
+        r"[0-9a-f]{40}", source_commit
+    ) is None:
+        raise CloudDeployError("artifact_manifest_invalid")
     staged_spec = dataclasses.replace(
         spec,
         release_id=str(state["active_release_id"]),
+        source_commit=source_commit,
         artifact_root=release,
         artifact_manifest_sha256=digest,
     )
     _validate_artifact(staged_spec)
+    _seal_release_directory(release, identity)
     _verify_staged_runtime(release)
     return release
 
@@ -2997,9 +3235,7 @@ def deploy(spec: CloudDeploymentSpec, *, confirmation: str) -> Mapping[str, Any]
             journal = _ensure_activation_schema_ready(
                 spec, journal, target_release=release
             )
-            candidate_units = _slot_units(target)
-            _systemctl(spec, "start", candidate_units)
-            _wait_health(spec, target)
+            _start_target_services(spec, receipt)
             journal = _advance_transition_journal(journal, "target_ready")
             _switch_nginx(spec, target)
             journal = _advance_transition_journal(journal, "routes_switched")
@@ -3100,8 +3336,7 @@ def rollback(spec: CloudDeploymentSpec, *, confirmation: str) -> Mapping[str, An
                         environment=_service_environment(service, str(previous_slot)),
                         timeout=600,
                     )
-                _systemctl(spec, "start", _slot_units(str(previous_slot)))
-                _wait_health(spec, str(previous_slot))
+                _start_target_services(spec, target_state)
                 journal = _advance_transition_journal(journal, "target_ready")
                 _switch_nginx(spec, str(previous_slot))
             journal = _advance_transition_journal(journal, "routes_switched")

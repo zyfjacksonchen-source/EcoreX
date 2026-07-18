@@ -16,6 +16,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+import ecorex.image_orchestrator.production as image_production
+
 from ecorex.image_orchestrator.managed_provider import (
     ManagedHTTPSImageProvider,
     ManagedImageProviderConfigurationError,
@@ -623,6 +625,52 @@ def test_local_cas_mode_never_constructs_s3(tmp_path: Path) -> None:
 
     assert selected_dependency is dependency
     assert selected_content is content
+
+
+def test_image_schema_migration_does_not_require_dynamic_admin_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Storage:
+        def __init__(self) -> None:
+            self.checked = False
+            self.closed = False
+
+        def validate_controls(self, *, write_probe: bool) -> None:
+            assert write_probe is True
+            self.checked = True
+
+        def close(self) -> None:
+            self.closed = True
+
+    class SchemaManager:
+        def __init__(self, dsn: str) -> None:
+            assert dsn == "postgresql://migration.invalid/ecorex"
+
+        def migrate(self) -> SimpleNamespace:
+            return SimpleNamespace(schema_version=1)
+
+    storage = Storage()
+    provider = PostgresS3ManagedImageProvider()
+    config = SimpleNamespace(
+        postgres_dsn="postgresql://migration.invalid/ecorex",
+        storage_backend="postgresql",
+        content_storage_mode="attested-encrypted-local-cas",
+    )
+    monkeypatch.setattr(provider, "_static_dependencies", lambda *_args: object())
+    monkeypatch.setattr(
+        provider, "_content_storage", lambda _config: (storage, object())
+    )
+    monkeypatch.setattr(
+        provider,
+        "_external_dependencies",
+        lambda *_args: pytest.fail("dynamic models must not resolve during migration"),
+    )
+    monkeypatch.setattr(image_production, "PostgresImageSchemaManager", SchemaManager)
+
+    report = provider.migrate(config, object())
+
+    assert storage.checked and storage.closed
+    assert report.provider_checked is False
 
 
 class _SupervisorStore:

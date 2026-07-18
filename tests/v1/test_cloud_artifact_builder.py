@@ -21,6 +21,8 @@ from ecorex.deployment.cloud_artifact import (
     unsigned_cloud_manifest,
 )
 from ecorex.deployment.cloud_artifact_builder import (
+    CLOUD_PIP_INDEX_URL_ENV,
+    DOMESTIC_PYPI_SIMPLE_INDEX_URL,
     DESCRIPTOR_NAME,
     MANIFEST_NAME,
     PAYLOAD_NAME,
@@ -28,6 +30,7 @@ from ecorex.deployment.cloud_artifact_builder import (
     CloudArtifactPipelineError,
     attach_detached_cloud_signature,
     create_detached_signature_response,
+    _cloud_pip_index_url,
 )
 from ecorex.release import Ed25519MemorySigner
 
@@ -54,9 +57,11 @@ def test_cloud_transport_archive_preserves_only_approved_modes(tmp_path: Path) -
     output = tmp_path / "output"
     script["_unpack"](archive, output)
 
+    assert stat.S_IMODE(output.stat().st_mode) == 0o555
     assert (output / "venv/bin/ecorex-runtime").read_bytes() == b"runtime"
     assert stat.S_IMODE((output / "venv/bin/ecorex-runtime").stat().st_mode) == 0o755
     assert stat.S_IMODE((output / "manifest.json").stat().st_mode) == 0o644
+    output.chmod(0o700)
 
 
 REQUIRED = (
@@ -74,6 +79,20 @@ REQUIRED = (
     "deployment/nginx/admin-route-control-plane.conf",
     "deployment/nginx/ecorex-cloud.routes.conf",
 )
+
+
+def test_cloud_dependency_index_is_explicitly_allowlisted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(CLOUD_PIP_INDEX_URL_ENV, raising=False)
+    assert _cloud_pip_index_url() == "https://pypi.org/simple"
+
+    monkeypatch.setenv(CLOUD_PIP_INDEX_URL_ENV, DOMESTIC_PYPI_SIMPLE_INDEX_URL)
+    assert _cloud_pip_index_url() == DOMESTIC_PYPI_SIMPLE_INDEX_URL
+
+    monkeypatch.setenv(CLOUD_PIP_INDEX_URL_ENV, "https://untrusted.example/simple")
+    with pytest.raises(CloudArtifactPipelineError, match="cloud_dependency_index_unapproved"):
+        _cloud_pip_index_url()
 
 
 def _tree(root: Path) -> Path:
@@ -165,6 +184,10 @@ def _handoff(root: Path, handoff: Path) -> tuple[dict, bytes]:
         "architecture": "aarch64",
         "python_version": "3.11.9",
         "dependency_lock_manifest_sha256": "b" * 64,
+        "dependency_transport": {
+            "index_url": "https://pypi.org/simple",
+            "verification": "pip-require-hashes",
+        },
         "dependency_locks": {},
         "application_wheel": {},
         "artifact_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),

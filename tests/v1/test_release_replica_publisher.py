@@ -60,6 +60,70 @@ def test_github_read_through_mirror_streams_and_verifies_exact_bytes(
     assert receipt.url.endswith(f"/{package.name}")
 
 
+def test_github_read_through_mirror_probes_large_asset_availability(
+    tmp_path: Path,
+) -> None:
+    release_id = "release-stable-0123456789abcdef01234567"
+    package = tmp_path / "core-windows-x64.zip"
+    package.write_bytes(b"signed package bytes")
+    digest = hashlib.sha256(package.read_bytes()).hexdigest()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.headers["accept-encoding"] == "identity"
+        assert request.headers["range"] == "bytes=0-0"
+        return httpx.Response(
+            206,
+            content=b"s",
+            headers={
+                "content-encoding": "identity",
+                "content-range": f"bytes 0-0/{package.stat().st_size}",
+                "content-length": "1",
+            },
+        )
+
+    mirror = HTTPSReadThroughReleaseMirror(
+        source_id="github-cn",
+        public_hosts=frozenset({"ghproxy.example"}),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    receipt = mirror.probe_asset(
+        base_url=f"https://ghproxy.example/releases/{release_id}",
+        release_id=release_id,
+        path=package,
+        expected_sha256=digest,
+    )
+
+    assert receipt.sha256 == digest
+    assert receipt.size_bytes == package.stat().st_size
+
+
+def test_github_read_through_mirror_rejects_inexact_range_probe(tmp_path: Path) -> None:
+    release_id = "release-stable-0123456789abcdef01234567"
+    package = tmp_path / "core.zip"
+    package.write_bytes(b"signed")
+    digest = hashlib.sha256(package.read_bytes()).hexdigest()
+    mirror = HTTPSReadThroughReleaseMirror(
+        source_id="github-cn",
+        public_hosts=frozenset({"ghproxy.example"}),
+        attempts=1,
+        backoff_seconds=(),
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _request: httpx.Response(200, content=package.read_bytes())
+            )
+        ),
+    )
+
+    with pytest.raises(ReleaseReplicaError, match="mirror_range_unavailable"):
+        mirror.probe_asset(
+            base_url=f"https://ghproxy.example/releases/{release_id}",
+            release_id=release_id,
+            path=package,
+            expected_sha256=digest,
+        )
+
+
 def test_github_read_through_mirror_rejects_redirects_and_wrong_bytes(
     tmp_path: Path,
 ) -> None:

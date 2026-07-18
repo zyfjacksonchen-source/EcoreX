@@ -30,11 +30,12 @@ import (
 )
 
 const (
-	maxIndexBytes    = 256 * 1024
-	maxManifestBytes = 1024 * 1024
-	maxCoreBytes     = 150 * 1024 * 1024
-	maxPackBytes     = 500 * 1024 * 1024
-	maxFiles         = 50_000
+	maxIndexBytes      = 256 * 1024
+	maxManifestBytes   = 1024 * 1024
+	maxCoreBytes       = 150 * 1024 * 1024
+	maxPackBytes       = 500 * 1024 * 1024
+	maxFiles           = 50_000
+	artifactChunkBytes = 8 * 1024 * 1024
 )
 
 var (
@@ -289,6 +290,9 @@ func run(indexOverride, rootOverride string) error {
 	}
 	defer lock.close()
 	if err := ensureBootstrapStateDirectory(root); err != nil {
+		return err
+	}
+	if err := ensureRuntimeDataDirectories(root); err != nil {
 		return err
 	}
 	bootstrapHelper, err := stageSandboxHelper(root, configuration.SandboxHelperSHA256)
@@ -551,6 +555,32 @@ func ensureBootstrapStateDirectory(root string) error {
 	return nil
 }
 
+func ensureRuntimeDataDirectories(root string) error {
+	rootAbsolute, err := filepath.Abs(filepath.Clean(root))
+	if err != nil {
+		return fmt.Errorf("install root is invalid")
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(rootAbsolute)
+	if err != nil || !samePath(rootAbsolute, resolvedRoot) {
+		return fmt.Errorf("install root contains a link or reparse point")
+	}
+	directories := []string{
+		filepath.Join(rootAbsolute, "state"),
+		filepath.Join(rootAbsolute, "workspace"),
+	}
+	for _, directory := range directories {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			return fmt.Errorf("Runtime data directory is unavailable")
+		}
+		metadata, inspectErr := os.Lstat(directory)
+		resolved, resolveErr := filepath.EvalSymlinks(directory)
+		if inspectErr != nil || !metadata.IsDir() || metadata.Mode()&os.ModeSymlink != 0 || resolveErr != nil || !samePath(directory, resolved) {
+			return fmt.Errorf("Runtime data directory is unsafe")
+		}
+	}
+	return nil
+}
+
 func installRoot(override string) (string, error) {
 	if override != "" {
 		if !filepath.IsAbs(override) {
@@ -671,7 +701,7 @@ func newHTTPClient() *http.Client {
 	}
 	return &http.Client{
 		Transport:     transport,
-		Timeout:       10 * time.Minute,
+		Timeout:       5 * time.Minute,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 	}
 }
@@ -737,7 +767,7 @@ func fetchDiscovery(
 }
 
 func fetchManifest(ctx context.Context, client *http.Client, descriptor indexManifest) ([]byte, error) {
-	if descriptor.FileName != "release-manifest.json" || !sha256Pattern.MatchString(descriptor.SHA256) || len(descriptor.Sources) != 3 {
+	if descriptor.FileName != "release-manifest.json" || !sha256Pattern.MatchString(descriptor.SHA256) || len(descriptor.Sources) < 1 || len(descriptor.Sources) > 3 {
 		return nil, fmt.Errorf("manifest discovery contract is invalid")
 	}
 	var last error
@@ -780,10 +810,12 @@ func validateManifest(value *manifest, discovery *indexRelease, keys map[string]
 			return fmt.Errorf("release sources do not provide independent failover")
 		}
 		hosts[host] = true
-		discovered := discovery.Manifest.Sources[index]
-		expectedManifestURL := strings.TrimRight(item.BaseURL, "/") + "/release-manifest.json"
-		if discovered.SourceID != item.SourceID || discovered.Kind != item.Kind || discovered.Priority != item.Priority || discovered.URL != expectedManifestURL {
-			return fmt.Errorf("public discovery source does not match the signed release")
+		if index < len(discovery.Manifest.Sources) {
+			discovered := discovery.Manifest.Sources[index]
+			expectedManifestURL := strings.TrimRight(item.BaseURL, "/") + "/release-manifest.json"
+			if discovered.SourceID != item.SourceID || discovered.Kind != item.Kind || discovered.Priority != item.Priority || discovered.URL != expectedManifestURL {
+				return fmt.Errorf("public discovery source does not match the signed release")
+			}
 		}
 	}
 	payload, err := canonicalManifestPayload(value)
@@ -1095,13 +1127,19 @@ func downloadArtifact(ctx context.Context, client *http.Client, release *manifes
 		return verifyArtifactSignature(release, item, keys)
 	}
 	_ = os.Remove(destination)
+	partial := destination + ".partial"
+	if metadata, err := os.Lstat(partial); err == nil {
+		if !metadata.Mode().IsRegular() || metadata.Mode()&os.ModeSymlink != 0 || metadata.Size() > item.SizeBytes {
+			_ = os.Remove(partial)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("partial artifact is unavailable")
+	}
 	var last error
 	for _, origin := range release.Sources {
-		partial := destination + ".partial-" + origin.SourceID
 		location := strings.TrimRight(origin.BaseURL, "/") + "/" + url.PathEscape(item.FileName)
 		if err := downloadFromSource(ctx, client, location, partial, item.SizeBytes); err != nil {
 			last = err
-			_ = os.Remove(partial)
 			continue
 		}
 		if !fileMatches(partial, item.SizeBytes, item.SHA256) || verifyArtifactSignature(release, item, keys) != nil {
@@ -1128,50 +1166,51 @@ func downloadFromSource(ctx context.Context, client *http.Client, location, dest
 		}
 		resume = metadata.Size()
 	}
-	if resume == expected {
-		return nil
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, location, nil)
-	if err != nil {
-		return err
-	}
-	request.Header.Set("Accept-Encoding", "identity")
-	if resume > 0 {
-		request.Header.Set("Range", "bytes="+strconv.FormatInt(resume, 10)+"-")
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		return err
-	}
-	defer response.Body.Close()
-	expectedStatus := http.StatusOK
-	if resume > 0 {
-		expectedStatus = http.StatusPartialContent
-		expectedRange := fmt.Sprintf("bytes %d-%d/%d", resume, expected-1, expected)
-		if response.Header.Get("Content-Range") != expectedRange {
-			return fmt.Errorf("release source did not honor the resume range")
+	for resume < expected {
+		end := min(resume+artifactChunkBytes-1, expected-1)
+		chunkSize := end - resume + 1
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, location, nil)
+		if err != nil {
+			return err
 		}
-	}
-	if response.StatusCode != expectedStatus || response.Header.Get("Content-Encoding") != "" && !strings.EqualFold(response.Header.Get("Content-Encoding"), "identity") || response.ContentLength >= 0 && response.ContentLength != expected-resume {
-		return fmt.Errorf("release source returned an invalid bounded response")
-	}
-	flags := os.O_CREATE | os.O_WRONLY
-	if resume > 0 {
-		flags |= os.O_APPEND
-	} else {
-		flags |= os.O_EXCL
-	}
-	file, err := os.OpenFile(destination, flags, 0o600)
-	if err != nil {
-		return err
-	}
-	written, copyErr := io.CopyN(file, response.Body, expected-resume)
-	extra := make([]byte, 1)
-	extraCount, extraErr := response.Body.Read(extra)
-	syncErr := file.Sync()
-	closeErr := file.Close()
-	if copyErr != nil || written != expected-resume || extraCount != 0 || extraErr != io.EOF || syncErr != nil || closeErr != nil {
-		return fmt.Errorf("release source ended outside the signed artifact bound")
+		request.Header.Set("Accept-Encoding", "identity")
+		request.Header.Set(
+			"Range",
+			fmt.Sprintf("bytes=%d-%d", resume, end),
+		)
+		response, err := client.Do(request)
+		if err != nil {
+			return err
+		}
+		expectedRange := fmt.Sprintf("bytes %d-%d/%d", resume, end, expected)
+		if response.StatusCode != http.StatusPartialContent ||
+			response.Header.Get("Content-Range") != expectedRange ||
+			response.Header.Get("Content-Encoding") != "" && !strings.EqualFold(response.Header.Get("Content-Encoding"), "identity") ||
+			response.ContentLength >= 0 && response.ContentLength != chunkSize {
+			response.Body.Close()
+			return fmt.Errorf("release source did not honor the bounded range")
+		}
+		flags := os.O_CREATE | os.O_WRONLY
+		if resume > 0 {
+			flags |= os.O_APPEND
+		} else {
+			flags |= os.O_EXCL
+		}
+		file, err := os.OpenFile(destination, flags, 0o600)
+		if err != nil {
+			response.Body.Close()
+			return err
+		}
+		written, copyErr := io.CopyN(file, response.Body, chunkSize)
+		extra := make([]byte, 1)
+		extraCount, extraErr := response.Body.Read(extra)
+		bodyCloseErr := response.Body.Close()
+		syncErr := file.Sync()
+		closeErr := file.Close()
+		if copyErr != nil || written != chunkSize || extraCount != 0 || extraErr != io.EOF || bodyCloseErr != nil || syncErr != nil || closeErr != nil {
+			return fmt.Errorf("release source ended outside the signed artifact bound")
+		}
+		resume += chunkSize
 	}
 	return nil
 }
@@ -1351,7 +1390,21 @@ func supervise(python, root string, trusted []string, legacySource string) error
 }
 
 func minimalEnvironment() []string {
-	allowed := map[string]bool{"APPDATA": true, "HOME": true, "LANG": true, "LC_ALL": true, "LOCALAPPDATA": true, "SYSTEMDRIVE": true, "SYSTEMROOT": true, "TEMP": true, "TMP": true, "USERPROFILE": true, "WINDIR": true}
+	allowed := map[string]bool{
+		"APPDATA":                true,
+		"HOME":                   true,
+		"LANG":                   true,
+		"LC_ALL":                 true,
+		"LOCALAPPDATA":           true,
+		"PROCESSOR_ARCHITECTURE": true,
+		"PROCESSOR_ARCHITEW6432": true,
+		"SYSTEMDRIVE":            true,
+		"SYSTEMROOT":             true,
+		"TEMP":                   true,
+		"TMP":                    true,
+		"USERPROFILE":            true,
+		"WINDIR":                 true,
+	}
 	result := []string{"PYTHONDONTWRITEBYTECODE=1", "PYTHONNOUSERSITE=1", "PYTHONUTF8=1"}
 	for _, item := range os.Environ() {
 		name, _, _ := strings.Cut(item, "=")

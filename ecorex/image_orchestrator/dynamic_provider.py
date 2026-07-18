@@ -62,6 +62,8 @@ class AdminImageModelConfigurationResolver:
 class _Entry:
     provider: _ManagedImageProvider
     active_count: int = 0
+    retired: bool = False
+    close_started: bool = False
 
 
 class DynamicManagedImageProvider:
@@ -102,6 +104,10 @@ class DynamicManagedImageProvider:
         self._entries: OrderedDict[tuple[str, int], _Entry] = OrderedDict()
         self._lock = asyncio.Lock()
         self._closed = False
+        self._close_complete = False
+        self._close_waiter: asyncio.Future[None] | None = None
+        self._closing_count = 0
+        self._close_tasks: set[asyncio.Task[None]] = set()
 
     async def submit(self, job: ImageJob, *, idempotency_key: str) -> ProviderResult:
         return await self._call("submit", job, idempotency_key=idempotency_key)
@@ -151,12 +157,23 @@ class DynamicManagedImageProvider:
 
     async def aclose(self) -> None:
         async with self._lock:
+            if self._close_complete:
+                return
             self._closed = True
-            entries = list(self._entries.values())
-            self._entries.clear()
-        await asyncio.gather(
-            *(entry.provider.aclose() for entry in entries), return_exceptions=True
-        )
+            if self._close_waiter is None:
+                self._close_waiter = asyncio.get_running_loop().create_future()
+            waiter = self._close_waiter
+            close_now: list[_Entry] = []
+            for key, entry in tuple(self._entries.items()):
+                entry.retired = True
+                if entry.active_count != 0:
+                    continue
+                del self._entries[key]
+                self._begin_close_locked(entry)
+                close_now.append(entry)
+            self._finish_close_locked()
+        self._schedule_closes(close_now)
+        await asyncio.shield(waiter)
 
     async def _call(self, method: str, job: ImageJob, **kwargs) -> ProviderResult:
         key, entry, upstream_job = await self._acquire(job)
@@ -234,17 +251,19 @@ class DynamicManagedImageProvider:
             return key, entry
 
     async def _release(self, key: tuple[str, int], entry: _Entry) -> None:
-        retired: list[_ManagedImageProvider]
+        close_now: list[_Entry] = []
         async with self._lock:
-            if entry.active_count <= 0 or self._entries.get(key) is not entry:
+            if entry.active_count <= 0:
                 raise RuntimeError("dynamic image provider reference count is unbalanced")
             entry.active_count -= 1
-            retired = self._retire_idle_locked()
-        if retired:
-            await asyncio.gather(
-                *(provider.aclose() for provider in retired),
-                return_exceptions=True,
-            )
+            if entry.retired and entry.active_count == 0:
+                if self._entries.get(key) is entry:
+                    del self._entries[key]
+                self._begin_close_locked(entry)
+                close_now.append(entry)
+            close_now.extend(self._retire_idle_locked())
+            self._finish_close_locked()
+        await self._await_closes(close_now)
 
     def _create_provider(
         self,
@@ -268,8 +287,8 @@ class DynamicManagedImageProvider:
             ssl_context=self.ssl_context,
         )
 
-    def _retire_idle_locked(self) -> list[_ManagedImageProvider]:
-        retired: list[_ManagedImageProvider] = []
+    def _retire_idle_locked(self) -> list[_Entry]:
+        retired: list[_Entry] = []
         if len(self._entries) <= self.max_cached_revisions:
             return retired
         for key, entry in tuple(self._entries.items()):
@@ -278,8 +297,58 @@ class DynamicManagedImageProvider:
             if entry.active_count != 0:
                 continue
             del self._entries[key]
-            retired.append(entry.provider)
+            entry.retired = True
+            self._begin_close_locked(entry)
+            retired.append(entry)
         return retired
+
+    def _begin_close_locked(self, entry: _Entry) -> None:
+        if entry.close_started:
+            return
+        entry.close_started = True
+        self._closing_count += 1
+
+    def _schedule_closes(self, entries: list[_Entry]) -> list[asyncio.Task[None]]:
+        tasks: list[asyncio.Task[None]] = []
+        for entry in entries:
+            task = asyncio.create_task(self._close_entry(entry))
+            self._close_tasks.add(task)
+            task.add_done_callback(self._close_tasks.discard)
+            tasks.append(task)
+        return tasks
+
+    async def _await_closes(self, entries: list[_Entry]) -> None:
+        tasks = self._schedule_closes(entries)
+        if tasks:
+            await asyncio.gather(*(asyncio.shield(task) for task in tasks))
+
+    async def _close_entry(self, entry: _Entry) -> None:
+        try:
+            await entry.provider.aclose()
+        except (Exception, asyncio.CancelledError):
+            # Shutdown and cache retirement are best-effort, matching the provider
+            # contract. Lifecycle accounting must still complete exactly once.
+            pass
+        finally:
+            async with self._lock:
+                self._closing_count -= 1
+                if self._closing_count < 0:
+                    raise RuntimeError(
+                        "dynamic image provider close count is unbalanced"
+                    )
+                self._finish_close_locked()
+
+    def _finish_close_locked(self) -> None:
+        if (
+            not self._closed
+            or self._entries
+            or self._closing_count != 0
+            or self._close_complete
+        ):
+            return
+        self._close_complete = True
+        if self._close_waiter is not None and not self._close_waiter.done():
+            self._close_waiter.set_result(None)
 
 
 __all__ = [

@@ -59,6 +59,18 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--maximum-total-bytes", type=int, default=16 * 1024 * 1024 * 1024
     )
+    parser.add_argument(
+        "--chunk-bytes",
+        type=int,
+        default=1024 * 1024,
+        help="streaming write chunk size; lower values tolerate slow first-source mirrors",
+    )
+    parser.add_argument(
+        "--inter-request-delay-seconds",
+        type=float,
+        default=2.0,
+        help="pace immutable asset reads so domestic mirrors do not throttle a release audit",
+    )
     return parser
 
 
@@ -118,6 +130,8 @@ def run(argv: list[str] | None = None) -> int:
             read_timeout_seconds=args.read_timeout_seconds,
             total_timeout_seconds=args.total_timeout_seconds,
             maximum_total_bytes=args.maximum_total_bytes,
+            chunk_bytes=args.chunk_bytes,
+            inter_request_delay_seconds=args.inter_request_delay_seconds,
         )
         with OnlinePublicationVerifier(
             verifier=verifier,
@@ -148,9 +162,13 @@ def run(argv: list[str] | None = None) -> int:
         return 0
     except OnlinePublicationVerificationError as error:
         code = error.code
-    except Exception:
+    except Exception as error:
         code = "online_publication_verification_failed"
-    print(json.dumps({"ok": False, "code": code}, sort_keys=True), file=sys.stderr)
+        detail_type = type(error).__name__
+    failure = {"ok": False, "code": code}
+    if "detail_type" in locals():
+        failure["detail_type"] = detail_type
+    print(json.dumps(failure, sort_keys=True), file=sys.stderr)
     return 1
 
 

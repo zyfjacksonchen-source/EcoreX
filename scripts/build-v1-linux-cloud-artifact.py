@@ -119,6 +119,9 @@ def _unpack(archive_path: Path, root: Path) -> dict[str, object]:
                 files += 1
     except (OSError, tarfile.TarError):
         raise CloudArtifactPipelineError("cloud_transport_archive_invalid") from None
+    # Extraction is private while incomplete. Only a fully validated transport
+    # tree is published as read-only and traversable by the runtime identity.
+    root.chmod(0o555)
     return {"member_count": len(observed), "file_count": files}
 
 

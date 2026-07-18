@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import base64
+import ctypes
+from ctypes import wintypes
 from datetime import UTC, datetime
 import hashlib
 import json
@@ -111,18 +113,62 @@ def _load(path: Path | None = None) -> tuple[dict[str, Any], bytearray]:
 def _copy(path: Path | None = None) -> dict[str, Any]:
     value, credential = _load(path)
     try:
-        import win32clipboard
-
-        win32clipboard.OpenClipboard()
-        try:
-            win32clipboard.EmptyClipboard()
-            win32clipboard.SetClipboardText(credential.decode("ascii"))
-        finally:
-            win32clipboard.CloseClipboard()
+        _set_windows_clipboard(credential.decode("ascii"))
     finally:
         for index in range(len(credential)):
             credential[index] = 0
     return {**_description(value), "copied_to_clipboard": True}
+
+
+def _set_windows_clipboard(value: str) -> None:
+    if os.name != "nt":
+        raise RuntimeError("admin_credential_clipboard_unavailable")
+    payload = bytearray((value + "\0").encode("utf-16-le"))
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.OpenClipboard.restype = wintypes.BOOL
+    user32.EmptyClipboard.argtypes = []
+    user32.EmptyClipboard.restype = wintypes.BOOL
+    user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+    user32.SetClipboardData.restype = wintypes.HANDLE
+    user32.CloseClipboard.argtypes = []
+    user32.CloseClipboard.restype = wintypes.BOOL
+    kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+    kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+    kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalLock.restype = wintypes.LPVOID
+    kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalUnlock.restype = wintypes.BOOL
+    kernel32.GlobalFree.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalFree.restype = wintypes.HGLOBAL
+    handle = None
+    try:
+        handle = kernel32.GlobalAlloc(0x0002, len(payload))
+        if not handle:
+            raise RuntimeError("admin_credential_clipboard_unavailable")
+        address = kernel32.GlobalLock(handle)
+        if not address:
+            raise RuntimeError("admin_credential_clipboard_unavailable")
+        try:
+            ctypes.memmove(address, bytes(payload), len(payload))
+        finally:
+            kernel32.GlobalUnlock(handle)
+        if not user32.OpenClipboard(None):
+            raise RuntimeError("admin_credential_clipboard_unavailable")
+        try:
+            if not user32.EmptyClipboard():
+                raise RuntimeError("admin_credential_clipboard_unavailable")
+            if not user32.SetClipboardData(13, handle):
+                raise RuntimeError("admin_credential_clipboard_unavailable")
+            handle = None
+        finally:
+            user32.CloseClipboard()
+    finally:
+        for index in range(len(payload)):
+            payload[index] = 0
+        if handle:
+            kernel32.GlobalFree(handle)
 
 
 def _description(value: dict[str, Any]) -> dict[str, Any]:

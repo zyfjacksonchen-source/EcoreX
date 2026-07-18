@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EcoreX Agent 使用情况分析面板</title>
+  <link rel="stylesheet" href="./styles.css?v=20260706-v0291-dashboard-taxonomy-r1" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="eyebrow">服务器 RAW 上报分析</div>
+      <h1>EcoreX Agent 使用情况</h1>
+      <div class="meta-stack">
+        <p id="metaLine" class="muted"></p>
+        <span id="liveStatus" class="live-status"></span>
+      </div>
+    </div>
+    <div class="actions">
+      <button id="refreshData" class="button primary" type="button" data-tip="点击后重新读取服务器上的最新记录，页面数字会随之更新">
+        <span data-icon="refresh"></span>刷新数据
+      </button>
+      <a id="rawSheetLink" class="button ghost" href="#" target="_blank" rel="noreferrer" data-tip="打开原始明细表，里面是一条条后台记录">
+        <span data-icon="external"></span>RAW 表
+      </a>
+      <button id="exportSummary" class="button ghost" type="button" data-tip="导出当前筛选后的汇总表，会带上自动统计或手动修正的有效产物数"><span data-icon="download"></span>汇总 CSV</button>
+      <button id="exportRawCsv" class="button ghost" type="button" data-tip="导出一条条中文明细，适合给业务同学看"><span data-icon="table"></span>RAW CSV</button>
+      <button id="exportRawJson" class="button ghost" type="button" data-tip="导出一条条中文明细，适合后续继续分析"><span data-icon="code"></span>RAW JSON</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="dimension-switch" aria-label="数据维度切换">
+      <button class="dimension-tab active" type="button" data-metric-view="tasks">
+        <span data-icon="target"></span>
+        <span>
+          <strong>任务维度</strong>
+          <small>成功、失败、耗时、干预</small>
+        </span>
+      </button>
+      <button class="dimension-tab" type="button" data-metric-view="tokens">
+        <span data-icon="database"></span>
+        <span>
+          <strong>Token 用量维度</strong>
+          <small>输入、输出、总量、缓存命中</small>
+        </span>
+      </button>
+    </section>
+
+    <section id="kpiGrid" class="kpi-grid"></section>
+
+    <section class="definition-panel" aria-label="看板统计口径">
+      <article>
+        <strong>产物有效性</strong>
+        <span>用户勾选 👎 的产物定义为无效；未被标记无效且状态可用的产物计入有效产物。</span>
+      </article>
+      <article>
+        <strong>任务状态</strong>
+        <span>任务分为成功、失败、中止；中止表示用户主动停止任务，不再混入失败。</span>
+      </article>
+      <article>
+        <strong>使用场景</strong>
+        <span>创作内容=创作文案/标题/报告/脚本等；制作素材=制作图片、海报图片编辑等；搜索查询=网页搜索抓取等；处理数据=数据处理（Excel/word/ppt/pdf）等；编辑文档=操作在线文档（飞书/腾讯文档）等；交付通知=打包/展示/发消息/提醒等；系统维护=环境检查/排错/配置等。</span>
+      </article>
+    </section>
+
+    <section class="filters">
+      <div class="range-control">
+        <label>
+          <span>开始日期</span>
+          <input id="rangeStart" type="date" />
+        </label>
+        <label>
+          <span>结束日期</span>
+          <input id="rangeEnd" type="date" />
+        </label>
+        <button id="applyRange" class="button ghost" type="button">
+          <span data-icon="calendar"></span>应用时间段
+        </button>
+      </div>
+      <div id="filterUsers" class="filter-control"></div>
+      <div id="filterDates" class="filter-control"></div>
+      <div id="filterScenarios" class="filter-control"></div>
+      <div id="filterStates" class="filter-control"></div>
+      <button id="resetFilters" class="button ghost" type="button" data-tip="恢复全部用户、日期、场景和状态"><span data-icon="rotate"></span>重置</button>
+      <div class="definition-help">
+        <span><strong>任务</strong> 用户发起一次需求并被系统接收，就算 1 次使用</span>
+        <span><strong>事件</strong> 后台记录的一条动作，比如接收、完成、取消、工具执行、产物更新</span>
+      </div>
+      <div class="status-help">
+        <strong>任务状态说明：</strong>
+        <span>成功 = 当天有成功完成的任务</span>
+        <span>失败 = 已接收但未成功且非用户主动停止</span>
+        <span>中止 = 用户主动停止任务</span>
+      </div>
+    </section>
+
+    <section class="analysis-grid">
+      <div class="panel wide">
+        <div class="panel-head">
+          <div>
+            <h2 id="dailyChartTitle">分日趋势</h2>
+            <p id="dailyChartHelp" class="muted small">柱上数字为：成功 / 失败 / 中止；中止为用户主动停止任务。</p>
+          </div>
+          <span id="dailyLegend" class="legend"><i class="dot green"></i>成功 <i class="dot red"></i>失败</span>
+        </div>
+        <div id="dailyChart" class="chart"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">
+          <h2 id="userChartTitle">用户任务量</h2>
+        </div>
+        <div id="userChart" class="chart"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">
+          <h2 id="scenarioChartTitle">主要使用场景</h2>
+        </div>
+        <div id="scenarioChart" class="chart"></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>分析结论</h2>
+      </div>
+      <div id="insights" class="insights"></div>
+    </section>
+
+    <section class="panel table-panel">
+      <div class="panel-head">
+        <div>
+          <h2 id="summaryTableTitle">用户 × 分日使用情况</h2>
+          <p id="summaryTableHelp" class="muted small">有效产物数优先使用服务器自动统计；仍可手动修正并保存在当前浏览器。</p>
+        </div>
+        <div class="table-tools">
+          <span id="rowCount" class="muted small"></span>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead id="summaryHead"></thead>
+          <tbody id="summaryBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel table-panel">
+      <div class="panel-head">
+        <div>
+          <h2 id="personTableTitle">个人明细数据</h2>
+          <p id="personTableHelp" class="muted small">按个人先汇总；点击个人行可展开查看每天的成功、失败、中止、产物和主要使用场景。</p>
+        </div>
+        <div class="table-tools">
+          <span id="detailRowCount" class="muted small"></span>
+        </div>
+      </div>
+      <div class="table-wrap person-detail-wrap">
+        <table class="person-detail-table">
+          <thead id="personDetailHead"></thead>
+          <tbody id="personDetailBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <details class="panel audit-panel audit-collapsible" aria-label="v0.2.9 审计补充">
+      <summary>
+        <div>
+          <h2>v0.2.9 审计补充</h2>
+          <p class="muted small">用户动作、图片处理、有效产物和下拇指回溯保留为补充审计；默认折叠，需要时展开查看。</p>
+        </div>
+        <span id="auditStatus" class="live-status">正在读取审计数据</span>
+      </summary>
+      <div class="audit-filterbar" aria-label="审计筛选">
+        <label>
+          <span>用户</span>
+          <select id="auditUserFilter"></select>
+        </label>
+        <label>
+          <span>开始日期</span>
+          <input id="auditRangeStart" type="date" />
+        </label>
+        <label>
+          <span>结束日期</span>
+          <input id="auditRangeEnd" type="date" />
+        </label>
+        <button id="applyAuditFilters" class="button ghost" type="button">
+          <span data-icon="calendar"></span>应用审计筛选
+        </button>
+        <button id="resetAuditFilters" class="button ghost" type="button">
+          <span data-icon="rotate"></span>跟随当前时间段
+        </button>
+        <span id="auditFilterSummary" class="muted small"></span>
+      </div>
+      <div id="auditSummaryGrid" class="audit-summary-grid"></div>
+      <div class="audit-grid">
+        <div class="audit-block">
+          <h3>用户动作分类</h3>
+          <div id="auditActionTypes" class="audit-list"></div>
+        </div>
+        <div class="audit-block">
+          <h3>最近用户动作</h3>
+          <div id="auditUserActions" class="audit-list"></div>
+        </div>
+        <div class="audit-block">
+          <h3>有效产物</h3>
+          <div id="effectiveArtifacts" class="audit-list"></div>
+        </div>
+        <div class="audit-block">
+          <h3>下拇指回溯</h3>
+          <div id="feedbackTraces" class="audit-list"></div>
+        </div>
+      </div>
+    </details>
+  </main>
+
+  <script src="./data.js?v=20260718-v101-authoritative-usage-r1"></script>
+  <script src="./app.js?v=20260718-v101-authoritative-usage-r1"></script>
+</body>
+</html>

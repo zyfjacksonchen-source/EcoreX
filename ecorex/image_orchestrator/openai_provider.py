@@ -505,6 +505,7 @@ class OpenAICompatibleImageProvider:
         mime_type = self._mime_type(image)
         if mime_type != "image/png":
             raise ProviderRejected("image provider output format changed")
+        image = self._normalize_provider_png(image, job)
         try:
             result = validate_image_payload(
                 image,
@@ -513,7 +514,6 @@ class OpenAICompatibleImageProvider:
             )
         except Exception:
             raise ProviderRejected("image provider result is invalid") from None
-        self._verify_provider_png(image, job)
         request_id = headers.get("x-request-id")
         if not isinstance(request_id, str) or _REQUEST_ID.fullmatch(request_id) is None:
             request_id = job.job_id if _REQUEST_ID.fullmatch(job.job_id) else None
@@ -712,7 +712,7 @@ class OpenAICompatibleImageProvider:
             raise ProviderRejected("image retouch input exceeds provider limit")
         return base, prepared_mask
 
-    def _verify_provider_png(self, payload: bytes, job: ImageJob) -> None:
+    def _normalize_provider_png(self, payload: bytes, job: ImageJob) -> bytes:
         Image = self._pillow()
         try:
             with Image.open(BytesIO(payload)) as image:
@@ -735,8 +735,40 @@ class OpenAICompatibleImageProvider:
                     job.request.width,
                     job.request.height,
                 ):
-                    raise ProviderRejected("image provider dimensions changed")
+                    target_width = job.request.width
+                    target_height = job.request.height
+                    if (
+                        width * target_height != height * target_width
+                        or width * 2 < target_width
+                        or height * 2 < target_height
+                        or width > target_width * 2
+                        or height > target_height * 2
+                    ):
+                        raise ProviderRejected("image provider dimensions changed")
+                    image.load()
+                    converted = image.convert(
+                        "RGBA" if "A" in image.getbands() else "RGB"
+                    )
+                    try:
+                        resized = converted.resize(
+                            (target_width, target_height),
+                            Image.Resampling.LANCZOS,
+                        )
+                        try:
+                            output = BytesIO()
+                            resized.save(output, format="PNG", compress_level=6)
+                            normalized = output.getvalue()
+                        finally:
+                            resized.close()
+                    finally:
+                        converted.close()
+                    if not normalized or len(normalized) > self.max_image_bytes:
+                        raise ProviderRejected(
+                            "image provider normalized result is oversized"
+                        )
+                    return normalized
                 image.verify()
+                return payload
         except ProviderRejected:
             raise
         except MemoryError:

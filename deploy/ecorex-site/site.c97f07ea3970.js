@@ -74,9 +74,13 @@ function signature(value, label) {
   });
 }
 
-function sourceList(value, label, fileName) {
-  if (!Array.isArray(value) || value.length !== SOURCE_ORDER.length) {
-    throw new Error(`${label} 必须包含三个有序下载源`);
+export function sourceList(value, label, fileName) {
+  if (
+    !Array.isArray(value)
+    || value.length < 1
+    || value.length > SOURCE_ORDER.length
+  ) {
+    throw new Error(`${label} 必须包含一至三个有序下载源`);
   }
   const ids = new Set();
   return Object.freeze(value.map((raw, index) => {
@@ -113,12 +117,15 @@ function sourceList(value, label, fileName) {
 }
 
 function sameSources(reference, candidate, label) {
-  if (candidate.some((source, index) => (
+  if (
+    candidate.length !== reference.length
+    || candidate.some((source, index) => (
     source.sourceId !== reference[index].sourceId ||
     source.kind !== reference[index].kind ||
     source.priority !== reference[index].priority ||
     source.baseUrl !== reference[index].baseUrl
-  ))) {
+    ))
+  ) {
     throw new Error(`${label} 下载源身份与清单不一致`);
   }
 }
@@ -395,7 +402,7 @@ export async function verifyManifestBytes(
       clearTimeout(timeout);
     }
   }
-  throw new Error("三个来源的签名清单均未通过 exact SHA-256 字节核对");
+  throw new Error("所有发布源的签名清单均未通过 exact SHA-256 字节核对");
 }
 
 function createElement(tag, className, value) {
@@ -444,6 +451,67 @@ function cardCopy(artifact) {
   return ["Mac", "macOS Intel", "Intel Mac 的签名 Bootstrap。"];
 }
 
+function powershellLiteral(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+function shellLiteral(value) {
+  return `'${String(value).replaceAll("'", `'\"'\"'`)}'`;
+}
+
+export function terminalCommand(artifact) {
+  const sourceUrl = artifact.sources[0].url;
+  if (artifact.platform === "windows") {
+    return [
+      "$d=Join-Path $env:TEMP ('EcoreX-'+[guid]::NewGuid())",
+      "New-Item -ItemType Directory -Path $d | Out-Null",
+      "$z=Join-Path $d 'EcoreX.zip'",
+      `Invoke-WebRequest -UseBasicParsing -Uri ${powershellLiteral(sourceUrl)} -OutFile $z`,
+      `if ((Get-FileHash $z -Algorithm SHA256).Hash.ToLowerInvariant() -ne ${powershellLiteral(artifact.sha256)}) { throw 'EcoreX 下载校验失败' }`,
+      "Expand-Archive -LiteralPath $z -DestinationPath $d",
+      "& (Join-Path $d 'bin\\ecorex-bootstrap.exe')",
+    ].join("; ");
+  }
+  const url = shellLiteral(sourceUrl);
+  const digest = shellLiteral(artifact.sha256);
+  return [
+    'd="$(mktemp -d)"',
+    'z="$d/EcoreX.zip"',
+    `curl -fL --retry 8 --retry-all-errors -o "$z" ${url}`,
+    `printf '%s  %s\\n' ${digest} "$z" | shasum -a 256 -c -`,
+    'ditto -x -k "$z" "$d"',
+    'chmod +x "$d/bin/ecorex-bootstrap"',
+    '"$d/bin/ecorex-bootstrap"',
+  ].join(" && ");
+}
+
+function appendTerminalCommand(article, artifact) {
+  const block = createElement("div", "command-block");
+  block.append(createElement(
+    "span",
+    "",
+    artifact.platform === "windows" ? "PowerShell 一键安装" : "终端一键安装",
+  ));
+  const command = terminalCommand(artifact);
+  block.append(createElement("code", "", command));
+  const copy = createElement("button", "", "复制命令");
+  copy.type = "button";
+  copy.addEventListener("click", async () => {
+    const original = copy.textContent;
+    try {
+      await navigator.clipboard.writeText(command);
+      copy.textContent = "已复制";
+    } catch {
+      copy.textContent = "复制失败";
+    }
+    window.setTimeout(() => {
+      copy.textContent = original;
+    }, 1600);
+  });
+  block.append(copy);
+  article.append(block);
+}
+
 function renderArtifactCard(grid, release, artifact, recommended) {
   const [icon, title, body] = cardCopy(artifact);
   const article = createElement("article", `download-card${recommended ? " is-recommended" : ""}`);
@@ -466,18 +534,25 @@ function renderArtifactCard(grid, release, artifact, recommended) {
   primary.rel = "noopener noreferrer";
   primary.download = artifact.fileName;
   article.append(primary);
+  appendTerminalCommand(article, artifact);
 
-  const details = createElement("details", "source-fallbacks");
-  details.append(createElement("summary", "", "备用下载源"));
-  const sourceLabels = ["国内 GitHub 镜像", "GitHub Releases", "EcoreX CDN"];
-  artifact.sources.forEach((source, index) => {
-    const link = createElement("a", "", sourceLabels[index]);
-    link.href = source.url;
-    link.rel = "noopener noreferrer";
-    link.download = artifact.fileName;
-    details.append(link);
-  });
-  article.append(details);
+  if (artifact.sources.length > 1) {
+    const details = createElement("details", "source-fallbacks");
+    details.append(createElement("summary", "", "备用下载源"));
+    const sourceLabels = {
+      "github-cn-mirror": "国内 GitHub 镜像",
+      "github-release": "GitHub Releases",
+      "ecorex-cdn": "EcoreX CDN",
+    };
+    artifact.sources.slice(1).forEach((source) => {
+      const link = createElement("a", "", sourceLabels[source.kind]);
+      link.href = source.url;
+      link.rel = "noopener noreferrer";
+      link.download = artifact.fileName;
+      details.append(link);
+    });
+    article.append(details);
+  }
   grid.append(article);
 }
 
@@ -489,7 +564,7 @@ function renderIndex(index, manifestCheck = null) {
     const card = createElement("article", "download-card");
     card.append(createElement("span", "platform-icon", "···"));
     card.append(createElement("h3", "", "v1.0 Bootstrap 尚未发布"));
-    card.append(createElement("p", "", "三平台制品和三个发布源全部通过签名与一致性门禁后，下载才会开启。"));
+    card.append(createElement("p", "", "三平台制品通过签名与一致性门禁后，下载才会开启。"));
     card.append(createElement("span", "download-link is-disabled", "不可下载"));
     grid.append(card);
     return;
@@ -567,11 +642,21 @@ if (typeof document !== "undefined") {
     setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
   });
   loadIndex()
-    .then(async (index) => {
-      const manifestCheck = index.status === "published"
-        ? await verifyManifestBytes(index.release.manifest)
-        : null;
-      renderIndex(index, manifestCheck);
+    .then((index) => {
+      // Discovery must remain usable when a release origin does not grant
+      // browser CORS. The downloaded Bootstrap is the signature authority.
+      renderIndex(index, null);
+      if (index.status === "published") {
+        verifyManifestBytes(index.release.manifest)
+          .then((manifestCheck) => {
+            const node = document.querySelector("[data-manifest-check]");
+            if (node) node.textContent = `字节摘要已核对（${manifestCheck.kind}）`;
+          })
+          .catch(() => {
+            const node = document.querySelector("[data-manifest-check]");
+            if (node) node.textContent = "由 Bootstrap 验签";
+          });
+      }
     })
     .catch(renderFailure);
 }

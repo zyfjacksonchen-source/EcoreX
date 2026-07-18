@@ -26,6 +26,20 @@ staging 目录必须由 root 拥有，不得被 group/other 写入。`site` 中�
 和 `assets/` 内 HTML 精确引用的内容寻址资产。链接、中间文件、日志、
 源码映射和额外空目录都会阻断上线。
 
+### 一次性 loopback TLS readback 基线
+
+如果公网 TLS 由 CDN 终止，而源站证书属于另一个站点，生产初始化必须一次性
+建立 `dl.ecoremedia.net` 专用的 loopback SNI vhost。它只监听
+`127.0.0.1:443`、复用正式静态目录与 Cloud/Admin route include，并使用只包含
+`dl.ecoremedia.net` SAN 的独立 readback leaf。独立 CA 私钥和 leaf 私钥必须
+root-only；CA 只安装到该生产主机的系统 trust store。它可以与 Provider Bridge
+共享同一个 loopback listener，因为 Nginx 按 SNI 选择完全分离的证书和路由。
+
+这是主机 bootstrap 控制，不是每个版本的发布步骤。建成后，每次发布仍由下方
+部署器执行真实 SNI、完整证书校验和逐字节 readback；不得使用 `curl -k`、关闭
+hostname 校验或退化为 HTTP。若该 vhost/CA 缺失或证书选择漂移，apply 会在提交
+前失败并恢复上一站点。
+
 ## 生成已校验 staging
 
 先在管理员发布工作站完成三源发布、签名指针生成和 direct deployable

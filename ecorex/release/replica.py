@@ -314,7 +314,10 @@ class HTTPSReadThroughReleaseMirror:
 
     The mirror is deliberately read-only: it has no credential, upload or
     finalize method. Publication code must first make the immutable GitHub
-    assets public, then stream every mirror byte through this verifier.
+    assets public.  Small signed control files are streamed end-to-end; large
+    payloads can use an exact Range availability probe because the mirror is
+    not a source of truth and clients still verify the signed SHA-256 before
+    activation.
     """
 
     read_through = True
@@ -503,6 +506,128 @@ class HTTPSReadThroughReleaseMirror:
             release_id,
             file_path.name,
             size,
+            expected_sha256,
+            url,
+        )
+
+    def probe_asset(
+        self,
+        *,
+        base_url: str,
+        release_id: str,
+        path: str | os.PathLike[str],
+        expected_sha256: str,
+    ) -> ReleaseReplicaReceipt:
+        """Verify that a large read-through asset is publicly fetchable.
+
+        This intentionally does not claim to re-hash mirror bytes: GitHub is
+        the immutable origin, the signed manifest binds the expected digest,
+        and every client verifies that digest before activation.  A strict
+        one-byte range response confirms that the mirror can serve the exact
+        asset namespace without making release publication depend on a full
+        second multi-gigabyte transfer through a best-effort accelerator.
+        """
+        if _SAFE_ID.fullmatch(release_id) is None or _SHA256.fullmatch(
+            expected_sha256
+        ) is None:
+            raise ValueError("read-through mirror identity is invalid")
+        file_path = Path(path)
+        before = _regular_file(file_path)
+        if _SAFE_FILE.fullmatch(file_path.name) is None or before.st_size < 1:
+            raise ReleaseReplicaError("local_asset_invalid")
+        parsed = urlsplit(base_url.rstrip("/"))
+        if (
+            parsed.scheme != "https"
+            or (parsed.hostname or "").casefold().rstrip(".") not in self.public_hosts
+            or parsed.port not in {None, 443}
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+            or not parsed.path
+        ):
+            raise ValueError("read-through mirror does not match signed source URL")
+        if self._verification_started_at is None:
+            self._verification_started_at = self.clock()
+        last_error: ReleaseReplicaError | None = None
+        for attempt in range(self.attempts):
+            if self._deadline_exhausted():
+                raise ReleaseReplicaError(
+                    "mirror_verification_deadline_exceeded", retryable=True
+                )
+            try:
+                return self._probe_asset_once(
+                    base_url=base_url,
+                    release_id=release_id,
+                    file_path=file_path,
+                    expected_sha256=expected_sha256,
+                    expected_size=before.st_size,
+                )
+            except ReleaseReplicaError as error:
+                last_error = error
+                if not error.retryable or attempt >= self.attempts - 1:
+                    raise
+                delay = self.backoff_seconds[attempt]
+                if error.retry_after_seconds is not None:
+                    delay = max(delay, min(error.retry_after_seconds, 30.0))
+                if self.clock() + delay >= self._deadline_at:
+                    raise ReleaseReplicaError(
+                        "mirror_verification_deadline_exceeded", retryable=True
+                    ) from error
+                self.sleeper(delay)
+        assert last_error is not None
+        raise last_error
+
+    def _probe_asset_once(
+        self,
+        *,
+        base_url: str,
+        release_id: str,
+        file_path: Path,
+        expected_sha256: str,
+        expected_size: int,
+    ) -> ReleaseReplicaReceipt:
+        url = f"{base_url.rstrip('/')}/{quote(file_path.name, safe='')}"
+        try:
+            with self.client.stream(
+                "GET",
+                url,
+                headers={"Accept-Encoding": "identity", "Range": "bytes=0-0"},
+                follow_redirects=False,
+            ) as response:
+                if response.is_redirect or response.history:
+                    raise ReleaseReplicaError("mirror_redirect_refused")
+                if response.status_code != 206:
+                    raise ReleaseReplicaError(
+                        "mirror_range_unavailable",
+                        retryable=(
+                            response.status_code in {404, 408, 425, 429}
+                            or response.status_code >= 500
+                        ),
+                        retry_after_seconds=_retry_after_seconds(
+                            response.headers.get("retry-after")
+                        ),
+                    )
+                if response.headers.get(
+                    "content-encoding", "identity"
+                ).casefold() != "identity":
+                    raise ReleaseReplicaError("mirror_compressed_response")
+                if response.headers.get("content-range") != (
+                    f"bytes 0-0/{expected_size}"
+                ):
+                    raise ReleaseReplicaError("mirror_range_mismatch")
+                payload = b"".join(response.iter_bytes())
+        except ReleaseReplicaError:
+            raise
+        except (httpx.TimeoutException, httpx.TransportError):
+            raise ReleaseReplicaError("mirror_unavailable", retryable=True) from None
+        if len(payload) != 1:
+            raise ReleaseReplicaError("mirror_range_mismatch")
+        return ReleaseReplicaReceipt(
+            self.source_id,
+            release_id,
+            file_path.name,
+            expected_size,
             expected_sha256,
             url,
         )
