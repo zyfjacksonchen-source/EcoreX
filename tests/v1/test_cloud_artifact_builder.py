@@ -21,6 +21,8 @@ from ecorex.deployment.cloud_artifact import (
     unsigned_cloud_manifest,
 )
 from ecorex.deployment.cloud_artifact_builder import (
+    CLOUD_PIP_INDEX_URL_ENV,
+    DOMESTIC_PYPI_SIMPLE_INDEX_URL,
     DESCRIPTOR_NAME,
     MANIFEST_NAME,
     PAYLOAD_NAME,
@@ -28,6 +30,7 @@ from ecorex.deployment.cloud_artifact_builder import (
     CloudArtifactPipelineError,
     attach_detached_cloud_signature,
     create_detached_signature_response,
+    _cloud_pip_index_url,
 )
 from ecorex.release import Ed25519MemorySigner
 
@@ -74,6 +77,20 @@ REQUIRED = (
     "deployment/nginx/admin-route-control-plane.conf",
     "deployment/nginx/ecorex-cloud.routes.conf",
 )
+
+
+def test_cloud_dependency_index_is_explicitly_allowlisted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(CLOUD_PIP_INDEX_URL_ENV, raising=False)
+    assert _cloud_pip_index_url() == "https://pypi.org/simple"
+
+    monkeypatch.setenv(CLOUD_PIP_INDEX_URL_ENV, DOMESTIC_PYPI_SIMPLE_INDEX_URL)
+    assert _cloud_pip_index_url() == DOMESTIC_PYPI_SIMPLE_INDEX_URL
+
+    monkeypatch.setenv(CLOUD_PIP_INDEX_URL_ENV, "https://untrusted.example/simple")
+    with pytest.raises(CloudArtifactPipelineError, match="cloud_dependency_index_unapproved"):
+        _cloud_pip_index_url()
 
 
 def _tree(root: Path) -> Path:

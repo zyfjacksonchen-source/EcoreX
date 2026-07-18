@@ -40,6 +40,12 @@ PAYLOAD_NAME = "cloud-release-manifest.signing-payload"
 RECEIPT_NAME = "cloud-build-receipt.json"
 SIGNATURE_RESPONSE_NAME = "cloud-manifest-signature-response.json"
 MAX_SIGNING_PAYLOAD_BYTES = 16 * 1024 * 1024
+PYPI_SIMPLE_INDEX_URL = "https://pypi.org/simple"
+DOMESTIC_PYPI_SIMPLE_INDEX_URL = "https://mirrors.aliyun.com/pypi/simple"
+CLOUD_PIP_INDEX_URL_ENV = "ECOREX_CLOUD_PIP_INDEX_URL"
+APPROVED_CLOUD_PIP_INDEX_URLS = frozenset(
+    {PYPI_SIMPLE_INDEX_URL, DOMESTIC_PYPI_SIMPLE_INDEX_URL}
+)
 _SHA = re.compile(r"^[0-9a-f]{64}$")
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _ENTRYPOINTS = {
@@ -74,6 +80,7 @@ def build_linux_cloud_artifact(
     artifact = _new_directory_path(artifact_root, "cloud_artifact_output_exists")
     handoff = _new_directory_path(handoff_root, "cloud_handoff_output_exists")
     locks = _validated_locks(source)
+    dependency_index_url = _cloud_pip_index_url()
     source_date_epoch = _git(source, "show", "-s", "--format=%ct", expected_commit)
     if not source_date_epoch.isdigit():
         raise CloudArtifactPipelineError("cloud_source_commit_time_invalid")
@@ -97,6 +104,7 @@ def build_linux_cloud_artifact(
                 artifact,
                 locks=archived_locks,
                 environment=environment,
+                dependency_index_url=dependency_index_url,
             )
             _copy_deployment_templates(archived_source, artifact)
         _normalize_tree_modes(artifact)
@@ -124,6 +132,10 @@ def build_linux_cloud_artifact(
             "architecture": ARCHITECTURE,
             "python_version": ".".join(str(part) for part in PYTHON_VERSION),
             "dependency_lock_manifest_sha256": locks["manifest_sha256"],
+            "dependency_transport": {
+                "index_url": dependency_index_url,
+                "verification": "pip-require-hashes",
+            },
             "dependency_locks": {
                 profile: {
                     "filename": Path(value["path"]).name,
@@ -480,6 +492,7 @@ def _build_runtime_tree(
     *,
     locks: Mapping[str, Any],
     environment: Mapping[str, str],
+    dependency_index_url: str,
 ) -> dict[str, Any]:
     venv = artifact / "venv"
     _run((sys.executable, "-m", "venv", "--copies", str(venv)), cwd=artifact, env=environment)
@@ -506,7 +519,7 @@ def _build_runtime_tree(
                 "-r",
                 locks["profiles"][profile]["path"],
                 "--index-url",
-                "https://pypi.org/simple",
+                dependency_index_url,
             ),
             cwd=artifact,
             env=environment,
@@ -737,6 +750,20 @@ def _build_environment(source_date_epoch: str) -> dict[str, str]:
             "SOURCE_DATE_EPOCH": source_date_epoch,
         }
     )
+    return value
+
+
+def _cloud_pip_index_url() -> str:
+    """Return an explicitly approved package index for a hash-locked build.
+
+    The environment override exists for regions where the default PyPI endpoint
+    is not reliably reachable.  It does not weaken dependency verification:
+    pip still installs only the repository's ``--require-hashes`` locks.
+    """
+
+    value = os.environ.get(CLOUD_PIP_INDEX_URL_ENV, PYPI_SIMPLE_INDEX_URL)
+    if value not in APPROVED_CLOUD_PIP_INDEX_URLS:
+        raise CloudArtifactPipelineError("cloud_dependency_index_unapproved")
     return value
 
 
