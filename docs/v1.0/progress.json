@@ -9,8 +9,8 @@
     "dirty_worktree_preserved": true
   },
   "current_milestone": "direct_production_publication",
-  "current_batch": "The approved public-HTTP bridge is transactionally active. GPT-5.6 SOL, DeepSeek and Doubao passed real activation. The legacy Image 2 proxy's 1254px native square response is now handled by a bounded same-aspect normalization contract; the new exact source must be rebuilt, both image slots revalidated, and Web/Admin switched atomically.",
-  "last_verified_batch": "On 2026-07-18, both Image 2 operations returned HTTP 200 base64 PNG at 1254x1254 while declaring size=auto. A strict Image 2-only normalization to the requested dimensions passed the activation, management and direct-provider suite (42 tests) plus Ruff. Gemini's legacy proxy returned 502 and remains rejected. No v1 Web/Admin route has yet been activated.",
+  "current_batch": "All required chat and image slots except the failing Gemini legacy proxy have passed real activation. First-recovery defects in public JSON quoting and slot-directory traversal are corrected; the new exact source must be rebuilt, the durable schema_ready journal recovered, and Web/Admin switched atomically.",
+  "last_verified_batch": "On 2026-07-18, all six environment files passed one parser. A failed blue-slot start was traced to root:root 0750 traversal, stopped without route switch, and legacy services were restored. The root:ecorex-cloud 0750 slot contract plus failed-health cleanup passed 69 Cloud sidecar tests with seven platform skips and Ruff.",
   "recovery_document": "docs/v1.0/implementation-log.md",
   "verification_document": "docs/v1.0/verification-ledger.md",
   "milestones": [
@@ -23,7 +23,7 @@
     {"id": "migration_ga_gates", "status": "in_progress"}
   ],
   "remaining_local_work": [
-    "commit and push the verified bounded image-normalization correction without touching the user-owned .artifacts tree",
+    "commit and push the verified slot-runtime recovery correction without touching the user-owned .artifacts tree",
     "build and sign one exact replacement Cloud artifact, then revalidate both Image 2 slots through the audited repository workflow",
     "recover the committed first-activation journal, perform the atomic Web/Admin route switch, and complete external plus browser readback"
   ],

@@ -1747,6 +1747,9 @@ def test_migrating_recovery_reruns_schema_before_target_can_start(
         "_wait_health",
         lambda _spec, slot: events.append(("health", slot)),
     )
+    monkeypatch.setattr(
+        deployment, "_prepare_slot_runtime_directory", lambda _slot: None
+    )
     monkeypatch.setattr(deployment, "_switch_nginx", lambda *_args: None)
     monkeypatch.setattr(deployment, "_write_slot_projection", lambda *_args: None)
     monkeypatch.setattr(deployment, "_clear_transition_journal", lambda: None)
@@ -1957,6 +1960,9 @@ def test_source_recovery_stops_target_writer_before_starting_source(
         lambda _spec, slot: events.append(("health", slot)),
     )
     monkeypatch.setattr(
+        deployment, "_prepare_slot_runtime_directory", lambda _slot: None
+    )
+    monkeypatch.setattr(
         deployment,
         "_switch_nginx",
         lambda _spec, slot: events.append(("routes", slot)),
@@ -2020,6 +2026,9 @@ def test_target_roll_forward_stops_source_writer_then_reverifies_and_rebuilds(
         lambda _spec, slot: events.append(("health", slot)),
     )
     monkeypatch.setattr(
+        deployment, "_prepare_slot_runtime_directory", lambda _slot: None
+    )
+    monkeypatch.setattr(
         deployment,
         "_switch_nginx",
         lambda _spec, slot: events.append(("routes", slot)),
@@ -2047,6 +2056,63 @@ def test_target_roll_forward_stops_source_writer_then_reverifies_and_rebuilds(
         ("routes", "green"),
         ("state", "green"),
         "journal_clear",
+    ]
+
+
+def test_slot_runtime_directory_is_service_group_traversable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    slot_root = tmp_path / "cloud" / "slots"
+    ownership: list[tuple[Path, str, str]] = []
+    monkeypatch.setattr(deployment, "SLOT_ROOT", slot_root)
+    monkeypatch.setattr(deployment, "_fsync_directory", lambda _path: None)
+    monkeypatch.setattr(
+        deployment.shutil,
+        "chown",
+        lambda path, *, user, group: ownership.append((Path(path), user, group)),
+    )
+
+    deployment._prepare_slot_runtime_directory("blue")
+
+    directory = slot_root / "blue"
+    assert directory.is_dir()
+    if os.name != "nt":
+        assert stat.S_IMODE(directory.stat().st_mode) == 0o750
+    assert ownership == [(directory, "root", "ecorex-cloud")]
+
+
+def test_failed_candidate_health_stops_the_restart_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[object] = []
+    monkeypatch.setattr(
+        deployment,
+        "_prepare_slot_runtime_directory",
+        lambda slot: events.append(("prepare", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_systemctl",
+        lambda _spec, verb, units: events.append((verb, tuple(units))),
+    )
+
+    def unhealthy(_spec, slot):
+        events.append(("health", slot))
+        raise deployment.CloudDeployError("service_health_failed")
+
+    monkeypatch.setattr(deployment, "_wait_health", unhealthy)
+    with pytest.raises(deployment.CloudDeployError, match="service_health_failed"):
+        deployment._start_target_services(
+            _spec(tmp_path),
+            _slot_state("ecorex-cloud-v1.0.0-target", "blue"),
+        )
+
+    units = deployment._slot_units("blue")
+    assert events == [
+        ("prepare", "blue"),
+        ("start", tuple(units)),
+        ("health", "blue"),
+        ("stop", tuple(reversed(units))),
     ]
 
 

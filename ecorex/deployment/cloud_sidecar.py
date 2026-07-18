@@ -2047,6 +2047,7 @@ def _verify_nginx_wiring(spec: CloudDeploymentSpec) -> None:
 
 
 def _write_slot_environment(slot: str, release: Path) -> None:
+    _prepare_slot_runtime_directory(slot)
     ports = PORTS[slot]
     values = {
         "control-plane": {
@@ -2071,6 +2072,38 @@ def _write_slot_environment(slot: str, release: Path) -> None:
             payload.encode("ascii"),
         )
     _atomic_symlink(release, SLOT_ROOT / slot / "current")
+
+
+def _prepare_slot_runtime_directory(slot: str) -> None:
+    """Make the fixed slot traversable only by root and the service group."""
+
+    if slot not in SLOTS:
+        raise CloudDeployError("slot_runtime_directory_invalid")
+    directory = SLOT_ROOT / slot
+    try:
+        SLOT_ROOT.mkdir(parents=True, exist_ok=True, mode=0o755)
+        root_metadata = SLOT_ROOT.lstat()
+        if (
+            stat.S_ISLNK(root_metadata.st_mode)
+            or not stat.S_ISDIR(root_metadata.st_mode)
+            or SLOT_ROOT.resolve(strict=True) != SLOT_ROOT
+        ):
+            raise OSError
+        directory.mkdir(mode=0o750, exist_ok=True)
+        metadata = directory.lstat()
+        if (
+            stat.S_ISLNK(metadata.st_mode)
+            or not stat.S_ISDIR(metadata.st_mode)
+            or directory.resolve(strict=True) != directory
+            or metadata.st_dev != root_metadata.st_dev
+        ):
+            raise OSError
+        shutil.chown(directory, user="root", group="ecorex-cloud")
+        os.chmod(directory, 0o750)
+        _fsync_directory(directory)
+        _fsync_directory(SLOT_ROOT)
+    except OSError:
+        raise CloudDeployError("slot_runtime_directory_invalid") from None
 
 
 _SERVICE_MODULES = {
@@ -2223,8 +2256,17 @@ def _start_target_services(
         _systemctl(spec, "is-active", LEGACY_SERVICE_NAMES)
         return
     slot = str(state["active_slot"])
-    _systemctl(spec, "start", _slot_units(slot))
-    _wait_health(spec, slot)
+    _prepare_slot_runtime_directory(slot)
+    units = _slot_units(slot)
+    _systemctl(spec, "start", units)
+    try:
+        _wait_health(spec, slot)
+    except CloudDeployError:
+        # Recovery may be re-entered repeatedly. A candidate that cannot
+        # become healthy must never remain in systemd's restart loop while
+        # the still-authoritative source serves traffic.
+        _systemctl(spec, "stop", reversed(units))
+        raise
 
 
 def _stop_transition_writers(

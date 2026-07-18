@@ -6457,3 +6457,20 @@ requested dimensions. The adapter requires identical aspect ratio, PNG input,
 decoded-memory and byte limits, and revalidates the normalized PNG before CAS
 publication. The expanded activation, management and direct-provider suite
 passes 42 tests.
+
+The first durable activation recovery then exposed two deployment-contract
+defects before route switch. The public origin-map helper had written JSON
+without the single-quote envelope required to make systemd and the migration
+parser observe identical bytes; both affected public files were atomically
+rerendered and all six public/secret environment files now pass the same
+parser. The recovered blue slot next failed with `203/EXEC` because its fixed
+slot directory was root:root `0750`, preventing the `ecorex-cloud` service
+identity from traversing the otherwise valid immutable interpreter path.
+
+The deployer now owns a fixed slot-directory contract: real directory, same
+filesystem, root owner, `ecorex-cloud` group and mode `0750`, applied both
+while staging and before any recovery start. A candidate that fails health is
+also stopped before the error escapes, preventing an unattended systemd
+restart loop. The failed candidate units were stopped and the still-
+authoritative legacy Web/Admin/usage services were restored before continuing.
+The Cloud sidecar suite passes 69 tests with seven explicit platform skips.
