@@ -324,7 +324,26 @@ jobs:
             }
             try {
               $root = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8765/" -TimeoutSec 3
-              $api = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8765/api/v1/bootstrap" -TimeoutSec 3
+              $runtimeMatch = [regex]::Match(
+                $root.Content,
+                'window\.__ECOREX_RUNTIME__=Object\.freeze\((\{[^;]+\})\);'
+              )
+              if (-not $runtimeMatch.Success) {
+                throw "Runtime WebUI configuration is missing"
+              }
+              $runtimeConfig = $runtimeMatch.Groups[1].Value | ConvertFrom-Json
+              if (
+                -not $runtimeConfig.bearerToken -or
+                $runtimeConfig.releaseId -cne $env:ECOREX_EXPECTED_RELEASE_ID -or
+                $runtimeConfig.version -cne $env:ECOREX_EXPECTED_VERSION
+              ) {
+                throw "Runtime WebUI configuration identity is invalid"
+              }
+              $api = Invoke-WebRequest `
+                -UseBasicParsing `
+                -Uri "http://127.0.0.1:8765/api/v1/bootstrap" `
+                -Headers @{ Authorization = "Bearer $($runtimeConfig.bearerToken)" } `
+                -TimeoutSec 3
               if ($root.StatusCode -eq 200 -and $api.StatusCode -eq 200) {
                 $apiProjection = $api.Content | ConvertFrom-Json
                 $pointersPath = Join-Path $env:ECOREX_INSTALL_ROOT "slot-pointers.json"
@@ -377,6 +396,8 @@ jobs:
           import json
           import os
           from pathlib import Path
+          import re
+          from urllib.request import Request
           from urllib.request import urlopen
 
           install_root = Path(os.environ["ECOREX_INSTALL_ROOT"])
@@ -387,7 +408,28 @@ jobs:
           current = pointers.get("current")
           if not current or current not in pointers.get("known_good", []):
               raise SystemExit(1)
-          with urlopen("http://127.0.0.1:8765/api/v1/bootstrap", timeout=3) as response:
+          root_html = Path(os.environ["ECOREX_ROOT_HTML"]).read_text(
+              encoding="utf-8"
+          )
+          match = re.search(
+              r"window\.__ECOREX_RUNTIME__=Object\.freeze\((\{[^;]+\})\);",
+              root_html,
+          )
+          if match is None:
+              raise SystemExit(1)
+          runtime_config = json.loads(match.group(1))
+          if (
+              not runtime_config.get("bearerToken")
+              or runtime_config.get("releaseId")
+              != os.environ["ECOREX_EXPECTED_RELEASE_ID"]
+              or runtime_config.get("version") != os.environ["ECOREX_EXPECTED_VERSION"]
+          ):
+              raise SystemExit(1)
+          request = Request(
+              "http://127.0.0.1:8765/api/v1/bootstrap",
+              headers={"Authorization": "Bearer " + runtime_config["bearerToken"]},
+          )
+          with urlopen(request, timeout=3) as response:
               if response.status != 200:
                   raise SystemExit(1)
               api = json.load(response)
