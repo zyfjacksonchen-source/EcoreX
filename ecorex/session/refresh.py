@@ -17,6 +17,7 @@ from ecorex.runtime.schema_catalog import validate_product_schema
 from .device import BrokerDeviceGrant
 from .device_transport import DeviceRefreshInvalidGrant
 from .models import (
+    LeaseValidationError,
     ManagedSessionSnapshot,
     SessionConflict,
     SessionRefreshContext,
@@ -180,6 +181,32 @@ class ManagedSessionRefreshRepository:
             )
             return self._projection(self._row(connection))
 
+    def require_reauthorization_for_invalid_session(
+        self,
+        *,
+        source_lease_digest: str,
+        now: datetime,
+        error_code: str = "lease_validation_failed",
+    ) -> SessionRefreshProjection:
+        _require_digest(source_lease_digest)
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", error_code):
+            raise ValueError("managed session refresh error code is invalid")
+        with self.database.transaction() as connection:
+            row = self._row(connection)
+            if (
+                row["status"] == "reauthorization_required"
+                and row["source_lease_digest"] == source_lease_digest
+            ):
+                return self._projection(row)
+            connection.execute(
+                "UPDATE managed_session_refresh_state SET "
+                "status='reauthorization_required',source_lease_digest=?,"
+                "request_hash=NULL,claim_token=NULL,claim_expires_at=NULL,"
+                "next_attempt_at=NULL,error_code=?,updated_at=? WHERE singleton=1",
+                (source_lease_digest, error_code, _iso(now)),
+            )
+            return self._projection(self._row(connection))
+
     def complete(
         self,
         *,
@@ -300,13 +327,21 @@ class ManagedSessionRefreshService:
             self.session.recover()
             active = self.session.read_data_scope_snapshot()
             digest = active.lease_digest
+        except LeaseValidationError:
+            return self._invalid_session_requires_reauthorization()
         except SessionUnavailable:
             digest = None
         return self.repository.recover(active_lease_digest=digest, now=self._now())
 
     async def refresh_if_due(self, *, force: bool = False) -> SessionRefreshProjection:
         async with self._lock:
-            context = await asyncio.to_thread(self.session.refresh_context)
+            try:
+                context = await asyncio.to_thread(self.session.refresh_context)
+            except LeaseValidationError:
+                self._invalid_session_requires_reauthorization()
+                raise SessionReauthorizationRequired(
+                    "managed session requires device authorization"
+                ) from None
             now = self._now()
             if not force and context.access_expires_at - now > timedelta(
                 seconds=self.refresh_ahead_seconds
@@ -414,6 +449,42 @@ class ManagedSessionRefreshService:
         except Exception:
             pass
 
+    def _invalid_session_requires_reauthorization(
+        self,
+    ) -> SessionRefreshProjection:
+        fallback = hashlib.sha256(
+            b"ecorex-invalid-managed-session-v1"
+        ).hexdigest()
+        generation = 0
+        try:
+            active = self.session.repository.active(require_quiescent=True)
+            source_digest = active.intent.lease_digest
+            generation = active.state.generation
+        except Exception:
+            source_digest = fallback
+            try:
+                generation = self.session.repository.state().generation
+            except Exception:
+                generation = 0
+        projection = self.repository.require_reauthorization_for_invalid_session(
+            source_lease_digest=source_digest,
+            now=self._now(),
+        )
+        try:
+            self.session.repository.record_audit(
+                event_type="session.refresh.reauthorization_required",
+                outcome="failed",
+                reason_code="lease_validation_failed",
+                client_request_hash=None,
+                lease=None,
+                generation=generation,
+                details={},
+                now=_iso(self._now()),
+            )
+        except Exception:
+            pass
+        return projection
+
     def _now(self) -> datetime:
         value = self.clock()
         if not isinstance(value, datetime) or value.tzinfo is None:
@@ -463,6 +534,7 @@ class ManagedSessionRefreshSupervisor:
             try:
                 await self.service.refresh_if_due()
             except (
+                LeaseValidationError,
                 SessionUnavailable,
                 SessionRefreshError,
                 SessionReauthorizationRequired,

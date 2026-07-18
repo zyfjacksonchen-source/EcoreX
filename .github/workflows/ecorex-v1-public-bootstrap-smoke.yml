@@ -1,0 +1,578 @@
+name: EcoreX v1 public Bootstrap smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/v1-cloud-routing-hotfix
+    paths:
+      - ".github/workflows/ecorex-v1-public-bootstrap-smoke.yml"
+      - "platform-staging/bootstrap/**"
+  schedule:
+    - cron: "17 19 * * *"
+
+permissions: {}
+
+concurrency:
+  group: ecorex-v1-public-bootstrap-smoke
+  cancel-in-progress: false
+
+env:
+  ECOREX_PUBLIC_BOOTSTRAP_INDEX: https://dl.ecoremedia.net/ecorex-agent/public-bootstrap-index.json
+
+jobs:
+  real-install-smoke:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: windows-latest x64
+            id: windows-latest-x64
+            runs_on: windows-latest
+            platform: windows
+            architecture: x64
+            artifact_id: bootstrap-windows-x64
+          - label: macos-15 arm64
+            id: macos-15-arm64
+            runs_on: macos-15
+            platform: macos
+            architecture: arm64
+            artifact_id: bootstrap-macos-arm64
+          - label: macos-15-intel x64
+            id: macos-15-intel-x64
+            runs_on: macos-15-intel
+            platform: macos
+            architecture: x64
+            artifact_id: bootstrap-macos-x64
+
+    steps:
+      - name: Provision isolated verifier
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.9"
+
+      - name: Resolve current public Bootstrap
+        shell: python
+        env:
+          EXPECTED_ARTIFACT_ID: ${{ matrix.artifact_id }}
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
+          EXPECTED_ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          from __future__ import annotations
+
+          from datetime import UTC, datetime
+          import json
+          import os
+          from pathlib import PurePosixPath
+          import re
+          from urllib.parse import unquote, urlsplit
+          from urllib.request import Request, urlopen
+
+          index_url = os.environ["ECOREX_PUBLIC_BOOTSTRAP_INDEX"]
+          request = Request(
+              index_url,
+              headers={
+                  "Accept": "application/json",
+                  "User-Agent": "EcoreX-public-Bootstrap-smoke/1",
+              },
+          )
+          with urlopen(request, timeout=30) as response:
+              if response.status != 200 or response.geturl() != index_url:
+                  raise SystemExit("public Bootstrap index did not return directly")
+              payload = response.read(256 * 1024 + 1)
+          if not 1 <= len(payload) <= 256 * 1024:
+              raise SystemExit("public Bootstrap index size is invalid")
+          try:
+              index = json.loads(payload)
+          except (UnicodeDecodeError, json.JSONDecodeError):
+              raise SystemExit("public Bootstrap index is not valid JSON") from None
+
+          if (
+              not isinstance(index, dict)
+              or index.get("schema_version") != 1
+              or index.get("document_type") != "ecorex.public-bootstrap-discovery"
+              or index.get("status") != "published"
+              or index.get("trust") != "untrusted-discovery-hint"
+          ):
+              raise SystemExit("public Bootstrap index contract is invalid")
+          release = index.get("release")
+          authority = index.get("authority")
+          freshness = index.get("freshness")
+          if not all(isinstance(item, dict) for item in (release, authority, freshness)):
+              raise SystemExit("public Bootstrap release authority is missing")
+          target = authority.get("target")
+          if (
+              not isinstance(target, dict)
+              or release.get("channel") != "stable"
+              or target.get("release_id") != release.get("release_id")
+              or target.get("version") != release.get("version")
+              or target.get("build_digest") != release.get("build_digest")
+              or target.get("manifest_sha256")
+              != release.get("manifest", {}).get("sha256")
+          ):
+              raise SystemExit("public Bootstrap release identity is inconsistent")
+          sha_pattern = re.compile(r"[0-9a-f]{64}")
+          if (
+              not sha_pattern.fullmatch(str(release.get("build_digest", "")))
+              or not sha_pattern.fullmatch(str(target.get("manifest_sha256", "")))
+          ):
+              raise SystemExit("public Bootstrap release digest is invalid")
+          try:
+              expires_at = datetime.fromisoformat(
+                  str(freshness["expires_at"]).replace("Z", "+00:00")
+              )
+          except (KeyError, TypeError, ValueError):
+              raise SystemExit("public Bootstrap freshness is invalid") from None
+          if expires_at <= datetime.now(UTC):
+              raise SystemExit("public Bootstrap index has expired")
+
+          artifacts = release.get("bootstrap_artifacts")
+          matches = [
+              item
+              for item in artifacts
+              if isinstance(item, dict)
+              and item.get("artifact_id") == os.environ["EXPECTED_ARTIFACT_ID"]
+          ] if isinstance(artifacts, list) else []
+          if len(matches) != 1:
+              raise SystemExit("target Bootstrap artifact is missing or ambiguous")
+          artifact = matches[0]
+          if (
+              artifact.get("platform") != os.environ["EXPECTED_PLATFORM"]
+              or artifact.get("architecture") != os.environ["EXPECTED_ARCHITECTURE"]
+              or not isinstance(artifact.get("file_name"), str)
+              or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,239}", artifact["file_name"])
+              or not sha_pattern.fullmatch(str(artifact.get("sha256", "")))
+              or not isinstance(artifact.get("size_bytes"), int)
+              or not 1 <= artifact["size_bytes"] <= 10 * 1024 * 1024
+          ):
+              raise SystemExit("target Bootstrap artifact contract is invalid")
+          sources = artifact.get("sources")
+          if not isinstance(sources, list) or not 1 <= len(sources) <= 3:
+              raise SystemExit("target Bootstrap source list is invalid")
+          ordered = sorted(sources, key=lambda item: item.get("priority", -1))
+          primary = ordered[0]
+          if (
+              not isinstance(primary, dict)
+              or primary.get("priority") != 0
+              or primary.get("kind") != "github-cn-mirror"
+              or not isinstance(primary.get("url"), str)
+          ):
+              raise SystemExit("target Bootstrap primary source is invalid")
+          parsed = urlsplit(primary["url"])
+          if (
+              parsed.scheme != "https"
+              or not parsed.hostname
+              or parsed.username is not None
+              or parsed.password is not None
+              or parsed.query
+              or parsed.fragment
+              or PurePosixPath(unquote(parsed.path)).name != artifact["file_name"]
+          ):
+              raise SystemExit("target Bootstrap primary URL is unsafe")
+
+          values = {
+              "ECOREX_BOOTSTRAP_URL": primary["url"],
+              "ECOREX_BOOTSTRAP_SHA256": artifact["sha256"],
+              "ECOREX_BOOTSTRAP_FILE": artifact["file_name"],
+              "ECOREX_EXPECTED_PLATFORM": artifact["platform"],
+              "ECOREX_EXPECTED_ARCHITECTURE": artifact["architecture"],
+              "ECOREX_EXPECTED_RELEASE_ID": release["release_id"],
+              "ECOREX_EXPECTED_VERSION": release["version"],
+              "ECOREX_EXPECTED_BUILD_DIGEST": release["build_digest"],
+          }
+          if any(
+              not isinstance(value, str)
+              or not value
+              or "\r" in value
+              or "\n" in value
+              for value in values.values()
+          ):
+              raise SystemExit("resolved Bootstrap environment is invalid")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as stream:
+              for key, value in values.items():
+                  stream.write(f"{key}={value}\n")
+          print(
+              "Resolved",
+              release["release_id"],
+              artifact["platform"],
+              artifact["architecture"],
+              artifact["sha256"],
+          )
+
+      - name: Download, verify and self-test Bootstrap
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $prefix = "ecorex-public-smoke-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.id }}"
+          $work = Join-Path $env:RUNNER_TEMP "$prefix-download"
+          # Keep the product root short enough for native dependency members
+          # while still exercising the real side-by-side installer.
+          $install = Join-Path "C:\EcoreXSmoke" "${{ github.run_id }}-${{ github.run_attempt }}"
+          New-Item -ItemType Directory -Path $work | Out-Null
+          New-Item -ItemType Directory -Path $install | Out-Null
+          $archive = Join-Path $work $env:ECOREX_BOOTSTRAP_FILE
+          $downloaded = $false
+          for ($attempt = 1; $attempt -le 8; $attempt++) {
+            try {
+              Invoke-WebRequest -UseBasicParsing -Uri $env:ECOREX_BOOTSTRAP_URL -OutFile $archive -TimeoutSec 120
+              $downloaded = $true
+              break
+            } catch {
+              if ($attempt -eq 8) { throw }
+              Start-Sleep -Seconds ([Math]::Min(2 * $attempt, 10))
+            }
+          }
+          if (-not $downloaded) { throw "Bootstrap download did not complete" }
+          $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -cne $env:ECOREX_BOOTSTRAP_SHA256) {
+            throw "Bootstrap SHA-256 mismatch"
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $work
+          $bootstrap = Join-Path $work "bin\ecorex-bootstrap.exe"
+          if (-not (Test-Path -LiteralPath $bootstrap -PathType Leaf)) {
+            throw "Bootstrap executable is missing"
+          }
+          $selfTest = (& $bootstrap --self-test | Out-String).Trim() | ConvertFrom-Json
+          if (
+            $LASTEXITCODE -ne 0 -or
+            $selfTest.schema_version -ne 1 -or
+            $selfTest.status -cne "passed" -or
+            $selfTest.platform -cne $env:ECOREX_EXPECTED_PLATFORM -or
+            $selfTest.architecture -cne $env:ECOREX_EXPECTED_ARCHITECTURE
+          ) {
+            throw "Bootstrap self-test did not pass for the expected host"
+          }
+          @(
+            "ECOREX_SMOKE_WORK=$work"
+            "ECOREX_INSTALL_ROOT=$install"
+            "ECOREX_BOOTSTRAP_EXECUTABLE=$bootstrap"
+            "ECOREX_BOOTSTRAP_STDOUT=$(Join-Path $work 'bootstrap.stdout.log')"
+            "ECOREX_BOOTSTRAP_STDERR=$(Join-Path $work 'bootstrap.stderr.log')"
+            "ECOREX_ROOT_HTML=$(Join-Path $work 'root.html')"
+            "ECOREX_BOOTSTRAP_API=$(Join-Path $work 'bootstrap-api.json')"
+            "ECOREX_BOOTSTRAP_PID_FILE=$(Join-Path $work 'bootstrap.pid')"
+          ) | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
+
+      - name: Download, verify and self-test Bootstrap
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="ecorex-public-smoke-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.id }}"
+          work="$RUNNER_TEMP/${prefix}-download"
+          install="$RUNNER_TEMP/${prefix}-install"
+          mkdir "$work" "$install"
+          archive="$work/$ECOREX_BOOTSTRAP_FILE"
+          curl --fail --location --retry 8 --retry-all-errors --connect-timeout 30 \
+            --max-time 600 --output "$archive" "$ECOREX_BOOTSTRAP_URL"
+          printf '%s  %s\n' "$ECOREX_BOOTSTRAP_SHA256" "$archive" | shasum -a 256 -c -
+          ditto -x -k "$archive" "$work"
+          bootstrap="$work/bin/ecorex-bootstrap"
+          test -f "$bootstrap"
+          chmod +x "$bootstrap"
+          self_test="$("$bootstrap" --self-test)"
+          SELF_TEST="$self_test" python - <<'PY'
+          import json
+          import os
+
+          value = json.loads(os.environ["SELF_TEST"])
+          expected = {
+              "schema_version": 1,
+              "status": "passed",
+              "platform": os.environ["ECOREX_EXPECTED_PLATFORM"],
+              "architecture": os.environ["ECOREX_EXPECTED_ARCHITECTURE"],
+          }
+          if value != expected:
+              raise SystemExit("Bootstrap self-test did not pass for the expected host")
+          PY
+          {
+            printf 'ECOREX_SMOKE_WORK=%s\n' "$work"
+            printf 'ECOREX_INSTALL_ROOT=%s\n' "$install"
+            printf 'ECOREX_BOOTSTRAP_EXECUTABLE=%s\n' "$bootstrap"
+            printf 'ECOREX_BOOTSTRAP_STDOUT=%s\n' "$work/bootstrap.stdout.log"
+            printf 'ECOREX_BOOTSTRAP_STDERR=%s\n' "$work/bootstrap.stderr.log"
+            printf 'ECOREX_ROOT_HTML=%s\n' "$work/root.html"
+            printf 'ECOREX_BOOTSTRAP_API=%s\n' "$work/bootstrap-api.json"
+            printf 'ECOREX_BOOTSTRAP_PID_FILE=%s\n' "$work/bootstrap.pid"
+          } >> "$GITHUB_ENV"
+
+      - name: Start complete Bootstrap and wait for Runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $process = Start-Process `
+            -FilePath $env:ECOREX_BOOTSTRAP_EXECUTABLE `
+            -ArgumentList @("--install-root", $env:ECOREX_INSTALL_ROOT) `
+            -WorkingDirectory $env:ECOREX_SMOKE_WORK `
+            -RedirectStandardOutput $env:ECOREX_BOOTSTRAP_STDOUT `
+            -RedirectStandardError $env:ECOREX_BOOTSTRAP_STDERR `
+            -WindowStyle Hidden `
+            -PassThru
+          Set-Content -LiteralPath $env:ECOREX_BOOTSTRAP_PID_FILE -Value $process.Id -Encoding ascii
+          $ready = $false
+          for ($attempt = 1; $attempt -le 180; $attempt++) {
+            $process.Refresh()
+            if ($process.HasExited) {
+              throw "Bootstrap exited before Runtime became healthy"
+            }
+            try {
+              $root = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8765/" -TimeoutSec 3
+              $api = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8765/api/v1/bootstrap" -TimeoutSec 3
+              if ($root.StatusCode -eq 200 -and $api.StatusCode -eq 200) {
+                $apiProjection = $api.Content | ConvertFrom-Json
+                $pointersPath = Join-Path $env:ECOREX_INSTALL_ROOT "slot-pointers.json"
+                if (Test-Path -LiteralPath $pointersPath -PathType Leaf) {
+                  $pointers = Get-Content -LiteralPath $pointersPath -Raw | ConvertFrom-Json
+                  if ($pointers.current -and @($pointers.known_good) -contains $pointers.current) {
+                    Set-Content -LiteralPath $env:ECOREX_ROOT_HTML -Value $root.Content -Encoding utf8
+                    [ordered]@{
+                      api_version = $apiProjection.api_version
+                      event_schema_version = $apiProjection.event_schema_version
+                      storage_schema_version = $apiProjection.storage_schema_version
+                      current_version = $apiProjection.update.current_version
+                    } | ConvertTo-Json -Compress | Set-Content `
+                      -LiteralPath $env:ECOREX_BOOTSTRAP_API `
+                      -Encoding utf8
+                    $ready = $true
+                    break
+                  }
+                }
+              }
+            } catch {
+              # The signed Bootstrap may still be downloading and activating Core/Packs.
+            }
+            Start-Sleep -Seconds 5
+          }
+          if (-not $ready) {
+            throw "Runtime did not become healthy within 15 minutes"
+          }
+
+      - name: Start complete Bootstrap and wait for Runtime
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$ECOREX_BOOTSTRAP_EXECUTABLE" \
+            --install-root "$ECOREX_INSTALL_ROOT" \
+            >"$ECOREX_BOOTSTRAP_STDOUT" \
+            2>"$ECOREX_BOOTSTRAP_STDERR" &
+          bootstrap_pid=$!
+          printf '%s\n' "$bootstrap_pid" > "$ECOREX_BOOTSTRAP_PID_FILE"
+          ready=false
+          for _attempt in $(seq 1 180); do
+            if ! kill -0 "$bootstrap_pid" 2>/dev/null; then
+              echo "Bootstrap exited before Runtime became healthy" >&2
+              exit 1
+            fi
+            if curl --fail --silent --show-error --max-time 3 \
+              --output "$ECOREX_ROOT_HTML" "http://127.0.0.1:8765/" \
+              && python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from urllib.request import urlopen
+
+          install_root = Path(os.environ["ECOREX_INSTALL_ROOT"])
+          pointers_path = install_root / "slot-pointers.json"
+          if not pointers_path.is_file():
+              raise SystemExit(1)
+          pointers = json.loads(pointers_path.read_text(encoding="utf-8"))
+          current = pointers.get("current")
+          if not current or current not in pointers.get("known_good", []):
+              raise SystemExit(1)
+          with urlopen("http://127.0.0.1:8765/api/v1/bootstrap", timeout=3) as response:
+              if response.status != 200:
+                  raise SystemExit(1)
+              api = json.load(response)
+          safe_projection = {
+              "api_version": api.get("api_version"),
+              "event_schema_version": api.get("event_schema_version"),
+              "storage_schema_version": api.get("storage_schema_version"),
+              "current_version": api.get("update", {}).get("current_version"),
+          }
+          Path(os.environ["ECOREX_BOOTSTRAP_API"]).write_text(
+              json.dumps(safe_projection, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="utf-8",
+          )
+          PY
+            then
+              ready=true
+              break
+            fi
+            sleep 5
+          done
+          if [[ "$ready" != true ]]; then
+            echo "Runtime did not become healthy within 15 minutes" >&2
+            exit 1
+          fi
+
+      - name: Verify Core, Packs, embedded Python, WebUI and health
+        shell: python
+        run: |
+          from __future__ import annotations
+
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+
+          install_root = Path(os.environ["ECOREX_INSTALL_ROOT"])
+          pointers = json.loads(
+              (install_root / "slot-pointers.json").read_text(encoding="utf-8")
+          )
+          current = pointers.get("current")
+          known_good = pointers.get("known_good")
+          if (
+              not isinstance(current, str)
+              or not current
+              or not isinstance(known_good, list)
+              or current not in known_good
+          ):
+              raise SystemExit("installed Runtime is not current and known-good")
+          slot = install_root / "slots" / current
+          payload = slot / "payload"
+          marker = json.loads((slot / ".slot.json").read_text(encoding="utf-8"))
+          manifest = json.loads(
+              (slot / "release-manifest.json").read_text(encoding="utf-8")
+          )
+          if (
+              marker.get("release_id") != os.environ["ECOREX_EXPECTED_RELEASE_ID"]
+              or marker.get("version") != os.environ["ECOREX_EXPECTED_VERSION"]
+              or marker.get("build_digest") != os.environ["ECOREX_EXPECTED_BUILD_DIGEST"]
+              or manifest.get("release_id") != os.environ["ECOREX_EXPECTED_RELEASE_ID"]
+              or manifest.get("version") != os.environ["ECOREX_EXPECTED_VERSION"]
+              or manifest.get("build_digest") != os.environ["ECOREX_EXPECTED_BUILD_DIGEST"]
+          ):
+              raise SystemExit("installed Runtime identity differs from the public release")
+
+          required_core = (
+              payload / "runtime-config.json",
+              payload / "pack-python.json",
+              payload / "web-manifest.json",
+              payload / "web" / "index.html",
+          )
+          if any(not path.is_file() or path.stat().st_size < 1 for path in required_core):
+              raise SystemExit("installed Core or WebUI is incomplete")
+
+          required_packs = {"browser", "channels", "image", "ocr", "office", "sandbox"}
+          capability_root = payload / "capability-packs"
+          observed_packs = {
+              path.name for path in capability_root.iterdir() if path.is_dir()
+          } if capability_root.is_dir() else set()
+          if observed_packs != required_packs:
+              raise SystemExit("installed Capability Pack set is incomplete")
+          for pack_id in sorted(required_packs):
+              members = list((capability_root / pack_id).iterdir())
+              if (
+                  len([item for item in members if item.is_file() and item.suffix == ".zip"]) != 1
+                  or len([item for item in members if item.is_file() and item.suffix == ".json"]) != 1
+                  or len(members) != 2
+              ):
+                  raise SystemExit(f"installed Capability Pack {pack_id} is malformed")
+
+          python = (
+              payload / "bin" / "pack-python" / "python.exe"
+              if os.environ["ECOREX_EXPECTED_PLATFORM"] == "windows"
+              else payload / "bin" / "pack-python" / "bin" / "python3"
+          )
+          if not python.is_file():
+              raise SystemExit("embedded Python is missing")
+          probe = subprocess.run(
+              [
+                  str(python),
+                  "-I",
+                  "-B",
+                  "-c",
+                  "import json,sys;print(json.dumps({'major':sys.version_info.major,'minor':sys.version_info.minor}))",
+              ],
+              check=True,
+              capture_output=True,
+              text=True,
+              timeout=30,
+          )
+          version = json.loads(probe.stdout)
+          if version != {"major": 3, "minor": 11}:
+              raise SystemExit("embedded Python is not the supported 3.11 Runtime")
+
+          root_html = Path(os.environ["ECOREX_ROOT_HTML"]).read_text(
+              encoding="utf-8-sig"
+          )
+          if "<html" not in root_html.casefold() or "</html>" not in root_html.casefold():
+              raise SystemExit("Runtime did not serve the complete WebUI")
+          api = json.loads(
+              Path(os.environ["ECOREX_BOOTSTRAP_API"]).read_text(encoding="utf-8-sig")
+          )
+          if (
+              api.get("api_version") != "v1"
+              or api.get("event_schema_version") != 1
+              or api.get("storage_schema_version") != 1
+              or api.get("current_version") != os.environ["ECOREX_EXPECTED_VERSION"]
+          ):
+              raise SystemExit("Runtime Bootstrap health projection is invalid")
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(
+                  "### Public Bootstrap real-install smoke passed\n\n"
+                  f"- Target: `{os.environ['ECOREX_EXPECTED_PLATFORM']}/"
+                  f"{os.environ['ECOREX_EXPECTED_ARCHITECTURE']}`\n"
+                  f"- Release: `{os.environ['ECOREX_EXPECTED_RELEASE_ID']}`\n"
+                  f"- Version: `{os.environ['ECOREX_EXPECTED_VERSION']}`\n"
+                  f"- Build: `{os.environ['ECOREX_EXPECTED_BUILD_DIGEST']}`\n"
+                  "- Verified: public index, download SHA-256, native self-test, "
+                  "isolated first install, known-good health, six required Packs, "
+                  "embedded Python 3.11, WebUI and `/api/v1/bootstrap`\n"
+              )
+
+      - name: Show safe Bootstrap diagnostics on failure
+        if: failure()
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+
+          for variable in ("ECOREX_BOOTSTRAP_STDOUT", "ECOREX_BOOTSTRAP_STDERR"):
+              value = os.environ.get(variable)
+              if not value:
+                  continue
+              path = Path(value)
+              if not path.is_file():
+                  continue
+              lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+              print(f"--- {path.name} (last 120 lines) ---")
+              print("\n".join(lines[-120:]))
+
+      - name: Stop isolated Runtime
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          if (
+            $env:ECOREX_BOOTSTRAP_PID_FILE -and
+            (Test-Path -LiteralPath $env:ECOREX_BOOTSTRAP_PID_FILE -PathType Leaf)
+          ) {
+            $bootstrapPid = Get-Content -LiteralPath $env:ECOREX_BOOTSTRAP_PID_FILE | Select-Object -First 1
+            if ($bootstrapPid -match '^[0-9]+$') {
+              taskkill.exe /PID $bootstrapPid /T /F 2>$null | Out-Null
+            }
+          }
+
+      - name: Stop isolated Runtime
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        run: |
+          set +e
+          if [[ -n "${ECOREX_BOOTSTRAP_PID_FILE:-}" && -f "$ECOREX_BOOTSTRAP_PID_FILE" ]]; then
+            bootstrap_pid="$(head -n 1 "$ECOREX_BOOTSTRAP_PID_FILE")"
+            if [[ "$bootstrap_pid" =~ ^[0-9]+$ ]]; then
+              pkill -TERM -P "$bootstrap_pid" 2>/dev/null
+              kill -TERM "$bootstrap_pid" 2>/dev/null
+              sleep 2
+              pkill -KILL -P "$bootstrap_pid" 2>/dev/null
+              kill -KILL "$bootstrap_pid" 2>/dev/null
+            fi
+          fi

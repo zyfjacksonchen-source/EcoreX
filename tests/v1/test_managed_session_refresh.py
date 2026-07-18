@@ -17,6 +17,7 @@ from ecorex.session import (
     DeviceRefreshInvalidGrant,
     Ed25519SessionLeaseVerifier,
     ManagedSessionRefreshService,
+    ManagedSessionRefreshSupervisor,
     ManagedSessionService,
     SessionReauthorizationRequired,
 )
@@ -195,3 +196,39 @@ def test_invalid_grant_requires_reauthorization_without_deleting_lease_history(
         record.event_type == "session.refresh.reauthorization_required"
         for record in session.repository.audit_records()
     )
+
+
+def test_invalid_local_access_token_persists_reauthorization_and_supervisor_lives(
+    tmp_path,
+) -> None:
+    clock, cloud, session, vault = _fixture(tmp_path)
+    credential_ref = next(iter(vault.values))
+    vault.values[credential_ref]["access_token"] = "invalid-access-token"
+    refresh = ManagedSessionRefreshService(
+        tmp_path / "runtime.db",
+        session=session,
+        broker=AsyncBroker(cloud),
+        clock=clock,
+    )
+    supervisor = ManagedSessionRefreshSupervisor(refresh, poll_seconds=1)
+
+    async def exercise() -> None:
+        await supervisor.start()
+        await asyncio.sleep(0.05)
+        assert supervisor.running
+        assert refresh.repository.projection().status == "reauthorization_required"
+        assert refresh.repository.projection().error_code == "lease_validation_failed"
+        supervisor.notify()
+        await asyncio.sleep(0.05)
+        assert supervisor.running
+        await supervisor.close()
+        assert not supervisor.running
+
+    asyncio.run(exercise())
+    matching = [
+        record
+        for record in session.repository.audit_records()
+        if record.event_type == "session.refresh.reauthorization_required"
+        and record.reason_code == "lease_validation_failed"
+    ]
+    assert matching
