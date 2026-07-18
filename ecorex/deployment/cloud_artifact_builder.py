@@ -328,7 +328,7 @@ def _validate_unsigned_descriptor(
         isinstance(manifest, dict)
         and set(manifest) == manifest_fields
         and manifest.get("schema_version") == 1
-        and manifest.get("version") == "1.0.0"
+        and manifest.get("version") == __version__
         and manifest.get("platform") == "linux"
         and manifest.get("architecture") == ARCHITECTURE
         and manifest.get("python_version") == "3.11.9"
@@ -544,7 +544,9 @@ def _build_runtime_tree(
             cwd=archived_source,
             env=environment,
         )
-        candidates = sorted(wheels.glob("ecorex_agent_runtime-1.0.0-*.whl"))
+        candidates = sorted(
+            wheels.glob(f"ecorex_agent_runtime-{__version__}-*.whl")
+        )
         if len(candidates) != 1:
             raise CloudArtifactPipelineError("cloud_application_wheel_invalid")
         wheel = candidates[0]
@@ -567,7 +569,7 @@ def _build_runtime_tree(
                 "--no-input",
                 "--find-links",
                 str(wheels),
-                "ecorex-agent-runtime==1.0.0",
+                f"ecorex-agent-runtime=={__version__}",
             ),
             cwd=artifact,
             env=environment,
@@ -639,7 +641,7 @@ def _verify_runtime_tree(artifact: Path, source: Path) -> dict[str, Any]:
         prefix.relative_to(artifact_real)
     except (KeyError, OSError, ValueError, TypeError):
         raise CloudArtifactPipelineError("cloud_runtime_import_escaped_artifact") from None
-    if value.get("version") != "1.0.0" or value.get("admin_asset") is not True:
+    if value.get("version") != __version__ or value.get("admin_asset") is not True:
         raise CloudArtifactPipelineError("cloud_runtime_package_data_missing")
     forbidden = {str(source.resolve(strict=True)), "__editable__", "editable_finder"}
     pth_files = sorted((artifact / "venv").rglob("*.pth"))

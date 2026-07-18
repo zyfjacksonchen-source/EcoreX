@@ -43,6 +43,11 @@ def test_stream_chat_completion_maps_text_reasoning_usage() -> None:
                     "finish_reason": None,
                 }
             ],
+            "usage": {
+                "prompt_tokens": 8,
+                "completion_tokens": 2,
+                "total_tokens": 10,
+            },
         }
     )
     terminal = parser.feed_stream(
@@ -106,12 +111,22 @@ def test_nonstream_chat_completion_maps_one_tool_handoff() -> None:
                     "finish_reason": "tool_calls",
                 }
             ],
+            "usage": {
+                "prompt_tokens": 8,
+                "completion_tokens": 2,
+                "total_tokens": 10,
+            },
         }
     )
     assert len(events) == 1
     assert events[0].event_type is GatewayEventType.TOOL_CALL_REQUESTED
     assert events[0].tool_name == "fetch.document"
     assert events[0].arguments == {"document_id": "doc-1"}
+    assert events[0].usage == {
+        "input_tokens": 8,
+        "output_tokens": 2,
+        "total_tokens": 10,
+    }
     assert parser.handoff_message is not None
 
 
@@ -191,6 +206,11 @@ def test_provider_stages_handoff_before_exposing_tool_terminal() -> None:
                         "finish_reason": "tool_calls",
                     }
                 ],
+                "usage": {
+                    "prompt_tokens": 9,
+                    "completion_tokens": 3,
+                    "total_tokens": 12,
+                },
             },
         )
 
@@ -282,4 +302,9 @@ def test_provider_stages_handoff_before_exposing_tool_terminal() -> None:
     assert [event.event_type for event in events] == [
         GatewayEventType.TOOL_CALL_REQUESTED
     ]
+    assert events[0].usage == {
+        "input_tokens": 9,
+        "output_tokens": 3,
+        "total_tokens": 12,
+    }
     assert calls == ["bind", "consume", "post", "stage"]

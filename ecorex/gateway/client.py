@@ -15,7 +15,12 @@ from .errors import (
     GatewayRejected,
     GatewayUnavailable,
 )
-from .models import GatewayEvent, GatewayEventType, ModelGatewayRequest
+from .models import (
+    GatewayAccountUsageProjection,
+    GatewayEvent,
+    GatewayEventType,
+    ModelGatewayRequest,
+)
 
 
 class GatewayCredentialProvider(Protocol):
@@ -78,6 +83,9 @@ class ManagedModelGatewayClient:
         self.endpoint = endpoint
         self.catalog_endpoint = (
             f"{parsed.scheme}://{parsed.hostname}/api/v1/models"
+        )
+        self.usage_endpoint = (
+            f"{parsed.scheme}://{parsed.hostname}/api/v1/usage"
         )
         self.credentials = credentials
         self.max_request_bytes = max_request_bytes
@@ -305,5 +313,64 @@ class ManagedModelGatewayClient:
             return value
         except (ValueError, json.JSONDecodeError) as error:
             raise GatewayProtocolError("managed gateway catalog is invalid") from error
+        finally:
+            await response.aclose()
+
+    async def usage(self, timezone_name: str) -> GatewayAccountUsageProjection:
+        """Return the authenticated account's provider-reported token usage."""
+
+        if (
+            not isinstance(timezone_name, str)
+            or not 1 <= len(timezone_name) <= 64
+            or any(ord(character) < 33 for character in timezone_name)
+        ):
+            raise ValueError("managed gateway usage timezone is invalid")
+        try:
+            token = self.credentials.bearer_token()
+        except Exception:
+            raise GatewayAuthenticationError(
+                "managed gateway session is unavailable"
+            ) from None
+        if (
+            not isinstance(token, str)
+            or not 24 <= len(token) <= 4096
+            or any(not 33 <= ord(ch) <= 126 for ch in token)
+        ):
+            raise GatewayAuthenticationError("managed gateway session token is invalid")
+        try:
+            response = await self.client.get(
+                self.usage_endpoint,
+                params={"timezone": timezone_name},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/json",
+                    "Accept-Encoding": "identity",
+                },
+                follow_redirects=False,
+            )
+        except httpx.TimeoutException as error:
+            raise GatewayUnavailable("managed gateway timed out") from error
+        except httpx.TransportError as error:
+            raise GatewayUnavailable("managed gateway transport failed") from error
+        try:
+            if response.status_code in {401, 403}:
+                raise GatewayAuthenticationError(
+                    "managed gateway authentication was rejected"
+                )
+            if response.status_code != 200:
+                raise GatewayUnavailable("managed gateway usage is unavailable")
+            if len(response.content) > 256 * 1024:
+                raise GatewayProtocolError("managed gateway usage is oversized")
+            media_type = response.headers.get("content-type", "").split(";", 1)[0].strip()
+            if media_type != "application/json":
+                raise GatewayProtocolError("managed gateway usage media type is invalid")
+            if response.headers.get("content-encoding", "identity").casefold() != "identity":
+                raise GatewayProtocolError("managed gateway usage encoding is unsupported")
+            try:
+                return GatewayAccountUsageProjection.model_validate(response.json())
+            except (ValueError, json.JSONDecodeError, TypeError) as error:
+                raise GatewayProtocolError(
+                    "managed gateway usage contract is invalid"
+                ) from error
         finally:
             await response.aclose()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 import json
 from pathlib import Path
 import sqlite3
@@ -28,6 +29,9 @@ from ecorex.control_plane.management_models import (
 )
 from ecorex.control_plane.management_schema import AdminManagementSchemaManager
 from ecorex.control_plane.models import ControlPrincipal
+from ecorex.gateway.models import GatewayEventType
+from ecorex.gateway.production import AdminManagementGatewayUsageAccountant
+from ecorex.gateway.server import GatewayCompletedUsageFact
 
 
 KEY = b"m" * 32
@@ -117,6 +121,96 @@ def test_user_management_is_filterable_revisioned_and_idempotent(tmp_path: Path)
     assert summary.users_active == 1
     assert summary.tokens_used == 12_000
     repository.verify_integrity()
+
+
+def test_provider_usage_settlement_is_exactly_once_and_conflict_safe(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path)
+    created = repository.create_user(_user_request(), actor=ACTOR)
+    values = {
+        "source_service": "managed_gateway",
+        "source_id": "gateway-request-1",
+        "usage_kind": "chat",
+        "account_id": created.account_id,
+        "input_tokens": 120,
+        "output_tokens": 30,
+        "total_tokens": 150,
+        "provider_created_at": "2026-07-19T02:30:00+00:00",
+    }
+    settled = repository.record_provider_usage(**values)
+    replayed = repository.record_provider_usage(**values)
+    assert replayed == settled
+    assert settled.tokens_used == 150
+    assert settled.revision == created.revision + 1
+
+    with pytest.raises(AdminManagementConflict, match="reused"):
+        repository.record_provider_usage(**{**values, "total_tokens": 151})
+
+    with sqlite3.connect(tmp_path / "control-plane.db") as connection:
+        facts = connection.execute(
+            "SELECT source_service,source_id,total_tokens FROM "
+            "admin_ops_provider_usage_facts"
+        ).fetchall()
+        audit_count = connection.execute(
+            "SELECT COUNT(*) FROM admin_ops_audit "
+            "WHERE action='usage.provider.settled'"
+        ).fetchone()[0]
+    assert facts == [("managed_gateway", "gateway-request-1", 150)]
+    assert audit_count == 1
+    assert repository.usage_summary().tokens_used == 150
+    repository.verify_integrity()
+
+
+def test_gateway_accountant_settles_replay_once_and_enforces_token_limit(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repository = _repository(tmp_path)
+    repository.create_user(_user_request(), actor=ACTOR)
+    accountant = AdminManagementGatewayUsageAccountant(repository)
+    fact = GatewayCompletedUsageFact(
+        request_id="gateway-accountant-request",
+        account_id="account-1",
+        terminal_event_type=GatewayEventType.TOOL_CALL_REQUESTED,
+        input_tokens=190_000,
+        output_tokens=10_000,
+        total_tokens=200_000,
+        provider_created_at=datetime.fromisoformat(
+            "2026-07-19T03:00:00+00:00"
+        ),
+    )
+
+    accountant.reconcile((fact, fact))
+    assert repository.get_user("account-1").tokens_used == 200_000
+    assert accountant.tokens_available("account-1") is False
+
+    monkeypatch.setattr(
+        "ecorex.gateway.production.build_account_usage_projection",
+        lambda account_id, *, timezone_name: {
+            "schema_version": 1,
+            "scope": "account",
+            "timezone": timezone_name,
+            "today": {
+                "input_tokens": 190_000,
+                "output_tokens": 10_000,
+                "total_tokens": 200_000,
+            },
+            "week": {
+                "input_tokens": 190_000,
+                "output_tokens": 10_000,
+                "total_tokens": 200_000,
+            },
+            "week_started_at": "2026-07-12T16:00:00+00:00",
+            "coverage_started_at": "2026-06-21T16:00:00+00:00",
+            "calculated_at": "2026-07-19T03:00:01+00:00",
+        },
+    )
+    projection = accountant.project(
+        "account-1",
+        timezone_name="Asia/Shanghai",
+    )
+    assert projection.week.total_tokens == 200_000
 
 
 def test_model_key_is_encrypted_and_only_tested_revision_activates(tmp_path: Path) -> None:
@@ -345,12 +439,17 @@ def test_management_schema_migrates_v1_model_origin_presets(tmp_path: Path) -> N
         connection.close()
 
     receipt = AdminManagementSchemaManager(path).migrate()
-    assert receipt.migration_version == 2
+    assert receipt.migration_version == 3
     connection = sqlite3.connect(path)
     try:
         columns = {
             row[1] for row in connection.execute("PRAGMA table_info(admin_ops_model_revisions)")
         }
+        usage_table = connection.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type='table' "
+            "AND name='admin_ops_provider_usage_facts'"
+        ).fetchone()
     finally:
         connection.close()
     assert "provider_origin_preset" in columns
+    assert usage_table == (1,)

@@ -260,7 +260,7 @@ jobs:
           cp .publication-input-extraction.json
           .candidate/output/evidence/publication-input-extraction.json
 
-      - name: Publish the required primary source (Stable) or all sources (Canary)
+      - name: Publish GitHub origin and verify the configured release sources
         env:
           ECOREX_GITHUB_RELEASE_TOKEN: ${{ secrets.ECOREX_GITHUB_RELEASE_TOKEN }}
           ECOREX_CDN_TOKEN: ${{ secrets.ECOREX_CDN_TOKEN }}
@@ -268,7 +268,6 @@ jobs:
           KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
           PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
           PUBLICATION_CONFIG: ${{ vars.ECOREX_RELEASE_PUBLICATION_CONFIG }}
-          RELEASE_CHANNEL: ${{ inputs.channel }}
         run: |
           args=(
             publish-assets
@@ -277,9 +276,7 @@ jobs:
             --receipt .candidate/output/publication-receipt.json
             --trusted-key "$KEY_ID=$PUBLIC_KEY"
           )
-          if [[ "$RELEASE_CHANNEL" == "canary" ]]; then
-            args+=(--publish-github)
-          fi
+          args+=(--publish-github)
           ecorex-release "${args[@]}"
 
       - name: Reproduce the stable public Bootstrap discovery bytes

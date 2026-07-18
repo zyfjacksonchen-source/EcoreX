@@ -1489,6 +1489,9 @@ function conversationUsage(state, threadId) {
   return {
     thread_id: threadId,
     timezone: "Asia/Shanghai",
+    scope: "account",
+    source: "managed_gateway",
+    complete_across_devices: true,
     today: { input_tokens: 4_280, output_tokens: 960, total_tokens: 5_240 },
     week: { input_tokens: 18_840, output_tokens: 3_760, total_tokens: 22_600 },
     context: {

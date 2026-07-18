@@ -137,7 +137,7 @@ def test_platform_allowlist_fails_closed_for_missing_or_suspended_user(
         )
 
 
-def test_production_identity_requires_runtime_and_admin_web_clients(
+def test_production_identity_requires_product_runtime_and_admin_web_clients(
     tmp_path: Path,
 ) -> None:
     access = ExternalSignerConfig(
@@ -162,7 +162,7 @@ def test_production_identity_requires_runtime_and_admin_web_clients(
             issuer="https://identity.ecorex.test",
             audience="ecorex-control-plane",
             verification_url="https://identity.ecorex.test/device",
-            allowed_client_ids=frozenset({"ecorex-webui"}),
+            allowed_client_ids=frozenset({"ecorex-webui", "ecorex-admin-web"}),
             platform_admin_account_ids=frozenset({"admin-1"}),
             access_signer=access,
             lease_signer=lease,
@@ -173,9 +173,12 @@ def test_production_identity_requires_runtime_and_admin_web_clients(
         issuer="https://identity.ecorex.test",
         audience="ecorex-control-plane",
         verification_url="https://identity.ecorex.test/device",
-        allowed_client_ids=frozenset({"ecorex-webui", "ecorex-admin-web"}),
+        allowed_client_ids=frozenset(
+            {"ecorex-product", "ecorex-webui", "ecorex-admin-web"}
+        ),
         platform_admin_account_ids=frozenset({"admin-1"}),
         access_signer=access,
         lease_signer=lease,
     )
+    assert "ecorex-product" in configured.allowed_client_ids
     assert "ecorex-admin-web" in configured.allowed_client_ids

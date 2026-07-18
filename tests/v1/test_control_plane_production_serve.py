@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 import pytest
 
+from ecorex import __version__
 from ecorex.control_plane.production import (
     ControlPlaneProductionConfig,
     EnvironmentSecretProvider,
@@ -901,14 +902,14 @@ def test_release_replica_environment_is_version_namespace_fenced(
         ECOREX_CP_RELEASE_REPLICA_PUBLIC_ROOT=(
             "https://dl.ecoremedia.net/ecorex-agent/releases"
         ),
-        ECOREX_CP_RELEASE_REPLICA_NAMESPACE="v1.0.0",
-        ECOREX_CP_RELEASE_REPLICA_PRODUCT_VERSION="1.0.0",
+        ECOREX_CP_RELEASE_REPLICA_NAMESPACE=f"v{__version__}",
+        ECOREX_CP_RELEASE_REPLICA_PRODUCT_VERSION=__version__,
         ECOREX_CP_RELEASE_REPLICA_MAX_ASSET_BYTES=str(500 * 1024 * 1024),
     )
     parsed = ControlPlaneProductionConfig.from_environment(environment)
     assert parsed.release_replica_enabled is True
-    assert parsed.release_replica_namespace == "v1.0.0"
-    assert parsed.release_replica_product_version == "1.0.0"
+    assert parsed.release_replica_namespace == f"v{__version__}"
+    assert parsed.release_replica_product_version == __version__
 
     for name, invalid in (
         ("ECOREX_CP_RELEASE_REPLICA_NAMESPACE", "v1.0.1"),

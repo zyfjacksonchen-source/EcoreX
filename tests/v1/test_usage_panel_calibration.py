@@ -374,3 +374,101 @@ def test_same_request_is_deduplicated_across_legacy_and_gateway_ledgers(
     rows = {row["email"]: row for row in payload["summaryRows"]}
     assert rows["one@example.test"]["tokenUsageRecords"] == 2
     assert rows["one@example.test"]["tokenUsageTasks"] == 2
+
+
+def test_composer_account_projection_uses_the_exact_panel_ledger(
+    tmp_path,
+    monkeypatch,
+):
+    payload = _v1_payload(tmp_path, monkeypatch)
+    now = datetime(2026, 7, 18, 18, 0, tzinfo=TZ)
+
+    projection = usage_panel_service.build_account_usage_projection(
+        "account-one",
+        timezone_name="Asia/Shanghai",
+        now=now,
+    )
+    panel_row = next(
+        row
+        for row in payload["summaryRows"]
+        if row["email"] == "one@example.test"
+    )
+
+    assert projection["today"] == {
+        "input_tokens": panel_row["inputTokens"],
+        "output_tokens": panel_row["outputTokens"],
+        "total_tokens": panel_row["totalTokens"],
+    }
+    assert projection["week"] == projection["today"]
+    assert projection["week"]["total_tokens"] == 39
+    assert projection["scope"] == "account"
+    assert projection["coverage_started_at"] is not None
+
+
+def test_tool_handoff_usage_is_counted_as_a_terminal_provider_fact(
+    tmp_path,
+    monkeypatch,
+):
+    database = tmp_path / "admin-v1-tool.sqlite3"
+    _database(str(database))
+    _add_v1_facts(str(database))
+    connection = sqlite3.connect(database)
+    accepted = "2026-07-18T11:00:00+08:00"
+    completed = "2026-07-18T11:00:05+08:00"
+    connection.execute(
+        "INSERT INTO gateway_requests VALUES(?,?,?,?,?,?,?,?)",
+        (
+            "gateway-tool-request",
+            "account-one",
+            "gpt-5.6-sol",
+            "trace-tool",
+            "completed",
+            "tool_call.requested",
+            accepted,
+            completed,
+        ),
+    )
+    connection.execute(
+        "INSERT INTO gateway_events VALUES(?,?,?,?)",
+        (
+            "gateway-tool-request",
+            1,
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "response-tool",
+                    "tool_call_id": "call-tool",
+                    "tool_name": "read",
+                    "arguments": {"path": "report.docx"},
+                    "idempotency_key": "tool-call-idempotency",
+                    "usage": {
+                        "input_tokens": 6,
+                        "output_tokens": 2,
+                        "total_tokens": 8,
+                    },
+                }
+            ),
+            completed,
+        ),
+    )
+    connection.commit()
+    connection.close()
+    monkeypatch.setattr(usage_panel_service, "DB_PATH", str(database))
+    monkeypatch.setattr(usage_panel_service, "CONTROL_PLANE_DB_PATH", str(database))
+    monkeypatch.setattr(usage_panel_service, "GATEWAY_DB_PATH", str(database))
+
+    payload = usage_panel_service.build_payload(
+        datetime(2026, 7, 18, tzinfo=TZ),
+        datetime(2026, 7, 19, tzinfo=TZ),
+    )
+
+    assert payload["kpis"]["totalTokens"] == 47
+    task = next(
+        item
+        for item in payload["tasks"]
+        if item["requestId"] == "gateway-tool-request"
+    )
+    assert task["totalTokens"] == 8
+    assert task["success"] is True

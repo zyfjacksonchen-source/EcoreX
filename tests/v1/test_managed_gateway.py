@@ -94,6 +94,77 @@ def test_gateway_stream_requires_contiguous_terminal_ndjson_and_authenticates() 
     assert "api_key" not in body
 
 
+def test_gateway_usage_client_is_authenticated_and_contract_strict() -> None:
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            json={
+                "schema_version": 1,
+                "scope": "account",
+                "timezone": "Asia/Shanghai",
+                "today": {
+                    "input_tokens": 12,
+                    "output_tokens": 3,
+                    "total_tokens": 15,
+                },
+                "week": {
+                    "input_tokens": 40,
+                    "output_tokens": 8,
+                    "total_tokens": 48,
+                },
+                "week_started_at": "2026-07-12T16:00:00Z",
+                "coverage_started_at": "2026-07-12T15:00:00Z",
+                "calculated_at": "2026-07-19T00:00:00Z",
+            },
+        )
+
+    client, http = _client(handler)
+
+    async def run():
+        try:
+            return await client.usage("Asia/Shanghai")
+        finally:
+            await http.aclose()
+
+    projection = asyncio.run(run())
+    assert projection.today.total_tokens == 15
+    assert projection.week.total_tokens == 48
+    assert captured[0].url.path == "/api/v1/usage"
+    assert captured[0].url.params["timezone"] == "Asia/Shanghai"
+    assert captured[0].headers["authorization"].startswith("Bearer session_")
+
+    def invalid(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "schema_version": 1,
+                "scope": "account",
+                "timezone": "Asia/Shanghai",
+                "today": {
+                    "input_tokens": 5,
+                    "output_tokens": 5,
+                    "total_tokens": 1,
+                },
+                "week": {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                },
+                "week_started_at": "2026-07-12T16:00:00Z",
+                "coverage_started_at": "2026-07-12T15:00:00Z",
+                "calculated_at": "2026-07-19T00:00:00Z",
+            },
+        )
+
+    client, http = _client(invalid)
+    with pytest.raises(GatewayProtocolError, match="usage contract"):
+        asyncio.run(_usage_and_close(client, http))
+
+
 @pytest.mark.parametrize(
     "endpoint",
     [
@@ -375,5 +446,12 @@ def test_gateway_redacts_credential_provider_exception() -> None:
 async def _collect_and_close(client, http, request=None):
     try:
         return [event async for event in client.stream(request or _request())]
+    finally:
+        await http.aclose()
+
+
+async def _usage_and_close(client, http):
+    try:
+        return await client.usage("Asia/Shanghai")
     finally:
         await http.aclose()

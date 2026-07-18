@@ -150,6 +150,9 @@ const bootstrap: BootstrapResponse = {
 const conversationUsage: ConversationUsageProjection = {
   thread_id: "thr_usage",
   timezone: "Asia/Shanghai",
+  scope: "account",
+  source: "managed_gateway",
+  complete_across_devices: true,
   today: { input_tokens: 120, output_tokens: 30, total_tokens: 150 },
   week: { input_tokens: 640, output_tokens: 80, total_tokens: 720 },
   context: {

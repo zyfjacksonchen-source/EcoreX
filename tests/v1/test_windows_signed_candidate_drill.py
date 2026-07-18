@@ -675,8 +675,9 @@ def test_local_bootstrap_floor_is_release_key_signed_and_canonical(
     signer = drill.Ed25519MemorySigner("local-test-key", private)
     receipt = drill._bind_local_bootstrap_minimum(bootstrap, signer)
     value = json.loads(config.read_text(encoding="utf-8"))
-    assert receipt["sequence"] == 1
-    assert value["minimum_stable"]["sequence"] == 1
-    assert value["minimum_stable"]["version"] == "1.0.0"
+    expected_sequence = drill.stable_pointer_sequence(drill.__version__)
+    assert receipt["sequence"] == expected_sequence
+    assert value["minimum_stable"]["sequence"] == expected_sequence
+    assert value["minimum_stable"]["version"] == drill.__version__
     assert value["minimum_stable"]["signature"]["key_id"] == "local-test-key"
     assert config.read_text(encoding="utf-8").endswith("\n")

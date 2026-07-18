@@ -472,6 +472,7 @@ class _ChatCompletionParser:
         self._call["arguments"] = combined
 
     def _terminal(self, finish: Any, usage: Any) -> GatewayEvent:
+        normalized = _chat_usage(usage)
         if finish == "tool_calls":
             if self._call is None:
                 raise ResponsesProviderProtocolError("chat tool handoff is missing")
@@ -483,9 +484,9 @@ class _ChatCompletionParser:
                 tool_name=self._call["name"],
                 arguments=arguments,
                 idempotency_key="tool_" + hashlib.sha256((self.request_id + "\0" + self._call["id"]).encode()).hexdigest()[:48],
+                usage=normalized,
             )
         elif finish in {"stop", "length"}:
-            normalized = _chat_usage(usage)
             event = self._event(GatewayEventType.RESPONSE_COMPLETED, usage=normalized)
         else:
             raise ResponsesProviderProtocolError("chat provider finish reason is invalid")

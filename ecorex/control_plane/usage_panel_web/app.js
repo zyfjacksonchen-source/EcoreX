@@ -10,7 +10,7 @@ function emptyUsageData() {
       generatedAt: '',
       rawSheetUrl: '#',
       source: '等待实时数据',
-      version: '1.0.1',
+      version: '1.0.2',
       live: false
     },
     kpis: {},
@@ -383,15 +383,12 @@ function tokenUsageFromSource(source) {
   const input = firstTokenValue(source, ['inputTokens', 'input_tokens', 'promptTokens', 'prompt_tokens', 'promptTokenCount']);
   const output = firstTokenValue(source, ['outputTokens', 'output_tokens', 'completionTokens', 'completion_tokens', 'completionTokenCount']);
   const total = firstTokenValue(source, ['totalTokens', 'total_tokens', 'tokens', 'tokenCount']) || input + output;
-  const detailUsage = tokensFromDetail(source && source.detail);
   const merged = {
-    input: input || detailUsage.input,
-    output: output || detailUsage.output,
-    total: total || detailUsage.total,
-    hasUsage: Boolean(source && source.hasUsage) || detailUsage.hasUsage,
+    input,
+    output,
+    total,
+    hasUsage: Boolean(source && source.hasUsage),
     explicitNoUsage: Boolean(source && source.noUsageFlag)
-      || Boolean(source && source.rawEventType && source.hasUsage === false)
-      || detailUsage.explicitNoUsage
   };
   if (!merged.total) merged.total = merged.input + merged.output;
   return merged;
@@ -399,25 +396,10 @@ function tokenUsageFromSource(source) {
 
 function tokenUsageForTask(task) {
   const direct = tokenUsageFromSource(task);
-  if (direct.total > 0 || direct.input > 0 || direct.output > 0) {
-    return { ...direct, hasTokens: true };
-  }
-  const usage = { ...direct };
-  const events = DATA.rawEvents.filter((event) => (
-    event.user === task.user
-    && event.date === task.date
-    && event.requestId === task.requestId
-  ));
-  events.forEach((event) => {
-    const item = tokenUsageFromSource(event);
-    usage.input += item.input;
-    usage.output += item.output;
-    usage.total += item.total;
-    usage.hasUsage = usage.hasUsage || item.hasUsage;
-    usage.explicitNoUsage = usage.explicitNoUsage || item.explicitNoUsage;
-  });
-  usage.hasTokens = usage.total > 0 || usage.input > 0 || usage.output > 0;
-  return usage;
+  return {
+    ...direct,
+    hasTokens: direct.total > 0 || direct.input > 0 || direct.output > 0
+  };
 }
 
 function summarizeTokenTasks(tasks) {
@@ -456,36 +438,25 @@ function tokenStatsFromRow(row) {
   const directInput = Number(row.inputTokens || 0);
   const directOutput = Number(row.outputTokens || 0);
   const recordCount = Number(row.tokenUsageRecords || row.tokenUsageTasks || 0);
-  if (directTotal || directInput || directOutput || recordCount) {
-    const cacheInput = Number(row.cacheInputTokens || 0) || directInput;
-    const cacheRead = Number(row.cacheReadTokens || 0);
-    return {
-      recordCount,
-      taskCount: recordCount,
-      inputTokens: directInput,
-      outputTokens: directOutput,
-      totalTokens: directTotal || directInput + directOutput,
-      cacheReadTokens: cacheRead,
-      cacheWriteTokens: Number(row.cacheWriteTokens || 0),
-      cacheInputTokens: cacheInput,
-      cacheHitRate: cacheInput ? cacheRead / cacheInput * 100 : 0,
-      cacheReportedRecords: Number(row.cacheReportedRecords || 0),
-      estimatedRecords: Number(row.tokenEstimatedRecords || 0),
-      reportedTasks: recordCount,
-      missingTasks: 0,
-      noUsageFlagTasks: 0,
-      modelText: row.tokenModels || '-',
-      sourceText: row.tokenSources || '-'
-    };
-  }
-  const fallback = summarizeTokenTasks(tokenTasksForRow(row));
+  const cacheInput = Number(row.cacheInputTokens || 0) || directInput;
+  const cacheRead = Number(row.cacheReadTokens || 0);
   return {
-    ...fallback,
-    recordCount: fallback.reportedTasks,
-    cacheHitRate: cacheHitRate(fallback),
-    estimatedRecords: 0,
-    modelText: '-',
-    sourceText: '-'
+    recordCount,
+    taskCount: recordCount,
+    inputTokens: directInput,
+    outputTokens: directOutput,
+    totalTokens: directTotal || directInput + directOutput,
+    cacheReadTokens: cacheRead,
+    cacheWriteTokens: Number(row.cacheWriteTokens || 0),
+    cacheInputTokens: cacheInput,
+    cacheHitRate: cacheInput ? cacheRead / cacheInput * 100 : 0,
+    cacheReportedRecords: Number(row.cacheReportedRecords || 0),
+    estimatedRecords: Number(row.tokenEstimatedRecords || 0),
+    reportedTasks: recordCount,
+    missingTasks: 0,
+    noUsageFlagTasks: 0,
+    modelText: row.tokenModels || '-',
+    sourceText: row.tokenSources || '-'
   };
 }
 
@@ -704,11 +675,11 @@ function renderTokenKpis(rows) {
   const activeUsers = new Set(rows.map(row => row.user)).size;
   const currentCacheRate = cacheHitRate(a);
   const cards = [
-    { label: '总 Token', value: tokenNumber(a.totalTokens), foot: '来自 usage_events 表', icon: 'database', color: colors.blue, tip: '总 Token 来自后台 usage_events 表的 total_tokens 字段；不是从任务事件里猜出来的。' },
-    { label: '输入 Token', value: tokenNumber(a.inputTokens), foot: 'input_tokens 汇总', icon: 'target', color: colors.teal, tip: '输入 Token：usage_events.input_tokens 汇总。' },
-    { label: '输出 Token', value: tokenNumber(a.outputTokens), foot: 'output_tokens 汇总', icon: 'check', color: colors.green, tip: '输出 Token：usage_events.output_tokens 汇总。' },
+    { label: '总 Token', value: tokenNumber(a.totalTokens), foot: '服务端合并账本', icon: 'database', color: colors.blue, tip: '总 Token 来自旧版用量事实与 v1 Gateway 终态事实的服务端去重投影，不解析任务说明文字。' },
+    { label: '输入 Token', value: tokenNumber(a.inputTokens), foot: '提供商实报汇总', icon: 'target', color: colors.teal, tip: '输入 Token 来自提供商完成事实，按请求 ID 幂等去重。' },
+    { label: '输出 Token', value: tokenNumber(a.outputTokens), foot: '提供商实报汇总', icon: 'check', color: colors.green, tip: '输出 Token 来自提供商完成事实，按请求 ID 幂等去重。' },
     { label: '缓存命中率', value: tokenRate(currentCacheRate), foot: `参考线 ${tokenRate(mainstreamCacheReferenceRate)}`, icon: 'clock', color: currentCacheRate >= mainstreamCacheReferenceRate ? colors.green : colors.orange, tip: `缓存命中率 = 缓存命中输入 Token / 输入 Token。当前命中 ${tokenNumber(a.cacheReadTokens)}，输入 ${tokenNumber(a.cacheInputTokens || a.inputTokens)}；${cacheReportedLabel(a)}。${mainstreamCacheReferenceText}。` },
-    { label: '用量记录数', value: number(a.recordCount), foot: `${number(a.estimatedRecords)} 条为估算口径`, icon: 'table', color: colors.purple, tip: '用量记录数：usage_events 表里的记录条数；当前多为 usageSource=estimated。' },
+    { label: '用量记录数', value: number(a.recordCount), foot: `${number(a.estimatedRecords)} 条历史估算`, icon: 'table', color: colors.purple, tip: '用量记录数为服务端合并后的唯一用量事实数；历史旧版记录若只能估算会明确标记。' },
     { label: '涉及用户', value: number(activeUsers), foot: '按当前筛选', icon: 'users', color: colors.red, tip: '当前筛选下有 Token 用量记录的用户数。' }
   ];
   $('#kpiGrid').innerHTML = cards.map(card => `
@@ -909,7 +880,7 @@ function tokenEmptyMessage(stats) {
   if (!stats.recordCount) return '<div class="empty">当前筛选下没有 Token 用量记录。</div>';
   return `<div class="empty token-empty">
     当前筛选有 ${number(stats.recordCount)} 条 Token 用量记录。<br>
-    Token 来自 usage_events 表，任务事件来自 sync_events 表。
+    Token 来自服务端去重用量账本，任务事件来自运行审计账本。
   </div>`;
 }
 

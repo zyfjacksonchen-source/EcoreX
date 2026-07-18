@@ -53,7 +53,7 @@ ECOREX_CP_DEVICE_IDENTITY_ENABLED=true
 ECOREX_CP_DEVICE_ISSUER=https://dl.ecoremedia.net
 ECOREX_CP_DEVICE_AUDIENCE=ecorex-managed-runtime
 ECOREX_CP_DEVICE_VERIFICATION_URL=https://dl.ecoremedia.net/device
-ECOREX_CP_DEVICE_ALLOWED_CLIENT_IDS=ecorex-webui,ecorex-admin-web
+ECOREX_CP_DEVICE_ALLOWED_CLIENT_IDS=ecorex-product,ecorex-webui,ecorex-admin-web
 ECOREX_CP_DEVICE_PLATFORM_ADMIN_ACCOUNT_IDS=<active account IDs, comma separated>
 
 ECOREX_CP_DEVICE_DERIVATION_KEY_B64=<secret-provider value, 32-64 bytes>

@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
+from ecorex.gateway import GatewayAccountUsageProjection, GatewayTokenUsageWindow
 from ecorex.protocol import CreateThreadRequest, CreateTurnRequest
 from ecorex.runtime import RuntimeSettings, create_app
 from ecorex.runtime.usage import UsageProjectionService
@@ -44,6 +45,40 @@ def _turn(app, *, title: str, message_id: str):
         snapshot_context=prepared.snapshot_context,
     )
     return thread, created
+
+
+class AccountUsageGateway:
+    def __init__(self) -> None:
+        self.available = True
+        self.calls: list[str] = []
+        self.coverage_started_at: datetime | None = datetime(
+            2026, 7, 12, 15, 0, tzinfo=UTC
+        )
+
+    async def usage(self, timezone_name: str) -> GatewayAccountUsageProjection:
+        self.calls.append(timezone_name)
+        if not self.available:
+            raise RuntimeError("gateway unavailable")
+        return GatewayAccountUsageProjection(
+            timezone=timezone_name,
+            today=GatewayTokenUsageWindow(
+                input_tokens=100,
+                output_tokens=20,
+                total_tokens=120,
+            ),
+            week=GatewayTokenUsageWindow(
+                input_tokens=400,
+                output_tokens=80,
+                total_tokens=480,
+            ),
+            week_started_at=datetime(2026, 7, 12, 16, 0, tzinfo=UTC),
+            coverage_started_at=self.coverage_started_at,
+            calculated_at=datetime(2026, 7, 19, 1, 0, tzinfo=UTC),
+        )
+
+    async def stream(self, _request):
+        if False:
+            yield None
 
 
 def test_usage_projection_uses_provider_facts_for_calendar_and_context(tmp_path) -> None:
@@ -139,3 +174,63 @@ def test_usage_endpoint_returns_a_strict_read_only_projection(tmp_path) -> None:
     assert response.json()["context"]["used_tokens"] == 2
     assert response.json()["context"]["window_tokens"] == 272_000
     assert client.get("/api/v1/threads/thread_missing/usage", headers=_headers()).status_code == 404
+
+
+def test_usage_endpoint_prefers_account_projection_and_falls_back_locally(
+    tmp_path,
+) -> None:
+    gateway = AccountUsageGateway()
+    app = create_app(
+        settings=RuntimeSettings(
+            database_path=tmp_path / "runtime-account-usage.db",
+            runtime_bearer_token=TOKEN,
+            csrf_token=CSRF,
+            webui_origins=(ORIGIN,),
+            model_gateway=gateway,
+            allow_unmanaged_model_gateway_for_testing=True,
+            close_model_gateway_on_shutdown=False,
+        )
+    )
+    thread, created = _turn(app, title="跨设备用量", message_id="account-usage")
+    _append_completed(
+        app.state.runtime,
+        thread_id=thread.thread_id,
+        turn_id=created.turn.turn_id,
+        created_at=datetime.now(UTC),
+        usage={"input_tokens": 2, "output_tokens": 3, "total_tokens": 5},
+    )
+    client = TestClient(app)
+
+    online = client.get(
+        f"/api/v1/threads/{thread.thread_id}/usage",
+        headers=_headers(),
+    )
+    assert online.status_code == 200
+    assert online.json()["scope"] == "account"
+    assert online.json()["source"] == "managed_gateway"
+    assert online.json()["complete_across_devices"] is True
+    assert online.json()["today"]["total_tokens"] == 120
+    assert online.json()["week"]["total_tokens"] == 480
+    # Context remains a local, thread-specific provider fact.
+    assert online.json()["context"]["used_tokens"] == 2
+    assert gateway.calls == ["Asia/Shanghai"]
+
+    gateway.coverage_started_at = datetime(2026, 7, 18, 0, 0, tzinfo=UTC)
+    partial = client.get(
+        f"/api/v1/threads/{thread.thread_id}/usage",
+        headers=_headers(),
+    )
+    assert partial.status_code == 200
+    assert partial.json()["scope"] == "local_device"
+    assert partial.json()["today"]["total_tokens"] == 5
+
+    gateway.available = False
+    fallback = client.get(
+        f"/api/v1/threads/{thread.thread_id}/usage",
+        headers=_headers(),
+    )
+    assert fallback.status_code == 200
+    assert fallback.json()["scope"] == "local_device"
+    assert fallback.json()["source"] == "local_event_store"
+    assert fallback.json()["complete_across_devices"] is False
+    assert fallback.json()["today"]["total_tokens"] == 5

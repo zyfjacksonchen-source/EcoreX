@@ -9,6 +9,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import pytest
 
+from ecorex import __version__
 from ecorex.control_plane.cli import (
     _parser,
     _publication_coordinator,
@@ -35,12 +36,12 @@ class Publisher:
         self.closed = False
 
     def ensure_draft(self, *, version, channel, release_id):
-        assert version == "1.0.0"
+        assert version == __version__
         assert channel is ReleaseChannel.STABLE
         assert release_id.startswith("release-stable-")
         return GitHubReleaseDraft(
             release_id=91,
-            tag_name="v1.0.0",
+            tag_name=f"v{__version__}",
             upload_url=(
                 "https://uploads.github.com/repos/acme/ecorex/releases/91/"
                 "assets{?name,label}"
@@ -58,7 +59,7 @@ class Publisher:
             size_bytes=file_path.stat().st_size,
             sha256=expected_sha256,
             browser_download_url=(
-                "https://github.com/acme/ecorex/releases/download/v1.0.0/"
+                f"https://github.com/acme/ecorex/releases/download/v{__version__}/"
                 + file_path.name
             ),
         )

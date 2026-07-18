@@ -58,6 +58,10 @@ in-flight 内存槽、准确 `Content-Length` 和 32 MiB 上限提供纵深保�
 ## 两阶段命令链
 
 下列命令中的 key、endpoint、receipt 和 journal 均需使用同一 release 的真实值。
+`$STAGING_RUN_ID` 是生成 Candidate receipt 中三平台 Stage 的
+`ecorex-v1-platform-stage.yml` 运行 ID；`$CANDIDATE_RUN_ID` 是生成非发布
+gate receipt 的 `ecorex-v1-candidate.yml` 运行 ID。两者必须是同一 commit 上两个
+不同的真实运行，不能互换，也不能把一个 ID 手工写入另一类 receipt。
 
 1. 使用 `build-v1-direct-operator-release.py` 生成签名 Candidate 和
    `direct-release-waiver.json`。waiver 明确记录 protected live acceptance 为
@@ -71,7 +75,9 @@ python scripts/assemble-v1-direct-release-admission.py `
   --operator-waiver direct-release-waiver.json `
   --publication-receipt publication-receipt.json `
   --receipts-dir gate-receipts `
-  --expected-commit $COMMIT --expected-workflow-run-id $RUN_ID `
+  --expected-commit $COMMIT `
+  --expected-staging-run-id $STAGING_RUN_ID `
+  --expected-candidate-workflow-run-id $CANDIDATE_RUN_ID `
   --operator-instruction-sha256 $INSTRUCTION_SHA `
   --output direct-prepare.unsigned.json
 
@@ -96,8 +102,9 @@ python -m ecorex.control_plane.cli promote --direct-admission --phase prepare `
 
 4. 使用既有 `stage-public-bootstrap-index` 和 `activate-public-bootstrap-index`
    命令完成 CAS 激活与公网 readback，取得 Bootstrap receipt。
-5. 用相同输入和 `--phase finalize --bootstrap-index-receipt ...` 重新 assemble/sign。
-   服务端会逐项比较 prepare，任何 drift 都拒绝。
+5. 用相同的 `$STAGING_RUN_ID`、`$CANDIDATE_RUN_ID` 和其他输入，加上
+   `--phase finalize --bootstrap-index-receipt ...` 重新 assemble/sign。服务端会
+   逐项比较 prepare，任何 drift 都拒绝。
 6. final promotion 先记录 final admission、验证可信 Bootstrap proof、发布 Candidate，
    最后才激活既有 rollout：
 

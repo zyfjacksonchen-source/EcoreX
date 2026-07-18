@@ -50,7 +50,11 @@ from ecorex.connectors import (
     build_connector_composition,
     production_credential_vault,
 )
-from ecorex.gateway import ManagedModelGatewayClient, ModelGateway
+from ecorex.gateway import (
+    GatewayAccountUsageProjection,
+    ManagedModelGatewayClient,
+    ModelGateway,
+)
 from ecorex.ids import is_id
 from ecorex.extensions.api import register_extension_routes
 from ecorex.extensions.local_bundle import LocalSkillBundleStore
@@ -160,6 +164,7 @@ from ecorex.protocol import (
     ThreadProjectionResponse,
     ThreadStatus,
     ThreadStatusRequest,
+    TokenUsageWindow,
     TraceProjectionResponse,
     TurnMutationResponse,
     UpdateSnapshot,
@@ -3441,11 +3446,48 @@ def create_app(
         "/api/v1/threads/{thread_id}/usage",
         response_model=ConversationUsageProjection,
     )
-    def conversation_usage(thread_id: str) -> ConversationUsageProjection:
+    async def conversation_usage(thread_id: str) -> ConversationUsageProjection:
         try:
-            return usage_projection_service.project(thread_id)
+            local_projection = usage_projection_service.project(thread_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="thread not found") from error
+        remote_usage = getattr(settings.model_gateway, "usage", None)
+        if not callable(remote_usage):
+            return local_projection
+        try:
+            account_projection = await asyncio.wait_for(
+                remote_usage(settings.usage_timezone),
+                timeout=3.0,
+            )
+        except Exception:
+            # Conversation history and the local provider facts remain useful
+            # when the managed account projection is temporarily unavailable.
+            return local_projection
+        if not isinstance(account_projection, GatewayAccountUsageProjection):
+            return local_projection
+        if (
+            account_projection.coverage_started_at is None
+            or account_projection.coverage_started_at
+            > account_projection.week_started_at
+        ):
+            # Do not replace a complete local week with a partially deployed
+            # cloud ledger. The switch becomes authoritative at the first
+            # Monday whose whole window is covered by the Gateway.
+            return local_projection
+        return local_projection.model_copy(
+            update={
+                "scope": "account",
+                "source": "managed_gateway",
+                "complete_across_devices": True,
+                "today": TokenUsageWindow(
+                    **account_projection.today.model_dump()
+                ),
+                "week": TokenUsageWindow(
+                    **account_projection.week.model_dump()
+                ),
+                "calculated_at": account_projection.calculated_at,
+            }
+        )
 
     @app.get(
         "/api/v1/threads/{thread_id}/replay",

@@ -106,7 +106,8 @@ deployment/nginx/*.conf
 一起切到 `admin-route-control-plane.conf`。Nginx 校验或 reload 失败时两级 symlink
 同时恢复，因此不需要人工删除重复 location，也不会在候选准备阶段中断旧 Admin。
 
-manifest 固定 `version=1.0.0`、`platform=linux`、`architecture=aarch64`、
+manifest 的 `version` 必须来自产品唯一版本源（本次为 `1.0.2`），并固定
+`platform=linux`、`architecture=aarch64`、
 `python_version=3.11.9`，列出每个普通文件的长度和 SHA-256。签名是 canonical JSON
 上的 Ed25519 签名；公钥环路径和公钥环文件 SHA-256 也由部署 spec 固定。制品不接受
 符号链接、目录逃逸、重复路径、未知目标或任一字节漂移。

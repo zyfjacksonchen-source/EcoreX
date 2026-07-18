@@ -666,6 +666,11 @@ def test_production_nginx_and_systemd_keep_replica_boundary_narrow() -> None:
     assert "proxy_request_buffering off;" in legacy_gateway_route
     assert "proxy_buffering off;" in legacy_gateway_route
     assert "X-Accel-Buffering no always;" in legacy_gateway_route
+    usage_route = routes.split(
+        "location = /api/v1/usage {", 1
+    )[1].split("}\n", 1)[0]
+    assert "proxy_pass $ecorex_gateway;" in usage_route
+    assert "proxy_buffering off;" in usage_route
     assert routes.count("location ^~ /api/v1/bootstrap-index/ {") == 1
     bootstrap_route = routes.split(
         "location ^~ /api/v1/bootstrap-index/ {", 1

@@ -116,7 +116,12 @@ class DeviceIdentityProductionConfig:
         if (
             not self.database_path.is_absolute()
             or not self.allowed_client_ids
-            or not {"ecorex-webui", "ecorex-admin-web"} <= self.allowed_client_ids
+            or not {
+                "ecorex-product",
+                "ecorex-webui",
+                "ecorex-admin-web",
+            }
+            <= self.allowed_client_ids
             or not self.platform_admin_account_ids
             or any(
                 _ACCOUNT_ID.fullmatch(account_id) is None

@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import pytest
 from fastapi.testclient import TestClient
 
+from ecorex import __version__
 from ecorex.bootstrap import RUNTIME_RELOAD_EXIT_CODE
 
 from ecorex.connectors import InMemoryCredentialVault
@@ -235,7 +236,7 @@ def _web(
     unsigned = WebBundleManifest(
         schema_version=1,
         release_id=release_id,
-        version="1.0.0",
+        version=__version__,
         build_digest=build_digest,
         bundle_sha256=WebBundleManifest.compute_bundle_sha256(files),
         entrypoint="index.html",
@@ -259,7 +260,7 @@ def _config(
     raw = {
         "schema_version": 1,
         "identity": {
-            "version": "1.0.0",
+            "version": __version__,
             "platform": platform,
             "architecture": architecture,
         },
@@ -501,7 +502,7 @@ def _stage_product(tmp_path: Path, *, config_mutator=None):
             "release-key",
             core_unsigned.signed_payload(
                 release_id=release_id,
-                version="1.0.0",
+                version=__version__,
                 build_digest=build_digest,
             ),
         ),
@@ -522,7 +523,7 @@ def _stage_product(tmp_path: Path, *, config_mutator=None):
             "release-key",
             web_unsigned.signed_payload(
                 release_id=release_id,
-                version="1.0.0",
+                version=__version__,
                 build_digest=build_digest,
             ),
         ),
@@ -530,7 +531,7 @@ def _stage_product(tmp_path: Path, *, config_mutator=None):
     manifest_unsigned = ReleaseManifest(
         schema_version=1,
         release_id=release_id,
-        version="1.0.0",
+        version=__version__,
         build_digest=build_digest,
         channel=ReleaseChannel.STABLE,
         created_at="2026-07-10T00:00:00+00:00",
@@ -1273,7 +1274,7 @@ def test_release_builder_embeds_the_signed_web_payload_in_product_core(
         f"web/{javascript_path}",
     } <= names
     assert embedded_manifest == result.artifact_paths["web-manifest"].read_bytes()
-    assert ProductRuntimeConfig.from_bytes(embedded_config).identity.version == "1.0.0"
+    assert ProductRuntimeConfig.from_bytes(embedded_config).identity.version == __version__
     assert all(
         "channel/web" not in name and "dist-electron" not in name for name in names
     )
@@ -1336,7 +1337,7 @@ def test_release_builder_embeds_the_signed_web_payload_in_product_core(
         port=9876,
         runtime_loader=_loader(product, vault),
     )
-    assert server.app.version == "1.0.0"
+    assert server.app.version == __version__
     assert server.uvicorn_config.port == 9876
     assert server.composition.slot.manifest == result.manifest
 
@@ -1786,11 +1787,11 @@ def test_configured_capability_pack_requires_verified_artifact_and_trusted_adapt
             "pack_id": pack_id,
             "manifest": (
                 f"capability-packs/{pack_id}/ecorex-capability-pack-"
-                f"{pack_id}-windows-x64-1.0.0.json"
+                f"{pack_id}-windows-x64-{__version__}.json"
             ),
             "artifact": (
                 f"capability-packs/{pack_id}/ecorex-capability-pack-"
-                f"{pack_id}-windows-x64-1.0.0.zip"
+                f"{pack_id}-windows-x64-{__version__}.zip"
             ),
         }
         for pack_id in REQUIRED_CAPABILITY_PACK_IDS

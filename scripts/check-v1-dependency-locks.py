@@ -461,6 +461,13 @@ def _validate_workflows(repo: Path) -> dict[str, object]:
             "npm_ci": 0,
             "node": False,
         },
+        # Public smoke verifies already-built immutable assets. It needs an
+        # exact Python toolchain, but must not resolve product dependencies.
+        "ecorex-v1-public-bootstrap-smoke.yml": {
+            "profiles": {},
+            "npm_ci": 0,
+            "node": False,
+        },
     }
     workflow_root = repo / ".github" / "workflows"
     workflow_paths = tuple(

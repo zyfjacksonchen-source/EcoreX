@@ -12,7 +12,7 @@ import argparse
 import asyncio
 import base64
 import binascii
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 import ipaddress
 import json
@@ -35,6 +35,7 @@ from ecorex.security.provider_tls import (
 from ecorex.control_plane.management import AdminManagementRepository
 from ecorex.control_plane.management_schema import AdminManagementSchemaManager
 from ecorex.control_plane.management_models import MANAGED_MODEL_ORIGIN_PRESETS
+from ecorex.control_plane.usage_panel_service import build_account_usage_projection
 
 from .production_auth import (
     Ed25519GatewayJWTAuthenticator,
@@ -56,10 +57,13 @@ from .schema import (
     GatewaySchemaManager,
 )
 from .server import (
+    GatewayCompletedUsageFact,
+    GatewayUsageAccountant,
     ManagedProviderAdapter,
     SQLiteGatewayStore,
     create_managed_gateway_app,
 )
+from .models import GatewayAccountUsageProjection
 
 
 _SAFE_MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -538,6 +542,7 @@ class GatewayProductionBundle:
     store: SQLiteGatewayStore
     authenticator: Ed25519GatewayJWTAuthenticator
     provider: ProductionResponsesProvider
+    usage_accountant: GatewayUsageAccountant | None
     lifecycle: "SingleNodeGatewayLifecycle"
 
     def create_app(self) -> FastAPI:
@@ -546,8 +551,52 @@ class GatewayProductionBundle:
             authenticator=self.authenticator,
             provider=self.provider,
             allowed_model_ids=self.config.allowed_model_ids,
+            dynamic_model_authority=self.config.admin_management_enabled,
+            usage_accountant=self.usage_accountant,
             lease_seconds=self.config.gateway_lease_seconds,
             service_lifecycle=self.lifecycle,
+        )
+
+
+class AdminManagementGatewayUsageAccountant:
+    """Settle Gateway facts and expose the canonical cross-version projection."""
+
+    def __init__(self, repository: AdminManagementRepository) -> None:
+        self.repository = repository
+
+    def settle(self, fact: GatewayCompletedUsageFact) -> None:
+        self.repository.record_provider_usage(
+            source_service="managed_gateway",
+            source_id=fact.request_id,
+            usage_kind="chat",
+            account_id=fact.account_id,
+            input_tokens=fact.input_tokens,
+            output_tokens=fact.output_tokens,
+            total_tokens=fact.total_tokens,
+            provider_created_at=fact.provider_created_at.isoformat(),
+        )
+
+    def reconcile(self, facts: Iterable[GatewayCompletedUsageFact]) -> None:
+        for fact in facts:
+            self.settle(fact)
+
+    def tokens_available(self, account_id: str) -> bool:
+        user = self.repository.get_user(account_id)
+        if user.status != "active":
+            return False
+        return user.token_limit == 0 or user.tokens_used < user.token_limit
+
+    def project(
+        self,
+        account_id: str,
+        *,
+        timezone_name: str,
+    ) -> GatewayAccountUsageProjection:
+        return GatewayAccountUsageProjection.model_validate(
+            build_account_usage_projection(
+                account_id,
+                timezone_name=timezone_name,
+            )
         )
 
 
@@ -793,6 +842,7 @@ class SingleNodeSQLiteResponsesProvider:
             store = SQLiteGatewayStore(config.database_path)
             authenticator = self._authenticator(config)
             provider = self._provider(config, secrets, handoff_authority=store)
+            usage_accountant = self._usage_accountant(config, secrets)
             if not isinstance(provider, ProductionResponsesProvider):
                 raise GatewayProductionConfigurationError(
                     "gateway provider contract is unavailable"
@@ -807,6 +857,7 @@ class SingleNodeSQLiteResponsesProvider:
                 store=store,
                 authenticator=authenticator,
                 provider=provider,
+                usage_accountant=usage_accountant,
                 lifecycle=lifecycle,
             )
         except BaseException:
@@ -830,7 +881,9 @@ class SingleNodeSQLiteResponsesProvider:
             ),
             issuer=config.auth_issuer,
             audience=config.auth_audience,
-            service_model_ids=config.allowed_model_ids,
+            service_model_ids=(
+                None if config.admin_management_enabled else config.allowed_model_ids
+            ),
             max_token_lifetime_seconds=config.auth_max_token_lifetime_seconds,
             clock_skew_seconds=config.auth_clock_skew_seconds,
         )
@@ -868,6 +921,23 @@ class SingleNodeSQLiteResponsesProvider:
                 config.provider_ca_bundle_sha256,
             ),
         )
+
+    @staticmethod
+    def _usage_accountant(
+        config: GatewayProductionConfig,
+        secrets: GatewaySecretProvider,
+    ) -> GatewayUsageAccountant | None:
+        if not config.admin_management_enabled:
+            return None
+        database_path = config.admin_management_database_path
+        assert database_path is not None
+        repository = AdminManagementRepository(
+            database_path,
+            encryption_key=_secret_bytes(
+                secrets.read("model-config-encryption-key"), exact_length=32
+            ),
+        )
+        return AdminManagementGatewayUsageAccountant(repository)
 
 
 async def _probe_and_close(provider: ProductionResponsesProvider) -> None:
@@ -1126,6 +1196,7 @@ if __name__ == "__main__":  # pragma: no cover - deployment entry point
 
 
 __all__ = [
+    "AdminManagementGatewayUsageAccountant",
     "EnvironmentGatewaySecretProvider",
     "GatewayProductionBundle",
     "GatewayProductionConfig",

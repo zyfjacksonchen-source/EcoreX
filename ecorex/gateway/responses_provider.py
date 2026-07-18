@@ -297,7 +297,9 @@ class ManagedHTTPSResponsesProvider:
                                 # completed/stored this Responses object, and do
                                 # not expose the provider completion as a second
                                 # Gateway terminal for the same round.
-                                yield pending_tool
+                                yield pending_tool.model_copy(
+                                    update={"usage": event.usage}
+                                )
                                 return
                             if pending_tool is not None:
                                 raise ResponsesProviderProtocolError(

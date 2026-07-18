@@ -49,7 +49,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--bootstrap-index-receipt", type=Path)
     parser.add_argument("--phase", choices=("prepare", "finalize"), required=True)
     parser.add_argument("--expected-commit", required=True)
-    parser.add_argument("--expected-workflow-run-id", required=True, type=int)
+    parser.add_argument("--expected-staging-run-id", required=True, type=int)
+    parser.add_argument(
+        "--expected-candidate-workflow-run-id",
+        required=True,
+        type=int,
+    )
     parser.add_argument("--operator-instruction-sha256", required=True)
     parser.add_argument("--output", required=True, type=Path)
     return parser
@@ -68,7 +73,10 @@ def run(argv: list[str] | None = None) -> int:
     try:
         if (
             _COMMIT.fullmatch(args.expected_commit) is None
-            or args.expected_workflow_run_id < 1
+            or args.expected_staging_run_id < 1
+            or args.expected_candidate_workflow_run_id < 1
+            or args.expected_staging_run_id
+            == args.expected_candidate_workflow_run_id
             or _SHA256.fullmatch(args.operator_instruction_sha256) is None
         ):
             raise ValueError("direct_release_admission_identity_invalid")
@@ -100,7 +108,7 @@ def run(argv: list[str] | None = None) -> int:
             or candidate.get("manifest_sha256") != manifest_sha256
             or not isinstance(candidate.get("staging_provenance"), dict)
             or candidate["staging_provenance"].get("workflow_run_id")
-            != args.expected_workflow_run_id
+            != args.expected_staging_run_id
             or waiver.get("operator_instruction_sha256")
             != args.operator_instruction_sha256
             or not isinstance(signing, dict)
@@ -133,7 +141,8 @@ def run(argv: list[str] | None = None) -> int:
                 or value.get("gate") != gate
                 or value.get("status") != "passed"
                 or value.get("commit_sha") != args.expected_commit
-                or value.get("workflow_run_id") != args.expected_workflow_run_id
+                or value.get("workflow_run_id")
+                != args.expected_candidate_workflow_run_id
                 or value.get("release_id") != manifest.release_id
                 or value.get("version") != manifest.version
                 or value.get("channel") != manifest.channel.value

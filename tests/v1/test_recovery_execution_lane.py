@@ -10,6 +10,7 @@ import uuid
 from fastapi.testclient import TestClient
 import pytest
 
+from ecorex import __version__
 from ecorex.protocol import ActivateUpdateResponse, UpdateSnapshot
 from ecorex.runtime import RuntimeSettings, create_app
 from ecorex.runtime.database import SQLiteDatabase, json_dumps
@@ -46,6 +47,11 @@ MUTATION_HEADERS = {
 }
 TRANSACTION_ID = "a" * 32
 BUILD_DIGEST = hashlib.sha256(b"verified-local-build").hexdigest()
+_VERSION_PARTS = tuple(int(part) for part in __version__.split("."))
+TARGET_VERSION = (
+    f"{_VERSION_PARTS[0]}.{_VERSION_PARTS[1]}.{_VERSION_PARTS[2] + 1}"
+)
+TARGET_RELEASE_ID = f"release-{TARGET_VERSION}-stable"
 
 
 class DurableLocalUpdateService:
@@ -63,10 +69,10 @@ class DurableLocalUpdateService:
         self.started = 0
         self.stopped = 0
         self.value = UpdateSnapshot(
-            current_version="1.0.0",
+            current_version=__version__,
             state="awaiting_user",
-            target_version="1.0.1",
-            release_id="release-1.0.1-stable",
+            target_version=TARGET_VERSION,
+            release_id=TARGET_RELEASE_ID,
             build_digest=BUILD_DIGEST,
             transaction_id=TRANSACTION_ID,
             can_activate=True,
@@ -103,11 +109,17 @@ class DurableLocalUpdateService:
                     "INSERT INTO runtime_update_state("
                     "singleton,state,target_version,release_id,build_digest,"
                     "transaction_id,requires_refresh,error_code,updated_at"
-                    ") VALUES(1,'activating','1.0.1','release-1.0.1-stable',"
+                    ") VALUES(1,'activating',?,?,"
                     "?,?,1,NULL,?) ON CONFLICT(singleton) DO UPDATE SET "
                     "state='activating',transaction_id=excluded.transaction_id,"
                     "requires_refresh=1,updated_at=excluded.updated_at",
-                    (BUILD_DIGEST, TRANSACTION_ID, now),
+                    (
+                        TARGET_VERSION,
+                        TARGET_RELEASE_ID,
+                        BUILD_DIGEST,
+                        TRANSACTION_ID,
+                        now,
+                    ),
                 )
                 connection.execute(
                     "INSERT INTO runtime_update_events("
@@ -280,7 +292,7 @@ def test_logout_then_local_activation_contract_and_full_table_diff(tmp_path) -> 
     database = tmp_path / "runtime.db"
     session = _service(database, public, MutableClock(now), Vault())
     managed = _install(session, _lease(private, now=now))
-    payload = _package("1.0.1")
+    payload = _package(TARGET_VERSION)
     feed = Feed(_manifest(payload))
     restarts: list[str] = []
     updates = RuntimeUpdateService(
@@ -288,7 +300,7 @@ def test_logout_then_local_activation_contract_and_full_table_diff(tmp_path) -> 
         coordinator=_coordinator(tmp_path / "update-fixture", payload),
         feed=feed,
         artifact_id="core-windows-x64",
-        current_version="1.0.0",
+        current_version=__version__,
         channel=ReleaseChannel.STABLE,
         platform="windows",
         architecture="x64",
