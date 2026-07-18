@@ -25,7 +25,7 @@ env:
 jobs:
   real-install-smoke:
     name: ${{ matrix.label }}
-    runs-on: ${{ fromJSON(matrix.runs_on) }}
+    runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -33,19 +33,19 @@ jobs:
         include:
           - label: windows-latest x64
             id: windows-latest-x64
-            runs_on: '"windows-latest"'
+            runs_on: windows-latest
             platform: windows
             architecture: x64
             artifact_id: bootstrap-windows-x64
           - label: macos-15 arm64
             id: macos-15-arm64
-            runs_on: '"macos-15"'
+            runs_on: macos-15
             platform: macos
             architecture: arm64
             artifact_id: bootstrap-macos-arm64
           - label: macos-15-intel x64
             id: macos-15-intel-x64
-            runs_on: '"macos-15-intel"'
+            runs_on: macos-15-intel
             platform: macos
             architecture: x64
             artifact_id: bootstrap-macos-x64
