@@ -6492,3 +6492,23 @@ umask-reduced mode. Startup cleanup and quota walks apply the same rule, so an
 unrelated stale health-prefix cannot poison every future probe. Any content,
 foreign identity or other mode still fails closed. The combined CAS and
 sidecar suite passes 75 tests with eight explicit platform skips.
+
+The next recovery reached all three v1 HTTP lifecycles and exposed a separate
+listener-allocation defect before route switch: Image API and Image Worker
+both inherited the slot's single image port. The Worker therefore failed with
+an address-in-use error even though both processes were individually healthy.
+Every slot now reserves a fourth, globally unique Worker port and writes a
+dedicated `image-worker.env`; recovery schema checks also use that exact
+environment. The readiness gate continues to probe the Image API while
+separately requiring the Worker unit to be active. The Cloud sidecar suite
+passes 74 tests with seven explicit platform skips.
+
+Forced shutdown during that failed start also found an independent provider
+lifecycle race. `DynamicManagedImageProvider.aclose()` previously cleared and
+closed cached providers while health or job calls still held them, causing a
+late release to report an unbalanced reference count. Closing now enters a
+draining state, rejects new acquisitions, lets existing calls release, and
+closes each provider exactly once. Concurrent or cancelled close callers share
+the same shielded completion and cannot interrupt the underlying drain.
+Focused image configuration, provider and production-runtime coverage passes
+46 tests.

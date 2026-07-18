@@ -515,6 +515,172 @@ def test_local_cas_units_do_not_depend_on_minio_and_secrets_require_mount() -> N
     assert "/etc/ecorex/cloud/secrets/" not in minio
 
 
+def test_slot_ports_are_unique_and_image_processes_never_share_a_listener() -> None:
+    allocated = [
+        port
+        for slot_ports in deployment.PORTS.values()
+        for port in slot_ports.values()
+    ]
+
+    assert len(allocated) == len(set(allocated))
+    for slot in deployment.SLOTS:
+        ports = deployment.PORTS[slot]
+        assert set(ports) == {
+            "control_plane",
+            "gateway",
+            "image",
+            "image_worker",
+        }
+        assert ports["image"] != ports["image_worker"]
+
+
+def test_image_units_use_separate_slot_environment_files() -> None:
+    root = Path("deploy/ecorex-cloud-sidecar/systemd")
+    api = (root / "ecorex-image-api@.service").read_text(encoding="utf-8")
+    worker = (root / "ecorex-image-worker@.service").read_text(encoding="utf-8")
+
+    assert "EnvironmentFile=/etc/ecorex/cloud/slots/%i/image.env" in api
+    assert "EnvironmentFile=/etc/ecorex/cloud/slots/%i/image-worker.env" not in api
+    assert "EnvironmentFile=/etc/ecorex/cloud/slots/%i/image-worker.env" in worker
+    assert "EnvironmentFile=/etc/ecorex/cloud/slots/%i/image.env" not in worker
+
+
+def test_slot_environment_assigns_distinct_image_api_and_worker_ports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_root = tmp_path / "config-root"
+    release = tmp_path / "release"
+    symlinks: list[tuple[Path, Path]] = []
+    monkeypatch.setattr(deployment, "CONFIG_ROOT", config_root)
+    monkeypatch.setattr(deployment, "SLOT_ROOT", tmp_path / "slots")
+    monkeypatch.setattr(
+        deployment, "_prepare_slot_runtime_directory", lambda _slot: None
+    )
+
+    def write(path: Path, payload: bytes, mode: int = 0o640) -> None:
+        del mode
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+
+    monkeypatch.setattr(deployment, "_atomic_write", write)
+    monkeypatch.setattr(
+        deployment,
+        "_atomic_symlink",
+        lambda target, link: symlinks.append((Path(target), Path(link))),
+    )
+
+    deployment._write_slot_environment("blue", release)
+
+    api = deployment._parse_env(
+        config_root / "slots" / "blue" / "image.env", secret=False
+    )
+    worker = deployment._parse_env(
+        config_root / "slots" / "blue" / "image-worker.env", secret=False
+    )
+    assert api == {
+        "ECOREX_IMAGE_BIND_HOST": "127.0.0.1",
+        "ECOREX_IMAGE_BIND_PORT": str(deployment.PORTS["blue"]["image"]),
+        "ECOREX_IMAGE_INSTANCE_ID": "ecorex-image-blue",
+    }
+    assert worker == {
+        "ECOREX_IMAGE_BIND_HOST": "127.0.0.1",
+        "ECOREX_IMAGE_BIND_PORT": str(
+            deployment.PORTS["blue"]["image_worker"]
+        ),
+        "ECOREX_IMAGE_INSTANCE_ID": "ecorex-image-worker-blue",
+    }
+    assert api["ECOREX_IMAGE_BIND_PORT"] != worker["ECOREX_IMAGE_BIND_PORT"]
+    assert symlinks == [(release, tmp_path / "slots" / "blue" / "current")]
+
+
+def test_health_uses_image_api_endpoint_and_requires_active_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requested: list[str] = []
+    commands: list[tuple[str, ...]] = []
+
+    class ReadyResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return b'{"status":"ready"}'
+
+    def open_ready(request, *, timeout: float):
+        assert timeout == 2.0
+        requested.append(request.full_url)
+        return ReadyResponse()
+
+    def run(command, **_kwargs):
+        commands.append(tuple(command))
+        return SimpleNamespace(stdout=b"active\n", stderr=b"", returncode=0)
+
+    monkeypatch.setattr(deployment.urllib.request, "urlopen", open_ready)
+    monkeypatch.setattr(deployment, "_run", run)
+    spec = _spec(tmp_path)
+
+    deployment._wait_health(spec, "blue", timeout_seconds=0.1)
+
+    ports = deployment.PORTS["blue"]
+    assert requested == [
+        f"http://127.0.0.1:{ports['control_plane']}/health/ready",
+        f"http://127.0.0.1:{ports['gateway']}/health/ready",
+        f"http://127.0.0.1:{ports['image']}/health/ready",
+    ]
+    assert all(str(ports["image_worker"]) not in url for url in requested)
+    assert commands == [
+        (
+            str(spec.systemctl_binary),
+            "is-active",
+            "ecorex-image-worker@blue.service",
+        )
+    ]
+
+
+def test_recovery_checks_worker_with_its_dedicated_slot_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    environments: list[tuple[str, str]] = []
+    checks: list[tuple[tuple[str, ...], str]] = []
+
+    def environment(service: str, slot: str) -> dict[str, str]:
+        environments.append((service, slot))
+        return {"ECOREX_TEST_ENVIRONMENT": service}
+
+    def run(command, *, environment, **_kwargs):
+        checks.append(
+            (
+                tuple(command),
+                environment["ECOREX_TEST_ENVIRONMENT"],
+            )
+        )
+        return SimpleNamespace(stdout=b"", stderr=b"", returncode=0)
+
+    monkeypatch.setattr(deployment, "_service_environment", environment)
+    monkeypatch.setattr(deployment, "_run_service_command", run)
+
+    deployment._recovery_schema_check(tmp_path / "release", "green", source=False)
+
+    assert environments == [
+        ("control-plane", "green"),
+        ("gateway", "green"),
+        ("image", "green"),
+        ("image-worker", "green"),
+    ]
+    worker_command, worker_environment = checks[-1]
+    assert worker_command[-3:] == (
+        "ecorex.image_orchestrator.production",
+        "schema",
+        "check",
+    )
+    assert worker_environment == "image-worker"
+
+
 def _legacy_nginx_server() -> str:
     return """server {
     listen 443 ssl;

@@ -9,8 +9,8 @@
     "dirty_worktree_preserved": true
   },
   "current_milestone": "direct_production_publication",
-  "current_batch": "All required chat/image slots except the failing Gemini legacy proxy have passed. First-recovery env, slot traversal and CAS sandbox/crash-window defects are corrected; the new exact source must be rebuilt, the durable schema_ready journal recovered, and Web/Admin switched atomically.",
-  "last_verified_batch": "On 2026-07-18, the exact production sandbox reduced one new CAS directory to 2700 because CAS writers had RestrictSUIDSGID. The directive is retained for Gateway and removed only from CAS writers; an empty same-identity umask-reduced directory can now be repaired safely. CAS plus sidecar suite passed 75 tests with eight platform skips and Ruff. Legacy routes/services remain active.",
+  "current_batch": "All required chat/image slots except the failing Gemini legacy proxy have passed. CAS is production-clean. The Image API/Worker shared-port recovery blocker and provider shutdown race are locally corrected; one narrow blue-slot environment repair, durable schema_ready recovery, exact artifact activation and atomic Web/Admin switch remain.",
+  "last_verified_batch": "On 2026-07-18, exact production CAS sandbox probes passed and all 41 directories were 2770. Recovery then exposed Image API/Worker port reuse before route switch; legacy services were restored. Dedicated Worker ports/environment passed 74 Cloud sidecar tests, provider draining passed 46 related image tests, and Ruff passed.",
   "recovery_document": "docs/v1.0/implementation-log.md",
   "verification_document": "docs/v1.0/verification-ledger.md",
   "milestones": [
@@ -23,7 +23,7 @@
     {"id": "migration_ga_gates", "status": "in_progress"}
   ],
   "remaining_local_work": [
-    "commit and push the verified slot-runtime recovery correction without touching the user-owned .artifacts tree",
+    "commit and push the verified worker-port and provider-drain corrections without touching the user-owned .artifacts tree",
     "build and sign one exact replacement Cloud artifact, then revalidate both Image 2 slots through the audited repository workflow",
     "recover the committed first-activation journal, perform the atomic Web/Admin route switch, and complete external plus browser readback"
   ],

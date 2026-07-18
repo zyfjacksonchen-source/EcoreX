@@ -161,8 +161,18 @@ CONTROL_PLANE_ADMIN_ROUTE_CONTRACT = {
 
 SLOTS = ("blue", "green")
 PORTS = {
-    "blue": {"control_plane": 18771, "gateway": 18772, "image": 18773},
-    "green": {"control_plane": 18871, "gateway": 18872, "image": 18873},
+    "blue": {
+        "control_plane": 18771,
+        "gateway": 18772,
+        "image": 18773,
+        "image_worker": 18774,
+    },
+    "green": {
+        "control_plane": 18871,
+        "gateway": 18872,
+        "image": 18873,
+        "image_worker": 18874,
+    },
 }
 SERVICE_NAMES = (
     "ecorex-control-plane",
@@ -179,6 +189,7 @@ ENV_NAMES = {
     "control-plane": ("control-plane.env", "control-plane.secret.env"),
     "gateway": ("gateway.env", "gateway.secret.env"),
     "image": ("image.env", "image.secret.env"),
+    "image-worker": ("image.env", "image.secret.env"),
 }
 SAFE_RELEASE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{5,127}\Z")
 SAFE_ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{0,127}\Z")
@@ -2064,6 +2075,11 @@ def _write_slot_environment(slot: str, release: Path) -> None:
             "ECOREX_IMAGE_BIND_PORT": str(ports["image"]),
             "ECOREX_IMAGE_INSTANCE_ID": f"ecorex-image-{slot}",
         },
+        "image-worker": {
+            "ECOREX_IMAGE_BIND_HOST": "127.0.0.1",
+            "ECOREX_IMAGE_BIND_PORT": str(ports["image_worker"]),
+            "ECOREX_IMAGE_INSTANCE_ID": f"ecorex-image-worker-{slot}",
+        },
     }
     for service, environment in values.items():
         payload = "".join(f"{name}={value}\n" for name, value in environment.items())
@@ -2197,18 +2213,18 @@ def _production_contract_gate(release: Path, slot: str) -> None:
 
 
 _RECOVERY_SCHEMA_SERVICES = (
-    ("control-plane", "control-plane"),
-    ("gateway", "gateway"),
-    ("image-api", "image"),
-    ("image-worker", "image"),
+    ("control-plane", "control-plane", "control-plane"),
+    ("gateway", "gateway", "gateway"),
+    ("image-api", "image", "image"),
+    ("image-worker", "image", "image-worker"),
 )
 
 
 def _recovery_schema_check(
     release: Path, slot: str, *, source: bool
 ) -> None:
-    for service_name, runtime_service in _RECOVERY_SCHEMA_SERVICES:
-        environment = _service_environment(runtime_service, slot)
+    for service_name, runtime_service, environment_service in _RECOVERY_SCHEMA_SERVICES:
+        environment = _service_environment(environment_service, slot)
         try:
             _run_service_command(
                 _service_command(release, runtime_service, "schema", "check"),

@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from ecorex.control_plane.management import (
     AdminManagementRepository,
     ModelConnectionTestResult,
@@ -23,7 +25,11 @@ from ecorex.image_orchestrator.models import ImageOperation, ImageSubmitRequest
 from ecorex.image_orchestrator.openai_provider import (
     OpenAICompatibleImageProvider,
 )
-from ecorex.image_orchestrator.provider import ProviderResult, ProviderState
+from ecorex.image_orchestrator.provider import (
+    ProviderResult,
+    ProviderState,
+    ProviderUnavailable,
+)
 from ecorex.image_orchestrator.service import ImageOrchestrationService
 from ecorex.image_orchestrator.sqlite_schema import SQLiteImageSchemaManager
 from ecorex.image_orchestrator.sqlite_store import SQLiteImageJobStore
@@ -157,6 +163,56 @@ class _RecordingProvider:
 
     async def aclose(self) -> None:
         self.closed = True
+
+
+class _GatedProvider(_RecordingProvider):
+    def __init__(
+        self,
+        configuration: ActiveModelConfiguration,
+        *,
+        release: asyncio.Event,
+        expected_entries: int,
+    ) -> None:
+        super().__init__(configuration)
+        self.release = release
+        self.expected_entries = expected_entries
+        self.entered = asyncio.Event()
+        self.entered_count = 0
+        self.active_count = 0
+        self.close_calls = 0
+        self.closed_while_active = False
+
+    async def _block(self) -> None:
+        self.entered_count += 1
+        self.active_count += 1
+        if self.entered_count == self.expected_entries:
+            self.entered.set()
+        try:
+            await self.release.wait()
+        finally:
+            self.active_count -= 1
+
+    async def submit(self, job, *, idempotency_key: str) -> ProviderResult:
+        await self._block()
+        return await super().submit(job, idempotency_key=idempotency_key)
+
+    async def recover(self, job, **kwargs) -> ProviderResult:
+        await self._block()
+        return await _RecordingProvider.submit(
+            self, job, idempotency_key=kwargs["idempotency_key"]
+        )
+
+    async def cancel(self, job, **kwargs) -> None:
+        await self._block()
+        await super().cancel(job, **kwargs)
+
+    async def health(self) -> None:
+        await self._block()
+
+    async def aclose(self) -> None:
+        self.close_calls += 1
+        self.closed_while_active = self.active_count != 0
+        await super().aclose()
 
 
 def test_image_jobs_freeze_tested_revision_and_cache_is_bounded(tmp_path: Path) -> None:
@@ -337,3 +393,120 @@ def test_default_dynamic_provider_uses_cloud_direct_adapter_and_shared_inputs(
     assert provider.input_store is content
     assert provider.allowed_models == frozenset({"provider-image-v1"})
     asyncio.run(provider.aclose())
+
+
+def test_dynamic_provider_close_drains_in_flight_calls_exactly_once(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path)
+    _activate_new(
+        repository,
+        local_model_id="gpt-image-2",
+        modality="image_generation",
+        upstream_model_id="provider-image-v1",
+        api_key="sk-image-version-one",
+        request_suffix="image-close-race",
+    )
+    _activate_new(
+        repository,
+        local_model_id="gpt-image-2-edit",
+        modality="image_edit",
+        upstream_model_id="provider-edit-v1",
+        api_key="sk-edit-version-one",
+        request_suffix="edit-close-race",
+    )
+    image_database = tmp_path / "image-close-race.db"
+    SQLiteImageSchemaManager(image_database).migrate()
+    service = ImageOrchestrationService(
+        SQLiteImageJobStore(image_database),
+        allowed_models=frozenset({"gpt-image-2"}),
+        model_configuration_resolver=AdminImageModelConfigurationResolver(repository),
+    )
+    job, created = service.submit(
+        "account-1",
+        ImageSubmitRequest(
+            operation=ImageOperation.GENERATE,
+            model_id="gpt-image-2",
+            client_request_id="image-close-race",
+            prompt="Create a concurrency-safe office illustration",
+        ),
+    )
+    assert created
+
+    async def scenario() -> None:
+        release = asyncio.Event()
+        providers: list[_GatedProvider] = []
+
+        def factory(configuration: ActiveModelConfiguration, _origin: str):
+            provider = _GatedProvider(
+                configuration,
+                release=release,
+                expected_entries=4,
+            )
+            providers.append(provider)
+            return provider
+
+        dynamic = DynamicManagedImageProvider(
+            repository,
+            provider_id="managed-image",
+            origins={"ecorex_image": "https://images.ecorex.example"},
+            timeout_seconds=120,
+            connect_timeout_seconds=5,
+            max_image_bytes=64 * 1024 * 1024,
+            max_connections=8,
+            max_concurrency=4,
+            max_cached_revisions=2,
+            provider_factory=factory,  # type: ignore[arg-type]
+        )
+        calls = [
+            asyncio.create_task(
+                dynamic.submit(job, idempotency_key="provider-submit")
+            ),
+            asyncio.create_task(
+                dynamic.recover(
+                    job,
+                    idempotency_key="provider-recover",
+                    provider_request_id="request-previous",
+                )
+            ),
+            asyncio.create_task(
+                dynamic.cancel(
+                    job,
+                    idempotency_key="provider-cancel",
+                    provider_request_id="request-current",
+                )
+            ),
+            asyncio.create_task(dynamic.health()),
+        ]
+        while not providers:
+            await asyncio.sleep(0)
+        provider = providers[0]
+        await asyncio.wait_for(provider.entered.wait(), timeout=2)
+
+        closes = [asyncio.create_task(dynamic.aclose()) for _ in range(3)]
+        await asyncio.sleep(0)
+        assert all(not close.done() for close in closes)
+        assert provider.close_calls == 0
+        closes[0].cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await closes[0]
+        assert all(not close.done() for close in closes[1:])
+        with pytest.raises(ProviderUnavailable, match="closed"):
+            await dynamic.submit(job, idempotency_key="provider-after-close")
+
+        release.set()
+        outcomes = await asyncio.gather(*calls, return_exceptions=True)
+        await asyncio.gather(*closes[1:])
+        await dynamic.aclose()
+
+        assert not any(
+            isinstance(outcome, RuntimeError)
+            and "reference count is unbalanced" in str(outcome)
+            for outcome in outcomes
+        )
+        assert isinstance(outcomes[3], ProviderUnavailable)
+        assert provider.close_calls == 1
+        assert provider.closed
+        assert not provider.closed_while_active
+
+    asyncio.run(scenario())
