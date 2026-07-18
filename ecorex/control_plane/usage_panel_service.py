@@ -14,6 +14,14 @@ from urllib.parse import parse_qs, urlparse
 
 VERSION = "1.0.1"
 DB_PATH = "/srv/ecorex-agent-admin/data/ecorex-admin.sqlite3"
+CONTROL_PLANE_DB_PATH = os.environ.get(
+    "ECOREX_CONTROL_PLANE_DATABASE_PATH",
+    "/var/lib/ecorex/control-plane/control-plane.sqlite3",
+)
+GATEWAY_DB_PATH = os.environ.get(
+    "ECOREX_GATEWAY_DATABASE_PATH",
+    "/var/lib/ecorex/gateway/gateway.sqlite3",
+)
 HOST = "127.0.0.1"
 PORT = 18105
 TZ = timezone(timedelta(hours=8))
@@ -290,6 +298,134 @@ def canonical_email(value: object) -> str:
     return str(value or "").strip().casefold()
 
 
+def _read_optional_rows(
+    paths: list[str],
+    table: str,
+    query: str,
+    parameters: tuple[object, ...] = (),
+) -> list[dict]:
+    """Read the first available copy of an optional v1 fact table.
+
+    Production keeps the legacy panel, Control Plane and Gateway databases in
+    separate files. Tests and migration rehearsals may co-locate their tables.
+    Trying the configured authority first and the legacy database second keeps
+    both layouts supported without counting a copied table twice.
+    """
+
+    seen: set[str] = set()
+    for raw_path in paths:
+        path = str(raw_path or "").strip()
+        if not path:
+            continue
+        normalized = os.path.normcase(os.path.abspath(path))
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        if not pathlib.Path(path).is_file():
+            continue
+        connection = sqlite3.connect(f"file:{pathlib.Path(path).as_posix()}?mode=ro", uri=True)
+        connection.row_factory = sqlite3.Row
+        try:
+            exists = connection.execute(
+                "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone()
+            if exists is None:
+                continue
+            return [dict(row) for row in connection.execute(query, parameters)]
+        finally:
+            connection.close()
+    return []
+
+
+def merged_identity_catalog(
+    legacy_rows: list[dict],
+    admin_rows: list[dict],
+    observed_emails: set[str],
+    observed_accounts: set[str],
+) -> tuple[dict[str, str], list[str], dict[str, str]]:
+    """Return display labels, stable identity order and account aliases.
+
+    Email is the canonical cross-version identity when available. An account
+    without email remains addressable by its canonical account id. The account
+    alias map is what lets Gateway facts join the legacy email ledger.
+    """
+
+    entries: dict[str, str] = {}
+    account_aliases: dict[str, str] = {}
+    for row in legacy_rows:
+        if row.get("deleted_at") not in (None, ""):
+            continue
+        identity = canonical_email(row.get("email"))
+        if not identity:
+            continue
+        entries[identity] = str(row.get("name") or "").strip() or identity.split("@")[0]
+
+    for row in admin_rows:
+        account_id = canonical_email(row.get("account_id"))
+        email = canonical_email(row.get("email"))
+        identity = email or account_id
+        if not identity:
+            continue
+        if account_id:
+            account_aliases[account_id] = identity
+        display_name = str(row.get("display_name") or "").strip()
+        entries[identity] = display_name or entries.get(identity) or identity.split("@")[0]
+
+    for email in observed_emails:
+        if email:
+            entries.setdefault(email, email.split("@")[0])
+    for account_id in observed_accounts:
+        if not account_id:
+            continue
+        identity = account_aliases.get(account_id, account_id)
+        account_aliases.setdefault(account_id, identity)
+        entries.setdefault(identity, identity.split("@")[0])
+
+    if "" in observed_emails or "" in observed_accounts:
+        entries.setdefault("", "未识别用户")
+
+    name_counts = Counter(entries.values())
+    labels = {
+        identity: (
+            name
+            if name_counts[name] == 1 or not identity
+            else f"{name} · {identity}"
+        )
+        for identity, name in entries.items()
+    }
+    identities = sorted(labels, key=lambda identity: labels[identity].casefold())
+    return labels, identities, account_aliases
+
+
+def usage_request_id(row: dict, gateway_request_ids: set[str] | None = None) -> str:
+    direct = str(row.get("request_id") or "").strip()
+    if direct:
+        return direct
+    detail = json_loads(row.get("detail"), {})
+    if isinstance(detail, dict):
+        for key in (
+            "request_id",
+            "requestId",
+            "provider_request_id",
+            "providerRequestId",
+        ):
+            value = str(detail.get(key) or "").strip()
+            if value:
+                return value
+        for container_key in ("request", "usage", "metadata"):
+            container = detail.get(container_key)
+            if isinstance(container, dict):
+                for key in ("request_id", "requestId", "provider_request_id"):
+                    value = str(container.get(key) or "").strip()
+                    if value:
+                        return value
+    row_id = str(row.get("id") or "").strip()
+    if gateway_request_ids and row_id in gateway_request_ids:
+        return row_id
+    return ""
+
+
 def usage_row_projection(row: dict) -> dict:
     """Normalize one immutable provider usage fact without parsing event prose.
 
@@ -404,6 +540,8 @@ def scenario_from_tool(tool: str, detail: dict | None = None) -> str:
 
 
 def task_status_category(rec: dict) -> str:
+    if rec.get("failed"):
+        return "失败"
     if rec.get("completedAt"):
         return "成功"
     if rec.get("cancelled"):
@@ -434,13 +572,11 @@ def build_payload(start: datetime, end: datetime) -> dict:
                 (start.isoformat(), end.isoformat()),
             )
         ]
-        usage_rows = [
+        legacy_usage_rows = [
             dict(row)
             for row in conn.execute(
                 """
-                SELECT id, category, label, user_email, detail, created_at,
-                       device_id, session_id, model, provider,
-                       input_tokens, output_tokens, total_tokens
+                SELECT *
                 FROM usage_events
                 WHERE datetime(created_at) >= datetime(?) AND datetime(created_at) < datetime(?)
                 ORDER BY datetime(created_at), id
@@ -466,15 +602,141 @@ def build_payload(start: datetime, end: datetime) -> dict:
     finally:
         conn.close()
 
+    admin_rows = _read_optional_rows(
+        [CONTROL_PLANE_DB_PATH, DB_PATH],
+        "admin_ops_users",
+        """
+        SELECT account_id, display_name, email, organization_id, status
+        FROM admin_ops_users
+        ORDER BY lower(COALESCE(email, account_id)), account_id
+        """,
+    )
+    gateway_request_rows = _read_optional_rows(
+        [GATEWAY_DB_PATH, DB_PATH],
+        "gateway_requests",
+        """
+        SELECT request_id, account_id, model_id, trace_id, status,
+               terminal_event_type, created_at, updated_at
+        FROM gateway_requests
+        WHERE (
+            datetime(created_at) >= datetime(?) AND datetime(created_at) < datetime(?)
+        ) OR (
+            datetime(updated_at) >= datetime(?) AND datetime(updated_at) < datetime(?)
+        )
+        ORDER BY datetime(created_at), request_id
+        """,
+        (start.isoformat(), end.isoformat(), start.isoformat(), end.isoformat()),
+    )
+    gateway_event_rows = _read_optional_rows(
+        [GATEWAY_DB_PATH, DB_PATH],
+        "gateway_events",
+        """
+        SELECT request_id, seq, payload_json, created_at
+        FROM gateway_events
+        WHERE datetime(created_at) >= datetime(?) AND datetime(created_at) < datetime(?)
+        ORDER BY datetime(created_at), request_id, seq
+        """,
+        (start.isoformat(), end.isoformat()),
+    )
+
     observed_emails = {
         canonical_email(event.get("user_email") or event.get("user_key"))
         for event in rows
     }
     observed_emails.update(
         canonical_email(usage.get("user_email"))
-        for usage in usage_rows
+        for usage in legacy_usage_rows
     )
-    labels_by_email, users_list = identity_catalog(user_rows, observed_emails)
+    observed_accounts = {
+        canonical_email(request.get("account_id"))
+        for request in gateway_request_rows
+    }
+    labels_by_email, identity_order, account_aliases = merged_identity_catalog(
+        user_rows,
+        admin_rows,
+        observed_emails,
+        observed_accounts,
+    )
+    users_list = [labels_by_email[identity] for identity in identity_order]
+
+    gateway_requests_by_id = {
+        str(row.get("request_id") or "").strip(): row
+        for row in gateway_request_rows
+        if str(row.get("request_id") or "").strip()
+    }
+    gateway_request_ids = set(gateway_requests_by_id)
+    merged_usage: dict[tuple[str, str], dict] = {}
+    anonymous_usage_sequence = 0
+    for row in legacy_usage_rows:
+        identity = canonical_email(row.get("user_email"))
+        request_id = usage_request_id(row, gateway_request_ids)
+        anonymous_usage_sequence += 1
+        key = (
+            "request",
+            request_id,
+        ) if request_id else (
+            "legacy",
+            str(row.get("id") or anonymous_usage_sequence),
+        )
+        normalized = dict(row)
+        normalized["_identity"] = identity
+        normalized["_request_id"] = request_id
+        merged_usage[key] = normalized
+
+    # A Gateway request id is the cross-ledger idempotency identity. When a
+    # legacy usage row and a v1 completion describe the same request, the
+    # immutable Gateway completion is authoritative and replaces the old copy.
+    gateway_completion_by_request: dict[str, dict] = {}
+    for event in gateway_event_rows:
+        payload = json_loads(event.get("payload_json"), {})
+        if not isinstance(payload, dict) or payload.get("event_type") != "response.completed":
+            continue
+        request_id = str(event.get("request_id") or "").strip()
+        request = gateway_requests_by_id.get(request_id)
+        if not request:
+            continue
+        usage = payload.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        account_id = canonical_email(request.get("account_id"))
+        identity = account_aliases.get(account_id, account_id)
+        input_tokens = token_number(usage.get("input_tokens") or usage.get("prompt_tokens"))
+        output_tokens = token_number(
+            usage.get("output_tokens") or usage.get("completion_tokens")
+        )
+        total_tokens = token_number(usage.get("total_tokens"))
+        gateway_completion_by_request[request_id] = {
+            "id": f"gateway:{request_id}",
+            "category": "chat",
+            "label": "gateway.response.completed",
+            "user_email": identity,
+            "detail": json.dumps(
+                {
+                    "usageSource": "gateway",
+                    "requestId": request_id,
+                },
+                ensure_ascii=False,
+            ),
+            "created_at": event.get("created_at") or request.get("updated_at"),
+            "device_id": "",
+            "session_id": request.get("trace_id") or "",
+            "model": request.get("model_id") or "",
+            "provider": "managed_gateway",
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": max(total_tokens, input_tokens + output_tokens),
+            "_identity": identity,
+            "_request_id": request_id,
+        }
+    for request_id, row in gateway_completion_by_request.items():
+        merged_usage[("request", request_id)] = row
+    usage_rows = sorted(
+        merged_usage.values(),
+        key=lambda row: (
+            parse_time(str(row.get("created_at") or start.isoformat())),
+            str(row.get("id") or ""),
+        ),
+    )
 
     raw_events = []
     for index, event in enumerate(rows, 1):
@@ -529,10 +791,9 @@ def build_payload(start: datetime, end: datetime) -> dict:
         if not request_id:
             continue
         email = canonical_email(event.get("user_email") or event.get("user_key"))
-        key = (email, request_id)
         created = parse_time(event.get("created_at"))
         rec = requests.setdefault(
-            key,
+            request_id,
             {
                 "email": email,
                 "user": labels_by_email.get(email, "未识别用户"),
@@ -546,6 +807,7 @@ def build_payload(start: datetime, end: datetime) -> dict:
                 "artifactEvents": 0,
                 "problemEvents": 0,
                 "cancelled": False,
+                "failed": False,
                 "hasUsage": False,
                 "noUsageFlag": False,
                 "inputTokens": 0,
@@ -564,6 +826,8 @@ def build_payload(start: datetime, end: datetime) -> dict:
             rec["completedAt"] = max([item for item in [rec["completedAt"], created] if item], default=created)
         if event_type == "run.cancelled" or status == "cancelled":
             rec["cancelled"] = True
+        if event_type == "run.failed" or status == "failed":
+            rec["failed"] = True
         if event_type == "artifact.updated":
             rec["artifactEvents"] += 1
         if status in {"failed", "cancelled", "limited"} or event_type in {
@@ -579,6 +843,66 @@ def build_payload(start: datetime, end: datetime) -> dict:
             rec["tools"][TOOL_ZH.get(str(tool), str(tool))] += 1
             rec["scenarios"][scenario_from_tool(str(tool), detail)] += 1
 
+    for request in gateway_request_rows:
+        request_id = str(request.get("request_id") or "").strip()
+        if not request_id:
+            continue
+        account_id = canonical_email(request.get("account_id"))
+        identity = account_aliases.get(account_id, account_id)
+        accepted_at = parse_time(request.get("created_at"))
+        updated_at = parse_time(request.get("updated_at"))
+        terminal = str(request.get("terminal_event_type") or "").strip()
+        rec = requests.setdefault(
+            request_id,
+            {
+                "email": identity,
+                "user": labels_by_email.get(identity, "未识别用户"),
+                "requestId": request_id,
+                "sessionId": request.get("trace_id") or "",
+                "acceptedAt": accepted_at,
+                "completedAt": None,
+                "firstAt": accepted_at,
+                "tools": Counter(),
+                "scenarios": Counter(),
+                "artifactEvents": 0,
+                "problemEvents": 0,
+                "cancelled": False,
+                "failed": False,
+                "hasUsage": False,
+                "noUsageFlag": False,
+                "inputTokens": 0,
+                "outputTokens": 0,
+                "totalTokens": 0,
+            },
+        )
+        # The v1 account directory is authoritative for Gateway facts. This
+        # also makes a matching legacy sync request converge on one identity.
+        if identity:
+            rec["email"] = identity
+            rec["user"] = labels_by_email.get(identity, rec["user"])
+        rec["acceptedAt"] = min(
+            [item for item in (rec.get("acceptedAt"), accepted_at) if item],
+            default=accepted_at,
+        )
+        rec["firstAt"] = min(rec.get("firstAt") or accepted_at, accepted_at)
+        if not rec.get("sessionId") and request.get("trace_id"):
+            rec["sessionId"] = request["trace_id"]
+        if str(request.get("status") or "") == "completed":
+            if terminal == "response.failed":
+                rec["failed"] = True
+                rec["problemEvents"] += 1
+            else:
+                rec["completedAt"] = max(
+                    [item for item in (rec.get("completedAt"), updated_at) if item],
+                    default=updated_at,
+                )
+
+    usage_by_request: dict[str, dict] = {}
+    for row in usage_rows:
+        request_id = str(row.get("_request_id") or "").strip()
+        if request_id:
+            usage_by_request[request_id] = usage_row_projection(row)
+
     tasks = []
     for rec in requests.values():
         if not rec["acceptedAt"]:
@@ -589,6 +913,7 @@ def build_payload(start: datetime, end: datetime) -> dict:
         if success:
             duration = max(0, (rec["completedAt"] - rec["acceptedAt"]).total_seconds() / 60)
         scenario = rec["scenarios"].most_common(1)[0][0] if rec["scenarios"] else "创作内容"
+        task_usage = usage_by_request.get(rec["requestId"])
         tasks.append(
             {
                 "user": rec["user"],
@@ -603,11 +928,11 @@ def build_payload(start: datetime, end: datetime) -> dict:
                 "needsIntervention": rec["problemEvents"] > 0 or not success,
                 "problemEvents": rec["problemEvents"],
                 "artifactEvents": rec["artifactEvents"],
-                "hasUsage": False,
-                "noUsageFlag": False,
-                "inputTokens": 0,
-                "outputTokens": 0,
-                "totalTokens": 0,
+                "hasUsage": task_usage is not None,
+                "noUsageFlag": task_usage is None,
+                "inputTokens": int((task_usage or {}).get("inputTokens", 0)),
+                "outputTokens": int((task_usage or {}).get("outputTokens", 0)),
+                "totalTokens": int((task_usage or {}).get("totalTokens", 0)),
                 "scenario": scenario,
                 "mainTools": "、".join(f"{name} {count}" for name, count in rec["tools"].most_common(3))
                 or "无工具调用记录",
@@ -618,10 +943,9 @@ def build_payload(start: datetime, end: datetime) -> dict:
     dates = [(start + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(date_count)]
     usage_by_user_date: dict[tuple[str, str], dict] = {}
     for row in usage_rows:
-        email = canonical_email(row.get("user_email"))
-        user = labels_by_email.get(email, "未识别用户")
+        email = canonical_email(row.get("_identity") or row.get("user_email"))
         created = parse_time(row.get("created_at"))
-        key = (user, created.strftime("%Y-%m-%d"))
+        key = (email, created.strftime("%Y-%m-%d"))
         projection = usage_row_projection(row)
         bucket = usage_by_user_date.setdefault(
             key,
@@ -636,9 +960,16 @@ def build_payload(start: datetime, end: datetime) -> dict:
                 "estimatedRecords": 0,
                 "models": Counter(),
                 "sources": Counter(),
+                "requestIds": set(),
+                "unlinkedRecords": 0,
             },
         )
         bucket["records"] += 1
+        request_id = str(row.get("_request_id") or "").strip()
+        if request_id:
+            bucket["requestIds"].add(request_id)
+        else:
+            bucket["unlinkedRecords"] += 1
         for field in (
             "inputTokens",
             "outputTokens",
@@ -659,13 +990,14 @@ def build_payload(start: datetime, end: datetime) -> dict:
     scenarios = [name for name in SCENARIO_ORDER if name in scenario_set]
     scenarios.extend(sorted(scenario_set - set(scenarios)))
     summary_rows = []
-    for user in users_list:
-        email = next(
-            (email for email, label in labels_by_email.items() if label == user),
-            "",
-        )
+    for email in identity_order:
+        user = labels_by_email[email]
         for date in dates:
-            slice_tasks = [task for task in tasks if task["user"] == user and task["date"] == date]
+            slice_tasks = [
+                task
+                for task in tasks
+                if task["email"] == email and task["date"] == date
+            ]
             total = len(slice_tasks)
             successes = sum(1 for task in slice_tasks if task["success"])
             stopped = sum(1 for task in slice_tasks if task.get("statusCategory") == "中止")
@@ -673,11 +1005,15 @@ def build_payload(start: datetime, end: datetime) -> dict:
             interventions = sum(1 for task in slice_tasks if task["needsIntervention"])
             durations = [task["durationMinutes"] for task in slice_tasks if task["durationMinutes"] is not None]
             scene_counts = Counter(task["scenario"] for task in slice_tasks)
-            usage = usage_by_user_date.get((user, date), {})
+            usage = usage_by_user_date.get((email, date), {})
             input_tokens = int(usage.get("inputTokens", 0))
             output_tokens = int(usage.get("outputTokens", 0))
             total_tokens = int(usage.get("totalTokens", 0))
             usage_records = int(usage.get("records", 0))
+            usage_tasks = (
+                len(usage.get("requestIds", set()))
+                + int(usage.get("unlinkedRecords", 0))
+            )
             remarks = []
             if date in {"2026-06-22", "2026-06-23"} and total == 0:
                 remarks.append("服务器未收到详细事件上报")
@@ -711,8 +1047,8 @@ def build_payload(start: datetime, end: datetime) -> dict:
                     "outputTokens": output_tokens,
                     "totalTokens": total_tokens or input_tokens + output_tokens,
                     "tokenUsageRecords": usage_records,
-                    "tokenUsageTasks": usage_records,
-                    "missingTokenTasks": max(0, total - usage_records),
+                    "tokenUsageTasks": usage_tasks,
+                    "missingTokenTasks": max(0, total - usage_tasks),
                     "cacheReadTokens": int(usage.get("cacheReadTokens", 0)),
                     "cacheWriteTokens": int(usage.get("cacheWriteTokens", 0)),
                     "cacheInputTokens": input_tokens,
@@ -738,8 +1074,18 @@ def build_payload(start: datetime, end: datetime) -> dict:
         for row in usage_rows
         if str(row.get("session_id") or "").strip()
     }
+    usage_request_ids = {
+        str(row.get("_request_id") or "").strip()
+        for row in usage_rows
+        if str(row.get("_request_id") or "").strip()
+    }
     token_usage_tasks = sum(
-        1 for task in tasks if task.get("sessionId") in usage_sessions
+        1
+        for task in tasks
+        if (
+            task.get("requestId") in usage_request_ids
+            or task.get("sessionId") in usage_sessions
+        )
     )
     scenario_counts = Counter(task["scenario"] for task in tasks)
     daily_counts = []
