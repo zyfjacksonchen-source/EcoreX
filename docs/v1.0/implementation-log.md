@@ -6392,3 +6392,32 @@ The resumption authorization does not by itself prove any remote mutation.
 Production remains unchanged until the authenticated release authority accepts
 the exact immutable release evidence and the post-activation Web/Admin readback
 succeeds.
+
+## 2026-07-18 - Direct-production continuation: model-gateway admission hold
+
+The direct Stable candidate was published through the signed release boundary,
+and the server-side Cloud sidecar was advanced only as far as its durable
+pre-route migration journal.  The legacy Web/Admin/API services were restored
+and remain the active public route while this journal is incomplete; neither
+the new WebUI nor `/admin/` has been claimed as live.
+
+The v0.2.9.2 administrator migration preserved 40 live users, excluded seven
+deleted users, retained eligible conversation/project data independently, and
+imported six encrypted model drafts.  Deleted conversations are not revived.
+The retained-key revalidation flow created auditable new revisions and made
+real catalog/inference probes without exposing a key, endpoint credential,
+prompt body, response body, or generated image.
+
+Only the existing Doubao chat slot passed and is active.  The primary
+`gpt-5.6-sol`, Gemini, Image 2 and Image 2 Edit probes correctly remain
+inactive because their fixed HTTPS bridge upstreams are unreachable from the
+production host; the retained DeepSeek revision returned an incompatible
+provider response contract.  The historic OpenAI/Gemini endpoints are
+public-HTTP-only addresses, so v1 intentionally will not send a retained key
+to them.  This is a release hold, not a failed-open fallback.
+
+The production Control Plane and Gateway origin maps now include the existing
+loopback TLS Image bridge.  Final Cloud and public Web/Admin activation remains
+blocked until a reachable, trusted HTTPS upstream (or an equivalently secure
+operator-managed egress path) is supplied for the primary/image providers and
+passes the same real activation probe.

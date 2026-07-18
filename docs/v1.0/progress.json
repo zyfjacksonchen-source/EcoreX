@@ -9,8 +9,8 @@
     "dirty_worktree_preserved": true
   },
   "current_milestone": "direct_production_publication",
-  "current_batch": "On 2026-07-18 the product owner superseded the temporary protected-Stage deferral with an explicit instruction to deploy after verification. Release work is resumed through the repository's controlled v1 direct-admission/publication boundary. No prior failed Stage artifact may be reused; production remains unchanged until an authenticated deployment path completes and readback succeeds.",
-  "last_verified_batch": "Local evidence: exact Node 22.23.1 Web 180/180; exact Python 3.11.9 combined release/cloud/migration/pointer suite 193 passed with 12 platform skips; complete Candidate/CDN/public boundary 40 passed. On branch codex/fix-ga-turn-duration, local GA mock-server coverage was corrected so newly accepted and terminal turns use live timestamps; npm build and the 10-test mock-server suite passed. Deployment authorization was explicitly restored after the temporary deferral; no Stage, signing, deployment, or release activation has yet been claimed as complete.",
+  "current_batch": "Direct Stable publication has completed, but the authenticated v1 Cloud activation is deliberately paused before route switch. The production host's required primary/image HTTPS model probes are not healthy; legacy Web/Admin/API services remain the active public route.",
+  "last_verified_batch": "On 2026-07-18, v0.2.9.2 administration import preserved 40 live users, excluded seven deleted users and imported six encrypted model drafts. Audited retained-key activation passed only for Doubao. gpt-5.6-sol, Gemini, Image 2 and Image 2 Edit are safely inactive after provider_test_unavailable; DeepSeek is inactive after provider_test_protocol. No v1 Web/Admin route has been activated.",
   "recovery_document": "docs/v1.0/implementation-log.md",
   "verification_document": "docs/v1.0/verification-ledger.md",
   "milestones": [
@@ -28,7 +28,7 @@
     "publish, activate, and read back Web/Admin only after the authenticated release authority accepts the exact immutable release evidence"
   ],
   "external_blockers": [
-    "historical public-HTTP OpenAI/Gemini/Image credentials require administrator rotation before those provider revisions can be activated; they remain disabled and rotation_required",
+    "the production host cannot reach the configured HTTPS upstreams for gpt-5.6-sol, Gemini and Image 2; the historical OpenAI/Gemini bases are public HTTP-only and are intentionally rejected rather than used for retained-key activation",
     "whole-machine reboot requires the recorded LUKS operator unlock procedure; the current single-host CAS replica and shared PostgreSQL role remain explicitly waived availability constraints"
   ]
 }

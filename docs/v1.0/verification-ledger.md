@@ -2457,3 +2457,12 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Content-addressed production Web build | 0 | `npm run build` passed: 25 production assets, 24 chunks, 459.76 KiB initial JS / 146.20 KiB gzip and 136.30 KiB deferred / 49.78 KiB gzip. |
 | Full v1 Runtime suite on this workstation | incomplete, not a product failure | Initial collection found the local `.venv` lacked the lock-required `Pillow`; the verified `cloud` profile was installed after restoring the environment's missing pip bootstrap. The rerun then exceeded the local command host's 120-second ceiling and was terminated by that host. Protected CI remains the full-suite authority. |
 | Release authority | pending | The product owner explicitly restored authorization to deploy after verification. Commit/push, immutable-main CI and the authenticated controlled release path remain required before any online success claim. |
+
+## Direct-production model-gateway gate - 2026-07-18
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Legacy administrator import | 0 | Imported 40 live users and six encrypted, pending-test model slots; seven deleted users were excluded. Existing legacy public services remain active while the v1 route is not switched. |
+| Retained-key revalidation | mixed | The normal audited stage/test/activate workflow reused no plaintext output. Doubao passed and became active. `gpt-5.6-sol`, Gemini, Image 2 and Image 2 Edit returned the safe `provider_test_unavailable` outcome; DeepSeek returned `provider_test_protocol`. |
+| Provider bridge diagnosis | hold | The production host times out to the official OpenAI/Image and Google endpoints. Legacy OpenAI/Gemini bases are public HTTP-only, which v1 rejects rather than transmitting retained keys insecurely. |
+| Web/Admin deployment | not attempted | Main WebUI and `/admin/` remain on the legacy public route. No partial frontend or Admin cutover is permitted while required model/image readiness is false. |
