@@ -143,11 +143,28 @@ class ReleaseAssetPublicationCoordinator:
                     )
                     for path in files
                 )
+                # A real GitHub draft reports ``untagged-<opaque>`` asset URLs.
+                # Publish only after every digest is fenced, then re-read each
+                # asset through the public tag identity before the mirror is
+                # accepted as the Stable primary source.
+                published = self.github.publish(draft)
+                github_receipts = tuple(
+                    self.github.ensure_asset(
+                        published,
+                        path,
+                        expected_sha256=expected_sha256[path.name],
+                    )
+                    for path in files
+                )
                 self._validate_github_urls(github_source.base_url, github_receipts)
-                self.github.publish(draft)
                 verifier = self.mirror
                 mirror_receipts = tuple(
-                    verifier.verify_asset(  # type: ignore[union-attr]
+                    (
+                        verifier.verify_asset
+                        if path.name == "release-manifest.json"
+                        or not callable(getattr(verifier, "probe_asset", None))
+                        else verifier.probe_asset
+                    )(  # type: ignore[union-attr]
                         base_url=mirror_source.base_url,
                         release_id=manifest.release_id,
                         path=path,
@@ -254,10 +271,24 @@ class ReleaseAssetPublicationCoordinator:
         )
         if publish_github:
             draft = self.github.publish(draft)
+            github_receipts = tuple(
+                self.github.ensure_asset(
+                    draft,
+                    path,
+                    expected_sha256=expected_sha256[path.name],
+                )
+                for path in files
+            )
+            self._validate_github_urls(github_source.base_url, github_receipts)
         if read_through:
             verifier = self.mirror
             mirror_receipts = tuple(
-                verifier.verify_asset(  # type: ignore[union-attr]
+                (
+                    verifier.verify_asset
+                    if path.name == "release-manifest.json"
+                    or not callable(getattr(verifier, "probe_asset", None))
+                    else verifier.probe_asset
+                )(  # type: ignore[union-attr]
                     base_url=mirror_source.base_url,
                     release_id=manifest.release_id,
                     path=path,

@@ -655,7 +655,7 @@ def test_production_nginx_and_systemd_keep_replica_boundary_narrow() -> None:
     ).read_text(encoding="utf-8")
     deployer = Path("ecorex/deployment/cloud_sidecar.py").read_text(encoding="utf-8")
     assert "location /ecorex-agent/releases/" in routes
-    assert "(?<release_namespace>v" in routes
+    assert 'location ~ "^/ecorex-agent/releases/(?<release_namespace>v' in routes
     assert "proxy_request_buffering off" in routes
     assert routes.count("location ^~ /api/v1/bootstrap-index/ {") == 1
     bootstrap_route = routes.split(

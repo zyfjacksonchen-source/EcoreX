@@ -438,6 +438,51 @@ def test_bridge_install_is_idempotent_and_manages_one_tagged_hosts_block(
         assert stat.S_IMODE(nginx_path.stat().st_mode) == 0o600
 
 
+def test_bridge_install_retries_only_the_bounded_post_reload_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec_path, ca_path, certificate_path, private_key_path = _deployment_materials(
+        tmp_path
+    )
+    materials = validate_provider_bridge_materials(
+        spec_path,
+        ca_bundle_path=ca_path,
+        server_certificate_path=certificate_path,
+        server_private_key_path=private_key_path,
+        enforce_identity=False,
+    )
+    nginx_path = tmp_path / "provider.conf"
+    hosts_path = tmp_path / "hosts"
+    hosts_path.write_text("127.0.0.1 localhost\n", encoding="utf-8")
+    _emulate_root_file_ownership(monkeypatch)
+    attempts = 0
+    sleeps: list[float] = []
+    now = [0.0]
+
+    def probe(_value: object) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise ProviderBridgeInstallError("provider_bridge_loopback_probe_failed")
+
+    def sleep(delay: float) -> None:
+        sleeps.append(delay)
+        now[0] += delay
+
+    install_provider_bridge(
+        materials,
+        nginx_path=nginx_path,
+        hosts_path=hosts_path,
+        run_command=lambda _command, _code: None,
+        probe=probe,
+        sleeper=sleep,
+        clock=lambda: now[0],
+    )
+
+    assert attempts == 3
+    assert sleeps == [0.25, 0.25]
+
+
 def test_bridge_install_failure_restores_exact_previous_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
