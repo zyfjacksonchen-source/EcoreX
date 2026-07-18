@@ -724,9 +724,11 @@ class AttestedEncryptedLocalCAS:
             return 0, 0, 0
         for current, directories, files in os.walk(namespaces, followlinks=False):
             root = Path(current)
-            self.volume.security.validate_directory(root)
+            _validate_or_repair_existing_directory(root, self.volume.security)
             for directory in directories:
-                self.volume.security.validate_directory(root / directory)
+                _validate_or_repair_existing_directory(
+                    root / directory, self.volume.security
+                )
             for name in files:
                 path = root / name
                 metadata = self.volume.security.validate_file(path)
@@ -749,9 +751,11 @@ class AttestedEncryptedLocalCAS:
             return
         for current, directories, files in os.walk(namespaces, followlinks=False):
             root = Path(current)
-            self.volume.security.validate_directory(root)
+            _validate_or_repair_existing_directory(root, self.volume.security)
             for directory in directories:
-                self.volume.security.validate_directory(root / directory)
+                _validate_or_repair_existing_directory(
+                    root / directory, self.volume.security
+                )
             for name in files:
                 if not _ATTEMPT.fullmatch(name):
                     continue
@@ -868,34 +872,7 @@ def _read_bounded_file(path: Path, maximum: int, code: str) -> bytes:
 
 def _ensure_directory(path: Path, security: CASFileSecurity) -> None:
     if os.path.lexists(path):
-        try:
-            security.validate_directory(path)
-        except AttestedLocalCASError as error:
-            # mkdir and the following setgid chmod cannot be one syscall. A
-            # crash, kill or restrictive transient sandbox can therefore
-            # leave the exact empty umask-reduced directory behind. Repair
-            # only that narrow identity and shape; a non-empty, differently
-            # owned or otherwise malformed directory remains fail-closed.
-            if (
-                error.code != "attested_local_cas_directory_permission_invalid"
-                or not isinstance(security, PosixGroupCASFileSecurity)
-            ):
-                raise
-            metadata = _lstat_directory(path)
-            reduced_mode = security.directory_mode & ~0o070
-            try:
-                empty = next(path.iterdir(), None) is None
-            except OSError:
-                raise error from None
-            if (
-                metadata.st_uid != os.geteuid()
-                or metadata.st_gid != security.owner_gid
-                or stat.S_IMODE(metadata.st_mode) != reduced_mode
-                or not empty
-            ):
-                raise error
-            security.prepare_directory(path)
-            _fsync_directory(path.parent)
+        _validate_or_repair_existing_directory(path, security)
         return
     try:
         path.mkdir()
@@ -905,6 +882,39 @@ def _ensure_directory(path: Path, security: CASFileSecurity) -> None:
         security.validate_directory(path)
     except OSError:
         raise AttestedLocalCASError("attested_local_cas_directory_create_failed") from None
+
+
+def _validate_or_repair_existing_directory(
+    path: Path, security: CASFileSecurity
+) -> None:
+    try:
+        security.validate_directory(path)
+    except AttestedLocalCASError as error:
+        # mkdir and the following setgid chmod cannot be one syscall. A
+        # crash, kill or restrictive transient sandbox can therefore leave
+        # the exact empty umask-reduced directory behind. Repair only that
+        # narrow identity and shape; a non-empty, differently owned or
+        # otherwise malformed directory remains fail-closed.
+        if (
+            error.code != "attested_local_cas_directory_permission_invalid"
+            or not isinstance(security, PosixGroupCASFileSecurity)
+        ):
+            raise
+        metadata = _lstat_directory(path)
+        reduced_mode = security.directory_mode & ~0o070
+        try:
+            empty = next(path.iterdir(), None) is None
+        except OSError:
+            raise error from None
+        if (
+            metadata.st_uid != os.geteuid()
+            or metadata.st_gid != security.owner_gid
+            or stat.S_IMODE(metadata.st_mode) != reduced_mode
+            or not empty
+        ):
+            raise error
+        security.prepare_directory(path)
+        _fsync_directory(path.parent)
 
 
 def _ensure_descendants(base: Path, target: Path, security: CASFileSecurity) -> None:

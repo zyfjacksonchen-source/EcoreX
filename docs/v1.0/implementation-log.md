@@ -6488,6 +6488,7 @@ shared CAS, and is removed only from the three CAS-writing units. The CAS now
 also closes the `mkdir`/permission-preparation crash window: an existing
 directory is repaired only when it is empty, owned by the current service UID,
 already in the configured storage GID and has exactly the expected
-umask-reduced mode. Any content, foreign identity or other mode still fails
-closed. The combined CAS and sidecar suite passes 75 tests with eight explicit
-platform skips.
+umask-reduced mode. Startup cleanup and quota walks apply the same rule, so an
+unrelated stale health-prefix cannot poison every future probe. Any content,
+foreign identity or other mode still fails closed. The combined CAS and
+sidecar suite passes 75 tests with eight explicit platform skips.
