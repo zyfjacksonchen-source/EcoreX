@@ -2272,7 +2272,17 @@ def _storage(
         config.backup_directory,
         config.share_spool_directory,
     ):
-        if not directory.exists() or not directory.is_dir() or directory.is_symlink():
+        try:
+            # ``migrate`` is the sole authority permitted to initialize the
+            # durable working directories.  This makes a fresh signed install
+            # self-contained while ``serve`` remains read-only because it
+            # never calls this helper before the migration boundary.
+            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        except OSError:
+            raise ProductionConfigurationError(
+                "Control Plane production directory is unavailable or unsafe"
+            ) from None
+        if not directory.is_dir() or directory.is_symlink():
             raise ProductionConfigurationError(
                 "Control Plane production directory is unavailable or unsafe"
             )
