@@ -451,6 +451,55 @@ class SQLiteGatewayStore:
         finally:
             connection.close()
 
+    def completed_replay(
+        self,
+        request: ModelGatewayRequest,
+        principal: GatewayPrincipal,
+    ) -> tuple[GatewayEvent, ...] | None:
+        """Read an already completed request without opening a new admission.
+
+        Provider quota and settlement gates apply to new work, not to delivery
+        of a response that is already durable. The ownership and request
+        fingerprint checks intentionally match ``reserve`` so this fast path
+        cannot be used to read another account's events.
+        """
+
+        fingerprint = _fingerprint(request)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN")
+            row = connection.execute(
+                "SELECT account_id,request_fingerprint,status "
+                "FROM gateway_requests WHERE request_id=?",
+                (request.request_id,),
+            ).fetchone()
+            if row is None:
+                connection.commit()
+                return None
+            if (
+                row["account_id"] != principal.account_id
+                or row["request_fingerprint"] != fingerprint
+            ):
+                raise GatewayRequestConflict(
+                    "gateway request identity was reused with different input"
+                )
+            if row["status"] != "completed":
+                connection.commit()
+                return None
+            events = self._events(connection, request.request_id)
+            connection.commit()
+            return events
+        except GatewayStoreError:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        except (OSError, sqlite3.Error):
+            if connection.in_transaction:
+                connection.rollback()
+            raise GatewayStoreError("gateway durable state is unavailable") from None
+        finally:
+            connection.close()
+
     def bind_chat_model_attempt(
         self,
         request: ModelGatewayRequest,
@@ -2062,6 +2111,35 @@ def create_managed_gateway_app(
             raise HTTPException(status_code=413, detail="managed gateway request is too large")
         if body.model_id not in current.allowed_model_ids:
             raise HTTPException(status_code=403, detail="managed model is not allowed")
+
+        async def completed_replay_response() -> StreamingResponse | None:
+            try:
+                replay_events = await asyncio.to_thread(
+                    store.completed_replay,
+                    body,
+                    current,
+                )
+            except GatewayRequestConflict as error:
+                raise HTTPException(
+                    status_code=409,
+                    detail="gateway request identity conflict",
+                ) from error
+            except GatewayStoreError as error:
+                raise HTTPException(
+                    status_code=503,
+                    detail="gateway durable state is unavailable",
+                ) from error
+            if replay_events is None:
+                return None
+            return StreamingResponse(
+                _ndjson(replay_events),
+                media_type="application/x-ndjson",
+                headers={"X-EcoreX-Replay": "true"},
+            )
+
+        replay_response = await completed_replay_response()
+        if replay_response is not None:
+            return replay_response
         if dynamic_model_authority:
             try:
                 _catalog, active_ids = await active_chat_catalog()
@@ -2089,17 +2167,26 @@ def create_managed_gateway_app(
                     current.account_id,
                 )
             except Exception:
+                replay_response = await completed_replay_response()
+                if replay_response is not None:
+                    return replay_response
                 raise HTTPException(
                     status_code=503,
                     detail="managed usage settlement is unavailable",
                 ) from None
             if unsettled:
+                replay_response = await completed_replay_response()
+                if replay_response is not None:
+                    return replay_response
                 raise HTTPException(
                     status_code=503,
                     detail="managed usage settlement is pending",
                     headers={"Retry-After": "1"},
                 )
             if not available:
+                replay_response = await completed_replay_response()
+                if replay_response is not None:
+                    return replay_response
                 raise HTTPException(
                     status_code=429,
                     detail="managed token quota is exhausted",
