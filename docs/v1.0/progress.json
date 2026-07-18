@@ -9,8 +9,8 @@
     "dirty_worktree_preserved": true
   },
   "current_milestone": "direct_production_publication",
-  "current_batch": "Direct Stable publication is resuming after the product owner explicitly authorized the historic public-HTTP model upstreams. The bridge waiver is restricted to deployment-pinned global IP literals; exact model revalidation and the atomic Web/Admin route switch remain pending.",
-  "last_verified_batch": "On 2026-07-18, v0.2.9.2 administration import preserved 40 live users, excluded seven deleted users and imported six encrypted model drafts. The explicit public-HTTP bridge contract passed 93 provider-bridge/cloud-sidecar tests with seven platform skips. No v1 Web/Admin route has yet been activated.",
+  "current_batch": "The approved public-HTTP bridge is transactionally active on the production host. GPT-5.6 SOL, DeepSeek and Doubao passed real activation; Image 2 generation/edit require the now-tested explicit b64_json compatibility selector. The corrected exact source must be rebuilt, both image slots revalidated, and Web/Admin switched atomically.",
+  "last_verified_batch": "On 2026-07-18, commit 74800e60 and the root-owned pinned-IP bridge spec passed production material, Nginx and loopback TLS probes. GPT-5.6 SOL, DeepSeek and Doubao are active. Both Image 2 operations returned valid base64 PNG fields under the explicit response selector; the focused correction passed 22 tests and Ruff. Gemini's legacy proxy returned 502 and remains rejected. No v1 Web/Admin route has yet been activated.",
   "recovery_document": "docs/v1.0/implementation-log.md",
   "verification_document": "docs/v1.0/verification-ledger.md",
   "milestones": [
@@ -23,12 +23,12 @@
     {"id": "migration_ga_gates", "status": "in_progress"}
   ],
   "remaining_local_work": [
-    "commit and push the verified local correction and release-record update without touching the user-owned .artifacts tree",
-    "use the repository's controlled direct-admission or normal Candidate path; reject every previously failed Stage artifact and never treat waived live checks as passed",
-    "publish, activate, and read back Web/Admin only after the authenticated release authority accepts the exact immutable release evidence"
+    "commit and push the verified image-activation compatibility correction without touching the user-owned .artifacts tree",
+    "build and sign one exact replacement Cloud artifact, then revalidate both Image 2 slots through the audited repository workflow",
+    "recover the committed first-activation journal, perform the atomic Web/Admin route switch, and complete external plus browser readback"
   ],
   "external_blockers": [
-    "the product-owner-authorized public-HTTP bridge still requires production model revalidation before route activation",
+    "Gemini's retained legacy proxy currently returns HTTP 502 and must remain inactive unless a later real probe passes",
     "whole-machine reboot requires the recorded LUKS operator unlock procedure; the current single-host CAS replica and shared PostgreSQL role remain explicitly waived availability constraints"
   ]
 }

@@ -2467,3 +2467,12 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Provider bridge diagnosis | hold | The production host times out to the official OpenAI/Image and Google endpoints. Legacy OpenAI/Gemini bases are public HTTP-only, which v1 rejects rather than transmitting retained keys insecurely. |
 | Web/Admin deployment | not attempted | Main WebUI and `/admin/` remain on the legacy public route. No partial frontend or Admin cutover is permitted while required model/image readiness is false. |
 | Explicit public-HTTP authority | 0 local contract | The product owner authorized retaining the legacy HTTP addresses. A separate waiver accepts only a pinned global IP literal in the root-owned bridge specification; hostname HTTP, redirects and Admin-origin mutation remain forbidden. Provider bridge plus Cloud sidecar regression: 93 passed / seven platform skips. |
+
+## Public-HTTP bridge and provider revalidation - 2026-07-18
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Exact bridge source and root-owned spec | 0 production | Commit `74800e60` was reconstructed from the SHA-256-verified Git bundle. The root-owned spec pins only the approved OpenAI/Image and Gemini global IP literals. Material validation, `nginx -t`, reload and all loopback TLS probes passed transactionally. |
+| Retained chat credentials | mixed, fail closed | GPT-5.6 SOL, DeepSeek and Doubao passed real catalog plus inference probes and are active. Gemini reached the legacy proxy, which returned HTTP 502; it remains a rejected draft and is not exposed as active. No key, response body or model output was logged. |
+| Image provider shape diagnostic | 0 production diagnostic | Image 2 generation and edit both returned HTTP 200 JSON with exactly one base64 image field when `response_format=b64_json` was requested. The diagnostic recorded only status/content type/field names and encoded lengths, then durably closed its temporary test revisions as rejected. |
+| Image activation compatibility correction | 0 local | Generation and edit activation probes now request `b64_json`; all existing strict result checks remain. `pytest -q tests/v1/test_model_activation.py tests/v1/test_control_plane_management.py`: 22 passed. Ruff passed for the touched source and test. |

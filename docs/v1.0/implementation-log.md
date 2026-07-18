@@ -6429,3 +6429,20 @@ It does not permit hostnames, redirects, Admin-supplied origins or arbitrary
 paths; the loopback-facing side remains TLS and exposes only the fixed model
 routes. The focused bridge and sidecar regression passes 93 tests with seven
 explicit Windows/platform skips.
+
+The exact `74800e60` source was then installed as the production bridge
+authority. Its root-owned spec now pins the historic OpenAI/Image and Gemini
+global-IP origins under that waiver; validation, `nginx -t`, graceful reload
+and every loopback TLS route probe passed as one rollback-capable operation.
+The retained-key workflow subsequently activated GPT-5.6 SOL, DeepSeek and
+Doubao. Gemini's legacy proxy reached its inference route but returned HTTP
+502, so that revision remains rejected rather than being advertised.
+
+Both Image 2 operations reached the legacy provider and returned valid
+base64-encoded PNG result fields when the compatibility request explicitly
+selected `b64_json`. The activation request previously omitted that selector,
+so the provider was reachable while the strict v1 validator correctly
+classified its alternate result as a protocol failure. The activation
+contract now requests `b64_json` for both generation and edit without relaxing
+PNG, dimensions, count, size, status, content-type, redirect or digest checks.
+The focused model-activation and management suite passes 22 tests.

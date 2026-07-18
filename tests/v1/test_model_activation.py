@@ -198,9 +198,12 @@ def test_image_probe_exercises_the_actual_operation(
             assert body["model"] == "gpt-image-2"
             assert body["size"] == "1024x1024"
             assert body["output_format"] == "png"
+            assert body["response_format"] == "b64_json"
         else:
             assert b'name="model"' in request.content
             assert b"gpt-image-2" in request.content
+            assert b'name="response_format"' in request.content
+            assert b"b64_json" in request.content
             assert b'filename="ecorex-activation.png"' in request.content
             assert b"\x89PNG\r\n\x1a\n" in request.content
         return httpx.Response(

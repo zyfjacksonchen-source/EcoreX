@@ -290,6 +290,7 @@ class HTTPSModelConnectionTester:
                     "size": "1024x1024",
                     "quality": "low",
                     "output_format": "png",
+                    "response_format": "b64_json",
                 },
             )
         elif configuration.modality == "image_edit":
@@ -307,6 +308,7 @@ class HTTPSModelConnectionTester:
                     "size": "1024x1024",
                     "quality": "low",
                     "output_format": "png",
+                    "response_format": "b64_json",
                 },
                 files={
                     "image": (
