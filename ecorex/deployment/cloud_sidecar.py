@@ -2343,7 +2343,13 @@ def _commit_legacy_admin_and_identity(
         encryption_key=key,
         environment=environment,
     )
-    payload = _legacy_identity_payload(records)
+    payload = _legacy_identity_payload(
+        _eligible_legacy_identity_records(
+            records,
+            target=target,
+            encryption_key=key,
+        )
+    )
     if payload:
         _run_service_command(
             _service_command(release, "control-plane", "device", "legacy-import"),
@@ -2352,6 +2358,46 @@ def _commit_legacy_admin_and_identity(
             timeout=600,
             input_bytes=payload,
         )
+
+
+def _eligible_legacy_identity_records(
+    records: Sequence[Mapping[str, object]],
+    *,
+    target: Path,
+    encryption_key: bytes,
+) -> tuple[Mapping[str, object], ...]:
+    """Keep legacy credentials only for live, currently usable accounts.
+
+    A v0.2.9.2 credential can outlive its user record.  Importing that mapping
+    would revive a deleted identity or make the all-or-nothing device import
+    fail.  Credentials also cannot produce a valid device lease until an
+    administrator has an active public model catalog.  Preserve neither kind
+    of unusable mapping; users, conversations and project data are migrated
+    independently by their own authoritative paths.
+    """
+
+    try:
+        repository = AdminManagementRepository(target, encryption_key=encryption_key)
+        catalog = repository.active_public_catalog()
+    except Exception:
+        raise CloudDeployError("legacy_identity_account_inventory_failed") from None
+    if not catalog:
+        return ()
+
+    eligible: list[Mapping[str, object]] = []
+    for record in records:
+        account_id = record.get("account_id")
+        if not isinstance(account_id, str) or not account_id:
+            raise CloudDeployError("legacy_identity_record_invalid")
+        try:
+            user = repository.get_user(account_id)
+        except AdminManagementNotFound:
+            continue
+        except Exception:
+            raise CloudDeployError("legacy_identity_account_inventory_failed") from None
+        if user.status == "active":
+            eligible.append(record)
+    return tuple(eligible)
 
 
 def _ensure_configured_deployment_platform_admin(

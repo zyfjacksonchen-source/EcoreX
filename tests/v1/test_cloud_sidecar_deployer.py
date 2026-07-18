@@ -1523,6 +1523,52 @@ def test_configured_deployment_platform_admin_is_created_after_management_import
     assert user.organization_id == "ecorex-production"
 
 
+def test_legacy_identity_inventory_skips_deleted_suspended_and_unusable_accounts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    records = tuple({"account_id": account_id} for account_id in (
+        "active-user",
+        "suspended-user",
+        "deleted-user",
+    ))
+
+    class Repository:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def active_public_catalog(self):
+            return [{"local_model_id": "gpt-5.6-sol"}]
+
+        def get_user(self, account_id: str):
+            if account_id == "deleted-user":
+                raise deployment.AdminManagementNotFound("missing")
+            return SimpleNamespace(
+                account_id=account_id,
+                status="active" if account_id == "active-user" else "suspended",
+            )
+
+    monkeypatch.setattr(deployment, "AdminManagementRepository", Repository)
+
+    assert deployment._eligible_legacy_identity_records(
+        records,
+        target=tmp_path / "control-plane.sqlite3",
+        encryption_key=b"a" * 32,
+    ) == (records[0],)
+
+    class EmptyCatalogRepository(Repository):
+        def active_public_catalog(self):
+            return []
+
+    monkeypatch.setattr(
+        deployment, "AdminManagementRepository", EmptyCatalogRepository
+    )
+    assert deployment._eligible_legacy_identity_records(
+        records,
+        target=tmp_path / "control-plane.sqlite3",
+        encryption_key=b"a" * 32,
+    ) == ()
+
+
 def test_crash_after_admin_commit_forces_idempotent_rollforward_without_legacy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
