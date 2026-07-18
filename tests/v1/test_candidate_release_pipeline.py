@@ -1048,7 +1048,7 @@ def test_candidate_and_publication_workflows_are_split_and_default_safe() -> Non
     assert "ECOREX_GITHUB_RELEASE_TOKEN" in publication
     assert "ECOREX_GITHUB_RELEASE_READ_TOKEN" not in publication
     assert "ECOREX_MIRROR_TOKEN" not in publication
-    assert "verify the read-through mirror" in publication
+    assert "Publish the required primary source (Stable) or all sources (Canary)" in publication
     assert publication.index("verify-v1-accepted-candidate.py") < publication.index(
         "publish-assets"
     )

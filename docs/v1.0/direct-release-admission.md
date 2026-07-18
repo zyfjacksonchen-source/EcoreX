@@ -8,11 +8,12 @@ Direct admission 是正式发布协议中的独立、默认关闭的应急入口
 ## 信任边界
 
 - `release-manifest.json`、Artifact 和 Candidate receipt 继续由 release key 验证。
-- Candidate receipt、operator waiver、三源 publication receipt 和 manifest 的原始
+- Candidate receipt、operator waiver、按渠道要求的 publication receipt 和 manifest 的原始
   字节以 Base64 嵌入 direct bundle；服务端验证其精确 SHA-256，而不是重新序列化后
   猜测身份。
-- GitHub 国内镜像、GitHub Release、EcoreX CDN 必须在同一 publication receipt 中
-  包含完全相同的文件集合、大小和 SHA-256。
+- Stable 只要求已签名的 GitHub 国内镜像主源；Canary 继续要求 GitHub 国内镜像、
+  GitHub Release 和 EcoreX CDN 都在同一 publication receipt 中包含完全相同的文件集合、
+  大小和 SHA-256。
 - operator waiver 必须绑定相同 Candidate、commit、instruction SHA 和独立的
   publication key。release/publication key ID 和原始公钥指纹均不得相同。
 - final bundle 必须包含 Control Plane 已公开读回并验证的 Bootstrap proof。

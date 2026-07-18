@@ -169,7 +169,7 @@
         }
       ],
       "items": false,
-      "minItems": 3,
+      "minItems": 1,
       "maxItems": 3
     },
     "manifest": {

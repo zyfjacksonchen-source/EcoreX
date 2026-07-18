@@ -15,7 +15,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from ecorex.control_plane.repository import required_release_gates  # noqa: E402
+from ecorex.control_plane.repository import (  # noqa: E402
+    required_publication_gates,
+    required_release_gates,
+)
 from ecorex.control_plane.cli import (  # noqa: E402
     _bootstrap_index_evidence_token,
     _publication_evidence_token,
@@ -31,9 +34,6 @@ from ecorex.release.gate_attestation import build_unsigned_gate_bundle  # noqa: 
 
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_PUBLICATION_GATES = frozenset({"github-release", "mirror-sync", "cdn-sync"})
-
-
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--receipts-dir", required=True, type=Path)
@@ -73,10 +73,11 @@ def run(argv: list[str] | None = None) -> int:
         # is a different byte stream and must never become a second identity.
         manifest_sha256 = hashlib.sha256(manifest_payload).hexdigest()
         required = required_release_gates(manifest.channel)
+        publication_gates = required_publication_gates(manifest.channel)
         directory = Path(os.path.abspath(args.receipts_dir))
         if not directory.is_dir():
             raise ValueError("release_gate_receipt_set_incomplete")
-        expected = required - _PUBLICATION_GATES - {"bootstrap-index"}
+        expected = required - publication_gates - {"bootstrap-index"}
         observed = {path.stem for path in directory.glob("*.json")}
         if observed != expected:
             raise ValueError("release_gate_receipt_set_incomplete")
@@ -146,7 +147,7 @@ def run(argv: list[str] | None = None) -> int:
             manifest=manifest,
             manifest_sha256=manifest_sha256,
         )
-        for gate in sorted(_PUBLICATION_GATES):
+        for gate in sorted(publication_gates):
             result[gate] = {"status": "passed", "evidence": publication_token}
         if manifest.channel is ReleaseChannel.STABLE and args.phase == "finalize":
             if args.bootstrap_index_receipt is None:

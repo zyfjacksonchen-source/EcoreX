@@ -570,7 +570,7 @@ jobs:
       - image-soak
     environment:
       name: ecorex-release-signing-${{ inputs.channel }}
-    runs-on: [self-hosted, linux, x64, ecorex-release-sign]
+    runs-on: [self-hosted, linux, arm64, ecorex-release-sign]
     timeout-minutes: 30
     permissions:
       actions: read
@@ -901,7 +901,7 @@ jobs:
     needs: cloud-build-unsigned
     environment:
       name: ecorex-release-signing-${{ inputs.channel }}
-    runs-on: [self-hosted, linux, x64, ecorex-release-sign]
+    runs-on: [self-hosted, linux, arm64, ecorex-release-sign]
     timeout-minutes: 15
     permissions:
       actions: read

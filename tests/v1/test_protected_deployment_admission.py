@@ -226,7 +226,7 @@ def test_protected_workflow_dag_uses_isolated_roles_and_generic_admission() -> N
     assert "\n  cloud-sign:" in candidate
     assert "\n  cloud-finalize:" in candidate
     assert "runs-on: [self-hosted, linux, arm64, ecorex-cloud-build]" in candidate
-    assert "runs-on: [self-hosted, linux, x64, ecorex-release-sign]" in candidate
+    assert "runs-on: [self-hosted, linux, arm64, ecorex-release-sign]" in candidate
     assert "      - cloud-finalize" in candidate
     cloud_builder = candidate[
         candidate.index("\n  cloud-build-unsigned:") : candidate.index("\n  cloud-sign:")

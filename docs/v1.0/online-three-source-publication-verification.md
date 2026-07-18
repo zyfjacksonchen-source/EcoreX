@@ -1,4 +1,4 @@
-# v1 三源在线发布验证
+# v1 在线发布验证
 
 `scripts/verify-v1-online-publication.py` 在不修改任何远程源的前提下，对已签名
 Release 生成 Control Plane 和 public Bootstrap index 共用的 canonical
@@ -11,8 +11,9 @@ https://ghproxy.net/https://github.com/<owner>/<repo>/releases/download/<tag>
 ```
 
 代理不需要实现 EcoreX replica 上传 API。验证器只对 manifest 声明的
-三个 HTTPS base URL 执行 `GET`，流式计算每个发布文件的精确字节数和
-SHA-256。`HEAD` 只能证明元数据可达，不能作为字节摘要证明，因此本工具不使用
+channel-required HTTPS base URL 执行 `GET`，流式计算每个发布文件的精确字节数
+和 SHA-256。Stable 只验证签名 manifest 中的第一个国内镜像源；Canary 验证全部
+三个来源。`HEAD` 只能证明元数据可达，不能作为字节摘要证明，因此本工具不使用
 `HEAD`。
 
 ## 信任与输出
@@ -21,7 +22,7 @@ SHA-256。`HEAD` 只能证明元数据可达，不能作为字节摘要证明，
 签名，再验证 release dir 中的本地字节。manifest 摘要始终来自该文件的
 原始字节，不会通过 JSON 重序列化重建。
 
-GitHub 源额外查询 `api.github.com/repos/<owner>/<repo>/releases/tags/<tag>`，
+Canary 的 GitHub 源额外查询 `api.github.com/repos/<owner>/<repo>/releases/tags/<tag>`，
 要求：
 
 - tag 与签名 manifest 的 version/channel/release_id 完全一致；
@@ -39,8 +40,9 @@ schema，在线调试信息不会混入公开合同。
 ## 断点续验
 
 checkpoint 只在整个文件已通过 HTTPS GET、size 和 SHA-256 后更新。
-它绑定 manifest SHA-256、release ID、GitHub release ID、每个 source/file URL
-和字节身份，并使用运行时提供的 32-byte HMAC key 认证。续验时任何
+它绑定 manifest SHA-256、release ID、channel-required source/file URL 和字节
+身份，并使用运行时提供的 32-byte HMAC key 认证。Canary 额外绑定 GitHub
+release ID；Stable 不查询 GitHub API。续验时任何
 MAC 或身份冲突都会 fail closed。HMAC key 不写入 checkpoint、receipt 或日志。
 成功生成 receipt 前会删除 checkpoint；任何下载临时文件也会在成功或失败后
 立即删除。

@@ -15,7 +15,7 @@ import secrets
 import stat as stat_module
 import sys
 from typing import Any, Callable, Mapping
-from urllib.parse import quote, urlsplit
+from urllib.parse import urlsplit
 
 from ecorex.update import ReleaseChannel, ReleaseManifest
 from ecorex.update import (
@@ -39,7 +39,9 @@ from ecorex.release import (
     ReleaseSigner,
     ReleaseAssetPublicationCoordinator,
     build_public_bootstrap_index,
+    publication_receipt_policy,
     stable_pointer_sequence,
+    validate_publication_receipt,
     write_public_bootstrap_index,
     gate_bundle_sha256,
     validate_signed_gate_bundle,
@@ -50,13 +52,12 @@ from ecorex.release import (
 from ecorex.update.locking import ProductFileLock
 
 from .client import AdminControlPlaneClient, EnvironmentAdminCredential
-from .repository import required_release_gates
+from .repository import required_publication_gates, required_release_gates
 
 
 MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
 MAX_DIRECT_ADMISSION_BYTES = 32 * 1024 * 1024
-_PUBLICATION_GATES = frozenset({"github-release", "mirror-sync", "cdn-sync"})
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_LOCAL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _PUBLICATION_EVIDENCE = re.compile(r"^publication-receipt:sha256:[0-9a-f]{64}$")
@@ -765,27 +766,28 @@ def _publication_coordinator(
         limit=1024 * 1024,
         label="release publication config",
     )
-    if not isinstance(value, dict) or set(value) != {
-        "schema_version",
-        "github",
-        "mirror",
-        "cdn",
-    }:
+    if not isinstance(value, dict):
         raise ValueError("release publication config has an invalid shape")
-    if value.get("schema_version") != 1:
+    schema_version = value.get("schema_version")
+    if schema_version == 1:
+        expected = {"schema_version", "github", "mirror", "cdn"}
+    elif schema_version == 2:
+        expected = {"schema_version", "mirror", "github", "cdn"}
+        if "mirror" not in value:
+            raise ValueError("release publication config has an invalid shape")
+    else:
         raise ValueError("release publication config schema is unsupported")
-    github_value = value.get("github")
-    if not isinstance(github_value, dict) or set(github_value) != {
-        "owner",
-        "repository",
-        "token_env",
-    }:
-        raise ValueError("GitHub publication config has an invalid shape")
+    if schema_version == 1 and set(value) != expected:
+        raise ValueError("release publication config has an invalid shape")
+    if schema_version == 2 and not set(value).issubset(expected):
+        raise ValueError("release publication config has an invalid shape")
 
     def replica_value(
         label: str,
-    ) -> tuple[str, str, frozenset[str], frozenset[str], str]:
+    ) -> tuple[str, str, frozenset[str], frozenset[str], str] | None:
         item = value.get(label)
+        if item is None:
+            return None
         if not isinstance(item, dict) or set(item) != {
             "source_id",
             "endpoint",
@@ -804,6 +806,25 @@ def _publication_coordinator(
         if not all(isinstance(part, str) and part for part in string_values):
             raise ValueError(f"{label} publication config contains an invalid value")
         return string_values[0], string_values[1], allowed, public, string_values[2]
+
+    def github_value() -> tuple[str, str, str] | None:
+        item = value.get("github")
+        if item is None:
+            return None
+        if not isinstance(item, dict) or set(item) != {
+            "owner",
+            "repository",
+            "token_env",
+        }:
+            raise ValueError("GitHub publication config has an invalid shape")
+        owner = item.get("owner")
+        repository = item.get("repository")
+        token_env = item.get("token_env")
+        if not all(
+            isinstance(part, str) and part for part in (owner, repository, token_env)
+        ):
+            raise ValueError("GitHub publication config contains an invalid value")
+        return owner, repository, token_env
 
     mirror_value = value.get("mirror")
     mirror_read_through = False
@@ -834,18 +855,17 @@ def _publication_coordinator(
         mirror_read_through = True
     else:
         mirror_args = replica_value("mirror")
+        if mirror_args is None:
+            raise ValueError("mirror publication config has an invalid shape")
     cdn_args = replica_value("cdn")
-    if mirror_args[0] == cdn_args[0]:
-        raise ValueError("mirror and CDN source identities must be distinct")
-    if not mirror_args[3].isdisjoint(cdn_args[3]):
-        raise ValueError("mirror and CDN public download hosts must be distinct")
-    owner = github_value.get("owner")
-    repository = github_value.get("repository")
-    token_env = github_value.get("token_env")
-    if not all(
-        isinstance(part, str) and part for part in (owner, repository, token_env)
-    ):
-        raise ValueError("GitHub publication config contains an invalid value")
+    if cdn_args is not None:
+        if mirror_args[0] == cdn_args[0]:
+            raise ValueError("mirror and CDN source identities must be distinct")
+        if not mirror_args[3].isdisjoint(cdn_args[3]):
+            raise ValueError("mirror and CDN public download hosts must be distinct")
+    github_args = github_value()
+    if schema_version == 1 and (cdn_args is None or github_args is None):
+        raise ValueError("release publication config has an invalid shape")
 
     mirror: HTTPSReleaseReplicaPublisher | HTTPSReadThroughReleaseMirror | None = None
     github: GitHubReleasePublisher | None = None
@@ -865,18 +885,20 @@ def _publication_coordinator(
                 public_hosts=mirror_args[3],
                 credentials=EnvironmentReplicaCredential(variable=mirror_args[4]),
             )
-        github = GitHubReleasePublisher(
-            owner=owner,
-            repository=repository,
-            credentials=EnvironmentGitHubCredential(variable=token_env),
-        )
-        cdn = HTTPSReleaseReplicaPublisher(
-            source_id=cdn_args[0],
-            endpoint=cdn_args[1],
-            allowed_hosts=cdn_args[2],
-            public_hosts=cdn_args[3],
-            credentials=EnvironmentReplicaCredential(variable=cdn_args[4]),
-        )
+        if github_args is not None:
+            github = GitHubReleasePublisher(
+                owner=github_args[0],
+                repository=github_args[1],
+                credentials=EnvironmentGitHubCredential(variable=github_args[2]),
+            )
+        if cdn_args is not None:
+            cdn = HTTPSReleaseReplicaPublisher(
+                source_id=cdn_args[0],
+                endpoint=cdn_args[1],
+                allowed_hosts=cdn_args[2],
+                public_hosts=cdn_args[3],
+                credentials=EnvironmentReplicaCredential(variable=cdn_args[4]),
+            )
         return ReleaseAssetPublicationCoordinator(
             mirror=mirror,
             github=github,
@@ -1231,12 +1253,11 @@ def _publish_assets(
             for source_id, receipts in publication.source_receipts.items()
         }
         receipt_value = {
-            "schema_version": 1,
+            "schema_version": 2,
             "release_id": publication.release_id,
             "version": verified.manifest.version,
             "manifest_sha256": verified.expected_sha256["release-manifest.json"],
-            "github_release_id": publication.github_release_id,
-            "github_draft": publication.github_draft,
+            "publication_policy": publication_receipt_policy(verified.manifest),
             "source_receipts": sources,
         }
         receipt_path, receipt_sha256 = _write_publication_receipt_unlocked(
@@ -1589,7 +1610,7 @@ def _publication_evidence_token(
     manifest: ReleaseManifest,
     manifest_sha256: str,
 ) -> str:
-    """Bind all three publication gates to one exact, matching receipt."""
+    """Bind required publication gates to one exact, matching receipt."""
 
     path = _publication_receipt_path(path_value)
     before_digest = _file_sha256(path)
@@ -1600,92 +1621,17 @@ def _publication_evidence_token(
     )
     if _file_sha256(path) != before_digest:
         raise ValueError("release publication receipt changed while reading")
-    expected_keys = {
-        "schema_version",
-        "release_id",
-        "version",
-        "manifest_sha256",
-        "github_release_id",
-        "github_draft",
-        "source_receipts",
-    }
-    if (
-        not isinstance(value, dict)
-        or set(value) != expected_keys
-        or value.get("schema_version") != 1
-        or value.get("release_id") != manifest.release_id
-        or value.get("version") != manifest.version
-        or value.get("manifest_sha256") != manifest_sha256
-        or isinstance(value.get("github_release_id"), bool)
-        or not isinstance(value.get("github_release_id"), int)
-        or value["github_release_id"] < 1
-        or value.get("github_draft") is not False
-        or not isinstance(value.get("source_receipts"), dict)
-    ):
+    if not isinstance(value, dict):
         raise ValueError("release publication receipt does not match the manifest")
-
-    source_receipts = value["source_receipts"]
-    expected_source_ids = tuple(source.source_id for source in manifest.sources)
-    if set(source_receipts) != set(expected_source_ids):
-        raise ValueError("release publication receipt source set is incomplete")
-    reserved_names = {
-        "release-manifest.json",
-        "release-metadata.json",
-        "sbom.cdx.json",
-    }
-    artifact_names = tuple(artifact.file_name for artifact in manifest.artifacts)
-    if len(artifact_names) != len(set(artifact_names)) or reserved_names.intersection(
-        artifact_names
-    ):
-        raise ValueError("release manifest artifact filenames collide")
-    expected_names = reserved_names.union(artifact_names)
-    artifacts = {artifact.file_name: artifact for artifact in manifest.artifacts}
-    common_identity: dict[str, tuple[int, str]] | None = None
-    for source in manifest.sources:
-        entries = source_receipts.get(source.source_id)
-        if not isinstance(entries, list) or len(entries) != len(expected_names):
-            raise ValueError("release publication receipt asset set is incomplete")
-        identities: dict[str, tuple[int, str]] = {}
-        for entry in entries:
-            if not isinstance(entry, dict) or set(entry) != {
-                "name",
-                "size_bytes",
-                "sha256",
-                "url",
-            }:
-                raise ValueError("release publication receipt asset is invalid")
-            name = entry.get("name")
-            size = entry.get("size_bytes")
-            sha256 = entry.get("sha256")
-            url = entry.get("url")
-            if (
-                not isinstance(name, str)
-                or name not in expected_names
-                or name in identities
-                or isinstance(size, bool)
-                or not isinstance(size, int)
-                or size < 1
-                or not isinstance(sha256, str)
-                or _SHA256.fullmatch(sha256) is None
-                or url != f"{source.base_url}/{quote(name, safe='')}"
-            ):
-                raise ValueError("release publication receipt asset is invalid")
-            artifact = artifacts.get(name)
-            if artifact is not None and (
-                size != artifact.size_bytes or sha256 != artifact.sha256
-            ):
-                raise ValueError(
-                    "release publication receipt artifact identity differs"
-                )
-            if name == "release-manifest.json" and sha256 != manifest_sha256:
-                raise ValueError("release publication receipt manifest digest differs")
-            identities[name] = (size, sha256)
-        if set(identities) != expected_names:
-            raise ValueError("release publication receipt asset set is incomplete")
-        if common_identity is None:
-            common_identity = identities
-        elif identities != common_identity:
-            raise ValueError("release publication origins contain different bytes")
+    try:
+        validate_publication_receipt(
+            manifest=manifest,
+            manifest_sha256=manifest_sha256,
+            receipt=value,
+            receipt_sha256=before_digest,
+        )
+    except Exception:
+        raise ValueError("release publication receipt does not match the manifest") from None
     return f"publication-receipt:sha256:{before_digest}"
 
 
@@ -2097,10 +2043,11 @@ def _promote(
         manifest=manifest,
         manifest_sha256=digest,
     )
-    publication_evidence = {normalized[gate] for gate in _PUBLICATION_GATES}
+    publication_gates = required_publication_gates(manifest.channel)
+    publication_evidence = {normalized[gate] for gate in publication_gates}
     if publication_evidence != {publication_token}:
         raise ValueError(
-            "GitHub, mirror and CDN gates must reference the same publication receipt"
+            "required publication gates must reference the same publication receipt"
         )
     bootstrap_index_token: str | None = None
     if manifest.channel is ReleaseChannel.STABLE and phase != "prepare":

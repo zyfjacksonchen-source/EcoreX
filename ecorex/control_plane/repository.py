@@ -53,6 +53,9 @@ from .models import (
 )
 from .schema import ControlPlaneSchemaManager, ControlPlaneSchemaReceipt
 
+PUBLICATION_RELEASE_GATES = frozenset(
+    {"github-release", "mirror-sync", "cdn-sync"}
+)
 REQUIRED_RELEASE_GATES = frozenset(
     {
         "lint",
@@ -72,24 +75,43 @@ REQUIRED_RELEASE_GATES = frozenset(
         "secret-scan",
         "size-scan",
         "signature",
-        "github-release",
-        "mirror-sync",
-        "cdn-sync",
         "bootstrap-index",
     }
-) | LIVE_ACCEPTANCE_GATES
+) | LIVE_ACCEPTANCE_GATES | PUBLICATION_RELEASE_GATES
 STABLE_ONLY_RELEASE_GATES = frozenset({"bootstrap-index"})
 
 
-def required_release_gates(channel: ReleaseChannel | str) -> frozenset[str]:
-    """Return the exact gates for a channel without weakening stable GA."""
+def required_publication_gates(channel: ReleaseChannel | str) -> frozenset[str]:
+    """Return publication gates that are blocking for one channel.
+
+    Stable admission has one required source: the signed domestic mirror.
+    GitHub Releases and the CDN remain optional client fallbacks and are never
+    represented as passed merely because they were not checked. Canary keeps
+    its all-origin consistency contract.
+    """
 
     normalized = (
         channel if isinstance(channel, ReleaseChannel) else ReleaseChannel(channel)
     )
     if normalized is ReleaseChannel.STABLE:
-        return REQUIRED_RELEASE_GATES
-    return REQUIRED_RELEASE_GATES - STABLE_ONLY_RELEASE_GATES
+        return frozenset({"mirror-sync"})
+    return PUBLICATION_RELEASE_GATES
+
+
+def required_release_gates(channel: ReleaseChannel | str) -> frozenset[str]:
+    """Return exact gates for a channel with source-specific admission."""
+
+    normalized = (
+        channel if isinstance(channel, ReleaseChannel) else ReleaseChannel(channel)
+    )
+    gates = (
+        REQUIRED_RELEASE_GATES
+        - PUBLICATION_RELEASE_GATES
+        | required_publication_gates(normalized)
+    )
+    if normalized is ReleaseChannel.STABLE:
+        return gates
+    return gates - STABLE_ONLY_RELEASE_GATES
 
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")

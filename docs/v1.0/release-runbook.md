@@ -17,11 +17,15 @@ The checked-in file contains no credential values; it only names the
 environment variables from which credentials are read at request time. The
 strict companion contract is `release/v1/publication-config.schema.json`.
 Source IDs and public hosts must match the three sources in every signed
-release manifest.
+release manifest. Stable admission requires the signed domestic mirror as its
+only live publication source; GitHub Releases and EcoreX CDN remain optional
+fallbacks. Canary continues to prove all three sources before admission.
 
 The mirror/CDN endpoints are upload control roots, not public download roots.
-Each service returns the public asset URL; the coordinator rejects it unless it
-exactly equals the corresponding signed manifest source plus the asset name.
+For Stable, use the schema-v2 configuration with an independently writable
+mirror endpoint and its credential only. Each service returns the public asset
+URL; the coordinator rejects it unless it exactly equals the corresponding
+signed manifest source plus the asset name.
 
 ## GitHub release repository bootstrap and readiness
 
@@ -74,41 +78,38 @@ Remove-Item Env:\ECOREX_GITHUB_ADMIN_TOKEN
 `ready=true` requires the four v1 workflows, strict PR/status protection,
 protected-branch-only Environment deployment, one reviewer per Environment,
 the complete variable/Secret name inventory and four isolated Runners: exact
-Windows platform build, signing, live acceptance and publication. Only the last
-three carry privileged signing/provider/origin authority; the Windows build
-Runner must contain none of those credentials. A busy online Runner may queue work; an
-offline or label-mismatched Runner does not satisfy the contract.
+Windows platform build, ARM64 production signing/publication/deployment,
+live acceptance and cloud build. Only the privileged production roles carry
+signing/provider/origin authority; the Windows build Runner must contain none
+of those credentials. A busy online Runner may queue work; an offline or
+label-mismatched Runner does not satisfy the contract.
 
 ## Candidate asset publication
 
-Export the GitHub release and CDN publisher credentials through the variable
-names in `publication.json`, then run one resumable command. A
-`github-read-through` mirror has no credential or mutation endpoint.
-`--trusted-key` contains a public verification key, not a secret.
+Export only the credential required by the selected channel through the
+variable names in `publication.json`, then run one resumable command. Stable
+uses its writable domestic mirror and does not create a GitHub Release or CDN
+replica. Canary retains the all-source GitHub/CDN flow. A `github-read-through`
+mirror has no credential or mutation endpoint and therefore cannot be Stable's
+sole source. `--trusted-key` contains a public verification key, not a secret.
 
 ```powershell
 ecorex-release publish-assets `
   --release-dir C:\releases\1.0.0 `
   --publication-config C:\ecorex-admin\publication.json `
   --receipt C:\ecorex-admin\receipts\1.0.0-publication.json `
-  --trusted-key release-2026=BASE64_ED25519_PUBLIC_KEY `
-  --publish-github
+  --trusted-key release-2026=BASE64_ED25519_PUBLIC_KEY
 ```
 
-The command verifies the exact local directory and all signatures/digests,
-creates or resumes the GitHub draft, finalizes the CDN replica, makes the
-complete GitHub release public and then streams every asset through the signed
-domestic read-through mirror with redirects and content encoding disabled.
-Re-running resumes matching assets, including when GitHub is already public but
-the mirror check was temporarily unavailable. A conflicting same-name asset or
-any receipt mismatch stops the command; it never overwrites remote bytes.
-The atomic receipt records the exact manifest digest and three validated source
-projections; its SHA-256 is printed for the Control Plane release-gate evidence.
-The `github-release`, `mirror-sync`, and `cdn-sync` entries in
-`release-evidence.json` must all use the identical value
-`publication-receipt:sha256:<printed receipt SHA-256>`. Promotion reopens that
-receipt, verifies its release/manifest identity, exact three source URLs and
-cross-origin asset digests, and refuses unrelated or draft-only evidence.
+The command verifies the exact local directory and all signatures/digests. For
+Stable it uploads and verifies every byte on the writable domestic mirror and
+emits a v2 receipt bound to `stable-primary-only`; `mirror-sync` is the sole
+publication gate. For Canary, pass `--publish-github`: the command creates or
+resumes the GitHub draft, finalizes the CDN replica, makes the complete GitHub
+release public, and validates the domestic read-through mirror. A conflicting
+same-name asset or any receipt mismatch stops the command; it never overwrites
+remote bytes. Promotion reopens the receipt and validates the channel-required
+source projections before it accepts the corresponding gate evidence.
 
 ## Control Plane Web console deployment boundary
 

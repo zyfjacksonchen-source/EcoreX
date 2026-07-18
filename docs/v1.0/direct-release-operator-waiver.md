@@ -26,10 +26,10 @@ a protected Environment, isolated Runner, managed CDP or KMS/HSM pass.
   manifest digest, Candidate receipt digest and hash of the operator's
   instruction. It says publication is incomplete and cannot authorize a live
   pointer.
-- Immutable release bytes must still be published to the domestic GitHub
-  mirror, GitHub Releases and EcoreX CDN. The online verifier performs full
-  HTTPS GET and SHA-256 validation for every byte at all three origins and
-  produces the compatible receipt; a HEAD result is never digest evidence.
+- Stable immutable release bytes must be published to the signed domestic
+  GitHub mirror. Canary additionally requires GitHub Releases and EcoreX CDN.
+  The online verifier performs a full HTTPS GET and SHA-256 validation for
+  every required source; a HEAD result is never digest evidence.
 - The checked-in download site remains the canonical `unpublished` document.
   Only a staging copy containing a `published` index reproduced from the exact
   three-origin receipt and signed by both direct keys can pass the direct
@@ -96,11 +96,11 @@ live_pointer_authorized=false
 
 ## Publish immutable assets and build the staged site
 
-Publish the exact release directory to the public installer GitHub Release and
-the EcoreX CDN. The signed first source is a GitHub CN read-through proxy, so it
-is verified after the GitHub Release becomes non-draft. Run
-`verify-v1-online-publication.py` for every file at the proxy, GitHub and CDN;
-do not upload the public pointer before its canonical receipt exists. Then copy
+Publish the exact Stable release directory to the writable domestic GitHub
+mirror and verify that signed primary source before publishing its pointer.
+Canary additionally publishes GitHub Release and EcoreX CDN bytes. Run
+`verify-v1-online-publication.py` for every required source; do not upload the
+public pointer before its canonical receipt exists. Then copy
 `deploy/ecorex-site` to a separate staging directory and run the existing
 `build-public-bootstrap-index` command with:
 

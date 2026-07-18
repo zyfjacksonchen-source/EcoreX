@@ -33,6 +33,10 @@ from ecorex.update import (
 from ecorex.update.locking import ProductFileLock
 
 from .builder import MAX_BOOTSTRAP_BYTES
+from .publication_policy import (
+    publication_receipt_policy,
+    required_publication_sources,
+)
 from .signing import ReleaseSigner, sign_envelope
 
 
@@ -62,7 +66,7 @@ _RFC3339 = re.compile(
 _AUTHORITY_TIME = re.compile(
     r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
 )
-_RECEIPT_KEYS = frozenset(
+_LEGACY_RECEIPT_KEYS = frozenset(
     {
         "schema_version",
         "release_id",
@@ -70,6 +74,16 @@ _RECEIPT_KEYS = frozenset(
         "manifest_sha256",
         "github_release_id",
         "github_draft",
+        "source_receipts",
+    }
+)
+_PRIMARY_ONLY_RECEIPT_KEYS = frozenset(
+    {
+        "schema_version",
+        "release_id",
+        "version",
+        "manifest_sha256",
+        "publication_policy",
         "source_receipts",
     }
 )
@@ -123,8 +137,9 @@ def build_public_bootstrap_index(
 
     The caller still has to verify local release files before publication.  This
     boundary independently verifies the signed manifest and all three Bootstrap
-    artifact signatures, then proves that the immutable publication receipt has
-    the same bytes at the domestic mirror, GitHub Releases and the EcoreX CDN.
+    artifact signatures, then proves the channel-required published bytes. A
+    Stable pointer advertises only its verified domestic primary source; the
+    signed manifest retains the full client failover order for later updates.
     """
 
     if not isinstance(manifest, ReleaseManifest):
@@ -188,7 +203,7 @@ def build_public_bootstrap_index(
                 "priority": source.priority,
                 "url": receipt_assets[source.source_id][file_name][2],
             }
-            for source in manifest.sources
+            for source in required_publication_sources(manifest)
         ]
 
     observed_now = _utc_now(now)
@@ -969,8 +984,8 @@ def _validate_sources(
     file_name: str,
     label: str,
 ) -> tuple[tuple[tuple[str, str, int], ...], tuple[str, ...]]:
-    if not isinstance(value, list) or len(value) != 3:
-        raise PublicBootstrapIndexError(f"{label} must contain three sources")
+    if not isinstance(value, list) or not 1 <= len(value) <= 3:
+        raise PublicBootstrapIndexError(f"{label} must contain one to three sources")
     expected_order = (
         ("github-cn-mirror", 0),
         ("github-release", 1),
@@ -1021,8 +1036,6 @@ def validate_publication_receipt(
     receipt: Mapping[str, Any],
     receipt_sha256: str,
 ) -> dict[str, dict[str, tuple[int, str, str]]]:
-    if set(receipt) != _RECEIPT_KEYS:
-        raise PublicBootstrapIndexError("publication receipt shape is invalid")
     canonical_receipt_sha256 = hashlib.sha256(
         _canonical_json_bytes(receipt)
     ).hexdigest()
@@ -1030,15 +1043,30 @@ def validate_publication_receipt(
         raise PublicBootstrapIndexError(
             "publication receipt digest differs from its canonical bytes"
         )
+    schema_version = receipt.get("schema_version")
+    if schema_version == 1:
+        if (
+            set(receipt) != _LEGACY_RECEIPT_KEYS
+            or isinstance(receipt.get("github_release_id"), bool)
+            or not isinstance(receipt.get("github_release_id"), int)
+            or receipt["github_release_id"] < 1
+            or receipt.get("github_draft") is not False
+        ):
+            raise PublicBootstrapIndexError("publication receipt shape is invalid")
+        receipt_sources = tuple(manifest.sources)
+    elif schema_version == 2:
+        if (
+            set(receipt) != _PRIMARY_ONLY_RECEIPT_KEYS
+            or receipt.get("publication_policy") != publication_receipt_policy(manifest)
+        ):
+            raise PublicBootstrapIndexError("publication receipt shape is invalid")
+        receipt_sources = required_publication_sources(manifest)
+    else:
+        raise PublicBootstrapIndexError("publication receipt shape is invalid")
     if (
-        receipt.get("schema_version") != 1
-        or receipt.get("release_id") != manifest.release_id
+        receipt.get("release_id") != manifest.release_id
         or receipt.get("version") != manifest.version
         or receipt.get("manifest_sha256") != manifest_sha256
-        or isinstance(receipt.get("github_release_id"), bool)
-        or not isinstance(receipt.get("github_release_id"), int)
-        or receipt["github_release_id"] < 1
-        or receipt.get("github_draft") is not False
     ):
         raise PublicBootstrapIndexError(
             "publication receipt does not describe the signed public release"
@@ -1046,7 +1074,7 @@ def validate_publication_receipt(
     raw_sources = receipt.get("source_receipts")
     if not isinstance(raw_sources, Mapping):
         raise PublicBootstrapIndexError("publication receipt source set is invalid")
-    source_ids = tuple(source.source_id for source in manifest.sources)
+    source_ids = tuple(source.source_id for source in receipt_sources)
     if set(raw_sources) != set(source_ids):
         raise PublicBootstrapIndexError("publication receipt source set is incomplete")
 
@@ -1056,7 +1084,7 @@ def validate_publication_receipt(
     expected_names = set(artifact_by_name).union(_RESERVED_RELEASE_FILES)
     common_identity: dict[str, tuple[int, str]] | None = None
     result: dict[str, dict[str, tuple[int, str, str]]] = {}
-    for source in manifest.sources:
+    for source in receipt_sources:
         raw_entries = raw_sources.get(source.source_id)
         if not isinstance(raw_entries, list) or len(raw_entries) != len(expected_names):
             raise PublicBootstrapIndexError(

@@ -206,8 +206,6 @@ class PublicationCoordinator:
         assert {path.name for path in files} == set(expected_sha256)
         return SimpleNamespace(
             release_id=manifest.release_id,
-            github_release_id=42,
-            github_draft=False,
             source_receipts=MappingProxyType(
                 {
                     "github-cn": (
@@ -220,9 +218,7 @@ class PublicationCoordinator:
                             }
                         )
                         for path in files
-                    ),
-                    "github": (),
-                    "cdn": (),
+                    )
                 }
             ),
         )
@@ -265,10 +261,11 @@ def test_publish_assets_cli_uses_one_verified_multi_source_transaction(
     assert coordinator.closed is True
     receipt_value = json.loads(receipt.read_text(encoding="utf-8"))
     assert receipt_value["release_id"] == built.manifest.release_id
-    assert receipt_value["github_draft"] is False
-    assert set(receipt_value["source_receipts"]) == {"github-cn", "github", "cdn"}
+    assert receipt_value["schema_version"] == 2
+    assert receipt_value["publication_policy"] == "stable-primary-only"
+    assert set(receipt_value["source_receipts"]) == {"github-cn"}
     output = capsys.readouterr()
-    assert '"github_draft": false' in output.out
+    assert '"publication_policy": "stable-primary-only"' in output.out
     assert '"github-cn"' in output.out
     assert output.err == ""
 
@@ -479,23 +476,18 @@ def test_checked_in_publication_example_schema_and_cli_parser_stay_bound(
     schema_path = root / "release" / "v1" / "publication-config.schema.json"
     example = json.loads(example_path.read_text(encoding="utf-8"))
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    assert set(example) == set(schema["required"]) == set(schema["properties"])
-    assert set(example["github"]) == set(
-        schema["$defs"]["github"]["required"]
-    ) == set(schema["$defs"]["github"]["properties"])
-    assert len(schema["properties"]["mirror"]["oneOf"]) == 2
+    assert example["schema_version"] == 2
+    assert len(schema["oneOf"]) == 2
     assert set(example["mirror"]) == set(
-        schema["$defs"]["readThroughMirror"]["required"]
-    ) == set(schema["$defs"]["readThroughMirror"]["properties"])
-    assert example["mirror"]["mode"] == "github-read-through"
-    assert example["mirror"]["public_hosts"] == ["ghproxy.net"]
-    assert set(example["cdn"]) == set(
         schema["$defs"]["replica"]["required"]
     ) == set(schema["$defs"]["replica"]["properties"])
-    assert example["cdn"]["endpoint"].startswith("https://")
-    assert ".invalid/" in example["cdn"]["endpoint"]
-    assert example["cdn"]["public_hosts"] == ["dl.ecoremedia.net"]
-    assert example["github"]["repository"] == "EcoreX-installers"
+    assert example["mirror"]["endpoint"].startswith("https://")
+    assert ".invalid/" in example["mirror"]["endpoint"]
+    assert example["mirror"]["public_hosts"] == ["dl.ecoremedia.net"]
+    assert "github" not in example and "cdn" not in example
+    assert set(example["mirror"]) == set(
+        schema["$defs"]["replica"]["required"]
+    ) == set(schema["$defs"]["replica"]["properties"])
     serialized = json.dumps(example, sort_keys=True)
     assert "Bearer " not in serialized
     assert "password" not in serialized.casefold()
@@ -516,8 +508,8 @@ def test_checked_in_publication_example_schema_and_cli_parser_stay_bound(
     coordinator = _publication_coordinator(args)
     try:
         assert coordinator.mirror.source_id == example["mirror"]["source_id"]
-        assert coordinator.cdn.source_id == example["cdn"]["source_id"]
-        assert coordinator.github.owner == example["github"]["owner"]
+        assert coordinator.cdn is None
+        assert coordinator.github is None
     finally:
         coordinator.close()
 

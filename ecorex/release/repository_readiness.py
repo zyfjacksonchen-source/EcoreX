@@ -272,7 +272,7 @@ def default_release_repository_contract() -> ReleaseRepositoryContract:
             ),
             RunnerContract(
                 "release-sign",
-                frozenset({"self-hosted", "linux", "x64", "ecorex-release-sign"}),
+                frozenset({"self-hosted", "linux", "arm64", "ecorex-release-sign"}),
             ),
             RunnerContract(
                 "live-acceptance",
@@ -280,7 +280,7 @@ def default_release_repository_contract() -> ReleaseRepositoryContract:
             ),
             RunnerContract(
                 "release-publication",
-                frozenset({"self-hosted", "linux", "x64", "ecorex-release-publish"}),
+                frozenset({"self-hosted", "linux", "arm64", "ecorex-release-publish"}),
             ),
             RunnerContract(
                 "cloud-build",
@@ -289,19 +289,19 @@ def default_release_repository_contract() -> ReleaseRepositoryContract:
             RunnerContract(
                 "deployment-authorize",
                 frozenset(
-                    {"self-hosted", "linux", "x64", "ecorex-deployment-authorize"}
+                    {"self-hosted", "linux", "arm64", "ecorex-deployment-authorize"}
                 ),
             ),
             RunnerContract(
                 "production-deploy",
                 frozenset(
-                    {"self-hosted", "linux", "x64", "ecorex-production-deploy"}
+                    {"self-hosted", "linux", "arm64", "ecorex-production-deploy"}
                 ),
             ),
             RunnerContract(
                 "production-readback",
                 frozenset(
-                    {"self-hosted", "linux", "x64", "ecorex-production-readback"}
+                    {"self-hosted", "linux", "arm64", "ecorex-production-readback"}
                 ),
             ),
         ),

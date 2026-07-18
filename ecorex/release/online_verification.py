@@ -34,6 +34,11 @@ from ecorex.update import (
 )
 
 from .identity import release_tag
+from .publication_policy import (
+    ALL_SOURCES_POLICY,
+    publication_receipt_policy,
+    required_publication_sources,
+)
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -47,8 +52,7 @@ _RECEIPT_KEYS = frozenset(
         "release_id",
         "version",
         "manifest_sha256",
-        "github_release_id",
-        "github_draft",
+        "publication_policy",
         "source_receipts",
     }
 )
@@ -211,8 +215,10 @@ class OnlinePublicationVerifier:
                 "online_manifest_signature_invalid"
             ) from None
         expected = _local_release_files(root, manifest, manifest_bytes, self.verifier)
+        required_sources = required_publication_sources(manifest)
+        policy = publication_receipt_policy(manifest)
         expected_total = sum(item.size_bytes for item in expected.values()) * len(
-            manifest.sources
+            required_sources
         )
         if expected_total > self.limits.maximum_total_bytes:
             raise OnlinePublicationVerificationError(
@@ -223,16 +229,17 @@ class OnlinePublicationVerifier:
             self.limits.maximum_total_bytes,
             time.monotonic() + self.limits.total_timeout_seconds,
         )
-        github_release_id = self._github_release(manifest, expected, budget)
+        if policy == ALL_SOURCES_POLICY:
+            self._github_release(manifest, expected, budget)
         completed = _load_checkpoint(
             checkpoint,
             checkpoint_key=self._checkpoint_key,
             manifest=manifest,
             manifest_sha256=manifest_sha256,
-            github_release_id=github_release_id,
+            publication_policy=policy,
             expected=expected,
         )
-        for source in manifest.sources:
+        for source in required_sources:
             allowed = self._allowed_hosts(
                 source.source_id, source.kind, source.base_url
             )
@@ -261,11 +268,11 @@ class OnlinePublicationVerifier:
                     checkpoint_key=self._checkpoint_key,
                     manifest=manifest,
                     manifest_sha256=manifest_sha256,
-                    github_release_id=github_release_id,
+                    publication_policy=policy,
                     completed=completed,
                 )
         source_receipts: dict[str, list[dict[str, object]]] = {}
-        for source in manifest.sources:
+        for source in required_sources:
             source_receipts[source.source_id] = [
                 {
                     "name": name,
@@ -276,12 +283,11 @@ class OnlinePublicationVerifier:
                 for name in sorted(expected)
             ]
         receipt: dict[str, object] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "release_id": manifest.release_id,
             "version": manifest.version,
             "manifest_sha256": manifest_sha256,
-            "github_release_id": github_release_id,
-            "github_draft": False,
+            "publication_policy": policy,
             "source_receipts": source_receipts,
         }
         if set(receipt) != _RECEIPT_KEYS:
@@ -671,7 +677,7 @@ def _load_checkpoint(
     checkpoint_key: bytes,
     manifest: ReleaseManifest,
     manifest_sha256: str,
-    github_release_id: int,
+    publication_policy: str,
     expected: Mapping[str, _ExpectedFile],
 ) -> dict[tuple[str, str], dict[str, object]]:
     if not os.path.lexists(path):
@@ -688,18 +694,16 @@ def _load_checkpoint(
             "document_type",
             "release_id",
             "manifest_sha256",
-            "github_release_id",
-            "github_draft",
+            "publication_policy",
             "completed",
             "checkpoint_mac",
         }
-        or value.get("schema_version") != 1
+        or value.get("schema_version") != 2
         or value.get("document_type")
         != "ecorex.online-publication-verification-checkpoint"
         or value.get("release_id") != manifest.release_id
         or value.get("manifest_sha256") != manifest_sha256
-        or value.get("github_release_id") != github_release_id
-        or value.get("github_draft") is not False
+        or value.get("publication_policy") != publication_policy
         or not isinstance(value.get("completed"), list)
     ):
         raise OnlinePublicationVerificationError("online_checkpoint_identity_conflict")
@@ -713,7 +717,9 @@ def _load_checkpoint(
         raise OnlinePublicationVerificationError(
             "online_checkpoint_authentication_failed"
         )
-    sources = {source.source_id: source for source in manifest.sources}
+    sources = {
+        source.source_id: source for source in required_publication_sources(manifest)
+    }
     completed: dict[tuple[str, str], dict[str, object]] = {}
     for raw in value["completed"]:
         if not isinstance(raw, dict) or set(raw) != {
@@ -751,16 +757,15 @@ def _write_checkpoint(
     checkpoint_key: bytes,
     manifest: ReleaseManifest,
     manifest_sha256: str,
-    github_release_id: int,
+    publication_policy: str,
     completed: Mapping[tuple[str, str], Mapping[str, object]],
 ) -> None:
     value = {
-        "schema_version": 1,
+        "schema_version": 2,
         "document_type": "ecorex.online-publication-verification-checkpoint",
         "release_id": manifest.release_id,
         "manifest_sha256": manifest_sha256,
-        "github_release_id": github_release_id,
-        "github_draft": False,
+        "publication_policy": publication_policy,
         "completed": [dict(completed[key]) for key in sorted(completed)],
     }
     value["checkpoint_mac"] = _checkpoint_mac(checkpoint_key, value)
@@ -930,10 +935,19 @@ def _read_or_hash(
             raise OnlinePublicationVerificationError(code)
         with path.open("rb") as current_stream:
             current_opened = os.fstat(current_stream.fileno())
+            current_digest = hashlib.sha256()
+            current_total = 0
+            while chunk := current_stream.read(1024 * 1024):
+                current_total += len(chunk)
+                if current_total > maximum_bytes:
+                    raise OnlinePublicationVerificationError(code)
+                current_digest.update(chunk)
         if (
             not _regular(current_opened)
             or _descriptor_identity(current_opened)
             != _descriptor_identity(opened)
+            or current_total != total
+            or current_digest.digest() != digest.digest()
         ):
             raise OnlinePublicationVerificationError(code)
         return total, digest.hexdigest(), b"".join(chunks) if retain else None

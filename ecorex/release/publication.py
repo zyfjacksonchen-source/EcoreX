@@ -13,6 +13,11 @@ from ecorex.update import ReleaseManifest, SourceKind
 
 from .github import GitHubAssetReceipt, GitHubReleasePublisher
 from .identity import release_tag
+from .publication_policy import (
+    STABLE_PRIMARY_ONLY_POLICY,
+    publication_receipt_policy,
+    required_publication_sources,
+)
 from .replica import (
     HTTPSReadThroughReleaseMirror,
     HTTPSReleaseReplicaPublisher,
@@ -26,8 +31,6 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 @dataclass(frozen=True, slots=True)
 class PublishedReleaseAssets:
     release_id: str
-    github_release_id: int
-    github_draft: bool
     source_receipts: Mapping[str, tuple[Mapping[str, object], ...]]
 
     @classmethod
@@ -35,8 +38,6 @@ class PublishedReleaseAssets:
         cls,
         *,
         release_id: str,
-        github_release_id: int,
-        github_draft: bool,
         source_receipts: Mapping[str, tuple[Mapping[str, object], ...]],
     ) -> "PublishedReleaseAssets":
         copied = {
@@ -45,14 +46,12 @@ class PublishedReleaseAssets:
         }
         return cls(
             release_id,
-            github_release_id,
-            github_draft,
             MappingProxyType(copied),
         )
 
 
 class ReleaseAssetPublicationCoordinator:
-    """Publish immutable assets, then prove every signed source serves them.
+    """Publish immutable assets, then prove the channel-required sources.
 
     Managed mirrors keep their historical upload-first behavior. A GitHub
     read-through mirror is different: it is verified only after the GitHub
@@ -63,8 +62,8 @@ class ReleaseAssetPublicationCoordinator:
         self,
         *,
         mirror: HTTPSReleaseReplicaPublisher | HTTPSReadThroughReleaseMirror,
-        github: GitHubReleasePublisher,
-        cdn: HTTPSReleaseReplicaPublisher,
+        github: GitHubReleasePublisher | None = None,
+        cdn: HTTPSReleaseReplicaPublisher | None = None,
     ) -> None:
         self.mirror = mirror
         self.github = github
@@ -73,6 +72,8 @@ class ReleaseAssetPublicationCoordinator:
     def close(self) -> None:
         failed = False
         for resource in (self.cdn, self.github, self.mirror):
+            if resource is None:
+                continue
             try:
                 resource.close()
             except Exception:
@@ -109,18 +110,53 @@ class ReleaseAssetPublicationCoordinator:
             or github_source.kind is not SourceKind.GITHUB_RELEASE
             or cdn_source.kind is not SourceKind.ECOREX_CDN
             or self.mirror.source_id != mirror_source.source_id
-            or self.cdn.source_id != cdn_source.source_id
         ):
+            raise ValueError("publisher identities do not match signed source order")
+
+        read_through = isinstance(self.mirror, HTTPSReadThroughReleaseMirror) or (
+            getattr(self.mirror, "read_through", False) is True
+        )
+        if publication_receipt_policy(manifest) == STABLE_PRIMARY_ONLY_POLICY:
+            if read_through:
+                raise ValueError(
+                    "stable primary-only publication requires an independently writable mirror"
+                )
+            self._validate_primary_mirror(mirror_source.base_url)
+            assert isinstance(self.mirror, HTTPSReleaseReplicaPublisher) or callable(
+                getattr(self.mirror, "ensure_asset", None)
+            )
+            mirror_receipts = tuple(
+                self.mirror.ensure_asset(  # type: ignore[union-attr]
+                    release_id=manifest.release_id,
+                    path=path,
+                    expected_sha256=expected_sha256[path.name],
+                )
+                for path in files
+            )
+            self._validate_replica_urls(mirror_source.base_url, mirror_receipts)
+            self.mirror.finalize(  # type: ignore[union-attr]
+                release_id=manifest.release_id,
+                manifest_sha256=expected_sha256["release-manifest.json"],
+            )
+            required = required_publication_sources(manifest)
+            return PublishedReleaseAssets.create(
+                release_id=manifest.release_id,
+                source_receipts={
+                    required[0].source_id: tuple(
+                        _replica_projection(item) for item in mirror_receipts
+                    )
+                },
+            )
+
+        if self.github is None or self.cdn is None:
+            raise ValueError("all-source publication requires GitHub and CDN publishers")
+        if self.cdn.source_id != cdn_source.source_id:
             raise ValueError("publisher identities do not match signed source order")
         self._validate_publisher_sources(
             manifest=manifest,
             mirror_base_url=mirror_source.base_url,
             github_base_url=github_source.base_url,
             cdn_base_url=cdn_source.base_url,
-        )
-
-        read_through = isinstance(self.mirror, HTTPSReadThroughReleaseMirror) or (
-            getattr(self.mirror, "read_through", False) is True
         )
         if read_through and not publish_github:
             raise ValueError(
@@ -200,9 +236,15 @@ class ReleaseAssetPublicationCoordinator:
         }
         return PublishedReleaseAssets.create(
             release_id=manifest.release_id,
-            github_release_id=draft.release_id,
-            github_draft=draft.draft,
             source_receipts=receipts,
+        )
+
+    def _validate_primary_mirror(self, mirror_base_url: str) -> None:
+        """Fence the only Stable admission source before mutation."""
+
+        self._validate_replica_base_url(
+            mirror_base_url,
+            public_hosts=self.mirror.public_hosts,
         )
 
     def _validate_publisher_sources(
@@ -215,10 +257,8 @@ class ReleaseAssetPublicationCoordinator:
     ) -> None:
         """Fence signed public identities before the first remote mutation."""
 
-        self._validate_replica_base_url(
-            mirror_base_url,
-            public_hosts=self.mirror.public_hosts,
-        )
+        self._validate_primary_mirror(mirror_base_url)
+        assert self.cdn is not None and self.github is not None
         self._validate_replica_base_url(
             cdn_base_url,
             public_hosts=self.cdn.public_hosts,

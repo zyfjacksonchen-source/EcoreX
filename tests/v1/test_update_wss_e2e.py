@@ -21,11 +21,12 @@ import uvicorn
 import pytest
 
 from ecorex.control_plane import (
-    REQUIRED_RELEASE_GATES,
     ControlPlaneRepository,
     ControlPrincipal,
     create_control_plane_app,
     migrate_control_plane_database,
+    required_publication_gates,
+    required_release_gates,
 )
 from ecorex.release import build_unsigned_gate_bundle
 from ecorex.update import (
@@ -135,8 +136,8 @@ def _manifest() -> ReleaseManifest:
 def _gate_bundle(manifest: ReleaseManifest) -> dict:
     publication = "publication-receipt:sha256:" + "a" * 64
     gates = {}
-    for gate in REQUIRED_RELEASE_GATES:
-        if gate in {"github-release", "mirror-sync", "cdn-sync"}:
+    for gate in required_release_gates(manifest.channel):
+        if gate in required_publication_gates(manifest.channel):
             evidence = publication
         elif gate == "bootstrap-index":
             evidence = (

@@ -124,8 +124,10 @@ from .management_schema import (
 )
 from .repository import (
     MAX_UPDATE_HINT_BATCH_SIZE,
+    PUBLICATION_RELEASE_GATES,
     REQUIRED_RELEASE_GATES,
     STABLE_ONLY_RELEASE_GATES,
+    required_publication_gates,
     required_release_gates,
     ControlPlaneConflict,
     ControlPlaneError,

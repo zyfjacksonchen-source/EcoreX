@@ -1,26 +1,14 @@
 {
-  "schema_version": 1,
-  "github": {
-    "owner": "zhangyifanjackson-dotcom",
-    "repository": "EcoreX-installers",
-    "token_env": "ECOREX_GITHUB_RELEASE_TOKEN"
-  },
+  "schema_version": 2,
   "mirror": {
     "source_id": "github-cn",
-    "mode": "github-read-through",
-    "public_hosts": [
-      "ghproxy.net"
-    ]
-  },
-  "cdn": {
-    "source_id": "cdn",
-    "endpoint": "https://cdn-publisher.invalid/api/v1/releases",
+    "endpoint": "https://mirror-publisher.invalid/api/v1/releases",
     "allowed_hosts": [
-      "cdn-publisher.invalid"
+      "mirror-publisher.invalid"
     ],
     "public_hosts": [
       "dl.ecoremedia.net"
     ],
-    "token_env": "ECOREX_CDN_TOKEN"
+    "token_env": "ECOREX_RELEASE_MIRROR_TOKEN"
   }
 }

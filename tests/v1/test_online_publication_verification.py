@@ -36,14 +36,14 @@ from ecorex.update import (
 CHECKPOINT_KEY = hashlib.sha256(b"online-checkpoint-test-key").digest()
 
 
-def _release(tmp_path: Path):
+def _release(tmp_path: Path, *, channel: ReleaseChannel = ReleaseChannel.STABLE):
     source = tmp_path / "source"
     source.mkdir()
     (source / "runtime.txt").write_bytes(b"signed EcoreX runtime\n")
     signer = Ed25519MemorySigner("release-key-2026", Ed25519PrivateKey.generate())
     built = ReleaseBuilder(signer).build(
         ReleaseBuildSpec(
-            channel=ReleaseChannel.STABLE,
+            channel=channel,
             created_at="2026-07-16T18:00:00+08:00",
             sources=(
                 ReleaseSource(
@@ -180,7 +180,7 @@ def _online(verifier, origin: _Origin, *, attempts: int = 1):
     )
 
 
-def test_read_only_github_proxy_and_all_three_get_bytes_make_canonical_receipt(
+def test_stable_primary_source_gets_bytes_without_contacting_optional_fallbacks(
     tmp_path: Path,
 ) -> None:
     built, verifier, files = _release(tmp_path)
@@ -194,9 +194,9 @@ def test_read_only_github_proxy_and_all_three_get_bytes_make_canonical_receipt(
         temporary_directory=tmp_path,
     )
 
-    assert receipt["github_release_id"] == 4242
-    assert receipt["github_draft"] is False
-    assert list(receipt["source_receipts"]) == ["github-cn", "github", "cdn"]
+    assert receipt["schema_version"] == 2
+    assert receipt["publication_policy"] == "stable-primary-only"
+    assert list(receipt["source_receipts"]) == ["github-cn"]
     assert all(
         entry["url"].startswith(
             "https://ghproxy.net/https://github.com/acme/ecorex/releases/download/"
@@ -216,6 +216,12 @@ def test_read_only_github_proxy_and_all_three_get_bytes_make_canonical_receipt(
     assert not checkpoint.exists()
     assert not list(tmp_path.glob(".ecorex-online-*.part"))
     assert all(method == "GET" for method, _url in origin.requests)
+    assert not any(
+        request_url.startswith("https://api.github.com/")
+        or request_url.startswith("https://github.com/")
+        or request_url.startswith("https://cdn.ecorex.test/")
+        for _method, request_url in origin.requests
+    )
     manifest_bytes = built.manifest_path.read_bytes()
     _validate_publication_receipt(
         manifest=built.manifest,
@@ -226,7 +232,7 @@ def test_read_only_github_proxy_and_all_three_get_bytes_make_canonical_receipt(
 
 
 def test_remote_digest_drift_fails_and_removes_partial_file(tmp_path: Path) -> None:
-    built, verifier, files = _release(tmp_path)
+    built, verifier, files = _release(tmp_path, channel=ReleaseChannel.CANARY)
     origin = _Origin(built, files, drift_host="ghproxy.net")
     with pytest.raises(
         OnlinePublicationVerificationError, match="online_download_digest_drift"
@@ -264,7 +270,7 @@ def test_unexpected_cross_host_redirect_is_rejected_before_follow(
 def test_authenticated_checkpoint_resumes_after_partial_origin_failure(
     tmp_path: Path,
 ) -> None:
-    built, verifier, files = _release(tmp_path)
+    built, verifier, files = _release(tmp_path, channel=ReleaseChannel.CANARY)
     checkpoint = tmp_path / "checkpoint.json"
     failed = _Origin(built, files, fail_host="github.com")
     with pytest.raises(
@@ -313,14 +319,13 @@ def test_existing_receipt_and_checkpoint_tamper_fail_before_false_success(
     checkpoint.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                    "schema_version": 2,
                 "document_type": "ecorex.online-publication-verification-checkpoint",
                 "release_id": built.manifest.release_id,
                 "manifest_sha256": hashlib.sha256(
                     built.manifest_path.read_bytes()
                 ).hexdigest(),
-                "github_release_id": 4242,
-                "github_draft": False,
+                    "publication_policy": "stable-primary-only",
                 "completed": [],
                 "checkpoint_mac": "0" * 64,
             },
@@ -341,7 +346,7 @@ def test_existing_receipt_and_checkpoint_tamper_fail_before_false_success(
 
 
 def test_github_release_must_be_public_not_draft(tmp_path: Path) -> None:
-    built, verifier, files = _release(tmp_path)
+    built, verifier, files = _release(tmp_path, channel=ReleaseChannel.CANARY)
     with pytest.raises(
         OnlinePublicationVerificationError, match="github_release_identity_invalid"
     ):

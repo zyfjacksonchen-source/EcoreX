@@ -12,12 +12,13 @@ import pytest
 
 from ecorex.control_plane import (
     MAX_UPDATE_HINT_BATCH_SIZE,
-    REQUIRED_RELEASE_GATES,
     ControlPlaneRepository,
     ControlPrincipal,
     UpdateHintClient,
     UpdateSignalHub,
     migrate_control_plane_database,
+    required_publication_gates,
+    required_release_gates,
 )
 from ecorex.control_plane.app import _ClientConnection
 from ecorex.release import build_unsigned_gate_bundle
@@ -143,8 +144,8 @@ def _repository(tmp_path) -> tuple[ControlPlaneRepository, _CountingVerifier]:
 def _gate_bundle(manifest: ReleaseManifest) -> dict:
     publication = "publication-receipt:sha256:" + "a" * 64
     gates = {}
-    for gate in REQUIRED_RELEASE_GATES:
-        if gate in {"github-release", "mirror-sync", "cdn-sync"}:
+    for gate in required_release_gates(manifest.channel):
+        if gate in required_publication_gates(manifest.channel):
             evidence = publication
         elif gate == "bootstrap-index":
             evidence = (

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GET and verify every published v1 release byte on all three origins."""
+"""GET and verify all channel-required published v1 release bytes."""
 
 from __future__ import annotations
 
@@ -138,7 +138,7 @@ def run(argv: list[str] | None = None) -> int:
                 {
                     "ok": True,
                     "release_id": receipt["release_id"],
-                    "github_release_id": receipt["github_release_id"],
+                    "publication_policy": receipt["publication_policy"],
                     "publication_receipt_sha256": hashlib.sha256(payload).hexdigest(),
                 },
                 sort_keys=True,

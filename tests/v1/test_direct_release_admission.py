@@ -38,6 +38,7 @@ from ecorex.control_plane import (
     ControlPrincipal,
     ReleaseGateError,
     required_release_gates,
+    required_publication_gates,
 )
 from ecorex.control_plane.app import (
     _DirectAdmissionBodyLimitMiddleware,
@@ -222,15 +223,7 @@ def test_direct_bundle_records_live_gates_only_as_waived(tmp_path: Path) -> None
     waiver_sha = hashlib.sha256(waiver_bytes).hexdigest()
     gates = {
         "unit": {"status": "passed", "evidence": "gate-receipt:sha256:" + "4" * 64},
-        "github-release": {
-            "status": "passed",
-            "evidence": f"publication-receipt:sha256:{publication_sha}",
-        },
         "mirror-sync": {
-            "status": "passed",
-            "evidence": f"publication-receipt:sha256:{publication_sha}",
-        },
-        "cdn-sync": {
             "status": "passed",
             "evidence": f"publication-receipt:sha256:{publication_sha}",
         },
@@ -371,7 +364,7 @@ def test_control_plane_projects_waived_without_mutating_passed_gate_schema(
                 "status": "waived",
                 "evidence": f"operator-waiver:sha256:{waiver_sha}",
             }
-        elif gate in {"github-release", "mirror-sync", "cdn-sync"}:
+        elif gate in required_publication_gates(ReleaseChannel.STABLE):
             gates[gate] = {
                 "status": "passed",
                 "evidence": f"publication-receipt:sha256:{publication_sha}",
@@ -538,7 +531,7 @@ def test_release_cli_dry_run_consumes_direct_prepare_bundle(
                 "status": "waived",
                 "evidence": f"operator-waiver:sha256:{waiver_sha}",
             }
-        elif gate in {"github-release", "mirror-sync", "cdn-sync"}:
+        elif gate in required_publication_gates(ReleaseChannel.STABLE):
             gates[gate] = {
                 "status": "passed",
                 "evidence": f"publication-receipt:sha256:{publication_sha}",

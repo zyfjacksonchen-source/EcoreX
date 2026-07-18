@@ -13,8 +13,9 @@ from ecorex.control_plane import (
     BootstrapFreshnessStatusProjection,
     BootstrapIndexProofProjection,
     CandidateProjection,
-    REQUIRED_RELEASE_GATES,
     RolloutProjection,
+    required_publication_gates,
+    required_release_gates,
 )
 from ecorex.control_plane.cli import run
 from ecorex.release import (
@@ -117,7 +118,10 @@ class FakeClient:
             build_digest="b" * 64,
             channel="stable",
             status=status,
-            gates={gate: "passed" for gate in REQUIRED_RELEASE_GATES},
+            gates={
+                gate: "passed"
+                for gate in required_release_gates(ReleaseChannel.STABLE)
+            },
             missing_gates=[],
         )
 
@@ -371,12 +375,12 @@ def signed_gate_bundle(
     bootstrap_token: str | None,
     phase: str,
 ) -> dict:
-    names = set(REQUIRED_RELEASE_GATES)
+    names = set(required_release_gates(release.channel))
     if phase == "prepare":
         names.remove("bootstrap-index")
     gates = {}
     for gate in names:
-        if gate in {"github-release", "mirror-sync", "cdn-sync"}:
+        if gate in required_publication_gates(release.channel):
             evidence = publication_token
         elif gate == "bootstrap-index":
             assert bootstrap_token is not None

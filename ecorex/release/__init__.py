@@ -48,6 +48,14 @@ from .replica import (
     ReplicaCredentialProvider,
 )
 from .publication import PublishedReleaseAssets, ReleaseAssetPublicationCoordinator
+from .publication_policy import (
+    ALL_SOURCES_POLICY,
+    PublicationPolicyError,
+    STABLE_PRIMARY_ONLY_POLICY,
+    publication_receipt_policy,
+    required_publication_source_ids,
+    required_publication_sources,
+)
 from .identity import release_tag
 from .live_acceptance import (
     LIVE_ACCEPTANCE_GATES,
@@ -185,6 +193,9 @@ __all__ = [
     "PUBLIC_BOOTSTRAP_AUTHORITY_MAX_TTL_SECONDS",
     "PUBLIC_BOOTSTRAP_FRESHNESS_DOMAIN",
     "PublishedReleaseAssets",
+    "ALL_SOURCES_POLICY",
+    "PublicationPolicyError",
+    "STABLE_PRIMARY_ONLY_POLICY",
     "PUBLIC_BOOTSTRAP_INDEX_DOCUMENT_TYPE",
     "PUBLIC_BOOTSTRAP_INDEX_FILE_NAME",
     "PUBLIC_BOOTSTRAP_INDEX_SCHEMA_VERSION",
@@ -247,6 +258,9 @@ __all__ = [
     "validate_public_bootstrap_index",
     "validate_publication_receipt",
     "validate_live_acceptance_evidence",
+    "publication_receipt_policy",
+    "required_publication_source_ids",
+    "required_publication_sources",
     "validate_direct_release_waiver",
     "build_unsigned_direct_admission",
     "canonical_direct_admission",

@@ -14,6 +14,7 @@ from ecorex.release import (
     ReleaseReplicaError,
     ReleaseReplicaReceipt,
 )
+from ecorex.release.identity import release_tag
 from ecorex.update import ReleaseChannel, ReleaseSource, SourceKind
 
 
@@ -95,17 +96,16 @@ class GitHub:
         self.published = False
 
     def ensure_draft(self, *, version, channel, release_id):
-        del version, channel, release_id
         self.order.append("github:draft")
+        tag = release_tag(version, channel, release_id=release_id)
         return GitHubReleaseDraft(
             71,
-            "v1.0.0",
+            tag,
             "https://uploads.github.com/repos/acme/ecorex/releases/71/assets{?name}",
             not self.published,
         )
 
     def ensure_asset(self, draft, path, *, expected_sha256):
-        del draft
         name = Path(path).name
         self.order.append(f"github:asset:{name}")
         return GitHubAssetReceipt(
@@ -113,7 +113,7 @@ class GitHub:
             name,
             Path(path).stat().st_size,
             expected_sha256,
-            f"https://github.com/acme/ecorex/releases/download/v1.0.0/{name}",
+            f"https://github.com/acme/ecorex/releases/download/{draft.tag_name}/{name}",
         )
 
     def publish(self, draft):
@@ -129,7 +129,13 @@ class GitHub:
         self.closed = True
 
 
-def _inputs(tmp_path: Path):
+def _inputs(tmp_path: Path, *, channel: ReleaseChannel = ReleaseChannel.STABLE):
+    release_id = (
+        RELEASE_ID
+        if channel is ReleaseChannel.STABLE
+        else "release-canary-0123456789abcdef01234567"
+    )
+    tag = release_tag("1.0.0", channel, release_id=release_id)
     names = (
         "core.zip",
         "release-manifest.json",
@@ -144,60 +150,55 @@ def _inputs(tmp_path: Path):
         files.append(path)
         digests[name] = hashlib.sha256(path.read_bytes()).hexdigest()
     manifest = SimpleNamespace(
-        release_id=RELEASE_ID,
+        release_id=release_id,
         version="1.0.0",
-        channel=ReleaseChannel.STABLE,
+        channel=channel,
         sources=(
             ReleaseSource(
                 "github-cn",
                 SourceKind.GITHUB_CN_MIRROR,
                 0,
-                f"https://mirror.example/releases/{RELEASE_ID}",
+                f"https://mirror.example/releases/{release_id}",
             ),
             ReleaseSource(
                 "github",
                 SourceKind.GITHUB_RELEASE,
                 1,
-                "https://github.com/acme/ecorex/releases/download/v1.0.0",
+                f"https://github.com/acme/ecorex/releases/download/{tag}",
             ),
             ReleaseSource(
                 "cdn",
                 SourceKind.ECOREX_CDN,
                 2,
-                f"https://cdn.example/releases/{RELEASE_ID}",
+                f"https://cdn.example/releases/{release_id}",
             ),
         ),
     )
     return manifest, tuple(files), digests
 
 
-def test_mirror_is_ready_before_github_and_cdn_before_publication(
+def test_stable_primary_only_publishes_the_mirror_without_fallback_credentials(
     tmp_path: Path,
 ) -> None:
     manifest, files, digests = _inputs(tmp_path)
     order: list[str] = []
     mirror = Replica("github-cn", manifest.sources[0].base_url, order)
-    github = GitHub(order)
-    cdn = Replica("cdn", manifest.sources[2].base_url, order)
-    coordinator = ReleaseAssetPublicationCoordinator(
-        mirror=mirror, github=github, cdn=cdn
-    )
+    coordinator = ReleaseAssetPublicationCoordinator(mirror=mirror)
     result = coordinator.publish(
         manifest=manifest,
         files=files,
         expected_sha256=digests,
         publish_github=True,
     )
-    assert order.index("github-cn:finalize") < order.index("github:draft")
-    assert order.index("cdn:finalize") < order.index("github:publish")
-    assert result.github_draft is False
-    assert tuple(result.source_receipts) == ("github-cn", "github", "cdn")
+    assert order[-1] == "github-cn:finalize"
+    assert not any(item.startswith("github:") or item.startswith("cdn:") for item in order)
+    assert tuple(result.source_receipts) == ("github-cn",)
     coordinator.close()
-    assert mirror.closed and github.closed and cdn.closed
+    assert mirror.closed
 
 
 def test_bad_replica_receipt_stops_before_github_publish(tmp_path: Path) -> None:
-    manifest, files, digests = _inputs(tmp_path)
+    manifest, files, digests = _inputs(tmp_path, channel=ReleaseChannel.CANARY)
     order: list[str] = []
     mirror = Replica("github-cn", manifest.sources[0].base_url, order)
     mirror.bad_url = True
@@ -220,7 +221,7 @@ def test_bad_replica_receipt_stops_before_github_publish(tmp_path: Path) -> None
 def test_read_through_mirror_is_verified_only_after_github_is_public(
     tmp_path: Path,
 ) -> None:
-    manifest, files, digests = _inputs(tmp_path)
+    manifest, files, digests = _inputs(tmp_path, channel=ReleaseChannel.CANARY)
     order: list[str] = []
     mirror = ReadThroughMirror("github-cn", manifest.sources[0].base_url, order)
     github = GitHub(order)
@@ -245,14 +246,14 @@ def test_read_through_mirror_is_verified_only_after_github_is_public(
     assert order.index("cdn:finalize") < order.index("github:publish")
     assert order.index("github:publish") < min(mirror_verifications)
     assert not any(value.startswith("github-cn:asset:") for value in order)
-    assert result.github_draft is False
+    assert github.published is True
     assert len(result.source_receipts["github-cn"]) == len(files)
 
 
 def test_read_through_mirror_refuses_a_draft_before_any_remote_mutation(
     tmp_path: Path,
 ) -> None:
-    manifest, files, digests = _inputs(tmp_path)
+    manifest, files, digests = _inputs(tmp_path, channel=ReleaseChannel.CANARY)
     order: list[str] = []
     coordinator = ReleaseAssetPublicationCoordinator(
         mirror=ReadThroughMirror(
@@ -276,7 +277,7 @@ def test_read_through_mirror_refuses_a_draft_before_any_remote_mutation(
 def test_read_through_failure_is_retryable_after_github_publication(
     tmp_path: Path,
 ) -> None:
-    manifest, files, digests = _inputs(tmp_path)
+    manifest, files, digests = _inputs(tmp_path, channel=ReleaseChannel.CANARY)
     order: list[str] = []
     mirror = ReadThroughMirror("github-cn", manifest.sources[0].base_url, order)
     mirror.failures_remaining = 1
@@ -304,7 +305,7 @@ def test_read_through_failure_is_retryable_after_github_publication(
         expected_sha256=digests,
         publish_github=True,
     )
-    assert result.github_draft is False
+    assert github.published is True
     assert order.count("github:publish") == 1
     assert len(result.source_receipts["github-cn"]) == len(files)
 
@@ -312,7 +313,7 @@ def test_read_through_failure_is_retryable_after_github_publication(
 def test_signed_source_mismatch_fails_before_first_remote_mutation(
     tmp_path: Path,
 ) -> None:
-    manifest, files, digests = _inputs(tmp_path)
+    manifest, files, digests = _inputs(tmp_path, channel=ReleaseChannel.CANARY)
     order: list[str] = []
     mirror = Replica("github-cn", manifest.sources[0].base_url, order)
     github = GitHub(order)

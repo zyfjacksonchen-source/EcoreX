@@ -186,7 +186,8 @@ def test_direct_waiver_never_represents_skipped_gates_as_passed(
     assert waiver["publication"] == {
         "status": "not-yet-published",
         "live_pointer_authorized": False,
-        "requires_three_origin_receipt": True,
+        "required_publication_policy": "stable-primary-only",
+        "required_source_ids": ["github-cn"],
         "requires_published_signed_index": True,
     }
 

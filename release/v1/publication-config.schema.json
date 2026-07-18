@@ -1,37 +1,32 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ecorex.invalid/schemas/publication-config-v1.json",
-  "title": "EcoreX multi-origin publication configuration v1",
+  "title": "EcoreX release publication configuration",
   "description": "Non-secret endpoint and environment-variable-name configuration. Bearer token values are never valid fields.",
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-    "schema_version",
-    "github",
-    "mirror",
-    "cdn"
-  ],
-  "properties": {
-    "schema_version": {
-      "const": 1
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "github", "mirror", "cdn"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "github": {"$ref": "#/$defs/github"},
+        "mirror": {"$ref": "#/$defs/mirror"},
+        "cdn": {"$ref": "#/$defs/replica"}
+      }
     },
-    "github": {
-      "$ref": "#/$defs/github"
-    },
-    "mirror": {
-      "oneOf": [
-        {
-          "$ref": "#/$defs/replica"
-        },
-        {
-          "$ref": "#/$defs/readThroughMirror"
-        }
-      ]
-    },
-    "cdn": {
-      "$ref": "#/$defs/replica"
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "mirror"],
+      "properties": {
+        "schema_version": {"const": 2},
+        "mirror": {"$ref": "#/$defs/replica"},
+        "github": {"$ref": "#/$defs/github"},
+        "cdn": {"$ref": "#/$defs/replica"}
+      }
     }
-  },
+  ],
   "$defs": {
     "environmentName": {
       "type": "string",
@@ -72,6 +67,12 @@
           "$ref": "#/$defs/environmentName"
         }
       }
+    },
+    "mirror": {
+      "oneOf": [
+        {"$ref": "#/$defs/replica"},
+        {"$ref": "#/$defs/readThroughMirror"}
+      ]
     },
     "replica": {
       "type": "object",

@@ -2,8 +2,8 @@
 """Fail closed before a direct-waiver release site can be deployed.
 
 The checked-in public site deliberately remains unpublished.  An operator must
-copy it to a staging directory, publish the immutable release to all three
-origins, generate a signed ``published`` Bootstrap index from that exact
+copy it to a staging directory, publish the immutable release to the required
+channel source set, generate a signed ``published`` Bootstrap index from that exact
 publication receipt, and pass this checker.  Therefore neither an unsigned
 Candidate nor the repository's unpublished placeholder can reach the site.
 """

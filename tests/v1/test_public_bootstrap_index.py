@@ -194,9 +194,7 @@ def test_public_index_is_only_a_three_target_discovery_hint(tmp_path: Path) -> N
         ("bootstrap-macos-x64", "macos", "x64"),
     ]
     assert [source["kind"] for source in release["manifest"]["sources"]] == [
-        "github-cn-mirror",
-        "github-release",
-        "ecorex-cdn",
+        "github-cn-mirror"
     ]
     assert all(
         item["sources"][0]["url"].startswith("https://mirror.example/")
@@ -441,7 +439,7 @@ def test_public_index_fails_closed_for_incomplete_or_unpublished_release(
     receipt, receipt_digest = _receipt(built)
     draft_receipt = dict(receipt)
     draft_receipt["github_draft"] = True
-    with pytest.raises(PublicBootstrapIndexError, match="public release"):
+    with pytest.raises(PublicBootstrapIndexError, match="shape|public release"):
         build_public_bootstrap_index(
             manifest=built.manifest,
             manifest_bytes=built.manifest_path.read_bytes(),

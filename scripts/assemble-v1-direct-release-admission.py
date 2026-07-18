@@ -19,7 +19,10 @@ from ecorex.control_plane.cli import (  # noqa: E402
     _bootstrap_index_evidence_token,
     _publication_evidence_token,
 )
-from ecorex.control_plane.repository import required_release_gates  # noqa: E402
+from ecorex.control_plane.repository import (  # noqa: E402
+    required_publication_gates,
+    required_release_gates,
+)
 from ecorex.release import (  # noqa: E402
     LIVE_ACCEPTANCE_GATES,
     build_unsigned_direct_admission,
@@ -34,7 +37,6 @@ from ecorex.update import ReleaseChannel, ReleaseManifest  # noqa: E402
 
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_PUBLICATION_GATES = frozenset({"github-release", "mirror-sync", "cdn-sync"})
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -106,9 +108,10 @@ def run(argv: list[str] | None = None) -> int:
         ):
             raise ValueError("direct_release_admission_identity_invalid")
         required = required_release_gates(manifest.channel)
+        publication_gates = required_publication_gates(manifest.channel)
         receipt_gates = (
             required
-            - _PUBLICATION_GATES
+            - publication_gates
             - LIVE_ACCEPTANCE_GATES
             - {"bootstrap-index"}
         )
@@ -153,7 +156,7 @@ def run(argv: list[str] | None = None) -> int:
             publication_bytes
         ).hexdigest():
             raise ValueError("direct_release_publication_receipt_invalid")
-        for gate in _PUBLICATION_GATES:
+        for gate in publication_gates:
             gates[gate] = {"status": "passed", "evidence": publication_token}
         waiver_token = "operator-waiver:sha256:" + hashlib.sha256(
             waiver_bytes

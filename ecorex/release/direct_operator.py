@@ -20,6 +20,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from ecorex.update import ReleaseChannel, ReleaseManifest, SignatureEnvelope
 
 from .candidate import candidate_receipt_signing_payload
+from .publication_policy import (
+    publication_receipt_policy,
+    required_publication_source_ids,
+)
 from .signing import ReleaseSigner, sign_envelope
 
 
@@ -49,7 +53,7 @@ _VERIFIED_REQUIREMENTS: Mapping[str, str] = {
     "stage-gate-evidence": "verified-by-candidate",
     "signed-manifest-and-artifacts": "verified-by-candidate",
     "independent-release-and-publication-keys": "required",
-    "three-origin-publication-before-live-pointer": "required",
+    "required-publication-before-live-pointer": "required",
 }
 
 
@@ -191,7 +195,10 @@ def build_direct_release_waiver(
         "publication": {
             "status": "not-yet-published",
             "live_pointer_authorized": False,
-            "requires_three_origin_receipt": True,
+            "required_publication_policy": publication_receipt_policy(manifest),
+            "required_source_ids": list(
+                sorted(required_publication_source_ids(manifest))
+            ),
             "requires_published_signed_index": True,
         },
         "signing": {
@@ -299,7 +306,10 @@ def validate_direct_release_waiver(
     if root.get("publication") != {
         "status": "not-yet-published",
         "live_pointer_authorized": False,
-        "requires_three_origin_receipt": True,
+        "required_publication_policy": publication_receipt_policy(expected_manifest),
+        "required_source_ids": list(
+            sorted(required_publication_source_ids(expected_manifest))
+        ),
         "requires_published_signed_index": True,
     }:
         raise DirectReleaseWaiverError("direct_release_waiver_publication_invalid")
