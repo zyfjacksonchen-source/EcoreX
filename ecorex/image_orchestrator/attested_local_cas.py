@@ -178,13 +178,26 @@ class AttestedLocalImageContentStore:
                 except AttestedLocalCASError as cas_error:
                     raise ImageResultRejected(cas_error.code) from None
                 result = _infer_result(payload, self.max_bytes, sha256)
-                self._write_metadata(
-                    result,
-                    (),
-                    state="active",
-                    expected_version=None,
-                )
-                repaired += 1
+                try:
+                    self._write_metadata(
+                        result,
+                        (),
+                        state="active",
+                        expected_version=None,
+                    )
+                    repaired += 1
+                except ImageResultRejected as conflict:
+                    if str(conflict) != "attested_local_cas_record_conflict":
+                        raise
+                    # Two independently restarting processes can discover the
+                    # same valid orphan before either publishes its metadata.
+                    # The create-if-absent winner is authoritative; the loser
+                    # converges by validating that exact committed result.
+                    current = self._read_metadata(sha256)
+                    if current.result != result or current.state != "active":
+                        raise ImageResultRejected(
+                            "attested Image CAS metadata conflicts with content"
+                        ) from None
                 continue
             if metadata.state == "deleting" and self.reconcile_deletion(sha256):
                 deleted += 1

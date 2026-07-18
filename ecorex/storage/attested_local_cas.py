@@ -629,16 +629,10 @@ class AttestedEncryptedLocalCAS:
     def health_probe(self, *, write_probe: bool, deep: bool = False) -> Mapping[str, object]:
         observation = self.volume.validate()
         probe_digest: str | None = None
-        if write_probe:
-            payload = b"ecorex-local-cas-health-v1\0" + secrets.token_bytes(32)
-            stored = self.put(payload)
-            probe_digest = stored.sha256
-            if self.read(stored.sha256) != payload or not self.delete(
-                stored.sha256, expected_size=len(payload)
-            ):
-                raise AttestedLocalCASError("attested_local_cas_health_probe_failed")
         with self.volume.locked():
             self._cleanup_temporary_files_locked()
+            if write_probe:
+                probe_digest = self._write_probe_locked()
             used, blobs, records = self._usage_locked(deep=deep)
             free = shutil.disk_usage(self.volume.cas_root).free
         if free < self.volume.minimum_free_bytes:
@@ -662,6 +656,54 @@ class AttestedEncryptedLocalCAS:
             "record_count": records,
             "write_probe_sha256": probe_digest,
         }
+
+    def _write_probe_locked(self) -> str:
+        """Exercise one real shard without publishing a business blob.
+
+        Image recovery treats every published digest as domain content.  A
+        health sentinel must therefore remain an attempt file for its entire
+        lifetime, while the volume-wide lock keeps recovery and enumeration
+        outside the create/read/delete window.  The ordinary attempt cleanup
+        removes the file after a crash.
+        """
+
+        payload = b"ecorex-local-cas-health-v1\0" + secrets.token_bytes(32)
+        digest = hashlib.sha256(payload).hexdigest()
+        parent = self._blob_path(digest).parent
+        _ensure_descendants(self.blob_root, parent, self.volume.security)
+        self._require_capacity_locked(len(payload))
+        temporary = parent / f".health-{secrets.token_hex(12)}.tmp"
+        _write_temporary(temporary, payload, self.volume.security)
+        try:
+            metadata = self.volume.security.validate_file(temporary)
+            received = _read_bounded_file(
+                temporary,
+                self.max_blob_bytes,
+                "attested_local_cas_health_probe_failed",
+            )
+            current = self.volume.security.validate_file(temporary)
+            if (
+                metadata.st_size != len(payload)
+                or _file_identity(metadata) != _file_identity(current)
+                or received != payload
+                or hashlib.sha256(received).hexdigest() != digest
+            ):
+                raise AttestedLocalCASError(
+                    "attested_local_cas_health_probe_failed"
+                )
+        finally:
+            try:
+                temporary.unlink()
+                _fsync_directory(parent)
+            except FileNotFoundError:
+                raise AttestedLocalCASError(
+                    "attested_local_cas_health_probe_failed"
+                ) from None
+            except OSError:
+                raise AttestedLocalCASError(
+                    "attested_local_cas_health_probe_failed"
+                ) from None
+        return digest
 
     def _blob_path(self, sha256: str) -> Path:
         _digest(sha256)

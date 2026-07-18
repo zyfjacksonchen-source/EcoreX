@@ -593,7 +593,7 @@ def test_slot_environment_assigns_distinct_image_api_and_worker_ports(
     assert symlinks == [(release, tmp_path / "slots" / "blue" / "current")]
 
 
-def test_health_uses_image_api_endpoint_and_requires_active_worker(
+def test_final_health_rechecks_all_endpoints_and_requires_active_worker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     requested: list[str] = []
@@ -631,14 +631,48 @@ def test_health_uses_image_api_endpoint_and_requires_active_worker(
         f"http://127.0.0.1:{ports['control_plane']}/health/ready",
         f"http://127.0.0.1:{ports['gateway']}/health/ready",
         f"http://127.0.0.1:{ports['image']}/health/ready",
+        f"http://127.0.0.1:{ports['image_worker']}/health/ready",
     ]
-    assert all(str(ports["image_worker"]) not in url for url in requested)
     assert commands == [
         (
             str(spec.systemctl_binary),
             "is-active",
             "ecorex-image-worker@blue.service",
         )
+    ]
+
+
+def test_worker_health_polls_only_the_dedicated_worker_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requested: list[str] = []
+
+    class ReadyResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return b'{"status":"ready"}'
+
+    def open_ready(request, *, timeout: float):
+        assert timeout == 2.0
+        requested.append(request.full_url)
+        return ReadyResponse()
+
+    monkeypatch.setattr(deployment.urllib.request, "urlopen", open_ready)
+
+    deployment._wait_worker_health(
+        _spec(tmp_path), "green", timeout_seconds=0.1
+    )
+
+    assert requested == [
+        "http://127.0.0.1:"
+        f"{deployment.PORTS['green']['image_worker']}/health/ready"
     ]
 
 
@@ -1345,7 +1379,9 @@ def test_deploy_does_not_switch_admin_route_before_candidate_health(
     monkeypatch.setattr(deployment, "_schema_gate", lambda *_args: None)
     monkeypatch.setattr(deployment, "_systemctl", lambda *_args: None)
     monkeypatch.setattr(
-        deployment, "_wait_health", lambda *_args: events.append("candidate_healthy")
+        deployment,
+        "_start_target_services",
+        lambda *_args: events.append("candidate_healthy"),
     )
 
     def switch(*_args) -> None:
@@ -1914,6 +1950,16 @@ def test_migrating_recovery_reruns_schema_before_target_can_start(
     )
     monkeypatch.setattr(
         deployment,
+        "_wait_api_health",
+        lambda _spec, slot: events.append(("api-health", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_wait_worker_health",
+        lambda _spec, slot: events.append(("worker-health", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
         "_wait_health",
         lambda _spec, slot: events.append(("health", slot)),
     )
@@ -2126,6 +2172,16 @@ def test_source_recovery_stops_target_writer_before_starting_source(
     )
     monkeypatch.setattr(
         deployment,
+        "_wait_api_health",
+        lambda _spec, slot: events.append(("api-health", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_wait_worker_health",
+        lambda _spec, slot: events.append(("worker-health", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
         "_wait_health",
         lambda _spec, slot: events.append(("health", slot)),
     )
@@ -2154,7 +2210,13 @@ def test_source_recovery_stops_target_writer_before_starting_source(
         ("stop", tuple(reversed(deployment._slot_units("blue")))),
         ("verify", "blue"),
         ("schema", "blue"),
-        ("start", tuple(deployment._slot_units("blue"))),
+        ("start", tuple(deployment._slot_api_units("blue"))),
+        ("api-health", "blue"),
+        (
+            "start",
+            (deployment._unit(deployment.IMAGE_WORKER_SERVICE_NAME, "blue"),),
+        ),
+        ("worker-health", "blue"),
         ("health", "blue"),
         ("routes", "blue"),
         ("state", "blue"),
@@ -2192,6 +2254,16 @@ def test_target_roll_forward_stops_source_writer_then_reverifies_and_rebuilds(
     )
     monkeypatch.setattr(
         deployment,
+        "_wait_api_health",
+        lambda _spec, slot: events.append(("api-health", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_wait_worker_health",
+        lambda _spec, slot: events.append(("worker-health", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
         "_wait_health",
         lambda _spec, slot: events.append(("health", slot)),
     )
@@ -2221,7 +2293,13 @@ def test_target_roll_forward_stops_source_writer_then_reverifies_and_rebuilds(
         ("stop", tuple(reversed(deployment._slot_units("blue")))),
         ("verify", "green"),
         ("schema", "green"),
-        ("start", tuple(deployment._slot_units("green"))),
+        ("start", tuple(deployment._slot_api_units("green"))),
+        ("api-health", "green"),
+        (
+            "start",
+            (deployment._unit(deployment.IMAGE_WORKER_SERVICE_NAME, "green"),),
+        ),
+        ("worker-health", "green"),
         ("health", "green"),
         ("routes", "green"),
         ("state", "green"),
@@ -2251,7 +2329,7 @@ def test_slot_runtime_directory_is_service_group_traversable(
     assert ownership == [(directory, "root", "ecorex-cloud")]
 
 
-def test_failed_candidate_health_stops_the_restart_loop(
+def test_slot_start_is_staged_before_worker_and_rechecks_all_health(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     events: list[object] = []
@@ -2265,12 +2343,68 @@ def test_failed_candidate_health_stops_the_restart_loop(
         "_systemctl",
         lambda _spec, verb, units: events.append((verb, tuple(units))),
     )
+    monkeypatch.setattr(
+        deployment,
+        "_wait_api_health",
+        lambda _spec, slot: events.append(("api-health", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_wait_worker_health",
+        lambda _spec, slot: events.append(("worker-health", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_wait_health",
+        lambda _spec, slot: events.append(("final-health", slot)),
+    )
+
+    deployment._start_target_services(
+        _spec(tmp_path),
+        _slot_state("ecorex-cloud-v1.0.0-target", "blue"),
+    )
+
+    assert events == [
+        ("prepare", "blue"),
+        ("start", tuple(deployment._slot_api_units("blue"))),
+        ("api-health", "blue"),
+        (
+            "start",
+            (deployment._unit(deployment.IMAGE_WORKER_SERVICE_NAME, "blue"),),
+        ),
+        ("worker-health", "blue"),
+        ("final-health", "blue"),
+    ]
+
+
+def test_api_health_failure_stops_all_slot_units_without_starting_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[object] = []
+    monkeypatch.setattr(
+        deployment, "_prepare_slot_runtime_directory", lambda _slot: None
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_systemctl",
+        lambda _spec, verb, units: events.append((verb, tuple(units))),
+    )
 
     def unhealthy(_spec, slot):
-        events.append(("health", slot))
+        events.append(("api-health", slot))
         raise deployment.CloudDeployError("service_health_failed")
 
-    monkeypatch.setattr(deployment, "_wait_health", unhealthy)
+    monkeypatch.setattr(deployment, "_wait_api_health", unhealthy)
+    monkeypatch.setattr(
+        deployment,
+        "_wait_worker_health",
+        lambda *_args: pytest.fail("worker phase started after API health failure"),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_wait_health",
+        lambda *_args: pytest.fail("final phase started after API health failure"),
+    )
     with pytest.raises(deployment.CloudDeployError, match="service_health_failed"):
         deployment._start_target_services(
             _spec(tmp_path),
@@ -2279,9 +2413,59 @@ def test_failed_candidate_health_stops_the_restart_loop(
 
     units = deployment._slot_units("blue")
     assert events == [
-        ("prepare", "blue"),
-        ("start", tuple(units)),
-        ("health", "blue"),
+        ("start", tuple(deployment._slot_api_units("blue"))),
+        ("api-health", "blue"),
+        ("stop", tuple(reversed(units))),
+    ]
+
+
+@pytest.mark.parametrize("failure_stage", ("worker", "final"))
+def test_worker_or_final_health_failure_stops_all_slot_units_in_reverse_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_stage: str
+) -> None:
+    events: list[object] = []
+    monkeypatch.setattr(
+        deployment, "_prepare_slot_runtime_directory", lambda _slot: None
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_systemctl",
+        lambda _spec, verb, units: events.append((verb, tuple(units))),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_wait_api_health",
+        lambda _spec, slot: events.append(("api-health", slot)),
+    )
+
+    def worker_health(_spec, slot):
+        events.append(("worker-health", slot))
+        if failure_stage == "worker":
+            raise deployment.CloudDeployError("service_health_failed")
+
+    def final_health(_spec, slot):
+        events.append(("final-health", slot))
+        if failure_stage == "final":
+            raise deployment.CloudDeployError("service_health_failed")
+
+    monkeypatch.setattr(deployment, "_wait_worker_health", worker_health)
+    monkeypatch.setattr(deployment, "_wait_health", final_health)
+    with pytest.raises(deployment.CloudDeployError, match="service_health_failed"):
+        deployment._start_target_services(
+            _spec(tmp_path),
+            _slot_state("ecorex-cloud-v1.0.0-target", "green"),
+        )
+
+    units = deployment._slot_units("green")
+    assert events == [
+        ("start", tuple(deployment._slot_api_units("green"))),
+        ("api-health", "green"),
+        (
+            "start",
+            (deployment._unit(deployment.IMAGE_WORKER_SERVICE_NAME, "green"),),
+        ),
+        ("worker-health", "green"),
+        *((("final-health", "green"),) if failure_stage == "final" else ()),
         ("stop", tuple(reversed(units))),
     ]
 
@@ -2466,7 +2650,7 @@ def test_post_route_commit_failures_roll_forward_and_return_success(
     monkeypatch.setattr(deployment, "_verify_nginx_wiring", lambda *_args: None)
     monkeypatch.setattr(deployment, "_schema_gate", lambda *_args: None)
     monkeypatch.setattr(deployment, "_systemctl", lambda *_args: None)
-    monkeypatch.setattr(deployment, "_wait_health", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_start_target_services", lambda *_args: None)
     monkeypatch.setattr(deployment, "_switch_nginx", lambda *_args: None)
     monkeypatch.setattr(
         deployment,

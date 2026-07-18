@@ -1,14 +1,20 @@
 from __future__ import annotations
 
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import (
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+    TimeoutError as FutureTimeoutError,
+)
 import hashlib
 import json
 import os
 from pathlib import Path
 import stat
+from threading import Barrier, Event
 
 import pytest
 
+import ecorex.storage.attested_local_cas as attested_local_cas_module
 from ecorex.control_plane.share_attested_local_objects import (
     AttestedLocalShareObjectStore,
 )
@@ -233,6 +239,108 @@ def test_volume_quota_and_health_probe_cover_all_namespaces(tmp_path: Path) -> N
     assert receipt["blob_count"] == 1
 
 
+def test_image_health_probe_is_invisible_to_concurrent_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    volume, root, attestation, digest = _fixture(tmp_path)
+    api = AttestedLocalImageContentStore(
+        AttestedEncryptedLocalCAS(
+            volume, namespace="image", max_blob_bytes=1024 * 1024
+        )
+    )
+    worker = AttestedLocalImageContentStore(
+        AttestedEncryptedLocalCAS(
+            _open_volume(root, attestation, digest),
+            namespace="image",
+            max_blob_bytes=1024 * 1024,
+        )
+    )
+    probe_written = Event()
+    release_probe = Event()
+    listing_started = Event()
+    original_write = attested_local_cas_module._write_temporary
+    original_list = worker.cas.list_blob_digests
+
+    def paused_probe_write(
+        path: Path,
+        payload: bytes,
+        security: PortableSecurity,
+    ) -> None:
+        original_write(path, payload, security)
+        if path.name.startswith(".health-"):
+            probe_written.set()
+            if not release_probe.wait(5):
+                raise RuntimeError("health probe test barrier timed out")
+
+    def observed_list() -> tuple[str, ...]:
+        listing_started.set()
+        return original_list()
+
+    monkeypatch.setattr(
+        attested_local_cas_module,
+        "_write_temporary",
+        paused_probe_write,
+    )
+    monkeypatch.setattr(worker.cas, "list_blob_digests", observed_list)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        probe = pool.submit(api.health_probe, write_probe=True)
+        assert probe_written.wait(5)
+        recovery = pool.submit(worker.health_probe, write_probe=False)
+        assert listing_started.wait(5)
+        try:
+            with pytest.raises(FutureTimeoutError):
+                recovery.result(timeout=0.1)
+        finally:
+            release_probe.set()
+        assert probe.result(timeout=5)["status"] == "passed"
+        assert recovery.result(timeout=5)["status"] == "passed"
+
+    assert api.cas.list_blob_digests() == ()
+    assert not list(root.rglob(".health-*.tmp"))
+
+
+def test_crash_left_health_attempt_is_removed_before_next_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    volume, root, _attestation, _digest_value = _fixture(tmp_path)
+    cas = AttestedEncryptedLocalCAS(
+        volume, namespace="image", max_blob_bytes=1024 * 1024
+    )
+    original_write = attested_local_cas_module._write_temporary
+
+    class SimulatedProcessCrash(BaseException):
+        pass
+
+    def crash_after_write(
+        path: Path,
+        payload: bytes,
+        security: PortableSecurity,
+    ) -> None:
+        original_write(path, payload, security)
+        if path.name.startswith(".health-"):
+            raise SimulatedProcessCrash
+
+    monkeypatch.setattr(
+        attested_local_cas_module,
+        "_write_temporary",
+        crash_after_write,
+    )
+    with pytest.raises(SimulatedProcessCrash):
+        cas.health_probe(write_probe=True)
+    assert len(list(root.rglob(".health-*.tmp"))) == 1
+
+    monkeypatch.setattr(
+        attested_local_cas_module,
+        "_write_temporary",
+        original_write,
+    )
+    assert cas.health_probe(write_probe=False)["status"] == "passed"
+    assert not list(root.rglob(".health-*.tmp"))
+
+
 def test_share_api_adapter_streams_verified_bytes_without_paths(tmp_path: Path) -> None:
     volume, _root, _attestation, _digest_value = _fixture(tmp_path)
     adapter = AttestedLocalShareObjectStore(
@@ -337,3 +445,47 @@ def test_image_crash_recovery_repairs_orphan_and_finishes_tombstone(
         "reconciled_deletions": 1,
     }
     assert raw.list_blob_digests() == ()
+
+
+def test_concurrent_image_recovery_converges_on_one_orphan_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    volume, root, attestation, digest = _fixture(tmp_path)
+    raw = AttestedEncryptedLocalCAS(
+        volume, namespace="image", max_blob_bytes=1024 * 1024
+    )
+    orphan = raw.put(PNG)
+    stores = tuple(
+        AttestedLocalImageContentStore(
+            AttestedEncryptedLocalCAS(
+                _open_volume(root, attestation, digest),
+                namespace="image",
+                max_blob_bytes=1024 * 1024,
+            )
+        )
+        for _index in range(2)
+    )
+    both_ready_to_publish = Barrier(2)
+
+    for store in stores:
+        original_write = store._write_metadata  # noqa: SLF001 - concurrency fixture
+
+        def synchronized_write(
+            *args: object,
+            _write=original_write,
+            **kwargs: object,
+        ):
+            if kwargs.get("expected_version") is None:
+                both_ready_to_publish.wait(timeout=5)
+            return _write(*args, **kwargs)
+
+        monkeypatch.setattr(store, "_write_metadata", synchronized_write)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        receipts = list(pool.map(lambda store: store.recover(), stores))
+
+    assert sorted(receipt["repaired_orphans"] for receipt in receipts) == [0, 1]
+    assert {receipt["reconciled_deletions"] for receipt in receipts} == {0}
+    assert stores[0].describe(orphan.sha256).result.sha256 == orphan.sha256
+    assert raw.list_blob_digests() == (orphan.sha256,)

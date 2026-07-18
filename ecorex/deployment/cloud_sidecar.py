@@ -180,6 +180,8 @@ SERVICE_NAMES = (
     "ecorex-image-api",
     "ecorex-image-worker",
 )
+API_SERVICE_NAMES = SERVICE_NAMES[:-1]
+IMAGE_WORKER_SERVICE_NAME = SERVICE_NAMES[-1]
 LEGACY_SERVICE_NAMES = (
     "ecorex-admin-api.service",
     "ecorex-usage-panel-api.service",
@@ -2253,6 +2255,10 @@ def _slot_units(slot: str) -> list[str]:
     return [_unit(service, slot) for service in SERVICE_NAMES]
 
 
+def _slot_api_units(slot: str) -> list[str]:
+    return [_unit(service, slot) for service in API_SERVICE_NAMES]
+
+
 def _stop_target_services(
     spec: CloudDeploymentSpec, state: Mapping[str, Any] | None
 ) -> None:
@@ -2274,8 +2280,11 @@ def _start_target_services(
     slot = str(state["active_slot"])
     _prepare_slot_runtime_directory(slot)
     units = _slot_units(slot)
-    _systemctl(spec, "start", units)
     try:
+        _systemctl(spec, "start", _slot_api_units(slot))
+        _wait_api_health(spec, slot)
+        _systemctl(spec, "start", (_unit(IMAGE_WORKER_SERVICE_NAME, slot),))
+        _wait_worker_health(spec, slot)
         _wait_health(spec, slot)
     except CloudDeployError:
         # Recovery may be re-entered repeatedly. A candidate that cannot
@@ -2606,15 +2615,9 @@ def _ensure_activation_schema_ready(
     return _advance_transition_journal(effective, "schema_ready")
 
 
-def _wait_health(
-    spec: CloudDeploymentSpec, slot: str, *, timeout_seconds: float = 120.0
+def _wait_endpoints(
+    endpoints: Sequence[str], *, timeout_seconds: float
 ) -> None:
-    ports = PORTS[slot]
-    endpoints = (
-        f"http://127.0.0.1:{ports['control_plane']}/health/ready",
-        f"http://127.0.0.1:{ports['gateway']}/health/ready",
-        f"http://127.0.0.1:{ports['image']}/health/ready",
-    )
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         ready = True
@@ -2627,17 +2630,56 @@ def _wait_health(
             except Exception:
                 ready = False
         if ready:
-            _run(
-                [
-                    str(spec.systemctl_binary),
-                    "is-active",
-                    _unit("ecorex-image-worker", slot),
-                ],
-                code="image_worker_unavailable",
-            )
             return
         time.sleep(1.0)
     raise CloudDeployError("candidate_readiness_failed")
+
+
+def _slot_health_endpoints(slot: str) -> tuple[str, str, str, str]:
+    ports = PORTS[slot]
+    return (
+        f"http://127.0.0.1:{ports['control_plane']}/health/ready",
+        f"http://127.0.0.1:{ports['gateway']}/health/ready",
+        f"http://127.0.0.1:{ports['image']}/health/ready",
+        f"http://127.0.0.1:{ports['image_worker']}/health/ready",
+    )
+
+
+def _wait_api_health(
+    spec: CloudDeploymentSpec, slot: str, *, timeout_seconds: float = 120.0
+) -> None:
+    del spec
+    _wait_endpoints(
+        _slot_health_endpoints(slot)[:3],
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def _wait_worker_health(
+    spec: CloudDeploymentSpec, slot: str, *, timeout_seconds: float = 120.0
+) -> None:
+    del spec
+    _wait_endpoints(
+        _slot_health_endpoints(slot)[3:],
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def _wait_health(
+    spec: CloudDeploymentSpec, slot: str, *, timeout_seconds: float = 120.0
+) -> None:
+    _wait_endpoints(
+        _slot_health_endpoints(slot),
+        timeout_seconds=timeout_seconds,
+    )
+    _run(
+        [
+            str(spec.systemctl_binary),
+            "is-active",
+            _unit(IMAGE_WORKER_SERVICE_NAME, slot),
+        ],
+        code="image_worker_unavailable",
+    )
 
 
 def _nginx_target(slot: str) -> Path:
@@ -3117,9 +3159,7 @@ def deploy(spec: CloudDeploymentSpec, *, confirmation: str) -> Mapping[str, Any]
             journal = _ensure_activation_schema_ready(
                 spec, journal, target_release=release
             )
-            candidate_units = _slot_units(target)
-            _systemctl(spec, "start", candidate_units)
-            _wait_health(spec, target)
+            _start_target_services(spec, receipt)
             journal = _advance_transition_journal(journal, "target_ready")
             _switch_nginx(spec, target)
             journal = _advance_transition_journal(journal, "routes_switched")
@@ -3220,8 +3260,7 @@ def rollback(spec: CloudDeploymentSpec, *, confirmation: str) -> Mapping[str, An
                         environment=_service_environment(service, str(previous_slot)),
                         timeout=600,
                     )
-                _systemctl(spec, "start", _slot_units(str(previous_slot)))
-                _wait_health(spec, str(previous_slot))
+                _start_target_services(spec, target_state)
                 journal = _advance_transition_journal(journal, "target_ready")
                 _switch_nginx(spec, str(previous_slot))
             journal = _advance_transition_journal(journal, "routes_switched")

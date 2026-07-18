@@ -6512,3 +6512,26 @@ closes each provider exactly once. Concurrent or cancelled close callers share
 the same shielded completion and cannot interrupt the underlying drain.
 Focused image configuration, provider and production-runtime coverage passes
 46 tests.
+
+The dedicated Worker listener exposed one final cross-process startup race.
+The generic CAS write probe briefly published a non-image sentinel as a normal
+business blob. A concurrent Image recovery scan could enumerate that digest
+between `put` and `delete`, reject it as an invalid orphan image, and abort
+startup; the probe then deleted the evidence, which explained why a standalone
+Worker probe and the final directory audit both passed.
+
+The write probe now remains an unpublished attempt file inside a real digest
+shard. Create, permission/identity/length/content/digest verification, delete,
+fsync, quota and usage checks all run under one volume-wide interprocess lock.
+A crash residue is covered by the existing bounded attempt cleanup. Image
+orphan recovery also converges idempotently when two processes race to publish
+the same valid metadata record, while mismatched content or state still fails
+closed.
+
+Candidate services now start in phases for deterministic readiness as well:
+Control Plane, Gateway and Image API must all return ready before the Worker
+starts; the Worker must return ready on its dedicated listener before all four
+endpoints and the unit state are rechecked. Deploy, journal recovery and
+rollback share this path, and any failure stops the complete slot in reverse
+order. The Cloud sidecar suite passes 78 tests with seven platform skips; the
+CAS/Image/Control Plane adjacency suite passes 51 tests with one platform skip.
