@@ -868,7 +868,34 @@ def _read_bounded_file(path: Path, maximum: int, code: str) -> bytes:
 
 def _ensure_directory(path: Path, security: CASFileSecurity) -> None:
     if os.path.lexists(path):
-        security.validate_directory(path)
+        try:
+            security.validate_directory(path)
+        except AttestedLocalCASError as error:
+            # mkdir and the following setgid chmod cannot be one syscall. A
+            # crash, kill or restrictive transient sandbox can therefore
+            # leave the exact empty umask-reduced directory behind. Repair
+            # only that narrow identity and shape; a non-empty, differently
+            # owned or otherwise malformed directory remains fail-closed.
+            if (
+                error.code != "attested_local_cas_directory_permission_invalid"
+                or not isinstance(security, PosixGroupCASFileSecurity)
+            ):
+                raise
+            metadata = _lstat_directory(path)
+            reduced_mode = security.directory_mode & ~0o070
+            try:
+                empty = next(path.iterdir(), None) is None
+            except OSError:
+                raise error from None
+            if (
+                metadata.st_uid != os.geteuid()
+                or metadata.st_gid != security.owner_gid
+                or stat.S_IMODE(metadata.st_mode) != reduced_mode
+                or not empty
+            ):
+                raise error
+            security.prepare_directory(path)
+            _fsync_directory(path.parent)
         return
     try:
         path.mkdir()

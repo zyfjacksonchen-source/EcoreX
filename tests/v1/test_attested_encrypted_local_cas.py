@@ -22,6 +22,8 @@ from ecorex.storage.attested_local_cas import (
     AttestedEncryptedLocalVolume,
     AttestedLocalCASError,
     MountObservation,
+    PosixGroupCASFileSecurity,
+    _ensure_directory,
 )
 
 
@@ -77,6 +79,29 @@ def _not_mount(path: Path) -> MountObservation:
 
 def _canonical(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX group-mode contract")
+def test_empty_umask_reduced_directory_is_repaired_but_content_is_not(
+    tmp_path: Path,
+) -> None:
+    security = PosixGroupCASFileSecurity(owner_gid=os.getegid())
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    empty.chmod(0o2700)
+
+    _ensure_directory(empty, security)
+    assert stat.S_IMODE(empty.stat().st_mode) == 0o2770
+
+    occupied = tmp_path / "occupied"
+    occupied.mkdir()
+    occupied.chmod(0o2700)
+    (occupied / "data").write_bytes(b"x")
+    with pytest.raises(
+        AttestedLocalCASError,
+        match="attested_local_cas_directory_permission_invalid",
+    ):
+        _ensure_directory(occupied, security)
 
 
 def _fixture(tmp_path: Path, *, quota: int = 8 * 1024 * 1024):

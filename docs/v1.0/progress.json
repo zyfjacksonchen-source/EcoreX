@@ -9,8 +9,8 @@
     "dirty_worktree_preserved": true
   },
   "current_milestone": "direct_production_publication",
-  "current_batch": "All required chat and image slots except the failing Gemini legacy proxy have passed real activation. First-recovery defects in public JSON quoting and slot-directory traversal are corrected; the new exact source must be rebuilt, the durable schema_ready journal recovered, and Web/Admin switched atomically.",
-  "last_verified_batch": "On 2026-07-18, all six environment files passed one parser. A failed blue-slot start was traced to root:root 0750 traversal, stopped without route switch, and legacy services were restored. The root:ecorex-cloud 0750 slot contract plus failed-health cleanup passed 69 Cloud sidecar tests with seven platform skips and Ruff.",
+  "current_batch": "All required chat/image slots except the failing Gemini legacy proxy have passed. First-recovery env, slot traversal and CAS sandbox/crash-window defects are corrected; the new exact source must be rebuilt, the durable schema_ready journal recovered, and Web/Admin switched atomically.",
+  "last_verified_batch": "On 2026-07-18, the exact production sandbox reduced one new CAS directory to 2700 because CAS writers had RestrictSUIDSGID. The directive is retained for Gateway and removed only from CAS writers; an empty same-identity umask-reduced directory can now be repaired safely. CAS plus sidecar suite passed 75 tests with eight platform skips and Ruff. Legacy routes/services remain active.",
   "recovery_document": "docs/v1.0/implementation-log.md",
   "verification_document": "docs/v1.0/verification-ledger.md",
   "milestones": [

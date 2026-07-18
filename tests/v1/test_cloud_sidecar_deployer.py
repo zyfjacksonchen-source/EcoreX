@@ -506,6 +506,10 @@ def test_local_cas_units_do_not_depend_on_minio_and_secrets_require_mount() -> N
         source = (root / name).read_text(encoding="utf-8")
         assert "/var/lib/ecorex/cas" in source
         assert "SupplementaryGroups=ecorex-storage" in source
+        assert "RestrictSUIDSGID=true" not in source
+        assert "setgid ecorex-storage directories" in source
+    gateway = (root / "ecorex-gateway@.service").read_text(encoding="utf-8")
+    assert "RestrictSUIDSGID=true" in gateway
     minio = (root / "minio.service").read_text(encoding="utf-8")
     assert "EnvironmentFile=/var/lib/ecorex/secrets/minio.secret.env" in minio
     assert "/etc/ecorex/cloud/secrets/" not in minio

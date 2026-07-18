@@ -29,7 +29,8 @@ ProtectControlGroups=true
 ProtectClock=true
 ProtectHostname=true
 LockPersonality=true
-RestrictSUIDSGID=true
+# The attested CAS creates setgid ecorex-storage directories so API and
+# worker processes share objects without broadening permissions.
 RestrictRealtime=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallArchitectures=native

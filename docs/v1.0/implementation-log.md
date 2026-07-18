@@ -6474,3 +6474,20 @@ also stopped before the error escapes, preventing an unattended systemd
 restart loop. The failed candidate units were stopped and the still-
 authoritative legacy Web/Admin/usage services were restored before continuing.
 The Cloud sidecar suite passes 69 tests with seven explicit platform skips.
+
+After the slot became executable, the exact production sandbox exposed a CAS
+contract conflict. The Control Plane, Image API and Image Worker must create
+setgid `ecorex-storage` descendants so independently sandboxed processes can
+share content without world access. Their unit templates nevertheless enabled
+`RestrictSUIDSGID`, causing a random health-prefix directory to stop at the
+umask-reduced `2700` state before the required `2770` chmod. The same probes
+outside systemd had passed, explaining the environment-dependent failure.
+
+`RestrictSUIDSGID` remains enabled for the Gateway, which never writes the
+shared CAS, and is removed only from the three CAS-writing units. The CAS now
+also closes the `mkdir`/permission-preparation crash window: an existing
+directory is repaired only when it is empty, owned by the current service UID,
+already in the configured storage GID and has exactly the expected
+umask-reduced mode. Any content, foreign identity or other mode still fails
+closed. The combined CAS and sidecar suite passes 75 tests with eight explicit
+platform skips.
