@@ -410,6 +410,7 @@ function turn(
   agentModelId = "ecorex-chat",
   imageModelId = "gpt-image-2",
   threadId = "thread-ga",
+  timestamp = NOW,
 ) {
   return {
     turn_id: turnId,
@@ -424,12 +425,12 @@ function turn(
       ? status
       : null,
     inherited: false,
-    created_at: NOW,
-    updated_at: NOW,
+    created_at: timestamp,
+    updated_at: timestamp,
   };
 }
 
-function item(itemId, turnId, role, text, threadId = "thread-ga") {
+function item(itemId, turnId, role, text, threadId = "thread-ga", timestamp = NOW) {
   return {
     item_id: itemId,
     thread_id: threadId,
@@ -438,8 +439,8 @@ function item(itemId, turnId, role, text, threadId = "thread-ga") {
     status: "completed",
     content: { role, text },
     inherited: false,
-    created_at: NOW,
-    updated_at: NOW,
+    created_at: timestamp,
+    updated_at: timestamp,
   };
 }
 
@@ -1427,6 +1428,7 @@ function scheduleTurnCompletion(state, activeTurn, selectedModel) {
     }
     activeTurn.status = "completed";
     activeTurn.terminal_reason = "completed";
+    activeTurn.updated_at = new Date().toISOString();
     emit(state, envelope(state, "turn.status_changed", {
       turnId: activeTurn.turn_id,
       payload: { from: "model_requested", to: "completed", reason: "completed" },
@@ -2031,15 +2033,25 @@ async function handleApi(holder, req, res, url) {
     if (!state.authenticated) return apiError(res, 401, "managed_session_unavailable", "Managed login is required");
     const request = await body(req);
     if (!state.projection) return apiError(res, 404, "thread_not_found", "Thread not found");
+    const acceptedAt = new Date().toISOString();
     const activeTurn = turn(
       `turn-ga-${state.projection.turns.length + 1}`,
       "model_requested",
       String(request.input ?? ""),
       String(request.agent_model_id ?? ""),
       request.image_model_id == null ? null : String(request.image_model_id),
+      "thread-ga",
+      acceptedAt,
     );
     activeTurn.client_message_id = String(request.client_message_id ?? activeTurn.client_message_id);
-    const userItem = item(`item-user-${state.projection.items.length + 1}`, activeTurn.turn_id, "user", activeTurn.input);
+    const userItem = item(
+      `item-user-${state.projection.items.length + 1}`,
+      activeTurn.turn_id,
+      "user",
+      activeTurn.input,
+      "thread-ga",
+      acceptedAt,
+    );
     state.projection.turns.push(activeTurn);
     state.projection.items.push(userItem);
     scheduleTurnCompletion(

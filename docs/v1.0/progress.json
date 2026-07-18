@@ -9,8 +9,8 @@
     "dirty_worktree_preserved": true
   },
   "current_milestone": "direct_production_publication",
-  "current_batch": "PR run 29526376684 passed all five jobs and PR #12 merged as exact main de70b480. Exact-main Stage 29526938093 then failed safely before artifacts. The correction branch now closes macOS raw-header lifetime, Windows PEP 668 Stage isolation, canonical CDN URL mapping, dynamic dual-key Bootstrap pointer continuity, and journal-owned v0.2.9.2 Admin/identity migration. Live old production remains active; the failed Stage is not reusable.",
-  "last_verified_batch": "Evidence on 2026-07-17: exact Node 22.23.1 Web 180/180; exact Python 3.11.9 combined release/cloud/migration/pointer suite 193 passed with 12 platform skips; complete Candidate/CDN/public boundary 40 passed. A fresh Stage venv installed all 53 locked packages. Independent review found no P0/P1/P2 after stable pointer seed plus pre-route-retire revalidation, canonical unpublished fallback for the current 404 site, and public-to-private CDN channel mapping. Live gates remain WAIVED. A new protected PR matrix, merge and wholly new exact-main Stage remain mandatory before signing or deployment.",
+  "current_batch": "On 2026-07-18 the product owner superseded the temporary protected-Stage deferral with an explicit instruction to deploy after verification. Release work is resumed through the repository's controlled v1 direct-admission/publication boundary. No prior failed Stage artifact may be reused; production remains unchanged until an authenticated deployment path completes and readback succeeds.",
+  "last_verified_batch": "Local evidence: exact Node 22.23.1 Web 180/180; exact Python 3.11.9 combined release/cloud/migration/pointer suite 193 passed with 12 platform skips; complete Candidate/CDN/public boundary 40 passed. On branch codex/fix-ga-turn-duration, local GA mock-server coverage was corrected so newly accepted and terminal turns use live timestamps; npm build and the 10-test mock-server suite passed. Deployment authorization was explicitly restored after the temporary deferral; no Stage, signing, deployment, or release activation has yet been claimed as complete.",
   "recovery_document": "docs/v1.0/implementation-log.md",
   "verification_document": "docs/v1.0/verification-ledger.md",
   "milestones": [
@@ -23,12 +23,9 @@
     {"id": "migration_ga_gates", "status": "in_progress"}
   ],
   "remaining_local_work": [
-    "commit and push the reviewed Stage/CDN/pointer/migration correction without touching the user-owned .artifacts tree",
-    "run a new protected PR matrix, merge the correction to main and reject all failed-run artifacts",
-    "run one exact-main Windows/macOS platform stage, assemble the single Web build and produce signed client receipts",
-    "build the exact-main Linux aarch64 cloud artifact, sign it with the Windows DPAPI release key and attach/verify it on Linux",
-    "perform commit-mode v0.2.9.2 migration, deploy the cloud slot, publish GitHub/CDN/ghproxy bytes, activate Bootstrap/direct rollout, then atomically switch and read back Web/Admin",
-    "run final HTTP, installer/update and in-app Browser validation against the live signed v1 deployment"
+    "commit and push the verified local correction and release-record update without touching the user-owned .artifacts tree",
+    "use the repository's controlled direct-admission or normal Candidate path; reject every previously failed Stage artifact and never treat waived live checks as passed",
+    "publish, activate, and read back Web/Admin only after the authenticated release authority accepts the exact immutable release evidence"
   ],
   "external_blockers": [
     "historical public-HTTP OpenAI/Gemini/Image credentials require administrator rotation before those provider revisions can be activated; they remain disabled and rotation_required",

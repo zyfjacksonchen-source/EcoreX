@@ -311,6 +311,34 @@ test("GA frame reload preserves one browser session while a fresh session resets
   assert.equal(reset.items[0].pinned, false);
 });
 
+test("GA-created turns use live acceptance and terminal timestamps", async (context) => {
+  const harness = await createGaMockServer({ scenario: "artifact" });
+  context.after(() => harness.close());
+
+  const acceptedAfter = Date.now();
+  const created = await fetch(`${harness.url}/api/v1/threads/thread-ga/turns`, {
+    method: "POST",
+    headers: MUTATION_HEADERS,
+    body: JSON.stringify({
+      input: "整理当前周报",
+      agent_model_id: "ecorex-chat",
+      image_model_id: "gpt-image-2",
+      client_message_id: "duration-live-clock-ga",
+      metadata: {},
+    }),
+  }).then((response) => response.json());
+  assert.ok(Date.parse(created.turn.created_at) >= acceptedAfter);
+
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  const projection = await fetch(
+    `${harness.url}/api/v1/threads/thread-ga/projection`,
+  ).then((response) => response.json());
+  const completed = projection.turns.find((turn) => turn.turn_id === created.turn.turn_id);
+  assert.equal(completed.status, "completed");
+  const elapsed = Date.parse(completed.updated_at) - Date.parse(completed.created_at);
+  assert.ok(elapsed >= 0 && elapsed < 5_000, `unexpected fixture duration: ${elapsed}`);
+});
+
 test("GA task-switch scenario serves independent projections and preserves missing-task 404", async (context) => {
   const harness = await createGaMockServer({ scenario: "thread-switch" });
   context.after(() => harness.close());

@@ -6370,3 +6370,25 @@ generation now reuses that policy and its bounded text-contract scope while
 preserving streaming hashes and stable-file identity checks. Actual secrets in
 text contracts remain rejected; token-shaped Mach-O/native bytes no longer
 produce a false credential result. The failed run remains quarantined.
+
+## 2026-07-18 - Product-owner release-chain deferral
+
+The product owner explicitly directed EcoreX to skip the current protected
+PR/Stage/signing/publication loop after it had consumed disproportionate time.
+This was a temporary workflow decision, not a Stage pass and not a release
+exception that permits publication. It was superseded later in the same
+operator session by an explicit instruction to deploy after verification. The
+resumed path must still use the repository's controlled direct-admission or
+normal Candidate authority; it may not reuse a failed Stage artifact or turn a
+waived live check into a passed check.
+
+The local branch at this checkpoint is `codex/fix-ga-turn-duration`.
+`bbea1da9` corrects the GA mock server so user-accepted and terminal Turn
+timestamps are live rather than a historical fixture time, preventing an
+acceptance-only elapsed-time inflation. The user-owned `.artifacts/` tree
+remains untracked and untouched.
+
+The resumption authorization does not by itself prove any remote mutation.
+Production remains unchanged until the authenticated release authority accepts
+the exact immutable release evidence and the post-activation Web/Admin readback
+succeeds.

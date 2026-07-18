@@ -2446,3 +2446,14 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Root cause | 0 | The stager supply-chain gate uses the shared path-aware secret policy and had passed the same final tree. Receipt generation instead applied raw token regexes to every opaque native byte stream, so signed Mach-O/runtime bytes could be classified as credentials even though the source-owned policy intentionally scans only bounded text contracts. |
 | Policy correction | 0 local contract | Stage receipt hashing now uses the same centralized `detect_secret` policy and the same 4 MiB text-contract bound as the attested stager supply-chain gate. Hashing, identity checks and size limits remain streaming and unchanged; real secret shapes in text contracts still fail closed. A macOS opaque-native regression fixture proves token-shaped binary bytes are not treated as credentials. |
 | Promotion | pending | Protected PR/main verification and a wholly new same-run Stage are required. No output from `29619611874` may be reused. |
+
+## Local WebUI regression and deployment resumption - 2026-07-18
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| JSON and tracked-diff record validation | 0 | `python -m json.tool docs/v1.0/progress.json` and `git diff --check -- docs/v1.0/progress.json docs/v1.0/implementation-log.md` passed. The current operator instruction supersedes the temporary release deferral but does not change the fact that prior failed Stage outputs are quarantined. |
+| WebUI type contract | 0 | `npm run typecheck` passed after generated Runtime contract verification. |
+| WebUI product regression | 0 | `npm run test:v1` passed 182/182, including the live Turn timestamp regression, first-turn terminal cleanup, persistent reasoning, model selection, artifact/retouch, extension, share and interaction contracts. |
+| Content-addressed production Web build | 0 | `npm run build` passed: 25 production assets, 24 chunks, 459.76 KiB initial JS / 146.20 KiB gzip and 136.30 KiB deferred / 49.78 KiB gzip. |
+| Full v1 Runtime suite on this workstation | incomplete, not a product failure | Initial collection found the local `.venv` lacked the lock-required `Pillow`; the verified `cloud` profile was installed after restoring the environment's missing pip bootstrap. The rerun then exceeded the local command host's 120-second ceiling and was terminated by that host. Protected CI remains the full-suite authority. |
+| Release authority | pending | The product owner explicitly restored authorization to deploy after verification. Commit/push, immutable-main CI and the authenticated controlled release path remain required before any online success claim. |
