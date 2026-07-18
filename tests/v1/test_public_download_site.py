@@ -144,6 +144,23 @@ const source = await readFile(sourcePath, "utf8");
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
 const contract = await import(moduleUrl);
 
+const windowsCommand = contract.terminalCommand({
+  platform: "windows",
+  sha256: "a".repeat(64),
+  sources: [{ url: "https://mirror.example/EcoreX.zip" }],
+});
+assert.match(windowsCommand, /Invoke-WebRequest/);
+assert.match(windowsCommand, /Get-FileHash/);
+assert.match(windowsCommand, /ecorex-bootstrap\.exe/);
+const macCommand = contract.terminalCommand({
+  platform: "macos",
+  sha256: "b".repeat(64),
+  sources: [{ url: "https://mirror.example/EcoreX.zip" }],
+});
+assert.match(macCommand, /curl -fL/);
+assert.match(macCommand, /shasum -a 256 -c/);
+assert.match(macCommand, /ecorex-bootstrap/);
+
 const oneSource = contract.sourceList(
   [
     {

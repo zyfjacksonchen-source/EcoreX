@@ -451,6 +451,67 @@ function cardCopy(artifact) {
   return ["Mac", "macOS Intel", "Intel Mac 的签名 Bootstrap。"];
 }
 
+function powershellLiteral(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+function shellLiteral(value) {
+  return `'${String(value).replaceAll("'", `'\"'\"'`)}'`;
+}
+
+export function terminalCommand(artifact) {
+  const sourceUrl = artifact.sources[0].url;
+  if (artifact.platform === "windows") {
+    return [
+      "$d=Join-Path $env:TEMP ('EcoreX-'+[guid]::NewGuid())",
+      "New-Item -ItemType Directory -Path $d | Out-Null",
+      "$z=Join-Path $d 'EcoreX.zip'",
+      `Invoke-WebRequest -UseBasicParsing -Uri ${powershellLiteral(sourceUrl)} -OutFile $z`,
+      `if ((Get-FileHash $z -Algorithm SHA256).Hash.ToLowerInvariant() -ne ${powershellLiteral(artifact.sha256)}) { throw 'EcoreX 下载校验失败' }`,
+      "Expand-Archive -LiteralPath $z -DestinationPath $d",
+      "& (Join-Path $d 'bin\\ecorex-bootstrap.exe')",
+    ].join("; ");
+  }
+  const url = shellLiteral(sourceUrl);
+  const digest = shellLiteral(artifact.sha256);
+  return [
+    'd="$(mktemp -d)"',
+    'z="$d/EcoreX.zip"',
+    `curl -fL --retry 8 --retry-all-errors -o "$z" ${url}`,
+    `printf '%s  %s\\n' ${digest} "$z" | shasum -a 256 -c -`,
+    'ditto -x -k "$z" "$d"',
+    'chmod +x "$d/bin/ecorex-bootstrap"',
+    '"$d/bin/ecorex-bootstrap"',
+  ].join(" && ");
+}
+
+function appendTerminalCommand(article, artifact) {
+  const block = createElement("div", "command-block");
+  block.append(createElement(
+    "span",
+    "",
+    artifact.platform === "windows" ? "PowerShell 一键安装" : "终端一键安装",
+  ));
+  const command = terminalCommand(artifact);
+  block.append(createElement("code", "", command));
+  const copy = createElement("button", "", "复制命令");
+  copy.type = "button";
+  copy.addEventListener("click", async () => {
+    const original = copy.textContent;
+    try {
+      await navigator.clipboard.writeText(command);
+      copy.textContent = "已复制";
+    } catch {
+      copy.textContent = "复制失败";
+    }
+    window.setTimeout(() => {
+      copy.textContent = original;
+    }, 1600);
+  });
+  block.append(copy);
+  article.append(block);
+}
+
 function renderArtifactCard(grid, release, artifact, recommended) {
   const [icon, title, body] = cardCopy(artifact);
   const article = createElement("article", `download-card${recommended ? " is-recommended" : ""}`);
@@ -473,6 +534,7 @@ function renderArtifactCard(grid, release, artifact, recommended) {
   primary.rel = "noopener noreferrer";
   primary.download = artifact.fileName;
   article.append(primary);
+  appendTerminalCommand(article, artifact);
 
   if (artifact.sources.length > 1) {
     const details = createElement("details", "source-fallbacks");
@@ -580,11 +642,21 @@ if (typeof document !== "undefined") {
     setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
   });
   loadIndex()
-    .then(async (index) => {
-      const manifestCheck = index.status === "published"
-        ? await verifyManifestBytes(index.release.manifest)
-        : null;
-      renderIndex(index, manifestCheck);
+    .then((index) => {
+      // Discovery must remain usable when a release origin does not grant
+      // browser CORS. The downloaded Bootstrap is the signature authority.
+      renderIndex(index, null);
+      if (index.status === "published") {
+        verifyManifestBytes(index.release.manifest)
+          .then((manifestCheck) => {
+            const node = document.querySelector("[data-manifest-check]");
+            if (node) node.textContent = `字节摘要已核对（${manifestCheck.kind}）`;
+          })
+          .catch(() => {
+            const node = document.querySelector("[data-manifest-check]");
+            if (node) node.textContent = "由 Bootstrap 验签";
+          });
+      }
     })
     .catch(renderFailure);
 }
