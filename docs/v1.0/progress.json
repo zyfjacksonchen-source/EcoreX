@@ -9,8 +9,8 @@
     "dirty_worktree_preserved": true
   },
   "current_milestone": "direct_production_publication",
-  "current_batch": "All required chat/image slots except the failing Gemini legacy proxy have passed. CAS is production-clean. Dedicated Worker ports, provider draining, unpublished atomic CAS probes and phased candidate readiness are verified; durable schema_ready recovery, exact artifact activation and atomic Web/Admin switch remain.",
-  "last_verified_batch": "On 2026-07-18, the transient Image CAS probe-orphan race was deterministically reproduced and removed. Probe bytes are never published as business digests, concurrent orphan repair is idempotent, and candidate startup requires four ready endpoints. Cloud sidecar passed 78 tests/seven skips; CAS/Image/Control Plane adjacency passed 51/one skip; Ruff passed.",
+  "current_batch": "The first exact v1 activation is healthy in production. Release-root publication and cross-commit compensation defects found by the replacement candidate are fixed and locally verified; a new exact signed candidate, public Web/Admin switch and browser acceptance remain.",
+  "last_verified_batch": "On 2026-07-18, production was restored to a healthy four-service v1 release after a pre-route-switch replacement-candidate failure. Transport now publishes complete release roots as 0555 and recovery validates each release against its own signed source commit. Cloud sidecar and artifact-builder coverage passed 91 tests/16 skips; Ruff and diff validation passed.",
   "recovery_document": "docs/v1.0/implementation-log.md",
   "verification_document": "docs/v1.0/verification-ledger.md",
   "milestones": [
@@ -23,9 +23,9 @@
     {"id": "migration_ga_gates", "status": "in_progress"}
   ],
   "remaining_local_work": [
-    "commit and push the verified CAS probe and phased-readiness corrections without touching the user-owned .artifacts tree",
-    "build and sign one exact replacement Cloud artifact, then revalidate both Image 2 slots through the audited repository workflow",
-    "recover the committed first-activation journal, perform the atomic Web/Admin route switch, and complete external plus browser readback"
+    "commit and push the verified release-root and cross-commit recovery corrections without touching the user-owned .artifacts tree",
+    "build, sign and activate one exact replacement Cloud artifact from that commit",
+    "atomically publish the matching WebUI and Admin bytes, then complete external and browser readback"
   ],
   "external_blockers": [
     "Gemini's retained legacy proxy currently returns HTTP 502 and must remain inactive unless a later real probe passes",

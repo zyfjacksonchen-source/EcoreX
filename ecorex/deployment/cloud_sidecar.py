@@ -1265,20 +1265,85 @@ def _atomic_symlink(target: Path, link: Path) -> None:
     os.replace(temporary, link)
 
 
+_RELEASE_DIRECTORY_MODE = 0o555
+_RECOVERABLE_RELEASE_DIRECTORY_MODES = frozenset(
+    {_RELEASE_DIRECTORY_MODE, 0o700, 0o755}
+)
+
+
+def _release_directory_identity(path: Path) -> tuple[int, int]:
+    try:
+        metadata = path.lstat()
+        resolved = path.resolve(strict=True)
+    except OSError:
+        raise CloudDeployError("release_directory_invalid") from None
+    if (
+        path.is_symlink()
+        or not stat.S_ISDIR(metadata.st_mode)
+        or resolved != path
+        or metadata.st_uid != 0
+        or metadata.st_gid != 0
+    ):
+        raise CloudDeployError("release_directory_identity_invalid")
+    if (
+        stat.S_IMODE(metadata.st_mode)
+        not in _RECOVERABLE_RELEASE_DIRECTORY_MODES
+    ):
+        raise CloudDeployError("release_directory_mode_invalid")
+    return metadata.st_dev, metadata.st_ino
+
+
+def _seal_release_directory(path: Path, identity: tuple[int, int]) -> None:
+    try:
+        metadata = path.lstat()
+        if (
+            path.is_symlink()
+            or not stat.S_ISDIR(metadata.st_mode)
+            or (metadata.st_dev, metadata.st_ino) != identity
+            or metadata.st_uid != 0
+            or metadata.st_gid != 0
+            or stat.S_IMODE(metadata.st_mode)
+            not in _RECOVERABLE_RELEASE_DIRECTORY_MODES
+        ):
+            raise OSError
+        if stat.S_IMODE(metadata.st_mode) != _RELEASE_DIRECTORY_MODE:
+            path.chmod(_RELEASE_DIRECTORY_MODE)
+        sealed = path.lstat()
+        if (
+            path.is_symlink()
+            or not stat.S_ISDIR(sealed.st_mode)
+            or (sealed.st_dev, sealed.st_ino) != identity
+            or sealed.st_uid != 0
+            or sealed.st_gid != 0
+            or stat.S_IMODE(sealed.st_mode) != _RELEASE_DIRECTORY_MODE
+        ):
+            raise OSError
+    except OSError:
+        raise CloudDeployError("release_directory_seal_failed") from None
+
+
 def _install_release(spec: CloudDeploymentSpec, manifest: Mapping[str, Any]) -> Path:
+    del manifest
     destination = RELEASE_ROOT / spec.release_id
-    if destination.exists():
+    if destination.exists() or destination.is_symlink():
+        identity = _release_directory_identity(destination)
         staged_spec = dataclasses.replace(spec, artifact_root=destination)
         _validate_artifact(staged_spec)
+        _seal_release_directory(destination, identity)
         return destination
     temporary = RELEASE_ROOT / f".{spec.release_id}.staging-{os.getpid()}"
-    if temporary.exists():
+    if temporary.exists() or temporary.is_symlink():
         raise CloudDeployError("release_staging_collision")
     RELEASE_ROOT.mkdir(parents=True, exist_ok=True, mode=0o755)
     try:
         shutil.copytree(spec.artifact_root, temporary, symlinks=False)
+        identity = _release_directory_identity(temporary)
         staged_spec = dataclasses.replace(spec, artifact_root=temporary)
         _validate_artifact(staged_spec)
+        _seal_release_directory(temporary, identity)
+        # The sealed, fully verified inode is published by one atomic rename.
+        # Do not introduce a fallible post-publication step that could leave a
+        # new release visible without a completed install result.
         os.replace(temporary, destination)
     except CloudDeployError:
         shutil.rmtree(temporary, ignore_errors=True)
@@ -2874,18 +2939,29 @@ def _verify_transition_release(
     spec: CloudDeploymentSpec, state: Mapping[str, Any]
 ) -> Path:
     release = _release_for_state(state)
+    identity = _release_directory_identity(release)
     manifest = release / "cloud-release-manifest.json"
     digest = _sha256_file(manifest)
     declared = state.get("artifact_manifest_sha256")
     if declared is not None and declared != digest:
         raise CloudDeployError("artifact_manifest_digest_mismatch")
+    manifest_value = _read_json(manifest, "artifact_manifest_invalid")
+    if not isinstance(manifest_value, Mapping):
+        raise CloudDeployError("artifact_manifest_invalid")
+    source_commit = manifest_value.get("source_commit")
+    if not isinstance(source_commit, str) or re.fullmatch(
+        r"[0-9a-f]{40}", source_commit
+    ) is None:
+        raise CloudDeployError("artifact_manifest_invalid")
     staged_spec = dataclasses.replace(
         spec,
         release_id=str(state["active_release_id"]),
+        source_commit=source_commit,
         artifact_root=release,
         artifact_manifest_sha256=digest,
     )
     _validate_artifact(staged_spec)
+    _seal_release_directory(release, identity)
     _verify_staged_runtime(release)
     return release
 

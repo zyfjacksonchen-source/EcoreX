@@ -6535,3 +6535,30 @@ endpoints and the unit state are rechecked. Deploy, journal recovery and
 rollback share this path, and any failure stops the complete slot in reverse
 order. The Cloud sidecar suite passes 78 tests with seven platform skips; the
 CAS/Image/Control Plane adjacency suite passes 51 tests with one platform skip.
+
+The first exact v1 activation then completed: the durable journal cleared,
+all four blue services became active, the legacy services stopped and both
+public Control Plane and Admin routes switched to v1. Building and attempting
+the next immutable candidate exposed two v1-to-v1 release-management defects
+before its route switch. The transport kept the unpack root at private mode
+`0700`, so the installed service identity could not traverse an otherwise
+valid signed release. Compensation also validated the previous release with
+the target release's source commit, incorrectly producing
+`artifact_target_mismatch` whenever those commits differed. A one-use,
+signed, exact-release repair sealed the installed root and restored the
+previous known-good release; all four services and both v1 routes returned
+healthy, and the activation journal was absent.
+
+The product path now owns both invariants. Transport extraction remains private
+until every member has been verified, then publishes the complete root as
+root-owned `0555`. Installation and journal recovery accept only a real,
+non-link, root-owned `0555`, `0700` or `0755` directory, perform the full
+signature/digest/release validation, seal that exact inode to `0555`, and
+publish it by one atomic rename. Foreign ownership, group/other write bits,
+symlinks and unsafe modes still fail closed. Compensation reads a strict
+40-character lowercase hexadecimal source commit from the signed manifest of
+the release being restored and then revalidates that release against its own
+identity. This makes v1-to-v1 rollback independent of the candidate commit
+without weakening any signed boundary. The combined Cloud sidecar and
+artifact-builder coverage passes 91 tests with 16 platform-specific skips;
+Ruff and tracked-diff validation pass.

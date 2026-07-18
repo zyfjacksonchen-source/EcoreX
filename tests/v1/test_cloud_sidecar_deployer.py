@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
 from types import SimpleNamespace
 
@@ -170,6 +171,88 @@ def test_artifact_byte_tamper_is_rejected_before_staging(tmp_path: Path) -> None
         deployment._validate_artifact(spec)
 
 
+@pytest.mark.skipif(
+    os.name == "nt" or deployment._effective_user_id() != 0,
+    reason="requires root-owned POSIX release directories",
+)
+@pytest.mark.parametrize("source_mode", (0o700, 0o755))
+def test_install_release_seals_new_and_existing_legacy_private_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source_mode: int
+) -> None:
+    spec, source = _signed_artifact(tmp_path)
+    source.chmod(source_mode)
+    release_root = tmp_path / "installed-releases"
+    monkeypatch.setattr(deployment, "RELEASE_ROOT", release_root)
+    manifest = deployment._validate_artifact(spec)
+
+    destination = deployment._install_release(spec, manifest)
+
+    assert stat.S_IMODE(destination.lstat().st_mode) == 0o555
+    destination.chmod(0o700)
+
+    recovered = deployment._install_release(spec, manifest)
+
+    assert recovered == destination
+    assert stat.S_IMODE(destination.lstat().st_mode) == 0o555
+
+
+@pytest.mark.skipif(
+    os.name == "nt" or deployment._effective_user_id() != 0,
+    reason="requires root-owned POSIX release directories",
+)
+@pytest.mark.parametrize("malicious_state", ("symlink", "foreign", "unsafe-mode"))
+def test_install_release_rejects_malicious_existing_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    malicious_state: str,
+) -> None:
+    spec, source = _signed_artifact(tmp_path)
+    source.chmod(0o700)
+    release_root = tmp_path / "installed-releases"
+    monkeypatch.setattr(deployment, "RELEASE_ROOT", release_root)
+    manifest = deployment._validate_artifact(spec)
+    release_root.mkdir()
+    destination = release_root / spec.release_id
+    if malicious_state == "symlink":
+        destination.symlink_to(source, target_is_directory=True)
+        expected = "release_directory_identity_invalid"
+    else:
+        shutil.copytree(source, destination)
+        if malicious_state == "foreign":
+            os.chown(destination, 65534, 65534)
+            expected = "release_directory_identity_invalid"
+        else:
+            destination.chmod(0o775)
+            expected = "release_directory_mode_invalid"
+
+    with pytest.raises(deployment.CloudDeployError, match=expected):
+        deployment._install_release(spec, manifest)
+
+
+@pytest.mark.skipif(
+    os.name == "nt" or deployment._effective_user_id() != 0,
+    reason="requires root-owned POSIX release directories",
+)
+def test_existing_legacy_private_release_is_verified_before_mode_repair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec, source = _signed_artifact(tmp_path)
+    source.chmod(0o700)
+    release_root = tmp_path / "installed-releases"
+    monkeypatch.setattr(deployment, "RELEASE_ROOT", release_root)
+    manifest = deployment._validate_artifact(spec)
+    destination = deployment._install_release(spec, manifest)
+    destination.chmod(0o700)
+    (destination / "venv/bin/ecorex-image").write_bytes(b"tampered")
+
+    with pytest.raises(
+        deployment.CloudDeployError, match="artifact_file_digest_mismatch"
+    ):
+        deployment._install_release(spec, manifest)
+
+    assert stat.S_IMODE(destination.lstat().st_mode) == 0o700
+
+
 @pytest.mark.skipif(os.name == "nt", reason="Windows does not expose POSIX modes")
 def test_artifact_executable_mode_tamper_is_rejected_before_staging(
     tmp_path: Path,
@@ -194,6 +277,100 @@ def test_artifact_manifest_is_bound_to_expected_source_and_lock(tmp_path: Path) 
             deployment.dataclasses.replace(
                 spec, dependency_lock_manifest_sha256="d" * 64
             )
+        )
+
+
+def test_transition_release_uses_its_signed_source_commit_not_target_spec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec, source = _signed_artifact(tmp_path)
+    release_root = tmp_path / "releases"
+    release = release_root / spec.release_id
+    release_root.mkdir()
+    shutil.copytree(source, release)
+    monkeypatch.setattr(deployment, "RELEASE_ROOT", release_root)
+    monkeypatch.setattr(
+        deployment, "_release_directory_identity", lambda _release: (1, 1)
+    )
+    monkeypatch.setattr(
+        deployment, "_seal_release_directory", lambda _release, _identity: None
+    )
+    monkeypatch.setattr(deployment, "_verify_staged_runtime", lambda _release: None)
+    target_spec = deployment.dataclasses.replace(spec, source_commit="c" * 40)
+
+    verified = deployment._verify_transition_release(
+        target_spec,
+        {
+            "active_release_id": spec.release_id,
+            "artifact_manifest_sha256": spec.artifact_manifest_sha256,
+        },
+    )
+
+    assert verified == release
+
+
+@pytest.mark.skipif(
+    os.name == "nt" or deployment._effective_user_id() != 0,
+    reason="requires root-owned POSIX release directories",
+)
+def test_transition_recovery_repairs_verified_legacy_private_release_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec, source = _signed_artifact(tmp_path)
+    release_root = tmp_path / "releases"
+    release = release_root / spec.release_id
+    release_root.mkdir()
+    shutil.copytree(source, release)
+    release.chmod(0o700)
+    monkeypatch.setattr(deployment, "RELEASE_ROOT", release_root)
+    monkeypatch.setattr(deployment, "_verify_staged_runtime", lambda _release: None)
+
+    deployment._verify_transition_release(
+        deployment.dataclasses.replace(spec, source_commit="c" * 40),
+        {
+            "active_release_id": spec.release_id,
+            "artifact_manifest_sha256": spec.artifact_manifest_sha256,
+        },
+    )
+
+    assert stat.S_IMODE(release.lstat().st_mode) == 0o555
+
+
+@pytest.mark.parametrize("source_commit", (None, "", "A" * 40, "a" * 39, "../bad"))
+def test_transition_release_rejects_missing_or_malformed_manifest_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_commit: str | None,
+) -> None:
+    spec, source = _signed_artifact(tmp_path)
+    manifest_path = source / "cloud-release-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if source_commit is None:
+        del manifest["source_commit"]
+    else:
+        manifest["source_commit"] = source_commit
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    release_root = tmp_path / "releases"
+    release = release_root / spec.release_id
+    release_root.mkdir()
+    shutil.copytree(source, release)
+    monkeypatch.setattr(deployment, "RELEASE_ROOT", release_root)
+    monkeypatch.setattr(
+        deployment, "_release_directory_identity", lambda _release: (1, 1)
+    )
+
+    with pytest.raises(
+        deployment.CloudDeployError, match="artifact_manifest_invalid"
+    ):
+        deployment._verify_transition_release(
+            deployment.dataclasses.replace(spec, source_commit="c" * 40),
+            {
+                "active_release_id": spec.release_id,
+                "artifact_manifest_sha256": _sha(manifest_path),
+            },
         )
 
 

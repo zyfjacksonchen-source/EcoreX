@@ -57,9 +57,11 @@ def test_cloud_transport_archive_preserves_only_approved_modes(tmp_path: Path) -
     output = tmp_path / "output"
     script["_unpack"](archive, output)
 
+    assert stat.S_IMODE(output.stat().st_mode) == 0o555
     assert (output / "venv/bin/ecorex-runtime").read_bytes() == b"runtime"
     assert stat.S_IMODE((output / "venv/bin/ecorex-runtime").stat().st_mode) == 0o755
     assert stat.S_IMODE((output / "manifest.json").stat().st_mode) == 0o644
+    output.chmod(0o700)
 
 
 REQUIRED = (
