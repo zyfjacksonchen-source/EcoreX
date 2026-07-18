@@ -158,6 +158,9 @@ export interface ContextUsageProjection {
 export interface ConversationUsageProjection {
   thread_id: string;
   timezone: string;
+  scope: "account" | "local_device";
+  source: "managed_gateway" | "local_event_store";
+  complete_across_devices: boolean;
   today: TokenUsageWindow;
   week: TokenUsageWindow;
   context: ContextUsageProjection;

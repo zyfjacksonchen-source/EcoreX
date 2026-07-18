@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import jsonschema
 import pytest
 
+from ecorex import __version__
 from ecorex.control_plane.cli import run
 from ecorex.release import (
     ArtifactBuildInput,
@@ -174,12 +175,13 @@ def test_public_index_is_only_a_three_target_discovery_hint(tmp_path: Path) -> N
     assert index["status"] == "published"
     authority = index["authority"]
     assert isinstance(authority, dict)
-    assert authority["sequence"] == 1
+    expected_sequence = stable_pointer_sequence(__version__)
+    assert authority["sequence"] == expected_sequence
     assert authority["revision"] == built.manifest.release_id
     assert authority["target"] == {
         "manifest_sha256": _sha256(built.manifest_path),
         "release_id": built.manifest.release_id,
-        "version": "1.0.0",
+        "version": __version__,
         "build_digest": built.manifest.build_digest,
     }
     release = index["release"]
@@ -244,6 +246,7 @@ def test_pointer_sequence_is_deterministic_monotonic_and_signature_reproducible(
     )
     authority = signed["authority"]
     assert isinstance(authority, dict)
+    expected_sequence = stable_pointer_sequence(__version__)
     existing = SignatureEnvelope.from_dict(authority["signature"])
     freshness = signed["freshness"]
     assert isinstance(freshness, dict)
@@ -267,7 +270,7 @@ def test_pointer_sequence_is_deterministic_monotonic_and_signature_reproducible(
     assert (
         verifier.verify(
             public_bootstrap_authority_signing_bytes(
-                sequence=1,
+                sequence=expected_sequence,
                 revision=built.manifest.release_id,
                 target=target,
             ),
@@ -669,7 +672,7 @@ def test_public_index_cli_verifies_then_atomically_writes_pointer(
     assert not output.with_suffix(output.suffix + ".lock").exists()
     command_result = json.loads(capsys.readouterr().out)
     assert command_result["trust"] == "untrusted-discovery-hint"
-    assert command_result["pointer_sequence"] == 1
+    assert command_result["pointer_sequence"] == stable_pointer_sequence(__version__)
     assert command_result["pointer_revision"] == built.manifest.release_id
     assert command_result["pointer_signature_key_id"] == "release-key-2026"
     assert command_result["pointer_target"]["manifest_sha256"] == _sha256(

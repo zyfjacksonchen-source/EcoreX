@@ -74,6 +74,9 @@ PRODUCT_VERSION = __version__
 TARGET_OS_ID = "alinux"
 TARGET_OS_VERSION = "4"
 TARGET_ARCHITECTURE = "aarch64"
+_PRODUCT_SEMVER = re.compile(
+    r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$"
+)
 
 INSTALL_ROOT = Path("/opt/ecorex/cloud")
 RELEASE_ROOT = INSTALL_ROOT / "releases"
@@ -555,7 +558,19 @@ def _normalize_legacy_migration_contract(
     }
 
 
-def _validate_artifact(spec: CloudDeploymentSpec) -> Mapping[str, Any]:
+def _product_version_key(value: object) -> tuple[int, int, int]:
+    text = str(value)
+    if _PRODUCT_SEMVER.fullmatch(text) is None:
+        raise CloudDeployError("artifact_target_mismatch")
+    major, minor, patch = text.split(".")
+    return int(major), int(minor), int(patch)
+
+
+def _validate_artifact(
+    spec: CloudDeploymentSpec,
+    *,
+    historical_release: bool = False,
+) -> Mapping[str, Any]:
     manifest_path = spec.artifact_root / "cloud-release-manifest.json"
     signature_path = spec.artifact_root / "cloud-release-manifest.sig.json"
     if _sha256_file(manifest_path) != spec.artifact_manifest_sha256:
@@ -580,10 +595,16 @@ def _validate_artifact(spec: CloudDeploymentSpec) -> Mapping[str, Any]:
         "files",
     }:
         raise CloudDeployError("artifact_manifest_invalid")
+    version = manifest.get("version")
+    version_matches = (
+        _product_version_key(version) <= _product_version_key(PRODUCT_VERSION)
+        if historical_release
+        else version == PRODUCT_VERSION
+    )
     if (
         manifest.get("schema_version") != SCHEMA_VERSION
         or manifest.get("release_id") != spec.release_id
-        or manifest.get("version") != PRODUCT_VERSION
+        or not version_matches
         or manifest.get("platform") != "linux"
         or manifest.get("architecture") != TARGET_ARCHITECTURE
         or manifest.get("python_version") != PYTHON_VERSION
@@ -1737,16 +1758,27 @@ def _prepare_release_replica_storage() -> None:
         )
     except CloudDeployError:
         raise CloudDeployError("release_replica_configuration_invalid") from None
-    namespace = environment.get("ECOREX_CP_RELEASE_REPLICA_NAMESPACE", "")
+    base_namespace = environment.get("ECOREX_CP_RELEASE_REPLICA_NAMESPACE", "")
+    base_product_version = environment.get(
+        "ECOREX_CP_RELEASE_REPLICA_PRODUCT_VERSION", ""
+    )
+    namespace = f"v{PRODUCT_VERSION}"
+    try:
+        base_version_is_compatible = (
+            _product_version_key(base_product_version)
+            <= _product_version_key(PRODUCT_VERSION)
+        )
+    except CloudDeployError:
+        base_version_is_compatible = False
     if (
         environment.get("ECOREX_CP_RELEASE_REPLICA_ENABLED") != "true"
         or environment.get("ECOREX_CP_RELEASE_REPLICA_STORAGE_ROOT")
         != str(RELEASE_REPLICA_ROOT)
         or environment.get("ECOREX_CP_RELEASE_REPLICA_PUBLIC_ROOT")
         != RELEASE_REPLICA_PUBLIC_ROOT
-        or environment.get("ECOREX_CP_RELEASE_REPLICA_PRODUCT_VERSION")
-        != PRODUCT_VERSION
-        or namespace != f"v{PRODUCT_VERSION}"
+        or not base_version_is_compatible
+        or base_namespace != f"v{base_product_version}"
+        or RELEASE_NAMESPACE.fullmatch(base_namespace) is None
         or RELEASE_NAMESPACE.fullmatch(namespace) is None
     ):
         raise CloudDeployError("release_replica_configuration_invalid")
@@ -2132,6 +2164,8 @@ def _write_slot_environment(slot: str, release: Path) -> None:
             "ECOREX_CP_BIND_HOST": "127.0.0.1",
             "ECOREX_CP_BIND_PORT": str(ports["control_plane"]),
             "ECOREX_CP_INSTANCE_ID": f"ecorex-cloud-{slot}",
+            "ECOREX_CP_RELEASE_REPLICA_NAMESPACE": f"v{PRODUCT_VERSION}",
+            "ECOREX_CP_RELEASE_REPLICA_PRODUCT_VERSION": PRODUCT_VERSION,
         },
         "gateway": {
             "ECOREX_GATEWAY_BIND_HOST": "127.0.0.1",
@@ -2949,18 +2983,28 @@ def _verify_transition_release(
     if not isinstance(manifest_value, Mapping):
         raise CloudDeployError("artifact_manifest_invalid")
     source_commit = manifest_value.get("source_commit")
+    dependency_lock_manifest_sha256 = manifest_value.get(
+        "dependency_lock_manifest_sha256"
+    )
     if not isinstance(source_commit, str) or re.fullmatch(
         r"[0-9a-f]{40}", source_commit
     ) is None:
         raise CloudDeployError("artifact_manifest_invalid")
+    if (
+        not isinstance(dependency_lock_manifest_sha256, str)
+        or SHA256.fullmatch(dependency_lock_manifest_sha256) is None
+    ):
+        raise CloudDeployError("artifact_manifest_invalid")
+    _product_version_key(manifest_value.get("version"))
     staged_spec = dataclasses.replace(
         spec,
         release_id=str(state["active_release_id"]),
         source_commit=source_commit,
+        dependency_lock_manifest_sha256=dependency_lock_manifest_sha256,
         artifact_root=release,
         artifact_manifest_sha256=digest,
     )
-    _validate_artifact(staged_spec)
+    _validate_artifact(staged_spec, historical_release=True)
     _seal_release_directory(release, identity)
     _verify_staged_runtime(release)
     return release

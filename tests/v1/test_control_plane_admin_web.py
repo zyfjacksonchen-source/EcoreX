@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 import pytest
 
+from ecorex import __version__
 from ecorex.control_plane.admin_web import (
     AdminResumeAdapter,
     AdminResumeFacts,
@@ -81,7 +82,7 @@ def test_admin_web_is_content_addressed_allowlisted_and_security_headered() -> N
         assert page.headers["x-content-type-options"] == "nosniff"
         assert page.headers["x-frame-options"] == "DENY"
         assert page.headers["referrer-policy"] == "no-referrer"
-        assert page.headers["x-ecorex-product-version"] == "1.0.0"
+        assert page.headers["x-ecorex-product-version"] == __version__
         csp = page.headers["content-security-policy"]
         assert "default-src 'none'" in csp
         assert "script-src 'self'" in csp
@@ -312,6 +313,10 @@ def test_admin_dom_and_script_contract_are_csp_safe_and_ephemeral() -> None:
         "new Function",
     )
     assert all(value not in script for value in forbidden_script)
+    assert 'const API_BASE = "/api/v1/admin";' in script
+    assert 'fetch(`${API_BASE}${path}${query}`' in script
+    assert 'fetch("./api/' not in script
+    assert 'fetch("api/' not in script
     assert "Authorization: `Bearer ${adminToken}`" in script
     assert 'redirect: "error"' in script
     assert 'cache: "no-store"' in script

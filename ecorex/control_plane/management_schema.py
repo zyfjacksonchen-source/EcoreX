@@ -10,13 +10,14 @@ from pathlib import Path
 import sqlite3
 
 
-CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION = 2
-ADMIN_MANAGEMENT_MIGRATION_NAME = "managed-model-origin-presets"
+CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION = 3
+ADMIN_MANAGEMENT_MIGRATION_NAME = "provider-usage-facts"
 
 _INITIAL_MIGRATION_NAME = "initial-admin-management"
 _INITIAL_MIGRATION_CHECKSUM = (
     "ceeb871fe920bc47afe58032a461b464220f707a56633deed1ce8b4e45afc72d"
 )
+_MIGRATION_V2_NAME = "managed-model-origin-presets"
 
 
 ADMIN_MANAGEMENT_SCHEMA_SQL = """
@@ -198,7 +199,7 @@ END;
 """
 
 
-ADMIN_MANAGEMENT_MIGRATION_CHECKSUM = hashlib.sha256(
+_MIGRATION_V2_CHECKSUM = hashlib.sha256(
     b"ecorex-admin-management-schema-v2\0managed-model-origin-presets"
 ).hexdigest()
 
@@ -220,6 +221,48 @@ SET provider_origin_preset = CASE (
     ELSE 'ecorex_image'
 END;
 """
+
+ADMIN_MANAGEMENT_SCHEMA_V3_SQL = """
+CREATE TABLE IF NOT EXISTS admin_ops_provider_usage_facts (
+    fact_id TEXT PRIMARY KEY,
+    source_service TEXT NOT NULL CHECK(source_service IN (
+        'legacy_baseline','managed_gateway','image_service'
+    )),
+    source_id TEXT NOT NULL,
+    usage_kind TEXT NOT NULL CHECK(usage_kind IN ('baseline','chat','image')),
+    account_id TEXT NOT NULL REFERENCES admin_ops_users(account_id),
+    input_tokens INTEGER NOT NULL CHECK(input_tokens >= 0),
+    output_tokens INTEGER NOT NULL CHECK(output_tokens >= 0),
+    total_tokens INTEGER NOT NULL CHECK(
+        total_tokens >= 0 AND total_tokens >= input_tokens + output_tokens
+    ),
+    image_count INTEGER NOT NULL CHECK(image_count >= 0),
+    payload_sha256 TEXT NOT NULL CHECK(length(payload_sha256) = 64),
+    provider_created_at TEXT NOT NULL,
+    recorded_at TEXT NOT NULL,
+    CHECK(total_tokens > 0 OR image_count > 0),
+    CHECK(
+        (usage_kind='chat' AND total_tokens > 0 AND image_count=0)
+        OR (usage_kind='image' AND total_tokens=0 AND image_count > 0)
+        OR usage_kind='baseline'
+    ),
+    UNIQUE(source_service, source_id, usage_kind)
+);
+CREATE INDEX IF NOT EXISTS idx_admin_ops_provider_usage_account
+    ON admin_ops_provider_usage_facts(account_id, provider_created_at, fact_id);
+CREATE TRIGGER IF NOT EXISTS admin_ops_provider_usage_facts_no_update
+BEFORE UPDATE ON admin_ops_provider_usage_facts BEGIN
+    SELECT RAISE(ABORT, 'provider usage facts are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS admin_ops_provider_usage_facts_no_delete
+BEFORE DELETE ON admin_ops_provider_usage_facts BEGIN
+    SELECT RAISE(ABORT, 'provider usage facts are immutable');
+END;
+"""
+
+ADMIN_MANAGEMENT_MIGRATION_CHECKSUM = hashlib.sha256(
+    b"ecorex-admin-management-schema-v3\0provider-usage-facts"
+).hexdigest()
 
 
 class AdminManagementSchemaError(RuntimeError):
@@ -260,6 +303,7 @@ def _expected_shape() -> str:
         connection.execute("PRAGMA foreign_keys=ON")
         connection.executescript(ADMIN_MANAGEMENT_SCHEMA_SQL)
         connection.executescript(ADMIN_MANAGEMENT_SCHEMA_V2_SQL)
+        connection.executescript(ADMIN_MANAGEMENT_SCHEMA_V3_SQL)
         return _managed_shape(connection)
     finally:
         connection.close()
@@ -298,19 +342,31 @@ class AdminManagementSchemaManager:
                     "SELECT name FROM sqlite_schema WHERE name LIKE 'admin_ops_%'"
                 )
             }
+            rows: list[sqlite3.Row] | list[tuple[object, ...]]
             if names:
                 rows = connection.execute(
                     "SELECT version,migration_name,migration_checksum "
                     "FROM admin_ops_schema_migrations ORDER BY version"
                 ).fetchall()
-                if len(rows) == 2:
+                if len(rows) == CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION:
                     receipt = self._validate_connection(connection)
                     connection.commit()
                     return receipt
-                if len(rows) != 1 or tuple(rows[0]) != (
-                    1,
-                    _INITIAL_MIGRATION_NAME,
-                    _INITIAL_MIGRATION_CHECKSUM,
+                if not 1 <= len(rows) < CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION:
+                    raise AdminManagementSchemaError(
+                        "admin management schema history is invalid"
+                    )
+                expected_prefix = (
+                    (
+                        1,
+                        _INITIAL_MIGRATION_NAME,
+                        _INITIAL_MIGRATION_CHECKSUM,
+                    ),
+                    (2, _MIGRATION_V2_NAME, _MIGRATION_V2_CHECKSUM),
+                )
+                if any(
+                    tuple(row) != expected_prefix[index]
+                    for index, row in enumerate(rows)
                 ):
                     raise AdminManagementSchemaError(
                         "admin management schema history is invalid"
@@ -324,20 +380,86 @@ class AdminManagementSchemaManager:
                     ") VALUES(1,?,?,?)",
                     (_INITIAL_MIGRATION_NAME, _INITIAL_MIGRATION_CHECKSUM, initial_at),
                 )
-            unknown_slots = int(
-                connection.execute(
-                    "SELECT COUNT(*) FROM admin_ops_model_configs WHERE local_model_id "
-                    "NOT IN ('ecorex-chat','ecorex-deepseek-v4-pro',"
-                    "'ecorex-gemini-3.1-pro','ecorex-doubao-seed-2.0-pro',"
-                    "'gpt-image-2','gpt-image-2-edit')"
-                ).fetchone()[0]
-            )
-            if unknown_slots:
-                raise AdminManagementSchemaError(
-                    "admin management contains an unknown managed model slot"
+            rows = connection.execute(
+                "SELECT version,migration_name,migration_checksum "
+                "FROM admin_ops_schema_migrations ORDER BY version"
+            ).fetchall()
+            if len(rows) == 1:
+                unknown_slots = int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM admin_ops_model_configs WHERE local_model_id "
+                        "NOT IN ('ecorex-chat','ecorex-deepseek-v4-pro',"
+                        "'ecorex-gemini-3.1-pro','ecorex-doubao-seed-2.0-pro',"
+                        "'gpt-image-2','gpt-image-2-edit')"
+                    ).fetchone()[0]
                 )
-            _execute_sql(connection, ADMIN_MANAGEMENT_SCHEMA_V2_SQL)
+                if unknown_slots:
+                    raise AdminManagementSchemaError(
+                        "admin management contains an unknown managed model slot"
+                    )
+                _execute_sql(connection, ADMIN_MANAGEMENT_SCHEMA_V2_SQL)
+                installed_at = datetime.now(UTC).isoformat()
+                connection.execute(
+                    "INSERT INTO admin_ops_schema_migrations("
+                    "version,migration_name,migration_checksum,installed_at"
+                    ") VALUES(2,?,?,?)",
+                    (_MIGRATION_V2_NAME, _MIGRATION_V2_CHECKSUM, installed_at),
+                )
+            _execute_sql(connection, ADMIN_MANAGEMENT_SCHEMA_V3_SQL)
             installed_at = datetime.now(UTC).isoformat()
+            for row in connection.execute(
+                "SELECT account_id,tokens_used,images_used,updated_at "
+                "FROM admin_ops_users WHERE tokens_used > 0 OR images_used > 0 "
+                "ORDER BY account_id"
+            ).fetchall():
+                account_id = str(row[0])
+                input_tokens = 0
+                output_tokens = 0
+                total_tokens = int(row[1])
+                image_count = int(row[2])
+                material = {
+                    "source_service": "legacy_baseline",
+                    "source_id": account_id,
+                    "usage_kind": "baseline",
+                    "account_id": account_id,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "total_tokens": total_tokens,
+                    "image_count": image_count,
+                    "provider_created_at": str(row[3]),
+                }
+                payload = json.dumps(
+                    material,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                fact_id = "usagefact_" + hashlib.sha256(
+                    b"ecorex-provider-usage-fact-v1\0"
+                    + b"legacy_baseline\0"
+                    + account_id.encode("utf-8")
+                    + b"\0baseline"
+                ).hexdigest()
+                connection.execute(
+                    "INSERT INTO admin_ops_provider_usage_facts("
+                    "fact_id,source_service,source_id,usage_kind,account_id,"
+                    "input_tokens,output_tokens,total_tokens,image_count,payload_sha256,"
+                    "provider_created_at,recorded_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        fact_id,
+                        "legacy_baseline",
+                        account_id,
+                        "baseline",
+                        account_id,
+                        input_tokens,
+                        output_tokens,
+                        total_tokens,
+                        image_count,
+                        hashlib.sha256(payload).hexdigest(),
+                        str(row[3]),
+                        installed_at,
+                    ),
+                )
             connection.execute(
                 "INSERT INTO admin_ops_schema_migrations("
                 "version,migration_name,migration_checksum,installed_at"
@@ -388,15 +510,18 @@ class AdminManagementSchemaManager:
             "SELECT version,migration_name,migration_checksum,installed_at "
             "FROM admin_ops_schema_migrations ORDER BY version"
         ).fetchall()
-        if len(row) != 2:
+        if len(row) != CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION:
             raise AdminManagementSchemaError(
                 "admin management schema history is invalid"
             )
-        initial, value = row
+        initial, migration_v2, value = row
         if (
             int(initial[0]) != 1
             or str(initial[1]) != _INITIAL_MIGRATION_NAME
             or str(initial[2]) != _INITIAL_MIGRATION_CHECKSUM
+            or int(migration_v2[0]) != 2
+            or str(migration_v2[1]) != _MIGRATION_V2_NAME
+            or str(migration_v2[2]) != _MIGRATION_V2_CHECKSUM
             or
             int(value[0]) != CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION
             or str(value[1]) != ADMIN_MANAGEMENT_MIGRATION_NAME
@@ -418,6 +543,7 @@ __all__ = [
     "ADMIN_MANAGEMENT_MIGRATION_NAME",
     "ADMIN_MANAGEMENT_SCHEMA_SHA256",
     "ADMIN_MANAGEMENT_SCHEMA_V2_SQL",
+    "ADMIN_MANAGEMENT_SCHEMA_V3_SQL",
     "AdminManagementSchemaError",
     "AdminManagementSchemaManager",
     "AdminManagementSchemaReceipt",

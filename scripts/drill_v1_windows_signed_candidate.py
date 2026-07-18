@@ -67,10 +67,12 @@ from ecorex.release import (
     ArtifactBuildInput,
     ArtifactKind,
     Ed25519MemorySigner,
+    PublicBootstrapIndexError,
     ReleaseBuildSpec,
     ReleaseBuilder,
     WebBundleBuildInput,
     load_dependency_lock_manifest,
+    stable_pointer_sequence,
 )
 from ecorex.integration.pack_verification import verify_product_capability_pack
 from ecorex.integration.pack_python import (
@@ -508,8 +510,6 @@ def _require_host() -> None:
         raise DrillError("this ceremony requires a native Windows x64 host")
     if sys.version_info[:2] != (3, 11):
         raise DrillError("this ceremony requires the product Python 3.11 toolchain")
-    if __version__ != "1.0.0":
-        raise DrillError("this ceremony is pinned to the current 1.0.0 product version")
 
 
 def _public_key(private_key: Ed25519PrivateKey) -> bytes:
@@ -1490,10 +1490,10 @@ def _bind_local_bootstrap_minimum(
 ) -> dict[str, Any]:
     """Apply the same release-key anti-rollback floor as Candidate assembly."""
 
-    match = re.fullmatch(r"1\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})", __version__)
-    if match is None:
+    try:
+        sequence = stable_pointer_sequence(__version__)
+    except PublicBootstrapIndexError:
         raise DrillError("the product version cannot derive a Bootstrap sequence")
-    sequence = int(match.group(1)) * 1_000_000 + int(match.group(2)) + 1
     payload = b"\0".join(
         (
             b"ecorex.bootstrap-minimum-stable.v1",

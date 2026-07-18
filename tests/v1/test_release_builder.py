@@ -411,8 +411,12 @@ def test_release_scoped_builder_resolves_cn_proxy_to_github_tag(tmp_path: Path) 
         release_scoped_sources=True,
     )
     built = ReleaseBuilder(signer).build(spec, tmp_path / "release")
-    assert built.manifest.sources[0].base_url.endswith("/releases/download/v1.0.0")
-    assert built.manifest.sources[1].base_url.endswith("/releases/download/v1.0.0")
+    assert built.manifest.sources[0].base_url.endswith(
+        f"/releases/download/v{__version__}"
+    )
+    assert built.manifest.sources[1].base_url.endswith(
+        f"/releases/download/v{__version__}"
+    )
     assert built.manifest.sources[2].base_url.endswith(
         f"/stable/{built.manifest.release_id}"
     )
@@ -505,7 +509,9 @@ def test_builder_rejects_same_or_future_delta_base_version(tmp_path: Path) -> No
     )
     base_package = base_release.artifact_paths["core-windows-x64"]
 
-    for version in (__version__, "1.0.1", "2.0.0-alpha.1"):
+    major, minor, patch = (int(part) for part in __version__.split("."))
+    next_patch = f"{major}.{minor}.{patch + 1}"
+    for version in (__version__, next_patch, "2.0.0-alpha.1"):
         base_manifest = replace(
             base_release.manifest,
             release_id=f"release-stable-base-{version.replace('.', '-')}",

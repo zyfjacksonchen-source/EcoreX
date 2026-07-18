@@ -20,15 +20,18 @@ import re
 import secrets
 import sqlite3
 from typing import Protocol
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
 from .models import (
+    GatewayAccountUsageProjection,
     GatewayEvent,
     GatewayEventType,
     GatewayFunctionCallOutputInput,
+    GatewayTokenUsageWindow,
     ModelGatewayRequest,
 )
 from .handoff import ChatModelRevision, DurableChatHandoff
@@ -145,6 +148,59 @@ class ManagedProviderAdapter(Protocol):
         principal: GatewayPrincipal,
     ) -> AsyncIterator[GatewayEvent]:
         ...
+
+
+@dataclass(frozen=True, slots=True)
+class GatewayCompletedUsageFact:
+    request_id: str
+    account_id: str
+    terminal_event_type: GatewayEventType
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    provider_created_at: datetime
+
+    def __post_init__(self) -> None:
+        if (
+            not self.request_id
+            or not self.account_id
+            or self.terminal_event_type
+            not in {
+                GatewayEventType.RESPONSE_COMPLETED,
+                GatewayEventType.TOOL_CALL_REQUESTED,
+            }
+            or any(
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value < 0
+                for value in (
+                    self.input_tokens,
+                    self.output_tokens,
+                    self.total_tokens,
+                )
+            )
+            or self.total_tokens < self.input_tokens + self.output_tokens
+            or self.total_tokens <= 0
+            or self.provider_created_at.tzinfo is None
+        ):
+            raise ValueError("gateway completed usage fact is invalid")
+
+
+class GatewayUsageAccountant(Protocol):
+    """Cross-database settlement boundary backed by an idempotent fact store."""
+
+    def settle(self, fact: GatewayCompletedUsageFact) -> None: ...
+
+    def reconcile(self, facts: Iterable[GatewayCompletedUsageFact]) -> None: ...
+
+    def tokens_available(self, account_id: str) -> bool: ...
+
+    def project(
+        self,
+        account_id: str,
+        *,
+        timezone_name: str,
+    ) -> GatewayAccountUsageProjection: ...
 
 
 class GatewayServiceLifecycle(Protocol):
@@ -300,6 +356,9 @@ class SQLiteGatewayStore:
                         raise GatewayRequestConflict(
                             "gateway handoff recovery lease was lost"
                         )
+                    self._enqueue_usage_settlement_in_transaction(
+                        connection, request.request_id, now
+                    )
                     connection.commit()
                     return GatewayReservation("replay", None, events)
                 seq = len(events) + 1
@@ -927,6 +986,29 @@ class SQLiteGatewayStore:
         )
         if result.rowcount != 1:
             raise GatewayRequestConflict("gateway request completion lease was lost")
+        if event.event_type in {
+            GatewayEventType.TOOL_CALL_REQUESTED,
+            GatewayEventType.RESPONSE_COMPLETED,
+        }:
+            self._enqueue_usage_settlement_in_transaction(
+                connection, request_id, now
+            )
+
+    @staticmethod
+    def _enqueue_usage_settlement_in_transaction(
+        connection: sqlite3.Connection,
+        request_id: str,
+        now: datetime,
+    ) -> None:
+        timestamp = _iso(now)
+        connection.execute(
+            "INSERT INTO gateway_usage_settlements("
+            "request_id,state,attempt_count,next_attempt_at,created_at,"
+            "updated_at,settled_at,last_error_code"
+            ") VALUES(?,'pending',0,?,?,?,NULL,NULL) "
+            "ON CONFLICT(request_id) DO NOTHING",
+            (request_id, timestamp, timestamp, timestamp),
+        )
 
     def _events(
         self, connection: sqlite3.Connection, request_id: str
@@ -1030,6 +1112,596 @@ class SQLiteGatewayStore:
         finally:
             connection.close()
 
+    def account_usage(
+        self,
+        account_id: str,
+        *,
+        timezone_name: str,
+        now: datetime | None = None,
+    ) -> GatewayAccountUsageProjection:
+        """Project exactly-once provider usage for one authenticated account."""
+
+        if not isinstance(account_id, str) or not account_id:
+            raise ValueError("gateway usage account identity is invalid")
+        if not isinstance(timezone_name, str) or not timezone_name.strip():
+            raise ValueError("gateway usage timezone is required")
+        try:
+            zone = ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError:
+            raise ValueError("gateway usage timezone is invalid") from None
+        calculated_at = now or _utcnow()
+        if calculated_at.tzinfo is None:
+            raise ValueError("gateway usage clock must be timezone-aware")
+        calculated_at = calculated_at.astimezone(timezone.utc)
+        local_now = calculated_at.astimezone(zone)
+        day_start_local = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_start_local = day_start_local - timedelta(days=day_start_local.weekday())
+        day_start = day_start_local.astimezone(timezone.utc)
+        week_start = week_start_local.astimezone(timezone.utc)
+
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN")
+            coverage_row = connection.execute(
+                """
+                SELECT events.created_at
+                FROM gateway_requests AS requests
+                JOIN gateway_events AS events
+                  ON events.request_id=requests.request_id
+                 AND events.seq=(
+                    SELECT MAX(candidate.seq)
+                    FROM gateway_events AS candidate
+                    WHERE candidate.request_id=requests.request_id
+                 )
+                WHERE requests.account_id=?
+                  AND requests.status='completed'
+                  AND requests.terminal_event_type IN (
+                    'response.completed','tool_call.requested'
+                  )
+                ORDER BY datetime(events.created_at), requests.request_id
+                LIMIT 1
+                """,
+                (account_id,),
+            ).fetchone()
+            rows = connection.execute(
+                """
+                SELECT requests.request_id, events.created_at
+                FROM gateway_requests AS requests
+                JOIN gateway_events AS events
+                  ON events.request_id=requests.request_id
+                 AND events.seq=(
+                    SELECT MAX(candidate.seq)
+                    FROM gateway_events AS candidate
+                    WHERE candidate.request_id=requests.request_id
+                 )
+                WHERE requests.account_id=?
+                  AND requests.status='completed'
+                  AND requests.terminal_event_type IN (
+                    'response.completed','tool_call.requested'
+                  )
+                  AND datetime(events.created_at) >= datetime(?)
+                ORDER BY datetime(events.created_at), requests.request_id
+                """,
+                (account_id, _iso(week_start)),
+            ).fetchall()
+            today = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+            week = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+            seen_request_ids: set[str] = set()
+            for row in rows:
+                request_id = str(row["request_id"])
+                if request_id in seen_request_ids:
+                    continue
+                seen_request_ids.add(request_id)
+                events = self._events(connection, request_id)
+                if (
+                    not events
+                    or events[-1].event_type
+                    not in {
+                        GatewayEventType.RESPONSE_COMPLETED,
+                        GatewayEventType.TOOL_CALL_REQUESTED,
+                    }
+                ):
+                    raise GatewayStoreError("gateway usage terminal fact is inconsistent")
+                usage = events[-1].usage or {}
+                input_tokens = int(
+                    usage.get("input_tokens", usage.get("prompt_tokens", 0))
+                )
+                output_tokens = int(
+                    usage.get("output_tokens", usage.get("completion_tokens", 0))
+                )
+                total_tokens = max(
+                    int(usage.get("total_tokens", 0)),
+                    input_tokens + output_tokens,
+                )
+                values = {
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "total_tokens": total_tokens,
+                }
+                for key, value in values.items():
+                    week[key] += value
+                try:
+                    completed_at = datetime.fromisoformat(str(row["created_at"]))
+                except ValueError as error:
+                    raise GatewayStoreError(
+                        "gateway usage timestamp is invalid"
+                    ) from error
+                if completed_at.tzinfo is None:
+                    raise GatewayStoreError("gateway usage timestamp is invalid")
+                if completed_at.astimezone(timezone.utc) > calculated_at:
+                    continue
+                if completed_at.astimezone(timezone.utc) >= day_start:
+                    for key, value in values.items():
+                        today[key] += value
+            coverage_started_at: datetime | None = None
+            if coverage_row is not None:
+                try:
+                    coverage_started_at = datetime.fromisoformat(
+                        str(coverage_row["created_at"])
+                    )
+                except ValueError as error:
+                    raise GatewayStoreError(
+                        "gateway usage coverage timestamp is invalid"
+                    ) from error
+                if coverage_started_at.tzinfo is None:
+                    raise GatewayStoreError(
+                        "gateway usage coverage timestamp is invalid"
+                    )
+                coverage_started_at = coverage_started_at.astimezone(timezone.utc)
+            connection.commit()
+            return GatewayAccountUsageProjection(
+                timezone=timezone_name,
+                today=GatewayTokenUsageWindow(**today),
+                week=GatewayTokenUsageWindow(**week),
+                week_started_at=week_start,
+                coverage_started_at=coverage_started_at,
+                calculated_at=calculated_at,
+            )
+        except GatewayStoreError:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        except (OSError, sqlite3.Error):
+            if connection.in_transaction:
+                connection.rollback()
+            raise GatewayStoreError("gateway durable state is unavailable") from None
+        finally:
+            connection.close()
+
+    def completed_usage_facts(
+        self,
+        *,
+        account_id: str | None = None,
+        request_id: str | None = None,
+        maximum: int = 100_000,
+    ) -> tuple[GatewayCompletedUsageFact, ...]:
+        """Read validated billable terminal facts from the durable event outbox."""
+
+        if account_id is not None and (
+            not isinstance(account_id, str) or not account_id
+        ):
+            raise ValueError("gateway usage account identity is invalid")
+        if request_id is not None and (
+            not isinstance(request_id, str) or not request_id
+        ):
+            raise ValueError("gateway usage request identity is invalid")
+        if isinstance(maximum, bool) or not 1 <= maximum <= 1_000_000:
+            raise ValueError("gateway usage fact limit is invalid")
+        filters = [
+            "requests.status='completed'",
+            "requests.terminal_event_type IN "
+            "('response.completed','tool_call.requested')",
+        ]
+        parameters: list[object] = []
+        if account_id is not None:
+            filters.append("requests.account_id=?")
+            parameters.append(account_id)
+        if request_id is not None:
+            filters.append("requests.request_id=?")
+            parameters.append(request_id)
+        where = " AND ".join(filters)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN")
+            count = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM gateway_requests AS requests WHERE "
+                    + where,
+                    tuple(parameters),
+                ).fetchone()[0]
+            )
+            if count > maximum:
+                raise GatewayStoreError("gateway usage fact ledger is oversized")
+            rows = connection.execute(
+                "SELECT requests.request_id,requests.account_id,events.created_at "
+                "FROM gateway_requests AS requests "
+                "JOIN gateway_events AS events "
+                "ON events.request_id=requests.request_id "
+                "AND events.seq=("
+                "SELECT MAX(candidate.seq) FROM gateway_events AS candidate "
+                "WHERE candidate.request_id=requests.request_id"
+                ") WHERE "
+                + where
+                + " ORDER BY datetime(events.created_at),requests.request_id",
+                tuple(parameters),
+            ).fetchall()
+            facts: list[GatewayCompletedUsageFact] = []
+            for row in rows:
+                events = self._events(connection, str(row["request_id"]))
+                if not events:
+                    raise GatewayStoreError(
+                        "gateway usage terminal fact is inconsistent"
+                    )
+                terminal = events[-1]
+                if terminal.event_type not in {
+                    GatewayEventType.RESPONSE_COMPLETED,
+                    GatewayEventType.TOOL_CALL_REQUESTED,
+                }:
+                    raise GatewayStoreError(
+                        "gateway usage terminal fact is inconsistent"
+                    )
+                usage = terminal.usage
+                if not isinstance(usage, dict):
+                    continue
+                input_tokens = int(
+                    usage.get("input_tokens", usage.get("prompt_tokens", 0))
+                )
+                output_tokens = int(
+                    usage.get("output_tokens", usage.get("completion_tokens", 0))
+                )
+                total_tokens = max(
+                    int(usage.get("total_tokens", 0)),
+                    input_tokens + output_tokens,
+                )
+                if total_tokens <= 0:
+                    continue
+                try:
+                    provider_created_at = datetime.fromisoformat(
+                        str(row["created_at"])
+                    )
+                except ValueError as error:
+                    raise GatewayStoreError(
+                        "gateway usage timestamp is invalid"
+                    ) from error
+                facts.append(
+                    GatewayCompletedUsageFact(
+                        request_id=str(row["request_id"]),
+                        account_id=str(row["account_id"]),
+                        terminal_event_type=terminal.event_type,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        total_tokens=total_tokens,
+                        provider_created_at=provider_created_at,
+                    )
+                )
+            connection.commit()
+            return tuple(facts)
+        except GatewayStoreError:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        except (OSError, sqlite3.Error):
+            if connection.in_transaction:
+                connection.rollback()
+            raise GatewayStoreError("gateway durable state is unavailable") from None
+        finally:
+            connection.close()
+
+    def pending_usage_facts(
+        self,
+        *,
+        account_id: str | None = None,
+        request_id: str | None = None,
+        maximum: int = 64,
+        now: datetime | None = None,
+    ) -> tuple[GatewayCompletedUsageFact, ...]:
+        """Claim a bounded view of the durable provider-usage outbox.
+
+        Reading never scans the historical ledger. Terminal rows with missing
+        provider usage are retained as ``usage_missing`` evidence instead of
+        being retried forever or silently treated as zero.
+        """
+
+        if account_id is not None and (
+            not isinstance(account_id, str) or not account_id
+        ):
+            raise ValueError("gateway usage account identity is invalid")
+        if request_id is not None and (
+            not isinstance(request_id, str) or not request_id
+        ):
+            raise ValueError("gateway usage request identity is invalid")
+        if isinstance(maximum, bool) or not 1 <= maximum <= 1024:
+            raise ValueError("gateway usage settlement batch is invalid")
+        current = now or _utcnow()
+        if current.tzinfo is None:
+            raise ValueError("gateway store time must be timezone-aware")
+        current = current.astimezone(timezone.utc)
+        filters = [
+            "settlements.state='pending'",
+            "settlements.next_attempt_at<=?",
+        ]
+        parameters: list[object] = [_iso(current)]
+        if account_id is not None:
+            filters.append("requests.account_id=?")
+            parameters.append(account_id)
+        if request_id is not None:
+            filters.append("requests.request_id=?")
+            parameters.append(request_id)
+        parameters.append(maximum)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                "SELECT requests.request_id,requests.account_id,events.created_at "
+                "FROM gateway_usage_settlements AS settlements "
+                "JOIN gateway_requests AS requests "
+                "ON requests.request_id=settlements.request_id "
+                "JOIN gateway_events AS events "
+                "ON events.request_id=requests.request_id "
+                "AND events.seq=("
+                "SELECT MAX(candidate.seq) FROM gateway_events AS candidate "
+                "WHERE candidate.request_id=requests.request_id"
+                ") WHERE "
+                + " AND ".join(filters)
+                + " ORDER BY settlements.next_attempt_at,requests.request_id LIMIT ?",
+                tuple(parameters),
+            ).fetchall()
+            facts: list[GatewayCompletedUsageFact] = []
+            for row in rows:
+                fact = self._usage_fact_in_transaction(
+                    connection,
+                    request_id=str(row["request_id"]),
+                    account_id=str(row["account_id"]),
+                    provider_created_at=str(row["created_at"]),
+                )
+                if fact is None:
+                    updated = connection.execute(
+                        "UPDATE gateway_usage_settlements "
+                        "SET state='usage_missing',attempt_count=attempt_count+1,"
+                        "updated_at=?,settled_at=?,"
+                        "last_error_code='provider_usage_missing' "
+                        "WHERE request_id=? AND state='pending'",
+                        (_iso(current), _iso(current), str(row["request_id"])),
+                    )
+                    if updated.rowcount != 1:
+                        raise GatewayStoreError(
+                            "gateway usage settlement changed"
+                        )
+                    continue
+                facts.append(fact)
+            connection.commit()
+            return tuple(facts)
+        except GatewayStoreError:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        except (OSError, sqlite3.Error):
+            if connection.in_transaction:
+                connection.rollback()
+            raise GatewayStoreError("gateway durable state is unavailable") from None
+        finally:
+            connection.close()
+
+    def mark_usage_settled(
+        self,
+        fact: GatewayCompletedUsageFact,
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        if not isinstance(fact, GatewayCompletedUsageFact):
+            raise ValueError("gateway usage settlement fact is invalid")
+        current = now or _utcnow()
+        if current.tzinfo is None:
+            raise ValueError("gateway store time must be timezone-aware")
+        current = current.astimezone(timezone.utc)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT settlements.state,requests.account_id,events.created_at "
+                "FROM gateway_usage_settlements AS settlements "
+                "JOIN gateway_requests AS requests "
+                "ON requests.request_id=settlements.request_id "
+                "JOIN gateway_events AS events "
+                "ON events.request_id=requests.request_id "
+                "AND events.seq=("
+                "SELECT MAX(candidate.seq) FROM gateway_events AS candidate "
+                "WHERE candidate.request_id=requests.request_id"
+                ") WHERE settlements.request_id=?",
+                (fact.request_id,),
+            ).fetchone()
+            if row is None:
+                raise GatewayStoreError("gateway usage settlement is missing")
+            if row["state"] == "settled":
+                connection.commit()
+                return
+            if row["state"] != "pending":
+                raise GatewayStoreError("gateway usage settlement changed")
+            durable = self._usage_fact_in_transaction(
+                connection,
+                request_id=fact.request_id,
+                account_id=str(row["account_id"]),
+                provider_created_at=str(row["created_at"]),
+            )
+            if durable != fact:
+                raise GatewayStoreError("gateway usage settlement fact drifted")
+            updated = connection.execute(
+                "UPDATE gateway_usage_settlements "
+                "SET state='settled',attempt_count=attempt_count+1,"
+                "updated_at=?,settled_at=?,last_error_code=NULL "
+                "WHERE request_id=? AND state='pending'",
+                (_iso(current), _iso(current), fact.request_id),
+            )
+            if updated.rowcount != 1:
+                raise GatewayStoreError("gateway usage settlement changed")
+            connection.commit()
+        except GatewayStoreError:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        except (OSError, sqlite3.Error):
+            if connection.in_transaction:
+                connection.rollback()
+            raise GatewayStoreError("gateway durable state is unavailable") from None
+        finally:
+            connection.close()
+
+    def defer_usage_settlement(
+        self,
+        request_id: str,
+        *,
+        error_code: str = "control_plane_unavailable",
+        now: datetime | None = None,
+    ) -> None:
+        if (
+            not isinstance(request_id, str)
+            or not request_id
+            or not isinstance(error_code, str)
+            or re.fullmatch(r"[a-z][a-z0-9_]{2,63}", error_code) is None
+        ):
+            raise ValueError("gateway usage settlement retry is invalid")
+        current = now or _utcnow()
+        if current.tzinfo is None:
+            raise ValueError("gateway store time must be timezone-aware")
+        current = current.astimezone(timezone.utc)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT state,attempt_count FROM gateway_usage_settlements "
+                "WHERE request_id=?",
+                (request_id,),
+            ).fetchone()
+            if row is None:
+                raise GatewayStoreError("gateway usage settlement is missing")
+            if row["state"] != "pending":
+                connection.commit()
+                return
+            attempt = int(row["attempt_count"]) + 1
+            delay = min(300, 2 ** min(attempt, 8))
+            updated = connection.execute(
+                "UPDATE gateway_usage_settlements "
+                "SET attempt_count=?,next_attempt_at=?,updated_at=?,last_error_code=? "
+                "WHERE request_id=? AND state='pending'",
+                (
+                    attempt,
+                    _iso(current + timedelta(seconds=delay)),
+                    _iso(current),
+                    error_code,
+                    request_id,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise GatewayStoreError("gateway usage settlement changed")
+            connection.commit()
+        except GatewayStoreError:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        except (OSError, sqlite3.Error):
+            if connection.in_transaction:
+                connection.rollback()
+            raise GatewayStoreError("gateway durable state is unavailable") from None
+        finally:
+            connection.close()
+
+    def usage_settlement_counts(self) -> dict[str, int]:
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                "SELECT state,COUNT(*) AS count FROM gateway_usage_settlements "
+                "GROUP BY state"
+            ).fetchall()
+            return {
+                state: next(
+                    (
+                        int(row["count"])
+                        for row in rows
+                        if str(row["state"]) == state
+                    ),
+                    0,
+                )
+                for state in ("pending", "settled", "usage_missing")
+            }
+        except (OSError, sqlite3.Error):
+            raise GatewayStoreError("gateway durable state is unavailable") from None
+        finally:
+            connection.close()
+
+    def has_unsettled_usage(self, account_id: str) -> bool:
+        if not isinstance(account_id, str) or not account_id:
+            raise ValueError("gateway usage account identity is invalid")
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT 1 FROM gateway_usage_settlements AS settlements "
+                "JOIN gateway_requests AS requests "
+                "ON requests.request_id=settlements.request_id "
+                "WHERE settlements.state IN ('pending','usage_missing') "
+                "AND requests.account_id=? "
+                "LIMIT 1",
+                (account_id,),
+            ).fetchone()
+            return row is not None
+        except (OSError, sqlite3.Error):
+            raise GatewayStoreError("gateway durable state is unavailable") from None
+        finally:
+            connection.close()
+
+    def _usage_fact_in_transaction(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        request_id: str,
+        account_id: str,
+        provider_created_at: str,
+    ) -> GatewayCompletedUsageFact | None:
+        events = self._events(connection, request_id)
+        if not events:
+            raise GatewayStoreError(
+                "gateway usage terminal fact is inconsistent"
+            )
+        terminal = events[-1]
+        if terminal.event_type not in {
+            GatewayEventType.RESPONSE_COMPLETED,
+            GatewayEventType.TOOL_CALL_REQUESTED,
+        }:
+            raise GatewayStoreError(
+                "gateway usage terminal fact is inconsistent"
+            )
+        usage = terminal.usage
+        if not isinstance(usage, dict):
+            return None
+        input_tokens = int(
+            usage.get("input_tokens", usage.get("prompt_tokens", 0))
+        )
+        output_tokens = int(
+            usage.get("output_tokens", usage.get("completion_tokens", 0))
+        )
+        total_tokens = max(
+            int(usage.get("total_tokens", 0)),
+            input_tokens + output_tokens,
+        )
+        if total_tokens <= 0:
+            return None
+        try:
+            created = datetime.fromisoformat(provider_created_at)
+        except ValueError as error:
+            raise GatewayStoreError(
+                "gateway usage timestamp is invalid"
+            ) from error
+        if created.tzinfo is None:
+            raise GatewayStoreError("gateway usage timestamp is invalid")
+        return GatewayCompletedUsageFact(
+            request_id=request_id,
+            account_id=account_id,
+            terminal_event_type=terminal.event_type,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            provider_created_at=created,
+        )
+
 
 def _ndjson(events: Iterable[GatewayEvent]) -> AsyncIterator[bytes]:
     async def generate() -> AsyncIterator[bytes]:
@@ -1058,6 +1730,8 @@ def create_managed_gateway_app(
     authenticator: GatewayAuthenticator,
     provider: ManagedProviderAdapter,
     allowed_model_ids: frozenset[str],
+    dynamic_model_authority: bool = False,
+    usage_accountant: GatewayUsageAccountant | None = None,
     lease_seconds: int = 180,
     service_lifecycle: GatewayServiceLifecycle | None = None,
 ) -> FastAPI:
@@ -1067,21 +1741,76 @@ def create_managed_gateway_app(
         raise ValueError("managed gateway model catalog is invalid")
     if not 30 <= lease_seconds <= 900:
         raise ValueError("managed gateway lease must be between 30 and 900 seconds")
+    catalog_provider = getattr(provider, "public_catalog", None)
+    if dynamic_model_authority and not callable(catalog_provider):
+        raise ValueError("dynamic managed gateway catalog is unavailable")
+
+    async def settle_usage_outbox(
+        *,
+        account_id: str | None = None,
+        request_id: str | None = None,
+        maximum: int = 64,
+    ) -> int:
+        if usage_accountant is None:
+            return 0
+        facts = await asyncio.to_thread(
+            store.pending_usage_facts,
+            account_id=account_id,
+            request_id=request_id,
+            maximum=maximum,
+        )
+        settled = 0
+        for fact in facts:
+            try:
+                await asyncio.to_thread(usage_accountant.settle, fact)
+                await asyncio.to_thread(store.mark_usage_settled, fact)
+                settled += 1
+            except Exception:
+                with suppress(Exception):
+                    await asyncio.to_thread(
+                        store.defer_usage_settlement,
+                        fact.request_id,
+                    )
+        return settled
+
+    async def usage_settlement_worker(stop: asyncio.Event) -> None:
+        while not stop.is_set():
+            try:
+                await settle_usage_outbox(maximum=128)
+            except Exception:
+                pass
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=1.0)
+            except TimeoutError:
+                continue
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        if service_lifecycle is None:
+        if service_lifecycle is None and usage_accountant is None:
             yield
             return
-        started = False
+        settlement_stop = asyncio.Event()
+        settlement_task: asyncio.Task[None] | None = None
         try:
-            await service_lifecycle.startup()
-            started = True
+            if service_lifecycle is not None:
+                await service_lifecycle.startup()
+            if usage_accountant is not None:
+                await settle_usage_outbox(maximum=256)
+                settlement_task = asyncio.create_task(
+                    usage_settlement_worker(settlement_stop),
+                    name="ecorex-gateway-usage-settlement",
+                )
             yield
         finally:
-            service_lifecycle.begin_drain()
-            # shutdown is idempotent and also owns partial-start cleanup.
-            await service_lifecycle.shutdown()
+            settlement_stop.set()
+            if settlement_task is not None:
+                settlement_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await settlement_task
+            if service_lifecycle is not None:
+                service_lifecycle.begin_drain()
+                # shutdown is idempotent and also owns partial-start cleanup.
+                await service_lifecycle.shutdown()
 
     app = FastAPI(
         title="EcoreX Managed Model Gateway",
@@ -1092,6 +1821,7 @@ def create_managed_gateway_app(
         lifespan=lifespan,
     )
     app.state.service_lifecycle = service_lifecycle
+    app.state.usage_accountant = usage_accountant
 
     def principal(request: Request) -> GatewayPrincipal:
         try:
@@ -1109,6 +1839,32 @@ def create_managed_gateway_app(
             raise HTTPException(
                 status_code=503, detail="managed gateway authentication is unavailable"
             ) from None
+
+    async def active_chat_catalog() -> tuple[list[dict[str, object]], frozenset[str]]:
+        if not callable(catalog_provider):
+            raise RuntimeError("managed gateway catalog is unavailable")
+        projected = await catalog_provider()
+        if not isinstance(projected, list) or len(projected) > 256:
+            raise RuntimeError("managed gateway catalog is invalid")
+        catalog: list[dict[str, object]] = []
+        model_ids: set[str] = set()
+        for item in projected:
+            if not isinstance(item, dict):
+                raise RuntimeError("managed gateway catalog is invalid")
+            if "api_key" in item or "secret" in item:
+                raise RuntimeError("managed gateway catalog contains secret material")
+            if item.get("modality") != "chat":
+                continue
+            local_model_id = item.get("local_model_id")
+            if (
+                not isinstance(local_model_id, str)
+                or _SAFE_MODEL_ID.fullmatch(local_model_id) is None
+                or local_model_id in model_ids
+            ):
+                raise RuntimeError("managed gateway chat catalog is invalid")
+            model_ids.add(local_model_id)
+            catalog.append(dict(item))
+        return catalog, frozenset(model_ids)
 
     @app.middleware("http")
     async def secure_transport(request: Request, call_next):
@@ -1178,8 +1934,26 @@ def create_managed_gateway_app(
     @app.get("/api/v1/models")
     async def models(current: GatewayPrincipal = Depends(principal)) -> dict[str, object]:
         visible = sorted(allowed_model_ids & current.allowed_model_ids)
-        catalog_provider = getattr(provider, "public_catalog", None)
         catalog: list[dict[str, object]] = []
+        if dynamic_model_authority:
+            try:
+                active_catalog, active_ids = await active_chat_catalog()
+                visible = sorted(active_ids & current.allowed_model_ids)
+                catalog = [
+                    item
+                    for item in active_catalog
+                    if item["local_model_id"] in visible
+                ]
+            except Exception:
+                # Dynamic catalog is authoritative.  Stale bootstrap mappings
+                # must never become an availability or security fallback.
+                visible = []
+                catalog = []
+            return {
+                "schema_version": 1,
+                "models": visible,
+                "catalog": catalog,
+            }
         if callable(catalog_provider):
             try:
                 projected = await catalog_provider()
@@ -1205,6 +1979,57 @@ def create_managed_gateway_app(
         if callable(catalog_provider):
             response["catalog"] = catalog
         return response
+
+    @app.get(
+        "/api/v1/usage",
+        response_model=GatewayAccountUsageProjection,
+    )
+    async def account_usage(
+        timezone_name: str = Query(
+            default="Asia/Shanghai",
+            alias="timezone",
+            min_length=1,
+            max_length=64,
+        ),
+        current: GatewayPrincipal = Depends(principal),
+    ) -> GatewayAccountUsageProjection:
+        if usage_accountant is not None:
+            try:
+                await settle_usage_outbox(
+                    account_id=current.account_id,
+                    maximum=16,
+                )
+                if await asyncio.to_thread(
+                    store.has_unsettled_usage,
+                    current.account_id,
+                ):
+                    raise GatewayStoreError(
+                        "managed account usage is incomplete"
+                    )
+                return await asyncio.to_thread(
+                    usage_accountant.project,
+                    current.account_id,
+                    timezone_name=timezone_name,
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from None
+            except Exception:
+                raise HTTPException(
+                    status_code=503,
+                    detail="managed account usage is unavailable",
+                ) from None
+        try:
+            return store.account_usage(
+                current.account_id,
+                timezone_name=timezone_name,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+        except GatewayStoreError:
+            raise HTTPException(
+                status_code=503,
+                detail="managed gateway usage is unavailable",
+            ) from None
 
     @app.post("/v1/responses", response_model=None, include_in_schema=False)
     @app.post("/api/v1/model/stream", response_model=None)
@@ -1235,11 +2060,50 @@ def create_managed_gateway_app(
         canonical_request = _canonical(body.model_dump(mode="json"))
         if len(canonical_request) > _MAX_REQUEST_BYTES:
             raise HTTPException(status_code=413, detail="managed gateway request is too large")
-        if (
-            body.model_id not in allowed_model_ids
-            or body.model_id not in current.allowed_model_ids
-        ):
+        if body.model_id not in current.allowed_model_ids:
             raise HTTPException(status_code=403, detail="managed model is not allowed")
+        if dynamic_model_authority:
+            try:
+                _catalog, active_ids = await active_chat_catalog()
+            except Exception:
+                raise HTTPException(
+                    status_code=503,
+                    detail="managed model catalog is unavailable",
+                ) from None
+            if body.model_id not in active_ids:
+                raise HTTPException(status_code=403, detail="managed model is not allowed")
+        elif body.model_id not in allowed_model_ids:
+            raise HTTPException(status_code=403, detail="managed model is not allowed")
+        if usage_accountant is not None:
+            try:
+                await settle_usage_outbox(
+                    account_id=current.account_id,
+                    maximum=64,
+                )
+                unsettled = await asyncio.to_thread(
+                    store.has_unsettled_usage,
+                    current.account_id,
+                )
+                available = await asyncio.to_thread(
+                    usage_accountant.tokens_available,
+                    current.account_id,
+                )
+            except Exception:
+                raise HTTPException(
+                    status_code=503,
+                    detail="managed usage settlement is unavailable",
+                ) from None
+            if unsettled:
+                raise HTTPException(
+                    status_code=503,
+                    detail="managed usage settlement is pending",
+                    headers={"Retry-After": "1"},
+                )
+            if not available:
+                raise HTTPException(
+                    status_code=429,
+                    detail="managed token quota is exhausted",
+                )
         admitted = False
         if service_lifecycle is not None:
             admitted = service_lifecycle.admit_stream()
@@ -1349,6 +2213,24 @@ def create_managed_gateway_app(
                                 lease_token,
                                 event,
                             )
+                        if (
+                            is_terminal
+                            and usage_accountant is not None
+                            and event.event_type
+                            in {
+                                GatewayEventType.RESPONSE_COMPLETED,
+                                GatewayEventType.TOOL_CALL_REQUESTED,
+                            }
+                        ):
+                            try:
+                                await settle_usage_outbox(
+                                    request_id=body.request_id,
+                                    maximum=1,
+                                )
+                            except Exception:
+                                # The committed terminal remains a durable
+                                # outbox and is retried by the bounded worker.
+                                pass
                         # The provider's terminal claim is not authoritative until
                         # the event and request state commit atomically.
                         terminal = is_terminal

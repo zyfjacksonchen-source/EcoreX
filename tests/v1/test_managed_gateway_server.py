@@ -26,6 +26,7 @@ from ecorex.gateway import (
     SQLiteGatewayStore as _SQLiteGatewayStore,
     create_managed_gateway_app,
 )
+from ecorex.gateway import server as gateway_server
 
 
 TOKEN = "managed-session-" + "x" * 32
@@ -120,6 +121,272 @@ def events(response) -> list[dict]:
     return [json.loads(line) for line in response.text.splitlines() if line]
 
 
+def _complete_usage_request(
+    store,
+    *,
+    request_id: str,
+    account_id: str,
+    completed_at: datetime,
+    input_tokens: int,
+    output_tokens: int,
+) -> None:
+    principal = GatewayPrincipal(
+        subject=f"subject-{account_id}",
+        account_id=account_id,
+        allowed_model_ids=frozenset({"ecorex-chat"}),
+        quota_period="2026-07",
+        request_limit=100,
+    )
+    body = ModelGatewayRequest.model_validate(request(request_id))
+    reservation = store.reserve(
+        body,
+        principal,
+        lease_seconds=180,
+        now=completed_at,
+    )
+    assert reservation.mode == "execute"
+    assert reservation.lease_token
+    original = gateway_server._utcnow
+    gateway_server._utcnow = lambda: completed_at
+    try:
+        store.append_terminal(
+            request_id,
+            reservation.lease_token,
+            GatewayEvent(
+                seq=1,
+                event_type=GatewayEventType.RESPONSE_COMPLETED,
+                response_id=f"response-{request_id}",
+                usage={
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "total_tokens": input_tokens + output_tokens,
+                },
+            ),
+        )
+    finally:
+        gateway_server._utcnow = original
+
+
+def test_usage_settlement_outbox_is_atomic_and_replay_safe(tmp_path) -> None:
+    store = SQLiteGatewayStore(tmp_path / "gateway.db")
+    completed_at = datetime.now(timezone.utc)
+    _complete_usage_request(
+        store,
+        request_id="usage-outbox-1",
+        account_id="account-1",
+        completed_at=completed_at,
+        input_tokens=13,
+        output_tokens=21,
+    )
+
+    assert store.usage_settlement_counts() == {
+        "pending": 1,
+        "settled": 0,
+        "usage_missing": 0,
+    }
+    facts = store.pending_usage_facts(
+        account_id="account-1",
+        maximum=1,
+        now=completed_at + timedelta(seconds=1),
+    )
+    assert len(facts) == 1
+    assert facts[0].total_tokens == 34
+    assert store.has_unsettled_usage("account-1") is True
+
+    store.mark_usage_settled(
+        facts[0],
+        now=completed_at + timedelta(seconds=2),
+    )
+    store.mark_usage_settled(
+        facts[0],
+        now=completed_at + timedelta(seconds=3),
+    )
+
+    assert store.usage_settlement_counts() == {
+        "pending": 0,
+        "settled": 1,
+        "usage_missing": 0,
+    }
+    assert store.has_unsettled_usage("account-1") is False
+    assert store.pending_usage_facts(
+        account_id="account-1",
+        now=completed_at + timedelta(days=1),
+    ) == ()
+
+
+def test_usage_settlement_failure_backoff_and_missing_usage_are_durable(
+    tmp_path,
+) -> None:
+    store = SQLiteGatewayStore(tmp_path / "gateway.db")
+    completed_at = datetime.now(timezone.utc)
+    _complete_usage_request(
+        store,
+        request_id="usage-retry-1",
+        account_id="account-1",
+        completed_at=completed_at,
+        input_tokens=5,
+        output_tokens=8,
+    )
+    fact = store.pending_usage_facts(
+        request_id="usage-retry-1",
+        now=completed_at + timedelta(seconds=1),
+    )[0]
+    store.defer_usage_settlement(
+        fact.request_id,
+        now=completed_at + timedelta(seconds=1),
+    )
+    assert store.pending_usage_facts(
+        request_id=fact.request_id,
+        now=completed_at + timedelta(seconds=2),
+    ) == ()
+    assert store.pending_usage_facts(
+        request_id=fact.request_id,
+        now=completed_at + timedelta(seconds=4),
+    ) == (fact,)
+
+    principal = GatewayPrincipal(
+        subject="subject-account-1",
+        account_id="account-1",
+        allowed_model_ids=frozenset({"ecorex-chat"}),
+        quota_period="2026-07",
+        request_limit=100,
+    )
+    body = ModelGatewayRequest.model_validate(request("usage-missing-1"))
+    reservation = store.reserve(
+        body,
+        principal,
+        lease_seconds=180,
+        now=completed_at,
+    )
+    original = gateway_server._utcnow
+    gateway_server._utcnow = lambda: completed_at
+    try:
+        store.append_terminal(
+            body.request_id,
+            reservation.lease_token,
+            GatewayEvent(
+                seq=1,
+                event_type=GatewayEventType.RESPONSE_COMPLETED,
+                response_id="response-usage-missing",
+            ),
+        )
+    finally:
+        gateway_server._utcnow = original
+
+    assert store.pending_usage_facts(
+        request_id=body.request_id,
+        now=completed_at + timedelta(seconds=1),
+    ) == ()
+    assert store.usage_settlement_counts() == {
+        "pending": 1,
+        "settled": 0,
+        "usage_missing": 1,
+    }
+    assert store.has_unsettled_usage("account-1") is True
+
+
+def test_usage_endpoint_fails_closed_for_missing_provider_usage(tmp_path) -> None:
+    store = SQLiteGatewayStore(tmp_path / "gateway.db")
+    completed_at = datetime.now(timezone.utc)
+    principal = GatewayPrincipal(
+        subject="subject-account-1",
+        account_id="account-1",
+        allowed_model_ids=frozenset({"ecorex-chat"}),
+        quota_period="2026-07",
+        request_limit=100,
+    )
+    body = ModelGatewayRequest.model_validate(request("usage-missing-endpoint"))
+    reservation = store.reserve(
+        body,
+        principal,
+        lease_seconds=180,
+        now=completed_at,
+    )
+    original = gateway_server._utcnow
+    gateway_server._utcnow = lambda: completed_at
+    try:
+        store.append_terminal(
+            body.request_id,
+            reservation.lease_token,
+            GatewayEvent(
+                seq=1,
+                event_type=GatewayEventType.RESPONSE_COMPLETED,
+                response_id="response-usage-missing-endpoint",
+            ),
+        )
+    finally:
+        gateway_server._utcnow = original
+
+    class Accountant:
+        def settle(self, _fact) -> None:
+            raise AssertionError("missing usage cannot be settled")
+
+        def reconcile(self, _facts) -> None:
+            raise AssertionError("full-ledger reconciliation must not run")
+
+        def tokens_available(self, _account_id: str) -> bool:
+            return True
+
+        def project(self, _account_id: str, *, timezone_name: str):
+            del timezone_name
+            raise AssertionError("incomplete usage must not be projected")
+
+    app = create_managed_gateway_app(
+        store,
+        authenticator=Authenticator(),
+        provider=Provider(),
+        allowed_model_ids=frozenset({"ecorex-chat"}),
+        usage_accountant=Accountant(),
+    )
+    response = TestClient(app).get("/api/v1/usage", headers=headers())
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "managed account usage is unavailable"
+
+
+def test_unsettled_account_usage_blocks_new_provider_admission(tmp_path) -> None:
+    provider = Provider()
+    store = SQLiteGatewayStore(tmp_path / "gateway.db")
+
+    class FailingAccountant:
+        def settle(self, _fact) -> None:
+            raise RuntimeError("control plane unavailable")
+
+        def reconcile(self, _facts) -> None:
+            raise AssertionError("full-ledger reconciliation must not run")
+
+        def tokens_available(self, _account_id: str) -> bool:
+            return True
+
+        def project(self, account_id: str, *, timezone_name: str):
+            return store.account_usage(account_id, timezone_name=timezone_name)
+
+    app = create_managed_gateway_app(
+        store,
+        authenticator=Authenticator(),
+        provider=provider,
+        allowed_model_ids=frozenset({"ecorex-chat"}),
+        usage_accountant=FailingAccountant(),
+    )
+    client = TestClient(app)
+
+    first = client.post(
+        "/api/v1/model/stream",
+        headers=headers(),
+        json=request("usage-fail-1"),
+    )
+    blocked = client.post(
+        "/api/v1/model/stream",
+        headers=headers(),
+        json=request("usage-fail-2"),
+    )
+
+    assert first.status_code == 200
+    assert blocked.status_code == 503
+    assert blocked.json()["detail"] == "managed usage settlement is pending"
+    assert provider.calls == 1
+
+
 def test_cloud_gateway_auth_allowlist_persists_before_stream_and_replays(tmp_path) -> None:
     provider = Provider()
     store = SQLiteGatewayStore(tmp_path / "gateway.db")
@@ -148,6 +415,93 @@ def test_cloud_gateway_auth_allowlist_persists_before_stream_and_replays(tmp_pat
         assert connection.execute(
             "SELECT status FROM gateway_requests WHERE request_id='request-1'"
         ).fetchone()[0] == "completed"
+
+
+def test_account_usage_is_cross_request_account_scoped_and_replay_safe(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store = SQLiteGatewayStore(tmp_path / "gateway-usage.db")
+    monday = datetime(2026, 7, 13, 16, 30, tzinfo=timezone.utc)
+    today = datetime(2026, 7, 14, 17, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc)
+    _complete_usage_request(
+        store,
+        request_id="device-a-request",
+        account_id="account-1",
+        completed_at=monday,
+        input_tokens=10,
+        output_tokens=2,
+    )
+    _complete_usage_request(
+        store,
+        request_id="device-b-request",
+        account_id="account-1",
+        completed_at=today,
+        input_tokens=20,
+        output_tokens=3,
+    )
+    _complete_usage_request(
+        store,
+        request_id="other-account-request",
+        account_id="account-2",
+        completed_at=today,
+        input_tokens=900,
+        output_tokens=100,
+    )
+
+    projection = store.account_usage(
+        "account-1",
+        timezone_name="Asia/Shanghai",
+        now=now,
+    )
+    assert projection.today.model_dump() == {
+        "input_tokens": 20,
+        "output_tokens": 3,
+        "total_tokens": 23,
+    }
+    assert projection.week.model_dump() == {
+        "input_tokens": 30,
+        "output_tokens": 5,
+        "total_tokens": 35,
+    }
+
+    replay = store.reserve(
+        ModelGatewayRequest.model_validate(request("device-b-request")),
+        GatewayPrincipal(
+            subject="subject-account-1",
+            account_id="account-1",
+            allowed_model_ids=frozenset({"ecorex-chat"}),
+            quota_period="2026-07",
+            request_limit=100,
+        ),
+        lease_seconds=180,
+        now=now,
+    )
+    assert replay.mode == "replay"
+    assert store.account_usage(
+        "account-1",
+        timezone_name="Asia/Shanghai",
+        now=now,
+    ) == projection
+
+    monkeypatch.setattr(gateway_server, "_utcnow", lambda: now)
+    app = create_managed_gateway_app(
+        store,
+        authenticator=Authenticator(),
+        provider=Provider(),
+        allowed_model_ids=frozenset({"ecorex-chat"}),
+    )
+    client = TestClient(app)
+    assert client.get("/api/v1/usage").status_code == 401
+    response = client.get(
+        "/api/v1/usage",
+        params={"timezone": "Asia/Shanghai"},
+        headers=headers(),
+    )
+    assert response.status_code == 200
+    assert response.json()["scope"] == "account"
+    assert response.json()["week"]["total_tokens"] == 35
 
 
 def test_gateway_request_identity_quota_and_model_policy_fail_closed(tmp_path) -> None:

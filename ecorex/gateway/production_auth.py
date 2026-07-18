@@ -41,14 +41,14 @@ class Ed25519GatewayJWTAuthenticator:
     public_keys: Mapping[str, bytes]
     issuer: str
     audience: str
-    service_model_ids: frozenset[str]
+    service_model_ids: frozenset[str] | None
     max_token_lifetime_seconds: int = 900
     clock_skew_seconds: int = 30
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
     _verifier: Ed25519AccessTokenVerifier = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        if (
+        if self.service_model_ids is not None and (
             not self.service_model_ids
             or len(self.service_model_ids) > 128
             or any(_MODEL_ID.fullmatch(item) is None for item in self.service_model_ids)
@@ -80,7 +80,9 @@ class Ed25519GatewayJWTAuthenticator:
             or entitlement.concurrent_request_limit is None
         ):
             raise PermissionError("gateway entitlements are incomplete")
-        allowed = entitlement.allowed_model_ids & self.service_model_ids
+        allowed = entitlement.allowed_model_ids
+        if self.service_model_ids is not None:
+            allowed &= self.service_model_ids
         if not allowed:
             raise PermissionError("gateway model entitlement is empty")
         if any(

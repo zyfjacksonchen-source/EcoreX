@@ -137,6 +137,9 @@ export function Composer({
     ? Math.max(0, Math.min(100, (usage.context.used_tokens / usage.context.window_tokens) * 100))
     : 0;
   const quotaUnit = quota?.unit === "managed_requests" ? "次" : (quota?.unit || "");
+  const usageScopeLabel = usage?.complete_across_devices
+    ? "账号累计"
+    : "仅此设备";
   const sendLabel = submitting ? "发送中" : sendFailed ? "重试发送" : "发送";
   const selectedChatModel = chatModels.find((model) => model.model_id === chatModel);
 
@@ -377,6 +380,7 @@ export function Composer({
               <span><b>本周</b>{formatTokens(usage?.week.total_tokens)}</span>
               <span><b>上下文</b>{contextLabel}</span>
               <span><b>额度</b>{remainingLabel}{remainingLabel === "—" ? "" : quotaUnit}</span>
+              <span><b>范围</b>{usageScopeLabel}</span>
               <Tooltip.Arrow className="ex-tooltip-arrow" />
             </Tooltip.Content>
           </Tooltip.Portal>

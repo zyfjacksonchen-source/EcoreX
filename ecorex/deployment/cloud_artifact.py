@@ -123,8 +123,7 @@ def unsigned_cloud_manifest(
 
     tree = _root(root)
     if (
-        __version__ != "1.0.0"
-        or _RELEASE_ID.fullmatch(release_id) is None
+        _RELEASE_ID.fullmatch(release_id) is None
         or _COMMIT.fullmatch(source_commit) is None
         or _SHA256.fullmatch(dependency_lock_manifest_sha256) is None
     ):

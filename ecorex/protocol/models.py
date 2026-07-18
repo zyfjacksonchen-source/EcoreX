@@ -1540,6 +1540,9 @@ class ConversationUsageProjection(FrozenProtocolModel):
 
     thread_id: str = Field(min_length=1)
     timezone: str = Field(min_length=1, max_length=64)
+    scope: Literal["account", "local_device"] = "local_device"
+    source: Literal["managed_gateway", "local_event_store"] = "local_event_store"
+    complete_across_devices: bool = False
     today: TokenUsageWindow = Field(default_factory=TokenUsageWindow)
     week: TokenUsageWindow = Field(default_factory=TokenUsageWindow)
     context: ContextUsageProjection = Field(default_factory=ContextUsageProjection)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
@@ -156,6 +157,46 @@ class GatewayEventType(StrEnum):
     TOOL_CALL_REQUESTED = "tool_call.requested"
     RESPONSE_COMPLETED = "response.completed"
     RESPONSE_FAILED = "response.failed"
+
+
+class GatewayTokenUsageWindow(GatewayModel):
+    input_tokens: int = Field(default=0, ge=0, strict=True)
+    output_tokens: int = Field(default=0, ge=0, strict=True)
+    total_tokens: int = Field(default=0, ge=0, strict=True)
+
+    @model_validator(mode="after")
+    def validate_total(self) -> "GatewayTokenUsageWindow":
+        if self.total_tokens < self.input_tokens + self.output_tokens:
+            raise ValueError("gateway token total is inconsistent")
+        return self
+
+
+class GatewayAccountUsageProjection(GatewayModel):
+    """Provider-reported usage for the authenticated account across devices."""
+
+    schema_version: Literal[1] = 1
+    scope: Literal["account"] = "account"
+    timezone: str = Field(min_length=1, max_length=64)
+    today: GatewayTokenUsageWindow = Field(default_factory=GatewayTokenUsageWindow)
+    week: GatewayTokenUsageWindow = Field(default_factory=GatewayTokenUsageWindow)
+    week_started_at: datetime
+    coverage_started_at: datetime | None = None
+    calculated_at: datetime
+
+    @model_validator(mode="after")
+    def validate_projection(self) -> "GatewayAccountUsageProjection":
+        if (
+            self.calculated_at.tzinfo is None
+            or self.week_started_at.tzinfo is None
+            or (
+                self.coverage_started_at is not None
+                and self.coverage_started_at.tzinfo is None
+            )
+        ):
+            raise ValueError("gateway usage timestamp must be timezone-aware")
+        if self.week_started_at > self.calculated_at:
+            raise ValueError("gateway usage window is invalid")
+        return self
 
 
 class GatewayToolOutput(GatewayModel):
@@ -508,7 +549,6 @@ class GatewayEvent(GatewayModel):
                     self.reasoning_id,
                     self.error_code,
                     self.error_message,
-                    self.usage,
                 )
             ) or self.retryable:
                 raise ValueError("tool_call.requested contains incompatible fields")

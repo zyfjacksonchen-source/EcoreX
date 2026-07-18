@@ -6,6 +6,8 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import pytest
@@ -16,6 +18,7 @@ from ecorex.release import (
     DirectReleaseAdmissionError,
     DirectReleaseAdmissionPolicy,
     Ed25519MemorySigner,
+    LIVE_ACCEPTANCE_GATES,
     ReleaseBuildSpec,
     ReleaseBuilder,
     build_direct_release_waiver,
@@ -309,6 +312,182 @@ def test_direct_bundle_records_live_gates_only_as_waived(tmp_path: Path) -> None
                 {release_signer.key_id: release_signer.public_key_bytes}
             ),
         )
+
+
+def test_direct_assembler_keeps_stage_and_candidate_run_identities_distinct(
+    tmp_path: Path,
+) -> None:
+    (
+        built,
+        _release_signer,
+        _publication_signer,
+        manifest_bytes,
+        candidate_bytes,
+        waiver_bytes,
+        publication_bytes,
+        _policy,
+    ) = _fixture(tmp_path)
+    staging_run_id = 42
+    candidate_run_id = 84
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    candidate_path = tmp_path / "candidate.json"
+    candidate_path.write_bytes(candidate_bytes)
+    waiver_path = tmp_path / "waiver.json"
+    waiver_path.write_bytes(waiver_bytes)
+    publication_path = tmp_path / "publication.json"
+    publication_path.write_bytes(publication_bytes)
+    receipts = tmp_path / "gate-receipts"
+    receipts.mkdir()
+    receipt_gates = (
+        required_release_gates(ReleaseChannel.STABLE)
+        - required_publication_gates(ReleaseChannel.STABLE)
+        - LIVE_ACCEPTANCE_GATES
+        - {"bootstrap-index"}
+    )
+    for gate in receipt_gates:
+        (receipts / f"{gate}.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "receipt_type": "ecorex-release-gate",
+                    "gate": gate,
+                    "status": "passed",
+                    "commit_sha": COMMIT,
+                    "workflow_run_id": candidate_run_id,
+                    "release_id": built.manifest.release_id,
+                    "version": built.manifest.version,
+                    "channel": built.manifest.channel.value,
+                    "build_digest": built.manifest.build_digest,
+                    "manifest_sha256": manifest_sha256,
+                    "evidence_type": "test-fixture",
+                    "evidence_sha256": hashlib.sha256(gate.encode()).hexdigest(),
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    script = (
+        Path(__file__).resolve().parents[2]
+        / "scripts"
+        / "assemble-v1-direct-release-admission.py"
+    )
+
+    def assemble(
+        *,
+        expected_staging_run_id: int,
+        expected_candidate_run_id: int,
+        output: Path,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            (
+                sys.executable,
+                str(script),
+                "--receipts-dir",
+                str(receipts),
+                "--publication-receipt",
+                str(publication_path),
+                "--manifest",
+                str(built.manifest_path),
+                "--candidate-receipt",
+                str(candidate_path),
+                "--operator-waiver",
+                str(waiver_path),
+                "--phase",
+                "prepare",
+                "--expected-commit",
+                COMMIT,
+                "--expected-staging-run-id",
+                str(expected_staging_run_id),
+                "--expected-candidate-workflow-run-id",
+                str(expected_candidate_run_id),
+                "--operator-instruction-sha256",
+                INSTRUCTION,
+                "--output",
+                str(output),
+            ),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    accepted_output = tmp_path / "accepted.json"
+    accepted = assemble(
+        expected_staging_run_id=staging_run_id,
+        expected_candidate_run_id=candidate_run_id,
+        output=accepted_output,
+    )
+    assert accepted.returncode == 0, accepted.stderr
+    assert accepted_output.is_file()
+
+    wrong_stage_output = tmp_path / "wrong-stage.json"
+    wrong_stage = assemble(
+        expected_staging_run_id=staging_run_id + 1,
+        expected_candidate_run_id=candidate_run_id,
+        output=wrong_stage_output,
+    )
+    assert wrong_stage.returncode == 1
+    assert not wrong_stage_output.exists()
+    assert json.loads(wrong_stage.stderr)["error"] == (
+        "direct_release_admission_identity_invalid"
+    )
+
+    wrong_candidate_output = tmp_path / "wrong-candidate.json"
+    wrong_candidate = assemble(
+        expected_staging_run_id=staging_run_id,
+        expected_candidate_run_id=candidate_run_id + 1,
+        output=wrong_candidate_output,
+    )
+    assert wrong_candidate.returncode == 1
+    assert not wrong_candidate_output.exists()
+    assert json.loads(wrong_candidate.stderr)["error"] == (
+        "direct_release_gate_receipt_invalid"
+    )
+
+    same_identity_output = tmp_path / "same-identity.json"
+    same_identity = assemble(
+        expected_staging_run_id=staging_run_id,
+        expected_candidate_run_id=staging_run_id,
+        output=same_identity_output,
+    )
+    assert same_identity.returncode == 1
+    assert not same_identity_output.exists()
+    assert json.loads(same_identity.stderr)["error"] == (
+        "direct_release_admission_identity_invalid"
+    )
+
+    swapped_output = tmp_path / "swapped.json"
+    swapped = assemble(
+        expected_staging_run_id=candidate_run_id,
+        expected_candidate_run_id=staging_run_id,
+        output=swapped_output,
+    )
+    assert swapped.returncode == 1
+    assert not swapped_output.exists()
+    assert json.loads(swapped.stderr)["error"] == (
+        "direct_release_admission_identity_invalid"
+    )
+
+    mixed_gate = sorted(receipt_gates)[0]
+    mixed_receipt_path = receipts / f"{mixed_gate}.json"
+    mixed_receipt = json.loads(mixed_receipt_path.read_text(encoding="utf-8"))
+    mixed_receipt["workflow_run_id"] = staging_run_id
+    mixed_receipt_path.write_text(
+        json.dumps(mixed_receipt, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    mixed_output = tmp_path / "mixed-receipt.json"
+    mixed = assemble(
+        expected_staging_run_id=staging_run_id,
+        expected_candidate_run_id=candidate_run_id,
+        output=mixed_output,
+    )
+    assert mixed.returncode == 1
+    assert not mixed_output.exists()
+    assert json.loads(mixed.stderr)["error"] == (
+        "direct_release_gate_receipt_invalid"
+    )
 
 
 def test_direct_policy_is_disabled_and_single_release_scoped(tmp_path: Path) -> None:

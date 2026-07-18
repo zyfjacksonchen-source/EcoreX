@@ -6612,3 +6612,60 @@ explicit selector, never its credential bytes or arbitrary secret-shaped
 variables. Focused external-signer, SSH-adapter, Bootstrap-index and public-site
 coverage passes 28 tests with seven platform skips; Ruff and tracked-diff
 validation pass.
+
+## 2026-07-19 - v1.0.2 canonical usage settlement and release hardening
+
+The account usage surfaces now share one cross-version ledger. Provider
+completion facts are preserved for both final-response and tool-handoff model
+rounds, projected by the same server function for the Composer and operator
+usage panel, and settled into administrator quota counters by immutable
+provider identity. Replays with the same identity and payload are no-ops;
+identity reuse with different ownership or usage is a hard conflict.
+
+Control Plane management schema v3 adds immutable provider usage facts and
+backfills each existing non-zero account counter as one legacy baseline.
+Gateway schema v3 adds a durable settlement outbox in the same transaction as
+the terminal event. A bounded worker settles only pending rows, writes a local
+receipt after the Control Plane commit, and retries with backoff. A crash
+between the two commits safely replays the Control Plane no-op. Missing
+provider usage is retained as `usage_missing` evidence and blocks later quota
+admission and account usage projection instead of being reported as zero.
+This replaces the former full-history reconciliation on every request, which
+would have become O(N) and failed closed after 100,000 completed requests.
+
+The usage panel no longer estimates Token values from task prose. Active users,
+summary rows and task/detail identity are reconciled from the account catalog,
+so users with zero activity remain visible without restoring deleted users.
+The production baseline before migration is 41 active users, 41 panel users
+and 41 task/detail users; the seven legacy-deleted users remain excluded.
+
+The product version is now `1.0.2`. Cloud artifact wheel selection, detached
+signing, runtime verification, Bootstrap sequence, Windows signed-candidate
+drill and release tests all derive from the single Python version source.
+Historical signed v1.0.0 Cloud releases are verifiable during pre-schema
+compensation using their own signed version, source commit and dependency-lock
+identity. Release-replica version/namespace values are written as slot-local
+overrides, so a v1.0.2 target can stage while the v1.0.0 source remains
+restartable. Once management schema v3 commits, rollback is intentionally
+roll-forward-only because the v1.0.0 process rejects the newer schema.
+
+Stable publication now always creates/finalizes the GitHub origin before
+verifying the configured domestic read-through mirror. This preserves the
+domestic mirror as the first download source without reintroducing a
+three-source-equality requirement.
+
+The direct-release admission contract now keeps the real platform Stage run
+identity separate from the Candidate quality-gate run identity. Candidate
+provenance must match `--expected-staging-run-id`; every non-publication gate
+receipt must match `--expected-candidate-workflow-run-id`; the two positive
+identities must differ. Same-ID, swapped-ID and mixed-receipt inputs fail
+closed, so a skipped protected path can no longer be made plausible by copying
+one workflow ID into every receipt.
+
+The final local v1 suite completed with 2,396 passes and 57 expected skips.
+Two Windows tests initially encountered the same host-level `MoveFileExW`
+access-denied race while atomically renaming isolated temporary slots; both
+passed together on immediate focused rerun. The final direct-admission suite
+passes 9/9, the WebUI suite passes 182/182, TypeScript contracts pass, the
+content-addressed Web build passes, Ruff passes, and dependency-lock
+verification remains unchanged.

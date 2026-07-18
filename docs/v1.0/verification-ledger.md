@@ -2504,3 +2504,17 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Loopback SNI root cause | 0 one-time production bootstrap | Installed an isolated `dl.ecoremedia.net` readback leaf/CA and SNI vhost on the shared loopback listener. Hostname and CA verification stay enabled; Provider Bridge SNI routes remain separate. The control persists across releases. |
 | Public Web/Admin activation | 0 production | `current` points to the immutable Stable slot; site tree `eccf1b99…94dd`; receipt `1ac04fce…a67`; index/pointer/cache policy, every hashed asset, Admin index/CSS/JS, CSP, version header and ready body passed exact HTTPS readback; journal absent. |
 | SSH signer selector boundary | 0 local | Only `ECOREX_SSH_SIGNER_CREDENTIAL_FILE` crosses the digest-pinned adapter as a path selector; credential bytes and arbitrary secret variables remain unavailable. Focused suites: 28 passed / seven skips; Ruff and diff checks passed. |
+
+## v1.0.2 usage and release pre-deployment gates - 2026-07-19
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Canonical usage, Gateway outbox and management settlement | 0 | 71 focused tests passed. Coverage includes v2→v3 production-shape migration, response/tool terminal backfill, atomic enqueue, idempotent settlement receipt, retry backoff, durable `usage_missing`, account fail-closed admission and the shared panel/Composer projection. |
+| Version, signing and Cloud artifact chain | 0 | 174 tests passed and 17 Windows platform skips were expected. Product identity, Bootstrap sequence, Windows drill, detached Cloud signing, historical-release compensation and slot-local release-replica version fences all follow `1.0.2`. |
+| Candidate publication path | 0 | 61 tests passed. Stable publishes the GitHub origin required by the domestic read-through mirror while retaining the `stable-primary-only` publication policy. |
+| WebUI thin-client contracts | 0 | TypeScript typecheck passed; the v1 product suite passed 182/182. Composer account scope remains server-projected. |
+| Production usage baseline before migration | 0 read-only | 41 active users = 41 API users = 41 task/detail users. The merged weekly ledger contains 287 summary rows and 237 usage records: input 117,518; output 291,153; total 408,671. Deleted legacy users remain excluded. |
+| Production administrator all-time baseline | 0 read-only | Existing administrator counters total 5,936,576 Tokens. The signed Gateway ledger contributes one previously unsettled account with 281 Tokens, producing the expected post-migration total 5,936,857 exactly once. |
+| Full local Runtime regression | 0 after focused host-race rerun | 2,396 passed and 57 platform/environment skips. Two isolated Windows slot renames returned host `ERROR_ACCESS_DENIED` in the long concurrent run; the exact two tests then passed 2/2 together. No business assertion failed. |
+| Direct release identity separation | 0 | Stage run ID and Candidate gate run ID are independent mandatory inputs. Correct distinct IDs pass; same, swapped, wrong and one-receipt-mixed identities fail closed. The complete direct-admission suite passes 9/9. |
+| Final WebUI and dependency gates | 0 | TypeScript contract check passed; WebUI tests passed 182/182; the content-addressed build produced 25 production assets and 24 chunks; Ruff and dependency-lock verification passed. |

@@ -451,6 +451,11 @@ def test_fixed_https_responses_adapter_translates_real_sse_contract() -> None:
         assert [event.seq for event in events] == [1, 2, 3]
         assert events[2].arguments == {"document_id": "doc_1"}
         assert events[2].idempotency_key.startswith("tool_")
+        assert events[2].usage == {
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "total_tokens": 15,
+        }
         await client.aclose()
         assert len(requests) == 2
 
@@ -761,11 +766,19 @@ def test_tool_handoff_is_a_replayable_terminal_and_releases_concurrency(
         tool_name="read",
         arguments={"path": "report.docx"},
         idempotency_key="tool-call-1",
+        usage={"input_tokens": 7, "output_tokens": 2, "total_tokens": 9},
     )
     store.append_terminal(body.request_id, reservation.lease_token, handoff)
     replay = store.reserve(body, principal, lease_seconds=30)
     assert replay.mode == "replay"
     assert replay.events == (handoff,)
+    facts = store.completed_usage_facts(request_id=body.request_id, maximum=1)
+    assert len(facts) == 1
+    assert facts[0].total_tokens == 9
+    assert store.account_usage(
+        "account-1",
+        timezone_name="Asia/Shanghai",
+    ).week.total_tokens >= 9
     assert store.reserve(
         _request("next-model-round"), principal, lease_seconds=30
     ).mode == "execute"

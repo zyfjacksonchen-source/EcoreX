@@ -3985,8 +3985,31 @@
           "title": "Calculated At",
           "type": "string"
         },
+        "complete_across_devices": {
+          "default": false,
+          "title": "Complete Across Devices",
+          "type": "boolean"
+        },
         "context": {
           "$ref": "#/$defs/ContextUsageProjection"
+        },
+        "scope": {
+          "default": "local_device",
+          "enum": [
+            "account",
+            "local_device"
+          ],
+          "title": "Scope",
+          "type": "string"
+        },
+        "source": {
+          "default": "local_event_store",
+          "enum": [
+            "managed_gateway",
+            "local_event_store"
+          ],
+          "title": "Source",
+          "type": "string"
         },
         "thread_id": {
           "minLength": 1,

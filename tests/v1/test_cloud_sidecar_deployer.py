@@ -41,7 +41,12 @@ def _spec(tmp_path: Path, artifact: Path | None = None) -> deployment.CloudDeplo
     )
 
 
-def _signed_artifact(tmp_path: Path) -> tuple[deployment.CloudDeploymentSpec, Path]:
+def _signed_artifact(
+    tmp_path: Path,
+    *,
+    version: str = deployment.PRODUCT_VERSION,
+    dependency_lock_manifest_sha256: str = "b" * 64,
+) -> tuple[deployment.CloudDeploymentSpec, Path]:
     root = tmp_path / "artifact"
     required = (
         "venv/bin/python3.11",
@@ -79,13 +84,13 @@ def _signed_artifact(tmp_path: Path) -> tuple[deployment.CloudDeploymentSpec, Pa
     manifest = {
         "schema_version": 1,
         "release_id": "ecorex-cloud-v1.0.0-test",
-        "version": "1.0.0",
+        "version": version,
         "platform": "linux",
         "architecture": "aarch64",
         "python_version": "3.11.9",
         "build_contract": deployment.BUILD_CONTRACT,
         "source_commit": "a" * 40,
-        "dependency_lock_manifest_sha256": "b" * 64,
+        "dependency_lock_manifest_sha256": dependency_lock_manifest_sha256,
         "files": files,
     }
     manifest_path = root / "cloud-release-manifest.json"
@@ -137,7 +142,7 @@ def _signed_artifact(tmp_path: Path) -> tuple[deployment.CloudDeploymentSpec, Pa
     spec = deployment.CloudDeploymentSpec(
         release_id="ecorex-cloud-v1.0.0-test",
         source_commit="a" * 40,
-        dependency_lock_manifest_sha256="b" * 64,
+        dependency_lock_manifest_sha256=dependency_lock_manifest_sha256,
         artifact_root=root,
         artifact_manifest_sha256=_sha(manifest_path),
         release_keyring_path=keyring,
@@ -300,6 +305,44 @@ def test_transition_release_uses_its_signed_source_commit_not_target_spec(
 
     verified = deployment._verify_transition_release(
         target_spec,
+        {
+            "active_release_id": spec.release_id,
+            "artifact_manifest_sha256": spec.artifact_manifest_sha256,
+        },
+    )
+
+    assert verified == release
+
+
+def test_v102_transition_recovery_accepts_signed_v100_release_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    historical_lock = "c" * 64
+    spec, source = _signed_artifact(
+        tmp_path,
+        version="1.0.0",
+        dependency_lock_manifest_sha256=historical_lock,
+    )
+    release_root = tmp_path / "releases"
+    release = release_root / spec.release_id
+    release_root.mkdir()
+    shutil.copytree(source, release)
+    monkeypatch.setattr(deployment, "RELEASE_ROOT", release_root)
+    monkeypatch.setattr(
+        deployment, "_release_directory_identity", lambda _release: (1, 1)
+    )
+    monkeypatch.setattr(
+        deployment, "_seal_release_directory", lambda _release, _identity: None
+    )
+    monkeypatch.setattr(deployment, "_verify_staged_runtime", lambda _release: None)
+    v102_target_spec = deployment.dataclasses.replace(
+        spec,
+        source_commit="d" * 40,
+        dependency_lock_manifest_sha256="e" * 64,
+    )
+
+    verified = deployment._verify_transition_release(
+        v102_target_spec,
         {
             "active_release_id": spec.release_id,
             "artifact_manifest_sha256": spec.artifact_manifest_sha256,
@@ -748,6 +791,9 @@ def test_slot_environment_assigns_distinct_image_api_and_worker_ports(
 
     deployment._write_slot_environment("blue", release)
 
+    control_plane = deployment._parse_env(
+        config_root / "slots" / "blue" / "control-plane.env", secret=False
+    )
     api = deployment._parse_env(
         config_root / "slots" / "blue" / "image.env", secret=False
     )
@@ -767,7 +813,83 @@ def test_slot_environment_assigns_distinct_image_api_and_worker_ports(
         "ECOREX_IMAGE_INSTANCE_ID": "ecorex-image-worker-blue",
     }
     assert api["ECOREX_IMAGE_BIND_PORT"] != worker["ECOREX_IMAGE_BIND_PORT"]
+    assert control_plane["ECOREX_CP_RELEASE_REPLICA_NAMESPACE"] == (
+        f"v{deployment.PRODUCT_VERSION}"
+    )
+    assert control_plane["ECOREX_CP_RELEASE_REPLICA_PRODUCT_VERSION"] == (
+        deployment.PRODUCT_VERSION
+    )
     assert symlinks == [(release, tmp_path / "slots" / "blue" / "current")]
+
+
+def test_v102_release_replica_storage_accepts_legacy_base_version_and_stages_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_root = tmp_path / "config-root"
+    replica_root = tmp_path / "replica"
+    replica_root.mkdir()
+    public_root = "https://downloads.example.invalid/releases"
+    public_config = config_root / "config" / "control-plane.env"
+    public_config.parent.mkdir(parents=True)
+    public_config.write_text(
+        "\n".join(
+            (
+                "ECOREX_CP_RELEASE_REPLICA_ENABLED=true",
+                f"ECOREX_CP_RELEASE_REPLICA_STORAGE_ROOT={replica_root}",
+                f"ECOREX_CP_RELEASE_REPLICA_PUBLIC_ROOT={public_root}",
+                "ECOREX_CP_RELEASE_REPLICA_NAMESPACE=v1.0.0",
+                "ECOREX_CP_RELEASE_REPLICA_PRODUCT_VERSION=1.0.0",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(deployment, "CONFIG_ROOT", config_root)
+    monkeypatch.setattr(deployment, "RELEASE_REPLICA_ROOT", replica_root)
+    monkeypatch.setattr(deployment, "RELEASE_REPLICA_PUBLIC_ROOT", public_root)
+    monkeypatch.setattr(deployment.shutil, "chown", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(deployment.os, "chmod", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(deployment, "_fsync_directory", lambda _path: None)
+
+    deployment._prepare_release_replica_storage()
+
+    namespace = replica_root / f"v{deployment.PRODUCT_VERSION}"
+    assert namespace.is_dir()
+    assert (namespace / "stable").is_dir()
+    assert (namespace / "canary").is_dir()
+
+
+def test_release_replica_storage_rejects_future_base_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_root = tmp_path / "config-root"
+    replica_root = tmp_path / "replica"
+    replica_root.mkdir()
+    public_root = "https://downloads.example.invalid/releases"
+    public_config = config_root / "config" / "control-plane.env"
+    public_config.parent.mkdir(parents=True)
+    public_config.write_text(
+        "\n".join(
+            (
+                "ECOREX_CP_RELEASE_REPLICA_ENABLED=true",
+                f"ECOREX_CP_RELEASE_REPLICA_STORAGE_ROOT={replica_root}",
+                f"ECOREX_CP_RELEASE_REPLICA_PUBLIC_ROOT={public_root}",
+                "ECOREX_CP_RELEASE_REPLICA_NAMESPACE=v9.9.9",
+                "ECOREX_CP_RELEASE_REPLICA_PRODUCT_VERSION=9.9.9",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(deployment, "CONFIG_ROOT", config_root)
+    monkeypatch.setattr(deployment, "RELEASE_REPLICA_ROOT", replica_root)
+    monkeypatch.setattr(deployment, "RELEASE_REPLICA_PUBLIC_ROOT", public_root)
+
+    with pytest.raises(
+        deployment.CloudDeployError,
+        match="release_replica_configuration_invalid",
+    ):
+        deployment._prepare_release_replica_storage()
 
 
 def test_final_health_rechecks_all_endpoints_and_requires_active_worker(

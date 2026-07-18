@@ -120,6 +120,16 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+_PROVIDER_USAGE_SERVICES = frozenset({"managed_gateway", "image_service"})
+_PROVIDER_USAGE_KINDS = frozenset({"chat", "image"})
+_PROVIDER_USAGE_ACTOR = ControlPrincipal(
+    subject="system:provider-usage-settlement",
+    client_id="ecorex-internal",
+    account_id="system",
+    roles=frozenset({"platform_admin"}),
+)
+
+
 class AdminManagementRepository:
     """One SQLite authority with immutable model revisions and secret-safe APIs."""
 
@@ -423,6 +433,189 @@ class AdminManagementRepository:
             return UsageSummaryProjection(
                 **dict(row), captured_at=_now()
             )
+        finally:
+            connection.close()
+
+    def record_provider_usage(
+        self,
+        *,
+        source_service: str,
+        source_id: str,
+        usage_kind: str,
+        account_id: str,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        total_tokens: int = 0,
+        image_count: int = 0,
+        provider_created_at: str,
+    ) -> AdminUserProjection:
+        """Settle one immutable provider fact into account counters exactly once.
+
+        The provider's durable request/job identity is the idempotency key.
+        Replaying the same identity and payload is a no-op; reusing it with
+        different ownership or usage is a hard conflict. The fact, counters
+        and audit chain commit in one SQLite transaction.
+        """
+
+        if (
+            source_service not in _PROVIDER_USAGE_SERVICES
+            or usage_kind not in _PROVIDER_USAGE_KINDS
+            or not isinstance(source_id, str)
+            or not 1 <= len(source_id) <= 256
+            or any(ord(character) < 33 for character in source_id)
+            or not isinstance(account_id, str)
+            or not 1 <= len(account_id) <= 256
+            or any(ord(character) < 33 for character in account_id)
+            or any(
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or not 0 <= value <= 10**12
+                for value in (
+                    input_tokens,
+                    output_tokens,
+                    total_tokens,
+                    image_count,
+                )
+            )
+            or total_tokens < input_tokens + output_tokens
+            or (
+                usage_kind == "chat"
+                and (total_tokens <= 0 or image_count != 0)
+            )
+            or (
+                usage_kind == "image"
+                and (total_tokens != 0 or image_count <= 0)
+            )
+            or not isinstance(provider_created_at, str)
+            or not 1 <= len(provider_created_at) <= 64
+        ):
+            raise ValueError("provider usage fact is invalid")
+        try:
+            created = datetime.fromisoformat(provider_created_at)
+        except ValueError:
+            raise ValueError("provider usage timestamp is invalid") from None
+        if created.tzinfo is None:
+            raise ValueError("provider usage timestamp is invalid")
+        created_at = created.astimezone(UTC).isoformat()
+        material = {
+            "source_service": source_service,
+            "source_id": source_id,
+            "usage_kind": usage_kind,
+            "account_id": account_id,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens,
+            "image_count": image_count,
+            "provider_created_at": created_at,
+        }
+        payload_sha256 = _sha(material)
+        fact_id = "usagefact_" + hashlib.sha256(
+            b"ecorex-provider-usage-fact-v1\0"
+            + source_service.encode("ascii")
+            + b"\0"
+            + source_id.encode("utf-8")
+            + b"\0"
+            + usage_kind.encode("ascii")
+        ).hexdigest()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT account_id,payload_sha256 FROM admin_ops_provider_usage_facts "
+                "WHERE fact_id=?",
+                (fact_id,),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    str(existing["account_id"]) != account_id
+                    or str(existing["payload_sha256"]) != payload_sha256
+                ):
+                    raise AdminManagementConflict(
+                        "provider usage identity was reused"
+                    )
+                row = connection.execute(
+                    "SELECT * FROM admin_ops_users WHERE account_id=?",
+                    (account_id,),
+                ).fetchone()
+                if row is None:
+                    raise AdminManagementNotFound("user does not exist")
+                connection.commit()
+                return self._user(row)
+            row = connection.execute(
+                "SELECT * FROM admin_ops_users WHERE account_id=?",
+                (account_id,),
+            ).fetchone()
+            if row is None:
+                raise AdminManagementNotFound("user does not exist")
+            revision = int(row["revision"]) + 1
+            token_value = int(row["tokens_used"]) + total_tokens
+            image_value = int(row["images_used"]) + image_count
+            recorded_at = _now()
+            connection.execute(
+                "INSERT INTO admin_ops_provider_usage_facts("
+                "fact_id,source_service,source_id,usage_kind,account_id,"
+                "input_tokens,output_tokens,total_tokens,image_count,payload_sha256,"
+                "provider_created_at,recorded_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    fact_id,
+                    source_service,
+                    source_id,
+                    usage_kind,
+                    account_id,
+                    input_tokens,
+                    output_tokens,
+                    total_tokens,
+                    image_count,
+                    payload_sha256,
+                    created_at,
+                    recorded_at,
+                ),
+            )
+            updated = connection.execute(
+                "UPDATE admin_ops_users SET tokens_used=?,images_used=?,revision=?,"
+                "updated_at=? WHERE account_id=? AND revision=?",
+                (
+                    token_value,
+                    image_value,
+                    revision,
+                    recorded_at,
+                    account_id,
+                    int(row["revision"]),
+                ),
+            )
+            if updated.rowcount != 1:
+                raise AdminManagementConflict("user revision changed")
+            self._audit(
+                connection,
+                actor=_PROVIDER_USAGE_ACTOR,
+                action="usage.provider.settled",
+                target_id=account_id,
+                payload={
+                    "fact_id": fact_id,
+                    "source_service": source_service,
+                    "source_id_sha256": hashlib.sha256(
+                        source_id.encode("utf-8")
+                    ).hexdigest(),
+                    "usage_kind": usage_kind,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "total_tokens": total_tokens,
+                    "image_count": image_count,
+                    "resulting_user_revision": revision,
+                },
+            )
+            projection = self._user(
+                connection.execute(
+                    "SELECT * FROM admin_ops_users WHERE account_id=?",
+                    (account_id,),
+                ).fetchone()
+            )
+            connection.commit()
+            return projection
+        except BaseException:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
         finally:
             connection.close()
 

@@ -102,7 +102,8 @@ class DynamicManagedResponsesProvider:
                 await self._release(key, entry)
 
     async def public_catalog(self) -> list[dict[str, object]]:
-        return await asyncio.to_thread(self.source.active_public_catalog)
+        catalog = await asyncio.to_thread(self.source.active_public_catalog)
+        return [item for item in catalog if item.get("modality") == "chat"]
 
     async def aclose(self) -> None:
         async with self._lock:

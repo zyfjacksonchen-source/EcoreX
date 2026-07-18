@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 import ecorex.deployment.public_site as deployment
+from ecorex import __version__
 from ecorex.deployment.cloud_artifact import (
     BUILD_CONTRACT,
     cloud_manifest_file_bytes,
@@ -26,6 +27,7 @@ from ecorex.release import (
     Ed25519MemorySigner,
     public_bootstrap_authority_signing_bytes,
     public_bootstrap_freshness_signing_bytes,
+    stable_pointer_sequence,
 )
 from ecorex.release.protected_deployment import sign_admission
 
@@ -49,9 +51,11 @@ DEPLOYMENT_PRIVATE = Ed25519PrivateKey.from_private_bytes(b"d" * 32)
 DEPLOYMENT_SIGNER = Ed25519MemorySigner(
     "ecorex-protected-deployment-test", DEPLOYMENT_PRIVATE
 )
-ADMIN_INDEX = b"<html><head><title>EcoreX Admin 1.0.0</title></head></html>"
+ADMIN_INDEX = (
+    f"<html><head><title>EcoreX Admin {__version__}</title></head></html>"
+).encode()
 ADMIN_CSS = b"body{color:CanvasText}"
-ADMIN_JS = b'globalThis.ecorexAdminVersion="1.0.0";'
+ADMIN_JS = f'globalThis.ecorexAdminVersion="{__version__}";'.encode()
 
 
 def _admin_identity() -> dict[str, object]:
@@ -71,8 +75,8 @@ def _admin_identity() -> dict[str, object]:
         )
     return {
         "schema_version": 1,
-        "cloud_release_id": "ecorex-cloud-v1.0.0-test",
-        "cloud_version": "1.0.0",
+        "cloud_release_id": f"ecorex-cloud-v{__version__}-test",
+        "cloud_version": __version__,
         "cloud_manifest_sha256": "8" * 64,
         "cloud_manifest_key_id": AUTHORIZATION_SIGNER.key_id,
         "index": {
@@ -83,7 +87,7 @@ def _admin_identity() -> dict[str, object]:
         "assets": assets,
         "version_marker": {
             "header": "X-EcoreX-Product-Version",
-            "value": "1.0.0",
+            "value": __version__,
         },
         "health": {
             "path": "/ecorex-agent/admin/health/ready",
@@ -170,14 +174,15 @@ def _pointer() -> dict[str, object]:
     now = datetime.now(UTC).replace(microsecond=0)
     issued_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     expires_at = (now + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    sequence = stable_pointer_sequence(__version__)
     target = {
         "manifest_sha256": MANIFEST_SHA256,
         "release_id": RELEASE_ID,
-        "version": "1.0.0",
+        "version": __version__,
         "build_digest": BUILD_DIGEST,
     }
     authority_payload = public_bootstrap_authority_signing_bytes(
-        sequence=1,
+        sequence=sequence,
         revision=RELEASE_ID,
         target=target,
     )
@@ -221,7 +226,7 @@ def _pointer() -> dict[str, object]:
         "trust": "untrusted-discovery-hint",
         "status": "published",
         "authority": {
-            "sequence": 1,
+            "sequence": sequence,
             "revision": RELEASE_ID,
             "target": target,
             "signature": authority_signature,
@@ -234,7 +239,7 @@ def _pointer() -> dict[str, object]:
         },
         "release": {
             "release_id": RELEASE_ID,
-            "version": "1.0.0",
+            "version": __version__,
             "channel": "stable",
             "created_at": issued_at,
             "build_digest": BUILD_DIGEST,
@@ -281,7 +286,7 @@ def _write_staging(paths: deployment.DeploymentPaths) -> Path:
         "status": "deployable-with-explicit-operator-waiver",
         "protected_pipeline_passed": False,
         "release_id": RELEASE_ID,
-        "version": "1.0.0",
+        "version": __version__,
         "manifest_sha256": MANIFEST_SHA256,
         "waiver_sha256": WAIVER_SHA256,
         "publication_receipt_sha256": PUBLICATION_SHA256,
@@ -368,7 +373,7 @@ def _convert_staging_to_protected_v2(
                 "artifact_id": 20,
                 "artifact_sha256": "1" * 64,
                 "release_id": RELEASE_ID,
-                "version": "1.0.0",
+                "version": __version__,
                 "build_digest": BUILD_DIGEST,
             },
             "gates": {
@@ -474,8 +479,8 @@ def _write_signed_cloud_artifact(root: Path) -> Path:
         )
     manifest = {
         "schema_version": 1,
-        "release_id": "ecorex-cloud-v1.0.0-test",
-        "version": "1.0.0",
+        "release_id": f"ecorex-cloud-v{__version__}-test",
+        "version": __version__,
         "platform": "linux",
         "architecture": "aarch64",
         "python_version": "3.11.9",
@@ -562,7 +567,7 @@ class _Readback:
                     "content-security-policy": (
                         deployment.ADMIN_CONTENT_SECURITY_POLICY,
                     ),
-                    deployment.ADMIN_VERSION_HEADER: ("1.0.0",),
+                    deployment.ADMIN_VERSION_HEADER: (__version__,),
                 },
                 ADMIN_INDEX if self.admin_status == 200 else b"bad gateway",
             )
@@ -571,7 +576,7 @@ class _Readback:
                 200,
                 {
                     "cache-control": ("no-store",),
-                    deployment.ADMIN_VERSION_HEADER: ("1.0.0",),
+                    deployment.ADMIN_VERSION_HEADER: (__version__,),
                 },
                 b'{"status":"ready"}',
             )
@@ -583,7 +588,7 @@ class _Readback:
                     "cache-control": (
                         "public, max-age=31536000, immutable",
                     ),
-                    deployment.ADMIN_VERSION_HEADER: ("1.0.0",),
+                    deployment.ADMIN_VERSION_HEADER: (__version__,),
                 },
                 payload,
             )
@@ -728,7 +733,7 @@ def test_readback_requires_no_store_immutable_assets_and_admin_route(
                         "content-security-policy": (
                             deployment.ADMIN_CONTENT_SECURITY_POLICY,
                         ),
-                        deployment.ADMIN_VERSION_HEADER: ("1.0.0",),
+                        deployment.ADMIN_VERSION_HEADER: (__version__,),
                     },
                     b"old or generic administrator page",
                 )
@@ -739,7 +744,7 @@ def test_readback_requires_no_store_immutable_assets_and_admin_route(
                     200,
                     {
                         "cache-control": ("no-store",),
-                        deployment.ADMIN_VERSION_HEADER: ("1.0.0",),
+                        deployment.ADMIN_VERSION_HEADER: (__version__,),
                     },
                     b'{"status":"unavailable"}',
                 )
@@ -815,7 +820,7 @@ def test_readback_accepts_only_freshness_renewal_for_authorized_target(
     drifted["release"]["build_digest"] = drifted_digest
     target = drifted["authority"]["target"]
     authority_payload = public_bootstrap_authority_signing_bytes(
-        sequence=1,
+        sequence=stable_pointer_sequence(__version__),
         revision=RELEASE_ID,
         target=target,
     )

@@ -8,9 +8,9 @@ v1.0 云端运行时只能在 Linux aarch64 + Python 3.11.9 上构建。构建�
 /opt/ecorex/platform/python-3.11.9/bin/python3.11 \
   scripts/build-v1-linux-cloud-artifact.py build \
   --source-root /srv/build/EcoreX \
-  --artifact-root /var/lib/ecorex/build/v1.0.0/artifact \
-  --handoff-root /var/lib/ecorex/build/v1.0.0/signing-handoff \
-  --release-id ecorex-cloud-v1.0.0-<candidate> \
+  --artifact-root /var/lib/ecorex/build/v1.0.2/artifact \
+  --handoff-root /var/lib/ecorex/build/v1.0.2/signing-handoff \
+  --release-id ecorex-cloud-v1.0.2-<candidate> \
   --expected-commit <exact-main-sha>
 ```
 
@@ -37,9 +37,9 @@ python scripts/sign-v1-cloud-manifest-dpapi.py `
 ```bash
 /opt/ecorex/platform/python-3.11.9/bin/python3.11 \
   scripts/build-v1-linux-cloud-artifact.py attach \
-  --artifact-root /var/lib/ecorex/build/v1.0.0/artifact \
-  --handoff-root /var/lib/ecorex/build/v1.0.0/signing-handoff \
-  --signature-response /var/lib/ecorex/build/v1.0.0/cloud-manifest-signature-response.json \
+  --artifact-root /var/lib/ecorex/build/v1.0.2/artifact \
+  --handoff-root /var/lib/ecorex/build/v1.0.2/signing-handoff \
+  --signature-response /var/lib/ecorex/build/v1.0.2/cloud-manifest-signature-response.json \
   --release-keyring /etc/ecorex/release-public-keys.json
 ```
 

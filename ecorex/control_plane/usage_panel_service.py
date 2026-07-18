@@ -11,8 +11,9 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 DB_PATH = "/srv/ecorex-agent-admin/data/ecorex-admin.sqlite3"
 CONTROL_PLANE_DB_PATH = os.environ.get(
     "ECOREX_CONTROL_PLANE_DATABASE_PATH",
@@ -689,7 +690,11 @@ def build_payload(start: datetime, end: datetime) -> dict:
     gateway_completion_by_request: dict[str, dict] = {}
     for event in gateway_event_rows:
         payload = json_loads(event.get("payload_json"), {})
-        if not isinstance(payload, dict) or payload.get("event_type") != "response.completed":
+        if (
+            not isinstance(payload, dict)
+            or payload.get("event_type")
+            not in {"response.completed", "tool_call.requested"}
+        ):
             continue
         request_id = str(event.get("request_id") or "").strip()
         request = gateway_requests_by_id.get(request_id)
@@ -708,7 +713,7 @@ def build_payload(start: datetime, end: datetime) -> dict:
         gateway_completion_by_request[request_id] = {
             "id": f"gateway:{request_id}",
             "category": "chat",
-            "label": "gateway.response.completed",
+            "label": f"gateway.{payload['event_type']}",
             "user_email": identity,
             "detail": json.dumps(
                 {
@@ -1163,6 +1168,115 @@ def build_payload(start: datetime, end: datetime) -> dict:
             "scenarios": [{"name": name, "value": value} for name, value in scenario_counts.most_common()],
         },
         "insights": insights,
+    }
+
+
+def _account_identity(account_id: str) -> str:
+    normalized = canonical_email(account_id)
+    if not normalized:
+        raise ValueError("usage account identity is invalid")
+    rows = _read_optional_rows(
+        [CONTROL_PLANE_DB_PATH, DB_PATH],
+        "admin_ops_users",
+        """
+        SELECT account_id, email
+        FROM admin_ops_users
+        ORDER BY account_id
+        """,
+    )
+    for row in rows:
+        if canonical_email(row.get("account_id")) == normalized:
+            return canonical_email(row.get("email")) or normalized
+    raise KeyError("usage account does not exist")
+
+
+def _coverage_started_at() -> datetime | None:
+    candidates: list[datetime] = []
+    for rows in (
+        _read_optional_rows(
+            [DB_PATH],
+            "usage_events",
+            "SELECT MIN(created_at) AS created_at FROM usage_events",
+        ),
+        _read_optional_rows(
+            [DB_PATH],
+            "sync_events",
+            "SELECT MIN(created_at) AS created_at FROM sync_events",
+        ),
+        _read_optional_rows(
+            [GATEWAY_DB_PATH, DB_PATH],
+            "gateway_requests",
+            "SELECT MIN(created_at) AS created_at FROM gateway_requests",
+        ),
+    ):
+        if not rows or not rows[0].get("created_at"):
+            continue
+        try:
+            candidates.append(parse_time(str(rows[0]["created_at"])))
+        except (TypeError, ValueError):
+            continue
+    if not candidates:
+        return None
+    return min(candidates).astimezone(timezone.utc)
+
+
+def build_account_usage_projection(
+    account_id: str,
+    *,
+    timezone_name: str = "Asia/Shanghai",
+    now: datetime | None = None,
+) -> dict:
+    """Project the Composer and panel from the exact same merged usage ledger."""
+
+    if not isinstance(timezone_name, str) or not timezone_name.strip():
+        raise ValueError("usage timezone is required")
+    try:
+        zone = ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        raise ValueError("usage timezone is invalid") from None
+    # The operator panel's calendar contract is currently Shanghai time. Fail
+    # closed instead of returning a plausible-looking projection whose daily
+    # rows were grouped in another zone.
+    if getattr(zone, "key", timezone_name) != "Asia/Shanghai":
+        raise ValueError("usage timezone is not supported")
+    calculated_at = now or datetime.now(timezone.utc)
+    if calculated_at.tzinfo is None:
+        raise ValueError("usage clock must be timezone-aware")
+    calculated_at = calculated_at.astimezone(timezone.utc)
+    local_now = calculated_at.astimezone(zone)
+    day_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = day_start - timedelta(days=day_start.weekday())
+    end = day_start + timedelta(days=1)
+    identity = _account_identity(account_id)
+    payload = build_payload(week_start, end)
+    rows = [
+        row
+        for row in payload.get("summaryRows", [])
+        if canonical_email(row.get("email")) == identity
+    ]
+    today_label = day_start.strftime("%Y-%m-%d")
+
+    def totals(selected: list[dict]) -> dict[str, int]:
+        input_tokens = sum(max(0, token_number(row.get("inputTokens"))) for row in selected)
+        output_tokens = sum(max(0, token_number(row.get("outputTokens"))) for row in selected)
+        total_tokens = sum(max(0, token_number(row.get("totalTokens"))) for row in selected)
+        return {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": max(total_tokens, input_tokens + output_tokens),
+        }
+
+    return {
+        "schema_version": 1,
+        "scope": "account",
+        "timezone": timezone_name,
+        "today": totals([row for row in rows if row.get("date") == today_label]),
+        "week": totals(rows),
+        "week_started_at": week_start.astimezone(timezone.utc).isoformat(),
+        "coverage_started_at": (
+            value.isoformat() if (value := _coverage_started_at()) is not None else None
+        ),
+        "calculated_at": calculated_at.isoformat(),
     }
 
 

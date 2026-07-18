@@ -673,6 +673,17 @@ export function validateConversationUsageProjection(value: unknown): Conversatio
   );
   assertString(value.thread_id, contract, "thread_id");
   assertString(value.timezone, contract, "timezone");
+  if (value.scope !== "account" && value.scope !== "local_device") {
+    reject(contract, "scope", "account or local_device");
+  }
+  if (value.source !== "managed_gateway" && value.source !== "local_event_store") {
+    reject(contract, "source", "managed_gateway or local_event_store");
+  }
+  assertBoolean(
+    value.complete_across_devices,
+    contract,
+    "complete_across_devices",
+  );
   assertUsageWindow(value.today, "today");
   assertUsageWindow(value.week, "week");
   assertRecord(value.context, contract, "context");
