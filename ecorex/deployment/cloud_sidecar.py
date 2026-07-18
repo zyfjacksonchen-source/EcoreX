@@ -48,6 +48,12 @@ from ecorex.migration.legacy_identity_export import (
     LegacyIdentityExportError,
     export_v0292_legacy_identities,
 )
+from ecorex.control_plane.management import (
+    AdminManagementNotFound,
+    AdminManagementRepository,
+)
+from ecorex.control_plane.management_models import CreateAdminUserRequest
+from ecorex.control_plane.models import ControlPrincipal
 from ecorex.release.public_index import (
     MAX_PUBLIC_BOOTSTRAP_INDEX_BYTES,
     PublicBootstrapIndexError,
@@ -100,6 +106,16 @@ PUBLIC_BOOTSTRAP_INDEX_URL = (
     "https://dl.ecoremedia.net/ecorex-agent/public-bootstrap-index.json"
 )
 PUBLICATION_KEYRING_PATH = CONFIG_ROOT / "publication-public-keys.json"
+_DEPLOYMENT_PLATFORM_ADMIN_ACCOUNT_ID = "ecorex-platform-admin"
+_DEPLOYMENT_PLATFORM_ADMIN_DISPLAY_NAME = "EcoreX 管理员"
+_DEPLOYMENT_PLATFORM_ADMIN_ORGANIZATION_ID = "ecorex-production"
+_DEPLOYMENT_PLATFORM_ADMIN_ACTOR = ControlPrincipal(
+    subject="system.platform-admin-bootstrap",
+    client_id="ecorex-production-bootstrap",
+    account_id="system.deployment",
+    organization_id=None,
+    roles=frozenset({"platform_admin"}),
+)
 
 NGINX_ROUTE_INCLUDE = "include /etc/nginx/ecorex-cloud/ecorex-cloud.routes.conf;"
 LEGACY_ADMIN_LOCATION_HEADERS = (
@@ -2307,6 +2323,11 @@ def _commit_legacy_admin_and_identity(
         or report.import_receipt_sha256 != contract["import_receipt_sha256"]
     ):
         raise CloudDeployError("legacy_admin_migration_identity_changed")
+    _ensure_configured_deployment_platform_admin(
+        target,
+        encryption_key=key,
+        environment=environment,
+    )
     payload = _legacy_identity_payload(records)
     if payload:
         _run_service_command(
@@ -2316,6 +2337,56 @@ def _commit_legacy_admin_and_identity(
             timeout=600,
             input_bytes=payload,
         )
+
+
+def _ensure_configured_deployment_platform_admin(
+    target: Path,
+    *,
+    encryption_key: bytes,
+    environment: Mapping[str, str],
+) -> None:
+    """Create the deployment-owned admin only when Device Identity selects it.
+
+    v0.2.9.2 can contain no active administrator while still having valid user
+    sessions.  Legacy session import needs a live platform-admin allowlist
+    before the device broker can compose, but creating that account before the
+    management import would violate the importer's empty-business-data fence.
+    The transaction therefore runs immediately after the idempotent import.
+    """
+
+    raw = environment.get("ECOREX_CP_DEVICE_PLATFORM_ADMIN_ACCOUNT_IDS", "")
+    selected = {item.strip() for item in raw.split(",") if item.strip()}
+    if _DEPLOYMENT_PLATFORM_ADMIN_ACCOUNT_ID not in selected:
+        return
+    try:
+        repository = AdminManagementRepository(target, encryption_key=encryption_key)
+        try:
+            user = repository.get_user(_DEPLOYMENT_PLATFORM_ADMIN_ACCOUNT_ID)
+        except AdminManagementNotFound:
+            repository.create_user(
+                CreateAdminUserRequest(
+                    account_id=_DEPLOYMENT_PLATFORM_ADMIN_ACCOUNT_ID,
+                    display_name=_DEPLOYMENT_PLATFORM_ADMIN_DISPLAY_NAME,
+                    email=None,
+                    organization_id=_DEPLOYMENT_PLATFORM_ADMIN_ORGANIZATION_ID,
+                    token_limit=0,
+                    image_limit=0,
+                    client_request_id="bootstrap-platform-admin-"
+                    + hashlib.sha256(
+                        _DEPLOYMENT_PLATFORM_ADMIN_ACCOUNT_ID.encode("utf-8")
+                    ).hexdigest(),
+                ),
+                actor=_DEPLOYMENT_PLATFORM_ADMIN_ACTOR,
+            )
+            return
+    except Exception:
+        raise CloudDeployError("deployment_platform_admin_bootstrap_failed") from None
+    if (
+        user.status != "active"
+        or user.display_name != _DEPLOYMENT_PLATFORM_ADMIN_DISPLAY_NAME
+        or user.organization_id != _DEPLOYMENT_PLATFORM_ADMIN_ORGANIZATION_ID
+    ):
+        raise CloudDeployError("deployment_platform_admin_conflict")
 
 
 def _legacy_admin_import_committed(journal: Mapping[str, Any]) -> bool:

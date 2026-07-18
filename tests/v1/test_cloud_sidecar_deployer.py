@@ -12,6 +12,8 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from ecorex.control_plane.management import AdminManagementRepository
+from ecorex.control_plane.management_schema import AdminManagementSchemaManager
 from ecorex.deployment import cloud_sidecar as deployment
 
 
@@ -1476,6 +1478,35 @@ def test_legacy_commit_runs_only_after_both_writer_sets_are_fenced(
         ("journal", "legacy_imported"),
         ("journal", "schema_ready"),
     ]
+
+
+def test_configured_deployment_platform_admin_is_created_after_management_import(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "control-plane.sqlite3"
+    AdminManagementSchemaManager(database).migrate()
+    key = b"a" * 32
+    environment = {
+        "ECOREX_CP_DEVICE_PLATFORM_ADMIN_ACCOUNT_IDS": "ecorex-platform-admin"
+    }
+
+    deployment._ensure_configured_deployment_platform_admin(
+        database,
+        encryption_key=key,
+        environment=environment,
+    )
+    deployment._ensure_configured_deployment_platform_admin(
+        database,
+        encryption_key=key,
+        environment=environment,
+    )
+
+    user = AdminManagementRepository(database, encryption_key=key).get_user(
+        "ecorex-platform-admin"
+    )
+    assert user.status == "active"
+    assert user.display_name == "EcoreX 管理员"
+    assert user.organization_id == "ecorex-production"
 
 
 def test_crash_after_admin_commit_forces_idempotent_rollforward_without_legacy(

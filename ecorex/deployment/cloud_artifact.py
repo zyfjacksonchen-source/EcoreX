@@ -286,7 +286,11 @@ def scan_cloud_artifact_tree(root: Path) -> list[dict[str, Any]]:
                     or stat.S_ISLNK(metadata.st_mode)
                     or bool(getattr(metadata, "st_file_attributes", 0) & reparse)
                     or not stat.S_ISREG(metadata.st_mode)
-                    or not 1 <= metadata.st_size <= MAX_FILE_BYTES
+                    # Python distributions may intentionally contain empty
+                    # ``__init__.py`` or typing marker files.  They still
+                    # need manifest coverage; rejecting them made a valid
+                    # Linux venv impossible to package on the real target.
+                    or not 0 <= metadata.st_size <= MAX_FILE_BYTES
                 ):
                     raise CloudArtifactBuildError("cloud_artifact_file_invalid")
                 mode = _portable_posix_mode(relative, metadata)

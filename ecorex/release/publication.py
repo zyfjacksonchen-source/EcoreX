@@ -118,8 +118,51 @@ class ReleaseAssetPublicationCoordinator:
         )
         if publication_receipt_policy(manifest) == STABLE_PRIMARY_ONLY_POLICY:
             if read_through:
-                raise ValueError(
-                    "stable primary-only publication requires an independently writable mirror"
+                if self.github is None:
+                    raise ValueError(
+                        "stable read-through mirror requires a GitHub publisher"
+                    )
+                if not publish_github:
+                    raise ValueError(
+                        "read-through mirror requires a public GitHub release"
+                    )
+                self._validate_github_source(
+                    manifest=manifest,
+                    github_base_url=github_source.base_url,
+                )
+                draft = self.github.ensure_draft(
+                    version=manifest.version,
+                    channel=manifest.channel,
+                    release_id=manifest.release_id,
+                )
+                github_receipts = tuple(
+                    self.github.ensure_asset(
+                        draft,
+                        path,
+                        expected_sha256=expected_sha256[path.name],
+                    )
+                    for path in files
+                )
+                self._validate_github_urls(github_source.base_url, github_receipts)
+                self.github.publish(draft)
+                verifier = self.mirror
+                mirror_receipts = tuple(
+                    verifier.verify_asset(  # type: ignore[union-attr]
+                        base_url=mirror_source.base_url,
+                        release_id=manifest.release_id,
+                        path=path,
+                        expected_sha256=expected_sha256[path.name],
+                    )
+                    for path in files
+                )
+                self._validate_replica_urls(mirror_source.base_url, mirror_receipts)
+                return PublishedReleaseAssets.create(
+                    release_id=manifest.release_id,
+                    source_receipts={
+                        mirror_source.source_id: tuple(
+                            _replica_projection(item) for item in mirror_receipts
+                        )
+                    },
                 )
             self._validate_primary_mirror(mirror_source.base_url)
             assert isinstance(self.mirror, HTTPSReleaseReplicaPublisher) or callable(
@@ -263,6 +306,18 @@ class ReleaseAssetPublicationCoordinator:
             cdn_base_url,
             public_hosts=self.cdn.public_hosts,
         )
+        self._validate_github_source(
+            manifest=manifest,
+            github_base_url=github_base_url,
+        )
+
+    def _validate_github_source(
+        self,
+        *,
+        manifest: ReleaseManifest,
+        github_base_url: str,
+    ) -> None:
+        assert self.github is not None
         expected_github = (
             f"https://github.com/{quote(self.github.owner, safe='')}/"
             f"{quote(self.github.repository, safe='')}/releases/download/"

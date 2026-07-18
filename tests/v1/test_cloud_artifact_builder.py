@@ -109,6 +109,26 @@ def test_cloud_artifact_manifest_binds_every_file_and_signature(tmp_path: Path) 
     )
 
 
+def test_cloud_artifact_manifest_binds_empty_runtime_marker(tmp_path: Path) -> None:
+    signer = Ed25519MemorySigner("release-cloud-test", Ed25519PrivateKey.generate())
+    root = _tree(tmp_path / "cloud")
+    marker = root / "venv/lib/python3.11/site-packages/runtime-marker.pyi"
+    marker.parent.mkdir(parents=True)
+    marker.write_bytes(b"")
+
+    build_signed_cloud_artifact(
+        root,
+        release_id="ecorex-cloud-v1.0.0-test",
+        signer=signer,
+        source_commit="a" * 40,
+        dependency_lock_manifest_sha256="b" * 64,
+    )
+
+    manifest = json.loads((root / "cloud-release-manifest.json").read_text())
+    row = next(item for item in manifest["files"] if item["path"] == marker.relative_to(root).as_posix())
+    assert row["size_bytes"] == 0
+
+
 def test_cloud_artifact_refuses_links_and_existing_authority(tmp_path: Path) -> None:
     signer = Ed25519MemorySigner("release-cloud-test", Ed25519PrivateKey.generate())
     root = _tree(tmp_path / "cloud")

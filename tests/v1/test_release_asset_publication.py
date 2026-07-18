@@ -197,6 +197,34 @@ def test_stable_primary_only_publishes_the_mirror_without_fallback_credentials(
     assert mirror.closed
 
 
+def test_stable_read_through_mirror_publishes_github_then_returns_primary_receipt(
+    tmp_path: Path,
+) -> None:
+    manifest, files, digests = _inputs(tmp_path)
+    order: list[str] = []
+    mirror = ReadThroughMirror("github-cn", manifest.sources[0].base_url, order)
+    github = GitHub(order)
+    coordinator = ReleaseAssetPublicationCoordinator(mirror=mirror, github=github)
+
+    result = coordinator.publish(
+        manifest=manifest,
+        files=files,
+        expected_sha256=digests,
+        publish_github=True,
+    )
+
+    mirror_verifications = [
+        index
+        for index, value in enumerate(order)
+        if value.startswith("github-cn:verify:")
+    ]
+    assert mirror_verifications
+    assert order.index("github:publish") < min(mirror_verifications)
+    assert github.published is True
+    assert tuple(result.source_receipts) == ("github-cn",)
+    assert len(result.source_receipts["github-cn"]) == len(files)
+
+
 def test_bad_replica_receipt_stops_before_github_publish(tmp_path: Path) -> None:
     manifest, files, digests = _inputs(tmp_path, channel=ReleaseChannel.CANARY)
     order: list[str] = []
