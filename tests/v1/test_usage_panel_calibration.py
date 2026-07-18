@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, timezone
 import json
 import sqlite3
 
+import pytest
+
 from ecorex.control_plane import usage_panel_service
 
 
@@ -139,6 +141,38 @@ def _database(path: str) -> None:
     )
     connection.commit()
     connection.close()
+
+
+def _database_with_active_users(path: str, count: int) -> None:
+    _database(path)
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        DELETE FROM sync_artifacts;
+        DELETE FROM sync_events;
+        DELETE FROM usage_events;
+        DELETE FROM users;
+        """
+    )
+    connection.executemany(
+        "INSERT INTO users VALUES(?,?,?,NULL)",
+        [
+            (
+                f"user-{index:03d}",
+                f"用户 {index:03d}",
+                f"user-{index:03d}@example.test",
+            )
+            for index in range(count)
+        ],
+    )
+    connection.commit()
+    connection.close()
+
+
+def _use_database(monkeypatch, path: str) -> None:
+    monkeypatch.setattr(usage_panel_service, "DB_PATH", path)
+    monkeypatch.setattr(usage_panel_service, "CONTROL_PLANE_DB_PATH", path)
+    monkeypatch.setattr(usage_panel_service, "GATEWAY_DB_PATH", path)
 
 
 def _add_v1_facts(path: str) -> None:
@@ -308,6 +342,112 @@ def _v1_payload(tmp_path, monkeypatch):
         datetime(2026, 7, 18, tzinfo=TZ),
         datetime(2026, 7, 19, tzinfo=TZ),
     )
+
+
+def test_data_request_accepts_the_exact_maximum_date_span(tmp_path, monkeypatch):
+    database = tmp_path / "bounded-range.sqlite3"
+    _database_with_active_users(str(database), 1)
+    _use_database(monkeypatch, str(database))
+
+    payload = usage_panel_service.build_data_request_payload(
+        {
+            "start": ["2026-01-01"],
+            "end": ["2026-04-01"],
+        }
+    )
+
+    assert usage_panel_service.MAX_DATA_RANGE_DAYS == 90
+    assert len(payload["dates"]) == usage_panel_service.MAX_DATA_RANGE_DAYS
+    assert len(payload["summaryRows"]) == usage_panel_service.MAX_DATA_RANGE_DAYS
+
+
+def test_data_request_rejects_an_oversized_range_before_building(
+    monkeypatch,
+):
+    called = False
+
+    def forbidden_build(_start, _end):
+        nonlocal called
+        called = True
+        raise AssertionError("build_payload must not run for an unsafe range")
+
+    monkeypatch.setattr(usage_panel_service, "build_payload", forbidden_build)
+    handler = object.__new__(usage_panel_service.Handler)
+    handler.path = "/api/data?start=2026-01-01&end=2026-04-02"
+    responses = []
+    handler.send_json = lambda status, payload: responses.append((status, payload))
+
+    handler.do_GET()
+
+    assert called is False
+    assert responses == [
+        (
+            422,
+            {
+                "ok": False,
+                "error": "range_too_large",
+                "message": "单次最多查询 90 天",
+                "actual": 91,
+                "limit": 90,
+            },
+        )
+    ]
+
+
+def test_data_request_rejects_projected_response_size_before_building(
+    tmp_path,
+    monkeypatch,
+):
+    database = tmp_path / "response-limit.sqlite3"
+    _database_with_active_users(str(database), 41)
+    _use_database(monkeypatch, str(database))
+    monkeypatch.setattr(usage_panel_service, "MAX_DATA_RESPONSE_ROWS", 300)
+    called = False
+
+    def forbidden_build(_start, _end):
+        nonlocal called
+        called = True
+        raise AssertionError("build_payload must not run beyond the response budget")
+
+    monkeypatch.setattr(usage_panel_service, "build_payload", forbidden_build)
+
+    with pytest.raises(usage_panel_service.UsagePanelRequestError) as captured:
+        usage_panel_service.build_data_request_payload(
+            {
+                "start": ["2026-07-13"],
+                "end": ["2026-07-20"],
+            }
+        )
+
+    assert called is False
+    assert captured.value.status == 413
+    assert captured.value.code == "response_too_large"
+    assert captured.value.actual == 390
+    assert captured.value.limit == 300
+
+
+def test_data_request_keeps_41_users_visible_for_a_normal_week(
+    tmp_path,
+    monkeypatch,
+):
+    database = tmp_path / "normal-week.sqlite3"
+    _database_with_active_users(str(database), 41)
+    _use_database(monkeypatch, str(database))
+
+    payload = usage_panel_service.build_data_request_payload(
+        {
+            "start": ["2026-07-13"],
+            "end": ["2026-07-20"],
+        }
+    )
+
+    assert len(payload["users"]) == 41
+    assert len(payload["dates"]) == 7
+    assert len(payload["summaryRows"]) == 287
+    assert {row["email"] for row in payload["summaryRows"]} == {
+        f"user-{index:03d}@example.test"
+        for index in range(41)
+    }
 
 
 def test_usage_panel_uses_ledger_and_keeps_zero_usage_users(tmp_path, monkeypatch):

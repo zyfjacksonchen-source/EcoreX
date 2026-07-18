@@ -26,12 +26,46 @@ GATEWAY_DB_PATH = os.environ.get(
 HOST = "127.0.0.1"
 PORT = 18105
 TZ = timezone(timedelta(hours=8))
+MAX_DATA_RANGE_DAYS = 90
+MAX_DATA_RESPONSE_ROWS = 8_000
 ADMIN_API_DIRS = [
     os.environ.get("ECOREX_ADMIN_API_DIR", ""),
     "/srv/ecorex-agent-admin/app",
     "/srv/ecorex-agent-download/current/admin",
     str(pathlib.Path(__file__).resolve().parent.parent / "ecorex-admin-api"),
 ]
+
+
+class UsagePanelRequestError(ValueError):
+    """A bounded client error that must be raised before payload materialization."""
+
+    def __init__(
+        self,
+        *,
+        status: int,
+        code: str,
+        message: str,
+        actual: int | None = None,
+        limit: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.code = code
+        self.message = message
+        self.actual = actual
+        self.limit = limit
+
+    def payload(self) -> dict[str, object]:
+        value: dict[str, object] = {
+            "ok": False,
+            "error": self.code,
+            "message": self.message,
+        }
+        if self.actual is not None:
+            value["actual"] = self.actual
+        if self.limit is not None:
+            value["limit"] = self.limit
+        return value
 
 EVENT_TYPE_ZH = {
     "run.accepted": "任务已接收",
@@ -397,6 +431,200 @@ def merged_identity_catalog(
     }
     identities = sorted(labels, key=lambda identity: labels[identity].casefold())
     return labels, identities, account_aliases
+
+
+def validate_data_request(start: datetime, end: datetime) -> dict[str, int]:
+    """Reject unsafe ranges before ``build_payload`` allocates response rows."""
+
+    if start.tzinfo is None or end.tzinfo is None or end <= start:
+        raise UsagePanelRequestError(
+            status=400,
+            code="invalid_range",
+            message="日期范围无效",
+        )
+    day_count = (end.date() - start.date()).days
+    if day_count <= 0:
+        raise UsagePanelRequestError(
+            status=400,
+            code="invalid_range",
+            message="日期范围无效",
+        )
+    if day_count > MAX_DATA_RANGE_DAYS:
+        raise UsagePanelRequestError(
+            status=422,
+            code="range_too_large",
+            message=f"单次最多查询 {MAX_DATA_RANGE_DAYS} 天",
+            actual=day_count,
+            limit=MAX_DATA_RANGE_DAYS,
+        )
+
+    parameters = (start.isoformat(), end.isoformat())
+    connection = sqlite3.connect(
+        f"file:{pathlib.Path(DB_PATH).as_posix()}?mode=ro",
+        uri=True,
+    )
+    connection.row_factory = sqlite3.Row
+    try:
+        legacy_users = [
+            dict(row)
+            for row in connection.execute(
+                "SELECT name,email,deleted_at FROM users ORDER BY lower(email)"
+            )
+        ]
+        observed_sync_identities = [
+            dict(row)
+            for row in connection.execute(
+                """
+                SELECT DISTINCT CASE
+                    WHEN TRIM(COALESCE(user_email,'')) <> '' THEN user_email
+                    ELSE COALESCE(user_key,'')
+                END AS identity
+                FROM sync_events
+                WHERE datetime(created_at) >= datetime(?)
+                  AND datetime(created_at) < datetime(?)
+                """,
+                parameters,
+            )
+        ]
+        observed_usage_identities = [
+            dict(row)
+            for row in connection.execute(
+                """
+                SELECT DISTINCT user_email
+                FROM usage_events
+                WHERE datetime(created_at) >= datetime(?)
+                  AND datetime(created_at) < datetime(?)
+                """,
+                parameters,
+            )
+        ]
+        raw_event_count = int(
+            connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM sync_events
+                WHERE datetime(created_at) >= datetime(?)
+                  AND datetime(created_at) < datetime(?)
+                """,
+                parameters,
+            ).fetchone()[0]
+        )
+        legacy_task_upper_bound = int(
+            connection.execute(
+                """
+                SELECT COUNT(DISTINCT request_id)
+                FROM sync_events
+                WHERE datetime(created_at) >= datetime(?)
+                  AND datetime(created_at) < datetime(?)
+                  AND TRIM(COALESCE(request_id,'')) <> ''
+                """,
+                parameters,
+            ).fetchone()[0]
+        )
+    finally:
+        connection.close()
+
+    admin_rows = _read_optional_rows(
+        [CONTROL_PLANE_DB_PATH, DB_PATH],
+        "admin_ops_users",
+        """
+        SELECT account_id,display_name,email,organization_id,status
+        FROM admin_ops_users
+        ORDER BY lower(COALESCE(email,account_id)),account_id
+        """,
+    )
+    gateway_accounts = _read_optional_rows(
+        [GATEWAY_DB_PATH, DB_PATH],
+        "gateway_requests",
+        """
+        SELECT DISTINCT account_id
+        FROM gateway_requests
+        WHERE (
+            datetime(created_at) >= datetime(?) AND datetime(created_at) < datetime(?)
+        ) OR (
+            datetime(updated_at) >= datetime(?) AND datetime(updated_at) < datetime(?)
+        )
+        """,
+        parameters + parameters,
+    )
+    gateway_count_rows = _read_optional_rows(
+        [GATEWAY_DB_PATH, DB_PATH],
+        "gateway_requests",
+        """
+        SELECT COUNT(*) AS request_count
+        FROM gateway_requests
+        WHERE (
+            datetime(created_at) >= datetime(?) AND datetime(created_at) < datetime(?)
+        ) OR (
+            datetime(updated_at) >= datetime(?) AND datetime(updated_at) < datetime(?)
+        )
+        """,
+        parameters + parameters,
+    )
+    observed_emails = {
+        canonical_email(row.get("identity"))
+        for row in observed_sync_identities
+    }
+    observed_emails.update(
+        canonical_email(row.get("user_email"))
+        for row in observed_usage_identities
+    )
+    observed_accounts = {
+        canonical_email(row.get("account_id"))
+        for row in gateway_accounts
+    }
+    _, identity_order, _ = merged_identity_catalog(
+        legacy_users,
+        admin_rows,
+        observed_emails,
+        observed_accounts,
+    )
+    identity_count = len(identity_order)
+    gateway_task_upper_bound = (
+        int(gateway_count_rows[0].get("request_count") or 0)
+        if gateway_count_rows
+        else 0
+    )
+    task_upper_bound = legacy_task_upper_bound + gateway_task_upper_bound
+    scenario_count = min(len(SCENARIO_ORDER), task_upper_bound)
+    summary_row_count = identity_count * day_count
+    # Arrays returned by build_payload: summaryRows, rawEvents, tasks, users,
+    # dates, scenarios, and the three chart series. Cross-ledger task overlap
+    # is deliberately counted twice so this remains a safe upper bound.
+    projected_response_rows = (
+        summary_row_count
+        + raw_event_count
+        + task_upper_bound
+        + (identity_count * 2)
+        + (day_count * 2)
+        + (scenario_count * 2)
+        + 7
+    )
+    if projected_response_rows > MAX_DATA_RESPONSE_ROWS:
+        raise UsagePanelRequestError(
+            status=413,
+            code="response_too_large",
+            message="查询结果过大，请缩短日期范围",
+            actual=projected_response_rows,
+            limit=MAX_DATA_RESPONSE_ROWS,
+        )
+    return {
+        "days": day_count,
+        "identities": identity_count,
+        "summary_rows": summary_row_count,
+        "raw_events": raw_event_count,
+        "task_upper_bound": task_upper_bound,
+        "projected_response_rows": projected_response_rows,
+    }
+
+
+def build_data_request_payload(query: dict[str, list[str]]) -> dict:
+    default_start = datetime(2026, 6, 22, tzinfo=TZ)
+    default_end = datetime(2026, 6, 29, tzinfo=TZ)
+    start = parse_date(query.get("start", [""])[0], default_start)
+    end = parse_date(query.get("end", [""])[0], default_end)
+    validate_data_request(start, end)
+    return build_payload(start, end)
 
 
 def usage_request_id(row: dict, gateway_request_ids: set[str] | None = None) -> str:
@@ -1248,6 +1476,7 @@ def build_account_usage_projection(
     week_start = day_start - timedelta(days=day_start.weekday())
     end = day_start + timedelta(days=1)
     identity = _account_identity(account_id)
+    validate_data_request(week_start, end)
     payload = build_payload(week_start, end)
     rows = [
         row
@@ -1303,15 +1532,10 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path not in {"/api/data", "/data"}:
             self.send_json(404, {"ok": False, "error": "not found"})
             return
-        default_start = datetime(2026, 6, 22, tzinfo=TZ)
-        default_end = datetime(2026, 6, 29, tzinfo=TZ)
-        start = parse_date(query.get("start", [""])[0], default_start)
-        end = parse_date(query.get("end", [""])[0], default_end)
-        if end <= start:
-            self.send_json(400, {"ok": False, "error": "invalid range"})
-            return
         try:
-            self.send_json(200, build_payload(start, end))
+            self.send_json(200, build_data_request_payload(query))
+        except UsagePanelRequestError as exc:
+            self.send_json(exc.status, exc.payload())
         except Exception as exc:
             self.send_json(500, {"ok": False, "error": str(exc)[:200]})
 
