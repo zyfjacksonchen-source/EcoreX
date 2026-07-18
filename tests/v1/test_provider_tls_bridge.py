@@ -19,6 +19,7 @@ import pytest
 from ecorex.deployment.provider_bridge import (
     BRIDGE_HOSTS,
     LEGACY_HTTP_WAIVER,
+    LEGACY_PUBLIC_HTTP_WAIVER,
     ProviderBridgeConfigurationError,
     ProviderBridgeSpec,
     ProviderUpstream,
@@ -282,7 +283,7 @@ def test_bridge_renderer_has_five_sni_hosts_exact_routes_and_no_open_proxy() -> 
     assert set(hosts.split()[1:]) == set(BRIDGE_HOSTS.values())
 
 
-def test_bridge_rejects_unwaived_hostname_and_public_http_upstreams() -> None:
+def test_bridge_rejects_unwaived_hostname_and_wrongly_waived_http_upstreams() -> None:
     with pytest.raises(ProviderBridgeConfigurationError):
         ProviderUpstream.from_origin("http://provider.test/v1")
     with pytest.raises(ProviderBridgeConfigurationError):
@@ -293,6 +294,27 @@ def test_bridge_rejects_unwaived_hostname_and_public_http_upstreams() -> None:
         ProviderUpstream.from_origin(
             "http://8.8.8.8/v1", legacy_http_waiver=LEGACY_HTTP_WAIVER
         )
+    with pytest.raises(ProviderBridgeConfigurationError):
+        ProviderUpstream.from_origin(
+            "http://10.8.0.2/v1",
+            legacy_http_waiver=LEGACY_PUBLIC_HTTP_WAIVER,
+        )
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://8.8.8.8/v1",
+        "http://[2606:4700:4700::1111]:8080/v1",
+    ],
+)
+def test_bridge_allows_only_explicitly_waived_pinned_public_ip_http(
+    origin: str,
+) -> None:
+    upstream = ProviderUpstream.from_origin(
+        origin, legacy_http_waiver=LEGACY_PUBLIC_HTTP_WAIVER
+    )
+    assert upstream.scheme == "http"
 
 
 @pytest.mark.parametrize(
@@ -388,6 +410,28 @@ def test_bridge_deployment_rejects_public_http_before_install(tmp_path: Path) ->
             server_private_key_path=private_key_path,
             enforce_identity=False,
         )
+
+
+def test_bridge_deployment_accepts_explicit_public_http_operator_waiver(
+    tmp_path: Path,
+) -> None:
+    spec_path, ca_path, certificate_path, private_key_path = _deployment_materials(
+        tmp_path
+    )
+    value = json.loads(spec_path.read_text(encoding="utf-8"))
+    value["upstreams"]["ecorex_chat"] = {
+        "origin": "http://8.8.8.8/v1",
+        "legacy_http_waiver": LEGACY_PUBLIC_HTTP_WAIVER,
+    }
+    spec_path.write_text(json.dumps(value), encoding="utf-8")
+    materials = validate_provider_bridge_materials(
+        spec_path,
+        ca_bundle_path=ca_path,
+        server_certificate_path=certificate_path,
+        server_private_key_path=private_key_path,
+        enforce_identity=False,
+    )
+    assert b"proxy_pass http://8.8.8.8:80/v1/responses;" in materials.nginx_payload
 
 
 def test_bridge_install_is_idempotent_and_manages_one_tagged_hosts_block(

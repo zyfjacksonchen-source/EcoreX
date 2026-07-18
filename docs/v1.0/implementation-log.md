@@ -6421,3 +6421,11 @@ loopback TLS Image bridge.  Final Cloud and public Web/Admin activation remains
 blocked until a reachable, trusted HTTPS upstream (or an equivalently secure
 operator-managed egress path) is supplied for the primary/image providers and
 passes the same real activation probe.
+
+The product owner subsequently supplied the missing authority: retain the
+historic public-HTTP provider addresses. The bridge now has a distinct
+root-owned public-HTTP waiver which accepts only a pinned global IP literal.
+It does not permit hostnames, redirects, Admin-supplied origins or arbitrary
+paths; the loopback-facing side remains TLS and exposes only the fixed model
+routes. The focused bridge and sidecar regression passes 93 tests with seven
+explicit Windows/platform skips.

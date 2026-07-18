@@ -1956,11 +1956,14 @@
   atomically activate it. The browser receives a fingerprint, never plaintext.
   Chat freezes the active revision per request. Image generation and edit
   freeze `config_id + revision + upstream_model_id` in durable Job admission.
-- Network boundary: provider preset origins remain deployment-owned exact HTTPS
-  allowlists. The administrator may choose a preset but cannot submit a URL.
-  The built-in implementation is explicitly single-node/co-located on one
-  encrypted SQLite WAL authority; it must not be presented as remote HA config
-  distribution.
+- Network boundary: provider preset origins remain deployment-owned exact
+  allowlists. HTTPS is the default. A root-owned deployment specification may
+  explicitly waive transport encryption for one pinned public IP literal using
+  the separate public-HTTP waiver; hostname HTTP, redirects and Admin-submitted
+  origins remain forbidden. The administrator may choose a preset but cannot
+  submit a URL. The built-in implementation is explicitly single-node/co-located
+  on one encrypted SQLite WAL authority; it must not be presented as remote HA
+  config distribution.
 - Consequence: new work sees a tested model/Key immediately without code,
   rebuild or restart, while in-flight work remains deterministic. Reverting
   means testing and activating a new revision from operator-held prior secret

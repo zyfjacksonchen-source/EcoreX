@@ -9,8 +9,8 @@
     "dirty_worktree_preserved": true
   },
   "current_milestone": "direct_production_publication",
-  "current_batch": "Direct Stable publication has completed, but the authenticated v1 Cloud activation is deliberately paused before route switch. The production host's required primary/image HTTPS model probes are not healthy; legacy Web/Admin/API services remain the active public route.",
-  "last_verified_batch": "On 2026-07-18, v0.2.9.2 administration import preserved 40 live users, excluded seven deleted users and imported six encrypted model drafts. Audited retained-key activation passed only for Doubao. gpt-5.6-sol, Gemini, Image 2 and Image 2 Edit are safely inactive after provider_test_unavailable; DeepSeek is inactive after provider_test_protocol. No v1 Web/Admin route has been activated.",
+  "current_batch": "Direct Stable publication is resuming after the product owner explicitly authorized the historic public-HTTP model upstreams. The bridge waiver is restricted to deployment-pinned global IP literals; exact model revalidation and the atomic Web/Admin route switch remain pending.",
+  "last_verified_batch": "On 2026-07-18, v0.2.9.2 administration import preserved 40 live users, excluded seven deleted users and imported six encrypted model drafts. The explicit public-HTTP bridge contract passed 93 provider-bridge/cloud-sidecar tests with seven platform skips. No v1 Web/Admin route has yet been activated.",
   "recovery_document": "docs/v1.0/implementation-log.md",
   "verification_document": "docs/v1.0/verification-ledger.md",
   "milestones": [
@@ -28,7 +28,7 @@
     "publish, activate, and read back Web/Admin only after the authenticated release authority accepts the exact immutable release evidence"
   ],
   "external_blockers": [
-    "the production host cannot reach the configured HTTPS upstreams for gpt-5.6-sol, Gemini and Image 2; the historical OpenAI/Gemini bases are public HTTP-only and are intentionally rejected rather than used for retained-key activation",
+    "the product-owner-authorized public-HTTP bridge still requires production model revalidation before route activation",
     "whole-machine reboot requires the recorded LUKS operator unlock procedure; the current single-host CAS replica and shared PostgreSQL role remain explicitly waived availability constraints"
   ]
 }
