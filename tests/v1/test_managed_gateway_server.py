@@ -387,6 +387,136 @@ def test_unsettled_account_usage_blocks_new_provider_admission(tmp_path) -> None
     assert provider.calls == 1
 
 
+def test_completed_request_replays_after_usage_exhausts_account_quota(
+    tmp_path,
+) -> None:
+    provider = Provider()
+    store = SQLiteGatewayStore(tmp_path / "gateway.db")
+
+    class ExhaustingAccountant:
+        def __init__(self) -> None:
+            self.facts: dict[str, object] = {}
+
+        def settle(self, fact) -> None:
+            self.facts.setdefault(fact.request_id, fact)
+
+        def reconcile(self, facts) -> None:
+            for fact in facts:
+                self.settle(fact)
+
+        def tokens_available(self, _account_id: str) -> bool:
+            return not self.facts
+
+        def project(self, account_id: str, *, timezone_name: str):
+            return store.account_usage(account_id, timezone_name=timezone_name)
+
+    accountant = ExhaustingAccountant()
+    app = create_managed_gateway_app(
+        store,
+        authenticator=Authenticator(),
+        provider=provider,
+        allowed_model_ids=frozenset({"ecorex-chat"}),
+        usage_accountant=accountant,
+    )
+    client = TestClient(app)
+    body = request("quota-replay-1")
+
+    first = client.post("/api/v1/model/stream", headers=headers(), json=body)
+    if not accountant.facts:
+        fact = store.pending_usage_facts(request_id="quota-replay-1")[0]
+        accountant.settle(fact)
+        store.mark_usage_settled(fact)
+    replay = client.post("/api/v1/model/stream", headers=headers(), json=body)
+    blocked = client.post(
+        "/api/v1/model/stream",
+        headers=headers(),
+        json=request("quota-new-request"),
+    )
+
+    assert first.status_code == replay.status_code == 200
+    assert replay.headers["x-ecorex-replay"] == "true"
+    assert events(replay) == events(first)
+    assert blocked.status_code == 429
+    assert blocked.json()["detail"] == "managed token quota is exhausted"
+    assert provider.calls == 1
+    assert len(accountant.facts) == 1
+
+
+def test_completed_request_with_missing_usage_replays_while_new_work_fails_closed(
+    tmp_path,
+) -> None:
+    provider = Provider()
+    store = SQLiteGatewayStore(tmp_path / "gateway.db")
+    completed_at = datetime.now(timezone.utc)
+    principal = GatewayPrincipal(
+        subject="subject-account-1",
+        account_id="account-1",
+        allowed_model_ids=frozenset({"ecorex-chat"}),
+        quota_period="2026-07",
+        request_limit=100,
+    )
+    body = ModelGatewayRequest.model_validate(request("usage-missing-replay"))
+    reservation = store.reserve(
+        body,
+        principal,
+        lease_seconds=180,
+        now=completed_at,
+    )
+    original = gateway_server._utcnow
+    gateway_server._utcnow = lambda: completed_at
+    try:
+        store.append_terminal(
+            body.request_id,
+            reservation.lease_token,
+            GatewayEvent(
+                seq=1,
+                event_type=GatewayEventType.RESPONSE_COMPLETED,
+                response_id="response-usage-missing-replay",
+            ),
+        )
+    finally:
+        gateway_server._utcnow = original
+
+    class MissingUsageAccountant:
+        def settle(self, _fact) -> None:
+            raise AssertionError("missing usage cannot be settled")
+
+        def reconcile(self, _facts) -> None:
+            raise AssertionError("full-ledger reconciliation must not run")
+
+        def tokens_available(self, _account_id: str) -> bool:
+            return True
+
+        def project(self, account_id: str, *, timezone_name: str):
+            return store.account_usage(account_id, timezone_name=timezone_name)
+
+    app = create_managed_gateway_app(
+        store,
+        authenticator=Authenticator(),
+        provider=provider,
+        allowed_model_ids=frozenset({"ecorex-chat"}),
+        usage_accountant=MissingUsageAccountant(),
+    )
+    client = TestClient(app)
+
+    replay = client.post(
+        "/api/v1/model/stream",
+        headers=headers(),
+        json=request("usage-missing-replay"),
+    )
+    blocked = client.post(
+        "/api/v1/model/stream",
+        headers=headers(),
+        json=request("usage-missing-new-request"),
+    )
+
+    assert replay.status_code == 200
+    assert replay.headers["x-ecorex-replay"] == "true"
+    assert blocked.status_code == 503
+    assert blocked.json()["detail"] == "managed usage settlement is pending"
+    assert provider.calls == 0
+
+
 def test_cloud_gateway_auth_allowlist_persists_before_stream_and_replays(tmp_path) -> None:
     provider = Provider()
     store = SQLiteGatewayStore(tmp_path / "gateway.db")

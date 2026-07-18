@@ -6669,3 +6669,22 @@ passed together on immediate focused rerun. The final direct-admission suite
 passes 9/9, the WebUI suite passes 182/182, TypeScript contracts pass, the
 content-addressed Web build passes, Ruff passes, and dependency-lock
 verification remains unchanged.
+
+### Post-freeze replay audit
+
+A production-shaped audit found one ordering defect before any v1.0.2 artifact
+was built: managed usage settlement and the account Token gate ran before the
+Gateway established whether an authenticated request was an already completed
+durable replay. A request that exactly exhausted its quota could therefore be
+charged once but receive `429` when the client retried the same request ID after
+a disconnect.
+
+The Gateway now performs a read-only completed-request lookup after bearer
+authorization and the principal model allowlist, but before dynamic provider
+admission and Token settlement gates. The lookup reuses the same account and
+canonical request fingerprint checks as reservation, so it cannot expose
+another account's events. Only a completed identical request bypasses new-work
+gates. Gate-error, unsettled and exhausted branches repeat the lookup before
+failing to close the narrow active-to-completed race. New requests remain
+fail-closed. Focused Gateway coverage passes 23/23 and the combined Gateway,
+schema, management and usage projection regression passes 90/90.
