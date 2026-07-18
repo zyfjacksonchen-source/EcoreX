@@ -2130,6 +2130,14 @@ def _run_service_command(
 
 
 def _schema_gate(release: Path, slot: str) -> None:
+    """Apply idempotent storage migrations before legacy model import.
+
+    The image provider's dynamic model configuration is authoritative in the
+    Control Plane.  On a first v0.2.9.2 migration that configuration does not
+    exist until the legacy Admin import is committed, so provider readiness is
+    deliberately checked in the post-import contract gate below.
+    """
+
     for service in _SERVICE_MODULES:
         environment = _service_environment(service, slot)
         _run_service_command(
@@ -2138,6 +2146,13 @@ def _schema_gate(release: Path, slot: str) -> None:
             environment=environment,
             timeout=600,
         )
+
+
+def _production_contract_gate(release: Path, slot: str) -> None:
+    """Validate all live provider/storage contracts after model import."""
+
+    for service in _SERVICE_MODULES:
+        environment = _service_environment(service, slot)
         # These checks intentionally execute the real S3 control/write/read/
         # delete probes.  MinIO is never accepted on API-compatibility faith.
         _run_service_command(
@@ -2483,6 +2498,7 @@ def _ensure_activation_schema_ready(
             records,
         )
         effective = _advance_transition_journal(effective, "legacy_imported")
+    _production_contract_gate(release, str(target_state["active_slot"]))
     return _advance_transition_journal(effective, "schema_ready")
 
 

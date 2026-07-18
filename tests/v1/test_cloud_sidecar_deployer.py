@@ -346,7 +346,7 @@ def test_read_only_plan_executes_real_target_preflight_and_surfaces_dependency(
     assert "postgres_service_unavailable" in plan.blockers
 
 
-def test_schema_gate_runs_real_checks_and_blocks_incompatible_minio(
+def test_schema_migration_and_contract_gates_are_separated_for_legacy_import(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     release = tmp_path / "release"
@@ -364,17 +364,19 @@ def test_schema_gate_runs_real_checks_and_blocks_incompatible_minio(
 
     monkeypatch.setattr(deployment, "_run", run)
 
+    deployment._schema_gate(release, "blue")
+
     with pytest.raises(
         deployment.CloudDeployError, match="image_production_contract_failed"
     ):
-        deployment._schema_gate(release, "blue")
+        deployment._production_contract_gate(release, "blue")
 
     assert [command[-2:] for command, _ in calls] == [
         ("schema", "migrate"),
-        ("schema", "check"),
+        ("schema", "migrate"),
         ("schema", "migrate"),
         ("schema", "check"),
-        ("schema", "migrate"),
+        ("schema", "check"),
         ("schema", "check"),
     ]
 
@@ -1404,6 +1406,11 @@ def test_activation_schema_boundary_is_durable_before_first_legacy_writer_stop(
         "_schema_gate",
         lambda _release, slot: events.append(("schema", slot)),
     )
+    monkeypatch.setattr(
+        deployment,
+        "_production_contract_gate",
+        lambda _release, slot: events.append(("contracts", slot)),
+    )
 
     result = deployment._ensure_activation_schema_ready(
         _spec(tmp_path), journal, target_release=tmp_path / "release"
@@ -1415,6 +1422,7 @@ def test_activation_schema_boundary_is_durable_before_first_legacy_writer_stop(
         ("stop", tuple(reversed(deployment._slot_units("blue")))),
         ("stop", tuple(reversed(deployment.LEGACY_SERVICE_NAMES))),
         ("schema", "blue"),
+        ("contracts", "blue"),
         ("journal", "schema_ready"),
     ]
 
@@ -1453,6 +1461,11 @@ def test_legacy_commit_runs_only_after_both_writer_sets_are_fenced(
     )
     monkeypatch.setattr(
         deployment,
+        "_production_contract_gate",
+        lambda *_args: events.append("contracts_checked"),
+    )
+    monkeypatch.setattr(
+        deployment,
         "_prepare_legacy_import_contract",
         lambda value: (
             {**value, "legacy_admin_migration": _legacy_migration_contract()},
@@ -1476,6 +1489,7 @@ def test_legacy_commit_runs_only_after_both_writer_sets_are_fenced(
         "schema_ready",
         "legacy_business_write",
         ("journal", "legacy_imported"),
+        "contracts_checked",
         ("journal", "schema_ready"),
     ]
 
@@ -1663,6 +1677,11 @@ def test_migrating_recovery_reruns_schema_before_target_can_start(
     )
     monkeypatch.setattr(
         deployment,
+        "_production_contract_gate",
+        lambda _release, slot: events.append(("contracts", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
         "_advance_transition_journal",
         lambda value, phase: events.append(("journal", phase))
         or {**value, "phase": phase},
@@ -1689,9 +1708,10 @@ def test_migrating_recovery_reruns_schema_before_target_can_start(
     assert deployment._resolve_pending_transition(_spec(tmp_path), journal) == "target"
 
     migration_index = events.index(("migrate", "green"))
+    contract_index = events.index(("contracts", "green"))
     schema_ready_index = events.index(("journal", "schema_ready"))
     start_index = next(i for i, event in enumerate(events) if event[0] == "start")
-    assert migration_index < schema_ready_index < start_index
+    assert migration_index < contract_index < schema_ready_index < start_index
 
 
 def test_migrating_first_release_restores_immutable_legacy_source(
