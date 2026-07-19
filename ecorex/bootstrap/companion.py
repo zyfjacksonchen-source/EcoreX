@@ -264,6 +264,11 @@ class BootstrapCompanionInstaller:
                 record_path=record_path,
                 desktop=desktop,
             )
+            self._remove_recorded_legacy_shortcuts(
+                record,
+                record_path=record_path,
+                desktop=desktop,
+            )
             self._cleanup_activation_backup(record)
             return
         if record["state"] != "prepared":
@@ -289,6 +294,11 @@ class BootstrapCompanionInstaller:
         atomic_write_json(record_path, updated)
         self._remove_superseded_receipt_entry(updated, desktop=desktop)
         self._remove_recorded_legacy_entries(
+            updated,
+            record_path=record_path,
+            desktop=desktop,
+        )
+        self._remove_recorded_legacy_shortcuts(
             updated,
             record_path=record_path,
             desktop=desktop,
@@ -749,6 +759,11 @@ class BootstrapCompanionInstaller:
                         record_path=record_path,
                         desktop=desktop,
                     )
+                    self._remove_recorded_legacy_shortcuts(
+                        existing_record,
+                        record_path=record_path,
+                        desktop=desktop,
+                    )
                     self._cleanup_activation_backup(
                         existing_record,
                         desktop=desktop,
@@ -778,22 +793,14 @@ class BootstrapCompanionInstaller:
                 )
         names = _WINDOWS_ENTRY_NAMES if self.platform == "windows" else _MAC_ENTRY_NAMES
         selected: Path | None = None
-        # v0.3.0 installed an ``EcoreX WebUI.lnk`` outside the v1 receipt
-        # authority.  Prefer that exact, independently verified product entry
-        # during the first v1 upgrade so the shortcut users already know is
-        # atomically rewritten to the current signed Bootstrap.  A same-named
-        # user shortcut never matches the strict legacy projection below.
-        if self.platform == "windows":
-            legacy = desktop / "EcoreX WebUI.lnk"
-            if _lexists(legacy) and _entry_is_product_owned(
-                legacy,
-                root=self.root,
-                platform=self.platform,
-            ):
-                selected = legacy
+        # A receipt-owned v1 entry always wins over the independently
+        # recognized v0.3.0 ``EcoreX WebUI.lnk``. Otherwise an online update
+        # can switch a user back to the obsolete shortcut name even though the
+        # current ``EcoreX.lnk`` is already known-good. The old shortcut is
+        # captured separately and removed only after this transaction commits.
         if receipt is not None:
             candidate = Path(receipt["entry_path"])
-            if selected is None and _entry_matches_receipt(candidate, receipt):
+            if _entry_matches_receipt(candidate, receipt):
                 selected = candidate
         if selected is None:
             for name in names:
@@ -862,6 +869,14 @@ class BootstrapCompanionInstaller:
             if self.platform == "windows"
             else []
         )
+        legacy_shortcuts = (
+            _discover_legacy_windows_shortcuts(
+                desktop,
+                selected=selected,
+            )
+            if self.platform == "windows"
+            else []
+        )
         preparing: dict[str, Any] = {
             "schema_version": DESKTOP_ACTIVATION_SCHEMA_VERSION,
             "transaction_id": transaction_id,
@@ -874,6 +889,7 @@ class BootstrapCompanionInstaller:
             "prior_digest": prior_digest,
             "prior_receipt": prior_receipt,
             "legacy_entries": legacy_entries,
+            "legacy_shortcuts": legacy_shortcuts,
             "release_id": manifest.release_id,
             "new_digest": None,
             "new_receipt": None,
@@ -1110,6 +1126,61 @@ class BootstrapCompanionInstaller:
             updated["legacy_entries"] = list(pending)
             atomic_write_json(record_path, updated)
 
+    def _remove_recorded_legacy_shortcuts(
+        self,
+        record: Mapping[str, Any],
+        *,
+        record_path: Path,
+        desktop: Path,
+    ) -> None:
+        """Remove unchanged v0.3.0 WebUI links after a successful commit."""
+
+        if self.platform != "windows":
+            return
+        records = _validate_legacy_windows_shortcut_records(
+            record.get("legacy_shortcuts", []),
+            desktop,
+        )
+        if records is None:
+            raise BootstrapCompanionError(
+                "Bootstrap legacy desktop shortcut record is invalid"
+            )
+        pending = list(records)
+        for legacy in records:
+            path = _require_desktop_entry_path(
+                Path(legacy["entry_path"]),
+                desktop,
+                "windows",
+            )
+            if not _lexists(path):
+                pending.remove(legacy)
+                updated = dict(record)
+                updated["legacy_shortcuts"] = list(pending)
+                atomic_write_json(record_path, updated)
+                continue
+            projection = _read_windows_shortcut(path)
+            if (
+                projection is None
+                or not _is_legacy_windows_entry(path, projection)
+                or _entry_digest(path, "windows") != legacy["entry_digest"]
+            ):
+                # Any user edit after prepare revokes ownership. Leave the
+                # entry untouched rather than guessing whether it is ours.
+                pending.remove(legacy)
+                updated = dict(record)
+                updated["legacy_shortcuts"] = list(pending)
+                atomic_write_json(record_path, updated)
+                continue
+            _remove_desktop_entry_path(
+                path,
+                desktop=desktop,
+                platform="windows",
+            )
+            pending.remove(legacy)
+            updated = dict(record)
+            updated["legacy_shortcuts"] = list(pending)
+            atomic_write_json(record_path, updated)
+
     def _converge_committed_legacy_entries(self, *, desktop: Path) -> None:
         directory = self.root / "bootstrap" / "companion-transactions"
         if not directory.exists():
@@ -1128,6 +1199,11 @@ class BootstrapCompanionInstaller:
             )
             if record is not None and record["state"] == "committed":
                 self._remove_recorded_legacy_entries(
+                    record,
+                    record_path=record_path,
+                    desktop=desktop,
+                )
+                self._remove_recorded_legacy_shortcuts(
                     record,
                     record_path=record_path,
                     desktop=desktop,
@@ -1479,7 +1555,7 @@ def _load_activation_record(
         "new_digest",
         "new_receipt",
     }
-    allowed = required | {"legacy_entries"}
+    allowed = required | {"legacy_entries", "legacy_shortcuts"}
     expected_kind = "windows-lnk" if platform == "windows" else "macos-app"
     names = _WINDOWS_ENTRY_NAMES if platform == "windows" else _MAC_ENTRY_NAMES
     expected_backup = path.parent / (
@@ -1489,7 +1565,8 @@ def _load_activation_record(
     )
     if (
         not isinstance(raw, dict)
-        or frozenset(raw) not in {frozenset(required), frozenset(allowed)}
+        or not frozenset(required).issubset(raw)
+        or not frozenset(raw).issubset(allowed)
         or raw["schema_version"] != DESKTOP_ACTIVATION_SCHEMA_VERSION
         or raw["transaction_id"] != transaction_id
         or raw["state"] not in {
@@ -1532,9 +1609,18 @@ def _load_activation_record(
             desktop,
         )
         is None
+        or _validate_legacy_windows_shortcut_records(
+            raw.get("legacy_shortcuts", []),
+            desktop,
+        )
+        is None
         or (
             platform != "windows"
             and raw.get("legacy_entries", []) != []
+        )
+        or (
+            platform != "windows"
+            and raw.get("legacy_shortcuts", []) != []
         )
         or not isinstance(raw["release_id"], str)
         or _SAFE_RELEASE_ID.fullmatch(raw["release_id"]) is None
@@ -1573,6 +1659,7 @@ def _load_activation_record(
             "Bootstrap desktop activation record is invalid"
         )
     raw.setdefault("legacy_entries", [])
+    raw.setdefault("legacy_shortcuts", [])
     return raw
 
 
@@ -1723,6 +1810,45 @@ def _validate_legacy_windows_entry_records(
     return result
 
 
+def _validate_legacy_windows_shortcut_records(
+    value: Any,
+    desktop: Path,
+) -> list[dict[str, str]] | None:
+    """Validate the one strict v0.3.0 ``.lnk`` cleanup record."""
+
+    if not isinstance(value, list) or len(value) > 1:
+        return None
+    result: list[dict[str, str]] = []
+    for raw in value:
+        if not isinstance(raw, Mapping) or set(raw) != {
+            "entry_kind",
+            "entry_name",
+            "entry_path",
+            "entry_digest",
+        }:
+            return None
+        if (
+            raw.get("entry_kind") != "windows-legacy-lnk"
+            or raw.get("entry_name") != "EcoreX WebUI.lnk"
+            or not isinstance(raw.get("entry_path"), str)
+            or not isinstance(raw.get("entry_digest"), str)
+            or _SHA256.fullmatch(raw["entry_digest"]) is None
+        ):
+            return None
+        try:
+            expected = _require_desktop_entry_path(
+                Path(raw["entry_path"]),
+                desktop,
+                "windows",
+            )
+        except BootstrapCompanionError:
+            return None
+        if expected.name != raw["entry_name"]:
+            return None
+        result.append(dict(raw))
+    return result
+
+
 def _regular_file_identity(metadata: os.stat_result) -> tuple[int, ...]:
     return (
         metadata.st_dev,
@@ -1836,6 +1962,39 @@ def _discover_legacy_windows_entries(desktop: Path) -> list[dict[str, str]]:
             }
         )
     return result
+
+
+def _discover_legacy_windows_shortcuts(
+    desktop: Path,
+    *,
+    selected: Path,
+) -> list[dict[str, str]]:
+    """Capture a strict old WebUI link for commit-time cleanup.
+
+    The capture happens before any mutation and excludes the shortcut chosen
+    for this transaction. This lets a receipt-owned ``EcoreX.lnk`` remain
+    canonical while the obsolete v0.3.0 entry is removed only when its exact
+    bytes and projection still prove ownership at commit time.
+    """
+
+    path = _require_desktop_entry_path(
+        desktop / "EcoreX WebUI.lnk",
+        desktop,
+        "windows",
+    )
+    if path == selected or not _lexists(path):
+        return []
+    projection = _read_windows_shortcut(path)
+    if projection is None or not _is_legacy_windows_entry(path, projection):
+        return []
+    return [
+        {
+            "entry_kind": "windows-legacy-lnk",
+            "entry_name": path.name,
+            "entry_path": str(path),
+            "entry_digest": _entry_digest(path, "windows"),
+        }
+    ]
 
 
 def _remove_legacy_windows_entry_path(path: Path, *, desktop: Path) -> None:

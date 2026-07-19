@@ -12,6 +12,11 @@ import zoneinfo
 from fastapi import FastAPI
 import uvicorn
 
+from ecorex.observability.audit import AuditIntegrityError
+from ecorex.observability.recovery import (
+    is_unreadable_observability_error,
+    quarantine_unreadable_observability,
+)
 from ecorex.session import ManagedSessionError
 from ecorex.startup_diagnostics import write_runtime_startup_diagnostic
 
@@ -99,12 +104,40 @@ def build_product_runtime_server(
             stage_code="runtime_composition",
         ) from None
     try:
-        app = (
-            create_activation_probe_app(composition.server_settings)
-            if isinstance(composition, ActivationProbeComposition)
-            else create_product_app(composition.server_settings)
-        )
-        app.state.product_runtime_composition = composition
+        app = _create_runtime_app(composition)
+    except AuditIntegrityError as error:
+        if (
+            isinstance(composition, ActivationProbeComposition)
+            or not is_unreadable_observability_error(error)
+        ):
+            composition.close_unstarted()
+            raise ProductRuntimeConfigurationError(
+                "Product Runtime observability state is invalid",
+                stage_code="observability_integrity",
+            ) from None
+        # An AES-GCM authentication failure means derived observability rows
+        # cannot be read with the active platform key. Preserve a full SQLite
+        # backup, remove only those unreadable derived rows, then rebuild the
+        # complete composition once. User conversation, project and Artifact
+        # tables remain outside this bounded recovery.
+        database_path = composition.server_settings.database_path
+        composition.close_unstarted()
+        try:
+            quarantine_unreadable_observability(database_path)
+            composition = runtime_loader(host=host, port=port)
+            app = _create_runtime_app(composition)
+        except BundleIntegrityError:
+            composition.close_unstarted()
+            raise
+        except (ServerConfigurationError, RuntimeError, ValueError):
+            composition.close_unstarted()
+            raise ProductRuntimeConfigurationError(
+                "Product Runtime observability recovery is invalid",
+                stage_code="observability_recovery",
+            ) from None
+        except BaseException:
+            composition.close_unstarted()
+            raise
     except BundleIntegrityError:
         composition.close_unstarted()
         raise
@@ -137,6 +170,18 @@ def build_product_runtime_server(
         app=app,
         uvicorn_config=uvicorn_config,
     )
+
+
+def _create_runtime_app(
+    composition: ProductRuntimeComposition | ActivationProbeComposition,
+) -> FastAPI:
+    app = (
+        create_activation_probe_app(composition.server_settings)
+        if isinstance(composition, ActivationProbeComposition)
+        else create_product_app(composition.server_settings)
+    )
+    app.state.product_runtime_composition = composition
+    return app
 
 
 def main(argv: Sequence[str] | None = None) -> int:

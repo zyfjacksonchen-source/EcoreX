@@ -23,6 +23,7 @@ from ecorex import __version__
 from ecorex.bootstrap import RUNTIME_RELOAD_EXIT_CODE
 
 from ecorex.connectors import InMemoryCredentialVault
+from ecorex.observability.audit import AuditIntegrityError
 from ecorex.pack_catalog import REQUIRED_CAPABILITY_PACK_IDS
 from ecorex.protocol import CreateTurnRequest
 from ecorex.release import (
@@ -2285,6 +2286,54 @@ def test_product_server_normalizes_application_composition_and_closes_once(
     assert "native-application-composition-secret" not in str(failure.value)
     assert composition.close_count == 1
     assert composition.transfer_count == 0
+
+
+def test_product_server_quarantines_only_unreadable_observability_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    first = _StartupStageComposition()
+    second = _StartupStageComposition()
+    first.server_settings = SimpleNamespace(database_path=tmp_path / "runtime.sqlite3")
+    second.server_settings = SimpleNamespace(database_path=tmp_path / "runtime.sqlite3")
+    app = SimpleNamespace(state=SimpleNamespace())
+    loaded = iter((first, second))
+    recovered: list[Path] = []
+
+    def loader(**_kwargs):
+        return next(loaded)
+
+    calls = 0
+
+    def create_after_recovery(_settings):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise AuditIntegrityError("stored audit payload authentication failed")
+        return app
+
+    monkeypatch.setattr("ecorex.server.cli.create_product_app", create_after_recovery)
+    monkeypatch.setattr(
+        "ecorex.server.cli.quarantine_unreadable_observability",
+        lambda path: recovered.append(Path(path)),
+    )
+    monkeypatch.setattr(
+        "ecorex.server.cli.build_uvicorn_config",
+        lambda _app, _settings: object(),
+    )
+
+    server = build_product_runtime_server(
+        host="127.0.0.1",
+        port=8765,
+        runtime_loader=loader,
+    )
+
+    assert server.app is app
+    assert recovered == [tmp_path / "runtime.sqlite3"]
+    assert first.close_count == 1
+    assert first.transfer_count == 0
+    assert second.close_count == 0
+    assert second.transfer_count == 1
 
 
 def test_product_server_normalizes_http_configuration_before_ownership_transfer(

@@ -432,12 +432,18 @@ def test_windows_upgrade_atomically_takes_over_exact_legacy_webui_shortcut(
         desktop_directory=desktop,
     )
     _prepare(second_installer, second, "b" * 32)
-    migrated = companion_module._read_windows_shortcut(legacy_entry)
+    migrated = companion_module._read_windows_shortcut(current_entry)
     assert migrated is not None
     assert migrated["description"] == "EcoreX"
     assert Path(migrated["target"]).name.casefold() == "ecorex-bootstrap.exe"
-    assert hashlib.sha256(legacy_entry.read_bytes()).hexdigest() != original_legacy_digest
+    assert hashlib.sha256(current_entry.read_bytes()).hexdigest() != current_receipt[
+        "entry_digest"
+    ]
+    assert hashlib.sha256(legacy_entry.read_bytes()).hexdigest() == original_legacy_digest
     second_installer.rollback_activation("b" * 32)
+    assert hashlib.sha256(current_entry.read_bytes()).hexdigest() == current_receipt[
+        "entry_digest"
+    ]
     assert hashlib.sha256(legacy_entry.read_bytes()).hexdigest() == original_legacy_digest
     assert json.loads(
         (root / "bootstrap" / "desktop-entry.json").read_text(encoding="utf-8")
@@ -448,10 +454,11 @@ def test_windows_upgrade_atomically_takes_over_exact_legacy_webui_shortcut(
     receipt = json.loads(
         (root / "bootstrap" / "desktop-entry.json").read_text(encoding="utf-8")
     )
-    assert receipt["entry_name"] == "EcoreX WebUI.lnk"
-    assert not current_entry.exists()
-    assert second_installer.remove_desktop_entry() is True
+    assert receipt["entry_name"] == "EcoreX.lnk"
+    assert current_entry.exists()
     assert not legacy_entry.exists()
+    assert second_installer.remove_desktop_entry() is True
+    assert not current_entry.exists()
     assert second_installer.remove_desktop_entry() is False
 
 
