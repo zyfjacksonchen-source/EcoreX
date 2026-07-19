@@ -2519,3 +2519,12 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Direct release identity separation | 0 | Stage run ID and Candidate gate run ID are independent mandatory inputs. Correct distinct IDs pass; same, swapped, wrong and one-receipt-mixed identities fail closed. The complete direct-admission suite passes 9/9. |
 | Final WebUI and dependency gates | 0 | TypeScript contract check passed; WebUI tests passed 182/182; the content-addressed build produced 25 production assets and 24 chunks; Ruff and dependency-lock verification passed. |
 | Completed-response replay before Token admission | 0 | A production-shaped audit reproduced first response 200 / same-request retry 429 after quota exhaustion. The durable completed-request lookup now precedes new-work Token gates while enforcing the same account and request fingerprint. Quota-exhausted replay and `usage_missing` replay tests pass; new work remains 429/503 fail-closed. Focused Gateway: 23/23; combined usage/Gateway regression: 90/90; Ruff and diff checks pass. |
+
+## v1.0.3 first-start hotfix evidence - 2026-07-19
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Public Windows package preflight | 0 with harness correction | v1.0.2 Bootstrap download, manifest and SHA-256 verification passed. The first isolated root exceeded the product's Windows path budget; a default-length isolated root retained empty `PATH` and completed signed Core staging, activation and Bootstrap health. |
+| Real browser root cause | 1 expected before fix | Fresh Chrome loaded the signed WebUI and received `/api/v1/bootstrap` with HTTP 200. CDP paused on `TypeError: Cannot add property csrfToken, object is not extensible` in `RuntimeClient.acceptBootstrap`; this precisely explained the visible safe startup error. |
+| Mutable-state boundary correction | 0 local | RuntimeClient makes a private shallow copy of the frozen injected bridge. Focused Runtime client tests pass 44/44, including a frozen-bridge CSRF regression; TypeScript and generated contract checks pass; tracked diff validation passes. |
+| Release and production activation | pending | v1.0.3 must be rebuilt as a new immutable release, installed from the public first source in a clean default-length root, exercised in a fresh browser, and only then promoted to Stable. |

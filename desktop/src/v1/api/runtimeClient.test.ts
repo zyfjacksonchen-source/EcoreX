@@ -409,6 +409,44 @@ test("bootstrap bearer is sent and returned CSRF protects later mutations", asyn
   }
 });
 
+test("bootstrap accepts CSRF when the injected Runtime bridge is frozen", async () => {
+  const requests: Request[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const request = new Request(input, init);
+    requests.push(request);
+    if (request.url.endsWith("/bootstrap")) return Response.json(bootstrap);
+    return Response.json({
+      thread_id: "thr_frozen_bridge",
+      status: "active",
+      title: null,
+      pinned: false,
+      active_turn_status: null,
+      metadata: {},
+      forked_from_thread_id: null,
+      forked_from_turn_id: null,
+      forked_from_seq: null,
+      created_at: bootstrap.server_time,
+      updated_at: bootstrap.server_time,
+    }, { status: 201 });
+  };
+  try {
+    const bridge = Object.freeze({
+      apiBase: "http://127.0.0.1:8765/api/v1",
+      bearerToken: "b".repeat(43),
+    });
+    const client = new RuntimeClient(bridge);
+    const loaded = await client.bootstrap();
+    assert.doesNotThrow(() => client.acceptBootstrap(loaded));
+    await client.createThread(messageOperation({ threadId: null }));
+
+    assert.equal(Object.hasOwn(bridge, "csrfToken"), false);
+    assert.equal(requests[1].headers.get("x-ecorex-csrf"), bootstrap.csrf_token);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("managed device login exposes only public challenge fields and protects begin/poll mutations", async () => {
   const requests: Request[] = [];
   const originalFetch = globalThis.fetch;

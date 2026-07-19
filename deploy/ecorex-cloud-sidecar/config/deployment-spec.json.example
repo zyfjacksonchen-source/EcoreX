@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "release_id": "ecorex-cloud-v1.0.2-build-REPLACE",
+  "release_id": "ecorex-cloud-v1.0.3-build-REPLACE",
   "source_commit": "REPLACE_WITH_40_LOWERCASE_HEX",
   "dependency_lock_manifest_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
-  "artifact_root": "/srv/ecorex-upload/ecorex-cloud-v1.0.2-build-REPLACE",
+  "artifact_root": "/srv/ecorex-upload/ecorex-cloud-v1.0.3-build-REPLACE",
   "artifact_manifest_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
   "release_keyring_path": "/etc/ecorex/cloud/release-public-keys.json",
   "release_keyring_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",

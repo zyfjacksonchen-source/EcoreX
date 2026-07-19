@@ -10,7 +10,7 @@ function emptyUsageData() {
       generatedAt: '',
       rawSheetUrl: '#',
       source: '等待实时数据',
-      version: '1.0.2',
+      version: '1.0.3',
       live: false
     },
     kpis: {},

@@ -306,7 +306,10 @@ export class RuntimeClient {
   private readonly config: RuntimeBridgeConfig;
 
   constructor(config: RuntimeBridgeConfig = window.__ECOREX_RUNTIME__ ?? {}) {
-    this.config = config;
+    // The Runtime injects and freezes the public bridge object so page code
+    // cannot replace its launch identity or bearer token.  Keep that boundary
+    // immutable and retain CSRF rotation in a private mutable copy.
+    this.config = { ...config };
     this.base = normalizeBase(config.apiBase);
   }
 

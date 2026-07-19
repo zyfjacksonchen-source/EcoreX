@@ -6688,3 +6688,31 @@ gates. Gate-error, unsettled and exhausted branches repeat the lookup before
 failing to close the narrow active-to-completed race. New requests remain
 fail-closed. Focused Gateway coverage passes 23/23 and the combined Gateway,
 schema, management and usage projection regression passes 90/90.
+
+## 2026-07-19 - v1.0.3 frozen Runtime bridge first-start correction
+
+A public Windows Bootstrap acceptance first failed while staging because the
+test harness used a descriptive GUID-length install root. The signed package,
+manifest and SHA-256 were valid; 97 embedded Python members crossed the
+deliberate 248-character Windows extraction guard only under that artificial
+root. The acceptance root was shortened to the same path budget as the product
+default while preserving an empty host `PATH`. The default installer itself
+was not weakened.
+
+The corrected install completed download, signature verification, Pack staging,
+activation, migration preparation and Bootstrap health confirmation using only
+the embedded Python 3.11 Runtime. A real fresh Chrome session then found a
+separate first-start defect: the Runtime correctly froze
+`window.__ECOREX_RUNTIME__`, but `RuntimeClient.acceptBootstrap` attempted to
+write the returned CSRF token back into that frozen object. The API returned
+HTTP 200 and passed the generated contract, yet the caught `TypeError` forced
+the WebUI into its safe startup error surface.
+
+`RuntimeClient` now clones the immutable launch bridge into private client
+state before accepting CSRF rotation. The Runtime-owned bearer and release
+identity remain frozen in page scope, while frontend request state stays
+mutable only inside the client. A regression constructs an actually frozen
+bridge, accepts Bootstrap, submits a mutation with the returned CSRF token and
+proves the injected object is unchanged. Product identity advances to
+`1.0.3`; immutable `1.0.2` artifacts are retained as audit evidence rather than
+silently replaced.
