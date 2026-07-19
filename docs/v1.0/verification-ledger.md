@@ -2571,3 +2571,12 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 These checks are regression evidence only. They do not replace the still-required
 interactive, authenticated user acceptance for chat, image generation/editing
 and live tool invocation.
+
+## v1.0.6 live-login and sandbox-boundary regression - 2026-07-20
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Authenticated Runtime login | 0 real Chromium | A normal account/password session was accepted by the production Control Plane and the managed local Runtime installed the rotated session. The post-login page reached the authenticated workbench; a reload-timing repair is included in the new immutable candidate so this handoff does not rely on a desktop shortcut. |
+| Pre-execution sandbox failure | 0 local | `tests/v1/test_shell_sandbox_boundary.py`, `test_platform_pack_staging.py` and `test_process_capability_pack.py`: 153 passed, 14 expected platform skips. A rejected Windows sandbox contract now produces a failed tool execution and no conflict-resolution interaction. |
+| Web login contract | 0 local | TypeScript contract check and targeted account-login layout contract passed. The page waits up to 90 seconds for credential rotation and self-reloads on either restart path. |
+| Release and installed acceptance | pending | Build a new signed v1.0.6 candidate, install it over the active v1.0.5 slot, and repeat authenticated shell/read/fetch plus image and retouch acceptance before Stable promotion. |

@@ -1615,18 +1615,23 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
       const receipt = await client.loginSession(identifier, password);
       if (!receipt.restart_scheduled) {
         setSessionError(
-          "登录已完成，但 EcoreX 未能自动重新打开。请双击桌面的 EcoreX 后继续。",
+          "登录已完成，正在自动重新连接 EcoreX…",
         );
+        window.setTimeout(() => window.location.reload(), 1_500);
         return null;
       }
-      if (await client.waitForCredentialRotation()) {
+      if (await client.waitForCredentialRotation({ timeoutMs: 90_000 })) {
         window.location.reload();
         return receipt;
       }
       setSessionError(
-        "登录已完成，但 EcoreX 启动时间较长。请双击桌面的 EcoreX 后继续。",
+        "EcoreX 正在重新连接，请稍候…",
       );
-      return null;
+      // A local Runtime restart can temporarily outlive the credential
+      // hand-off poll on slower machines.  Continue automatically instead of
+      // asking a non-technical user to relaunch the desktop shortcut.
+      window.setTimeout(() => window.location.reload(), 1_500);
+      return receipt;
     } catch (error) {
       setSessionError(errorMessage(error));
       return null;

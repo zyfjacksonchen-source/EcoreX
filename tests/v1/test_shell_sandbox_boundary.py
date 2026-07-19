@@ -19,8 +19,10 @@ from ecorex.capabilities import (
     ToolSpec,
 )
 from ecorex.gateway import GatewayEvent
+from ecorex.integration.pack_process import CapabilityPackProcessError
 from ecorex.protocol import CreateThreadRequest, CreateTurnRequest
 from ecorex.runtime import AgentTurnWorker, RuntimeKernel, RuntimeSettings, WorkerOutcome, create_app
+from ecorex.runtime.tool_executions import ToolExecutionRepository
 
 
 class _ScriptedGateway:
@@ -299,3 +301,78 @@ def test_non_idempotent_shell_crash_persists_uncertain_hitl_and_never_auto_retri
     completed = asyncio.run(restarted_worker.run_once("shell-worker-restarted"))
     assert completed.outcome is WorkerOutcome.COMPLETED
     assert calls == 1
+
+
+def test_shell_preflight_failure_does_not_create_false_uncertain_hitl(
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    def unavailable_shell(_arguments, _context):
+        nonlocal calls
+        calls += 1
+        # This is returned before a capability pack can start a command.
+        raise CapabilityPackProcessError("workspace_sandbox_unavailable")
+
+    app = create_app(
+        settings=RuntimeSettings(
+            database_path=tmp_path / "runtime.db",
+            installed_capability_packs=frozenset({"sandbox"}),
+            capability_handlers={"shell": unavailable_shell},
+        )
+    )
+    kernel = app.state.runtime
+    composition = app.state.runtime_composition
+    thread = kernel.create_thread(CreateThreadRequest(title="failed shell preflight"))
+    prepared = composition.prepare_turn(
+        CreateTurnRequest(
+            input="run shell",
+            agent_model_id="ecorex-chat",
+            client_message_id="failed-shell-preflight",
+        )
+    )
+    created = kernel.create_turn(
+        thread.thread_id,
+        prepared.request,
+        snapshot_context=prepared.snapshot_context,
+    )
+    gateway = _ScriptedGateway(
+        [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "shell-response",
+                    "tool_call_id": "shell-call",
+                    "tool_name": "shell",
+                    "arguments": {"command": "opaque-command"},
+                }
+            ]
+        ]
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+        retry_delay_seconds=0,
+    )
+
+    assert asyncio.run(worker.run_once("preflight-worker")).outcome is WorkerOutcome.WAITING_HUMAN
+    approval = kernel.list_interactions(thread.thread_id).interactions[0]
+    kernel.respond_interaction(
+        approval.interaction_id,
+        {"action_id": "allow", "values": {}},
+        client_request_id="allow-preflight-shell",
+    )
+
+    failed = asyncio.run(worker.run_once("preflight-worker"))
+    assert failed.outcome is WorkerOutcome.FAILED
+    assert calls == 1
+    execution_id = AgentTurnWorker._execution_id(created.turn.turn_id, "shell-call")
+    execution = ToolExecutionRepository(kernel.database).get(execution_id)
+    assert execution.status == "failed"
+    assert execution.error_code == "capabilitypackprocesserror"
+    assert not any(
+        interaction.kind.value == "conflict_resolution"
+        for interaction in kernel.list_interactions(thread.thread_id).interactions
+    )

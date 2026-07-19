@@ -31,7 +31,10 @@ test("unauthenticated users see only the account login surface", async () => {
   assert.match(client, /if \(error\.status === 401\) return true/u);
   assert.match(client, /if \(error\.status !== 409\)/u);
   assert.match(session, /if \(!receipt\.restart_scheduled\)/u);
-  assert.match(session, /await client\.waitForCredentialRotation\(\)/u);
+  assert.match(session, /await client\.waitForCredentialRotation\(\{ timeoutMs: 90_000 \}\)/u);
+  assert.match(session, /登录已完成，正在自动重新连接 EcoreX/u);
+  assert.match(session, /EcoreX 正在重新连接，请稍候/u);
+  assert.match(session, /window\.setTimeout\(\(\) => window\.location\.reload\(\), 1_500\)/u);
   assert.match(session, /window\.location\.reload\(\)/u);
 });
 

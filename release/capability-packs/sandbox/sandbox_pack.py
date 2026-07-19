@@ -409,9 +409,14 @@ def _validate_contract(value: Any, roots: tuple[Path, ...]) -> Mapping[str, Any]
     ):
         raise ContractError("shell_sandbox_contract_invalid")
     if profile == "workspace-write":
+        # The Windows AppContainer needs immutable Runtime files (the bundled
+        # Python and signed pack) in addition to the mutable workspace.  This
+        # is a narrower, attested scope than host access and is the exact
+        # contract emitted by Core's Windows backend.
         if (
             value.get("os_enforced") is not True
-            or value.get("filesystem_read_scope") != "workspace-only"
+            or value.get("filesystem_read_scope")
+            not in {"workspace-only", "workspace-and-runtime"}
             or value.get("filesystem_write_scope") != "workspace-only"
             or value.get("network_scope") != "denied"
         ):

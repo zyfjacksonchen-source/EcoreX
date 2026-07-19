@@ -990,6 +990,49 @@ def test_sandbox_pack_acknowledges_exact_core_contract_and_fixed_shell(
     assert rejected["error_code"] == "shell_sandbox_contract_invalid"
 
 
+def test_sandbox_pack_accepts_attested_windows_workspace_runtime_read_scope(
+    tmp_path: Path,
+) -> None:
+    artifact = _zipapp(tmp_path, "sandbox")
+    request = _request(
+        "sandbox",
+        "shell",
+        {"command": "echo ecorex-workspace-runtime", "timeout_seconds": 5},
+        tmp_path,
+    )
+    roots_digest = hashlib.sha256(str(tmp_path.resolve()).encode()).hexdigest()
+    contract = {
+        "profile": "workspace-write",
+        "backend_id": "windows-appcontainer",
+        "os_enforced": True,
+        "workspace_roots_sha256": roots_digest,
+        "filesystem_read_scope": "workspace-and-runtime",
+        "filesystem_write_scope": "workspace-only",
+        "network_scope": "denied",
+        "process_tree_scope": "contained-inherited",
+        "timeout_seconds": 10.0,
+        "stdout_limit_bytes": 4 * 1024 * 1024,
+        "stderr_limit_bytes": 64 * 1024,
+    }
+    contract["contract_id"] = (
+        "sandbox_"
+        + hashlib.sha256(
+            json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
+    request["context"].update(
+        {
+            "effective_sandbox": "workspace-write",
+            "sandbox_contract": contract,
+        }
+    )
+
+    response = _invoke(artifact, request)
+
+    assert response["status"] == "completed"
+    assert "ecorex-workspace-runtime" in response["result"]["stdout"]
+
+
 def test_sandbox_pack_streams_and_stops_stdout_flood(tmp_path: Path) -> None:
     artifact = _zipapp(tmp_path, "sandbox")
     marker = "stdout-flood-sensitive-marker"

@@ -6805,3 +6805,28 @@ working directory, icon and `EcoreX` ownership description. The live local
 Runtime remained responsive throughout the repair. Future entry recognition
 continues to preserve user-modified shortcuts rather than deleting them by
 name alone.
+
+## 2026-07-20 - v1.0.6 account handoff and sandbox acknowledgement boundary
+
+Authenticated live acceptance exposed two usability defects that unit-level
+success alone could not reveal. A successful password login could outlast the
+old Runtime's restart window and leave the page waiting for a manual desktop
+relaunch. The WebUI now treats the handoff as an automatic recovery path: it
+waits for the bounded credential rotation window and, if the local process is
+still converging, reloads itself with an explicit in-product status rather than
+asking a user to operate a shortcut.
+
+The same acceptance also found a Windows-only contract mismatch between Core
+and the reviewed sandbox pack. The AppContainer backend correctly attests a
+read scope for the immutable Runtime as well as the writable workspace; the
+pack had accepted only the narrower POSIX-shaped label and rejected a command
+before it could start. Runtime then conservatively but incorrectly presented
+that preflight rejection as an uncertain external side effect.
+
+The contract now explicitly accepts the attested Windows
+`workspace-and-runtime` read scope. Pack-process errors carry an explicit
+acknowledgement-boundary flag: preflight failures are persisted as ordinary
+failed executions, while a failure after a request crosses the child-process
+boundary remains an uncertain operation and retains human reconciliation. This
+preserves the safety invariant without creating a false conflict card. Product
+identity advances immutably to `1.0.6` for the repaired artifacts.

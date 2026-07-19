@@ -41,14 +41,44 @@ _PACK_TOOLS = {
     "sandbox": frozenset({"shell"}),
 }
 
+# These failures are returned by the reviewed sandbox pack before it resolves
+# or starts the requested command.  They are safe to report as normal failed
+# Tool executions rather than asking the user whether a command might have
+# run.  All other pack failures after request delivery remain conservative.
+_PRE_EXECUTION_PACK_FAILURE_CODES = frozenset(
+    {
+        "shell_approval_missing",
+        "shell_timeout_exceeds_core_contract",
+        "shell_cwd_invalid",
+        "shell_cwd_outside_workspace",
+        "shell_sandbox_contract_missing",
+        "shell_sandbox_contract_invalid",
+        "shell_process_supervision_unavailable",
+    }
+)
+
 
 class CapabilityPackProcessError(RuntimeError):
-    """A stable, non-secret failure returned by or around one pack process."""
+    """A stable, non-secret failure returned by or around one pack process.
 
-    def __init__(self, code: str, *, retryable: bool = False) -> None:
+    ``side_effect_uncertain`` is deliberately explicit.  A Runtime worker must
+    ask the user to reconcile an opaque command only after its request crossed
+    the child-process boundary; preflight failures (for example a rejected
+    sandbox contract) cannot have executed the command and must not create a
+    misleading conflict card.
+    """
+
+    def __init__(
+        self,
+        code: str,
+        *,
+        retryable: bool = False,
+        side_effect_uncertain: bool = False,
+    ) -> None:
         normalized = code if _SAFE_CODE.fullmatch(str(code)) else "pack_process_failed"
         self.code = normalized
         self.retryable = bool(retryable)
+        self.side_effect_uncertain = bool(side_effect_uncertain)
         super().__init__(normalized)
 
 
@@ -296,6 +326,7 @@ class ProcessCapabilityPackAdapter:
             sandbox_contract=sandbox_contract,
             child_environment=child_environment,
         )
+        request_dispatched = False
         stdout_task = asyncio.create_task(
             _read_bounded(process.stdout, MAX_STDOUT_BYTES)
         )
@@ -314,6 +345,10 @@ class ProcessCapabilityPackAdapter:
                 await process.stdin.wait_closed()
             except (BrokenPipeError, ConnectionResetError):
                 pass
+            # Packs read one complete request before dispatching a tool.  From
+            # this point onward a lost result from a non-idempotent tool is a
+            # genuine ambiguity and must enter HITL reconciliation.
+            request_dispatched = True
             return_code, stdout, _stderr = await asyncio.wait_for(
                 asyncio.shield(wait_task),
                 timeout=timeout,
@@ -326,21 +361,29 @@ class ProcessCapabilityPackAdapter:
             await _kill_process_tree(process)
             await _settle_process_tasks(wait_task, stdout_task, stderr_task)
             raise CapabilityPackProcessError(
-                "pack_process_timeout", retryable=True
+                "pack_process_timeout",
+                retryable=True,
+                side_effect_uncertain=request_dispatched,
             ) from None
-        except CapabilityPackProcessError:
+        except CapabilityPackProcessError as error:
             await _kill_process_tree(process)
             await _settle_process_tasks(wait_task, stdout_task, stderr_task)
+            if request_dispatched:
+                error.side_effect_uncertain = True
             raise
         except Exception:
             await _kill_process_tree(process)
             await _settle_process_tasks(wait_task, stdout_task, stderr_task)
             raise CapabilityPackProcessError(
-                "pack_process_transport_failed", retryable=True
+                "pack_process_transport_failed",
+                retryable=True,
+                side_effect_uncertain=request_dispatched,
             ) from None
         if return_code != 0:
             raise CapabilityPackProcessError(
-                "pack_process_exited", retryable=return_code < 0
+                "pack_process_exited",
+                retryable=return_code < 0,
+                side_effect_uncertain=request_dispatched,
             )
         # A successful pack response must not leave detached descendants. On
         # POSIX they inherit the process group; the Windows launcher owns a
@@ -351,18 +394,32 @@ class ProcessCapabilityPackAdapter:
         # pack mutation cannot be accepted merely because startup verification
         # happened earlier in the Runtime lifecycle.
         await asyncio.to_thread(_verify_pack_artifact, self.pack)
-        response = _parse_response(
-            stdout,
-            request_id=context.invocation_id,
-            sandbox_contract_id=(
-                sandbox_contract.contract_id if sandbox_contract is not None else None
-            ),
-        )
+        try:
+            response = _parse_response(
+                stdout,
+                request_id=context.invocation_id,
+                sandbox_contract_id=(
+                    sandbox_contract.contract_id if sandbox_contract is not None else None
+                ),
+            )
+        except CapabilityPackProcessError as error:
+            error.side_effect_uncertain = request_dispatched
+            raise
         if response[0] == "failed":
-            raise CapabilityPackProcessError(response[1], retryable=response[2])
+            raise CapabilityPackProcessError(
+                response[1],
+                retryable=response[2],
+                side_effect_uncertain=(
+                    request_dispatched
+                    and response[1] not in _PRE_EXECUTION_PACK_FAILURE_CODES
+                ),
+            )
         result = response[1]
         if _contains_protected_path(result, self._protected_paths):
-            raise CapabilityPackProcessError("pack_result_exposed_host_path")
+            raise CapabilityPackProcessError(
+                "pack_result_exposed_host_path",
+                side_effect_uncertain=request_dispatched,
+            )
         return result
 
     async def _spawn(

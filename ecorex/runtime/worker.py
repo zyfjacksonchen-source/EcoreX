@@ -2396,11 +2396,31 @@ class AgentTurnWorker:
             except LeaseError:
                 raise
             except Exception as error:
-                if (
-                    spec.idempotency is not IdempotencyClass.NON_IDEMPOTENT
-                    and getattr(error, "side_effect_uncertain", False) is not True
-                ):
-                    raise
+                # Generic opaque handlers remain conservative for a
+                # non-idempotent Tool.  Pack-process errors carry an explicit
+                # acknowledgement boundary, so rejected sandbox preflight
+                # failures are safely recorded as failed instead of trapping
+                # the user in a false "might have executed" interaction.
+                uncertain = bool(
+                    getattr(
+                        error,
+                        "side_effect_uncertain",
+                        spec.idempotency is IdempotencyClass.NON_IDEMPOTENT,
+                    )
+                )
+                if not uncertain:
+                    error_code = self._safe_error_code(error)
+                    await self._run_execution_sync(
+                        job_id,
+                        lease_token,
+                        self.tool_executions.fail,
+                        execution_id,
+                        error_code=error_code,
+                    )
+                    raise _GatewayResponseFailure(
+                        error_code,
+                        retryable=bool(getattr(error, "retryable", False)),
+                    ) from error
                 # Once an opaque side-effecting process was admitted, a lost
                 # acknowledgement is uncertain regardless of whether the
                 # transport labels the failure retryable.  Persist HITL now;
