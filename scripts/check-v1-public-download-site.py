@@ -130,6 +130,24 @@ def main() -> int:
         "public HTML must link directly to the canonical v1 Control Plane administrator WebUI",
         errors,
     )
+    _require(
+        "<title>EcoreX 下载与安装</title>" in html
+        and "<strong>下载</strong>" in html
+        and "<strong>解压</strong>" in html
+        and "<strong>双击 EcoreX Installer</strong>" in html
+        and "它就在解压后的第一层" in html
+        and "安装完成后会自动打开 EcoreX，并在桌面创建快捷方式。" in html,
+        "public HTML must present the plain-language download, unzip, and root installer flow",
+        errors,
+    )
+    _require(
+        not any(
+            term in html
+            for term in ("PowerShell", "终端", "Bootstrap", "SHA-256", "Ed25519")
+        ),
+        "public HTML must not expose implementation or cryptographic terms by default",
+        errors,
+    )
     for path in scripts + styles:
         _require(
             f'./{path.name}' in html,
@@ -163,6 +181,20 @@ def main() -> int:
             and "credentials: \"omit\"" in javascript
             and "new AbortController()" in javascript,
             "public discovery fetches must bypass caches/credentials and time out",
+            errors,
+        )
+        _require(
+            'createElement("a", "download-link", "下载 EcoreX")' in javascript
+            and 'createElement("details", "download-help")' in javascript
+            and 'createElement("summary", "", "下载遇到问题")' in javascript
+            and "details.append(meta);" in javascript
+            and "appendTerminalCommand(details, artifact);" in javascript
+            and "article.append(meta);" not in javascript
+            and "appendTerminalCommand(article, artifact);" not in javascript,
+            (
+                "public download cards must keep the direct download primary "
+                "and collapse commands, hashes, and fallback sources under help"
+            ),
             errors,
         )
 

@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-VERSION = "1.0.4"
+VERSION = "1.0.5"
 DB_PATH = "/srv/ecorex-agent-admin/data/ecorex-admin.sqlite3"
 CONTROL_PLANE_DB_PATH = os.environ.get(
     "ECOREX_CONTROL_PLANE_DATABASE_PATH",

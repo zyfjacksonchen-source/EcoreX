@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import hashlib
+import hmac
+import ipaddress
 import json
 from pathlib import Path
 import secrets
@@ -39,9 +41,19 @@ from .model_activation import (
     ModelConnectionTestResult,
     RejectingModelConnectionTester,
 )
+from .password_credentials import (
+    dummy_password_hash,
+    encode_password,
+    verify_password_and_upgrade,
+)
 
 
 _ZERO_DIGEST = "0" * 64
+_PASSWORD_RATE_WINDOW = timedelta(minutes=15)
+_PASSWORD_RATE_TTL = timedelta(hours=1)
+_PASSWORD_ACCOUNT_LIMIT = 5
+_PASSWORD_IP_LIMIT = 20
+_PASSWORD_RATE_CAPACITY = 100_000
 
 
 class AdminManagementError(RuntimeError):
@@ -56,6 +68,16 @@ class AdminManagementNotFound(AdminManagementError):
     pass
 
 
+class AdminPasswordAuthenticationError(AdminManagementError):
+    pass
+
+
+class AdminPasswordLocked(AdminPasswordAuthenticationError):
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__("password login is temporarily locked")
+        self.retry_after_seconds = max(1, int(retry_after_seconds))
+
+
 class AdminModelSecretError(AdminManagementError):
     pass
 
@@ -68,11 +90,19 @@ class ModelTestLease:
 
 class _ModelSecretCipher:
     _DOMAIN = b"ecorex-admin-model-secret-v1\0"
+    _PASSWORD_FINGERPRINT_DOMAIN = (
+        b"ecorex-admin-password-idempotency-fingerprint-v1\0"
+    )
 
     def __init__(self, key: bytes) -> None:
         if not isinstance(key, bytes) or len(key) != 32:
             raise ValueError("managed model encryption key must contain 32 bytes")
         self._cipher = AESGCM(key)
+        self._password_fingerprint_key = hmac.new(
+            key,
+            self._PASSWORD_FINGERPRINT_DOMAIN,
+            hashlib.sha256,
+        ).digest()
 
     @staticmethod
     def fingerprint(value: str) -> str:
@@ -101,6 +131,13 @@ class _ModelSecretCipher:
         except (InvalidTag, UnicodeDecodeError, ValueError):
             raise AdminModelSecretError("managed model key cannot be decrypted") from None
 
+    def password_request_fingerprint(self, value: str) -> str:
+        return hmac.new(
+            self._password_fingerprint_key,
+            self._PASSWORD_FINGERPRINT_DOMAIN + value.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
 
 def _canonical(value: Any) -> bytes:
     return json.dumps(
@@ -125,6 +162,12 @@ _PROVIDER_USAGE_KINDS = frozenset({"chat", "image"})
 _PROVIDER_USAGE_ACTOR = ControlPrincipal(
     subject="system:provider-usage-settlement",
     client_id="ecorex-internal",
+    account_id="system",
+    roles=frozenset({"platform_admin"}),
+)
+_PASSWORD_AUTH_ACTOR = ControlPrincipal(
+    subject="system:password-authentication",
+    client_id="ecorex-control-plane",
     account_id="system",
     roles=frozenset({"platform_admin"}),
 )
@@ -200,7 +243,7 @@ class AdminManagementRepository:
                 [*values, limit, offset],
             ).fetchall()
             return AdminUserListProjection(
-                items=[self._user(row) for row in rows],
+                items=[self._user(connection, row) for row in rows],
                 total=total,
                 offset=offset,
                 limit=limit,
@@ -216,21 +259,38 @@ class AdminManagementRepository:
             ).fetchone()
             if row is None:
                 raise AdminManagementNotFound("user does not exist")
-            return self._user(row)
+            return self._user(connection, row)
         finally:
             connection.close()
 
     def create_user(
         self, request: CreateAdminUserRequest, *, actor: ControlPrincipal
     ) -> AdminUserProjection:
-        public_request = request.model_dump(mode="json")
+        password_hash = password_fingerprint = None
+        if request.password is not None:
+            password = request.password.get_secret_value()
+            try:
+                password_hash = encode_password(password)
+                password_fingerprint = self._secrets.password_request_fingerprint(
+                    password
+                )
+            finally:
+                password = ""
+        idempotency_request = request.model_dump(
+            mode="json", exclude={"password"}
+        ) | {
+            "password_set": password_hash is not None,
+            "password_input_fingerprint": password_fingerprint,
+        }
         return self._mutate(
             actor=actor,
             client_request_id=request.client_request_id,
             operation="user.create",
-            request_payload=public_request,
+            request_payload=idempotency_request,
             projection=AdminUserProjection,
-            action=lambda connection: self._create_user(connection, request, actor),
+            action=lambda connection: self._create_user(
+                connection, request, actor, password_hash=password_hash
+            ),
         )
 
     def _create_user(
@@ -238,8 +298,15 @@ class AdminManagementRepository:
         connection: sqlite3.Connection,
         request: CreateAdminUserRequest,
         actor: ControlPrincipal,
+        *,
+        password_hash: str | None,
     ) -> AdminUserProjection:
         now = _now()
+        self._require_available_identity_namespace(
+            connection,
+            account_id=request.account_id,
+            email=request.email,
+        )
         try:
             connection.execute(
                 "INSERT INTO admin_ops_users("
@@ -263,14 +330,30 @@ class AdminManagementRepository:
             )
         except sqlite3.IntegrityError:
             raise AdminManagementConflict("user identity already exists") from None
+        if password_hash is not None:
+            self._write_password(
+                connection,
+                account_id=request.account_id,
+                encoded_hash=password_hash,
+                source_version="admin",
+                source_record_sha256=None,
+                now=now,
+            )
         self._audit(
             connection,
             actor=actor,
             action="user.create",
             target_id=request.account_id,
-            payload={key: value for key, value in request.model_dump(mode="json").items() if key != "client_request_id"},
+            payload={
+                **request.model_dump(
+                    mode="json",
+                    exclude={"client_request_id", "password"},
+                ),
+                "password_set": password_hash is not None,
+            },
         )
         return self._user(
+            connection,
             connection.execute(
                 "SELECT * FROM admin_ops_users WHERE account_id=?",
                 (request.account_id,),
@@ -284,7 +367,21 @@ class AdminManagementRepository:
         *,
         actor: ControlPrincipal,
     ) -> AdminUserProjection:
-        payload = request.model_dump(mode="json") | {"account_id": account_id}
+        password_hash = password_fingerprint = None
+        if request.password is not None:
+            password = request.password.get_secret_value()
+            try:
+                password_hash = encode_password(password)
+                password_fingerprint = self._secrets.password_request_fingerprint(
+                    password
+                )
+            finally:
+                password = ""
+        payload = request.model_dump(mode="json", exclude={"password"}) | {
+            "account_id": account_id,
+            "password_set": password_hash is not None,
+            "password_input_fingerprint": password_fingerprint,
+        }
         return self._mutate(
             actor=actor,
             client_request_id=request.client_request_id,
@@ -292,7 +389,11 @@ class AdminManagementRepository:
             request_payload=payload,
             projection=AdminUserProjection,
             action=lambda connection: self._update_user(
-                connection, account_id, request, actor
+                connection,
+                account_id,
+                request,
+                actor,
+                password_hash=password_hash,
             ),
         )
 
@@ -302,8 +403,16 @@ class AdminManagementRepository:
         account_id: str,
         request: UpdateAdminUserRequest,
         actor: ControlPrincipal,
+        *,
+        password_hash: str | None,
     ) -> AdminUserProjection:
         now = _now()
+        self._require_available_identity_namespace(
+            connection,
+            account_id=account_id,
+            email=request.email,
+            exclude_account_id=account_id,
+        )
         try:
             cursor = connection.execute(
                 "UPDATE admin_ops_users SET display_name=?,email=?,organization_id=?,"
@@ -325,17 +434,402 @@ class AdminManagementRepository:
             raise AdminManagementConflict("user email already exists") from None
         if cursor.rowcount != 1:
             self._require_user_or_conflict(connection, account_id)
+        if password_hash is not None:
+            self._write_password(
+                connection,
+                account_id=account_id,
+                encoded_hash=password_hash,
+                source_version="admin",
+                source_record_sha256=None,
+                now=now,
+            )
         self._audit(
             connection,
             actor=actor,
             action="user.update",
             target_id=account_id,
-            payload={key: value for key, value in request.model_dump(mode="json").items() if key != "client_request_id"},
+            payload={
+                **request.model_dump(
+                    mode="json",
+                    exclude={"client_request_id", "password"},
+                ),
+                "password_set": password_hash is not None,
+            },
         )
         return self._user(
+            connection,
             connection.execute(
                 "SELECT * FROM admin_ops_users WHERE account_id=?", (account_id,)
             ).fetchone()
+        )
+
+    def authenticate_password(
+        self,
+        identifier: str,
+        password: str,
+        *,
+        source_ip: str | None = None,
+        now: datetime | None = None,
+    ) -> AdminUserProjection:
+        normalized = str(identifier or "").strip()
+        if (
+            not 1 <= len(normalized) <= 254
+            or "\x00" in normalized
+            or any(ord(character) < 33 for character in normalized)
+        ):
+            raise AdminPasswordAuthenticationError("password login failed")
+        email = normalized.casefold()
+        identifier_sha = hashlib.sha256(
+            b"ecorex-password-identifier-v1\0" + email.encode("utf-8")
+        ).hexdigest()
+        source_key = self._password_source_key(source_ip)
+        selected_clock = now or datetime.now(UTC)
+        if selected_clock.tzinfo is None:
+            raise ValueError("password authentication clock must be timezone-aware")
+        selected_now = selected_clock.astimezone(UTC)
+
+        reservations = (
+            ("account", identifier_sha, _PASSWORD_ACCOUNT_LIMIT),
+            ("ip", source_key, _PASSWORD_IP_LIMIT),
+        )
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            self._cleanup_password_rate_limits(connection, selected_now)
+            retry_after = self._reserve_password_attempts(
+                connection,
+                reservations=reservations,
+                now=selected_now,
+            )
+            if retry_after is not None:
+                self._audit_password_authentication(
+                    connection,
+                    identifier_sha=identifier_sha,
+                    source_sha=source_key,
+                    outcome="limited",
+                )
+                connection.commit()
+                raise AdminPasswordLocked(retry_after)
+            rows = connection.execute(
+                "SELECT users.*,credentials.encoded_hash "
+                "FROM admin_ops_users users LEFT JOIN admin_ops_password_credentials "
+                "credentials USING(account_id) WHERE users.account_id=? OR users.email=? "
+                "ORDER BY users.account_id",
+                (normalized, email),
+            ).fetchall()
+            connection.commit()
+        except BaseException:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+        candidate = rows[0] if len(rows) == 1 else None
+        encoded = (
+            str(candidate["encoded_hash"])
+            if candidate is not None and candidate["encoded_hash"] is not None
+            else dummy_password_hash()
+        )
+        verified, replacement_hash = verify_password_and_upgrade(password, encoded)
+
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            current = None
+            if candidate is not None:
+                current = connection.execute(
+                    "SELECT users.*,credentials.encoded_hash "
+                    "FROM admin_ops_users users LEFT JOIN "
+                    "admin_ops_password_credentials credentials USING(account_id) "
+                    "WHERE users.account_id=?",
+                    (candidate["account_id"],),
+                ).fetchone()
+            success = bool(
+                verified
+                and current is not None
+                and current["status"] == "active"
+                and current["encoded_hash"] is not None
+                and str(current["encoded_hash"]) == encoded
+            )
+            if success:
+                self._release_password_reservations(
+                    connection,
+                    reservations=reservations,
+                    now=selected_now,
+                )
+                if replacement_hash is not None:
+                    self._write_password(
+                        connection,
+                        account_id=str(current["account_id"]),
+                        encoded_hash=replacement_hash,
+                        source_version="admin",
+                        source_record_sha256=None,
+                        now=selected_now.isoformat(),
+                    )
+                self._audit_password_authentication(
+                    connection,
+                    identifier_sha=identifier_sha,
+                    source_sha=source_key,
+                    outcome="succeeded",
+                )
+                connection.commit()
+                assert current is not None
+                return self._user(connection, current)
+            retry_after = self._finalize_password_failure(
+                connection,
+                reservations=reservations,
+                now=selected_now,
+            )
+            self._audit_password_authentication(
+                connection,
+                identifier_sha=identifier_sha,
+                source_sha=source_key,
+                outcome="failed",
+            )
+            connection.commit()
+        except BaseException:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        finally:
+            connection.close()
+        if retry_after is not None:
+            raise AdminPasswordLocked(retry_after)
+        raise AdminPasswordAuthenticationError("password login failed")
+
+    @staticmethod
+    def _password_source_key(source_ip: str | None) -> str:
+        if source_ip is None:
+            normalized = "unattributed"
+        else:
+            try:
+                normalized = ipaddress.ip_address(source_ip.strip()).compressed
+            except (AttributeError, ValueError):
+                raise ValueError("password authentication source is invalid") from None
+        return hashlib.sha256(
+            b"ecorex-password-source-v1\0" + normalized.encode("ascii")
+        ).hexdigest()
+
+    @staticmethod
+    def _cleanup_password_rate_limits(
+        connection: sqlite3.Connection,
+        now: datetime,
+    ) -> None:
+        connection.execute(
+            "DELETE FROM admin_ops_password_failures WHERE updated_at < ?",
+            ((now - _PASSWORD_RATE_TTL).isoformat(),),
+        )
+
+    @classmethod
+    def _reserve_password_attempts(
+        cls,
+        connection: sqlite3.Connection,
+        *,
+        reservations: tuple[tuple[str, str, int], ...],
+        now: datetime,
+    ) -> int | None:
+        count = int(
+            connection.execute(
+                "SELECT COUNT(*) FROM admin_ops_password_failures"
+            ).fetchone()[0]
+        )
+        missing = sum(
+            connection.execute(
+                "SELECT 1 FROM admin_ops_password_failures "
+                "WHERE scope=? AND subject_sha256=?",
+                (scope, subject),
+            ).fetchone()
+            is None
+            for scope, subject, _limit in reservations
+        )
+        if count + missing > _PASSWORD_RATE_CAPACITY:
+            return 60
+        retry_after = 0
+        prepared: list[tuple[str, str, int, datetime]] = []
+        for scope, subject, limit in reservations:
+            row = connection.execute(
+                "SELECT * FROM admin_ops_password_failures "
+                "WHERE scope=? AND subject_sha256=?",
+                (scope, subject),
+            ).fetchone()
+            attempts, window_started, locked_until = cls._password_rate_state(
+                row, now
+            )
+            if locked_until is not None and locked_until > now:
+                retry_after = max(
+                    retry_after,
+                    max(1, int((locked_until - now).total_seconds())),
+                )
+                continue
+            if attempts >= limit:
+                until = max(window_started + _PASSWORD_RATE_WINDOW, now)
+                retry_after = max(
+                    retry_after,
+                    max(1, int((until - now).total_seconds())),
+                )
+                continue
+            prepared.append((scope, subject, attempts + 1, window_started))
+        if retry_after:
+            return retry_after
+        for scope, subject, attempts, window_started in prepared:
+            connection.execute(
+                "INSERT INTO admin_ops_password_failures("
+                "scope,subject_sha256,failed_attempts,window_started_at,"
+                "locked_until,updated_at) VALUES(?,?,?,?,NULL,?) "
+                "ON CONFLICT(scope,subject_sha256) DO UPDATE SET "
+                "failed_attempts=excluded.failed_attempts,"
+                "window_started_at=excluded.window_started_at,"
+                "locked_until=NULL,updated_at=excluded.updated_at",
+                (
+                    scope,
+                    subject,
+                    attempts,
+                    window_started.isoformat(),
+                    now.isoformat(),
+                ),
+            )
+        return None
+
+    @staticmethod
+    def _password_rate_state(
+        row: sqlite3.Row | None,
+        now: datetime,
+    ) -> tuple[int, datetime, datetime | None]:
+        if row is None:
+            return 0, now, None
+        window_started = datetime.fromisoformat(str(row["window_started_at"]))
+        if window_started.tzinfo is None:
+            raise AdminManagementError("password failure state is invalid")
+        window_started = window_started.astimezone(UTC)
+        if now - window_started >= _PASSWORD_RATE_WINDOW:
+            return 0, now, None
+        locked_until = None
+        if row["locked_until"] is not None:
+            locked_until = datetime.fromisoformat(str(row["locked_until"]))
+            if locked_until.tzinfo is None:
+                raise AdminManagementError("password lock state is invalid")
+            locked_until = locked_until.astimezone(UTC)
+        return int(row["failed_attempts"]), window_started, locked_until
+
+    @classmethod
+    def _finalize_password_failure(
+        cls,
+        connection: sqlite3.Connection,
+        *,
+        reservations: tuple[tuple[str, str, int], ...],
+        now: datetime,
+    ) -> int | None:
+        retry_after = 0
+        for scope, subject, limit in reservations:
+            row = connection.execute(
+                "SELECT * FROM admin_ops_password_failures "
+                "WHERE scope=? AND subject_sha256=?",
+                (scope, subject),
+            ).fetchone()
+            attempts, _started, _locked = cls._password_rate_state(row, now)
+            if attempts < limit:
+                continue
+            locked_until = now + _PASSWORD_RATE_WINDOW
+            connection.execute(
+                "UPDATE admin_ops_password_failures SET locked_until=?,updated_at=? "
+                "WHERE scope=? AND subject_sha256=?",
+                (
+                    locked_until.isoformat(),
+                    now.isoformat(),
+                    scope,
+                    subject,
+                ),
+            )
+            retry_after = max(retry_after, int(_PASSWORD_RATE_WINDOW.total_seconds()))
+        return retry_after or None
+
+    @staticmethod
+    def _release_password_reservations(
+        connection: sqlite3.Connection,
+        *,
+        reservations: tuple[tuple[str, str, int], ...],
+        now: datetime,
+    ) -> None:
+        for scope, subject, _limit in reservations:
+            row = connection.execute(
+                "SELECT failed_attempts FROM admin_ops_password_failures "
+                "WHERE scope=? AND subject_sha256=?",
+                (scope, subject),
+            ).fetchone()
+            if row is None:
+                continue
+            attempts = int(row["failed_attempts"])
+            if attempts <= 1:
+                connection.execute(
+                    "DELETE FROM admin_ops_password_failures "
+                    "WHERE scope=? AND subject_sha256=?",
+                    (scope, subject),
+                )
+            else:
+                connection.execute(
+                    "UPDATE admin_ops_password_failures SET "
+                    "failed_attempts=failed_attempts-1,locked_until=NULL,updated_at=? "
+                    "WHERE scope=? AND subject_sha256=?",
+                    (now.isoformat(), scope, subject),
+                )
+
+    def _audit_password_authentication(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        identifier_sha: str,
+        source_sha: str,
+        outcome: str,
+    ) -> None:
+        self._audit(
+            connection,
+            actor=_PASSWORD_AUTH_ACTOR,
+            action=f"password.login.{outcome}",
+            target_id=identifier_sha,
+            payload={
+                "identifier_sha256": identifier_sha,
+                "source_sha256": source_sha,
+                "outcome": outcome,
+            },
+        )
+
+    @staticmethod
+    def _write_password(
+        connection: sqlite3.Connection,
+        *,
+        account_id: str,
+        encoded_hash: str,
+        source_version: str,
+        source_record_sha256: str | None,
+        now: str,
+    ) -> None:
+        existing = connection.execute(
+            "SELECT credential_version FROM admin_ops_password_credentials "
+            "WHERE account_id=?",
+            (account_id,),
+        ).fetchone()
+        version = int(existing[0]) + 1 if existing is not None else 1
+        connection.execute(
+            "INSERT INTO admin_ops_password_credentials("
+            "account_id,algorithm,encoded_hash,credential_version,source_version,"
+            "source_record_sha256,password_changed_at,updated_at"
+            ") VALUES(?,'pbkdf2_sha256',?,?,?,?,?,?) "
+            "ON CONFLICT(account_id) DO UPDATE SET algorithm=excluded.algorithm,"
+            "encoded_hash=excluded.encoded_hash,"
+            "credential_version=excluded.credential_version,"
+            "source_version=excluded.source_version,source_record_sha256=NULL,"
+            "password_changed_at=excluded.password_changed_at,"
+            "updated_at=excluded.updated_at",
+            (
+                account_id,
+                encoded_hash,
+                version,
+                source_version,
+                source_record_sha256,
+                now,
+                now,
+            ),
         )
 
     def adjust_usage(
@@ -414,6 +908,7 @@ class AdminManagementRepository:
             },
         )
         return self._user(
+            connection,
             connection.execute(
                 "SELECT * FROM admin_ops_users WHERE account_id=?", (account_id,)
             ).fetchone()
@@ -540,7 +1035,7 @@ class AdminManagementRepository:
                 if row is None:
                     raise AdminManagementNotFound("user does not exist")
                 connection.commit()
-                return self._user(row)
+                return self._user(connection, row)
             row = connection.execute(
                 "SELECT * FROM admin_ops_users WHERE account_id=?",
                 (account_id,),
@@ -605,6 +1100,7 @@ class AdminManagementRepository:
                 },
             )
             projection = self._user(
+                connection,
                 connection.execute(
                     "SELECT * FROM admin_ops_users WHERE account_id=?",
                     (account_id,),
@@ -1284,7 +1780,24 @@ class AdminManagementRepository:
             if existing is not None:
                 if existing["operation"] != operation or existing["request_sha256"] != request_sha:
                     raise AdminManagementConflict("idempotency key was reused")
-                result = projection.model_validate_json(existing["response_json"])
+                response_payload = json.loads(str(existing["response_json"]))
+                if (
+                    projection is AdminUserProjection
+                    and isinstance(response_payload, dict)
+                    and "password_configured" not in response_payload
+                ):
+                    account_id = response_payload.get("account_id")
+                    row = connection.execute(
+                        "SELECT * FROM admin_ops_users WHERE account_id=?",
+                        (account_id,),
+                    ).fetchone()
+                    if row is None:
+                        raise AdminManagementConflict(
+                            "idempotent user response no longer exists"
+                        )
+                    result = self._user(connection, row)
+                else:
+                    result = projection.model_validate(response_payload)
                 connection.commit()
                 return result
             result = action(connection)
@@ -1366,6 +1879,29 @@ class AdminManagementRepository:
         return self._secrets.decrypt(secret_id, row["nonce"], row["ciphertext"])
 
     @staticmethod
+    def _require_available_identity_namespace(
+        connection: sqlite3.Connection,
+        *,
+        account_id: str,
+        email: str | None,
+        exclude_account_id: str | None = None,
+    ) -> None:
+        requested = {account_id.casefold()}
+        if email is not None:
+            requested.add(email.casefold())
+        rows = connection.execute(
+            "SELECT account_id,email FROM admin_ops_users "
+            "WHERE (? IS NULL OR account_id<>?)",
+            (exclude_account_id, exclude_account_id),
+        ).fetchall()
+        for row in rows:
+            occupied = {str(row["account_id"]).casefold()}
+            if row["email"] is not None:
+                occupied.add(str(row["email"]).casefold())
+            if requested & occupied:
+                raise AdminManagementConflict("user identity already exists")
+
+    @staticmethod
     def _require_user_or_conflict(
         connection: sqlite3.Connection, account_id: str
     ) -> None:
@@ -1376,8 +1912,40 @@ class AdminManagementRepository:
         raise AdminManagementConflict("user revision changed")
 
     @staticmethod
-    def _user(row: sqlite3.Row) -> AdminUserProjection:
-        return AdminUserProjection(**dict(row))
+    def _user(
+        connection: sqlite3.Connection,
+        row: sqlite3.Row,
+    ) -> AdminUserProjection:
+        credential = connection.execute(
+            "SELECT password_changed_at FROM admin_ops_password_credentials "
+            "WHERE account_id=?",
+            (row["account_id"],),
+        ).fetchone()
+        password_changed_at = (
+            str(credential["password_changed_at"]) if credential is not None else None
+        )
+        return AdminUserProjection(
+            **{
+                key: row[key]
+                for key in (
+                    "account_id",
+                    "display_name",
+                    "email",
+                    "organization_id",
+                    "status",
+                    "token_limit",
+                    "tokens_used",
+                    "image_limit",
+                    "images_used",
+                    "revision",
+                    "created_at",
+                    "updated_at",
+                )
+            },
+            password_configured=credential is not None,
+            credential_state="configured" if credential is not None else "missing",
+            password_changed_at=password_changed_at,
+        )
 
     def _model_configuration(
         self, connection: sqlite3.Connection, config: sqlite3.Row
@@ -1436,6 +2004,8 @@ __all__ = [
     "AdminManagementError",
     "AdminManagementNotFound",
     "AdminManagementRepository",
+    "AdminPasswordAuthenticationError",
+    "AdminPasswordLocked",
     "AdminModelSecretError",
     "HTTPSModelConnectionTester",
     "ModelConnectionTester",

@@ -19,6 +19,7 @@ from .models import (
     SessionLogoutReceipt,
     SessionRecoveryReport,
     SessionRefreshContext,
+    SessionRevocationContext,
     SessionRestartRequired,
     SessionUnavailable,
     SessionVaultError,
@@ -330,6 +331,15 @@ class ManagedSessionService:
         return SessionRefreshContext(
             lease=active.intent.lease,
             access_expires_at=expires_at,
+            refresh_token=refresh_token,
+        )
+
+    def revocation_context(self) -> SessionRevocationContext:
+        active, _access_token, refresh_token = self._validated_active()
+        if not self.repository.identity_is_current(active):
+            raise SessionConflict("managed session changed during logout projection")
+        return SessionRevocationContext(
+            lease=active.intent.lease,
             refresh_token=refresh_token,
         )
 

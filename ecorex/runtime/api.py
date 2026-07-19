@@ -181,6 +181,8 @@ from ecorex.sharing import (
     create_share_router,
 )
 from ecorex.session import (
+    DeviceAuthorizationConflict,
+    DeviceAuthorizationUnavailable,
     DeviceAuthorizationSupervisor,
     ManagedDeviceAuthorizationService,
     ManagedSessionError,
@@ -2526,7 +2528,8 @@ def create_app(
                 request.method == "POST"
                 and settings.device_authorization_service is not None
                 and (
-                    request.url.path == "/api/v1/session/device"
+                    request.url.path == "/api/v1/session/login"
+                    or request.url.path == "/api/v1/session/device"
                     or re.fullmatch(
                         r"/api/v1/session/device/devflow_[0-9a-f]{32}/poll",
                         request.url.path,
@@ -2931,13 +2934,27 @@ def create_app(
                 },
             )
         try:
-            receipt = await asyncio.to_thread(
-                managed_session.logout,
-                client_request_id=payload.client_request_id,
-                expected_lease_digest=payload.lease_digest,
-            )
+            if settings.device_authorization_service is not None:
+                receipt = await settings.device_authorization_service.revoke_and_logout(
+                    client_request_id=payload.client_request_id,
+                    expected_lease_digest=payload.lease_digest,
+                )
+            else:
+                receipt = await asyncio.to_thread(
+                    managed_session.logout,
+                    client_request_id=payload.client_request_id,
+                    expected_lease_digest=payload.lease_digest,
+                )
             recovery_execution_gate.assert_permit(recovery_permit)
-        except SessionConflict as error:
+        except DeviceAuthorizationUnavailable as error:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "remote_revocation_pending",
+                    "message": "remote session revocation is pending; retry logout",
+                },
+            ) from error
+        except (DeviceAuthorizationConflict, SessionConflict) as error:
             raise HTTPException(
                 status_code=409,
                 detail={

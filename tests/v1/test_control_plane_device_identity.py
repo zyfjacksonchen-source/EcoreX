@@ -4,6 +4,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 import hashlib
 import sqlite3
+from types import SimpleNamespace
 
 import httpx
 from cryptography.hazmat.primitives import serialization
@@ -15,9 +16,21 @@ from ecorex.control_plane.device_identity import (
     DeviceAccountIdentity,
     DeviceIdentitySecrets,
     DeviceIdentityUnauthorized,
+    DeviceRefreshRequired,
     ManagedDeviceIdentityBroker,
 )
 from ecorex.control_plane.device_identity_router import create_device_identity_router
+from ecorex.control_plane.device_identity_schema import (
+    DEVICE_IDENTITY_MIGRATION_NAME,
+    DEVICE_IDENTITY_SCHEMA_SQL,
+    DeviceIdentitySchemaManager,
+)
+from ecorex.control_plane.management import (
+    AdminManagementRepository,
+    AdminPasswordAuthenticationError,
+    AdminPasswordLocked,
+)
+from ecorex.control_plane.management_schema import AdminManagementSchemaManager
 from ecorex.release.signing import Ed25519MemorySigner
 from ecorex.security import Ed25519AccessTokenVerifier
 from ecorex.session import Ed25519SessionLeaseVerifier, HTTPSDeviceAuthorizationBroker
@@ -38,6 +51,44 @@ class Directory:
             model_allowlist=("gpt-5.6-sol", "gpt-image-2"),
             quota={"managed_requests": 100, "concurrent_requests": 4},
         )
+
+
+def test_device_identity_v1_schema_migrates_to_revocation_authority(
+    tmp_path,
+) -> None:
+    path = tmp_path / "device-v1.db"
+    connection = sqlite3.connect(path)
+    try:
+        connection.executescript(DEVICE_IDENTITY_SCHEMA_SQL)
+        connection.execute(
+            "INSERT INTO device_identity_schema_migrations("
+            "version,migration_name,migration_checksum,installed_at) "
+            "VALUES(1,?,?,?)",
+            (
+                DEVICE_IDENTITY_MIGRATION_NAME,
+                hashlib.sha256(DEVICE_IDENTITY_SCHEMA_SQL.encode()).hexdigest(),
+                NOW.isoformat(),
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    receipt = DeviceIdentitySchemaManager(path).migrate()
+    assert receipt.migration_version == 2
+    connection = sqlite3.connect(path)
+    try:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_schema WHERE type='table'"
+            )
+        }
+    finally:
+        connection.close()
+    assert {
+        "device_identity_grant_authority",
+        "device_identity_revocations",
+    } <= tables
 
 
 def public(private: Ed25519PrivateKey) -> bytes:
@@ -157,10 +208,192 @@ def test_broker_is_idempotent_signed_durable_and_secret_free(identity) -> None:
         )
 
 
+def test_cloud_revoke_is_idempotent_and_blocks_refresh(identity) -> None:
+    broker, _access, _lease, _database = identity
+    granted = broker.grant_account(
+        client_id="ecorex-webui",
+        account_id="acct-1",
+        idempotency_key="password-grant-for-revoke-0001",
+    )
+    assert granted.lease is not None
+    first = broker.revoke(
+        client_id="ecorex-webui",
+        lease_id=granted.lease.claims.lease_id,
+        account_id="acct-1",
+        refresh_token=str(granted.refresh_token),
+        idempotency_key="session-revoke-request-0001",
+    )
+    replay = broker.revoke(
+        client_id="ecorex-webui",
+        lease_id=granted.lease.claims.lease_id,
+        account_id="acct-1",
+        refresh_token=str(granted.refresh_token),
+        idempotency_key="session-revoke-request-0001",
+    )
+    assert first.already_revoked is False
+    assert replay.already_revoked is True
+    with pytest.raises(DeviceRefreshRequired):
+        broker.refresh(
+            client_id="ecorex-webui",
+            lease_id=granted.lease.claims.lease_id,
+            refresh_token=str(granted.refresh_token),
+            idempotency_key="refresh-after-revoke-0001",
+        )
+
+
 def test_https_runtime_client_matches_exact_authorize_and_token_contract(
     identity,
 ) -> None:
     asyncio.run(_exercise_https_runtime_client(identity))
+
+
+def test_password_login_uses_transport_source_and_maps_lockout(identity, monkeypatch) -> None:
+    asyncio.run(_exercise_password_login_boundary(identity, monkeypatch))
+
+
+async def _exercise_password_login_boundary(identity, monkeypatch) -> None:
+    broker, _access, _lease, database = identity
+    AdminManagementSchemaManager(database).migrate()
+    repository = AdminManagementRepository(database, encryption_key=b"p" * 32)
+    observed: list[tuple[str, str | None]] = []
+
+    def authenticate(identifier: str, password: str, *, source_ip: str | None = None):
+        observed.append((identifier, source_ip))
+        assert password == "abcd1234"
+        return SimpleNamespace(account_id="acct-1")
+
+    monkeypatch.setattr(repository, "authenticate_password", authenticate)
+    app = FastAPI()
+    app.include_router(
+        create_device_identity_router(
+            broker,
+            password_repository=repository,
+        )
+    )
+    transport = httpx.ASGITransport(
+        app=app,
+        client=("203.0.113.19", 43100),
+    )
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="https://identity.ecorex.test",
+    ) as client:
+        response = await client.post(
+            "/v1/session/login",
+            headers={
+                "Idempotency-Key": "password-login-route-0001",
+                "X-Forwarded-For": "198.51.100.200",
+            },
+            json={
+                "schema_version": 1,
+                "client_id": "ecorex-webui",
+                "identifier": "user@example.com",
+                "password": "abcd1234",
+            },
+        )
+        assert response.status_code == 200
+        assert observed == [("user@example.com", "203.0.113.19")]
+
+        spoofed = await client.post(
+            "/v1/session/login",
+            headers={
+                "Idempotency-Key": "password-login-route-0001-spoof",
+                "X-Real-IP": "198.51.100.201",
+            },
+            json={
+                "schema_version": 1,
+                "client_id": "ecorex-webui",
+                "identifier": "user@example.com",
+                "password": "abcd1234",
+            },
+        )
+        assert spoofed.status_code == 200
+        assert observed[-1] == ("user@example.com", "203.0.113.19")
+
+        loopback_transport = httpx.ASGITransport(
+            app=app,
+            client=("127.0.0.1", 43101),
+        )
+        async with httpx.AsyncClient(
+            transport=loopback_transport,
+            base_url="https://identity.ecorex.test",
+        ) as proxy_client:
+            for index, source in enumerate(("198.51.100.21", "198.51.100.22")):
+                proxied = await proxy_client.post(
+                    "/v1/session/login",
+                    headers={
+                        "Idempotency-Key": (
+                            f"password-login-route-proxy-{index:04d}"
+                        ),
+                        "X-Real-IP": source,
+                        "X-Forwarded-For": "203.0.113.250, 203.0.113.251",
+                    },
+                    json={
+                        "schema_version": 1,
+                        "client_id": "ecorex-webui",
+                        "identifier": "user@example.com",
+                        "password": "abcd1234",
+                    },
+                )
+                assert proxied.status_code == 200
+            assert observed[-2:] == [
+                ("user@example.com", "198.51.100.21"),
+                ("user@example.com", "198.51.100.22"),
+            ]
+
+            malformed = await proxy_client.post(
+                "/v1/session/login",
+                headers={
+                    "Idempotency-Key": "password-login-route-proxy-invalid",
+                    "X-Real-IP": "198.51.100.21, 198.51.100.22",
+                },
+                json={
+                    "schema_version": 1,
+                    "client_id": "ecorex-webui",
+                    "identifier": "user@example.com",
+                    "password": "abcd1234",
+                },
+            )
+            assert malformed.status_code == 400
+            assert malformed.json()["detail"]["code"] == "invalid_proxy_client_ip"
+
+        def locked(*_args, **_kwargs):
+            raise AdminPasswordLocked(17)
+
+        monkeypatch.setattr(repository, "authenticate_password", locked)
+        limited = await client.post(
+            "/v1/session/login",
+            headers={"Idempotency-Key": "password-login-route-0002"},
+            json={
+                "schema_version": 1,
+                "client_id": "ecorex-webui",
+                "identifier": "user@example.com",
+                "password": "abcd1234",
+            },
+        )
+        assert limited.status_code == 429
+        assert limited.headers["retry-after"] == "17"
+        assert limited.json()["detail"]["code"] == "password_login_rate_limited"
+
+        def invalid(*_args, **_kwargs):
+            raise AdminPasswordAuthenticationError("private detail")
+
+        monkeypatch.setattr(repository, "authenticate_password", invalid)
+        denied = await client.post(
+            "/v1/session/login",
+            headers={"Idempotency-Key": "password-login-route-0003"},
+            json={
+                "schema_version": 1,
+                "client_id": "ecorex-webui",
+                "identifier": "user@example.com",
+                "password": "abcd1234",
+            },
+        )
+        assert denied.status_code == 401
+        assert denied.json()["detail"] == {
+            "code": "invalid_credentials",
+            "message": "account login failed",
+        }
 
 
 async def _exercise_https_runtime_client(identity) -> None:
@@ -198,6 +431,20 @@ async def _exercise_https_runtime_client(identity) -> None:
         idempotency_key=f"session-refresh:{after.grant.lease.digest}",
     )
     assert refreshed.lease.claims.revision == after.grant.lease.claims.revision + 1
+    revoked = await runtime.revoke(
+        lease_id=refreshed.lease.claims.lease_id,
+        account_id=refreshed.lease.claims.account_id,
+        refresh_token=refreshed.refresh_token,
+        idempotency_key="runtime-session-revoke-0001",
+    )
+    assert revoked.already_revoked is False
+    replayed = await runtime.revoke(
+        lease_id=refreshed.lease.claims.lease_id,
+        account_id=refreshed.lease.claims.account_id,
+        refresh_token=refreshed.refresh_token,
+        idempotency_key="runtime-session-revoke-0001",
+    )
+    assert replayed.already_revoked is True
     await client.aclose()
 
 

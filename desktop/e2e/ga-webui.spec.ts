@@ -495,6 +495,68 @@ test("sidebar keeps v0.3 view-more behavior without hiding current or running se
   await expect(generalSessions.getByRole("button", { name: /^打开任务：/ })).toHaveCount(8);
 });
 
+test("session summaries scroll independently while sidebar chrome stays fixed", async ({ browser }) => {
+  await withGuardedContext(
+    browser,
+    {
+      viewport: { width: 1024, height: 568 },
+      colorScheme: "dark",
+    },
+    async (page) => {
+      await openThreadScenario(page, "many-threads");
+      const nav = page.locator(".ex-task-nav");
+      const footer = page.locator(".ex-sidebar-footer");
+      const brand = page.locator(".ex-sidebar-brand");
+      await page.getByRole("group", { name: "季度报告 的会话" })
+        .getByRole("button", { name: "查看更多（3）" })
+        .click();
+      await page.getByRole("region", { name: "会话" })
+        .getByRole("button", { name: "查看更多（4）" })
+        .click();
+
+      const before = await page.evaluate(() => {
+        const body = document.body;
+        const navElement = document.querySelector<HTMLElement>(".ex-task-nav");
+        const footerElement = document.querySelector<HTMLElement>(".ex-sidebar-footer");
+        const brandElement = document.querySelector<HTMLElement>(".ex-sidebar-brand");
+        if (!navElement || !footerElement || !brandElement) throw new Error("sidebar regions are missing");
+        return {
+          bodyOverflow: body.scrollHeight - body.clientHeight,
+          navClientHeight: navElement.clientHeight,
+          navScrollHeight: navElement.scrollHeight,
+          navTop: navElement.getBoundingClientRect().top,
+          footerTop: footerElement.getBoundingClientRect().top,
+          brandTop: brandElement.getBoundingClientRect().top,
+        };
+      });
+      expect(before.bodyOverflow).toBeLessThanOrEqual(1);
+      expect(before.navScrollHeight).toBeGreaterThan(before.navClientHeight);
+
+      await nav.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+      });
+      await expect.poll(() => nav.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+
+      const after = await page.evaluate(() => {
+        const navElement = document.querySelector<HTMLElement>(".ex-task-nav");
+        const footerElement = document.querySelector<HTMLElement>(".ex-sidebar-footer");
+        const brandElement = document.querySelector<HTMLElement>(".ex-sidebar-brand");
+        if (!navElement || !footerElement || !brandElement) throw new Error("sidebar regions are missing");
+        return {
+          navTop: navElement.getBoundingClientRect().top,
+          footerTop: footerElement.getBoundingClientRect().top,
+          brandTop: brandElement.getBoundingClientRect().top,
+        };
+      });
+      expect(after.navTop).toBeCloseTo(before.navTop, 0);
+      expect(after.footerTop).toBeCloseTo(before.footerTop, 0);
+      expect(after.brandTop).toBeCloseTo(before.brandTop, 0);
+      await expect(footer).toBeVisible();
+      await expect(brand).toBeVisible();
+    },
+  );
+});
+
 test("skills workspace uses backend categories and keeps required skills locked", async ({ guardedPage }) => {
   await openArtifactScenario(guardedPage);
   await guardedPage.getByRole("button", { name: "技能", exact: true }).click();
@@ -545,6 +607,64 @@ test("mobile task drawer continues a task by ID and closes after recovery", asyn
   );
 });
 
+test("mobile session drawer remains inside the viewport and scrolls only its summaries", async ({ browser }) => {
+  await withGuardedContext(
+    browser,
+    {
+      viewport: { width: 390, height: 568 },
+      hasTouch: true,
+      isMobile: true,
+      colorScheme: "dark",
+    },
+    async (page) => {
+      await openThreadScenario(page, "many-threads");
+      await page.getByRole("button", { name: "打开任务导航" }).click();
+      const sidebar = page.locator(".ex-sidebar");
+      const nav = page.locator(".ex-task-nav");
+      const footer = page.locator(".ex-sidebar-footer");
+      await expect(sidebar).toHaveClass(/is-open/);
+      await page.getByRole("group", { name: "季度报告 的会话" })
+        .getByRole("button", { name: "查看更多（3）" })
+        .click();
+      await page.getByRole("region", { name: "会话" })
+        .getByRole("button", { name: "查看更多（4）" })
+        .click();
+
+      const geometry = await page.evaluate(() => {
+        const body = document.body;
+        const sidebarElement = document.querySelector<HTMLElement>(".ex-sidebar");
+        const navElement = document.querySelector<HTMLElement>(".ex-task-nav");
+        const footerElement = document.querySelector<HTMLElement>(".ex-sidebar-footer");
+        if (!sidebarElement || !navElement || !footerElement) throw new Error("mobile sidebar regions are missing");
+        const sidebarRect = sidebarElement.getBoundingClientRect();
+        const footerRect = footerElement.getBoundingClientRect();
+        return {
+          bodyOverflow: body.scrollHeight - body.clientHeight,
+          sidebarTop: sidebarRect.top,
+          sidebarBottom: sidebarRect.bottom,
+          viewportHeight: window.innerHeight,
+          footerTop: footerRect.top,
+          footerBottom: footerRect.bottom,
+          navClientHeight: navElement.clientHeight,
+          navScrollHeight: navElement.scrollHeight,
+        };
+      });
+      expect(geometry.bodyOverflow).toBeLessThanOrEqual(1);
+      expect(geometry.sidebarTop).toBeGreaterThanOrEqual(0);
+      expect(geometry.sidebarBottom).toBeLessThanOrEqual(geometry.viewportHeight);
+      expect(geometry.footerTop).toBeGreaterThanOrEqual(geometry.sidebarTop);
+      expect(geometry.footerBottom).toBeLessThanOrEqual(geometry.sidebarBottom);
+      expect(geometry.navScrollHeight).toBeGreaterThan(geometry.navClientHeight);
+
+      await nav.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+      });
+      await expect.poll(() => nav.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+      await expect(footer).toBeVisible();
+    },
+  );
+});
+
 test("settings persist output location, memory reset undo, and full-access revocation", async ({ guardedPage }) => {
   await openArtifactScenario(guardedPage);
   await guardedPage.getByRole("button", { name: /验收账号，打开账号菜单/u }).click();
@@ -591,9 +711,10 @@ test("account menu exposes the user name and performs a real lease-bound logout"
   const dialog = guardedPage.getByRole("dialog", { name: "退出 EcoreX？" });
   await expect(dialog).toContainText("会话和本地产物会保留");
   await dialog.getByRole("button", { name: "退出登录" }).click();
-  await expect(guardedPage.getByRole("dialog", { name: "已安全退出" })).toBeVisible();
-  await guardedPage.getByRole("button", { name: "关闭" }).click();
-  await expect(guardedPage.getByRole("button", { name: /未登录，打开账号菜单/u })).toBeVisible();
+  await expect(guardedPage.getByRole("heading", { name: "EcoreX", exact: true })).toBeVisible();
+  await expect(guardedPage.getByLabel("账号或邮箱")).toBeVisible();
+  await expect(guardedPage.getByLabel("密码")).toBeVisible();
+  await expect(guardedPage.locator(".ex-app-shell")).toHaveCount(0);
 
   const state = await guardedPage.evaluate(async () => fetch("/__ga/state").then((response) => response.json()));
   expect(state).toMatchObject({ authenticated: false, session_logout_count: 1 });

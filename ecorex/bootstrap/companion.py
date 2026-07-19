@@ -46,9 +46,13 @@ _SAFE_KEY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _STABLE_V1 = re.compile(r"^1\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$")
 _WINDOWS_ENTRY_NAMES = tuple(
-    ["EcoreX.lnk", "EcoreX Agent.lnk"]
+    ["EcoreX.lnk", "EcoreX Agent.lnk", "EcoreX WebUI.lnk"]
     + [f"EcoreX Agent ({index}).lnk" for index in range(2, 10)]
 )
+_WINDOWS_LEGACY_ENTRY_KINDS = {
+    "EcoreX WebUI.url": "windows-url",
+    "EcoreX WebUI.cmd": "windows-cmd",
+}
 _MAC_ENTRY_NAMES = tuple(
     ["EcoreX.app", "EcoreX Agent.app"]
     + [f"EcoreX Agent ({index}).app" for index in range(2, 10)]
@@ -254,6 +258,12 @@ class BootstrapCompanionInstaller:
                 "Bootstrap desktop activation record is unavailable"
             )
         if record["state"] == "committed":
+            self._remove_superseded_receipt_entry(record, desktop=desktop)
+            self._remove_recorded_legacy_entries(
+                record,
+                record_path=record_path,
+                desktop=desktop,
+            )
             self._cleanup_activation_backup(record)
             return
         if record["state"] != "prepared":
@@ -277,6 +287,12 @@ class BootstrapCompanionInstaller:
         updated = dict(record)
         updated["state"] = "committed"
         atomic_write_json(record_path, updated)
+        self._remove_superseded_receipt_entry(updated, desktop=desktop)
+        self._remove_recorded_legacy_entries(
+            updated,
+            record_path=record_path,
+            desktop=desktop,
+        )
         self._cleanup_activation_backup(updated)
 
     def rollback_activation(self, transaction_id: str) -> None:
@@ -519,7 +535,16 @@ class BootstrapCompanionInstaller:
             if self.platform == "windows"
             else "bin/ecorex-bootstrap"
         )
-        expected = {"bootstrap-config.json", launcher_relative}
+        installer_relative = (
+            "EcoreX Installer.cmd"
+            if self.platform == "windows"
+            else "EcoreX Installer.command"
+        )
+        expected = {
+            "bootstrap-config.json",
+            installer_relative,
+            launcher_relative,
+        }
         if self.platform == "windows":
             expected.add("bin/ecorex-sandbox-host.exe")
         observed: set[str] = set()
@@ -715,6 +740,15 @@ class BootstrapCompanionInstaller:
                 == existing_record["new_digest"]
             ):
                 if existing_record["state"] == "committed":
+                    self._remove_superseded_receipt_entry(
+                        existing_record,
+                        desktop=desktop,
+                    )
+                    self._remove_recorded_legacy_entries(
+                        existing_record,
+                        record_path=record_path,
+                        desktop=desktop,
+                    )
                     self._cleanup_activation_backup(
                         existing_record,
                         desktop=desktop,
@@ -744,21 +778,37 @@ class BootstrapCompanionInstaller:
                 )
         names = _WINDOWS_ENTRY_NAMES if self.platform == "windows" else _MAC_ENTRY_NAMES
         selected: Path | None = None
+        # v0.3.0 installed an ``EcoreX WebUI.lnk`` outside the v1 receipt
+        # authority.  Prefer that exact, independently verified product entry
+        # during the first v1 upgrade so the shortcut users already know is
+        # atomically rewritten to the current signed Bootstrap.  A same-named
+        # user shortcut never matches the strict legacy projection below.
+        if self.platform == "windows":
+            legacy = desktop / "EcoreX WebUI.lnk"
+            if _lexists(legacy) and _entry_is_product_owned(
+                legacy,
+                root=self.root,
+                platform=self.platform,
+            ):
+                selected = legacy
         if receipt is not None:
             candidate = Path(receipt["entry_path"])
-            if _entry_matches_receipt(candidate, receipt):
+            if selected is None and _entry_matches_receipt(candidate, receipt):
                 selected = candidate
         if selected is None:
             for name in names:
                 candidate = desktop / name
-                if not _lexists(candidate):
-                    selected = candidate
-                    break
                 if _entry_is_product_owned(
                     candidate,
                     root=self.root,
                     platform=self.platform,
                 ):
+                    selected = candidate
+                    break
+        if selected is None:
+            for name in names:
+                candidate = desktop / name
+                if not _lexists(candidate):
                     selected = candidate
                     break
         if selected is None:
@@ -798,13 +848,20 @@ class BootstrapCompanionInstaller:
         prior_receipt: Mapping[str, Any] | None = None
         if prior_present:
             prior_digest = _entry_digest(selected, self.platform)
-            if (
-                receipt is not None
-                and Path(receipt["entry_path"]) == selected
-                and _entry_matches_receipt(selected, receipt)
-            ):
-                prior_receipt = receipt
+        if receipt is not None and _entry_matches_receipt(
+            Path(receipt["entry_path"]),
+            receipt,
+        ):
+            # The one global receipt may point at the already-installed v1
+            # entry while this transaction takes over the exact legacy WebUI
+            # shortcut. Preserve that independent receipt for rollback.
+            prior_receipt = receipt
         kind = "windows-lnk" if self.platform == "windows" else "macos-app"
+        legacy_entries = (
+            _discover_legacy_windows_entries(desktop)
+            if self.platform == "windows"
+            else []
+        )
         preparing: dict[str, Any] = {
             "schema_version": DESKTOP_ACTIVATION_SCHEMA_VERSION,
             "transaction_id": transaction_id,
@@ -816,6 +873,7 @@ class BootstrapCompanionInstaller:
             "prior_present": prior_present,
             "prior_digest": prior_digest,
             "prior_receipt": prior_receipt,
+            "legacy_entries": legacy_entries,
             "release_id": manifest.release_id,
             "new_digest": None,
             "new_receipt": None,
@@ -965,10 +1023,121 @@ class BootstrapCompanionInstaller:
             platform=self.platform,
         )
 
+    def _remove_superseded_receipt_entry(
+        self,
+        record: Mapping[str, Any],
+        *,
+        desktop: Path,
+    ) -> None:
+        """Converge a legacy-name takeover to one product shortcut."""
+
+        prior_receipt = record.get("prior_receipt")
+        new_receipt = record.get("new_receipt")
+        if not isinstance(prior_receipt, Mapping) or not isinstance(
+            new_receipt,
+            Mapping,
+        ):
+            return
+        prior = _require_desktop_entry_path(
+            Path(str(prior_receipt.get("entry_path", ""))),
+            desktop,
+            self.platform,
+        )
+        current = _require_desktop_entry_path(
+            Path(str(new_receipt.get("entry_path", ""))),
+            desktop,
+            self.platform,
+        )
+        if prior == current or not _lexists(prior):
+            return
+        if not _entry_matches_receipt(prior, prior_receipt):
+            return
+        _remove_desktop_entry_path(
+            prior,
+            desktop=desktop,
+            platform=self.platform,
+        )
+
+    def _remove_recorded_legacy_entries(
+        self,
+        record: Mapping[str, Any],
+        *,
+        record_path: Path,
+        desktop: Path,
+    ) -> None:
+        """Remove only unchanged legacy entries captured by this transaction."""
+
+        if self.platform != "windows":
+            return
+        records = _validate_legacy_windows_entry_records(
+            record.get("legacy_entries", []),
+            desktop,
+        )
+        if records is None:
+            raise BootstrapCompanionError(
+                "Bootstrap legacy desktop entry record is invalid"
+            )
+        pending = list(records)
+        for legacy in records:
+            path = _require_legacy_windows_entry_path(
+                Path(legacy["entry_path"]),
+                desktop,
+            )
+            if not _lexists(path):
+                pending.remove(legacy)
+                updated = dict(record)
+                updated["legacy_entries"] = list(pending)
+                atomic_write_json(record_path, updated)
+                continue
+            payload = _read_legacy_windows_entry(path)
+            if (
+                payload is None
+                or hashlib.sha256(payload).hexdigest()
+                != legacy["entry_digest"]
+                or _legacy_windows_entry_kind(path, payload)
+                != legacy["entry_kind"]
+            ):
+                # A user or another process changed the old entry after
+                # prepare. Ownership is no longer proven, so preserve it.
+                pending.remove(legacy)
+                updated = dict(record)
+                updated["legacy_entries"] = list(pending)
+                atomic_write_json(record_path, updated)
+                continue
+            _remove_legacy_windows_entry_path(path, desktop=desktop)
+            pending.remove(legacy)
+            updated = dict(record)
+            updated["legacy_entries"] = list(pending)
+            atomic_write_json(record_path, updated)
+
+    def _converge_committed_legacy_entries(self, *, desktop: Path) -> None:
+        directory = self.root / "bootstrap" / "companion-transactions"
+        if not directory.exists():
+            return
+        _require_real_directory(directory, "Bootstrap companion transactions")
+        for record_path in sorted(directory.glob("*/activation.json")):
+            transaction_id = record_path.parent.name
+            if _SAFE_TRANSACTION_ID.fullmatch(transaction_id) is None:
+                continue
+            record = _load_activation_record(
+                record_path,
+                root=self.root,
+                desktop=desktop,
+                platform=self.platform,
+                transaction_id=transaction_id,
+            )
+            if record is not None and record["state"] == "committed":
+                self._remove_recorded_legacy_entries(
+                    record,
+                    record_path=record_path,
+                    desktop=desktop,
+                )
+
     def remove_desktop_entry(self) -> bool:
         """Remove only the exact product-owned entry recorded in our receipt."""
 
         desktop = self._resolved_desktop()
+        self._converge_committed_legacy_entries(desktop=desktop)
         receipt_path = self.root / "bootstrap" / "desktop-entry.json"
         receipt = _load_entry_receipt(
             receipt_path,
@@ -1310,6 +1479,7 @@ def _load_activation_record(
         "new_digest",
         "new_receipt",
     }
+    allowed = required | {"legacy_entries"}
     expected_kind = "windows-lnk" if platform == "windows" else "macos-app"
     names = _WINDOWS_ENTRY_NAMES if platform == "windows" else _MAC_ENTRY_NAMES
     expected_backup = path.parent / (
@@ -1319,7 +1489,7 @@ def _load_activation_record(
     )
     if (
         not isinstance(raw, dict)
-        or set(raw) != required
+        or frozenset(raw) not in {frozenset(required), frozenset(allowed)}
         or raw["schema_version"] != DESKTOP_ACTIVATION_SCHEMA_VERSION
         or raw["transaction_id"] != transaction_id
         or raw["state"] not in {
@@ -1357,6 +1527,15 @@ def _load_activation_record(
             )
             is None
         )
+        or _validate_legacy_windows_entry_records(
+            raw.get("legacy_entries", []),
+            desktop,
+        )
+        is None
+        or (
+            platform != "windows"
+            and raw.get("legacy_entries", []) != []
+        )
         or not isinstance(raw["release_id"], str)
         or _SAFE_RELEASE_ID.fullmatch(raw["release_id"]) is None
         or (
@@ -1388,15 +1567,12 @@ def _load_activation_record(
                 or raw["new_receipt"].get("entry_digest") != raw["new_digest"]
             )
         )
-        or (
-            isinstance(raw["prior_receipt"], Mapping)
-            and raw["prior_receipt"].get("entry_path") != raw["entry_path"]
-        )
         or not _is_relative_to(path, root / "bootstrap" / "companion-transactions")
     ):
         raise BootstrapCompanionError(
             "Bootstrap desktop activation record is invalid"
         )
+    raw.setdefault("legacy_entries", [])
     return raw
 
 
@@ -1487,6 +1663,194 @@ def _require_desktop_entry_path(
             "Bootstrap desktop entry is outside the resolved Desktop"
         )
     return expected
+
+
+def _require_legacy_windows_entry_path(entry: Path, desktop: Path) -> Path:
+    desktop = Path(os.path.abspath(desktop))
+    _require_real_directory(desktop, "Desktop")
+    expected = desktop / entry.name
+    if (
+        not entry.is_absolute()
+        or entry.name not in _WINDOWS_LEGACY_ENTRY_KINDS
+        or str(entry) != str(expected)
+        or entry != expected
+    ):
+        raise BootstrapCompanionError(
+            "legacy EcoreX desktop entry is outside the resolved Desktop"
+        )
+    return expected
+
+
+def _validate_legacy_windows_entry_records(
+    value: Any,
+    desktop: Path,
+) -> list[dict[str, str]] | None:
+    if not isinstance(value, list) or len(value) > len(
+        _WINDOWS_LEGACY_ENTRY_KINDS
+    ):
+        return None
+    result: list[dict[str, str]] = []
+    names: set[str] = set()
+    for raw in value:
+        if not isinstance(raw, Mapping) or set(raw) != {
+            "entry_kind",
+            "entry_name",
+            "entry_path",
+            "entry_digest",
+        }:
+            return None
+        name = raw.get("entry_name")
+        kind = raw.get("entry_kind")
+        path = raw.get("entry_path")
+        digest = raw.get("entry_digest")
+        if (
+            not isinstance(name, str)
+            or name in names
+            or _WINDOWS_LEGACY_ENTRY_KINDS.get(name) != kind
+            or not isinstance(path, str)
+            or not isinstance(digest, str)
+            or _SHA256.fullmatch(digest) is None
+        ):
+            return None
+        try:
+            expected = _require_legacy_windows_entry_path(Path(path), desktop)
+        except BootstrapCompanionError:
+            return None
+        if expected.name != name:
+            return None
+        names.add(name)
+        result.append(dict(raw))
+    return result
+
+
+def _regular_file_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+    )
+
+
+def _read_legacy_windows_entry(path: Path) -> bytes | None:
+    try:
+        before = path.lstat()
+        if (
+            _metadata_is_link_or_reparse(before)
+            or not stat.S_ISREG(before.st_mode)
+            or not 1 <= before.st_size <= 4096
+        ):
+            return None
+        with path.open("rb") as stream:
+            opened = os.fstat(stream.fileno())
+            if _regular_file_identity(opened) != _regular_file_identity(before):
+                return None
+            payload = stream.read(4097)
+            after = os.fstat(stream.fileno())
+        final = path.lstat()
+    except OSError:
+        return None
+    if (
+        len(payload) > 4096
+        or _regular_file_identity(opened) != _regular_file_identity(after)
+        or _regular_file_identity(after) != _regular_file_identity(final)
+    ):
+        return None
+    return payload
+
+
+def _legacy_windows_entry_kind(path: Path, payload: bytes) -> str | None:
+    expected_kind = _WINDOWS_LEGACY_ENTRY_KINDS.get(path.name)
+    if expected_kind == "windows-url":
+        for host in ("127.0.0.1", "localhost"):
+            base = (
+                "[InternetShortcut]\r\n"
+                f"URL=http://{host}:9909/app/\r\n"
+            ).encode("ascii")
+            # Windows PowerShell Set-Content appends its own line ending; the
+            # released tag's string already had one. Accept both observed
+            # exact byte forms and no other InternetShortcut fields.
+            if payload in {base, base + b"\r\n"}:
+                return expected_kind
+        return None
+    if expected_kind != "windows-cmd":
+        return None
+    try:
+        text = payload.decode("ascii")
+    except UnicodeDecodeError:
+        return None
+    match = re.fullmatch(
+        (
+            r'@echo off\r\n'
+            r'"([^"\r\n]+)" -NoProfile -ExecutionPolicy Bypass '
+            r'-File "([^"\r\n]+)"\r\n'
+        ),
+        text,
+    )
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    system_root = os.environ.get("SYSTEMROOT") or os.environ.get("SystemRoot")
+    if match is None or not local_app_data or not system_root:
+        return None
+    powershell, launcher = match.groups()
+    if "/" in powershell or "/" in launcher:
+        return None
+    expected_powershell = (
+        Path(os.path.abspath(system_root))
+        / "System32"
+        / "WindowsPowerShell"
+        / "v1.0"
+        / "powershell.exe"
+    )
+    expected_launcher = (
+        Path(os.path.abspath(local_app_data))
+        / "EcoreX WebUI"
+        / "Launch EcoreX WebUI.ps1"
+    )
+    return (
+        expected_kind
+        if (
+            os.path.normcase(os.path.abspath(powershell))
+            == os.path.normcase(str(expected_powershell))
+            and os.path.normcase(os.path.abspath(launcher))
+            == os.path.normcase(str(expected_launcher))
+        )
+        else None
+    )
+
+
+def _discover_legacy_windows_entries(desktop: Path) -> list[dict[str, str]]:
+    result: list[dict[str, str]] = []
+    for name, expected_kind in _WINDOWS_LEGACY_ENTRY_KINDS.items():
+        path = _require_legacy_windows_entry_path(desktop / name, desktop)
+        if not _lexists(path):
+            continue
+        payload = _read_legacy_windows_entry(path)
+        if payload is None or _legacy_windows_entry_kind(path, payload) != expected_kind:
+            continue
+        result.append(
+            {
+                "entry_kind": expected_kind,
+                "entry_name": name,
+                "entry_path": str(path),
+                "entry_digest": hashlib.sha256(payload).hexdigest(),
+            }
+        )
+    return result
+
+
+def _remove_legacy_windows_entry_path(path: Path, *, desktop: Path) -> None:
+    path = _require_legacy_windows_entry_path(path, desktop)
+    try:
+        metadata = path.lstat()
+    except OSError as error:
+        raise BootstrapCompanionError(
+            "legacy EcoreX desktop entry is unavailable"
+        ) from error
+    if _metadata_is_link_or_reparse(metadata) or not stat.S_ISREG(metadata.st_mode):
+        raise BootstrapCompanionError(
+            "legacy EcoreX desktop entry became unsafe"
+        )
+    path.unlink()
 
 
 def _remove_desktop_entry_path(
@@ -1584,12 +1948,15 @@ def _entry_is_product_owned(path: Path, *, root: Path, platform: str) -> bool:
             return False
         target = Path(projection["target"])
         arguments = projection["arguments"]
-        return (
+        current = (
             projection["description"] == "EcoreX"
             and arguments == f'--launch-installed --install-root "{root}"'
             and _is_relative_to(target, root / "bootstrap" / "versions")
             and target.name.casefold() == "ecorex-bootstrap.exe"
         )
+        if current:
+            return True
+        return _is_legacy_windows_entry(path, projection)
     if _is_link_or_reparse(path):
         return False
     marker = path / "Contents" / "Resources" / "ecorex-entry.json"
@@ -1680,7 +2047,7 @@ def _read_windows_shortcut(path: Path) -> dict[str, str] | None:
             "$ErrorActionPreference='Stop'",
             "$shell=New-Object -ComObject WScript.Shell",
             "$link=$shell.CreateShortcut($env:ECOREX_SHORTCUT_PATH)",
-            "$record=[ordered]@{target=$link.TargetPath;arguments=$link.Arguments;description=$link.Description}",
+            "$record=[ordered]@{target=$link.TargetPath;arguments=$link.Arguments;description=$link.Description;working_directory=$link.WorkingDirectory}",
             "[Console]::Out.Write(($record|ConvertTo-Json -Compress))",
         )
     )
@@ -1696,11 +2063,59 @@ def _read_windows_shortcut(path: Path) -> dict[str, str] | None:
         "target",
         "arguments",
         "description",
+        "working_directory",
     }:
         return None
     if not all(isinstance(value, str) for value in raw.values()):
         return None
     return raw
+
+
+def _is_legacy_windows_entry(
+    path: Path,
+    projection: Mapping[str, str],
+) -> bool:
+    """Recognize only the released v0.3.0 desktop shortcut.
+
+    The shortcut name alone is not ownership.  Its target, arguments,
+    working directory and description must all bind to the known per-user
+    legacy install root before v1 is allowed to replace it.
+    """
+
+    if path.name != "EcoreX WebUI.lnk":
+        return False
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    system_root = os.environ.get("SYSTEMROOT") or os.environ.get("SystemRoot")
+    if not local_app_data or not system_root:
+        return False
+    legacy_root = Path(os.path.abspath(local_app_data)) / "EcoreX WebUI"
+    launcher_script = legacy_root / "Launch EcoreX WebUI.ps1"
+    powershell = (
+        Path(os.path.abspath(system_root))
+        / "System32"
+        / "WindowsPowerShell"
+        / "v1.0"
+        / "powershell.exe"
+    )
+    expected_arguments = (
+        '-NoProfile -ExecutionPolicy Bypass -File '
+        f'"{launcher_script}"'
+    )
+    try:
+        target_matches = Path(projection["target"]).resolve(strict=False) == (
+            powershell.resolve(strict=False)
+        )
+        working_directory_matches = Path(
+            projection["working_directory"]
+        ).resolve(strict=False) == legacy_root.resolve(strict=False)
+    except (KeyError, OSError, ValueError):
+        return False
+    return (
+        target_matches
+        and working_directory_matches
+        and projection.get("arguments") == expected_arguments
+        and projection.get("description") == "Start or reopen EcoreX WebUI"
+    )
 
 
 def _shortcut_environment(**values: str) -> dict[str, str]:

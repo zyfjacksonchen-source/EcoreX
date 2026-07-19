@@ -100,6 +100,7 @@ class DeviceAccountIdentity:
     model_allowlist: tuple[str, ...]
     quota: Mapping[str, int]
     admin_denies: tuple[str, ...] = ()
+    auth_epoch: int = 0
 
     def __post_init__(self) -> None:
         # Reuse the managed-session claim validator with harmless commitments.
@@ -118,6 +119,8 @@ class DeviceAccountIdentity:
             access_token_sha256="0" * 64,
             refresh_token_sha256="0" * 64,
         )
+        if not isinstance(self.auth_epoch, int) or self.auth_epoch < 0:
+            raise ValueError("device account auth epoch is invalid")
 
 
 @runtime_checkable
@@ -168,6 +171,22 @@ class DeviceTokenResult:
             "schema_version": 1,
             "status": self.status,
             "retry_after_seconds": self.retry_after_seconds,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceRevocationResult:
+    lease_id: str
+    account_id: str
+    already_revoked: bool
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": 1,
+            "status": "revoked",
+            "lease_id": self.lease_id,
+            "account_id": self.account_id,
+            "already_revoked": self.already_revoked,
         }
 
 
@@ -484,6 +503,18 @@ class ManagedDeviceIdentityBroker:
                     ),
                 )
                 connection.execute(
+                    "INSERT INTO device_identity_grant_authority("
+                    "lease_id,account_id,auth_epoch,source_lease_id,created_at"
+                    ") VALUES(?,?,?,?,?)",
+                    (
+                        claims.lease_id,
+                        identity.account_id,
+                        identity.auth_epoch,
+                        None,
+                        _iso(now),
+                    ),
+                )
+                connection.execute(
                     "UPDATE device_identity_flows SET status='authorized',account_id=?,"
                     "lease_revision=?,authorized_at=?,updated_at=? WHERE flow_id=?",
                     (
@@ -511,6 +542,27 @@ class ManagedDeviceIdentityBroker:
                 raise
             finally:
                 connection.close()
+
+    def grant_account(
+        self,
+        *,
+        client_id: str,
+        account_id: str,
+        idempotency_key: str,
+    ) -> DeviceTokenResult:
+        """Issue the normal signed device grant without exposing device codes."""
+
+        self._client(client_id)
+        self._idempotency(idempotency_key)
+        identity = hashlib.sha256(
+            b"ecorex-password-login-v1\0" + idempotency_key.encode("utf-8")
+        ).hexdigest()
+        challenge = self.begin(
+            client_id=client_id,
+            idempotency_key=f"password-login:{identity}",
+        )
+        self.approve(user_code=challenge.user_code, account_id=account_id)
+        return self._grant(challenge.provider_flow_id, client_id=client_id)
 
     def refresh(
         self,
@@ -545,6 +597,26 @@ class ManagedDeviceIdentityBroker:
                     source_lease.claims.refresh_token_sha256,
                 ):
                     raise DeviceRefreshRequired("managed session refresh was rejected")
+                authority = connection.execute(
+                    "SELECT * FROM device_identity_grant_authority WHERE lease_id=?",
+                    (lease_id,),
+                ).fetchone()
+                if (
+                    authority is None
+                    or authority["account_id"] != source_lease.claims.account_id
+                    or self._lease_is_revoked(connection, lease_id)
+                ):
+                    raise DeviceRefreshRequired("managed session refresh was rejected")
+                try:
+                    current_identity = self.account_directory.resolve(
+                        source_lease.claims.account_id
+                    )
+                except DeviceIdentityError:
+                    raise DeviceRefreshRequired(
+                        "managed session refresh was rejected"
+                    ) from None
+                if int(authority["auth_epoch"]) != current_identity.auth_epoch:
+                    raise DeviceRefreshRequired("managed session refresh was rejected")
                 replay = connection.execute(
                     "SELECT * FROM device_identity_refresh_grants "
                     "WHERE source_lease_id=?",
@@ -555,13 +627,14 @@ class ManagedDeviceIdentityBroker:
                         raise DeviceIdentityConflict(
                             "managed session refresh identity changed"
                         )
+                    if self._lease_is_revoked(connection, str(replay["lease_id"])):
+                        raise DeviceRefreshRequired(
+                            "managed session refresh was rejected"
+                        )
                     return self._refresh_result(replay)
                 now = self._now().replace(microsecond=0)
                 if source_lease.claims.expires_at <= now + timedelta(seconds=30):
                     raise DeviceRefreshRequired("managed session refresh was rejected")
-                # Resolve only for active/suspended state. Policy remains the
-                # exact signed 72-hour snapshot and is not silently broadened.
-                self.account_directory.resolve(source_lease.claims.account_id)
                 high = connection.execute(
                     "SELECT high_water_revision FROM device_identity_account_revisions "
                     "WHERE account_id=?",
@@ -665,6 +738,28 @@ class ManagedDeviceIdentityBroker:
                         _iso(now),
                     ),
                 )
+                try:
+                    latest_identity = self.account_directory.resolve(
+                        identity.account_id
+                    )
+                except DeviceIdentityError:
+                    raise DeviceRefreshRequired(
+                        "managed session refresh was rejected"
+                    ) from None
+                if latest_identity.auth_epoch != current_identity.auth_epoch:
+                    raise DeviceRefreshRequired("managed session refresh was rejected")
+                connection.execute(
+                    "INSERT INTO device_identity_grant_authority("
+                    "lease_id,account_id,auth_epoch,source_lease_id,created_at"
+                    ") VALUES(?,?,?,?,?)",
+                    (
+                        new_lease_id,
+                        identity.account_id,
+                        current_identity.auth_epoch,
+                        lease_id,
+                        _iso(now),
+                    ),
+                )
                 self._audit(
                     connection,
                     "device.token.refreshed",
@@ -686,6 +781,120 @@ class ManagedDeviceIdentityBroker:
                 access_token=access_token,
                 refresh_token=new_refresh_token,
             )
+
+    def revoke(
+        self,
+        *,
+        client_id: str,
+        lease_id: str,
+        account_id: str,
+        refresh_token: str,
+        idempotency_key: str,
+    ) -> DeviceRevocationResult:
+        """Idempotently revoke one proven lease without requiring an active account."""
+
+        self._client(client_id)
+        self._idempotency(idempotency_key)
+        if (
+            _SAFE_ID.fullmatch(str(lease_id or "")) is None
+            or _SAFE_ID.fullmatch(str(account_id or "")) is None
+            or not isinstance(refresh_token, str)
+            or not 16 <= len(refresh_token) <= 4096
+        ):
+            raise DeviceRefreshRequired("managed session revocation was rejected")
+        idempotency_hash = self._commitment(
+            "revoke-idempotency", f"{client_id}\0{idempotency_key}"
+        )
+        request_hash = self._commitment(
+            "revoke-request", f"{client_id}\0{lease_id}\0{account_id}"
+        )
+        with self._approval_lock:
+            connection = self._connect()
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                source = self._source_grant(connection, lease_id)
+                if (
+                    source is None
+                    or source["client_id"] != client_id
+                    or source["account_id"] != account_id
+                ):
+                    raise DeviceRefreshRequired(
+                        "managed session revocation was rejected"
+                    )
+                lease = SignedManagedSessionLease.from_json(source["lease_json"])
+                if not hmac.compare_digest(
+                    token_digest(refresh_token),
+                    lease.claims.refresh_token_sha256,
+                ):
+                    raise DeviceRefreshRequired(
+                        "managed session revocation was rejected"
+                    )
+                replay = connection.execute(
+                    "SELECT * FROM device_identity_revocations "
+                    "WHERE idempotency_hash=?",
+                    (idempotency_hash,),
+                ).fetchone()
+                if replay is not None:
+                    if (
+                        replay["request_hash"] != request_hash
+                        or replay["lease_id"] != lease_id
+                        or replay["account_id"] != account_id
+                        or replay["client_id"] != client_id
+                    ):
+                        raise DeviceIdentityConflict(
+                            "managed session revoke identity changed"
+                        )
+                    connection.commit()
+                    return DeviceRevocationResult(
+                        lease_id=lease_id,
+                        account_id=account_id,
+                        already_revoked=True,
+                    )
+                existing = connection.execute(
+                    "SELECT * FROM device_identity_revocations WHERE lease_id=?",
+                    (lease_id,),
+                ).fetchone()
+                if existing is not None:
+                    connection.commit()
+                    return DeviceRevocationResult(
+                        lease_id=lease_id,
+                        account_id=account_id,
+                        already_revoked=True,
+                    )
+                now = self._now().replace(microsecond=0)
+                connection.execute(
+                    "INSERT INTO device_identity_revocations("
+                    "lease_id,account_id,client_id,idempotency_hash,request_hash,"
+                    "revoked_at) VALUES(?,?,?,?,?,?)",
+                    (
+                        lease_id,
+                        account_id,
+                        client_id,
+                        idempotency_hash,
+                        request_hash,
+                        _iso(now),
+                    ),
+                )
+                self._audit(
+                    connection,
+                    "device.session.revoked",
+                    "revoked",
+                    account_id=account_id,
+                    details={"lease_hash": self._commitment("lease", lease_id)},
+                    now=now,
+                )
+                connection.commit()
+                return DeviceRevocationResult(
+                    lease_id=lease_id,
+                    account_id=account_id,
+                    already_revoked=False,
+                )
+            except BaseException:
+                if connection.in_transaction:
+                    connection.rollback()
+                raise
+            finally:
+                connection.close()
 
     def verify_legacy_credential(self, *, user_code: str, credential: str) -> str:
         if not isinstance(credential, str) or not 8 <= len(credential) <= 4096:
@@ -856,7 +1065,23 @@ class ManagedDeviceIdentityBroker:
         lease = SignedManagedSessionLease.from_json(row["lease_json"])
         # Recheck that the account still exists/is active, while keeping the
         # exact approved entitlement snapshot bound to the signed lease.
-        self.account_directory.resolve(str(row["account_id"]))
+        current_identity = self.account_directory.resolve(str(row["account_id"]))
+        connection = self._connect()
+        try:
+            authority = connection.execute(
+                "SELECT auth_epoch FROM device_identity_grant_authority "
+                "WHERE lease_id=?",
+                (lease.claims.lease_id,),
+            ).fetchone()
+            revoked = self._lease_is_revoked(connection, lease.claims.lease_id)
+        finally:
+            connection.close()
+        if (
+            authority is None
+            or int(authority["auth_epoch"]) != current_identity.auth_epoch
+            or revoked
+        ):
+            raise DeviceRefreshRequired("managed session grant was rejected")
         identity = DeviceAccountIdentity(
             account_id=lease.claims.account_id,
             organization_id=lease.claims.organization_id,
@@ -907,6 +1132,19 @@ class ManagedDeviceIdentityBroker:
             "LIMIT 1",
             (lease_id, lease_id),
         ).fetchone()
+
+    @staticmethod
+    def _lease_is_revoked(
+        connection: sqlite3.Connection,
+        lease_id: str,
+    ) -> bool:
+        return (
+            connection.execute(
+                "SELECT 1 FROM device_identity_revocations WHERE lease_id=?",
+                (lease_id,),
+            ).fetchone()
+            is not None
+        )
 
     def _refresh_result(self, row: sqlite3.Row) -> DeviceTokenResult:
         lease = SignedManagedSessionLease.from_json(row["lease_json"])
@@ -1202,5 +1440,6 @@ __all__ = [
     "DeviceIdentityUnauthorized",
     "DeviceIdentityUnavailable",
     "DeviceTokenResult",
+    "DeviceRevocationResult",
     "ManagedDeviceIdentityBroker",
 ]

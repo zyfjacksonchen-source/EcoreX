@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 import html
+import ipaddress
 from typing import Literal
 from urllib.parse import parse_qs, urlsplit
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from .device_identity import (
     DeviceIdentityConflict,
@@ -18,6 +20,11 @@ from .device_identity import (
     DeviceIdentityUnauthorized,
     DeviceIdentityUnavailable,
     ManagedDeviceIdentityBroker,
+)
+from .management import (
+    AdminManagementRepository,
+    AdminPasswordAuthenticationError,
+    AdminPasswordLocked,
 )
 
 
@@ -49,6 +56,20 @@ class RefreshTokenRequest(DeviceAuthorizeRequest):
     refresh_token: str = Field(min_length=16, max_length=4096)
 
 
+class RevokeSessionRequest(DeviceAuthorizeRequest):
+    lease_id: str = Field(
+        min_length=1,
+        max_length=256,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$",
+    )
+    account_id: str = Field(
+        min_length=1,
+        max_length=256,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$",
+    )
+    refresh_token: str = Field(min_length=16, max_length=4096)
+
+
 class LegacyDeviceVerifyRequest(_StrictModel):
     schema_version: int = Field(ge=1, le=1)
     user_code: str = Field(pattern=r"^[A-Za-z2-9]{4}-[A-Za-z2-9]{4}$")
@@ -65,10 +86,59 @@ class AdminDeviceApproveRequest(_StrictModel):
     )
 
 
+class PasswordLoginRequest(DeviceAuthorizeRequest):
+    identifier: str = Field(min_length=1, max_length=254)
+    # Existing accounts may still carry an eight-character legacy password.
+    # New credentials and admin resets remain subject to the stricter
+    # ten-character management contract.
+    password: SecretStr = Field(min_length=8, max_length=256)
+
+
+def _password_login_source_ip(request: Request) -> str | None:
+    """Resolve one rate-limit source without trusting public proxy headers."""
+
+    if request.client is None:
+        return None
+    try:
+        direct = ipaddress.ip_address(request.client.host.strip())
+    except (AttributeError, ValueError):
+        return None
+
+    mapped = getattr(direct, "ipv4_mapped", None)
+    direct_is_loopback = direct.is_loopback or (
+        mapped is not None and mapped.is_loopback
+    )
+    if not direct_is_loopback:
+        return direct.compressed
+
+    forwarded = request.headers.getlist("x-real-ip")
+    if not forwarded:
+        return direct.compressed
+    if len(forwarded) != 1 or "," in forwarded[0]:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_proxy_client_ip",
+                "message": "login request source is invalid",
+            },
+        )
+    try:
+        return ipaddress.ip_address(forwarded[0].strip()).compressed
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_proxy_client_ip",
+                "message": "login request source is invalid",
+            },
+        ) from None
+
+
 def create_device_identity_router(
     broker: ManagedDeviceIdentityBroker,
     *,
     admin_dependency: Callable[..., object] | None = None,
+    password_repository: AdminManagementRepository | None = None,
 ) -> APIRouter:
     if not isinstance(broker, ManagedDeviceIdentityBroker):
         raise TypeError("managed device identity broker is required")
@@ -155,6 +225,74 @@ def create_device_identity_router(
             ).to_dict()
         except DeviceIdentityError as error:
             raise device_identity_error_response(error) from None
+
+    @router.post("/v1/device/revoke")
+    async def revoke(
+        request: RevokeSessionRequest,
+        idempotency_key: str = Header(
+            alias="Idempotency-Key", min_length=8, max_length=256
+        ),
+    ) -> dict[str, object]:
+        try:
+            return broker.revoke(
+                client_id=request.client_id,
+                lease_id=request.lease_id,
+                account_id=request.account_id,
+                refresh_token=request.refresh_token,
+                idempotency_key=idempotency_key,
+            ).to_dict()
+        except DeviceIdentityError as error:
+            raise device_identity_error_response(error) from None
+
+    if password_repository is not None:
+        if not isinstance(password_repository, AdminManagementRepository):
+            raise TypeError("password account repository is invalid")
+
+        @router.post("/v1/session/login")
+        async def password_login(
+            payload: PasswordLoginRequest,
+            request: Request,
+            idempotency_key: str = Header(
+                alias="Idempotency-Key", min_length=8, max_length=256
+            ),
+        ) -> dict[str, object]:
+            password = payload.password.get_secret_value()
+            source_ip = _password_login_source_ip(request)
+            try:
+                user = await asyncio.to_thread(
+                    password_repository.authenticate_password,
+                    payload.identifier,
+                    password,
+                    source_ip=source_ip,
+                )
+                result = await asyncio.to_thread(
+                    broker.grant_account,
+                    client_id=payload.client_id,
+                    account_id=user.account_id,
+                    idempotency_key=idempotency_key,
+                )
+            except AdminPasswordLocked as error:
+                raise HTTPException(
+                    status_code=429,
+                    detail={
+                        "code": "password_login_rate_limited",
+                        "message": "account login is temporarily unavailable",
+                    },
+                    headers={"Retry-After": str(error.retry_after_seconds)},
+                ) from None
+            except AdminPasswordAuthenticationError:
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "code": "invalid_credentials",
+                        "message": "account login failed",
+                    },
+                ) from None
+            except DeviceIdentityError as error:
+                raise device_identity_error_response(error) from None
+            finally:
+                password = ""
+            return result.to_dict()
 
     @router.post("/v1/device/verify/legacy")
     async def verify_legacy(request: LegacyDeviceVerifyRequest) -> dict[str, object]:

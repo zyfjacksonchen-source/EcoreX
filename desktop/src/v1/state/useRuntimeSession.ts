@@ -1606,17 +1606,35 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     signal,
   ), [client]);
 
-  const beginDeviceLogin = useCallback((clientRequestId?: string) => (
-    client.beginDeviceLogin(clientRequestId)
-  ), [client]);
-
-  const getDeviceLogin = useCallback((flowId: string, signal?: AbortSignal) => (
-    client.deviceLogin(flowId, signal)
-  ), [client]);
-
-  const pollDeviceLogin = useCallback((flowId: string, clientRequestId?: string) => (
-    client.pollDeviceLogin(flowId, clientRequestId)
-  ), [client]);
+  const loginSession = useCallback(async (identifier: string, password: string) => {
+    if (sessionBusyRef.current) return null;
+    sessionBusyRef.current = true;
+    setSessionBusy(true);
+    setSessionError(null);
+    try {
+      const receipt = await client.loginSession(identifier, password);
+      if (!receipt.restart_scheduled) {
+        setSessionError(
+          "登录已完成，但 EcoreX 未能自动重新打开。请双击桌面的 EcoreX 后继续。",
+        );
+        return null;
+      }
+      if (await client.waitForCredentialRotation()) {
+        window.location.reload();
+        return receipt;
+      }
+      setSessionError(
+        "登录已完成，但 EcoreX 启动时间较长。请双击桌面的 EcoreX 后继续。",
+      );
+      return null;
+    } catch (error) {
+      setSessionError(errorMessage(error));
+      return null;
+    } finally {
+      sessionBusyRef.current = false;
+      setSessionBusy(false);
+    }
+  }, [client]);
 
   const logoutSession = useCallback(async () => {
     if (sessionBusyRef.current) return null;
@@ -1684,6 +1702,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     sessionBusy,
     sessionError,
     clearSessionError: () => setSessionError(null),
+    loginSession,
     logoutSession,
     memory,
     memoryLoadState,
@@ -1774,9 +1793,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     submitRetouchWorkspace,
     reopenRetouchWorkspace,
     loadRetouchWorkspaceBlob,
-    beginDeviceLogin,
-    getDeviceLogin,
-    pollDeviceLogin,
     newTask,
   };
 }

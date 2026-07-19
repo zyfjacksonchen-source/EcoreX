@@ -366,6 +366,26 @@ def _stages(root: Path, public: bytes) -> list[dict[str, str]]:
         bootstrap_launcher.parent.mkdir(parents=True)
         bootstrap_launcher.write_bytes(b"real dependency-free Bootstrap fixture")
         bootstrap_launcher.chmod(0o755)
+        installer = bootstrap / (
+            "EcoreX Installer.cmd"
+            if platform == "windows"
+            else "EcoreX Installer.command"
+        )
+        installer.write_bytes(
+            (
+                b"@echo off\r\n"
+                b"\"%~dp0bin\\ecorex-bootstrap.exe\" %*\r\n"
+                b"exit /b %errorlevel%\r\n"
+            )
+            if platform == "windows"
+            else (
+                b"#!/bin/sh\n"
+                b"BASE_DIR=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
+                b"exec \"$BASE_DIR/bin/ecorex-bootstrap\" \"$@\"\n"
+            )
+        )
+        if platform == "macos":
+            installer.chmod(0o755)
         sandbox_helper_sha256 = ""
         if platform == "windows":
             helper = bootstrap / "bin" / "ecorex-sandbox-host.exe"
@@ -673,6 +693,16 @@ def test_candidate_builds_three_bootstraps_runtime_archives_and_eighteen_real_pa
         with zipfile.ZipFile(built.artifact_paths[artifact_id]) as archive:
             interpreter = archive.getinfo("bin/pack-python/bin/python3")
             assert (interpreter.external_attr >> 16) & 0o777 == 0o755
+    with zipfile.ZipFile(
+        built.artifact_paths["bootstrap-windows-x64"]
+    ) as windows_bootstrap:
+        assert windows_bootstrap.read("EcoreX Installer.cmd").startswith(
+            b"@echo off\r\n"
+        )
+    for artifact_id in ("bootstrap-macos-arm64", "bootstrap-macos-x64"):
+        with zipfile.ZipFile(built.artifact_paths[artifact_id]) as archive:
+            installer = archive.getinfo("EcoreX Installer.command")
+            assert (installer.external_attr >> 16) & 0o777 == 0o755
     all_bytes = b"".join(path.read_bytes() for path in built.output_dir.iterdir())
     assert private not in all_bytes
     receipt = json.loads((tmp_path / "candidate-receipt.json").read_text())

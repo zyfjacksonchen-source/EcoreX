@@ -796,12 +796,20 @@ def _stage_input(
             if platform == "windows"
             else "bin/ecorex-bootstrap"
         )
+        installer = (
+            "EcoreX Installer.cmd"
+            if platform == "windows"
+            else "EcoreX Installer.command"
+        )
         definition = ArtifactBuildInput(
             source_dir=frozen_source,
             kind=ArtifactKind.BOOTSTRAP,
             platform=platform,
             architecture=architecture,
-            executable_paths=(executable,),
+            executable_paths=(
+                executable,
+                *((installer,) if platform == "macos" else ()),
+            ),
         )
         stage_key = ("bootstrap", platform, architecture)
     else:
@@ -840,7 +848,12 @@ def _validate_stage_payload(
             if platform == "windows"
             else "bin/ecorex-bootstrap"
         )
-        required = (launcher, "bootstrap-config.json")
+        installer = (
+            "EcoreX Installer.cmd"
+            if platform == "windows"
+            else "EcoreX Installer.command"
+        )
+        required = (launcher, installer, "bootstrap-config.json")
         if platform == "windows":
             required += ("bin/ecorex-sandbox-host.exe",)
     elif pack_id is None:
@@ -863,6 +876,19 @@ def _validate_stage_payload(
         raise CandidateBuildError("stage_required_binary_missing")
     runtime_interpreter: Mapping[str, Any] | None = None
     if kind == "bootstrap":
+        installer_payload = (
+            b"@echo off\r\n"
+            b"\"%~dp0bin\\ecorex-bootstrap.exe\" %*\r\n"
+            b"exit /b %errorlevel%\r\n"
+            if platform == "windows"
+            else (
+                b"#!/bin/sh\n"
+                b"BASE_DIR=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
+                b"exec \"$BASE_DIR/bin/ecorex-bootstrap\" \"$@\"\n"
+            )
+        )
+        if (root / installer).read_bytes() != installer_payload:
+            raise CandidateBuildError("stage_bootstrap_installer_invalid")
         bootstrap_config = _validate_bootstrap_config(
             root / "bootstrap-config.json",
             platform=platform,

@@ -15,6 +15,8 @@ from .device import (
     BrokerDeviceGrant,
     BrokerPollResult,
     BrokerPollStatus,
+    BrokerRevocationReceipt,
+    DeviceAuthorizationUnauthorized,
     DeviceAuthorizationUnavailable,
 )
 from .models import SignedManagedSessionLease
@@ -191,6 +193,88 @@ class HTTPSDeviceAuthorizationBroker:
                 "device refresh grant is invalid"
             ) from None
 
+    async def login(
+        self,
+        *,
+        identifier: str,
+        password: str,
+        idempotency_key: str,
+    ) -> BrokerDeviceGrant:
+        body = await self._request(
+            "/v1/session/login",
+            {
+                "schema_version": 1,
+                "client_id": self.client_id,
+                "identifier": identifier,
+                "password": password,
+            },
+            idempotency_key=idempotency_key,
+            allow_login_failure=True,
+        )
+        _exact(
+            body,
+            {"schema_version", "status", "lease", "access_token", "refresh_token"},
+        )
+        if body.get("schema_version") != 1 or body.get("status") != "authorized":
+            raise DeviceAuthorizationUnavailable("password login response is invalid")
+        raw_lease = body.get("lease")
+        if not isinstance(raw_lease, Mapping):
+            raise DeviceAuthorizationUnavailable("password login lease is invalid")
+        try:
+            return BrokerDeviceGrant(
+                lease=SignedManagedSessionLease.from_dict(raw_lease),
+                access_token=_text(body, "access_token"),
+                refresh_token=_text(body, "refresh_token"),
+            )
+        except (TypeError, ValueError):
+            raise DeviceAuthorizationUnavailable(
+                "password login grant is invalid"
+            ) from None
+
+    async def revoke(
+        self,
+        *,
+        lease_id: str,
+        account_id: str,
+        refresh_token: str,
+        idempotency_key: str,
+    ) -> BrokerRevocationReceipt:
+        body = await self._request(
+            "/v1/device/revoke",
+            {
+                "schema_version": 1,
+                "client_id": self.client_id,
+                "lease_id": lease_id,
+                "account_id": account_id,
+                "refresh_token": refresh_token,
+            },
+            idempotency_key=idempotency_key,
+            allow_invalid_grant=True,
+        )
+        _exact(
+            body,
+            {
+                "schema_version",
+                "status",
+                "lease_id",
+                "account_id",
+                "already_revoked",
+            },
+        )
+        if (
+            body.get("schema_version") != 1
+            or body.get("status") != "revoked"
+            or not isinstance(body.get("already_revoked"), bool)
+        ):
+            raise DeviceAuthorizationUnavailable(
+                "device revoke response is invalid"
+            )
+        return BrokerRevocationReceipt(
+            lease_id=_text(body, "lease_id"),
+            account_id=_text(body, "account_id"),
+            already_revoked=bool(body["already_revoked"]),
+        )
+
     async def aclose(self) -> None:
         if self._owned:
             await self.client.aclose()
@@ -202,6 +286,7 @@ class HTTPSDeviceAuthorizationBroker:
         *,
         idempotency_key: str,
         allow_invalid_grant: bool = False,
+        allow_login_failure: bool = False,
     ) -> Mapping[str, Any]:
         if not _SAFE_CLIENT.fullmatch(idempotency_key.replace(":", "-")):
             raise DeviceAuthorizationUnavailable("device request identity is invalid")
@@ -229,7 +314,8 @@ class HTTPSDeviceAuthorizationBroker:
                     )
                 response_status = response.status_code
                 if response_status not in {200, 201} and not (
-                    allow_invalid_grant and response_status == 401
+                    (allow_invalid_grant and response_status == 401)
+                    or (allow_login_failure and response_status in {401, 429})
                 ):
                     raise DeviceAuthorizationUnavailable(
                         f"device broker returned HTTP {response.status_code}"
@@ -263,6 +349,18 @@ class HTTPSDeviceAuthorizationBroker:
             ) from None
         if not isinstance(value, Mapping):
             raise DeviceAuthorizationUnavailable("device broker response is invalid")
+        if allow_login_failure and response_status in {401, 429}:
+            detail = value.get("detail")
+            if (
+                isinstance(detail, Mapping)
+                and detail.get("code") == "invalid_credentials"
+                and set(detail) == {"code", "message"}
+                and set(value) == {"detail"}
+            ):
+                raise DeviceAuthorizationUnauthorized("password login failed")
+            raise DeviceAuthorizationUnavailable(
+                "password login authentication response is invalid"
+            )
         if response_status == 401:
             detail = value.get("detail")
             if (

@@ -775,20 +775,12 @@ export interface BootstrapResponse {
   server_time: string;
 }
 
-export type DeviceLoginStatus = "pending" | "authorized" | "denied" | "expired" | "failed";
-
-export interface DeviceLoginProjection {
-  flow_id: string;
-  status: DeviceLoginStatus;
-  user_code: string;
-  verification_url: string;
-  expires_at: string;
-  poll_interval_seconds: number;
-  next_poll_at: string;
-  restart_required: boolean;
+export interface LoginSessionResponse {
+  authenticated: true;
+  display_name: string;
+  generation: number;
+  restart_required: true;
   restart_scheduled: boolean;
-  session_generation: number | null;
-  error_code: string | null;
 }
 
 export interface LogoutSessionResponse {

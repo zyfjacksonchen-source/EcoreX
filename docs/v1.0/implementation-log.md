@@ -6747,3 +6747,48 @@ the real first source, displayed its transfer meter, passed SHA-256 and
 completed packaged self-test. The macOS command passed shell syntax validation;
 both Darwin targets remain subject to the native macOS Runner smoke required
 by release acceptance. Product identity advances to `1.0.4`.
+
+## 2026-07-19 - v1.0.5 account-first startup and upgrade convergence
+
+The installed v1.0.4 acceptance exposed two independent legacy-entry and
+authentication defects. A product-owned v0.2.9.2/v0.3.0 shortcut could remain
+beside the new entry and reopen the old service, while the first-use screen
+still required a device-code ceremony. v1.0.5 makes account/password login the
+only ordinary-user entry and keeps the complete workbench outside the DOM
+until the Runtime reports an authenticated managed session.
+
+The Control Plane accepts historical eight-character credentials and strictly
+verifies both Django PBKDF2 and the v0.2.9.2 standard-Base64 PBKDF2 format.
+Invalid legacy rows are quarantined independently. Successful legacy login
+atomically upgrades the hash; new and reset passwords remain at least ten
+characters. Account and source-IP reservations, bounded failure storage,
+constant-cost dummy verification, proxy-layer rate limits and secret-free
+audit events close the public password boundary.
+
+Administrator create now requires an initial password at the HTTP boundary;
+edit can explicitly reset it. User projections expose only configured/missing
+state and the change time. Account IDs and emails share one future login
+namespace. Password reset and suspension invalidate older refresh grants.
+Logout confirms an idempotent remote lease revocation before removing the
+local Vault; uncertain network outcomes remain durable and retryable.
+
+Runtime login remains subject to its bearer, exact loopback Origin, CSRF and
+execution-health gates while being reachable before a managed session exists.
+After the login commit, the old page waits through the old process 409 and
+treats the new process's rotated-bearer 401 as the reload boundary. The page
+then reloads with the newly injected Runtime credentials.
+
+Bootstrap recognizes only byte-exact product-owned legacy `.url`, `.cmd` and
+`.lnk` entries. Preparation records their digests without deletion; commit
+removes them idempotently, rollback preserves them, and any user modification
+revokes cleanup authority. The Bootstrap archives also gain a root-level
+`EcoreX Installer` entry for nontechnical double-click installation.
+
+The WebUI is fixed to one viewport. Project and conversation summaries own the
+only sidebar scroll region, with brand/new-task controls and the account footer
+outside it. The conversation Timeline scrolls independently while Composer
+remains fixed. Desktop and 390×568 Chromium geometry checks verify the page
+itself does not scroll and mobile drawer bounds remain inside the viewport.
+
+Product identity advances immutably to `1.0.5`. Final acceptance is an online
+update from the already installed v1.0.4 slot, not a clean-install substitute.

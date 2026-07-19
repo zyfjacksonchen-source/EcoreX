@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 import hashlib
+import hmac
 import re
 import secrets
 import sqlite3
@@ -23,7 +24,13 @@ from ecorex.runtime.invariant_guard import (
 )
 from ecorex.runtime.schema_catalog import validate_product_schema
 
-from .models import ManagedSessionSnapshot, SignedManagedSessionLease
+from .models import (
+    ManagedSessionSnapshot,
+    SessionLogoutReceipt,
+    SessionUnavailable,
+    SignedManagedSessionLease,
+)
+from .repository import client_request_hash
 from .service import ManagedSessionService
 
 
@@ -45,6 +52,10 @@ class DeviceAuthorizationConflict(DeviceAuthorizationError):
 
 class DeviceAuthorizationUnavailable(DeviceAuthorizationError):
     code = "device_authorization_unavailable"
+
+
+class DeviceAuthorizationUnauthorized(DeviceAuthorizationError):
+    code = "session_login_invalid"
 
 
 class DeviceFlowStatus(StrEnum):
@@ -125,6 +136,13 @@ class BrokerPollResult:
             raise ValueError("device retry interval is invalid")
 
 
+@dataclass(frozen=True, slots=True)
+class BrokerRevocationReceipt:
+    lease_id: str
+    account_id: str
+    already_revoked: bool
+
+
 class DeviceAuthorizationBroker(Protocol):
     async def begin(self, *, idempotency_key: str) -> BrokerDeviceChallenge:
         ...
@@ -136,6 +154,25 @@ class DeviceAuthorizationBroker(Protocol):
         device_code: str,
         idempotency_key: str,
     ) -> BrokerPollResult:
+        ...
+
+    async def login(
+        self,
+        *,
+        identifier: str,
+        password: str,
+        idempotency_key: str,
+    ) -> BrokerDeviceGrant:
+        ...
+
+    async def revoke(
+        self,
+        *,
+        lease_id: str,
+        account_id: str,
+        refresh_token: str,
+        idempotency_key: str,
+    ) -> BrokerRevocationReceipt:
         ...
 
 
@@ -384,6 +421,147 @@ class ManagedDeviceAuthorizationService:
             raise DeviceAuthorizationConflict("device authorization identity conflicted") from exc
         assert existing is not None
         return self._projection(existing)
+
+    async def login(
+        self,
+        *,
+        identifier: str,
+        password: str,
+        client_request_id: str,
+    ) -> ManagedSessionSnapshot:
+        self._require_converged()
+        request_hash = _request_hash(client_request_id)
+        committed = await asyncio.to_thread(
+            self.read_committed_password_login,
+            client_request_id=client_request_id,
+        )
+        if committed is not None:
+            return committed
+        permit = self._issue_permit(
+            scope="device_authorization",
+            subject=f"password-login:{request_hash}",
+        )
+        try:
+            grant = await self._await_with_permit(
+                permit,
+                lambda: asyncio.wait_for(
+                    self.broker.login(
+                        identifier=identifier,
+                        password=password,
+                        idempotency_key=f"password-login:{request_hash}",
+                    ),
+                    timeout=self.broker_timeout_seconds,
+                ),
+            )
+        except DeviceAuthorizationUnauthorized:
+            raise
+        except Exception as exc:
+            raise DeviceAuthorizationUnavailable(
+                f"password login provider failed: {type(exc).__name__}"
+            ) from None
+        return await self._to_thread_with_permit(
+            permit,
+            self.session.install,
+            grant.lease,
+            access_token=grant.access_token,
+            refresh_token=grant.refresh_token,
+            client_request_id=f"password-login:{request_hash}",
+            before_commit=self._before_commit(permit),
+        )
+
+    def read_committed_password_login(
+        self,
+        *,
+        client_request_id: str,
+    ) -> ManagedSessionSnapshot | None:
+        """Recover the exact committed result without calling the broker again."""
+
+        self._require_converged()
+        request_hash = _request_hash(client_request_id)
+        expected_install_hash = client_request_hash(
+            f"password-login:{request_hash}"
+        )
+        try:
+            active = self.session.repository.active()
+        except SessionUnavailable:
+            return None
+        if not hmac.compare_digest(
+            active.intent.client_request_hash,
+            expected_install_hash,
+        ):
+            return None
+        return self.session.read_snapshot()
+
+    async def revoke_and_logout(
+        self,
+        *,
+        client_request_id: str,
+        expected_lease_digest: str,
+    ) -> SessionLogoutReceipt:
+        """Confirm cloud revocation before clearing the local credential vault."""
+
+        self._require_converged()
+        request_hash = _request_hash(client_request_id)
+        context = await asyncio.to_thread(self.session.revocation_context)
+        if not hmac.compare_digest(
+            context.lease.digest,
+            expected_lease_digest,
+        ):
+            raise DeviceAuthorizationConflict("logout target is no longer active")
+        try:
+            receipt = await asyncio.wait_for(
+                self.broker.revoke(
+                    lease_id=context.lease.claims.lease_id,
+                    account_id=context.lease.claims.account_id,
+                    refresh_token=context.refresh_token,
+                    idempotency_key=f"session-revoke:{request_hash}",
+                ),
+                timeout=self.broker_timeout_seconds,
+            )
+            if (
+                receipt.lease_id != context.lease.claims.lease_id
+                or receipt.account_id != context.lease.claims.account_id
+            ):
+                raise DeviceAuthorizationUnavailable(
+                    "session revocation response identity changed"
+                )
+        except asyncio.CancelledError:
+            await asyncio.shield(
+                asyncio.to_thread(
+                    self.session.repository.record_remote_logout_state,
+                    client_request_hash=request_hash,
+                    expected_lease_digest=expected_lease_digest,
+                    state_name="remote_revocation_pending",
+                    reason_code="remote_revocation_cancelled",
+                    now=_iso(self._utc_now()),
+                )
+            )
+            raise
+        except Exception as exc:
+            await asyncio.to_thread(
+                self.session.repository.record_remote_logout_state,
+                client_request_hash=request_hash,
+                expected_lease_digest=expected_lease_digest,
+                state_name="remote_revocation_pending",
+                reason_code="remote_revocation_uncertain",
+                now=_iso(self._utc_now()),
+            )
+            raise DeviceAuthorizationUnavailable(
+                f"session remote revocation is uncertain: {type(exc).__name__}"
+            ) from None
+        await asyncio.to_thread(
+            self.session.repository.record_remote_logout_state,
+            client_request_hash=request_hash,
+            expected_lease_digest=expected_lease_digest,
+            state_name="remote_revoked",
+            reason_code=None,
+            now=_iso(self._utc_now()),
+        )
+        return await asyncio.to_thread(
+            self.session.logout,
+            client_request_id=client_request_id,
+            expected_lease_digest=expected_lease_digest,
+        )
 
     def get(self, flow_id: str) -> DeviceFlowProjection:
         """Return the durable projection without expiry or vault side effects."""
@@ -1032,6 +1210,7 @@ __all__ = [
     "DeviceAuthorizationError",
     "DeviceAuthorizationNotFound",
     "DeviceAuthorizationSupervisor",
+    "DeviceAuthorizationUnauthorized",
     "DeviceAuthorizationUnavailable",
     "DeviceFlowProjection",
     "DeviceFlowStatus",

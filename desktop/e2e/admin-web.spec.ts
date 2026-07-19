@@ -66,6 +66,11 @@ const adminUser = (body: Record<string, unknown>) => ({
   tokens_used: 0,
   image_limit: body.image_limit,
   images_used: 0,
+  password_configured: typeof body.password === "string" && body.password.length >= 10,
+  credential_state: typeof body.password === "string" && body.password.length >= 10 ? "configured" : "missing",
+  password_changed_at: typeof body.password === "string" && body.password.length >= 10
+    ? "2026-07-14T08:00:00Z"
+    : null,
   revision: 1,
   created_at: "2026-07-14T08:00:00Z",
   updated_at: "2026-07-14T08:00:00Z",
@@ -229,6 +234,7 @@ async function installAdminApi(
 }
 
 async function connect(page: Page): Promise<void> {
+  await page.getByText("运维令牌兜底", { exact: true }).click();
   await page.locator("#admin-token").fill(ADMIN_TOKEN);
   await page.getByRole("button", { name: "连接控制面" }).click();
   await expect(page.locator("#session-label")).toContainText("已连接");
@@ -275,14 +281,18 @@ test("administrator manages users, hot-tests a model, and creates an explicit fu
   await page.locator("#user-organization").fill("org-e2e");
   await page.locator("#user-token-limit").fill("200000");
   await page.locator("#user-image-limit").fill("100");
+  const initialPassword = "e2e-user-password-123";
+  await page.locator("#user-password").fill(initialPassword);
   await page.getByRole("button", { name: "保存用户" }).click();
   await expect(page.locator("#user-table-body")).toContainText("验收用户");
   expect(guard.userCreateBody).toMatchObject({
     account_id: "account-e2e",
     token_limit: 200000,
     image_limit: 100,
+    password: initialPassword,
     client_request_id: expect.stringMatching(/^admin_[0-9a-f]{32}$/u),
   });
+  await expect(page.locator("#user-table-body")).toContainText("密码已设置");
 
   const modelSecret = "sk-e2e-model-secret-123456";
   await page.getByRole("button", { name: "添加模型" }).click();

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "assets": {
-    "index.html": "838a6625df65af0b14f6c37e41304ef6a799deb266eae66b56ff86a0b71eff91",
+    "index.html": "94c523931893130430ef349a8152aa55a7a26df52653df55d084aaa5a046d14b",
     "admin.css": "478cb7d6dd731cb04f62e63cda037f188a1416a54c3ce57a70a6029442817eaa",
-    "admin.js": "f747126743d1a74c7c5a66393ebe01d0dac2541e9eac72c4e398ec7ad90550d6"
+    "admin.js": "9d95a3563ac3952ca9f0eae3be1cce102e6d6ed1216963ed267cb9dcb2a1015a"
   }
 }

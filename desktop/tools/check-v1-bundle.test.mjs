@@ -10,7 +10,6 @@ const FEATURES = [
   "ArtifactPreviewDialog",
   "ComposerModelSelector",
   "ConnectorPopover",
-  "DeviceLoginCard",
   "SkillsWorkspace",
   "InteractionStack",
   "NewConversationProjectSelector",

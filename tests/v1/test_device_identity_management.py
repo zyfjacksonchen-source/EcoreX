@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import pytest
 
+from ecorex.control_plane.device_identity import (
+    DeviceIdentitySecrets,
+    DeviceRefreshRequired,
+    ManagedDeviceIdentityBroker,
+)
 from ecorex.control_plane.device_identity_management import (
     AdminManagementDeviceAccountDirectory,
 )
@@ -23,6 +30,7 @@ from ecorex.control_plane.management_models import (
 )
 from ecorex.control_plane.management_schema import AdminManagementSchemaManager
 from ecorex.control_plane.models import ControlPrincipal
+from ecorex.release.signing import Ed25519MemorySigner
 
 
 ACTOR = ControlPrincipal(
@@ -68,6 +76,8 @@ def _repository(path: Path) -> AdminManagementRepository:
 def _create_user(
     repository: AdminManagementRepository,
     account_id: str,
+    *,
+    password: str | None = None,
 ) -> None:
     repository.create_user(
         CreateAdminUserRequest(
@@ -77,10 +87,102 @@ def _create_user(
             organization_id=None,
             token_limit=0,
             image_limit=0,
+            password=password,
             client_request_id=f"create-{account_id}",
         ),
         actor=ACTOR,
     )
+
+
+def test_password_reset_and_suspend_immediately_invalidate_old_refresh(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "control.db"
+    repository = _repository(path)
+    _create_user(repository, "member-1", password="old-password-1")
+    directory = AdminManagementDeviceAccountDirectory(repository)
+    access_private = Ed25519PrivateKey.generate()
+    lease_private = Ed25519PrivateKey.generate()
+    now = datetime(2026, 7, 19, 10, 0, tzinfo=UTC)
+    broker = ManagedDeviceIdentityBroker(
+        path,
+        account_directory=directory,
+        access_signer=Ed25519MemorySigner("access-key", access_private),
+        lease_signer=Ed25519MemorySigner("lease-key", lease_private),
+        secrets=DeviceIdentitySecrets(b"a" * 32, b"b" * 32),
+        issuer="https://identity.ecorex.test",
+        audience="ecorex-product",
+        verification_url="https://identity.ecorex.test/device",
+        allowed_client_ids=frozenset({"ecorex-product"}),
+        clock=lambda: now,
+    )
+    old_grant = broker.grant_account(
+        client_id="ecorex-product",
+        account_id="member-1",
+        idempotency_key="old-password-login-grant-0001",
+    )
+    assert old_grant.lease is not None
+    assert directory.resolve("member-1").auth_epoch == 1
+
+    current = repository.get_user("member-1")
+    repository.update_user(
+        "member-1",
+        UpdateAdminUserRequest(
+            display_name=current.display_name,
+            email=current.email,
+            organization_id=current.organization_id,
+            status="active",
+            token_limit=current.token_limit,
+            image_limit=current.image_limit,
+            password="new-password-2",
+            expected_revision=current.revision,
+            client_request_id="reset-member-password-0001",
+        ),
+        actor=ACTOR,
+    )
+    assert directory.resolve("member-1").auth_epoch == 2
+    with pytest.raises(DeviceRefreshRequired):
+        broker.refresh(
+            client_id="ecorex-product",
+            lease_id=old_grant.lease.claims.lease_id,
+            refresh_token=str(old_grant.refresh_token),
+            idempotency_key="refresh-after-password-reset-0001",
+        )
+    assert repository.authenticate_password(
+        "member-1",
+        "new-password-2",
+        source_ip="203.0.113.12",
+        now=now,
+    ).account_id == "member-1"
+    new_grant = broker.grant_account(
+        client_id="ecorex-product",
+        account_id="member-1",
+        idempotency_key="new-password-login-grant-0001",
+    )
+    assert new_grant.lease is not None
+
+    current = repository.get_user("member-1")
+    repository.update_user(
+        "member-1",
+        UpdateAdminUserRequest(
+            display_name=current.display_name,
+            email=current.email,
+            organization_id=current.organization_id,
+            status="suspended",
+            token_limit=current.token_limit,
+            image_limit=current.image_limit,
+            expected_revision=current.revision,
+            client_request_id="suspend-member-0001",
+        ),
+        actor=ACTOR,
+    )
+    with pytest.raises(DeviceRefreshRequired):
+        broker.refresh(
+            client_id="ecorex-product",
+            lease_id=new_grant.lease.claims.lease_id,
+            refresh_token=str(new_grant.refresh_token),
+            idempotency_key="refresh-after-suspend-0001",
+        )
 
 
 def test_platform_roles_come_only_from_deployment_allowlist(tmp_path: Path) -> None:

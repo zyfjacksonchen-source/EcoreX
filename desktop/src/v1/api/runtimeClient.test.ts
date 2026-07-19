@@ -447,45 +447,103 @@ test("bootstrap accepts CSRF when the injected Runtime bridge is frozen", async 
   }
 });
 
-test("managed device login exposes only public challenge fields and protects begin/poll mutations", async () => {
+test("account login sends one CSRF-protected credential mutation and validates the receipt", async () => {
   const requests: Request[] = [];
   const originalFetch = globalThis.fetch;
-  const projection = {
-    flow_id: `devflow_${"a".repeat(32)}`,
-    status: "pending" as const,
-    user_code: "ABCD-EFGH",
-    verification_url: "https://login.ecorex.example/device",
-    expires_at: "2026-07-10T01:00:00Z",
-    poll_interval_seconds: 5,
-    next_poll_at: "2026-07-10T00:00:05Z",
-    restart_required: false,
-    restart_scheduled: false,
-    session_generation: null,
-    error_code: null,
-  };
   globalThis.fetch = async (input, init) => {
     const request = new Request(input, init);
     requests.push(request);
-    return Response.json(projection, { status: request.method === "POST" && request.url.endsWith("/device") ? 202 : 200 });
+    return Response.json({
+      authenticated: true,
+      display_name: "小芯",
+      generation: 2,
+      restart_required: true,
+      restart_scheduled: true,
+    });
   };
   try {
     const client = new RuntimeClient({ apiBase: "http://127.0.0.1:8765", bearerToken: "b".repeat(43) });
     client.acceptBootstrap(bootstrap);
-    const started = await client.beginDeviceLogin("device-login-stable-id");
-    await client.deviceLogin(started.flow_id);
-    await client.pollDeviceLogin(started.flow_id, "device-poll-stable-id");
+    const receipt = await client.loginSession(
+      "user@example.com",
+      "correct horse battery staple",
+      "session-login-stable-id",
+    );
 
-    assert.equal(requests[0].url, "http://127.0.0.1:8765/api/v1/session/device");
-    assert.equal(requests[1].url, `http://127.0.0.1:8765/api/v1/session/device/${started.flow_id}`);
-    assert.equal(requests[2].url, `http://127.0.0.1:8765/api/v1/session/device/${started.flow_id}/poll`);
+    assert.equal(receipt.authenticated, true);
+    assert.equal(receipt.display_name, "小芯");
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].url, "http://127.0.0.1:8765/api/v1/session/login");
     assert.equal(requests[0].headers.get("x-ecorex-csrf"), bootstrap.csrf_token);
-    assert.equal(requests[1].headers.get("x-ecorex-csrf"), null);
-    assert.equal(requests[2].headers.get("x-ecorex-csrf"), bootstrap.csrf_token);
-    assert.deepEqual(JSON.parse(await requests[0].text()), { client_request_id: "device-login-stable-id" });
-    assert.deepEqual(JSON.parse(await requests[2].text()), { client_request_id: "device-poll-stable-id" });
-    assert.equal("device_code" in started, false);
-    assert.equal("access_token" in started, false);
-    assert.equal("refresh_token" in started, false);
+    assert.deepEqual(JSON.parse(await requests[0].text()), {
+      identifier: "user@example.com",
+      password: "correct horse battery staple",
+      client_request_id: "session-login-stable-id",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("account login rejects a malformed success receipt", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({
+    authenticated: true,
+    display_name: "",
+    generation: 0,
+    restart_required: false,
+    restart_scheduled: true,
+  });
+  try {
+    const client = new RuntimeClient({ apiBase: "http://127.0.0.1:8765" });
+    await assert.rejects(
+      client.loginSession("user@example.com", "password"),
+      (error: unknown) => error instanceof RuntimeApiError
+        && error.code === "login_receipt_invalid",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("login restart waits through the old process 409 and reloads on rotated bearer 401", async () => {
+  const statuses = [409, 401];
+  const requests: Request[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const request = new Request(input, init);
+    requests.push(request);
+    const status = statuses.shift();
+    if (status === 409) {
+      return Response.json({
+        detail: {
+          code: "managed_session_restart_required",
+          message: "restart required",
+        },
+      }, { status });
+    }
+    return Response.json({
+      detail: "runtime bearer token is required",
+    }, { status: 401 });
+  };
+  try {
+    const client = new RuntimeClient({
+      apiBase: "http://127.0.0.1:8765",
+      bearerToken: "old-runtime-bearer-" + "b".repeat(32),
+      csrfToken: "old-runtime-csrf-" + "c".repeat(32),
+    });
+    const rotated = await client.waitForCredentialRotation({
+      timeoutMs: 1_000,
+      pollIntervalMs: 0,
+    });
+
+    assert.equal(rotated, true);
+    assert.equal(requests.length, 2);
+    assert.equal(
+      requests.every((request) => request.headers.get("authorization")
+        === `Bearer old-runtime-bearer-${"b".repeat(32)}`),
+      true,
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }

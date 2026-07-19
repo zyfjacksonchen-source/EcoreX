@@ -48,6 +48,10 @@ from ecorex.migration.legacy_identity_export import (
     LegacyIdentityExportError,
     export_v0292_legacy_identities,
 )
+from ecorex.migration.legacy_password_credentials import (
+    LegacyPasswordCredentialImportError,
+    import_v0292_password_credentials,
+)
 from ecorex.control_plane.management import (
     AdminManagementNotFound,
     AdminManagementRepository,
@@ -121,6 +125,12 @@ _DEPLOYMENT_PLATFORM_ADMIN_ACTOR = ControlPrincipal(
 )
 
 NGINX_ROUTE_INCLUDE = "include /etc/nginx/ecorex-cloud/ecorex-cloud.routes.conf;"
+NGINX_LOGIN_HTTP_LIMITS = (
+    "limit_req_zone $binary_remote_addr "
+    "zone=ecorex_session_login_per_ip:10m rate=10r/m;\n"
+    "limit_conn_zone $binary_remote_addr "
+    "zone=ecorex_session_login_conn_per_ip:10m;\n\n"
+)
 LEGACY_ADMIN_LOCATION_HEADERS = (
     "location = /ecorex-agent/admin",
     "location ^~ /ecorex-agent/admin/api/",
@@ -1615,13 +1625,14 @@ def _install_legacy_admin_route_wiring(
     ):
         raise CloudDeployError("nginx_server_configuration_invalid")
 
-    include_count = source.count(NGINX_ROUTE_INCLUDE.encode("ascii"))
+    guarded_source = _with_login_http_limits(source)
+    include_count = guarded_source.count(NGINX_ROUTE_INCLUDE.encode("ascii"))
     active = NGINX_ROOT / "active-admin-route.conf"
     legacy = NGINX_ROOT / "admin-route-legacy.conf"
     if include_count == 1:
         if (
             any(
-                f"{header} {{".encode("ascii") in source
+                f"{header} {{".encode("ascii") in guarded_source
                 for header in LEGACY_ADMIN_LOCATION_HEADERS
             )
             or not active.is_symlink()
@@ -1630,7 +1641,7 @@ def _install_legacy_admin_route_wiring(
         ):
             raise CloudDeployError("nginx_admin_route_wiring_invalid")
         _validate_admin_route_resources()
-        migrated = _without_legacy_pointer_location(source)
+        migrated = _without_legacy_pointer_location(guarded_source)
         if migrated != source:
             _verify_public_bootstrap_seed_before_route_retire(
                 spec, public_bootstrap_seed
@@ -1673,7 +1684,7 @@ def _install_legacy_admin_route_wiring(
     if include_count != 0:
         raise CloudDeployError("nginx_admin_route_wiring_invalid")
 
-    migrated, legacy_payload = _legacy_admin_route_payload(source)
+    migrated, legacy_payload = _legacy_admin_route_payload(guarded_source)
     backup = STATE_ROOT / "nginx-pre-v1.conf"
     if backup.exists():
         try:
@@ -1711,6 +1722,25 @@ def _install_legacy_admin_route_wiring(
                 code="nginx_restore_failed",
             )
         raise
+
+
+def _with_login_http_limits(source: bytes) -> bytes:
+    """Install login limit zones at the conf.d/http level, never in a server include."""
+
+    try:
+        text = source.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        raise CloudDeployError("nginx_server_configuration_invalid") from None
+    request_zone = "zone=ecorex_session_login_per_ip:10m"
+    connection_zone = "zone=ecorex_session_login_conn_per_ip:10m"
+    expected = NGINX_LOGIN_HTTP_LIMITS
+    if text.startswith(expected):
+        if text.count(request_zone) != 1 or text.count(connection_zone) != 1:
+            raise CloudDeployError("nginx_login_limit_wiring_invalid")
+        return source
+    if request_zone in text or connection_zone in text:
+        raise CloudDeployError("nginx_login_limit_wiring_invalid")
+    return (expected + text).encode("utf-8")
 
 
 def _install_deployment_templates(spec: CloudDeploymentSpec, release: Path) -> None:
@@ -2417,6 +2447,29 @@ def _legacy_target_environment(slot: str) -> tuple[Path, bytes, dict[str, str]]:
     return target, key, environment
 
 
+def _commit_legacy_password_credentials(slot: str) -> None:
+    """Merge legacy password hashes into already-existing live v1 accounts.
+
+    This import is intentionally independent from the first-install Admin
+    importer: upgrades from an occupied v1 database must gain credentials
+    without recreating users, while deleted legacy accounts must stay deleted.
+    """
+
+    if not LEGACY_ADMIN_DATABASE_PATH.exists():
+        return
+    if LEGACY_ADMIN_DATABASE_PATH.is_symlink():
+        raise CloudDeployError("legacy_password_import_failed")
+    target, _key, _environment = _legacy_target_environment(slot)
+    try:
+        import_v0292_password_credentials(
+            LEGACY_ADMIN_DATABASE_PATH,
+            target,
+            dry_run=False,
+        )
+    except LegacyPasswordCredentialImportError:
+        raise CloudDeployError("legacy_password_import_failed") from None
+
+
 def _legacy_identity_payload(records: Sequence[Mapping[str, object]]) -> bytes:
     payload = b"".join(_canonical_json(dict(record)) + b"\n" for record in records)
     if len(payload) > 8 * 1024 * 1024 or len(records) > 100_000:
@@ -2504,6 +2557,9 @@ def _commit_legacy_admin_and_identity(
         or report.import_receipt_sha256 != contract["import_receipt_sha256"]
     ):
         raise CloudDeployError("legacy_admin_migration_identity_changed")
+    # The first-install importer creates the target users in the operation
+    # above. A second idempotent password pass can now attach credentials.
+    _commit_legacy_password_credentials(slot)
     _ensure_configured_deployment_platform_admin(
         target,
         encryption_key=key,
@@ -2701,6 +2757,9 @@ def _ensure_activation_schema_ready(
         else _verify_transition_release(spec, target_state)
     )
     _schema_gate(release, str(target_state["active_slot"]))
+    # This also runs on v1-to-v1 upgrades whose target database already has
+    # business data and therefore cannot use the full legacy importer.
+    _commit_legacy_password_credentials(str(target_state["active_slot"]))
     effective, records = _prepare_legacy_import_contract(effective)
     if effective.get("legacy_admin_migration") is not None:
         _commit_legacy_admin_and_identity(

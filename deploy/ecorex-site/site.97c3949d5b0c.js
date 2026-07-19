@@ -443,12 +443,12 @@ function shortSha(value) {
 
 function cardCopy(artifact) {
   if (artifact.artifactId === "bootstrap-windows-x64") {
-    return ["Win", "Windows x64", "Windows 10/11 x64 的签名 Bootstrap。"];
+    return ["Win", "Windows x64", "适用于 Windows 10/11 的 64 位电脑。"];
   }
   if (artifact.artifactId === "bootstrap-macos-arm64") {
-    return ["Mac", "macOS Apple Silicon", "M 系列 Mac 的签名 Bootstrap。"];
+    return ["Mac", "macOS Apple Silicon", "适用于配备 Apple 芯片的 Mac。"];
   }
-  return ["Mac", "macOS Intel", "Intel Mac 的签名 Bootstrap。"];
+  return ["Mac", "macOS Intel", "适用于配备 Intel 芯片的 Mac。"];
 }
 
 function powershellLiteral(value) {
@@ -529,38 +529,47 @@ function appendTerminalCommand(article, artifact) {
   article.append(block);
 }
 
-function renderArtifactCard(grid, release, artifact, recommended) {
-  const [icon, title, body] = cardCopy(artifact);
-  const article = createElement("article", `download-card${recommended ? " is-recommended" : ""}`);
-  if (recommended) article.append(createElement("span", "recommend-badge", "当前设备"));
-  article.append(createElement("span", "platform-icon", icon));
-  article.append(createElement("h3", "", title));
-  article.append(createElement("small", "card-version", `v${release.version}`));
-  article.append(createElement("p", "", `${body} 启动后会先验签发布清单，再安装 Core。`));
+function appendInstallSteps(article) {
+  const steps = createElement("ol", "card-install-steps");
+  [
+    ["下载", "保存 EcoreX 压缩包"],
+    ["解压", "打开压缩包并解压"],
+    ["双击 EcoreX Installer", "它就在解压后的第一层，按提示完成安装"],
+  ].forEach(([title, description]) => {
+    const item = createElement("li");
+    item.append(createElement("strong", "", title));
+    item.append(createElement("span", "", description));
+    steps.append(item);
+  });
+  article.append(steps);
   article.append(createElement(
     "p",
-    "progress-promise",
-    "安装过程持续显示当前阶段、下载百分比、实时速度和预计剩余时间。",
+    "install-result",
+    "安装完成后会自动打开 EcoreX，并在桌面创建 EcoreX 快捷方式。",
+  ));
+}
+
+function appendDownloadHelp(article, artifact) {
+  const details = createElement("details", "download-help");
+  details.append(createElement("summary", "", "下载遇到问题"));
+  details.append(createElement(
+    "p",
+    "download-help-intro",
+    "直接下载无法完成时，可以复制下面的命令重试；命令会自动切换备用线路并核对文件。",
   ));
 
   const meta = createElement("div", "meta");
-  meta.append(createElement("span", "", formatSize(artifact.sizeBytes)));
-  const digest = createElement("span", "", `SHA-256 提示: ${shortSha(artifact.sha256)}`);
+  meta.append(createElement("span", "", `文件大小: ${formatSize(artifact.sizeBytes)}`));
+  const digest = createElement("span", "", `SHA-256: ${shortSha(artifact.sha256)}`);
   digest.title = artifact.sha256;
   meta.append(digest);
-  meta.append(createElement("span", "", `Ed25519 key hint: ${artifact.signature.keyId}`));
-  article.append(meta);
-
-  const primary = createElement("a", "download-link", "下载 Bootstrap（启动后验签）");
-  primary.href = artifact.sources[0].url;
-  primary.rel = "noopener noreferrer";
-  primary.download = artifact.fileName;
-  article.append(primary);
-  appendTerminalCommand(article, artifact);
+  meta.append(createElement("span", "", `Ed25519 key: ${artifact.signature.keyId}`));
+  details.append(meta);
+  appendTerminalCommand(details, artifact);
 
   if (artifact.sources.length > 1) {
-    const details = createElement("details", "source-fallbacks");
-    details.append(createElement("summary", "", "备用下载源"));
+    const fallbacks = createElement("div", "source-fallbacks");
+    fallbacks.append(createElement("strong", "", "备用下载源"));
     const sourceLabels = {
       "github-cn-mirror": "国内 GitHub 镜像",
       "github-release": "GitHub Releases",
@@ -571,10 +580,29 @@ function renderArtifactCard(grid, release, artifact, recommended) {
       link.href = source.url;
       link.rel = "noopener noreferrer";
       link.download = artifact.fileName;
-      details.append(link);
+      fallbacks.append(link);
     });
-    article.append(details);
+    details.append(fallbacks);
   }
+  article.append(details);
+}
+
+function renderArtifactCard(grid, release, artifact, recommended) {
+  const [icon, title, body] = cardCopy(artifact);
+  const article = createElement("article", `download-card${recommended ? " is-recommended" : ""}`);
+  if (recommended) article.append(createElement("span", "recommend-badge", "当前设备"));
+  article.append(createElement("span", "platform-icon", icon));
+  article.append(createElement("h3", "", title));
+  article.append(createElement("small", "card-version", `v${release.version}`));
+  article.append(createElement("p", "", body));
+  appendInstallSteps(article);
+
+  const primary = createElement("a", "download-link", "下载 EcoreX");
+  primary.href = artifact.sources[0].url;
+  primary.rel = "noopener noreferrer";
+  primary.download = artifact.fileName;
+  article.append(primary);
+  appendDownloadHelp(article, artifact);
   grid.append(article);
 }
 
@@ -585,8 +613,8 @@ function renderIndex(index, manifestCheck = null) {
   if (index.status !== "published") {
     const card = createElement("article", "download-card");
     card.append(createElement("span", "platform-icon", "···"));
-    card.append(createElement("h3", "", "v1.0 Bootstrap 尚未发布"));
-    card.append(createElement("p", "", "三平台制品通过签名与一致性门禁后，下载才会开启。"));
+    card.append(createElement("h3", "", "EcoreX 正在准备中"));
+    card.append(createElement("p", "", "正式版本准备好后，Windows 和 Mac 下载会在这里开放。"));
     card.append(createElement("span", "download-link is-disabled", "不可下载"));
     grid.append(card);
     return;
@@ -645,9 +673,17 @@ function renderFailure(error) {
   grid.replaceChildren();
   const card = createElement("article", "download-card");
   card.append(createElement("span", "platform-icon", "!"));
-  card.append(createElement("h3", "", "发布索引不可用"));
-  card.append(createElement("p", "", error instanceof Error ? error.message : "请稍后刷新。"));
+  card.append(createElement("h3", "", "暂时无法下载"));
+  card.append(createElement("p", "", "下载信息暂时没有准备好，请稍后刷新页面。"));
   card.append(createElement("span", "download-link is-disabled", "不可下载"));
+  const details = createElement("details", "download-help");
+  details.append(createElement("summary", "", "下载遇到问题"));
+  details.append(createElement(
+    "p",
+    "download-error-detail",
+    error instanceof Error ? error.message : "请稍后刷新。",
+  ));
+  card.append(details);
   grid.append(card);
 }
 

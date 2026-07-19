@@ -76,6 +76,18 @@ class AuthorizingBroker:
         self.poll_calls += 1
         return BrokerPollResult(BrokerPollStatus.AUTHORIZED, grant=self.grant)
 
+    async def login(
+        self,
+        *,
+        identifier: str,
+        password: str,
+        idempotency_key: str,
+    ) -> BrokerDeviceGrant:
+        assert identifier == "user@example.com"
+        assert password == "abcd1234"
+        assert idempotency_key.startswith("password-login:")
+        return self.grant
+
 
 def _signed_lease(
     private_key: Ed25519PrivateKey,
@@ -149,8 +161,9 @@ def _create_product_runtime(
     reloads: list[str],
     registration_recorder=None,
     runtime_ready_recorder=None,
+    runtime_secrets: tuple[str, str] = (RUNTIME_BEARER, CSRF_TOKEN),
 ):
-    generated_secrets = iter((RUNTIME_BEARER, CSRF_TOKEN))
+    generated_secrets = iter(runtime_secrets)
     settings = ProductServerSettings(
         database_path=tmp_path / "runtime.db",
         web_root=tmp_path,
@@ -178,6 +191,108 @@ def _create_product_runtime(
         return_value=verified_bundle,
     ):
         return create_product_app(settings)
+
+
+def test_password_login_is_exactly_allowlisted_and_process_secrets_rotate(
+    tmp_path,
+) -> None:
+    database, vault, session, broker, device = _authorization_services(tmp_path)
+    reloads: list[str] = []
+    first = _create_product_runtime(
+        tmp_path,
+        session=session,
+        device=device,
+        reloads=reloads,
+    )
+    first_client = TestClient(first, base_url=ORIGIN)
+    payload = {
+        "identifier": "user@example.com",
+        "password": "abcd1234",
+        "client_request_id": "password-login-request-0001",
+    }
+
+    assert first_client.post(
+        "/api/v1/session/login",
+        json=payload,
+        headers=_headers(bearer="wrong-" + "x" * 40, mutation=True),
+    ).status_code == 401
+    assert first_client.post(
+        "/api/v1/session/login",
+        json=payload,
+        headers=_headers(origin="http://localhost:8765", mutation=True),
+    ).status_code == 403
+    assert first_client.post(
+        "/api/v1/session/login",
+        json=payload,
+        headers=_headers(csrf="wrong-" + "x" * 40, mutation=True),
+    ).status_code == 403
+
+    logged_in = first_client.post(
+        "/api/v1/session/login",
+        json=payload,
+        headers=_headers(mutation=True),
+    )
+    assert logged_in.status_code == 200
+    assert logged_in.json()["restart_scheduled"] is True
+    assert reloads == [f"session-login:{logged_in.json()['generation']}"]
+
+    # The original process still recognizes its bearer but is restart-fenced.
+    old_process = first_client.get("/api/v1/bootstrap", headers=_headers())
+    assert old_process.status_code == 409
+    assert old_process.json()["detail"]["code"] == "managed_session_restart_required"
+    first.state.runtime_execution_gate.mark_critical(
+        error_code="test_password_login_execution_gate"
+    )
+    gated = first_client.post(
+        "/api/v1/session/login",
+        json=payload,
+        headers=_headers(mutation=True),
+    )
+    assert gated.status_code == 503
+    assert gated.json()["code"] == "RUNTIME_READ_ONLY"
+
+    new_bearer = "runtime-rotated-bearer-" + "n" * 32
+    new_csrf = "runtime-rotated-csrf-" + "s" * 32
+    restarted_device = ManagedDeviceAuthorizationService(
+        database,
+        session=session,
+        vault=vault,
+        broker=broker,
+        clock=broker.clock,
+    )
+    second = _create_product_runtime(
+        tmp_path,
+        session=session,
+        device=restarted_device,
+        reloads=[],
+        runtime_secrets=(new_bearer, new_csrf),
+    )
+    second_client = TestClient(second, base_url=ORIGIN)
+
+    # A real second Runtime process has a different bearer/CSRF pair. The old
+    # immutable browser client therefore receives 401 and knows to reload.
+    rotated = second_client.get("/api/v1/bootstrap", headers=_headers())
+    assert rotated.status_code == 401
+    fresh = second_client.get(
+        "/api/v1/bootstrap",
+        headers={"Authorization": f"Bearer {new_bearer}"},
+    )
+    assert fresh.status_code == 200
+    assert fresh.json()["login"]["authenticated"] is True
+    stale_csrf = second_client.post(
+        "/api/v1/session/logout",
+        json={
+            "lease_digest": fresh.json()["login"]["session_lease_digest"],
+            "client_request_id": "rotated-csrf-check-0001",
+            "confirmed": True,
+        },
+        headers={
+            "Authorization": f"Bearer {new_bearer}",
+            "Origin": ORIGIN,
+            "X-EcoreX-CSRF": CSRF_TOKEN,
+        },
+    )
+    assert stale_csrf.status_code == 403
 
 
 def _headers(

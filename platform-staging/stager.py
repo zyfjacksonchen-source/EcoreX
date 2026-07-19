@@ -2754,6 +2754,25 @@ def _build_bootstrap(
         raise StageError("bootstrap_size_limit")
     if platform != "windows":
         binary.chmod(0o755)
+    installer_name = (
+        "EcoreX Installer.cmd"
+        if platform == "windows"
+        else "EcoreX Installer.command"
+    )
+    installer = destination / installer_name
+    if platform == "windows":
+        installer.write_bytes(
+            b"@echo off\r\n"
+            b"\"%~dp0bin\\ecorex-bootstrap.exe\" %*\r\n"
+            b"exit /b %errorlevel%\r\n"
+        )
+    else:
+        installer.write_bytes(
+            b"#!/bin/sh\n"
+            b"BASE_DIR=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
+            b"exec \"$BASE_DIR/bin/ecorex-bootstrap\" \"$@\"\n"
+        )
+        installer.chmod(0o755)
     config = {
         "schema_version": 1,
         "public_index_url": public_index_url,
@@ -2795,6 +2814,8 @@ def _build_bootstrap(
         {
             "entrypoint_sha256": _sha256(binary),
             "entrypoint_size_bytes": binary.stat().st_size,
+            "installer_entry": installer_name,
+            "installer_entry_sha256": _sha256(installer),
             "sandbox_helper_sha256": sandbox_helper_sha256 or None,
             "release_keys_sha256": release_keys_sha256,
             "public_index_url_sha256": public_index_url_sha256,

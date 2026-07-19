@@ -58,6 +58,14 @@ def __getattr__(name: str):
         from . import legacy_admin_management
 
         return getattr(legacy_admin_management, name)
+    if name in {
+        "LegacyPasswordCredentialImportError",
+        "LegacyPasswordCredentialImportReport",
+        "import_v0292_password_credentials",
+    }:
+        from . import legacy_password_credentials
+
+        return getattr(legacy_password_credentials, name)
     raise AttributeError(name)
 
 __all__ = [
@@ -71,6 +79,8 @@ __all__ = [
     "LegacyIdentityExportReport",
     "LegacyAdminManagementImportError",
     "LegacyAdminManagementImportReport",
+    "LegacyPasswordCredentialImportError",
+    "LegacyPasswordCredentialImportReport",
     "MigrationError",
     "MigrationOptions",
     "MigrationReport",
@@ -99,6 +109,7 @@ __all__ = [
     "inventory_source",
     "export_v0292_legacy_identities",
     "import_v0292_admin_management",
+    "import_v0292_password_credentials",
     "load_quarantine_key",
     "migrate_legacy_to_v1",
     "migrate_v030_to_v1",

@@ -41,7 +41,7 @@ const FEATURES = [
   "ShareDialog",
 ];
 const WORKSPACE_FEATURES = ["SkillsWorkspace"];
-const INLINE_FEATURES = ["DeviceLoginCard", "InteractionStack"];
+const INLINE_FEATURES = ["InteractionStack"];
 
 test("low-frequency features are dynamic imports behind persistent Suspense boundaries", () => {
   for (const feature of FEATURES) {
@@ -66,7 +66,7 @@ test("secondary workspaces are deferred without being presented as modal dialogs
   assert.doesNotMatch(app, /<ExtensionManagerDialog/u);
 });
 
-test("login and HITL code stay deferred but keep an inline accessible fallback", () => {
+test("the account gate is immediate while HITL stays deferred with an accessible fallback", () => {
   for (const feature of INLINE_FEATURES) {
     assert.doesNotMatch(app, new RegExp(`import\\s*\\{[^}]*${feature}[^}]*\\}\\s*from`, "u"));
     assert.match(app, new RegExp(`load${feature} = \\(\\) => import\\("\\./components/${feature}\\.tsx"\\)`, "u"));
@@ -75,6 +75,9 @@ test("login and HITL code stay deferred but keep an inline accessible fallback",
   assert.match(app, /<Suspense fallback=/u);
   assert.match(app, /aria-live="polite"/u);
   assert.match(app, /aria-busy="true"/u);
+  assert.match(app, /import \{ LoginPage \} from "\.\/components\/LoginPage\.tsx"/u);
+  assert.match(app, /if \(bootstrap && !authenticated\)[\s\S]*<LoginPage/u);
+  assert.doesNotMatch(app, /DeviceLoginCard|loadDeviceLoginCard/u);
 });
 
 test("connector management is deferred with a visible composer fallback", () => {

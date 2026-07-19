@@ -244,7 +244,7 @@
             <form class="rollout-form" id="rollback-form" novalidate>
               <label for="rollback-source-release-id">
                 <span>当前 Release ID</span>
-                <input id="rollback-source-release-id" type="text" maxlength="128" placeholder="例如 release-1.0.4-stable" required>
+                <input id="rollback-source-release-id" type="text" maxlength="128" placeholder="例如 release-1.0.5-stable" required>
               </label>
               <label for="rollback-target-release-id">
                 <span>已知良好目标</span>
@@ -362,6 +362,12 @@
           <label for="user-status"><span>状态</span><select id="user-status"><option value="active">正常</option><option value="suspended">已停用</option></select></label>
           <label for="user-token-limit"><span>Token 额度</span><input id="user-token-limit" type="number" min="0" max="1000000000000" required></label>
           <label for="user-image-limit"><span>图片额度</span><input id="user-image-limit" type="number" min="0" max="1000000000" required></label>
+          <label class="span-all" for="user-password">
+            <span id="user-password-label">初始密码</span>
+            <input id="user-password" type="password" autocomplete="new-password" minlength="10" maxlength="256" aria-describedby="user-password-help" required>
+            <small id="user-password-help">至少 10 位。创建后用户可直接使用账号或邮箱登录。</small>
+          </label>
+          <p class="field-help span-all" id="user-credential-status" aria-live="polite">尚未创建登录凭据。</p>
         </div>
         <div class="dialog-actions"><button class="button" id="user-cancel-button" type="button">取消</button><button class="button primary" id="user-save-button" type="submit">保存用户</button></div>
       </form>

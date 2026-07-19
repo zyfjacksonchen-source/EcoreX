@@ -617,6 +617,44 @@ class ManagedSessionRepository:
                 already_applied=False,
             )
 
+    def record_remote_logout_state(
+        self,
+        *,
+        client_request_hash: str,
+        expected_lease_digest: str,
+        state_name: str,
+        reason_code: str | None,
+        now: str,
+    ) -> None:
+        _digest(client_request_hash, "client request hash")
+        _digest(expected_lease_digest, "expected lease digest")
+        if state_name not in {"remote_revocation_pending", "remote_revoked"}:
+            raise ValueError("remote logout state is invalid")
+        with self.database.transaction() as connection:
+            state = self._state(connection)
+            if state.active_intent_id is None:
+                raise StaleSessionRequest("logout target is no longer active")
+            active = self._get_intent(connection, state.active_intent_id)
+            if active.lease_digest != expected_lease_digest:
+                raise StaleSessionRequest("logout target is no longer active")
+            self._append_audit(
+                connection,
+                event_type=f"session.logout.{state_name}",
+                outcome=(
+                    "uncertain"
+                    if state_name == "remote_revocation_pending"
+                    else "confirmed"
+                ),
+                reason_code=reason_code,
+                client_request_hash=client_request_hash,
+                lease=active.lease,
+                generation=state.generation,
+                details={
+                    "remote_confirmed": state_name == "remote_revoked",
+                },
+                now=now,
+            )
+
     def cleanup_pending(self) -> tuple[str, ...]:
         with self.database.reader() as connection:
             rows = connection.execute(

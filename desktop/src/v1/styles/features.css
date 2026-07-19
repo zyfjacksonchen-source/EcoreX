@@ -2,16 +2,19 @@
 /* Hallmark · pre-emit critique: P5 H5 E5 S5 R5 V4 */
 
 .ex-workspace.is-skills {
-  display: block;
-  overflow: auto;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  overflow: clip;
 }
 
 .ex-skills-workspace {
   width: min(1180px, 100%);
+  height: 100%;
   min-height: 100%;
   margin-inline: auto;
   padding: var(--space-6) var(--space-8) var(--space-10);
   color: var(--color-ink);
+  overflow: auto;
 }
 
 .ex-skills-header {
@@ -639,128 +642,10 @@
   line-height: var(--text-ui-line);
 }
 
-.ex-device-login {
-  min-height: 40px;
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid var(--color-rule-strong);
-  display: grid;
-  grid-template-columns: var(--icon-size-lg) minmax(0, 1fr);
-  gap: var(--space-3);
-  color: var(--color-ink);
-  background: var(--color-raised);
-}
-
-.ex-device-login.is-loading {
-  grid-template-columns: minmax(0, 1fr);
-  color: var(--color-ink-muted);
-  font-size: var(--text-ui-size);
-  line-height: var(--text-ui-line);
-}
-
-.ex-device-login > svg {
-  width: var(--icon-size-lg);
-  height: var(--icon-size-lg);
-  color: var(--color-warning);
-}
-
-.ex-device-login strong,
-.ex-device-login p {
-  display: block;
-  margin: 0;
-}
-
-.ex-device-login-body > p {
-  margin-top: var(--space-1);
-  color: var(--color-ink-muted);
-  font-size: var(--text-caption-size);
-  line-height: var(--text-caption-line);
-}
-
-.ex-device-login-body > .ex-button,
-.ex-device-login-actions {
-  margin-top: var(--space-3);
-}
-
-.ex-device-login-code {
-  margin-top: var(--space-3);
-  display: grid;
-  gap: var(--space-1);
-}
-
-.ex-device-login-code > span {
-  color: var(--color-ink-subtle);
-  font-size: var(--text-caption-size);
-  line-height: var(--text-caption-line);
-}
-
-.ex-device-login-code code {
-  width: max-content;
-  max-width: 100%;
-  border: 1px solid var(--color-rule-strong);
-  border-radius: var(--radius-control);
-  padding: var(--space-2) var(--space-3);
-  color: var(--color-ink);
-  background: var(--color-surface);
-  font-family: var(--font-mono);
-  font-size: var(--text-title-size);
-  line-height: var(--text-title-line);
-  font-variant-numeric: tabular-nums;
-  user-select: all;
-  overflow-wrap: anywhere;
-}
-
-.ex-device-login-actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.ex-device-login-actions a {
-  text-decoration: none;
-}
-
-.ex-device-login-terminal {
-  margin-top: var(--space-3);
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-2);
-}
-
-.ex-device-login-terminal > svg {
-  width: var(--icon-size-lg);
-  height: var(--icon-size-lg);
-  color: var(--color-success);
-  flex: none;
-}
-
-.ex-device-login-terminal p,
-.ex-device-login-error {
-  color: var(--color-ink-muted);
-  font-size: var(--text-caption-size);
-  line-height: var(--text-caption-line);
-}
-
-.ex-device-login-terminal.is-error {
-  justify-content: space-between;
-}
-
-.ex-device-login-body > .ex-device-login-error {
-  margin-top: var(--space-2);
-  color: var(--color-danger);
-}
-
-@media (max-width: 639px) {
-  .ex-device-login-actions,
-  .ex-device-login-terminal.is-error {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .ex-device-login-actions > *,
-  .ex-device-login-terminal.is-error .ex-button {
-    width: 100%;
-  }
+.ex-update-banner > span,
+.ex-error-banner > span {
+  min-width: 0;
+  flex: 1;
 }
 
 .ex-error-banner {
@@ -1429,9 +1314,16 @@
 }
 
 .ex-interaction-stack {
+  grid-row: 1;
   width: min(820px, calc(100% - var(--space-8)));
+  min-height: 0;
   margin: 0 auto;
+  padding-top: var(--space-2);
   padding-bottom: var(--space-3);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
 
 .ex-interaction-stack.is-loading {
@@ -1601,6 +1493,9 @@
 }
 
 .ex-composer-region {
+  grid-row: 2;
+  min-width: 0;
+  flex: none;
   padding: var(--space-2) var(--space-4) var(--space-2);
   background: var(--color-workspace-surface);
 }

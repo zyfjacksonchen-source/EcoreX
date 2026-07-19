@@ -9,6 +9,8 @@ from fastapi import APIRouter, HTTPException
 
 from ecorex.protocol import (
     DeviceLoginProjection,
+    PasswordSessionLoginRequest,
+    PasswordSessionLoginResponse,
     PollDeviceLoginRequest,
     StartDeviceLoginRequest,
 )
@@ -17,6 +19,7 @@ from .device import (
     DeviceAuthorizationConflict,
     DeviceAuthorizationNotFound,
     DeviceAuthorizationSupervisor,
+    DeviceAuthorizationUnauthorized,
     DeviceAuthorizationUnavailable,
     DeviceFlowProjection,
     DeviceFlowStatus,
@@ -56,6 +59,85 @@ def create_device_authorization_router(
     if reload_requester is not None and not callable(reload_requester):
         raise TypeError("device login reload requester must be callable")
     router = APIRouter(tags=["managed-session"])
+
+    @router.post(
+        "/session/login",
+        response_model=PasswordSessionLoginResponse,
+    )
+    async def password_login(
+        request: PasswordSessionLoginRequest,
+    ) -> PasswordSessionLoginResponse:
+        try:
+            already_authenticated = await asyncio.wait_for(
+                asyncio.to_thread(authenticated),
+                timeout=5,
+            )
+        except TimeoutError:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "session_state_unavailable"},
+            ) from None
+        if already_authenticated:
+            try:
+                snapshot = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        service.read_committed_password_login,
+                        client_request_id=request.client_request_id,
+                    ),
+                    timeout=5,
+                )
+            except TimeoutError:
+                raise HTTPException(
+                    status_code=503,
+                    detail={"code": "session_state_unavailable"},
+                ) from None
+            if snapshot is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "session_already_authenticated"},
+                )
+        else:
+            password = request.password.get_secret_value()
+            try:
+                snapshot = await service.login(
+                    identifier=request.identifier,
+                    password=password,
+                    client_request_id=request.client_request_id,
+                )
+            except DeviceAuthorizationUnauthorized as error:
+                raise HTTPException(
+                    status_code=401,
+                    detail={"code": error.code, "message": "account login failed"},
+                ) from None
+            except DeviceAuthorizationUnavailable as error:
+                raise HTTPException(
+                    status_code=503,
+                    detail={"code": error.code},
+                ) from None
+            finally:
+                password = ""
+        restart_scheduled = False
+        if reload_requester is not None:
+            try:
+                restart_scheduled = bool(
+                    await asyncio.wait_for(
+                        asyncio.to_thread(
+                            reload_requester,
+                            f"session-login:{snapshot.generation}",
+                        ),
+                        timeout=5,
+                    )
+                )
+            except Exception:
+                # The signed session is already durably committed. Reload
+                # scheduling is best-effort and must never turn that success
+                # into a misleading login failure.
+                restart_scheduled = False
+        return PasswordSessionLoginResponse(
+            display_name=snapshot.display_name,
+            generation=snapshot.generation,
+            restart_scheduled=restart_scheduled,
+        )
 
     @router.post(
         "/session/device",

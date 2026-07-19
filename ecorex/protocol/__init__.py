@@ -62,6 +62,8 @@ from .models import (
     LoginSnapshot,
     LogoutSessionRequest,
     LogoutSessionResponse,
+    PasswordSessionLoginRequest,
+    PasswordSessionLoginResponse,
     StartDeviceLoginRequest,
     PollDeviceLoginRequest,
     DeviceLoginProjection,

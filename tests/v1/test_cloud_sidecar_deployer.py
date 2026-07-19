@@ -1046,6 +1046,53 @@ def _legacy_nginx_server() -> str:
 """
 
 
+def test_session_login_nginx_limits_have_correct_scope_and_route_contract() -> None:
+    source = _legacy_nginx_server().encode("utf-8")
+    guarded = deployment._with_login_http_limits(source)
+    text = guarded.decode("utf-8")
+    assert text.startswith(deployment.NGINX_LOGIN_HTTP_LIMITS)
+    assert text.index("limit_req_zone ") < text.index("server {")
+    assert text.index("limit_conn_zone ") < text.index("server {")
+    assert deployment._with_login_http_limits(guarded) == guarded
+
+    routes = Path(
+        "deploy/ecorex-cloud-sidecar/nginx/ecorex-cloud.routes.conf"
+    ).read_text(encoding="utf-8")
+    assert routes.count("location = /v1/session/login {") == 1
+    login = routes.split("location = /v1/session/login {", 1)[1].split(
+        "\n}", 1
+    )[0]
+    for directive in (
+        "client_max_body_size 64k;",
+        "limit_except POST { deny all; }",
+        "limit_req zone=ecorex_session_login_per_ip burst=5 nodelay;",
+        "limit_req_status 429;",
+        "limit_conn ecorex_session_login_conn_per_ip 2;",
+        "limit_conn_status 429;",
+        "access_log off;",
+        "proxy_set_header X-Real-IP $remote_addr;",
+        "proxy_set_header X-Forwarded-For $remote_addr;",
+        "proxy_request_buffering off;",
+        "proxy_buffering off;",
+    ):
+        assert directive in login
+    assert "$proxy_add_x_forwarded_for" not in login
+    assert "limit_req_zone " not in routes
+    assert "limit_conn_zone " not in routes
+
+
+def test_session_login_nginx_limit_zone_conflicts_fail_closed() -> None:
+    conflicting = (
+        "limit_req_zone $binary_remote_addr "
+        "zone=ecorex_session_login_per_ip:10m rate=999r/s;\nserver {}\n"
+    ).encode("utf-8")
+    with pytest.raises(
+        deployment.CloudDeployError,
+        match="nginx_login_limit_wiring_invalid",
+    ):
+        deployment._with_login_http_limits(conflicting)
+
+
 @pytest.mark.skipif(os.name == "nt", reason="requires production-style symlinks")
 def test_legacy_admin_routes_move_behind_reversible_include(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

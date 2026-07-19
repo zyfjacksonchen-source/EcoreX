@@ -4,14 +4,14 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta http-equiv="Cache-Control" content="no-store" />
-    <title>EcoreX WebUI 下载与安装</title>
+    <title>EcoreX 下载与安装</title>
     <meta
       name="description"
-      content="EcoreX WebUI 面向 Windows 与 macOS 的官方下载与安装入口。"
+      content="EcoreX 面向 Windows 与 macOS 的官方下载与安装入口。"
     />
     <link rel="icon" href="./assets/icon.3a9a24c09a41.png" />
     <link rel="preload" as="image" href="./assets/ecorex-app-preview.6b606a2eecd4.png" />
-    <link rel="stylesheet" href="./styles.04919747ac4d.css" />
+    <link rel="stylesheet" href="./styles.4eddf337e330.css" />
   </head>
   <body>
     <div class="page-shell">
@@ -33,14 +33,14 @@
       </header>
 
       <main>
-        <section class="hero" aria-label="EcoreX WebUI">
-          <img class="hero-media" src="./assets/ecorex-app-preview.6b606a2eecd4.png" alt="EcoreX WebUI 界面预览" />
+        <section class="hero" aria-label="EcoreX">
+          <img class="hero-media" src="./assets/ecorex-app-preview.6b606a2eecd4.png" alt="EcoreX 界面预览" />
           <div class="hero-copy">
-            <p class="eyebrow">EcoreX WebUI</p>
+            <p class="eyebrow">EcoreX</p>
             <h1>EcoreX</h1>
             <p class="lead">
-              Windows 与 macOS 统一使用本地 WebUI。下载对应系统的安装程序，
-              打开后即可完成安装；以后的版本由 EcoreX 在后台下载，确认后刷新使用。
+              下载与你的电脑匹配的 EcoreX，解压后双击根目录里的 EcoreX Installer 即可开始使用。
+              安装完成后会自动打开，并在桌面创建 EcoreX 快捷方式。
             </p>
             <div class="hero-actions">
               <a class="button primary" href="#install-guide">查看安装步骤</a>
@@ -55,8 +55,8 @@
             <strong data-version>尚未发布</strong>
           </div>
           <div>
-            <span>默认入口</span>
-            <strong>WebUI</strong>
+            <span>打开方式</span>
+            <strong>桌面快捷方式</strong>
           </div>
           <div>
             <span>支持系统</span>
@@ -68,7 +68,7 @@
           </div>
         </section>
 
-        <section class="install-guide" id="install-guide" aria-label="如何安装 EcoreX WebUI">
+        <section class="install-guide" id="install-guide" aria-label="如何安装 EcoreX">
           <div class="section-heading">
             <p class="eyebrow">How to install</p>
             <h2>Windows / macOS 安装指南</h2>
@@ -77,17 +77,17 @@
             <article class="guide-panel">
               <h3>首次安装</h3>
               <ol class="guide-steps">
-                <li><strong>选择对应系统</strong><span>Windows 用户选择 Windows x64；Mac 用户按芯片选择 Apple Silicon 或 Intel。</span></li>
-                <li><strong>下载并打开</strong><span>终端会持续显示当前阶段、百分比、实时速度和预计剩余时间，并自动完成校验与安装。</span></li>
-                <li><strong>开始使用</strong><span>安装完成后会自动打开浏览器中的 EcoreX；以后也可以从本机入口再次打开。</span></li>
+                <li><strong>下载</strong><span>选择与你的 Windows 或 Mac 电脑匹配的版本。</span></li>
+                <li><strong>解压</strong><span>下载完成后，打开压缩包并解压到本机。</span></li>
+                <li><strong>双击 EcoreX Installer</strong><span>它就在解压后的第一层；安装完成后会自动打开 EcoreX，并在桌面创建快捷方式。</span></li>
               </ol>
             </article>
             <article class="guide-panel">
               <h3>关闭后重新打开</h3>
               <ol class="guide-steps">
-                <li><strong>使用本机入口</strong><span>打开 EcoreX 入口会先恢复本地服务，再进入浏览器中的工作区。</span></li>
+                <li><strong>双击桌面 EcoreX</strong><span>关闭网页后，随时可以通过桌面快捷方式重新打开。</span></li>
                 <li><strong>页面地址保持不变</strong><span>项目、会话和产物仍保存在本机，不会因为关闭页面而丢失。</span></li>
-                <li><strong>入口异常时重新安装</strong><span>重新运行同平台 Bootstrap 会修复本地入口，并保留已有用户数据。</span></li>
+                <li><strong>打不开时重新安装</strong><span>再次运行同一安装程序即可修复桌面快捷方式，并保留已有用户数据。</span></li>
               </ol>
             </article>
             <article class="guide-panel">
@@ -100,12 +100,12 @@
             </article>
           </div>
           <p class="trust-note">
-            安装程序会校验发布清单和文件摘要，下载页只负责提供当前正式版本。
-            <a data-manifest-link hidden rel="noopener noreferrer">查看签名发布清单</a>
+            安装程序会自动检查下载文件是否完整，下载页只提供当前正式版本。
+            <a data-manifest-link hidden rel="noopener noreferrer">查看发布信息</a>
           </p>
         </section>
 
-        <section class="downloads" id="download" aria-label="下载 EcoreX Bootstrap">
+        <section class="downloads" id="download" aria-label="下载 EcoreX">
           <div class="section-heading">
             <p class="eyebrow">Install / Update</p>
             <h2>选择你的系统</h2>
@@ -125,19 +125,19 @@
             <p class="eyebrow">Update policy</p>
             <h2>后台下载，用户确认后刷新激活。</h2>
             <div class="feature-list">
-              <span title="用户机器不执行 git pull、npm build 或 pip 在线组装。">预构建签名制品</span>
-              <span title="发布清单、Bootstrap 与 Core 均使用 Ed25519 + SHA-256。">密码学验证</span>
-              <span title="国内 GitHub 镜像为首选；正式发布可配置已验证的备用来源。">国内镜像优先</span>
-              <span title="首装和更新共用 InstallCoordinator 锁与 side-by-side slot。">原子激活与回滚</span>
+              <span title="下载后即可安装，不需要另外准备开发环境。">开箱即用</span>
+              <span title="安装程序会自动检查文件是否完整。">自动检查</span>
+              <span title="优先选择国内可用的下载线路。">国内线路优先</span>
+              <span title="新版本出现问题时会恢复到上一个可用版本。">安全更新</span>
             </div>
           </div>
         </section>
       </main>
 
       <footer class="footer">
-        <span>EcoreX WebUI</span>
+        <span>EcoreX</span>
       </footer>
     </div>
-    <script type="module" src="./site.6d8359867acc.js"></script>
+    <script type="module" src="./site.97c3949d5b0c.js"></script>
   </body>
 </html>

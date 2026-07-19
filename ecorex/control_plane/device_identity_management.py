@@ -67,6 +67,21 @@ class AdminManagementDeviceAccountDirectory:
         request_limit = (
             1_000_000 if user.token_limit == 0 else min(1_000_000, token_remaining)
         )
+        connection = self.repository._connect()
+        try:
+            credential = connection.execute(
+                "SELECT users.status,credentials.credential_version "
+                "FROM admin_ops_users users LEFT JOIN "
+                "admin_ops_password_credentials credentials USING(account_id) "
+                "WHERE users.account_id=?",
+                (user.account_id,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if credential is None:
+            raise DeviceIdentityNotFound("device account does not exist")
+        if credential["status"] != "active":
+            raise DeviceIdentityUnauthorized("device account is suspended")
         return DeviceAccountIdentity(
             account_id=user.account_id,
             organization_id=user.organization_id or f"personal:{user.account_id}",
@@ -85,6 +100,11 @@ class AdminManagementDeviceAccountDirectory:
                 "image_limit": user.image_limit,
                 "images_remaining": image_remaining,
             },
+            auth_epoch=(
+                int(credential["credential_version"])
+                if credential["credential_version"] is not None
+                else 0
+            ),
         )
 
 

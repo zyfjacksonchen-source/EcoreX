@@ -10,8 +10,8 @@ from pathlib import Path
 import sqlite3
 
 
-CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION = 3
-ADMIN_MANAGEMENT_MIGRATION_NAME = "provider-usage-facts"
+CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION = 4
+ADMIN_MANAGEMENT_MIGRATION_NAME = "password-credentials"
 
 _INITIAL_MIGRATION_NAME = "initial-admin-management"
 _INITIAL_MIGRATION_CHECKSUM = (
@@ -260,8 +260,42 @@ BEFORE DELETE ON admin_ops_provider_usage_facts BEGIN
 END;
 """
 
-ADMIN_MANAGEMENT_MIGRATION_CHECKSUM = hashlib.sha256(
+_MIGRATION_V3_CHECKSUM = hashlib.sha256(
     b"ecorex-admin-management-schema-v3\0provider-usage-facts"
+).hexdigest()
+
+ADMIN_MANAGEMENT_SCHEMA_V4_SQL = """
+CREATE TABLE IF NOT EXISTS admin_ops_password_credentials (
+    account_id TEXT PRIMARY KEY REFERENCES admin_ops_users(account_id),
+    algorithm TEXT NOT NULL CHECK(algorithm='pbkdf2_sha256'),
+    encoded_hash TEXT NOT NULL CHECK(length(encoded_hash) BETWEEN 60 AND 256),
+    credential_version INTEGER NOT NULL CHECK(credential_version > 0),
+    source_version TEXT NOT NULL CHECK(source_version IN ('admin','0.2.9.2')),
+    source_record_sha256 TEXT CHECK(
+        source_record_sha256 IS NULL OR length(source_record_sha256)=64
+    ),
+    password_changed_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_ops_password_source_record
+    ON admin_ops_password_credentials(source_record_sha256)
+    WHERE source_record_sha256 IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS admin_ops_password_failures (
+    scope TEXT NOT NULL CHECK(scope IN ('account','ip')),
+    subject_sha256 TEXT NOT NULL CHECK(length(subject_sha256)=64),
+    failed_attempts INTEGER NOT NULL CHECK(failed_attempts >= 0),
+    window_started_at TEXT NOT NULL,
+    locked_until TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(scope,subject_sha256)
+);
+CREATE INDEX IF NOT EXISTS idx_admin_ops_password_failures_lock
+    ON admin_ops_password_failures(locked_until, updated_at);
+"""
+
+ADMIN_MANAGEMENT_MIGRATION_CHECKSUM = hashlib.sha256(
+    b"ecorex-admin-management-schema-v4\0password-credentials"
 ).hexdigest()
 
 
@@ -304,6 +338,7 @@ def _expected_shape() -> str:
         connection.executescript(ADMIN_MANAGEMENT_SCHEMA_SQL)
         connection.executescript(ADMIN_MANAGEMENT_SCHEMA_V2_SQL)
         connection.executescript(ADMIN_MANAGEMENT_SCHEMA_V3_SQL)
+        connection.executescript(ADMIN_MANAGEMENT_SCHEMA_V4_SQL)
         return _managed_shape(connection)
     finally:
         connection.close()
@@ -363,6 +398,7 @@ class AdminManagementSchemaManager:
                         _INITIAL_MIGRATION_CHECKSUM,
                     ),
                     (2, _MIGRATION_V2_NAME, _MIGRATION_V2_CHECKSUM),
+                    (3, "provider-usage-facts", _MIGRATION_V3_CHECKSUM),
                 )
                 if any(
                     tuple(row) != expected_prefix[index]
@@ -405,67 +441,79 @@ class AdminManagementSchemaManager:
                     ") VALUES(2,?,?,?)",
                     (_MIGRATION_V2_NAME, _MIGRATION_V2_CHECKSUM, installed_at),
                 )
-            _execute_sql(connection, ADMIN_MANAGEMENT_SCHEMA_V3_SQL)
-            installed_at = datetime.now(UTC).isoformat()
-            for row in connection.execute(
-                "SELECT account_id,tokens_used,images_used,updated_at "
-                "FROM admin_ops_users WHERE tokens_used > 0 OR images_used > 0 "
-                "ORDER BY account_id"
-            ).fetchall():
-                account_id = str(row[0])
-                input_tokens = 0
-                output_tokens = 0
-                total_tokens = int(row[1])
-                image_count = int(row[2])
-                material = {
-                    "source_service": "legacy_baseline",
-                    "source_id": account_id,
-                    "usage_kind": "baseline",
-                    "account_id": account_id,
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                    "total_tokens": total_tokens,
-                    "image_count": image_count,
-                    "provider_created_at": str(row[3]),
-                }
-                payload = json.dumps(
-                    material,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-                fact_id = "usagefact_" + hashlib.sha256(
-                    b"ecorex-provider-usage-fact-v1\0"
-                    + b"legacy_baseline\0"
-                    + account_id.encode("utf-8")
-                    + b"\0baseline"
-                ).hexdigest()
+            rows = connection.execute(
+                "SELECT version,migration_name,migration_checksum "
+                "FROM admin_ops_schema_migrations ORDER BY version"
+            ).fetchall()
+            if len(rows) == 2:
+                _execute_sql(connection, ADMIN_MANAGEMENT_SCHEMA_V3_SQL)
+                installed_at = datetime.now(UTC).isoformat()
+                for row in connection.execute(
+                    "SELECT account_id,tokens_used,images_used,updated_at "
+                    "FROM admin_ops_users WHERE tokens_used > 0 OR images_used > 0 "
+                    "ORDER BY account_id"
+                ).fetchall():
+                    account_id = str(row[0])
+                    input_tokens = 0
+                    output_tokens = 0
+                    total_tokens = int(row[1])
+                    image_count = int(row[2])
+                    material = {
+                        "source_service": "legacy_baseline",
+                        "source_id": account_id,
+                        "usage_kind": "baseline",
+                        "account_id": account_id,
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "total_tokens": total_tokens,
+                        "image_count": image_count,
+                        "provider_created_at": str(row[3]),
+                    }
+                    payload = json.dumps(
+                        material,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                    fact_id = "usagefact_" + hashlib.sha256(
+                        b"ecorex-provider-usage-fact-v1\0"
+                        + b"legacy_baseline\0"
+                        + account_id.encode("utf-8")
+                        + b"\0baseline"
+                    ).hexdigest()
+                    connection.execute(
+                        "INSERT INTO admin_ops_provider_usage_facts("
+                        "fact_id,source_service,source_id,usage_kind,account_id,"
+                        "input_tokens,output_tokens,total_tokens,image_count,payload_sha256,"
+                        "provider_created_at,recorded_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (
+                            fact_id,
+                            "legacy_baseline",
+                            account_id,
+                            "baseline",
+                            account_id,
+                            input_tokens,
+                            output_tokens,
+                            total_tokens,
+                            image_count,
+                            hashlib.sha256(payload).hexdigest(),
+                            str(row[3]),
+                            installed_at,
+                        ),
+                    )
                 connection.execute(
-                    "INSERT INTO admin_ops_provider_usage_facts("
-                    "fact_id,source_service,source_id,usage_kind,account_id,"
-                    "input_tokens,output_tokens,total_tokens,image_count,payload_sha256,"
-                    "provider_created_at,recorded_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (
-                        fact_id,
-                        "legacy_baseline",
-                        account_id,
-                        "baseline",
-                        account_id,
-                        input_tokens,
-                        output_tokens,
-                        total_tokens,
-                        image_count,
-                        hashlib.sha256(payload).hexdigest(),
-                        str(row[3]),
-                        installed_at,
-                    ),
+                    "INSERT INTO admin_ops_schema_migrations("
+                    "version,migration_name,migration_checksum,installed_at"
+                    ") VALUES(3,'provider-usage-facts',?,?)",
+                    (_MIGRATION_V3_CHECKSUM, installed_at),
                 )
+            _execute_sql(connection, ADMIN_MANAGEMENT_SCHEMA_V4_SQL)
+            installed_at = datetime.now(UTC).isoformat()
             connection.execute(
                 "INSERT INTO admin_ops_schema_migrations("
                 "version,migration_name,migration_checksum,installed_at"
-                ") VALUES(?,?,?,?)",
+                ") VALUES(4,?,?,?)",
                 (
-                    CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION,
                     ADMIN_MANAGEMENT_MIGRATION_NAME,
                     ADMIN_MANAGEMENT_MIGRATION_CHECKSUM,
                     installed_at,
@@ -514,7 +562,7 @@ class AdminManagementSchemaManager:
             raise AdminManagementSchemaError(
                 "admin management schema history is invalid"
             )
-        initial, migration_v2, value = row
+        initial, migration_v2, migration_v3, value = row
         if (
             int(initial[0]) != 1
             or str(initial[1]) != _INITIAL_MIGRATION_NAME
@@ -522,6 +570,9 @@ class AdminManagementSchemaManager:
             or int(migration_v2[0]) != 2
             or str(migration_v2[1]) != _MIGRATION_V2_NAME
             or str(migration_v2[2]) != _MIGRATION_V2_CHECKSUM
+            or int(migration_v3[0]) != 3
+            or str(migration_v3[1]) != "provider-usage-facts"
+            or str(migration_v3[2]) != _MIGRATION_V3_CHECKSUM
             or
             int(value[0]) != CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION
             or str(value[1]) != ADMIN_MANAGEMENT_MIGRATION_NAME
@@ -544,6 +595,7 @@ __all__ = [
     "ADMIN_MANAGEMENT_SCHEMA_SHA256",
     "ADMIN_MANAGEMENT_SCHEMA_V2_SQL",
     "ADMIN_MANAGEMENT_SCHEMA_V3_SQL",
+    "ADMIN_MANAGEMENT_SCHEMA_V4_SQL",
     "AdminManagementSchemaError",
     "AdminManagementSchemaManager",
     "AdminManagementSchemaReceipt",

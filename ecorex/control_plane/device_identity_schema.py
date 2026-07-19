@@ -9,8 +9,9 @@ from pathlib import Path
 import sqlite3
 
 
-CURRENT_DEVICE_IDENTITY_SCHEMA_VERSION = 1
+CURRENT_DEVICE_IDENTITY_SCHEMA_VERSION = 2
 DEVICE_IDENTITY_MIGRATION_NAME = "initial-managed-device-identity"
+DEVICE_IDENTITY_REVOCATION_MIGRATION_NAME = "account-session-revocation"
 
 
 DEVICE_IDENTITY_SCHEMA_SQL = """
@@ -149,8 +150,54 @@ END;
 """
 
 
-DEVICE_IDENTITY_SCHEMA_SHA256 = hashlib.sha256(
+_DEVICE_IDENTITY_SCHEMA_V1_SHA256 = hashlib.sha256(
     DEVICE_IDENTITY_SCHEMA_SQL.encode("utf-8")
+).hexdigest()
+
+DEVICE_IDENTITY_SCHEMA_V2_SQL = """
+CREATE TABLE IF NOT EXISTS device_identity_grant_authority (
+    lease_id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    auth_epoch INTEGER NOT NULL CHECK(auth_epoch >= 0),
+    source_lease_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_device_identity_grant_authority_account
+    ON device_identity_grant_authority(account_id, auth_epoch, created_at);
+CREATE TRIGGER IF NOT EXISTS device_identity_grant_authority_no_update
+BEFORE UPDATE ON device_identity_grant_authority BEGIN
+    SELECT RAISE(ABORT, 'device grant authority is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS device_identity_grant_authority_no_delete
+BEFORE DELETE ON device_identity_grant_authority BEGIN
+    SELECT RAISE(ABORT, 'device grant authority is immutable');
+END;
+
+CREATE TABLE IF NOT EXISTS device_identity_revocations (
+    lease_id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    idempotency_hash TEXT NOT NULL UNIQUE,
+    request_hash TEXT NOT NULL,
+    revoked_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_device_identity_revocations_account
+    ON device_identity_revocations(account_id, revoked_at, lease_id);
+CREATE TRIGGER IF NOT EXISTS device_identity_revocations_no_update
+BEFORE UPDATE ON device_identity_revocations BEGIN
+    SELECT RAISE(ABORT, 'device revocations are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS device_identity_revocations_no_delete
+BEFORE DELETE ON device_identity_revocations BEGIN
+    SELECT RAISE(ABORT, 'device revocations are immutable');
+END;
+"""
+
+_DEVICE_IDENTITY_SCHEMA_V2_SHA256 = hashlib.sha256(
+    b"ecorex-device-identity-schema-v2\0account-session-revocation"
+).hexdigest()
+DEVICE_IDENTITY_SCHEMA_SHA256 = hashlib.sha256(
+    (DEVICE_IDENTITY_SCHEMA_SQL + DEVICE_IDENTITY_SCHEMA_V2_SQL).encode("utf-8")
 ).hexdigest()
 
 
@@ -168,6 +215,7 @@ def _expected_schema_fingerprint() -> str:
     connection = sqlite3.connect(":memory:")
     try:
         connection.executescript(DEVICE_IDENTITY_SCHEMA_SQL)
+        connection.executescript(DEVICE_IDENTITY_SCHEMA_V2_SQL)
         return _schema_fingerprint(connection)
     finally:
         connection.close()
@@ -194,7 +242,11 @@ class DeviceIdentitySchemaManager:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         connection = self._connect()
         try:
-            connection.executescript("BEGIN IMMEDIATE;\n" + DEVICE_IDENTITY_SCHEMA_SQL)
+            connection.executescript(
+                "BEGIN IMMEDIATE;\n"
+                + DEVICE_IDENTITY_SCHEMA_SQL
+                + DEVICE_IDENTITY_SCHEMA_V2_SQL
+            )
             row = connection.execute(
                 "SELECT migration_name,migration_checksum "
                 "FROM device_identity_schema_migrations WHERE version=1"
@@ -206,16 +258,38 @@ class DeviceIdentitySchemaManager:
                     "VALUES(1,?,?,?)",
                     (
                         DEVICE_IDENTITY_MIGRATION_NAME,
-                        DEVICE_IDENTITY_SCHEMA_SHA256,
+                        _DEVICE_IDENTITY_SCHEMA_V1_SHA256,
                         datetime.now(UTC).replace(microsecond=0).isoformat(),
                     ),
                 )
             elif tuple(row) != (
                 DEVICE_IDENTITY_MIGRATION_NAME,
-                DEVICE_IDENTITY_SCHEMA_SHA256,
+                _DEVICE_IDENTITY_SCHEMA_V1_SHA256,
             ):
                 raise DeviceIdentitySchemaError(
                     "device identity migration receipt is incompatible"
+                )
+            revocation = connection.execute(
+                "SELECT migration_name,migration_checksum "
+                "FROM device_identity_schema_migrations WHERE version=2"
+            ).fetchone()
+            if revocation is None:
+                connection.execute(
+                    "INSERT INTO device_identity_schema_migrations("
+                    "version,migration_name,migration_checksum,installed_at) "
+                    "VALUES(2,?,?,?)",
+                    (
+                        DEVICE_IDENTITY_REVOCATION_MIGRATION_NAME,
+                        _DEVICE_IDENTITY_SCHEMA_V2_SHA256,
+                        datetime.now(UTC).replace(microsecond=0).isoformat(),
+                    ),
+                )
+            elif tuple(revocation) != (
+                DEVICE_IDENTITY_REVOCATION_MIGRATION_NAME,
+                _DEVICE_IDENTITY_SCHEMA_V2_SHA256,
+            ):
+                raise DeviceIdentitySchemaError(
+                    "device identity revocation migration receipt is incompatible"
                 )
             connection.commit()
         except BaseException:
@@ -240,10 +314,21 @@ class DeviceIdentitySchemaManager:
             ).fetchone()
             if row is None or tuple(row) != (
                 DEVICE_IDENTITY_MIGRATION_NAME,
-                DEVICE_IDENTITY_SCHEMA_SHA256,
+                _DEVICE_IDENTITY_SCHEMA_V1_SHA256,
             ):
                 raise DeviceIdentitySchemaError(
                     "device identity migration receipt is incompatible"
+                )
+            revocation = connection.execute(
+                "SELECT migration_name,migration_checksum "
+                "FROM device_identity_schema_migrations WHERE version=2"
+            ).fetchone()
+            if revocation is None or tuple(revocation) != (
+                DEVICE_IDENTITY_REVOCATION_MIGRATION_NAME,
+                _DEVICE_IDENTITY_SCHEMA_V2_SHA256,
+            ):
+                raise DeviceIdentitySchemaError(
+                    "device identity revocation migration receipt is incompatible"
                 )
             required = {
                 "device_identity_account_revisions",
@@ -252,6 +337,8 @@ class DeviceIdentitySchemaManager:
                 "device_identity_refresh_grants",
                 "device_identity_legacy_credentials",
                 "device_identity_audit",
+                "device_identity_grant_authority",
+                "device_identity_revocations",
             }
             observed = {
                 str(item[0])
@@ -286,6 +373,7 @@ class DeviceIdentitySchemaManager:
 __all__ = [
     "CURRENT_DEVICE_IDENTITY_SCHEMA_VERSION",
     "DEVICE_IDENTITY_SCHEMA_SHA256",
+    "DEVICE_IDENTITY_SCHEMA_V2_SQL",
     "DEVICE_IDENTITY_OBJECTS_SHA256",
     "DeviceIdentitySchemaError",
     "DeviceIdentitySchemaManager",

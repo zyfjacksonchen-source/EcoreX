@@ -73,6 +73,7 @@ from .device_identity import (
     DeviceIdentitySecrets,
     DeviceIdentityUnauthorized,
     DeviceIdentityUnavailable,
+    DeviceRevocationResult,
     DeviceTokenResult,
     ManagedDeviceIdentityBroker,
 )
@@ -91,6 +92,8 @@ from .management import (
     AdminManagementError,
     AdminManagementNotFound,
     AdminManagementRepository,
+    AdminPasswordAuthenticationError,
+    AdminPasswordLocked,
     AdminModelSecretError,
     HTTPSModelConnectionTester,
     ModelConnectionTester,

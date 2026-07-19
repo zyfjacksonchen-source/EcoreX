@@ -21,6 +21,7 @@
   let models = [];
   let editingUser = null;
   let editingModel = null;
+  let userPasswordInputRevision = 0;
   let sessionConnected = false;
   let busy = false;
   let fileReadGeneration = 0;
@@ -77,6 +78,10 @@
     userStatus: byId("user-status"),
     userTokenLimit: byId("user-token-limit"),
     userImageLimit: byId("user-image-limit"),
+    userPassword: byId("user-password"),
+    userPasswordLabel: byId("user-password-label"),
+    userPasswordHelp: byId("user-password-help"),
+    userCredentialStatus: byId("user-credential-status"),
     userCancelButton: byId("user-cancel-button"),
     userSaveButton: byId("user-save-button"),
     usageUsers: byId("usage-users"),
@@ -209,8 +214,14 @@
   const normalizeUser = (value) => {
     if (!isRecord(value)) throw new Error("Control Plane 返回的用户合同无效。");
     const status = requiredString(value.status, "status");
+    const credentialState = requiredString(value.credential_state, "credential_state");
     if (!new Set(["active", "suspended"]).has(status)) {
       throw new Error("Control Plane 返回了未知用户状态。");
+    }
+    if (typeof value.password_configured !== "boolean"
+      || !new Set(["configured", "missing"]).has(credentialState)
+      || value.password_configured !== (credentialState === "configured")) {
+      throw new Error("Control Plane 返回了无效登录凭据状态。");
     }
     return {
       account_id: requiredString(value.account_id, "account_id"),
@@ -222,6 +233,9 @@
       tokens_used: boundedInteger(value.tokens_used, "tokens_used", 0, 10 ** 12),
       image_limit: boundedInteger(value.image_limit, "image_limit", 0, 10 ** 9),
       images_used: boundedInteger(value.images_used, "images_used", 0, 10 ** 9),
+      password_configured: value.password_configured,
+      credential_state: credentialState,
+      password_changed_at: optionalString(value.password_changed_at, "password_changed_at"),
       revision: boundedInteger(value.revision, "revision", 1),
       created_at: requiredString(value.created_at, "created_at"),
       updated_at: requiredString(value.updated_at, "updated_at"),
@@ -1046,6 +1060,7 @@
 
   const openUserDialog = (user = null) => {
     editingUser = user;
+    userPasswordInputRevision = 0;
     elements.userDialogTitle.textContent = user ? `编辑 ${user.display_name}` : "创建用户";
     elements.userAccountId.value = user?.account_id || "";
     elements.userAccountId.disabled = Boolean(user);
@@ -1056,6 +1071,17 @@
     elements.userStatus.disabled = !user;
     elements.userTokenLimit.value = String(user?.token_limit ?? 0);
     elements.userImageLimit.value = String(user?.image_limit ?? 0);
+    elements.userPassword.value = "";
+    elements.userPassword.required = !user;
+    elements.userPasswordLabel.textContent = user ? "重置密码（可选）" : "初始密码";
+    elements.userPasswordHelp.textContent = user
+      ? "留空表示保持原密码；输入至少 10 位的新密码会立即替换旧密码。"
+      : "至少 10 位。创建后用户可直接使用账号或邮箱登录。";
+    elements.userCredentialStatus.textContent = user
+      ? (user.password_configured
+        ? `当前已设置密码${user.password_changed_at ? `，更新于 ${new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(user.password_changed_at))}` : ""}。`
+        : "当前未设置密码；请在本次保存时设置。")
+      : "尚未创建登录凭据。";
     elements.userDialog.showModal();
     elements.userDisplayName.focus();
   };
@@ -1080,7 +1106,7 @@
       const name = document.createElement("strong");
       name.textContent = user.display_name;
       const detail = document.createElement("small");
-      detail.textContent = user.email || user.account_id;
+      detail.textContent = `${user.email || user.account_id} · ${user.password_configured ? "密码已设置" : "密码未设置"}`;
       identity.append(name, detail);
       row.append(identity);
       appendTextCell(row, user.organization_id || "—");
@@ -1387,6 +1413,12 @@
   });
 
   elements.userCancelButton.addEventListener("click", () => elements.userDialog.close("cancel"));
+  elements.userDialog.addEventListener("close", () => {
+    elements.userPassword.value = "";
+  });
+  elements.userPassword.addEventListener("input", () => {
+    userPasswordInputRevision += 1;
+  });
 
   elements.userForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -1397,16 +1429,20 @@
     const organizationId = elements.userOrganization.value.trim() || null;
     const tokenLimit = Number(elements.userTokenLimit.value);
     const imageLimit = Number(elements.userImageLimit.value);
+    const password = elements.userPassword.value;
     if (!SAFE_SEGMENT.test(accountId) || !displayName
       || !Number.isSafeInteger(tokenLimit) || tokenLimit < 0 || tokenLimit > 10 ** 12
-      || !Number.isSafeInteger(imageLimit) || imageLimit < 0 || imageLimit > 10 ** 9) {
+      || !Number.isSafeInteger(imageLimit) || imageLimit < 0 || imageLimit > 10 ** 9
+      || (!editingUser && password.length < 10)
+      || (password.length > 0 && password.length < 10)
+      || password.length > 256) {
       showMessage("error", "用户资料不完整，或额度不在允许范围内。");
       return;
     }
     const source = editingUser;
     const key = source
-      ? `user-update:${accountId}:${source.revision}`
-      : `user-create:${accountId}`;
+      ? `user-update:${accountId}:${source.revision}:password-${userPasswordInputRevision}`
+      : `user-create:${accountId}:password-${userPasswordInputRevision}`;
     void withBusy(elements.userSaveButton, "保存中", async () => {
       const base = {
         display_name: displayName,
@@ -1414,6 +1450,7 @@
         organization_id: organizationId,
         token_limit: tokenLimit,
         image_limit: imageLimit,
+        ...(password ? { password } : {}),
         client_request_id: requestId(key),
       };
       const payload = source

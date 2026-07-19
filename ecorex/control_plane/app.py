@@ -853,6 +853,7 @@ def create_control_plane_app(
             create_device_identity_router(
                 device_identity_broker,
                 admin_dependency=user_admin,
+                password_repository=management_repository,
             )
         )
     if audit_repository is not None:

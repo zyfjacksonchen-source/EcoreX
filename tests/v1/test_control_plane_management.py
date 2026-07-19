@@ -57,6 +57,7 @@ def _user_request(request_id: str = "request-user-create") -> CreateAdminUserReq
         organization_id="org-1",
         token_limit=200_000,
         image_limit=100,
+        password="ordinary-user-password-1",
         client_request_id=request_id,
     )
 
@@ -84,6 +85,9 @@ def test_user_management_is_filterable_revisioned_and_idempotent(tmp_path: Path)
     listing = repository.list_users(query="测试", status="active", organization_id="org-1")
     assert listing.total == 1
     assert listing.items[0].tokens_used == 0
+    assert listing.items[0].password_configured is True
+    assert listing.items[0].credential_state == "configured"
+    assert listing.items[0].password_changed_at is not None
 
     adjusted = repository.adjust_usage(
         created.account_id,
@@ -121,6 +125,49 @@ def test_user_management_is_filterable_revisioned_and_idempotent(tmp_path: Path)
     assert summary.users_active == 1
     assert summary.tokens_used == 12_000
     repository.verify_integrity()
+
+
+def test_account_ids_and_emails_share_one_unambiguous_login_namespace(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path)
+    first = repository.create_user(_user_request(), actor=ACTOR)
+    with pytest.raises(AdminManagementConflict, match="identity"):
+        repository.create_user(
+            CreateAdminUserRequest(
+                account_id="user@example.com",
+                display_name="冲突账号",
+                email="second@example.com",
+                password="second-user-password-1",
+                client_request_id="request-user-account-email-conflict",
+            ),
+            actor=ACTOR,
+        )
+    second = repository.create_user(
+        CreateAdminUserRequest(
+            account_id="account-2@example.com",
+            display_name="第二用户",
+            email="second@example.com",
+            password="second-user-password-1",
+            client_request_id="request-user-second",
+        ),
+        actor=ACTOR,
+    )
+    with pytest.raises(AdminManagementConflict, match="identity"):
+        repository.update_user(
+            first.account_id,
+            UpdateAdminUserRequest(
+                display_name=first.display_name,
+                email=second.account_id,
+                organization_id=first.organization_id,
+                status="active",
+                token_limit=first.token_limit,
+                image_limit=first.image_limit,
+                expected_revision=first.revision,
+                client_request_id="request-user-email-account-conflict",
+            ),
+            actor=ACTOR,
+        )
 
 
 def test_provider_usage_settlement_is_exactly_once_and_conflict_safe(
@@ -390,6 +437,15 @@ def test_admin_management_router_applies_roles_and_activates_after_test(
         "/api/v1/admin/users", json=_user_request().model_dump(mode="json")
     )
     assert created_user.status_code == 201
+    assert created_user.json()["password_configured"] is True
+    missing_password = _user_request("request-user-without-password").model_dump(
+        mode="json", exclude={"password"}
+    )
+    missing_password["account_id"] = "account-without-password"
+    missing_password["email"] = "without-password@example.com"
+    rejected_user = client.post("/api/v1/admin/users", json=missing_password)
+    assert rejected_user.status_code == 422
+    assert rejected_user.json()["detail"]["code"] == "initial_password_required"
     model_payload = _model_request().model_dump(mode="json", exclude={"api_key"})
     model_payload["api_key"] = "sk-production-secret-123456"
     created_model = client.post("/api/v1/admin/models", json=model_payload)
@@ -439,7 +495,7 @@ def test_management_schema_migrates_v1_model_origin_presets(tmp_path: Path) -> N
         connection.close()
 
     receipt = AdminManagementSchemaManager(path).migrate()
-    assert receipt.migration_version == 3
+    assert receipt.migration_version == 4
     connection = sqlite3.connect(path)
     try:
         columns = {
@@ -449,7 +505,12 @@ def test_management_schema_migrates_v1_model_origin_presets(tmp_path: Path) -> N
             "SELECT 1 FROM sqlite_schema WHERE type='table' "
             "AND name='admin_ops_provider_usage_facts'"
         ).fetchone()
+        password_table = connection.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type='table' "
+            "AND name='admin_ops_password_credentials'"
+        ).fetchone()
     finally:
         connection.close()
     assert "provider_origin_preset" in columns
     assert usage_table == (1,)
+    assert password_table == (1,)

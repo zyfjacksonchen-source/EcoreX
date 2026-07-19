@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Callable
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from .management import (
     AdminManagementRepository,
@@ -68,6 +68,14 @@ def create_admin_management_router(
         request: CreateAdminUserRequest,
         current: ControlPrincipal = Depends(user_admin_dependency),
     ) -> AdminUserProjection:
+        if request.password is None:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "initial_password_required",
+                    "message": "an initial password is required",
+                },
+            )
         return await asyncio.to_thread(repository.create_user, request, actor=current)
 
     @router.put("/users/{account_id}", response_model=AdminUserProjection)

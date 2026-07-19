@@ -21,6 +21,7 @@ import type { ArtifactProjection } from "./api/contracts.ts";
 import { Composer } from "./components/Composer.tsx";
 import { IconButton } from "./components/IconButton.tsx";
 import { LazyFeatureBoundary } from "./components/LazyFeatureBoundary.tsx";
+import { LoginPage } from "./components/LoginPage.tsx";
 import { Timeline } from "./components/Timeline.tsx";
 import { useRuntimeSession } from "./state/useRuntimeSession.ts";
 import { serviceReasonMessage } from "./state/userLanguage.ts";
@@ -31,7 +32,6 @@ import "./styles/plain-language.css";
 
 const loadArtifactPreviewDialog = () => import("./components/ArtifactPreviewDialog.tsx");
 const loadSidebar = () => import("./components/Sidebar.tsx");
-const loadDeviceLoginCard = () => import("./components/DeviceLoginCard.tsx");
 const loadSkillsWorkspace = () => import("./components/SkillsWorkspace.tsx");
 const loadInteractionStack = () => import("./components/InteractionStack.tsx");
 const loadReplayDialog = () => import("./components/ReplayDialog.tsx");
@@ -44,9 +44,6 @@ const ArtifactPreviewDialog = lazy(async () => ({
 }));
 const Sidebar = lazy(async () => ({
   default: (await loadSidebar()).Sidebar,
-}));
-const DeviceLoginCard = lazy(async () => ({
-  default: (await loadDeviceLoginCard()).DeviceLoginCard,
 }));
 const SkillsWorkspace = lazy(async () => ({
   default: (await loadSkillsWorkspace()).SkillsWorkspace,
@@ -105,6 +102,19 @@ function useMediaMatch(query: string): boolean {
   return matches;
 }
 
+const DISMISSED_UPDATE_BANNERS_KEY = "ecorex-dismissed-update-banners";
+
+function initialDismissedUpdateBanners(): string[] {
+  try {
+    const value = JSON.parse(window.sessionStorage.getItem(DISMISSED_UPDATE_BANNERS_KEY) ?? "[]");
+    return Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 export function AppV1() {
   const runtime = useRuntimeSession();
   const mobileNavigation = useMediaMatch("(max-width: 839px)");
@@ -121,6 +131,9 @@ export function AppV1() {
   const [retouchArtifact, setRetouchArtifact] = useState<ArtifactProjection | null>(null);
   const retouchReturnFocusRef = useRef<HTMLElement | null>(null);
   const [artifactNotice, setArtifactNotice] = useState<string | null>(null);
+  const [dismissedUpdateBanners, setDismissedUpdateBanners] = useState(
+    initialDismissedUpdateBanners,
+  );
 
   useEffect(() => {
     if (!document.documentElement.dataset.theme) {
@@ -304,8 +317,19 @@ export function AppV1() {
     );
   }
 
-  const connected = runtime.state.streamState === "open" || !runtime.state.thread;
   const authenticated = bootstrap?.login.authenticated === true;
+  if (bootstrap && !authenticated) {
+    return (
+      <LoginPage
+        busy={runtime.sessionBusy}
+        error={runtime.sessionError}
+        onClearError={runtime.clearSessionError}
+        onLogin={runtime.loginSession}
+      />
+    );
+  }
+
+  const connected = runtime.state.streamState === "open" || !runtime.state.thread;
   const modelServiceReady = authenticated && bootstrap?.model_service.state === "ready";
   const modelAvailable = modelServiceReady && Boolean(bootstrap?.models.chat.length);
   const modelUnavailable = modelServiceReady && !bootstrap?.models.chat.length
@@ -339,6 +363,27 @@ export function AppV1() {
         : update?.state === "available" || update?.state === "downloading"
           ? `正在后台准备 EcoreX ${update.target_version ?? "新版"}…`
           : null;
+  const updateBannerKey = updateMessage && update
+    ? `${update.target_version ?? "unknown"}:${update.state}`
+    : null;
+  const updateBannerVisible = Boolean(
+    updateMessage
+    && updateBannerKey
+    && !dismissedUpdateBanners.includes(updateBannerKey),
+  );
+  const dismissUpdateBanner = () => {
+    if (!updateBannerKey) return;
+    setDismissedUpdateBanners((current) => {
+      if (current.includes(updateBannerKey)) return current;
+      const next = [...current, updateBannerKey];
+      try {
+        window.sessionStorage.setItem(DISMISSED_UPDATE_BANNERS_KEY, JSON.stringify(next));
+      } catch {
+        // In-memory dismissal still works when storage is unavailable.
+      }
+      return next;
+    });
+  };
   const isNewConversation = !runtime.state.thread;
 
   const handleArtifactAction = async (artifact: ArtifactProjection, action: string) => {
@@ -500,7 +545,7 @@ export function AppV1() {
           open={sidebarOpen}
           modal={sidebarOpen && mobileNavigation}
           currentThreadId={currentThreadId}
-          version={bootstrap?.update.current_version || "1.0.4"}
+          version={bootstrap?.update.current_version || window.__ECOREX_RUNTIME__?.version || "未知"}
           threads={runtime.threads}
           projects={runtime.projects}
           projectCatalogState={runtime.projectCatalogState}
@@ -622,23 +667,7 @@ export function AppV1() {
           </header>
 
           <div className="ex-status-stack">
-            {bootstrap && !authenticated ? (
-              <Suspense fallback={(
-                <section className="ex-device-login is-loading" role="status" aria-live="polite">
-                  正在准备安全登录…
-                </section>
-              )}>
-                <DeviceLoginCard
-                  unavailableReason={modelUnavailable}
-                  serviceState={bootstrap.login_service.state}
-                  serviceReason={bootstrap.login_service.reason}
-                  onBegin={runtime.beginDeviceLogin}
-                  onGet={runtime.getDeviceLogin}
-                  onPoll={runtime.pollDeviceLogin}
-                />
-              </Suspense>
-            ) : null}
-            {updateMessage ? (
+            {updateBannerVisible ? (
               <section className="ex-update-banner" aria-live="polite">
                 <span>{updateMessage}</span>
                 {update?.state === "awaiting_user" && update.can_activate ? (
@@ -661,6 +690,9 @@ export function AppV1() {
                     重试检查
                   </button>
                 ) : null}
+                <IconButton label="关闭更新提示" onClick={dismissUpdateBanner}>
+                  <X aria-hidden="true" />
+                </IconButton>
               </section>
             ) : null}
 

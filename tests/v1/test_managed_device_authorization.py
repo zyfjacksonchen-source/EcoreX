@@ -22,6 +22,7 @@ from ecorex.session import (
     BrokerDeviceGrant,
     BrokerPollResult,
     BrokerPollStatus,
+    BrokerRevocationReceipt,
     DeviceAuthorizationSupervisor,
     DeviceAuthorizationUnavailable,
     DeviceFlowStatus,
@@ -30,6 +31,7 @@ from ecorex.session import (
     ManagedSessionLeaseClaims,
     ManagedSessionService,
     SessionLeaseSignature,
+    SessionUnavailable,
     SignedManagedSessionLease,
     token_digest,
     HTTPSDeviceAuthorizationBroker,
@@ -60,6 +62,8 @@ class Broker:
         self.results: list[BrokerPollResult | Exception] = []
         self.entered: asyncio.Event | None = None
         self.release: asyncio.Event | None = None
+        self.revoke_results: list[BrokerRevocationReceipt | Exception] = []
+        self.login_keys: list[str] = []
 
     async def begin(self, *, idempotency_key: str) -> BrokerDeviceChallenge:
         self.begin_keys.append(idempotency_key)
@@ -89,6 +93,29 @@ class Broker:
         if isinstance(result, Exception):
             raise result
         return result
+
+    async def revoke(self, **values) -> BrokerRevocationReceipt:
+        assert values["lease_id"] == self.grant.lease.claims.lease_id
+        assert values["account_id"] == self.grant.lease.claims.account_id
+        assert values["refresh_token"] == REFRESH
+        result = (
+            self.revoke_results.pop(0)
+            if self.revoke_results
+            else BrokerRevocationReceipt(
+                lease_id=values["lease_id"],
+                account_id=values["account_id"],
+                already_revoked=False,
+            )
+        )
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    async def login(self, **values) -> BrokerDeviceGrant:
+        assert values["identifier"] == "user@example.com"
+        assert values["password"] == "abcd1234"
+        self.login_keys.append(values["idempotency_key"])
+        return self.grant
 
 
 def _lease(private: Ed25519PrivateKey, now: datetime) -> SignedManagedSessionLease:
@@ -165,6 +192,62 @@ def test_device_begin_is_idempotent_and_never_persists_or_projects_device_secret
         connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     assert DEVICE_CODE.encode() not in (tmp_path / "runtime.db").read_bytes()
     assert len(vault._values) == 1  # test-only vault inspection
+
+
+def test_logout_persists_remote_uncertainty_and_retries_before_local_clear(
+    tmp_path,
+) -> None:
+    clock, vault, session, broker, device = _services(tmp_path)
+    session.install(
+        broker.grant.lease,
+        access_token=ACCESS,
+        refresh_token=REFRESH,
+        client_request_id="install-before-remote-logout",
+    )
+    broker.revoke_results = [
+        DeviceAuthorizationUnavailable("network unavailable"),
+        BrokerRevocationReceipt(
+            lease_id=broker.grant.lease.claims.lease_id,
+            account_id=broker.grant.lease.claims.account_id,
+            already_revoked=True,
+        ),
+    ]
+    with pytest.raises(DeviceAuthorizationUnavailable, match="uncertain"):
+        asyncio.run(
+            device.revoke_and_logout(
+                client_request_id="durable-remote-logout",
+                expected_lease_digest=broker.grant.lease.digest,
+            )
+        )
+    assert session.read_snapshot().lease_digest == broker.grant.lease.digest
+    assert len(vault._values) == 1
+    with sqlite3.connect(tmp_path / "runtime.db") as connection:
+        pending = connection.execute(
+            "SELECT outcome,details_json FROM managed_session_audit "
+            "WHERE event_type='session.logout.remote_revocation_pending'"
+        ).fetchone()
+    assert pending is not None
+    assert pending[0] == "uncertain"
+    assert '"remote_confirmed":false' in pending[1]
+
+    recovered_device = ManagedDeviceAuthorizationService(
+        tmp_path / "runtime.db",
+        session=session,
+        vault=vault,
+        broker=broker,
+        clock=clock,
+        poll_lease_seconds=30,
+    )
+    receipt = asyncio.run(
+        recovered_device.revoke_and_logout(
+            client_request_id="durable-remote-logout",
+            expected_lease_digest=broker.grant.lease.digest,
+        )
+    )
+    assert receipt.already_applied is False
+    with pytest.raises(SessionUnavailable):
+        session.read_snapshot()
+    assert vault._values == {}
 
 
 def test_device_poll_installs_signed_session_and_recovers_terminal_state(tmp_path) -> None:
@@ -592,3 +675,52 @@ def test_device_login_router_never_returns_tokens_and_schedules_same_slot_reload
         "/api/v1/session/device",
         json={"client_request_id": "account-switch-denied"},
     ).status_code == 409
+
+
+def test_password_login_survives_reload_failure_and_exact_retry_uses_commit(
+    tmp_path,
+) -> None:
+    _clock, _vault, session, broker, device = _services(tmp_path)
+    runtime = {"authenticated": False}
+
+    def fail_reload(_identity: str) -> bool:
+        raise OSError("reload transport unavailable")
+
+    app = FastAPI()
+    app.include_router(
+        create_device_authorization_router(
+            device,
+            supervisor=DeviceAuthorizationSupervisor(device),
+            authenticated=lambda: runtime["authenticated"],
+            reload_requester=fail_reload,
+        ),
+        prefix="/api/v1",
+    )
+    client = TestClient(app)
+    payload = {
+        "identifier": "user@example.com",
+        "password": "abcd1234",
+        "client_request_id": "password-login-reload-recovery",
+    }
+
+    first = client.post("/api/v1/session/login", json=payload)
+    assert first.status_code == 200
+    assert first.json()["restart_scheduled"] is False
+    assert first.json()["generation"] == session.read_snapshot().generation
+    assert len(broker.login_keys) == 1
+
+    # A lost response may be retried after a fresh Runtime has already observed
+    # the committed session. The exact request recovers without another cloud
+    # password exchange; unrelated login attempts remain account-switch errors.
+    runtime["authenticated"] = True
+    repeated = client.post("/api/v1/session/login", json=payload)
+    assert repeated.status_code == 200
+    assert repeated.json() == first.json()
+    assert len(broker.login_keys) == 1
+
+    conflict = client.post(
+        "/api/v1/session/login",
+        json={**payload, "client_request_id": "password-login-other-request"},
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "session_already_authenticated"

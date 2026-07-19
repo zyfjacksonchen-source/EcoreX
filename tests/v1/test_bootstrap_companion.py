@@ -53,6 +53,28 @@ def _built_bootstrap(
     launcher = source / "bin" / launcher_name
     launcher.write_bytes(("bootstrap-" + suffix).encode())
     executable_paths = [f"bin/{launcher_name}"]
+    installer_name = (
+        "EcoreX Installer.cmd"
+        if platform == "windows"
+        else "EcoreX Installer.command"
+    )
+    installer_entry = source / installer_name
+    installer_entry.write_bytes(
+        (
+            b"@echo off\r\n"
+            b"\"%~dp0bin\\ecorex-bootstrap.exe\" %*\r\n"
+            b"exit /b %errorlevel%\r\n"
+        )
+        if platform == "windows"
+        else (
+            b"#!/bin/sh\n"
+            b"BASE_DIR=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
+            b"exec \"$BASE_DIR/bin/ecorex-bootstrap\" \"$@\"\n"
+        )
+    )
+    if platform == "macos":
+        installer_entry.chmod(0o755)
+        executable_paths.append(installer_name)
     helper_digest = ""
     if platform == "windows":
         helper = source / "bin" / "ecorex-sandbox-host.exe"
@@ -160,6 +182,41 @@ def _prepare(
     )
     installer.stage(built.manifest, transaction)
     return installer.prepare_activation(built.manifest, transaction)
+
+
+def _released_legacy_url_payload(host: str = "127.0.0.1") -> bytes:
+    # v0.2.9.2 scripts/prepare-ecorex-webui-local-release.ps1 used
+    # Set-Content -Encoding ASCII with a string already ending in CRLF.
+    return (
+        "[InternetShortcut]\r\n"
+        f"URL=http://{host}:9909/app/\r\n\r\n"
+    ).encode("ascii")
+
+
+def _released_legacy_cmd_payload(
+    *,
+    local_app_data: Path,
+    system_root: Path,
+) -> bytes:
+    # v0.3.0 Write-WebUiShortcuts fallback template, emitted by
+    # [System.IO.File]::WriteAllText(..., [Text.Encoding]::ASCII).
+    powershell = (
+        system_root.resolve(strict=True)
+        / "System32"
+        / "WindowsPowerShell"
+        / "v1.0"
+        / "powershell.exe"
+    )
+    launcher = (
+        local_app_data
+        / "EcoreX WebUI"
+        / "Launch EcoreX WebUI.ps1"
+    )
+    return (
+        "@echo off\r\n"
+        f'"{powershell}" -NoProfile -ExecutionPolicy Bypass '
+        f'-File "{launcher}"\r\n'
+    ).encode("ascii")
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows helper rotation contract")
@@ -282,6 +339,330 @@ def test_windows_fallback_entry_is_preserved_and_update_rollback_is_exact(
         (root / "bootstrap" / "desktop-entry.json").read_text(encoding="utf-8")
     ) == first_receipt
     assert user_entry.read_bytes() == b"user-owned-shortcut"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows legacy shortcut migration")
+def test_windows_upgrade_atomically_takes_over_exact_legacy_webui_shortcut(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release_key = Ed25519PrivateKey.generate()
+    publication_key = Ed25519PrivateKey.generate()
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    local_app_data = tmp_path / "LocalAppData"
+    legacy_root = local_app_data / "EcoreX WebUI"
+    legacy_root.mkdir(parents=True)
+    legacy_script = legacy_root / "Launch EcoreX WebUI.ps1"
+    legacy_script.write_text("Write-Host legacy\n", encoding="utf-8")
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    root = tmp_path / "install"
+
+    first, verifier, fetcher = _built_bootstrap(
+        tmp_path,
+        platform="windows",
+        architecture="x64",
+        release_key=release_key,
+        publication_key=publication_key,
+        suffix="legacy-takeover-first",
+    )
+    installer = BootstrapCompanionInstaller(
+        root,
+        platform="windows",
+        architecture="x64",
+        verifier=verifier,
+        fetcher=fetcher,
+        desktop_directory=desktop,
+    )
+    _prepare(installer, first, "a" * 32)
+    installer.commit_activation("a" * 32)
+    current_entry = desktop / "EcoreX.lnk"
+    assert current_entry.is_file()
+    current_receipt = json.loads(
+        (root / "bootstrap" / "desktop-entry.json").read_text(encoding="utf-8")
+    )
+
+    legacy_entry = desktop / "EcoreX WebUI.lnk"
+    system_root = os.environ["SYSTEMROOT"]
+    powershell = (
+        Path(system_root)
+        / "System32"
+        / "WindowsPowerShell"
+        / "v1.0"
+        / "powershell.exe"
+    )
+    companion_module._run_powershell(
+        ";".join(
+            (
+                "$shell=New-Object -ComObject WScript.Shell",
+                "$link=$shell.CreateShortcut($env:ECOREX_TEST_SHORTCUT)",
+                "$link.TargetPath=$env:ECOREX_TEST_TARGET",
+                "$link.Arguments=$env:ECOREX_TEST_ARGUMENTS",
+                "$link.WorkingDirectory=$env:ECOREX_TEST_WORKDIR",
+                "$link.Description='Start or reopen EcoreX WebUI'",
+                "$link.Save()",
+            )
+        ),
+        companion_module._shortcut_environment(
+            ECOREX_TEST_SHORTCUT=str(legacy_entry),
+            ECOREX_TEST_TARGET=str(powershell),
+            ECOREX_TEST_ARGUMENTS=(
+                '-NoProfile -ExecutionPolicy Bypass -File '
+                f'"{legacy_script}"'
+            ),
+            ECOREX_TEST_WORKDIR=str(legacy_root),
+        ),
+    )
+    original_legacy_digest = hashlib.sha256(legacy_entry.read_bytes()).hexdigest()
+
+    second, second_verifier, second_fetcher = _built_bootstrap(
+        tmp_path,
+        platform="windows",
+        architecture="x64",
+        release_key=release_key,
+        publication_key=publication_key,
+        suffix="legacy-takeover-second",
+    )
+    second_installer = BootstrapCompanionInstaller(
+        root,
+        platform="windows",
+        architecture="x64",
+        verifier=second_verifier,
+        fetcher=second_fetcher,
+        desktop_directory=desktop,
+    )
+    _prepare(second_installer, second, "b" * 32)
+    migrated = companion_module._read_windows_shortcut(legacy_entry)
+    assert migrated is not None
+    assert migrated["description"] == "EcoreX"
+    assert Path(migrated["target"]).name.casefold() == "ecorex-bootstrap.exe"
+    assert hashlib.sha256(legacy_entry.read_bytes()).hexdigest() != original_legacy_digest
+    second_installer.rollback_activation("b" * 32)
+    assert hashlib.sha256(legacy_entry.read_bytes()).hexdigest() == original_legacy_digest
+    assert json.loads(
+        (root / "bootstrap" / "desktop-entry.json").read_text(encoding="utf-8")
+    ) == current_receipt
+
+    _prepare(second_installer, second, "c" * 32)
+    second_installer.commit_activation("c" * 32)
+    receipt = json.loads(
+        (root / "bootstrap" / "desktop-entry.json").read_text(encoding="utf-8")
+    )
+    assert receipt["entry_name"] == "EcoreX WebUI.lnk"
+    assert not current_entry.exists()
+    assert second_installer.remove_desktop_entry() is True
+    assert not legacy_entry.exists()
+    assert second_installer.remove_desktop_entry() is False
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows legacy entry migration")
+def test_windows_upgrade_cleans_released_url_and_cmd_with_rollback_and_uninstall(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release_key = Ed25519PrivateKey.generate()
+    publication_key = Ed25519PrivateKey.generate()
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    local_app_data = tmp_path / "LocalAppData"
+    legacy_root = local_app_data / "EcoreX WebUI"
+    legacy_root.mkdir(parents=True)
+    (legacy_root / "Launch EcoreX WebUI.ps1").write_text(
+        "Write-Host legacy\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    url_entry = desktop / "EcoreX WebUI.url"
+    cmd_entry = desktop / "EcoreX WebUI.cmd"
+    url_payload = _released_legacy_url_payload()
+    cmd_payload = _released_legacy_cmd_payload(
+        local_app_data=local_app_data,
+        system_root=Path(os.environ["SYSTEMROOT"]),
+    )
+    url_entry.write_bytes(url_payload)
+    cmd_entry.write_bytes(cmd_payload)
+
+    built, verifier, fetcher = _built_bootstrap(
+        tmp_path,
+        platform="windows",
+        architecture="x64",
+        release_key=release_key,
+        publication_key=publication_key,
+        suffix="released-url-cmd-migration",
+    )
+    root = tmp_path / "install"
+    installer = BootstrapCompanionInstaller(
+        root,
+        platform="windows",
+        architecture="x64",
+        verifier=verifier,
+        fetcher=fetcher,
+        desktop_directory=desktop,
+    )
+
+    first_transaction = "6" * 32
+    _prepare(installer, built, first_transaction)
+    current = desktop / "EcoreX.lnk"
+    assert current.exists()
+    assert url_entry.read_bytes() == url_payload
+    assert cmd_entry.read_bytes() == cmd_payload
+    record = json.loads(
+        (
+            root
+            / "bootstrap"
+            / "companion-transactions"
+            / first_transaction
+            / "activation.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert {
+        item["entry_name"] for item in record["legacy_entries"]
+    } == {"EcoreX WebUI.url", "EcoreX WebUI.cmd"}
+
+    installer.rollback_activation(first_transaction)
+    assert not current.exists()
+    assert url_entry.read_bytes() == url_payload
+    assert cmd_entry.read_bytes() == cmd_payload
+
+    second_transaction = "7" * 32
+    _prepare(installer, built, second_transaction)
+    current = desktop / "EcoreX.lnk"
+    original_remove = companion_module._remove_legacy_windows_entry_path
+    removals = 0
+
+    def crash_after_first_legacy_removal(
+        path: Path,
+        *,
+        desktop: Path,
+    ) -> None:
+        nonlocal removals
+        original_remove(path, desktop=desktop)
+        removals += 1
+        if removals == 1:
+            raise KeyboardInterrupt("simulated commit cleanup crash")
+
+    monkeypatch.setattr(
+        companion_module,
+        "_remove_legacy_windows_entry_path",
+        crash_after_first_legacy_removal,
+    )
+    with pytest.raises(KeyboardInterrupt, match="cleanup crash"):
+        installer.commit_activation(second_transaction)
+    assert current.exists()
+    assert sum(path.exists() for path in (url_entry, cmd_entry)) == 1
+
+    monkeypatch.setattr(
+        companion_module,
+        "_remove_legacy_windows_entry_path",
+        original_remove,
+    )
+    installer.converge_activation()
+    assert not url_entry.exists()
+    assert not cmd_entry.exists()
+    committed_record = json.loads(
+        (
+            root
+            / "bootstrap"
+            / "companion-transactions"
+            / second_transaction
+            / "activation.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert committed_record["legacy_entries"] == []
+    assert [path.name for path in desktop.iterdir()] == ["EcoreX.lnk"]
+
+    assert installer.remove_desktop_entry() is True
+    assert not any(desktop.iterdir())
+    assert installer.remove_desktop_entry() is False
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows legacy entry migration")
+def test_windows_legacy_entry_matchers_preserve_custom_and_malicious_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release_key = Ed25519PrivateKey.generate()
+    publication_key = Ed25519PrivateKey.generate()
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    local_app_data = tmp_path / "LocalAppData"
+    legacy_root = local_app_data / "EcoreX WebUI"
+    legacy_root.mkdir(parents=True)
+    (legacy_root / "Launch EcoreX WebUI.ps1").write_text(
+        "Write-Host legacy\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    url_entry = desktop / "EcoreX WebUI.url"
+    cmd_entry = desktop / "EcoreX WebUI.cmd"
+    custom_url = (
+        b"[InternetShortcut]\r\n"
+        b"URL=http://127.0.0.1:9909/app/\r\n"
+        b"IconFile=C:\\Users\\user\\custom.ico\r\n"
+    )
+    malicious_cmd = (
+        _released_legacy_cmd_payload(
+            local_app_data=local_app_data,
+            system_root=Path(os.environ["SYSTEMROOT"]),
+        )
+        + b"start https://attacker.invalid/\r\n"
+    )
+    url_entry.write_bytes(_released_legacy_url_payload())
+    cmd_entry.write_bytes(malicious_cmd)
+
+    discovered = companion_module._discover_legacy_windows_entries(desktop)
+    assert [item["entry_name"] for item in discovered] == [
+        "EcoreX WebUI.url"
+    ]
+    assert (
+        companion_module._legacy_windows_entry_kind(
+            url_entry,
+            _released_legacy_url_payload("localhost"),
+        )
+        == "windows-url"
+    )
+
+    built, verifier, fetcher = _built_bootstrap(
+        tmp_path,
+        platform="windows",
+        architecture="x64",
+        release_key=release_key,
+        publication_key=publication_key,
+        suffix="custom-legacy-preserved",
+    )
+    root = tmp_path / "install"
+    installer = BootstrapCompanionInstaller(
+        root,
+        platform="windows",
+        architecture="x64",
+        verifier=verifier,
+        fetcher=fetcher,
+        desktop_directory=desktop,
+    )
+    transaction_id = "8" * 32
+    _prepare(installer, built, transaction_id)
+    current = desktop / "EcoreX.lnk"
+    # Ownership must be revoked if the exact tag fixture is changed between
+    # prepare and commit.
+    url_entry.write_bytes(custom_url)
+    installer.commit_activation(transaction_id)
+    assert current.exists()
+    assert url_entry.read_bytes() == custom_url
+    assert cmd_entry.read_bytes() == malicious_cmd
+    record = json.loads(
+        (
+            root
+            / "bootstrap"
+            / "companion-transactions"
+            / transaction_id
+            / "activation.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert record["legacy_entries"] == []
+
+    assert installer.remove_desktop_entry() is True
+    assert url_entry.read_bytes() == custom_url
+    assert cmd_entry.read_bytes() == malicious_cmd
 
 
 def test_macos_fallback_app_and_receipt_owned_removal(tmp_path: Path) -> None:

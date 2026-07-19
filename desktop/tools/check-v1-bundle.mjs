@@ -12,7 +12,6 @@ const FEATURE_STEMS = [
   "ArtifactPreviewDialog",
   "ComposerModelSelector",
   "ConnectorPopover",
-  "DeviceLoginCard",
   "SkillsWorkspace",
   "InteractionStack",
   "NewConversationProjectSelector",

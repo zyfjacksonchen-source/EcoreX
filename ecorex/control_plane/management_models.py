@@ -90,6 +90,9 @@ class AdminUserProjection(ManagementModel):
     tokens_used: int
     image_limit: int
     images_used: int
+    password_configured: bool
+    credential_state: Literal["configured", "missing"]
+    password_changed_at: str | None
     revision: int
     created_at: str
     updated_at: str
@@ -113,6 +116,7 @@ class CreateAdminUserRequest(ManagementModel):
     organization_id: str | None = Field(default=None, min_length=1, max_length=128)
     token_limit: int = Field(default=0, ge=0, le=10**12)
     image_limit: int = Field(default=0, ge=0, le=10**9)
+    password: SecretStr | None = Field(default=None, min_length=10, max_length=256)
     client_request_id: str = Field(min_length=8, max_length=256)
 
     @field_validator("display_name")
@@ -147,6 +151,7 @@ class UpdateAdminUserRequest(ManagementModel):
     status: UserStatus
     token_limit: int = Field(ge=0, le=10**12)
     image_limit: int = Field(ge=0, le=10**9)
+    password: SecretStr | None = Field(default=None, min_length=10, max_length=256)
     expected_revision: int = Field(ge=1)
     client_request_id: str = Field(min_length=8, max_length=256)
 

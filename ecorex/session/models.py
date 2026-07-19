@@ -482,6 +482,19 @@ class SessionRefreshContext:
 
 
 @dataclass(frozen=True, slots=True)
+class SessionRevocationContext:
+    lease: SignedManagedSessionLease
+    refresh_token: str
+
+    def __repr__(self) -> str:
+        return (
+            "<SessionRevocationContext "
+            f"lease_id={self.lease.claims.lease_id!r} "
+            "refresh_token=<redacted>>"
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class SessionAuditRecord:
     sequence: int
     event_type: str
@@ -526,6 +539,7 @@ __all__ = [
     "SessionLogoutReceipt",
     "SessionRecoveryReport",
     "SessionRefreshContext",
+    "SessionRevocationContext",
     "SessionRestartRequired",
     "SessionUnavailable",
     "SessionVaultError",

@@ -14,7 +14,14 @@ import json
 import re
 from typing import Any, Literal, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 
 
 JsonObject = dict[str, Any]
@@ -1564,6 +1571,39 @@ class LogoutSessionRequest(ProtocolModel):
 
 class LogoutSessionResponse(FrozenProtocolModel):
     authenticated: Literal[False] = False
+    generation: int = Field(ge=1, strict=True)
+    restart_required: Literal[True] = True
+    restart_scheduled: bool = False
+
+
+class PasswordSessionLoginRequest(ProtocolModel):
+    identifier: str = Field(min_length=1, max_length=254)
+    # Login remains compatible with imported v0.2.9.2 credentials. Creating
+    # or resetting a credential is governed separately by the 10-char admin
+    # contract.
+    password: SecretStr = Field(min_length=8, max_length=256)
+    client_request_id: str = Field(
+        min_length=8,
+        max_length=256,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,255}$",
+    )
+
+    @field_validator("identifier")
+    @classmethod
+    def _identifier(cls, value: str) -> str:
+        normalized = value.strip()
+        if (
+            not normalized
+            or "\x00" in normalized
+            or any(ord(character) < 33 for character in normalized)
+        ):
+            raise ValueError("login identifier is invalid")
+        return normalized
+
+
+class PasswordSessionLoginResponse(FrozenProtocolModel):
+    authenticated: Literal[True] = True
+    display_name: str = Field(min_length=1, max_length=256)
     generation: int = Field(ge=1, strict=True)
     restart_required: Literal[True] = True
     restart_scheduled: bool = False

@@ -12,7 +12,6 @@ import type {
   ConnectorLoginBeginResponse,
   ConnectorLoginCancelResponse,
   ConnectorLoginCheckResponse,
-  DeviceLoginProjection,
   EventEnvelope,
   ExtensionActionId,
   ExtensionCatalogSnapshot,
@@ -22,6 +21,7 @@ import type {
   InteractionResponse,
   JsonObject,
   LiveReplayResponse,
+  LoginSessionResponse,
   LogoutSessionResponse,
   MemoryMutationResponse,
   MemorySnapshot,
@@ -70,6 +70,7 @@ export interface RuntimeBridgeConfig {
   apiBase?: string;
   bearerToken?: string;
   csrfToken?: string;
+  version?: string;
 }
 
 export interface TurnModelSelection {
@@ -245,6 +246,26 @@ function validateLogoutSessionResponse(value: unknown): LogoutSessionResponse {
   return value as unknown as LogoutSessionResponse;
 }
 
+function validateLoginSessionResponse(value: unknown): LoginSessionResponse {
+  if (
+    !isRecord(value)
+    || value.authenticated !== true
+    || typeof value.display_name !== "string"
+    || !value.display_name.trim()
+    || !Number.isSafeInteger(value.generation)
+    || Number(value.generation) < 1
+    || value.restart_required !== true
+    || typeof value.restart_scheduled !== "boolean"
+  ) {
+    throw new RuntimeApiError(
+      "Runtime returned an invalid login receipt.",
+      502,
+      "login_receipt_invalid",
+    );
+  }
+  return value as unknown as LoginSessionResponse;
+}
+
 async function validateThreadProjectionBoundary(value: unknown): Promise<ThreadProjection> {
   const contract = await import("./runtimeProjectionContract.ts");
   return contract.validateThreadProjection(value);
@@ -388,6 +409,38 @@ export class RuntimeClient {
       false,
       validateBootstrapResponse,
     );
+  }
+
+  async waitForCredentialRotation(
+    options: Readonly<{
+      timeoutMs?: number;
+      pollIntervalMs?: number;
+    }> = {},
+  ): Promise<boolean> {
+    const timeoutMs = options.timeoutMs ?? 30_000;
+    const pollIntervalMs = options.pollIntervalMs ?? 500;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      try {
+        const bootstrap = await this.bootstrap();
+        if (bootstrap.login.authenticated) return true;
+      } catch (error) {
+        if (error instanceof RuntimeApiError) {
+          // The old process continues to accept its bearer while its managed
+          // session is restart-fenced, returning 409. A 401 from the same
+          // immutable client means a new process is serving with a newly
+          // generated Runtime bearer/CSRF pair, so the document must reload.
+          if (error.status === 401) return true;
+          if (error.status !== 409) {
+            // Other transient startup responses are retried within the bound.
+          }
+        }
+      }
+      await new Promise<void>((resolve) => {
+        globalThis.setTimeout(resolve, pollIntervalMs);
+      });
+    }
+    return false;
   }
 
   conversationUsage(
@@ -579,37 +632,23 @@ export class RuntimeClient {
     );
   }
 
-  beginDeviceLogin(
-    clientRequestId = createClientRequestId("device_login"),
-  ): Promise<DeviceLoginProjection> {
+  loginSession(
+    identifier: string,
+    password: string,
+    clientRequestId = createClientRequestId("session_login"),
+  ): Promise<LoginSessionResponse> {
     return this.json(
-      "/api/v1/session/device",
+      "/api/v1/session/login",
       {
         method: "POST",
-        body: JSON.stringify({ client_request_id: clientRequestId }),
+        body: JSON.stringify({
+          identifier,
+          password,
+          client_request_id: clientRequestId,
+        }),
       },
       true,
-    );
-  }
-
-  deviceLogin(flowId: string, signal?: AbortSignal): Promise<DeviceLoginProjection> {
-    return this.json(
-      `/api/v1/session/device/${encodeURIComponent(flowId)}`,
-      { signal },
-    );
-  }
-
-  pollDeviceLogin(
-    flowId: string,
-    clientRequestId = createClientRequestId("device_poll"),
-  ): Promise<DeviceLoginProjection> {
-    return this.json(
-      `/api/v1/session/device/${encodeURIComponent(flowId)}/poll`,
-      {
-        method: "POST",
-        body: JSON.stringify({ client_request_id: clientRequestId }),
-      },
-      true,
+      validateLoginSessionResponse,
     );
   }
 
