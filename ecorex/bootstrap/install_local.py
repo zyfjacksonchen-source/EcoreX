@@ -31,6 +31,7 @@ from ecorex.update import (
 )
 
 from .cli import _read_public_keys
+from .companion import BootstrapCompanionInstaller
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -144,15 +145,27 @@ def install(
         )
     elif sandbox_helper is not None or sandbox_helper_sha256 is not None:
         raise ValueError("sandbox helper is only valid on Windows")
+    local_fetcher = LocalSourceFetcher(source_directories)
+    bootstrap_companion = BootstrapCompanionInstaller(
+        Path(os.path.abspath(install_root)),
+        platform=platform,
+        architecture=architecture,
+        verifier=verifier,
+        fetcher=local_fetcher,
+        windows_security_factory=(
+            type(security) if security is not None else None
+        ),
+    )
     coordinator = InstallCoordinator(
         Path(os.path.abspath(install_root)),
-        fetcher=LocalSourceFetcher(source_directories),
+        fetcher=local_fetcher,
         health_checker=lambda _slot: False,
         verifier=verifier,
         host_platform=platform,
         host_architecture=architecture,
         release_channel=manifest.channel,
         bootstrap_health_confirmation=True,
+        bootstrap_companion=bootstrap_companion,
         pack_content_verifier=verify_product_capability_pack,
         payload_security_preparer=security.prepare if security is not None else None,
         payload_security_attester=security.attest if security is not None else None,
@@ -178,6 +191,7 @@ def install(
             current_manifest = coordinator.slots.release_manifest(pointers.current)
             if current_manifest != manifest:
                 raise ValueError("an unrelated Runtime is already installed")
+            bootstrap_companion.install_existing(manifest, artifacts)
             activated = ActivationResult(
                 transaction_id="existing-" + manifest.build_digest[:24],
                 state=InstallState.COMPLETED,

@@ -72,6 +72,50 @@ class CrashAfterCompleteFetcher:
         raise KeyboardInterrupt("simulated process death after durable download")
 
 
+class TargetSecurity:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    def prepare(self, *_args) -> dict[str, object]:
+        self.events.append("target_prepare")
+        return {"target_helper": True}
+
+    def attest(self, *_args) -> dict[str, object]:
+        self.events.append("target_attest")
+        return {"contract": "target-helper-security-v1"}
+
+    def cleanup_failed(self, *_args) -> None:
+        self.events.append("target_cleanup")
+
+
+class TargetCompanion:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    def stage(self, _manifest, transaction_dir: Path) -> Path:
+        self.events.append("companion_stage")
+        transaction_dir.mkdir(parents=True, exist_ok=True)
+        path = transaction_dir / "bootstrap-companion.zip"
+        path.write_bytes(b"signed-companion")
+        return path
+
+    def prepare_payload_security(
+        self, _manifest, _transaction_dir: Path
+    ) -> TargetSecurity:
+        self.events.append("target_security")
+        return TargetSecurity(self.events)
+
+    def prepare_activation(self, _manifest, _transaction_dir: Path) -> Path:
+        self.events.append("companion_prepare_activation")
+        return Path("bootstrap")
+
+    def commit_activation(self, _transaction_id: str) -> None:
+        self.events.append("companion_commit")
+
+    def rollback_activation(self, _transaction_id: str) -> None:
+        self.events.append("companion_rollback")
+
+
 def _signature() -> SignatureEnvelope:
     return SignatureEnvelope(
         algorithm="ed25519",
@@ -171,6 +215,43 @@ def test_prepare_uses_signed_source_priority_then_waits_for_user(tmp_path: Path)
     ]
     assert source_events == ["cn", "github"]
     assert coordinator.journal.latest().state is InstallState.AWAITING_USER
+
+
+def test_signed_companion_selects_target_security_before_payload_staging(
+    tmp_path: Path,
+) -> None:
+    payload = _package("1.0.0")
+    manifest = _manifest("1.0.0", payload)
+    events: list[str] = []
+
+    def reject_old_helper(*_args):
+        raise AssertionError("the mutable prior helper was selected")
+
+    coordinator = InstallCoordinator(
+        tmp_path / "install",
+        fetcher=_fetcher(tmp_path, payload),
+        verifier=AcceptingTestVerifier(),
+        health_checker=lambda _slot: True,
+        bootstrap_companion=TargetCompanion(events),
+        payload_security_preparer=reject_old_helper,
+        payload_security_attester=reject_old_helper,
+        payload_security_cleanup=reject_old_helper,
+        slot_security_validator=lambda *_args: True,
+        slot_security_cleanup=lambda *_args: None,
+    )
+
+    prepared = coordinator.prepare_update(manifest, "core-windows-x64")
+
+    assert prepared.state is InstallState.AWAITING_USER
+    assert events == [
+        "companion_stage",
+        "target_security",
+        "target_prepare",
+        "target_attest",
+    ]
+    assert coordinator.slots.marker(prepared.slot_id)["security_provision"] == {
+        "contract": "target-helper-security-v1"
+    }
 
 
 def test_cancelled_staged_slot_runs_security_cleanup_before_deletion(

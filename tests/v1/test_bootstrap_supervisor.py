@@ -572,7 +572,11 @@ def test_default_launcher_uses_no_shell_and_a_sanitized_environment(
         verifier=_verifier(signing_key),
         host_platform="windows",
         host_architecture="x64",
-        source_environment={"GITHUB_TOKEN": "secret", "TEMP": str(tmp_path)},
+        source_environment={
+            "GITHUB_TOKEN": "secret",
+            "TEMP": str(tmp_path),
+            "ECOREX_RUNTIME_OWNER_NONCE": "A" * 43,
+        },
     ).run()
 
     assert result.exit_code == 0
@@ -585,7 +589,17 @@ def test_default_launcher_uses_no_shell_and_a_sanitized_environment(
     assert kwargs["env"]["PYTHONDONTWRITEBYTECODE"] == "1"
     assert kwargs["env"]["PYTHONNOUSERSITE"] == "1"
     assert kwargs["env"]["PYTHONTZPATH"] == ""
+    assert kwargs["env"]["ECOREX_RUNTIME_OWNER_NONCE"] == "A" * 43
     assert Path(kwargs["executable"]).is_absolute()
+
+    with pytest.raises(BootstrapConfigurationError):
+        BootstrapSupervisor(
+            install_root,
+            verifier=_verifier(signing_key),
+            host_platform="windows",
+            host_architecture="x64",
+            source_environment={"ECOREX_RUNTIME_OWNER_NONCE": "invalid"},
+        )
 
 
 def test_default_resolver_fails_closed_for_ambiguous_or_linked_entrypoint(

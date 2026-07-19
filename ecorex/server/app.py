@@ -43,6 +43,7 @@ from .errors import ServerConfigurationError
 
 SecretFactory = Callable[[int], str]
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_RUNTIME_OWNER_NONCE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 _SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
@@ -86,6 +87,7 @@ class ProductServerSettings:
     platform: str = field(default_factory=platform_module.system)
     architecture: str = field(default_factory=platform_module.machine)
     web_manifest_artifact_id: str = "web-manifest"
+    runtime_owner_nonce: str | None = field(default=None, repr=False, compare=False)
     secret_factory: SecretFactory | None = field(
         default=None, repr=False, compare=False
     )
@@ -190,6 +192,11 @@ class ProductServerSettings:
             self.web_manifest_artifact_id
         ):
             raise ServerConfigurationError("web manifest artifact id is invalid")
+        if self.runtime_owner_nonce is not None and (
+            not isinstance(self.runtime_owner_nonce, str)
+            or _RUNTIME_OWNER_NONCE.fullmatch(self.runtime_owner_nonce) is None
+        ):
+            raise ServerConfigurationError("Runtime owner nonce is invalid")
         copied_keys: dict[str, bytes] = {}
         for key_id, public_key in self.trusted_public_keys.items():
             if not isinstance(key_id, str) or not key_id:
@@ -618,6 +625,36 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
     register_runtime(settings=runtime_settings, app=app)
     app.state.web_bundle = bundle
     app.state.runtime_bearer_token = bearer_token
+
+    @app.get(
+        "/api/v1/runtime-owner",
+        status_code=204,
+        include_in_schema=False,
+    )
+    async def runtime_owner(request: Request) -> Response:
+        supplied = request.headers.get("X-EcoreX-Owner-Nonce", "")
+        expected = settings.runtime_owner_nonce
+        if (
+            expected is None
+            or not isinstance(supplied, str)
+            or not secrets.compare_digest(supplied, expected)
+        ):
+            return _apply_security_headers(
+                JSONResponse(
+                    status_code=404,
+                    content={"detail": "Not Found"},
+                    headers={"Cache-Control": "no-store"},
+                )
+            )
+        return _apply_security_headers(
+            Response(
+                status_code=204,
+                headers={
+                    "Cache-Control": "no-store",
+                    "X-EcoreX-Runtime-Owner": "verified",
+                },
+            )
+        )
 
     @app.middleware("http")
     async def product_boundary(request: Request, call_next):

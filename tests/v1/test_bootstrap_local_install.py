@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from datetime import UTC, datetime
 import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from ecorex import __version__
 from ecorex.bootstrap import install_local
 from ecorex.pack_catalog import (
     CAPABILITY_PACK_SERVICE_IDS,
@@ -91,12 +93,82 @@ def _target() -> tuple[str, str]:
 
 def _release(tmp_path: Path):
     platform, architecture = _target()
+    private = Ed25519PrivateKey.generate()
+    publication_private = Ed25519PrivateKey.generate()
+    signer = Ed25519MemorySigner("bootstrap-test-key", private)
     core = tmp_path / "core"
     (core / "bin").mkdir(parents=True)
     launcher = "ecorex.exe" if platform == "windows" else "ecorex"
     (core / "bin" / launcher).write_bytes(b"signed-test-launcher")
-    private = Ed25519PrivateKey.generate()
-    signer = Ed25519MemorySigner("bootstrap-test-key", private)
+    bootstrap = tmp_path / "bootstrap-companion"
+    (bootstrap / "bin").mkdir(parents=True)
+    bootstrap_launcher = (
+        "ecorex-bootstrap.exe"
+        if platform == "windows"
+        else "ecorex-bootstrap"
+    )
+    (bootstrap / "bin" / bootstrap_launcher).write_bytes(
+        b"signed-test-bootstrap"
+    )
+    bootstrap_executables = [f"bin/{bootstrap_launcher}"]
+    helper_digest = ""
+    if platform == "windows":
+        helper = bootstrap / "bin" / "ecorex-sandbox-host.exe"
+        helper.write_bytes(
+            b"signed-test-sandbox-helper"
+        )
+        helper_digest = hashlib.sha256(helper.read_bytes()).hexdigest()
+        bootstrap_executables.append("bin/ecorex-sandbox-host.exe")
+    release_public = private.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    publication_public = publication_private.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    _major, minor, patch = (int(value) for value in __version__.split("."))
+    sequence = minor * 1_000_000 + patch + 1
+    minimum_payload = (
+        b"ecorex.bootstrap-minimum-stable.v1\0"
+        + str(sequence).encode()
+        + b"\0"
+        + __version__.encode()
+    )
+    (bootstrap / "bootstrap-config.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "public_index_url": (
+                    "https://dl.ecoremedia.net/ecorex-agent/"
+                    "public-bootstrap-index.json"
+                ),
+                "release_public_keys": {
+                    signer.key_id: base64.b64encode(release_public).decode()
+                },
+                "publication_public_keys": {
+                    "publication-test-key": base64.b64encode(
+                        publication_public
+                    ).decode()
+                },
+                "sandbox_helper_sha256": helper_digest,
+                "minimum_stable": {
+                    "sequence": sequence,
+                    "version": __version__,
+                    "signature": {
+                        "algorithm": "ed25519",
+                        "key_id": signer.key_id,
+                        "value": base64.b64encode(
+                            private.sign(minimum_payload)
+                        ).decode(),
+                    },
+                },
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     sources = (
         ReleaseSource(
             "mirror", SourceKind.GITHUB_CN_MIRROR, 0, "https://mirror.example/v1"
@@ -113,6 +185,13 @@ def _release(tmp_path: Path):
             platform=platform,
             architecture=architecture,
             executable_paths=(f"bin/{launcher}",),
+        ),
+        ArtifactBuildInput(
+            source_dir=bootstrap,
+            kind=ArtifactKind.BOOTSTRAP,
+            platform=platform,
+            architecture=architecture,
+            executable_paths=tuple(bootstrap_executables),
         ),
         *(
             _pack(tmp_path / "packs", pack_id)

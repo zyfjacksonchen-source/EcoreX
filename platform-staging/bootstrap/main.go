@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
@@ -32,10 +33,12 @@ import (
 const (
 	maxIndexBytes      = 256 * 1024
 	maxManifestBytes   = 1024 * 1024
+	maxBootstrapBytes  = 10 * 1024 * 1024
 	maxCoreBytes       = 150 * 1024 * 1024
 	maxPackBytes       = 500 * 1024 * 1024
 	maxFiles           = 50_000
 	artifactChunkBytes = 8 * 1024 * 1024
+	productWebUIURL    = "http://127.0.0.1:8765/"
 )
 
 var (
@@ -44,6 +47,7 @@ var (
 	sha256Pattern       = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	stableSemverPattern = regexp.MustCompile(`^1\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$`)
 	semverPattern       = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
+	errProductLocked    = errors.New("another EcoreX install or Runtime is active")
 )
 
 // Set by the pinned Go build.  The external config may carry a signed release
@@ -220,6 +224,12 @@ type installResult struct {
 	SlotID        string `json:"slot_id"`
 }
 
+type runtimeOwnerReceipt struct {
+	SchemaVersion int    `json:"schema_version"`
+	Nonce         string `json:"nonce"`
+	IssuedAt      string `json:"issued_at"`
+}
+
 type boundedBuffer struct {
 	buffer   bytes.Buffer
 	limit    int
@@ -247,7 +257,12 @@ func (buffer *boundedBuffer) Bytes() []byte {
 func main() {
 	selfTest := flag.Bool("self-test", false, "verify the packaged bootstrap entrypoint")
 	indexURL := flag.String("index", "", "override the public discovery URL")
-	installRoot := flag.String("install-root", "", "override the EcoreX data root")
+	installRootFlag := flag.String("install-root", "", "override the EcoreX data root")
+	launchInstalled := flag.Bool(
+		"launch-installed",
+		false,
+		"launch the already-installed signed Runtime without release discovery",
+	)
 	flag.Parse()
 	if *selfTest {
 		platform, architecture, err := productTarget()
@@ -257,9 +272,73 @@ func main() {
 		writeJSON(map[string]any{"schema_version": 1, "status": "passed", "platform": platform, "architecture": architecture})
 		return
 	}
-	if err := run(*indexURL, *installRoot); err != nil {
+	if *launchInstalled {
+		if *indexURL != "" {
+			fail(fmt.Errorf("installed Runtime launch does not accept release discovery overrides"))
+		}
+		if err := runInstalled(*installRootFlag); err != nil {
+			fail(err)
+		}
+		return
+	}
+	if err := run(*indexURL, *installRootFlag); err != nil {
 		fail(err)
 	}
+}
+
+func runInstalled(rootOverride string) error {
+	configuration, _, keys, _, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	root, err := installRoot(rootOverride)
+	if err != nil {
+		return err
+	}
+	lock, err := acquireProductLock(filepath.Join(root, "bootstrap-launch.lock"))
+	if err != nil {
+		if errors.Is(err, errProductLocked) {
+			return waitForRuntimeAndOpen(root, 5*time.Minute)
+		}
+		return err
+	}
+	defer lock.close()
+	if err := ensureBootstrapStateDirectory(root); err != nil {
+		return err
+	}
+	if err := ensureRuntimeDataDirectories(root); err != nil {
+		return err
+	}
+	if opened, err := openRunningRuntime(root); err != nil {
+		return err
+	} else if opened {
+		return nil
+	}
+	if _, err := stageSandboxHelper(root, configuration.SandboxHelperSHA256); err != nil {
+		return err
+	}
+	legacySource, err := loadTrustedLocalConfig(root)
+	if err != nil {
+		return err
+	}
+	trustedDefinitions, err := persistTrust(
+		root, configuration.ReleasePublicKeys, keys,
+	)
+	if err != nil {
+		return err
+	}
+	python, err := installedPython(root)
+	if err != nil {
+		return err
+	}
+	ownerNonce, err := issueRuntimeOwnerReceipt(root)
+	if err != nil {
+		return err
+	}
+	go func() {
+		_ = waitForRuntimeAndOpen(root, 5*time.Minute)
+	}()
+	return supervise(python, root, trustedDefinitions, legacySource, ownerNonce)
 }
 
 func run(indexOverride, rootOverride string) error {
@@ -286,6 +365,9 @@ func run(indexOverride, rootOverride string) error {
 	}
 	lock, err := acquireProductLock(filepath.Join(root, "bootstrap-launch.lock"))
 	if err != nil {
+		if errors.Is(err, errProductLocked) {
+			return waitForRuntimeAndOpen(root, 5*time.Minute)
+		}
 		return err
 	}
 	defer lock.close()
@@ -294,6 +376,11 @@ func run(indexOverride, rootOverride string) error {
 	}
 	if err := ensureRuntimeDataDirectories(root); err != nil {
 		return err
+	}
+	if opened, err := openRunningRuntime(root); err != nil {
+		return err
+	} else if opened {
+		return nil
 	}
 	bootstrapHelper, err := stageSandboxHelper(root, configuration.SandboxHelperSHA256)
 	if err != nil {
@@ -343,6 +430,12 @@ func run(indexOverride, rootOverride string) error {
 	if err != nil {
 		return err
 	}
+	bootstrapArtifact, err := requiredBootstrapArtifact(
+		&release, index.Release, platform, architecture,
+	)
+	if err != nil {
+		return err
+	}
 	work := filepath.Join(root, "bootstrap-work", release.ReleaseID)
 	if err := os.MkdirAll(work, 0o700); err != nil {
 		return fmt.Errorf("bootstrap workspace is unavailable")
@@ -356,6 +449,10 @@ func run(indexOverride, rootOverride string) error {
 		if err := downloadArtifact(ctx, client, &release, item, destination, keys); err != nil {
 			return err
 		}
+	}
+	bootstrapArchive := filepath.Join(artifactsDir, bootstrapArtifact.FileName)
+	if err := downloadArtifact(ctx, client, &release, bootstrapArtifact, bootstrapArchive, keys); err != nil {
+		return err
 	}
 	manifestPath := filepath.Join(artifactsDir, "release-manifest.json")
 	if err := atomicWrite(manifestPath, manifestBytes, 0o600); err != nil {
@@ -383,7 +480,270 @@ func run(indexOverride, rootOverride string) error {
 	if err := os.RemoveAll(work); err != nil {
 		return fmt.Errorf("bootstrap workspace cleanup failed")
 	}
-	return supervise(python, root, trustedDefinitions, legacySource)
+	ownerNonce, err := issueRuntimeOwnerReceipt(root)
+	if err != nil {
+		return err
+	}
+	go func() {
+		_ = waitForRuntimeAndOpen(root, 5*time.Minute)
+	}()
+	return supervise(python, root, trustedDefinitions, legacySource, ownerNonce)
+}
+
+func waitForRuntimeAndOpen(root string, timeout time.Duration) error {
+	if timeout <= 0 || timeout > 15*time.Minute {
+		return fmt.Errorf("Runtime launch wait is invalid")
+	}
+	deadline := time.Now().Add(timeout)
+	client := &http.Client{
+		Timeout: 3 * time.Second,
+		Transport: &http.Transport{
+			Proxy: nil,
+			DialContext: (&net.Dialer{
+				Timeout:   2 * time.Second,
+				KeepAlive: -1,
+			}).DialContext,
+			DisableKeepAlives: true,
+		},
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	defer client.CloseIdleConnections()
+	for {
+		if runtimeUIReadyAt(client, root, productWebUIURL) {
+			if err := openWebUI(productWebUIURL); err != nil {
+				return fmt.Errorf("EcoreX WebUI could not be opened")
+			}
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("EcoreX Runtime did not become ready")
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+func openRunningRuntime(root string) (bool, error) {
+	return openRunningRuntimeAt(root, productWebUIURL, openWebUI)
+}
+
+func openRunningRuntimeAt(
+	root, webUIURL string,
+	opener func(string) error,
+) (bool, error) {
+	if opener == nil {
+		return false, fmt.Errorf("WebUI opener is unavailable")
+	}
+	client := &http.Client{
+		Timeout: 3 * time.Second,
+		Transport: &http.Transport{
+			Proxy: nil,
+			DialContext: (&net.Dialer{
+				Timeout:   2 * time.Second,
+				KeepAlive: -1,
+			}).DialContext,
+			DisableKeepAlives: true,
+		},
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	defer client.CloseIdleConnections()
+	if !runtimeUIReadyAt(client, root, webUIURL) {
+		return false, nil
+	}
+	if err := opener(webUIURL); err != nil {
+		return false, fmt.Errorf("EcoreX WebUI could not be opened")
+	}
+	return true, nil
+}
+
+func runtimeUIReadyAt(client *http.Client, root, webUIURL string) bool {
+	if client == nil || webUIURL == "" {
+		return false
+	}
+	ownerNonce, ok := readRuntimeOwnerReceipt(root)
+	if !ok {
+		return false
+	}
+	releaseID, version, ok := installedRuntimeIdentity(root)
+	if !ok {
+		return false
+	}
+	ownerRequest, err := http.NewRequest(
+		http.MethodGet,
+		strings.TrimRight(webUIURL, "/")+"/api/v1/runtime-owner",
+		nil,
+	)
+	if err != nil {
+		return false
+	}
+	ownerRequest.Header.Set("X-EcoreX-Owner-Nonce", ownerNonce)
+	ownerResponse, err := client.Do(ownerRequest)
+	if err != nil {
+		return false
+	}
+	ownerResponse.Body.Close()
+	if ownerResponse.StatusCode != http.StatusNoContent ||
+		ownerResponse.Header.Get("X-EcoreX-Runtime-Owner") != "verified" ||
+		ownerResponse.Header.Get("Cache-Control") != "no-store" {
+		return false
+	}
+	request, err := http.NewRequest(http.MethodGet, webUIURL, nil)
+	if err != nil {
+		return false
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return false
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK || response.Header.Get("Cache-Control") != "no-store" {
+		return false
+	}
+	payload, err := io.ReadAll(io.LimitReader(response.Body, 1024*1024+1))
+	if err != nil || len(payload) == 0 || len(payload) > 1024*1024 {
+		return false
+	}
+	return bytes.Contains(payload, []byte("window.__ECOREX_RUNTIME__=Object.freeze(")) &&
+		bytes.Contains(payload, []byte(`"releaseId":"`+releaseID+`"`)) &&
+		bytes.Contains(payload, []byte(`"version":"`+version+`"`))
+}
+
+func issueRuntimeOwnerReceipt(root string) (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("Runtime owner nonce could not be generated")
+	}
+	nonce := base64.RawURLEncoding.EncodeToString(raw)
+	receipt := runtimeOwnerReceipt{
+		SchemaVersion: 1,
+		Nonce:         nonce,
+		IssuedAt:      time.Now().UTC().Truncate(time.Second).Format("2006-01-02T15:04:05Z"),
+	}
+	payload, err := json.Marshal(receipt)
+	if err != nil {
+		return "", fmt.Errorf("Runtime owner receipt could not be encoded")
+	}
+	payload = append(payload, '\n')
+	path := filepath.Join(root, "bootstrap", "runtime-owner.json")
+	if err := atomicWrite(path, payload, 0o600); err != nil {
+		return "", fmt.Errorf("Runtime owner receipt could not be persisted")
+	}
+	return nonce, nil
+}
+
+func readRuntimeOwnerReceipt(root string) (string, bool) {
+	path := filepath.Join(root, "bootstrap", "runtime-owner.json")
+	info, err := os.Lstat(path)
+	if err != nil ||
+		!info.Mode().IsRegular() ||
+		info.Mode()&os.ModeSymlink != 0 ||
+		info.Size() < 1 ||
+		info.Size() > 1024 {
+		return "", false
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil || int64(len(payload)) != info.Size() {
+		return "", false
+	}
+	var receipt runtimeOwnerReceipt
+	if decodeExact(payload, &receipt) != nil ||
+		receipt.SchemaVersion != 1 ||
+		len(receipt.Nonce) != 43 {
+		return "", false
+	}
+	decoded, err := base64.RawURLEncoding.Strict().DecodeString(receipt.Nonce)
+	if err != nil || len(decoded) != 32 {
+		return "", false
+	}
+	if _, err := parseCanonicalUTCSecond(receipt.IssuedAt); err != nil {
+		return "", false
+	}
+	return receipt.Nonce, true
+}
+
+func installedRuntimeIdentity(root string) (string, string, bool) {
+	pointers, ok := readInstalledPointers(root)
+	if !ok {
+		return "", "", false
+	}
+	markerBytes, err := os.ReadFile(filepath.Join(root, "slots", pointers.Current, ".slot.json"))
+	if err != nil || len(markerBytes) == 0 || len(markerBytes) > 64*1024 {
+		return "", "", false
+	}
+	var marker map[string]any
+	if err := json.Unmarshal(markerBytes, &marker); err != nil {
+		return "", "", false
+	}
+	releaseID, releaseOK := marker["release_id"].(string)
+	version, versionOK := marker["version"].(string)
+	if !releaseOK || !versionOK || !releaseIDPattern.MatchString(releaseID) || !semverPattern.MatchString(version) {
+		return "", "", false
+	}
+	return releaseID, version, true
+}
+
+type installedPointers struct {
+	Current   string   `json:"current"`
+	Previous  *string  `json:"previous"`
+	KnownGood []string `json:"known_good"`
+}
+
+func readInstalledPointers(root string) (installedPointers, bool) {
+	pointerBytes, err := os.ReadFile(filepath.Join(root, "slot-pointers.json"))
+	if err != nil || len(pointerBytes) == 0 || len(pointerBytes) > 16*1024 {
+		return installedPointers{}, false
+	}
+	var pointers installedPointers
+	if err := decodeExact(pointerBytes, &pointers); err != nil ||
+		!safeID.MatchString(pointers.Current) ||
+		!slicesContain(pointers.KnownGood, pointers.Current) {
+		return installedPointers{}, false
+	}
+	if pointers.Previous != nil && !safeID.MatchString(*pointers.Previous) {
+		return installedPointers{}, false
+	}
+	return pointers, true
+}
+
+func installedPython(root string) (string, error) {
+	pointers, ok := readInstalledPointers(root)
+	if !ok {
+		return "", fmt.Errorf("installed Runtime pointer is invalid")
+	}
+	payload := filepath.Join(root, "slots", pointers.Current, "payload")
+	python := filepath.Join(payload, "bin", "pack-python", "bin", "python3")
+	if runtime.GOOS == "windows" {
+		python = filepath.Join(payload, "bin", "pack-python", "python.exe")
+	}
+	info, err := os.Lstat(python)
+	if err != nil ||
+		!info.Mode().IsRegular() ||
+		info.Mode()&os.ModeSymlink != 0 ||
+		info.Size() < 1 {
+		return "", fmt.Errorf("installed Runtime Python is unsafe")
+	}
+	return python, nil
+}
+
+func slicesContain(values []string, expected string) bool {
+	if len(values) < 1 || len(values) > 3 {
+		return false
+	}
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if !safeID.MatchString(value) {
+			return false
+		}
+		if _, duplicated := seen[value]; duplicated {
+			return false
+		}
+		seen[value] = struct{}{}
+	}
+	_, present := seen[expected]
+	return present
 }
 
 func productTarget() (string, string, error) {
@@ -433,15 +793,8 @@ func loadConfig() (config, string, map[string]ed25519.PublicKey, map[string]ed25
 	if err != nil {
 		return config{}, "", nil, nil, fmt.Errorf("Bootstrap publication trust is invalid")
 	}
-	for keyID, releaseKey := range keys {
-		if _, duplicated := publicationKeys[keyID]; duplicated {
-			return config{}, "", nil, nil, fmt.Errorf("Bootstrap signing roles are not separated")
-		}
-		for _, publicationKey := range publicationKeys {
-			if string(releaseKey) == string(publicationKey) {
-				return config{}, "", nil, nil, fmt.Errorf("Bootstrap signing roles are not separated")
-			}
-		}
+	if err := validateBootstrapSigningRoles(keys, publicationKeys); err != nil {
+		return config{}, "", nil, nil, err
 	}
 	encodedKeys, err := json.Marshal(value.ReleasePublicKeys)
 	if err != nil || !sha256Pattern.MatchString(embeddedReleaseKeysSHA256) || sha256Hex(encodedKeys) != embeddedReleaseKeysSHA256 {
@@ -485,6 +838,23 @@ func decodePublicKeys(encodedKeys map[string]string) (map[string]ed25519.PublicK
 	return keys, nil
 }
 
+func validateBootstrapSigningRoles(
+	releaseKeys map[string]ed25519.PublicKey,
+	publicationKeys map[string]ed25519.PublicKey,
+) error {
+	for keyID, releaseKey := range releaseKeys {
+		if _, duplicated := publicationKeys[keyID]; duplicated {
+			return fmt.Errorf("Bootstrap signing roles are not separated")
+		}
+		for _, publicationKey := range publicationKeys {
+			if bytes.Equal(releaseKey, publicationKey) {
+				return fmt.Errorf("Bootstrap signing roles are not separated")
+			}
+		}
+	}
+	return nil
+}
+
 func stageSandboxHelper(root, expectedDigest string) (string, error) {
 	if runtime.GOOS != "windows" {
 		if expectedDigest != "" {
@@ -523,13 +893,69 @@ func stageSandboxHelper(root, expectedDigest string) (string, error) {
 		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
 			return "", fmt.Errorf("Bootstrap sandbox helper destination is unsafe")
 		}
+		if info.Size() < 1 || info.Size() > 2*1024*1024 {
+			return "", fmt.Errorf("Bootstrap sandbox helper destination is unsafe")
+		}
+		previous, readErr := os.ReadFile(destination)
+		if readErr != nil || int64(len(previous)) != info.Size() {
+			return "", fmt.Errorf("Bootstrap sandbox helper destination is unreadable")
+		}
+		if err := retainSandboxHelper(root, previous, sha256Hex(previous)); err != nil {
+			return "", err
+		}
 	} else if !errors.Is(inspectErr, os.ErrNotExist) {
 		return "", fmt.Errorf("Bootstrap sandbox helper destination is unavailable")
+	}
+	if err := retainSandboxHelper(root, payload, expectedDigest); err != nil {
+		return "", err
 	}
 	if err := atomicWrite(destination, payload, 0o700); err != nil || !fileMatches(destination, metadata.Size(), expectedDigest) {
 		return "", fmt.Errorf("Bootstrap sandbox helper could not be staged")
 	}
 	return destination, nil
+}
+
+func retainSandboxHelper(root string, payload []byte, expectedDigest string) error {
+	if len(payload) < 1 || len(payload) > 2*1024*1024 || !sha256Pattern.MatchString(expectedDigest) || sha256Hex(payload) != expectedDigest {
+		return fmt.Errorf("sandbox helper retention identity is invalid")
+	}
+	helpers := filepath.Join(root, "bootstrap", "helpers")
+	directory := filepath.Join(helpers, expectedDigest)
+	if err := os.Mkdir(helpers, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("sandbox helper retention directory is unavailable")
+	}
+	for _, candidate := range []string{root, filepath.Join(root, "bootstrap"), helpers} {
+		info, inspectErr := os.Lstat(candidate)
+		resolved, resolveErr := filepath.EvalSymlinks(candidate)
+		absolute, absoluteErr := filepath.Abs(candidate)
+		resolvedAbsolute, resolvedAbsoluteErr := filepath.Abs(resolved)
+		if inspectErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || resolveErr != nil || absoluteErr != nil || resolvedAbsoluteErr != nil || !strings.EqualFold(filepath.Clean(absolute), filepath.Clean(resolvedAbsolute)) {
+			return fmt.Errorf("sandbox helper retention directory is unsafe")
+		}
+	}
+	if err := os.Mkdir(directory, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("sandbox helper retention directory is unavailable")
+	}
+	info, inspectErr := os.Lstat(directory)
+	resolved, resolveErr := filepath.EvalSymlinks(directory)
+	absolute, absoluteErr := filepath.Abs(directory)
+	resolvedAbsolute, resolvedAbsoluteErr := filepath.Abs(resolved)
+	if inspectErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || resolveErr != nil || absoluteErr != nil || resolvedAbsoluteErr != nil || !strings.EqualFold(filepath.Clean(absolute), filepath.Clean(resolvedAbsolute)) {
+		return fmt.Errorf("sandbox helper retention directory is unsafe")
+	}
+	destination := filepath.Join(directory, "ecorex-sandbox-host.exe")
+	if info, err := os.Lstat(destination); err == nil {
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || !fileMatches(destination, int64(len(payload)), expectedDigest) {
+			return fmt.Errorf("immutable sandbox helper retention conflicts with its digest")
+		}
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("sandbox helper retention destination is unavailable")
+	}
+	if err := atomicWrite(destination, payload, 0o700); err != nil || !fileMatches(destination, int64(len(payload)), expectedDigest) {
+		return fmt.Errorf("sandbox helper could not enter immutable retention")
+	}
+	return nil
 }
 
 func ensureBootstrapStateDirectory(root string) error {
@@ -1122,6 +1548,71 @@ func requiredArtifacts(value *manifest, platform, architecture string) ([]artifa
 	return result, nil
 }
 
+func requiredBootstrapArtifact(
+	value *manifest,
+	discovery *indexRelease,
+	platform string,
+	architecture string,
+) (artifact, error) {
+	if value == nil || discovery == nil {
+		return artifact{}, fmt.Errorf("release Bootstrap descriptor is unavailable")
+	}
+	artifactID := "bootstrap-" + platform + "-" + architecture
+	var selected *artifact
+	for index := range value.Artifacts {
+		item := &value.Artifacts[index]
+		if item.ArtifactID != artifactID {
+			continue
+		}
+		if selected != nil ||
+			item.Platform != platform ||
+			item.Architecture != architecture ||
+			item.SizeBytes > maxBootstrapBytes {
+			return artifact{}, fmt.Errorf("release Bootstrap descriptor is invalid")
+		}
+		selected = item
+	}
+	if selected == nil {
+		return artifact{}, fmt.Errorf("release is missing the required Bootstrap")
+	}
+	var published *indexArtifact
+	for index := range discovery.BootstrapArtifacts {
+		item := &discovery.BootstrapArtifacts[index]
+		if item.ArtifactID != artifactID {
+			continue
+		}
+		if published != nil {
+			return artifact{}, fmt.Errorf("public discovery repeats the host Bootstrap")
+		}
+		published = item
+	}
+	if published == nil ||
+		published.Platform != selected.Platform ||
+		published.Architecture != selected.Architecture ||
+		published.FileName != selected.FileName ||
+		published.SizeBytes != selected.SizeBytes ||
+		published.SHA256 != selected.SHA256 ||
+		published.Signature != selected.Signature ||
+		len(published.Sources) < 1 ||
+		len(published.Sources) > len(value.Sources) {
+		return artifact{}, fmt.Errorf("public discovery does not bind the host Bootstrap")
+	}
+	signedSources := make(map[string]source, len(value.Sources))
+	for _, origin := range value.Sources {
+		signedSources[origin.SourceID] = origin
+	}
+	for index, discovered := range published.Sources {
+		origin, signed := signedSources[discovered.SourceID]
+		if !signed ||
+			discovered.Kind != origin.Kind ||
+			discovered.Priority != index ||
+			validateHTTPS(discovered.URL) != nil {
+			return artifact{}, fmt.Errorf("public discovery Bootstrap source is invalid")
+		}
+	}
+	return *selected, nil
+}
+
 func downloadArtifact(ctx context.Context, client *http.Client, release *manifest, item artifact, destination string, keys map[string]ed25519.PublicKey) error {
 	if fileMatches(destination, item.SizeBytes, item.SHA256) {
 		return verifyArtifactSignature(release, item, keys)
@@ -1370,7 +1861,13 @@ func installLocal(coreRoot, root, manifestPath, artifactsDir string, trusted []s
 	return result, nil
 }
 
-func supervise(python, root string, trusted []string, legacySource string) error {
+func supervise(
+	python string,
+	root string,
+	trusted []string,
+	legacySource string,
+	ownerNonce string,
+) error {
 	arguments := []string{"-I", "-B", "-m", "ecorex.bootstrap", "--install-root", root}
 	if legacySource != "" {
 		arguments = append(arguments, "--legacy-v030-source", legacySource)
@@ -1382,7 +1879,10 @@ func supervise(python, root string, trusted []string, legacySource string) error
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
 	command.Stdin = os.Stdin
-	command.Env = minimalEnvironment()
+	command.Env = append(
+		minimalEnvironment(),
+		"ECOREX_RUNTIME_OWNER_NONCE="+ownerNonce,
+	)
 	if err := command.Run(); err != nil {
 		return fmt.Errorf("installed Runtime did not pass Bootstrap health")
 	}

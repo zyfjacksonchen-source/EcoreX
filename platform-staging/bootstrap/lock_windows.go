@@ -41,7 +41,7 @@ func acquireProductLock(path string) (*productLock, error) {
 	)
 	if result == 0 {
 		file.Close()
-		return nil, fmt.Errorf("another EcoreX install or update is active")
+		return nil, fmt.Errorf("%w", errProductLocked)
 	}
 	return lock, nil
 }

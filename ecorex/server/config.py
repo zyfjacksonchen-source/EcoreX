@@ -36,6 +36,7 @@ from ecorex.bootstrap import (
     DelayedRestartRequester,
     RUNTIME_RELOAD_EXIT_CODE,
     RuntimeEndpoint,
+    RUNTIME_OWNER_NONCE_ENV,
     VerifiedRuntimeSlot,
 )
 from ecorex.capabilities import (
@@ -780,6 +781,12 @@ def load_product_runtime(
         raise ProductRuntimeTrustError(
             "Product Runtime must be launched by the signed Bootstrap"
         )
+    runtime_owner_nonce = source_environment.get(RUNTIME_OWNER_NONCE_ENV)
+    if runtime_owner_nonce is not None and (
+        not isinstance(runtime_owner_nonce, str)
+        or re.fullmatch(r"[A-Za-z0-9_-]{43}", runtime_owner_nonce) is None
+    ):
+        raise ProductRuntimeTrustError("Runtime owner provenance is invalid")
     try:
         endpoint = RuntimeEndpoint(host, port)
     except BootstrapConfigurationError:
@@ -897,12 +904,10 @@ def load_product_runtime(
             raise ProductRuntimeTrustError(
                 "Runtime sandbox security provision is unavailable"
             )
-        sandbox_security = WindowsSandboxSlotSecurity(
+        sandbox_security = WindowsSandboxSlotSecurity.for_provision_digest(
             install_root,
-            install_root / "bootstrap" / "bin" / "ecorex-sandbox-host.exe",
-            expected_helper_sha256=str(
-                security_marker.get("provision_helper_sha256", "")
-            ),
+            str(security_marker.get("provision_helper_sha256", "")),
+            release_id=selected.manifest.release_id,
         )
         if not sandbox_security.validate(
             selected.slot_path,
@@ -1219,6 +1224,7 @@ def load_product_runtime(
             port=endpoint.port,
             platform=config.identity.platform,
             architecture=config.identity.architecture,
+            runtime_owner_nonce=runtime_owner_nonce,
             managed_session_service=managed_session,
             managed_session_refresh_service=session_refresh,
             managed_session_refresh_poll_seconds=30.0,

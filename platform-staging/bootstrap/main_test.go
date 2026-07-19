@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -44,6 +45,52 @@ func canonicalTestTempDir(t *testing.T) string {
 		t.Fatalf("canonical test directory is unsafe: %v", err)
 	}
 	return filepath.Clean(absolute)
+}
+
+func TestSandboxHelperRetentionKeepsDigestVersionsImmutable(t *testing.T) {
+	root := canonicalTestTempDir(t)
+	if err := os.MkdirAll(filepath.Join(root, "bootstrap"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	first := bytes.Repeat([]byte("first-helper"), 64)
+	second := bytes.Repeat([]byte("second-helper"), 64)
+	firstDigest := sha256Hex(first)
+	secondDigest := sha256Hex(second)
+	if err := retainSandboxHelper(root, first, firstDigest); err != nil {
+		t.Fatal(err)
+	}
+	if err := retainSandboxHelper(root, second, secondDigest); err != nil {
+		t.Fatal(err)
+	}
+	firstPath := filepath.Join(
+		root,
+		"bootstrap",
+		"helpers",
+		firstDigest,
+		"ecorex-sandbox-host.exe",
+	)
+	secondPath := filepath.Join(
+		root,
+		"bootstrap",
+		"helpers",
+		secondDigest,
+		"ecorex-sandbox-host.exe",
+	)
+	if !fileMatches(firstPath, int64(len(first)), firstDigest) {
+		t.Fatal("the retained prior helper changed")
+	}
+	if !fileMatches(secondPath, int64(len(second)), secondDigest) {
+		t.Fatal("the retained target helper did not verify")
+	}
+	if err := retainSandboxHelper(root, first, firstDigest); err != nil {
+		t.Fatalf("idempotent helper retention failed: %v", err)
+	}
+	if err := os.WriteFile(firstPath, second, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := retainSandboxHelper(root, first, firstDigest); err == nil {
+		t.Fatal("a digest-store conflict was accepted")
+	}
 }
 
 func signedManifest(t *testing.T) (*manifest, *indexRelease, map[string]ed25519.PublicKey) {
@@ -781,5 +828,164 @@ func TestRequiredArtifactsIncludesEveryProductCapabilityPack(t *testing.T) {
 	)
 	if _, err := requiredArtifacts(value, "windows", "x64"); err == nil {
 		t.Fatal("release with an unexpected host capability pack was accepted")
+	}
+}
+
+func TestRequiredBootstrapArtifactIsBoundToSignedManifestAndDiscovery(t *testing.T) {
+	item := artifact{
+		ArtifactID:   "bootstrap-windows-x64",
+		Platform:     "windows",
+		Architecture: "x64",
+		FileName:     "ecorex-bootstrap-windows-x64-1.0.3.zip",
+		SizeBytes:    128,
+		SHA256:       strings.Repeat("a", 64),
+		Signature: signature{
+			Algorithm: "ed25519",
+			KeyID:     "release-key",
+			Value:     base64.StdEncoding.EncodeToString(make([]byte, ed25519.SignatureSize)),
+		},
+	}
+	sources := []source{
+		{SourceID: "mirror", Kind: "github-cn-mirror", Priority: 0, BaseURL: "https://mirror.example/v1"},
+		{SourceID: "github", Kind: "github-release", Priority: 1, BaseURL: "https://github.example/v1"},
+		{SourceID: "cdn", Kind: "ecorex-cdn", Priority: 2, BaseURL: "https://cdn.example/v1"},
+	}
+	discoveredSources := make([]indexSource, 0, len(sources))
+	for _, origin := range sources {
+		discoveredSources = append(discoveredSources, indexSource{
+			SourceID: origin.SourceID,
+			Kind:     origin.Kind,
+			Priority: origin.Priority,
+			URL:      strings.TrimRight(origin.BaseURL, "/") + "/" + item.FileName,
+		})
+	}
+	release := &manifest{Sources: sources, Artifacts: []artifact{item}}
+	discovery := &indexRelease{BootstrapArtifacts: []indexArtifact{{
+		ArtifactID:   item.ArtifactID,
+		Platform:     item.Platform,
+		Architecture: item.Architecture,
+		FileName:     item.FileName,
+		SizeBytes:    item.SizeBytes,
+		SHA256:       item.SHA256,
+		Signature:    item.Signature,
+		Sources:      discoveredSources,
+	}}}
+	selected, err := requiredBootstrapArtifact(release, discovery, "windows", "x64")
+	if err != nil || selected != item {
+		t.Fatalf("signed host Bootstrap was rejected: %v", err)
+	}
+	discovery.BootstrapArtifacts[0].Sources = discovery.BootstrapArtifacts[0].Sources[:1]
+	if _, err := requiredBootstrapArtifact(release, discovery, "windows", "x64"); err != nil {
+		t.Fatalf("relaxed single-source Stable Bootstrap was rejected: %v", err)
+	}
+	discovery.BootstrapArtifacts[0].Sources[0].URL = "http://mirror.example/wrong.zip"
+	if _, err := requiredBootstrapArtifact(release, discovery, "windows", "x64"); err == nil {
+		t.Fatal("an insecure Bootstrap discovery source was accepted")
+	}
+}
+
+func TestOrphanRuntimeIsOpenedWithoutRotatingItsOwnerNonce(t *testing.T) {
+	root := canonicalTestTempDir(t)
+	slotID := "slot-orphan-runtime"
+	releaseID := "release-stable-1234567890abcdef12345678"
+	version := "1.0.0"
+	if err := os.MkdirAll(filepath.Join(root, "slots", slotID), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWrite(
+		filepath.Join(root, "slot-pointers.json"),
+		[]byte(fmt.Sprintf(
+			`{"current":%q,"previous":null,"known_good":[%q]}`+"\n",
+			slotID,
+			slotID,
+		)),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWrite(
+		filepath.Join(root, "slots", slotID, ".slot.json"),
+		[]byte(fmt.Sprintf(
+			`{"release_id":%q,"version":%q}`+"\n",
+			releaseID,
+			version,
+		)),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "bootstrap"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	nonce, err := issueRuntimeOwnerReceipt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptPath := filepath.Join(root, "bootstrap", "runtime-owner.json")
+	before, err := os.ReadFile(receiptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(
+		response http.ResponseWriter,
+		request *http.Request,
+	) {
+		response.Header().Set("Cache-Control", "no-store")
+		switch request.URL.Path {
+		case "/api/v1/runtime-owner":
+			if request.Header.Get("X-EcoreX-Owner-Nonce") != nonce {
+				http.NotFound(response, request)
+				return
+			}
+			response.Header().Set("X-EcoreX-Runtime-Owner", "verified")
+			response.WriteHeader(http.StatusNoContent)
+		case "/":
+			_, _ = fmt.Fprintf(
+				response,
+				`window.__ECOREX_RUNTIME__=Object.freeze({"releaseId":%q,"version":%q})`,
+				releaseID,
+				version,
+			)
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+	openCalls := 0
+	opened, err := openRunningRuntimeAt(
+		root,
+		server.URL+"/",
+		func(location string) error {
+			openCalls++
+			if location != server.URL+"/" {
+				t.Fatalf("unexpected WebUI location: %q", location)
+			}
+			return nil
+		},
+	)
+	if err != nil || !opened || openCalls != 1 {
+		t.Fatalf("verified orphan Runtime was not opened: %v", err)
+	}
+	after, err := os.ReadFile(receiptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("orphan Runtime owner nonce was rotated before hot-open")
+	}
+	if _, err := issueRuntimeOwnerReceipt(root); err != nil {
+		t.Fatal(err)
+	}
+	openCalls = 0
+	opened, err = openRunningRuntimeAt(
+		root,
+		server.URL+"/",
+		func(_ string) error {
+			openCalls++
+			return nil
+		},
+	)
+	if err != nil || opened || openCalls != 0 {
+		t.Fatal("a service without the persisted owner nonce was hot-opened")
 	}
 }

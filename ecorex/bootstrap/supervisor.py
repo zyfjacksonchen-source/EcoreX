@@ -7,6 +7,7 @@ import ipaddress
 import json
 import os
 import platform as platform_module
+import re
 import signal
 import secrets
 import socket
@@ -57,6 +58,9 @@ from .errors import (
 )
 from .restart import RUNTIME_RELOAD_EXIT_CODE, RUNTIME_RESTART_EXIT_CODE
 
+RUNTIME_OWNER_NONCE_ENV = "ECOREX_RUNTIME_OWNER_NONCE"
+_RUNTIME_OWNER_NONCE = re.compile(r"^[A-Za-z0-9_-]{43}$")
+
 
 class BootstrapExitCode(IntEnum):
     """Bounded public process outcomes used by the bootstrap CLI."""
@@ -94,6 +98,18 @@ class RuntimeEndpoint:
             raise BootstrapConfigurationError("Runtime port must be an integer")
         if not 1 <= self.port <= 65535:
             raise BootstrapConfigurationError("Runtime port is outside the TCP range")
+
+
+class ActivationCompanion(Protocol):
+    """Reversible desktop launcher side of one provisional activation."""
+
+    def prepare_transaction(self, transaction_id: str) -> Path: ...
+
+    def commit_activation(self, transaction_id: str) -> None: ...
+
+    def rollback_activation(self, transaction_id: str) -> None: ...
+
+    def converge_activation(self) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -376,6 +392,7 @@ class BootstrapSupervisor:
         lock_timeout: float | None = 10.0,
         source_environment: Mapping[str, str] | None = None,
         activation_health_probe: ActivationHealthProbe | None = None,
+        activation_companion: ActivationCompanion | None = None,
         pack_content_verifier: PackContentVerifier | None = None,
     ) -> None:
         if (
@@ -415,6 +432,19 @@ class BootstrapSupervisor:
         )
         if not callable(getattr(self.activation_health_probe, "probe", None)):
             raise BootstrapConfigurationError("activation health probe is invalid")
+        if activation_companion is not None and any(
+            not callable(getattr(activation_companion, method, None))
+            for method in (
+                "prepare_transaction",
+                "commit_activation",
+                "rollback_activation",
+                "converge_activation",
+            )
+        ):
+            raise BootstrapConfigurationError(
+                "activation companion is invalid"
+            )
+        self.activation_companion = activation_companion
         self.activations = ProvisionalActivationController(
             self.slots.root,
             verifier=release_verifier,
@@ -518,17 +548,44 @@ class BootstrapSupervisor:
                         launched_slots=tuple(launched),
                     )
                 confirmed = False
+                runtime_confirmed = False
                 try:
                     with self._selection_lock:
+                        if self.activation_companion is not None:
+                            self.activation_companion.prepare_transaction(
+                                selected.provisional.intent.transaction_id
+                            )
                         self.activations.confirm(
                             selected.provisional.intent.transaction_id,
                             selected.provisional.intent.health_identity,
                         )
+                        runtime_confirmed = True
+                        if self.activation_companion is not None:
+                            try:
+                                self.activation_companion.commit_activation(
+                                    selected.provisional.intent.transaction_id
+                                )
+                            except Exception:
+                                # The new entry is already active.  Its durable
+                                # transaction is converged on the next cold start.
+                                pass
                     confirmed = True
                 except Exception:
                     try:
                         with self._selection_lock:
                             confirmed = self.activations.reconcile_confirmation()
+                            if self.activation_companion is not None:
+                                if confirmed or runtime_confirmed:
+                                    try:
+                                        self.activation_companion.commit_activation(
+                                            selected.provisional.intent.transaction_id
+                                        )
+                                    except Exception:
+                                        pass
+                                else:
+                                    self.activation_companion.rollback_activation(
+                                        selected.provisional.intent.transaction_id
+                                    )
                     except Exception:
                         confirmed = False
                 self._stop_candidate(child)
@@ -1023,6 +1080,14 @@ def _sanitized_environment(source: Mapping[str, str]) -> Mapping[str, str]:
         )
     )
     clean["ECOREX_BOOTSTRAPPED"] = "1"
+    owner_nonce = source.get(RUNTIME_OWNER_NONCE_ENV)
+    if owner_nonce is not None:
+        if (
+            not isinstance(owner_nonce, str)
+            or _RUNTIME_OWNER_NONCE.fullmatch(owner_nonce) is None
+        ):
+            raise BootstrapConfigurationError("Runtime owner nonce is invalid")
+        clean[RUNTIME_OWNER_NONCE_ENV] = owner_nonce
     # A verified side-by-side slot is immutable.  Importing packaged Python
     # must never create or replace ``__pycache__`` inside the signed payload.
     clean["PYTHONDONTWRITEBYTECODE"] = "1"

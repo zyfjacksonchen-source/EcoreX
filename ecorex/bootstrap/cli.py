@@ -28,7 +28,13 @@ from .errors import (
     BootstrapTrustError,
     RuntimeLaunchError,
 )
-from .supervisor import BootstrapExitCode, BootstrapSupervisor, RuntimeEndpoint
+from .companion import BootstrapCompanionInstaller
+from .supervisor import (
+    BootstrapExitCode,
+    BootstrapSupervisor,
+    RuntimeEndpoint,
+    detect_host_target,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -72,6 +78,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         keys = _read_public_keys(args.trusted_public_key)
         verifier = Ed25519SignatureVerifier(keys)
+        host_platform, host_architecture = detect_host_target()
+        bootstrap_companion = BootstrapCompanionInstaller(
+            args.install_root,
+            platform=host_platform,
+            architecture=host_architecture,
+            verifier=verifier,
+        )
+        install_root = Path(os.path.abspath(args.install_root))
+        with ProductFileLock(install_root / "install-update.lock", timeout=10.0):
+            bootstrap_companion.converge_activation()
         if args.legacy_v030_source and args.legacy_source:
             raise BootstrapConfigurationError("Only one legacy source may be selected")
         legacy_source = args.legacy_source or args.legacy_v030_source
@@ -85,7 +101,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "Legacy release evidence requires a selected legacy source"
             )
         if legacy_source:
-            install_root = Path(os.path.abspath(args.install_root))
             with ProductFileLock(install_root / "install-update.lock", timeout=10.0):
                 write_product_migration_plan(
                     install_root,
@@ -103,6 +118,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             verifier=verifier,
             max_requested_restarts=args.max_requested_restarts,
             pack_content_verifier=verify_product_capability_pack,
+            activation_companion=bootstrap_companion,
         )
         prior_handlers: dict[int, object] = {}
 

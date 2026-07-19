@@ -180,7 +180,13 @@ def _write_signed_bundle(tmp_path: Path):
     }
 
 
-def _settings(tmp_path: Path, signed: dict, *, secret_factory=None):
+def _settings(
+    tmp_path: Path,
+    signed: dict,
+    *,
+    secret_factory=None,
+    runtime_owner_nonce: str | None = None,
+):
     return ProductServerSettings(
         database_path=tmp_path / "runtime.db",
         web_root=signed["web_root"],
@@ -192,6 +198,7 @@ def _settings(tmp_path: Path, signed: dict, *, secret_factory=None):
         secret_factory=secret_factory,
         allow_unmanaged_session_for_testing=True,
         workspace_roots=(tmp_path,),
+        runtime_owner_nonce=runtime_owner_nonce,
     )
 
 
@@ -292,6 +299,31 @@ def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
     assert asset.headers["cache-control"] == "public, max-age=31536000, immutable"
     assert asset.headers["x-content-type-options"] == "nosniff"
     assert asset.headers["etag"]
+
+
+def test_runtime_owner_endpoint_requires_exact_process_nonce(tmp_path):
+    signed = _write_signed_bundle(tmp_path)
+    nonce = "A" * 43
+    app = create_product_app(
+        _settings(tmp_path, signed, runtime_owner_nonce=nonce)
+    )
+    client = TestClient(app, base_url=ORIGIN)
+
+    missing = client.get("/api/v1/runtime-owner")
+    wrong = client.get(
+        "/api/v1/runtime-owner",
+        headers={"X-EcoreX-Owner-Nonce": "B" * 43},
+    )
+    accepted = client.get(
+        "/api/v1/runtime-owner",
+        headers={"X-EcoreX-Owner-Nonce": nonce},
+    )
+
+    assert missing.status_code == 404
+    assert wrong.status_code == 404
+    assert accepted.status_code == 204
+    assert accepted.headers["x-ecorex-runtime-owner"] == "verified"
+    assert accepted.headers["cache-control"] == "no-store"
 
 
 @pytest.mark.parametrize(

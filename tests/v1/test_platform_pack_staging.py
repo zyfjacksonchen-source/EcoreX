@@ -4028,7 +4028,7 @@ def test_bootstrap_security_tests_use_a_canonical_real_temp_root() -> None:
     )
     assert "resolved, err := filepath.EvalSymlinks(raw)" in source
     assert "metadata.Mode()&os.ModeSymlink != 0" in source
-    assert source.count("canonicalTestTempDir(t)") == 5
+    assert source.count("canonicalTestTempDir(t)") == 7
     assert source.count("ensureBootstrapStateDirectory(root)") == 3
 
 

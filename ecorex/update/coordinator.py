@@ -19,7 +19,7 @@ import uuid
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Protocol
 
 from .fetching import ArtifactFetcher
 from .download_cache import (
@@ -102,6 +102,52 @@ class RollForwardRequired(UpdateError):
 
 class ActivationAuthorizationRevoked(ActivationError):
     pass
+
+
+class BootstrapCompanion(Protocol):
+    """Signed host launcher staged and activated with one Runtime transaction."""
+
+    def stage(self, manifest: ReleaseManifest, transaction_dir: Path) -> Path: ...
+
+    def prepare_activation(
+        self, manifest: ReleaseManifest, transaction_dir: Path
+    ) -> Path: ...
+
+    def commit_activation(self, transaction_id: str) -> None: ...
+
+    def rollback_activation(self, transaction_id: str) -> None: ...
+
+
+class PayloadSecurityLifecycle(Protocol):
+    """One target-bound payload permission lifecycle."""
+
+    def prepare(
+        self,
+        slot_root: Path,
+        payload_root: Path,
+        package_path: Path,
+        manifest: ReleaseManifest,
+        artifact: ReleaseArtifact,
+    ) -> Mapping[str, Any]: ...
+
+    def attest(
+        self,
+        slot_root: Path,
+        payload_root: Path,
+        package_path: Path,
+        manifest: ReleaseManifest,
+        artifact: ReleaseArtifact,
+        preparation: Mapping[str, Any],
+    ) -> Mapping[str, Any]: ...
+
+    def cleanup_failed(
+        self,
+        slot_root: Path,
+        payload_root: Path,
+        manifest: ReleaseManifest,
+        artifact: ReleaseArtifact,
+        preparation: Mapping[str, Any],
+    ) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,6 +258,7 @@ class InstallCoordinator:
         ),
         lock_timeout: float | None = 0.0,
         bootstrap_health_confirmation: bool = True,
+        bootstrap_companion: BootstrapCompanion | None = None,
         pack_content_verifier: PackContentVerifier | None = None,
         payload_security_preparer: Callable[
             [Path, Path, Path, ReleaseManifest, ReleaseArtifact], Mapping[str, Any]
@@ -255,6 +302,22 @@ class InstallCoordinator:
         if not isinstance(bootstrap_health_confirmation, bool):
             raise ValueError("bootstrap_health_confirmation must be boolean")
         self.bootstrap_health_confirmation = bootstrap_health_confirmation
+        if bootstrap_companion is not None and (
+            not callable(getattr(bootstrap_companion, "stage", None))
+            or not callable(
+                getattr(bootstrap_companion, "prepare_activation", None)
+            )
+            or not callable(
+                getattr(bootstrap_companion, "commit_activation", None)
+            )
+            or not callable(
+                getattr(bootstrap_companion, "rollback_activation", None)
+            )
+        ):
+            raise ValueError(
+                "bootstrap companion must implement its activation transaction"
+            )
+        self.bootstrap_companion = bootstrap_companion
         self.drainer = drainer or (lambda: True)
         self.migration_dry_run = migration_dry_run or (lambda _slot: True)
         self.migration_prepare = migration_prepare or (lambda _slot, _transaction_id: True)
@@ -1151,11 +1214,120 @@ class InstallCoordinator:
                 verify_manifest_signature(manifest, self.verifier)
                 verify_artifact_file(package_path, manifest, artifact, self.verifier)
                 self._ensure_stage_space(package_path)
+                target_security: PayloadSecurityLifecycle | None = None
+                if self.bootstrap_companion is not None:
+                    transaction_dir = self.transactions_dir / transaction_id
+                    self.bootstrap_companion.stage(manifest, transaction_dir)
+                    security_factory = getattr(
+                        self.bootstrap_companion,
+                        "prepare_payload_security",
+                        None,
+                    )
+                    if callable(security_factory):
+                        target_security = security_factory(
+                            manifest,
+                            transaction_dir,
+                        )
                 prepared_packs = self._prepare_pack_set(
                     active,
                     manifest,
                     pack_set,
                 )
+                payload_preparer = None
+                payload_attester = None
+                payload_cleanup = None
+                if target_security is not None:
+                    def prepare_target_payload(slot_root: Path, payload_root: Path):
+                        return target_security.prepare(
+                            slot_root,
+                            payload_root,
+                            package_path,
+                            manifest,
+                            artifact,
+                        )
+
+                    def attest_target_payload(
+                        slot_root: Path,
+                        payload_root: Path,
+                        prepared: Mapping[str, Any],
+                    ):
+                        return target_security.attest(
+                            slot_root,
+                            payload_root,
+                            package_path,
+                            manifest,
+                            artifact,
+                            prepared,
+                        )
+
+                    def cleanup_target_payload(
+                        slot_root: Path,
+                        payload_root: Path,
+                        prepared: Mapping[str, Any],
+                    ) -> None:
+                        target_security.cleanup_failed(
+                            slot_root,
+                            payload_root,
+                            manifest,
+                            artifact,
+                            prepared,
+                        )
+
+                    payload_preparer = prepare_target_payload
+                    payload_attester = attest_target_payload
+                    payload_cleanup = cleanup_target_payload
+                else:
+                    if self.payload_security_preparer is not None:
+                        static_preparer = self.payload_security_preparer
+
+                        def prepare_static_payload(
+                            slot_root: Path,
+                            payload_root: Path,
+                        ):
+                            return static_preparer(
+                                slot_root,
+                                payload_root,
+                                package_path,
+                                manifest,
+                                artifact,
+                            )
+
+                        payload_preparer = prepare_static_payload
+                    if self.payload_security_attester is not None:
+                        static_attester = self.payload_security_attester
+
+                        def attest_static_payload(
+                            slot_root: Path,
+                            payload_root: Path,
+                            prepared: Mapping[str, Any],
+                        ):
+                            return static_attester(
+                                slot_root,
+                                payload_root,
+                                package_path,
+                                manifest,
+                                artifact,
+                                prepared,
+                            )
+
+                        payload_attester = attest_static_payload
+                    if self.payload_security_cleanup is not None:
+                        static_cleanup = self.payload_security_cleanup
+
+                        def cleanup_static_payload(
+                            slot_root: Path,
+                            payload_root: Path,
+                            prepared: Mapping[str, Any],
+                        ) -> None:
+                            static_cleanup(
+                                slot_root,
+                                payload_root,
+                                manifest,
+                                artifact,
+                                prepared,
+                            )
+
+                        payload_cleanup = cleanup_static_payload
                 self.slots.stage(
                     package_path,
                     slot_id=str(active["slot_id"]),
@@ -1166,46 +1338,9 @@ class InstallCoordinator:
                         if prepared_packs is not None
                         else None
                     ),
-                    payload_preparer=(
-                        (
-                            lambda slot_root, payload_root: self.payload_security_preparer(
-                                slot_root,
-                                payload_root,
-                                package_path,
-                                manifest,
-                                artifact,
-                            )
-                        )
-                        if self.payload_security_preparer is not None
-                        else None
-                    ),
-                    payload_attester=(
-                        (
-                            lambda slot_root, payload_root, prepared: self.payload_security_attester(
-                                slot_root,
-                                payload_root,
-                                package_path,
-                                manifest,
-                                artifact,
-                                prepared,
-                            )
-                        )
-                        if self.payload_security_attester is not None
-                        else None
-                    ),
-                    payload_cleanup=(
-                        (
-                            lambda slot_root, payload_root, prepared: self.payload_security_cleanup(
-                                slot_root,
-                                payload_root,
-                                manifest,
-                                artifact,
-                                prepared,
-                            )
-                        )
-                        if self.payload_security_cleanup is not None
-                        else None
-                    ),
+                    payload_preparer=payload_preparer,
+                    payload_attester=payload_attester,
+                    payload_cleanup=payload_cleanup,
                 )
                 self._validate_staged_release(
                     slot_id=str(active["slot_id"]),
@@ -1807,6 +1942,8 @@ class InstallCoordinator:
                 self._prune_slots(max_slots=3)
                 self._cleanup_transaction(active)
                 return result
+            companion_prepared = False
+            companion_attempted = False
             try:
                 healthy = self.health_checker(slot_path) is True
                 health_error = None
@@ -1817,10 +1954,42 @@ class InstallCoordinator:
                         manifest=manifest,
                         artifact=artifact,
                     )
+                    if self.bootstrap_companion is not None:
+                        companion_attempted = True
+                        self.bootstrap_companion.prepare_activation(
+                            manifest,
+                            self.transactions_dir / transaction_id,
+                        )
+                        companion_prepared = True
             except Exception as exc:
                 healthy = False
                 health_error = type(exc).__name__
             if not healthy:
+                if self.bootstrap_companion is not None and companion_attempted:
+                    try:
+                        self.bootstrap_companion.rollback_activation(
+                            transaction_id
+                        )
+                    except Exception:
+                        active["health_failed"] = True
+                        active["health_error"] = "BootstrapCompanionRollbackFailed"
+                        active["rollback_safe"] = False
+                        active["rollforward_required"] = True
+                        self._save_active(active)
+                        self._transition(
+                            transaction_id,
+                            InstallState.FAILED,
+                            "bootstrap_companion_rollback_failed",
+                            {
+                                "slot_id": slot_id,
+                                "error_type": "RollForwardRequired",
+                            },
+                        )
+                        return self._activation_result(
+                            active,
+                            InstallState.FAILED,
+                            error="RollForwardRequired",
+                        )
                 active["health_failed"] = True
                 active["health_error"] = health_error or "HealthCheckFailed"
                 rollback_safe = self._rollback_is_safe(slot_path, prior)
@@ -1864,6 +2033,15 @@ class InstallCoordinator:
                 self._cleanup_transaction(active)
                 return result
             self.slots.mark_known_good(slot_id, keep=3)
+            if self.bootstrap_companion is not None and companion_prepared:
+                try:
+                    self.bootstrap_companion.commit_activation(transaction_id)
+                except Exception:
+                    # The new desktop entry is already live and its companion
+                    # transaction is durable.  Cold-start convergence finishes
+                    # receipt/backup cleanup without reverting the known-good
+                    # Runtime to an incompatible launcher.
+                    pass
             self._transition(
                 transaction_id,
                 InstallState.COMPLETED,

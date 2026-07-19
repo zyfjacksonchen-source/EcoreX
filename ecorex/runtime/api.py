@@ -2496,7 +2496,11 @@ def create_app(
     @app.middleware("http")
     async def local_origin_and_cache_policy(request: Request, call_next):
         commit_guard = None
-        if request.url.path.startswith("/api/v1"):
+        runtime_owner_probe = (
+            request.method == "GET"
+            and request.url.path == "/api/v1/runtime-owner"
+        )
+        if request.url.path.startswith("/api/v1") and not runtime_owner_probe:
             recovery_scope = recovery_mutation_scopes.get(
                 (request.method, request.url.path)
             )

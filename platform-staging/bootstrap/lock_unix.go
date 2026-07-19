@@ -17,7 +17,7 @@ func acquireProductLock(path string) (*productLock, error) {
 	}
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		file.Close()
-		return nil, fmt.Errorf("another EcoreX install or update is active")
+		return nil, fmt.Errorf("%w", errProductLocked)
 	}
 	return &productLock{file: file}, nil
 }

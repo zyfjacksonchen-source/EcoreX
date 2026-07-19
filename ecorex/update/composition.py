@@ -243,6 +243,17 @@ def build_product_update_composition(
             allowed_hosts=settings.artifact_hosts,
             ssl_context=settings.ssl_context,
         )
+        # Keep the update kernel independent of Bootstrap presentation while
+        # using the same signed companion service for install and online update.
+        from ecorex.bootstrap.companion import BootstrapCompanionInstaller
+
+        bootstrap_companion = BootstrapCompanionInstaller(
+            settings.install_root,
+            platform=settings.platform,
+            architecture=settings.architecture,
+            verifier=verifier,
+            fetcher=fetcher,
+        )
         coordinator = InstallCoordinator(
             settings.install_root,
             fetcher=fetcher,
@@ -260,6 +271,7 @@ def build_product_update_composition(
             # threads.  They share one coordinator and must serialize instead
             # of turning a harmless scheduling race into a failed lifespan.
             lock_timeout=None,
+            bootstrap_companion=bootstrap_companion,
             rollback_authorizer=rollback_authorizer.authorize,
             download_cache_max_bytes=settings.download_cache_max_bytes,
             download_cache_max_age_seconds=settings.download_cache_max_age_seconds,

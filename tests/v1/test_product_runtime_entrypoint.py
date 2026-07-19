@@ -79,6 +79,7 @@ from ecorex.update import (
     SourceKind,
     Ed25519SignatureVerifier,
 )
+from ecorex.integration import windows_sandbox_security as sandbox_security_module
 from ecorex.integration.windows_sandbox_security import WindowsSandboxSlotSecurity
 from ecorex.integration.windows_path_identity import windows_invariant_path_key
 from ecorex.integration.sandbox import (
@@ -588,6 +589,9 @@ def _stage_product(tmp_path: Path, *, config_mutator=None):
         "install_root": install_root,
         "payload": slot_path / "payload",
         "slot_path": slot_path,
+        "package": package,
+        "manifest": manifest,
+        "artifact": core,
         "config": slot_path / "payload/runtime-config.json",
         "database": install_root / "state/runtime.sqlite3",
         "release_private": release_private,
@@ -912,6 +916,220 @@ def test_real_signed_slot_builds_product_app_and_uvicorn_config(tmp_path: Path) 
     assert server.composition.slot.slot_id == "slot-product-entrypoint"
     assert server.app.state.product_runtime_composition is server.composition
     assert "ignored" not in repr(server.composition)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows AppContainer path contract")
+@pytest.mark.parametrize("failure_phase", ("before-write-through", "after-write-through"))
+def test_windows_helper_store_fault_boundary_never_publishes_a_missing_helper(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_phase: str,
+) -> None:
+    install_root = tmp_path / failure_phase / "install"
+    bootstrap_bin = install_root / "bootstrap/bin"
+    bootstrap_bin.mkdir(parents=True)
+    helper = bootstrap_bin / "ecorex-sandbox-host.exe"
+    helper.write_bytes(b"MZ-helper-durability-boundary")
+    digest = hashlib.sha256(helper.read_bytes()).hexdigest()
+    final = (
+        install_root
+        / "bootstrap"
+        / "helpers"
+        / digest
+        / "ecorex-sandbox-host.exe"
+    )
+    real_durable_replace = sandbox_security_module._durable_replace
+
+    class SimulatedPowerLoss(BaseException):
+        pass
+
+    def fail_at_boundary(source, destination, *, replace_existing):
+        assert replace_existing is False
+        if failure_phase == "before-write-through":
+            raise OSError("simulated durable rename failure")
+        real_durable_replace(
+            source,
+            destination,
+            replace_existing=replace_existing,
+        )
+        raise SimulatedPowerLoss
+
+    monkeypatch.setattr(
+        sandbox_security_module,
+        "_durable_replace",
+        fail_at_boundary,
+    )
+    if failure_phase == "before-write-through":
+        with pytest.raises(
+            sandbox_security_module.WindowsSandboxSecurityError,
+            match="immutable store",
+        ):
+            WindowsSandboxSlotSecurity(
+                install_root,
+                helper,
+                expected_helper_sha256=digest,
+            )
+        assert not final.exists()
+    else:
+        with pytest.raises(SimulatedPowerLoss):
+            WindowsSandboxSlotSecurity(
+                install_root,
+                helper,
+                expected_helper_sha256=digest,
+            )
+        assert hashlib.sha256(final.read_bytes()).hexdigest() == digest
+
+    monkeypatch.setattr(
+        sandbox_security_module,
+        "_durable_replace",
+        real_durable_replace,
+    )
+    if failure_phase == "after-write-through":
+        restarted = WindowsSandboxSlotSecurity.for_provision_digest(
+            install_root,
+            digest,
+        )
+        assert restarted.bootstrap_helper == final.resolve(strict=True)
+    assert not tuple(
+        (install_root / "bootstrap/helpers").glob(f".{digest}.*")
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows AppContainer path contract")
+def test_windows_helper_rotation_keeps_cold_restart_and_rollback_attestable(
+    tmp_path: Path,
+) -> None:
+    product = _stage_product(tmp_path / "helper-rotation")
+    install_root = product["install_root"]
+    slots = SlotStore(install_root)
+    slot = product["slot_path"]
+    marker = slots.marker("slot-product-entrypoint")
+    receipt = dict(marker["security_provision"])
+    manifest = slots.release_manifest("slot-product-entrypoint")
+    artifact = manifest.artifact(marker["artifact_id"])
+    old_digest = str(receipt["provision_helper_sha256"])
+    mutable_helper = install_root / "bootstrap/bin/ecorex-sandbox-host.exe"
+    retained_old = (
+        install_root
+        / "bootstrap"
+        / "helpers"
+        / old_digest
+        / "ecorex-sandbox-host.exe"
+    )
+    assert retained_old.is_file()
+    assert hashlib.sha256(retained_old.read_bytes()).hexdigest() == old_digest
+
+    # A PE overlay changes the cryptographic identity while preserving a
+    # runnable helper, matching an actual signed helper rebuild/rotation.
+    rotated_bytes = mutable_helper.read_bytes() + b"\0ecorex-helper-rotation-v2"
+    rotated_digest = hashlib.sha256(rotated_bytes).hexdigest()
+    mutable_helper.write_bytes(rotated_bytes)
+    rotated = WindowsSandboxSlotSecurity(
+        install_root,
+        mutable_helper,
+        expected_helper_sha256=rotated_digest,
+    )
+    assert rotated.bootstrap_helper != retained_old
+
+    # A cold Runtime start and a subsequent rollback resolve the exact helper
+    # recorded by the old slot, not the now-rotated compatibility copy.
+    restarted_old = WindowsSandboxSlotSecurity.for_provision_digest(
+        install_root,
+        old_digest,
+        release_id=manifest.release_id,
+    )
+    assert restarted_old.bootstrap_helper == retained_old.resolve(strict=True)
+    assert restarted_old.validate(slot, manifest, artifact, receipt) is True
+    restarted_new = WindowsSandboxSlotSecurity.for_provision_digest(
+        install_root,
+        rotated_digest,
+    )
+    assert restarted_new.bootstrap_helper == (
+        install_root
+        / "bootstrap"
+        / "helpers"
+        / rotated_digest
+        / "ecorex-sandbox-host.exe"
+    ).resolve(strict=True)
+
+    restarted_old.cleanup_slot(slot, manifest, artifact, receipt)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows AppContainer recovery contract")
+def test_windows_helper_rotation_recovers_interrupted_target_provision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    product = _stage_product(tmp_path / "helper-rotation-recovery")
+    install_root = product["install_root"]
+    slots = SlotStore(install_root)
+    old_marker = slots.marker("slot-product-entrypoint")
+    old_receipt = dict(old_marker["security_provision"])
+    old_digest = str(old_receipt["provision_helper_sha256"])
+    mutable_helper = install_root / "bootstrap/bin/ecorex-sandbox-host.exe"
+    target_bytes = mutable_helper.read_bytes() + b"\0ecorex-helper-recovery-v2"
+    target_digest = hashlib.sha256(target_bytes).hexdigest()
+    target_version = (
+        install_root
+        / "bootstrap"
+        / "versions"
+        / "release-stable-helper-recovery"
+        / "bin"
+    )
+    target_version.mkdir(parents=True)
+    target_helper = target_version / "ecorex-sandbox-host.exe"
+    target_helper.write_bytes(target_bytes)
+    target_security = WindowsSandboxSlotSecurity(
+        install_root,
+        target_helper,
+        expected_helper_sha256=target_digest,
+    )
+    candidate = install_root / "slots/slot-interrupted-target"
+    payload = candidate / "payload"
+    payload.mkdir(parents=True)
+    original_invoke = target_security._invoke
+
+    def crash_after_native_provision(helper, operation, **kwargs):
+        receipt = original_invoke(helper, operation, **kwargs)
+        if operation == "provision":
+            raise KeyboardInterrupt("simulated power loss after native provision")
+        return receipt
+
+    monkeypatch.setattr(target_security, "_invoke", crash_after_native_provision)
+    with pytest.raises(KeyboardInterrupt, match="simulated power loss"):
+        target_security.prepare(
+            candidate,
+            payload,
+            product["package"],
+            product["manifest"],
+            product["artifact"],
+        )
+    preparation = json.loads(
+        (candidate / ".sandbox-security-preparation.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert preparation["schema_version"] == 2
+    assert preparation["provision_helper_sha256"] == target_digest
+    mutable_helper.write_bytes(target_bytes)
+
+    # The restarted old Runtime is bound to the prior helper, but cleanup
+    # resolves the interrupted target's helper from its durable digest.
+    restarted_old = WindowsSandboxSlotSecurity.for_provision_digest(
+        install_root,
+        old_digest,
+        release_id=product["manifest"].release_id,
+    )
+    restarted_old.cleanup_abandoned(candidate)
+    assert not (candidate / ".sandbox-security-preparation.json").exists()
+    assert payload.is_dir() and not any(payload.iterdir())
+
+    restarted_old.cleanup_slot(
+        product["slot_path"],
+        product["manifest"],
+        product["artifact"],
+        old_receipt,
+    )
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows AppContainer path contract")

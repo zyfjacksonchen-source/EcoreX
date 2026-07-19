@@ -14,12 +14,18 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import shutil
 import stat
+import tempfile
 from typing import Any
 import zipfile
 
 from ecorex.update import ReleaseArtifact, ReleaseManifest, SlotStore
-from ecorex.update.storage import atomic_write_json
+from ecorex.update.storage import (
+    _durable_replace,
+    _fsync_directory,
+    atomic_write_json,
+)
 
 from .sandbox import (
     SANDBOX_LAUNCH_PROTOCOL,
@@ -35,6 +41,7 @@ from .windows_path_identity import windows_invariant_path_key
 
 _MAX_CONFIG_BYTES = 256 * 1024
 _PREPARATION_FILE = ".sandbox-security-preparation.json"
+_HELPER_FILE_NAME = "ecorex-sandbox-host.exe"
 _STABLE_PROVISION_CONTRACT = "windows-appcontainer-stable-provision-v3"
 _STRICT_INHERITANCE_PROOF = "immutable-read-tree-mutable-workspace-acl-mic-v3"
 _RECEIPT_KEYS = {
@@ -101,8 +108,73 @@ class WindowsSandboxSlotSecurity:
             raise WindowsSandboxSecurityError(
                 "Bootstrap helper is outside the trusted install directory"
             ) from None
-        self.bootstrap_helper = helper
         self.expected_helper_sha256 = expected
+        self.bootstrap_helper = self._retain_helper(helper, expected)
+
+    @classmethod
+    def for_provision_digest(
+        cls,
+        install_root: Path | str,
+        expected_helper_sha256: str,
+        *,
+        release_id: str | None = None,
+    ) -> WindowsSandboxSlotSecurity:
+        """Resolve an immutable helper by the digest recorded in one slot."""
+
+        root = _real_directory(Path(install_root))
+        expected = str(expected_helper_sha256).casefold()
+        if len(expected) != 64 or any(
+            value not in "0123456789abcdef" for value in expected
+        ):
+            raise WindowsSandboxSecurityError("Bootstrap helper digest is invalid")
+        candidates = [
+            root
+            / "bootstrap"
+            / "helpers"
+            / expected
+            / _HELPER_FILE_NAME,
+        ]
+        if release_id is not None:
+            if (
+                not isinstance(release_id, str)
+                or not release_id
+                or len(release_id) > 128
+                or any(
+                    value
+                    not in (
+                        "abcdefghijklmnopqrstuvwxyz"
+                        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                        "0123456789._-"
+                    )
+                    for value in release_id
+                )
+            ):
+                raise WindowsSandboxSecurityError(
+                    "Bootstrap helper release identity is invalid"
+                )
+            candidates.append(
+                root
+                / "bootstrap"
+                / "versions"
+                / release_id
+                / "bin"
+                / _HELPER_FILE_NAME
+            )
+        candidates.append(root / "bootstrap" / "bin" / _HELPER_FILE_NAME)
+        for candidate in candidates:
+            try:
+                helper = _trusted_regular_file(candidate)
+                if _sha256_file(helper) == expected:
+                    return cls(
+                        root,
+                        helper,
+                        expected_helper_sha256=expected,
+                    )
+            except (OSError, ValueError, WindowsSandboxSecurityError):
+                continue
+        raise WindowsSandboxSecurityError(
+            "Provisioning helper for the signed slot is unavailable"
+        )
 
     def prepare(
         self,
@@ -182,6 +254,10 @@ class WindowsSandboxSlotSecurity:
         read_roots = (payload,)
         runtime_helper = _trusted_regular_file(payload / "bin" / "ecorex-sandbox-host.exe")
         runtime_helper_sha256 = _sha256_file(runtime_helper)
+        if runtime_helper_sha256 != self.expected_helper_sha256:
+            raise WindowsSandboxSecurityError(
+                "Runtime and signed Bootstrap sandbox helpers differ"
+            )
         provision_raw = preparation.get("receipt")
         if not isinstance(provision_raw, Mapping):
             raise WindowsSandboxSecurityError("Provision receipt is unavailable")
@@ -256,6 +332,9 @@ class WindowsSandboxSlotSecurity:
         try:
             if set(marker) != _MARKER_KEYS or marker.get("schema_version") != 1:
                 return False
+            self._helper_for_digest(
+                str(marker.get("provision_helper_sha256", ""))
+            )
             slot = _real_directory(slot_root)
             payload = _real_directory(slot / "payload")
             workspaces = self._workspace_roots_from_payload(
@@ -364,6 +443,8 @@ class WindowsSandboxSlotSecurity:
             )
         read_roots = (payload,)
         receipt = value["receipt"]
+        provision_helper_sha256 = str(value["provision_helper_sha256"])
+        provision_helper = self._helper_for_digest(provision_helper_sha256)
         if receipt is not None:
             if not isinstance(receipt, Mapping):
                 raise WindowsSandboxSecurityError(
@@ -377,10 +458,10 @@ class WindowsSandboxSlotSecurity:
                 workspaces=workspaces,
                 slot_digest=value["slot_digest"],
                 inheritance_proof="fresh-empty-roots-v1",
-                expected_helper_sha256=self.expected_helper_sha256,
+                expected_helper_sha256=provision_helper_sha256,
             )
         self._invoke(
-            self.bootstrap_helper,
+            provision_helper,
             "unprovision-slot",
             slot=slot,
             read_roots=read_roots,
@@ -392,7 +473,7 @@ class WindowsSandboxSlotSecurity:
             value["permission_domain_sha256"], excluding=slot
         ):
             self._invoke(
-                self.bootstrap_helper,
+                provision_helper,
                 "unprovision-domain",
                 slot=slot,
                 read_roots=read_roots,
@@ -426,8 +507,11 @@ class WindowsSandboxSlotSecurity:
             raise WindowsSandboxSecurityError(
                 "Retained slot sandbox receipt is not valid for cleanup"
             )
+        provision_helper = self._helper_for_digest(
+            str(marker.get("provision_helper_sha256", ""))
+        )
         self._invoke(
-            self.bootstrap_helper,
+            provision_helper,
             "unprovision-slot",
             slot=slot,
             read_roots=read_roots,
@@ -438,7 +522,7 @@ class WindowsSandboxSlotSecurity:
         permission_domain = str(marker.get("permission_domain_sha256", ""))
         if not self._permission_domain_referenced(permission_domain, excluding=slot):
             self._invoke(
-                self.bootstrap_helper,
+                provision_helper,
                 "unprovision-domain",
                 slot=slot,
                 read_roots=read_roots,
@@ -446,6 +530,79 @@ class WindowsSandboxSlotSecurity:
                 slot_digest=manifest.build_digest,
                 timeout_seconds=120,
             )
+
+    def _retain_helper(self, helper: Path, expected_digest: str) -> Path:
+        helpers = self.install_root / "bootstrap" / "helpers"
+        helpers.mkdir(parents=True, exist_ok=True)
+        helpers = _real_directory(helpers)
+        final = helpers / expected_digest
+        destination = final / _HELPER_FILE_NAME
+        if os.path.lexists(final):
+            _real_directory(final)
+            retained = _trusted_regular_file(destination)
+            if _sha256_file(retained) != expected_digest:
+                raise WindowsSandboxSecurityError(
+                    "Immutable sandbox helper store conflicts with its digest"
+                )
+            _fsync_directory(final)
+            _fsync_directory(helpers)
+            return retained
+        staging = Path(
+            tempfile.mkdtemp(prefix=f".{expected_digest}.", dir=helpers)
+        )
+        try:
+            copied = staging / _HELPER_FILE_NAME
+            _copy_verified_helper(helper, copied, expected_digest)
+            _fsync_directory(staging)
+            try:
+                _durable_replace(staging, final, replace_existing=False)
+            except OSError:
+                if not os.path.lexists(final):
+                    raise
+                _real_directory(final)
+            retained = _trusted_regular_file(destination)
+            if _sha256_file(retained) != expected_digest:
+                raise WindowsSandboxSecurityError(
+                    "Retained sandbox helper digest changed"
+                )
+            _fsync_directory(final)
+            _fsync_directory(helpers)
+            return retained
+        except (OSError, ValueError) as error:
+            raise WindowsSandboxSecurityError(
+                "Sandbox helper could not enter the immutable store"
+            ) from error
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging)
+
+    def _helper_for_digest(self, expected_digest: str) -> Path:
+        if len(expected_digest) != 64 or any(
+            character not in "0123456789abcdef"
+            for character in expected_digest
+        ):
+            raise WindowsSandboxSecurityError(
+                "Sandbox provision helper identity is invalid"
+            )
+        candidates = (
+            self.install_root
+            / "bootstrap"
+            / "helpers"
+            / expected_digest
+            / _HELPER_FILE_NAME,
+            self.bootstrap_helper,
+            self.install_root / "bootstrap" / "bin" / _HELPER_FILE_NAME,
+        )
+        for candidate in candidates:
+            try:
+                helper = _trusted_regular_file(candidate)
+                if _sha256_file(helper) == expected_digest:
+                    return helper
+            except (OSError, ValueError):
+                continue
+        raise WindowsSandboxSecurityError(
+            "Sandbox provision helper is no longer available"
+        )
 
     def _preparation_record(
         self,
@@ -460,10 +617,11 @@ class WindowsSandboxSlotSecurity:
                 "Sandbox preparation state is invalid"
             )
         value: dict[str, Any] = {
-            "schema_version": 1,
-            "contract": "windows-appcontainer-preparation-v1",
+            "schema_version": 2,
+            "contract": "windows-appcontainer-preparation-v2",
             "state": state,
             "slot_digest": slot_digest,
+            "provision_helper_sha256": self.expected_helper_sha256,
             "workspace_relatives": [
                 PurePosixPath(root.relative_to(self.install_root).as_posix()).as_posix()
                 for root in workspaces
@@ -489,7 +647,7 @@ class WindowsSandboxSlotSecurity:
             raise WindowsSandboxSecurityError(
                 "Sandbox preparation record is unreadable"
             ) from None
-        expected = {
+        common_fields = {
             "schema_version",
             "contract",
             "state",
@@ -499,7 +657,17 @@ class WindowsSandboxSlotSecurity:
             "receipt",
             "record_digest",
         }
-        if not isinstance(value, dict) or set(value) != expected:
+        if not isinstance(value, dict):
+            raise WindowsSandboxSecurityError(
+                "Sandbox preparation record fields are invalid"
+            )
+        schema_version = value.get("schema_version")
+        expected = (
+            common_fields
+            if schema_version == 1
+            else common_fields | {"provision_helper_sha256"}
+        )
+        if set(value) != expected:
             raise WindowsSandboxSecurityError(
                 "Sandbox preparation record fields are invalid"
             )
@@ -508,8 +676,13 @@ class WindowsSandboxSlotSecurity:
         state = value.get("state")
         relatives = value.get("workspace_relatives")
         if (
-            value.get("schema_version") != 1
-            or value.get("contract") != "windows-appcontainer-preparation-v1"
+            schema_version not in {1, 2}
+            or value.get("contract")
+            != (
+                "windows-appcontainer-preparation-v1"
+                if schema_version == 1
+                else "windows-appcontainer-preparation-v2"
+            )
             or state not in {"provisioning", "provisioned"}
             or not isinstance(value.get("slot_digest"), str)
             or len(value["slot_digest"]) != 64
@@ -545,6 +718,23 @@ class WindowsSandboxSlotSecurity:
                 raise WindowsSandboxSecurityError(
                     "Sandbox preparation workspace escaped its managed root"
                 ) from None
+        provision_helper_sha256 = (
+            self.expected_helper_sha256
+            if schema_version == 1
+            else value.get("provision_helper_sha256")
+        )
+        if (
+            not isinstance(provision_helper_sha256, str)
+            or len(provision_helper_sha256) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in provision_helper_sha256
+            )
+        ):
+            raise WindowsSandboxSecurityError(
+                "Sandbox preparation helper identity is invalid"
+            )
+        value["provision_helper_sha256"] = provision_helper_sha256
         return value
 
     def _invoke(
@@ -984,6 +1174,55 @@ class WindowsSandboxSlotSecurity:
             if security.get("permission_domain_sha256") == permission_domain:
                 return True
         return False
+
+
+def _copy_verified_helper(source: Path, destination: Path, expected_digest: str) -> None:
+    source = _trusted_regular_file(source)
+    try:
+        before = source.lstat()
+        digest = hashlib.sha256()
+        with source.open("rb") as input_stream, destination.open("xb") as output_stream:
+            opened = os.fstat(input_stream.fileno())
+            while chunk := input_stream.read(1024 * 1024):
+                digest.update(chunk)
+                output_stream.write(chunk)
+            output_stream.flush()
+            os.fsync(output_stream.fileno())
+            after_open = os.fstat(input_stream.fileno())
+        after = source.lstat()
+    except OSError as error:
+        raise WindowsSandboxSecurityError(
+            "Sandbox helper immutable copy failed"
+        ) from error
+    identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+    )
+    if (
+        digest.hexdigest() != expected_digest
+        or (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
+        != identity
+        or (
+            after_open.st_dev,
+            after_open.st_ino,
+            after_open.st_size,
+            after_open.st_mtime_ns,
+        )
+        != identity
+        or (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+        != identity
+    ):
+        raise WindowsSandboxSecurityError(
+            "Sandbox helper changed while entering the immutable store"
+        )
+    destination.chmod(0o700)
+    retained = _trusted_regular_file(destination)
+    if _sha256_file(retained) != expected_digest:
+        raise WindowsSandboxSecurityError(
+            "Sandbox helper immutable copy did not verify"
+        )
 
 
 def _real_directory(path: Path) -> Path:
