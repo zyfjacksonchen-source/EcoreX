@@ -342,6 +342,86 @@ def test_windows_fallback_entry_is_preserved_and_update_rollback_is_exact(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows legacy shortcut migration")
+def test_windows_fresh_install_keeps_legacy_webui_out_of_canonical_name_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release_key = Ed25519PrivateKey.generate()
+    publication_key = Ed25519PrivateKey.generate()
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    local_app_data = tmp_path / "LocalAppData"
+    legacy_root = local_app_data / "EcoreX WebUI"
+    legacy_root.mkdir(parents=True)
+    legacy_script = legacy_root / "Launch EcoreX WebUI.ps1"
+    legacy_script.write_text("Write-Host legacy\n", encoding="utf-8")
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    legacy_entry = desktop / "EcoreX WebUI.lnk"
+    powershell = (
+        Path(os.environ["SYSTEMROOT"])
+        / "System32"
+        / "WindowsPowerShell"
+        / "v1.0"
+        / "powershell.exe"
+    )
+    companion_module._run_powershell(
+        ";".join(
+            (
+                "$shell=New-Object -ComObject WScript.Shell",
+                "$link=$shell.CreateShortcut($env:ECOREX_TEST_SHORTCUT)",
+                "$link.TargetPath=$env:ECOREX_TEST_TARGET",
+                "$link.Arguments=$env:ECOREX_TEST_ARGUMENTS",
+                "$link.WorkingDirectory=$env:ECOREX_TEST_WORKDIR",
+                "$link.Description='Start or reopen EcoreX WebUI'",
+                "$link.Save()",
+            )
+        ),
+        companion_module._shortcut_environment(
+            ECOREX_TEST_SHORTCUT=str(legacy_entry),
+            ECOREX_TEST_TARGET=str(powershell),
+            ECOREX_TEST_ARGUMENTS=(
+                '-NoProfile -ExecutionPolicy Bypass -File '
+                f'"{legacy_script}"'
+            ),
+            ECOREX_TEST_WORKDIR=str(legacy_root),
+        ),
+    )
+    original_legacy_digest = hashlib.sha256(legacy_entry.read_bytes()).hexdigest()
+    built, verifier, fetcher = _built_bootstrap(
+        tmp_path,
+        platform="windows",
+        architecture="x64",
+        release_key=release_key,
+        publication_key=publication_key,
+        suffix="fresh-legacy-canonical-selection",
+    )
+    root = tmp_path / "install"
+    installer = BootstrapCompanionInstaller(
+        root,
+        platform="windows",
+        architecture="x64",
+        verifier=verifier,
+        fetcher=fetcher,
+        desktop_directory=desktop,
+    )
+
+    _prepare(installer, built, "d" * 32)
+
+    canonical = desktop / "EcoreX.lnk"
+    assert canonical.is_file()
+    assert hashlib.sha256(legacy_entry.read_bytes()).hexdigest() == original_legacy_digest
+
+    installer.commit_activation("d" * 32)
+
+    assert canonical.is_file()
+    assert not legacy_entry.exists()
+    receipt = json.loads(
+        (root / "bootstrap" / "desktop-entry.json").read_text(encoding="utf-8")
+    )
+    assert receipt["entry_name"] == "EcoreX.lnk"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows legacy shortcut migration")
 def test_windows_upgrade_atomically_takes_over_exact_legacy_webui_shortcut(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -2115,7 +2115,15 @@ def _entry_is_product_owned(path: Path, *, root: Path, platform: str) -> bool:
         )
         if current:
             return True
-        return _is_legacy_windows_entry(path, projection)
+        # A strict v0.3.0 ``EcoreX WebUI.lnk`` is recognised separately for
+        # transactional cleanup, but it is never a candidate for the v1
+        # canonical desktop entry. Treating it as product-owned here made a
+        # fresh v1 install overwrite that old name whenever ``EcoreX.lnk``
+        # was available but belonged to another installed v1 root. The new
+        # install must instead select a vacant canonical/Agent name and then
+        # remove the verified legacy entry only after its own activation
+        # commits.
+        return False
     if _is_link_or_reparse(path):
         return False
     marker = path / "Contents" / "Resources" / "ecorex-entry.json"
