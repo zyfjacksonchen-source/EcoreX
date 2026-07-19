@@ -2558,3 +2558,16 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | --- | ---: | --- |
 | Desktop shortcut convergence | 0 | `EcoreX.lnk` and the retained historical `EcoreX WebUI.lnk` now both resolve to the signed v1.0.5 Bootstrap with the exact installed-root launch arguments and the canonical `EcoreX` ownership descriptor. |
 | Live Runtime preservation | 0 | The loopback WebUI returned HTTP 200 before and after the convergence repair; no account data, session material, conversation data or installed slot was deleted or replaced. |
+
+## v1.0.5 supplementary local regression - 2026-07-20
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Progressive capability discovery | 0 | `tests/v1/test_capability_discovery.py`: 16 passed. Coverage includes image intent prioritization without exclusive routing, plus shell/read/fetch/CDP/vision discovery aliases. |
+| Account-login restart boundary | 0 | Selected managed-session tests: 2 passed. The durable password-login commit survives a reload scheduling failure and exact retry; the same-slot reload path remains covered without exposing grants. |
+| Retouch durability | 0 | Selected retouch execution tests: 2 passed. Structured retouch publishes atomically and crash recovery does not issue a second external edit. |
+| Stream delivery continuity | 0 | `tests/v1/test_runtime_event_notifications.py`: 5 passed. Commit notifications close the event-page/wait gap and wake SSE clients without fast polling. |
+
+These checks are regression evidence only. They do not replace the still-required
+interactive, authenticated user acceptance for chat, image generation/editing
+and live tool invocation.
