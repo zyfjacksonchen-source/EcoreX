@@ -460,27 +460,44 @@ function shellLiteral(value) {
 }
 
 export function terminalCommand(artifact) {
-  const sourceUrl = artifact.sources[0].url;
+  const sourceUrls = artifact.sources.map((source) => source.url);
   if (artifact.platform === "windows") {
+    const urls = sourceUrls.map(powershellLiteral).join(",");
     return [
+      "$ErrorActionPreference='Stop'",
       "$d=Join-Path $env:TEMP ('EcoreX-'+[guid]::NewGuid())",
       "New-Item -ItemType Directory -Path $d | Out-Null",
       "$z=Join-Path $d 'EcoreX.zip'",
-      `Invoke-WebRequest -UseBasicParsing -Uri ${powershellLiteral(sourceUrl)} -OutFile $z`,
-      `if ((Get-FileHash $z -Algorithm SHA256).Hash.ToLowerInvariant() -ne ${powershellLiteral(artifact.sha256)}) { throw 'EcoreX 下载校验失败' }`,
+      `$urls=@(${urls})`,
+      "$ok=$false",
+      "$i=0",
+      "Write-Host ''",
+      "Write-Host 'EcoreX 安装准备' -ForegroundColor Cyan",
+      "foreach($u in $urls){$i++; Remove-Item -LiteralPath $z -Force -ErrorAction SilentlyContinue; Write-Host (('[下载] 下载源 {0}/{1}，将显示百分比、速度和剩余时间' -f $i,$urls.Count)); & curl.exe --fail --location --retry 4 --retry-all-errors --connect-timeout 15 --output $z $u; if($LASTEXITCODE -eq 0 -and (Get-FileHash $z -Algorithm SHA256).Hash.ToLowerInvariant() -eq " + powershellLiteral(artifact.sha256) + "){$ok=$true; break}; Write-Host '[切换] 当前下载源未完成，正在尝试下一来源'}",
+      "if(-not $ok){throw 'EcoreX Bootstrap 下载或校验失败'}",
+      "Write-Host '[校验] Bootstrap 的 SHA-256 已通过'",
+      "Write-Host '[解压] 正在准备启动组件'",
       "Expand-Archive -LiteralPath $z -DestinationPath $d",
+      "Write-Host '[启动] 后续 Core 与能力组件会继续显示实时进度'",
       "& (Join-Path $d 'bin\\ecorex-bootstrap.exe')",
     ].join("; ");
   }
-  const url = shellLiteral(sourceUrl);
+  const urls = sourceUrls.map(shellLiteral).join(" ");
   const digest = shellLiteral(artifact.sha256);
   return [
     'd="$(mktemp -d)"',
     'z="$d/EcoreX.zip"',
-    `curl -fL --retry 8 --retry-all-errors -o "$z" ${url}`,
-    `printf '%s  %s\\n' ${digest} "$z" | shasum -a 256 -c -`,
+    `urls=(${urls})`,
+    "ok=0",
+    "i=0",
+    "printf '\\nEcoreX 安装准备\\n'",
+    "for u in \"${urls[@]}\"; do i=$((i+1)); rm -f \"$z\"; printf '[下载] 下载源 %s/%s，将显示百分比、速度和剩余时间\\n' \"$i\" \"${#urls[@]}\"; if curl --fail --location --retry 4 --retry-all-errors --connect-timeout 15 --output \"$z\" \"$u\" && printf '%s  %s\\n' " + digest + " \"$z\" | shasum -a 256 -c -; then ok=1; break; fi; printf '[切换] 当前下载源未完成，正在尝试下一来源\\n'; done",
+    "test \"$ok\" -eq 1",
+    "printf '[校验] Bootstrap 的 SHA-256 已通过\\n'",
+    "printf '[解压] 正在准备启动组件\\n'",
     'ditto -x -k "$z" "$d"',
     'chmod +x "$d/bin/ecorex-bootstrap"',
+    "printf '[启动] 后续 Core 与能力组件会继续显示实时进度\\n'",
     '"$d/bin/ecorex-bootstrap"',
   ].join(" && ");
 }
@@ -520,6 +537,11 @@ function renderArtifactCard(grid, release, artifact, recommended) {
   article.append(createElement("h3", "", title));
   article.append(createElement("small", "card-version", `v${release.version}`));
   article.append(createElement("p", "", `${body} 启动后会先验签发布清单，再安装 Core。`));
+  article.append(createElement(
+    "p",
+    "progress-promise",
+    "安装过程持续显示当前阶段、下载百分比、实时速度和预计剩余时间。",
+  ));
 
   const meta = createElement("div", "meta");
   meta.append(createElement("span", "", formatSize(artifact.sizeBytes)));

@@ -6716,3 +6716,34 @@ bridge, accepts Bootstrap, submits a mutation with the returned CSRF token and
 proves the injected object is unchanged. Product identity advances to
 `1.0.3`; immutable `1.0.2` artifacts are retained as audit evidence rather than
 silently replaced.
+
+## 2026-07-19 - v1.0.4 visible dual-platform install progress
+
+The public Windows command used `Invoke-WebRequest` without a useful progress
+surface. Even after that small Bootstrap archive completed, the signed Go
+Bootstrap downloaded the much larger Core and Capability Packs without
+emitting a phase or byte position. A healthy installation therefore looked
+indistinguishable from a stalled process at two separate boundaries.
+
+The generated Windows and macOS commands now announce download, verification,
+extraction and launch. Both preserve the native curl transfer meter, which
+shows percentage, speed and remaining time, and try the projected signed
+sources in order. The Bootstrap SHA-256 is checked before extraction. The
+download page states the same behavior before the user copies the command.
+
+The cross-platform Bootstrap now owns a bounded terminal progress renderer.
+Each artifact reports position in the set, bytes transferred, total bytes,
+source, percentage, average speed and ETA. Interactive terminals redraw no
+faster than every 150 ms; redirected logs emit periodic snapshots instead of
+one line per network read. Existing 8 MiB bounded range requests, safe resume,
+source fallback, Ed25519 verification and atomic commit remain authoritative.
+Extraction and local installation use elapsed-time heartbeats, followed by
+explicit startup and ready messages. Expected failures are translated into
+network, signature, storage, lock or Runtime recovery guidance without
+printing sensitive paths or raw internal errors.
+
+The Windows public Bootstrap was downloaded through the generated command over
+the real first source, displayed its transfer meter, passed SHA-256 and
+completed packaged self-test. The macOS command passed shell syntax validation;
+both Darwin targets remain subject to the native macOS Runner smoke required
+by release acceptance. Product identity advances to `1.0.4`.

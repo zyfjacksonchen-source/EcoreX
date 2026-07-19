@@ -287,6 +287,8 @@ func main() {
 }
 
 func runInstalled(rootOverride string) error {
+	progress := newBootstrapProgress(os.Stderr)
+	progress.Stage("启动", "正在检查本机 EcoreX")
 	configuration, _, keys, _, err := loadConfig()
 	if err != nil {
 		return err
@@ -298,6 +300,7 @@ func runInstalled(rootOverride string) error {
 	lock, err := acquireProductLock(filepath.Join(root, "bootstrap-launch.lock"))
 	if err != nil {
 		if errors.Is(err, errProductLocked) {
+			progress.Stage("等待", "EcoreX 正在启动，准备好后会自动打开浏览器")
 			return waitForRuntimeAndOpen(root, 5*time.Minute)
 		}
 		return err
@@ -312,8 +315,10 @@ func runInstalled(rootOverride string) error {
 	if opened, err := openRunningRuntime(root); err != nil {
 		return err
 	} else if opened {
+		progress.Success("EcoreX 已在运行，浏览器已打开")
 		return nil
 	}
+	progress.Stage("准备", "正在确认已安装版本与本机安全组件")
 	if _, err := stageSandboxHelper(root, configuration.SandboxHelperSHA256); err != nil {
 		return err
 	}
@@ -335,13 +340,18 @@ func runInstalled(rootOverride string) error {
 	if err != nil {
 		return err
 	}
+	progress.Stage("启动", "正在启动本地服务，准备好后会自动打开浏览器")
 	go func() {
-		_ = waitForRuntimeAndOpen(root, 5*time.Minute)
+		if waitForRuntimeAndOpen(root, 5*time.Minute) == nil {
+			progress.Success("EcoreX 已就绪，浏览器已打开")
+		}
 	}()
 	return supervise(python, root, trustedDefinitions, legacySource, ownerNonce)
 }
 
 func run(indexOverride, rootOverride string) error {
+	progress := newBootstrapProgress(os.Stderr)
+	progress.Stage("准备", "正在检查系统、存储空间与安装状态")
 	configuration, _, keys, publicationKeys, err := loadConfig()
 	if err != nil {
 		return err
@@ -366,6 +376,7 @@ func run(indexOverride, rootOverride string) error {
 	lock, err := acquireProductLock(filepath.Join(root, "bootstrap-launch.lock"))
 	if err != nil {
 		if errors.Is(err, errProductLocked) {
+			progress.Stage("等待", "另一个 EcoreX 进程正在工作，准备好后会自动打开浏览器")
 			return waitForRuntimeAndOpen(root, 5*time.Minute)
 		}
 		return err
@@ -380,8 +391,10 @@ func run(indexOverride, rootOverride string) error {
 	if opened, err := openRunningRuntime(root); err != nil {
 		return err
 	} else if opened {
+		progress.Success("EcoreX 已在运行，浏览器已打开")
 		return nil
 	}
+	progress.Stage("准备", "正在准备本机安全组件")
 	bootstrapHelper, err := stageSandboxHelper(root, configuration.SandboxHelperSHA256)
 	if err != nil {
 		return err
@@ -394,6 +407,7 @@ func run(indexOverride, rootOverride string) error {
 	client := newHTTPClient()
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()
+	progress.Stage("连接", "正在读取正式版发布信息")
 	indexBytes, trustedNow, err := fetchDiscovery(ctx, client, indexLocation, maxIndexBytes)
 	if err != nil {
 		return fmt.Errorf("public discovery is unavailable")
@@ -422,6 +436,7 @@ func run(indexOverride, rootOverride string) error {
 	if err := acceptPointerAuthority(root, *index.Authority, *index.Freshness, keys, publicationKeys, trustedNow); err != nil {
 		return err
 	}
+	progress.Stage("版本", fmt.Sprintf("已确认 EcoreX v%s，正在准备所需组件", release.Version))
 	platform, architecture, err := productTarget()
 	if err != nil {
 		return err
@@ -444,14 +459,33 @@ func run(indexOverride, rootOverride string) error {
 	if err := os.MkdirAll(artifactsDir, 0o700); err != nil {
 		return fmt.Errorf("bootstrap artifact directory is unavailable")
 	}
-	for _, item := range selected {
+	artifactCount := len(selected) + 1
+	for index, item := range selected {
+		progress.BeginArtifact(item, index+1, artifactCount)
 		destination := filepath.Join(artifactsDir, item.FileName)
-		if err := downloadArtifact(ctx, client, &release, item, destination, keys); err != nil {
+		if err := downloadArtifact(
+			ctx,
+			client,
+			&release,
+			item,
+			destination,
+			keys,
+			progress,
+		); err != nil {
 			return err
 		}
 	}
+	progress.BeginArtifact(bootstrapArtifact, artifactCount, artifactCount)
 	bootstrapArchive := filepath.Join(artifactsDir, bootstrapArtifact.FileName)
-	if err := downloadArtifact(ctx, client, &release, bootstrapArtifact, bootstrapArchive, keys); err != nil {
+	if err := downloadArtifact(
+		ctx,
+		client,
+		&release,
+		bootstrapArtifact,
+		bootstrapArchive,
+		keys,
+		progress,
+	); err != nil {
 		return err
 	}
 	manifestPath := filepath.Join(artifactsDir, "release-manifest.json")
@@ -461,17 +495,41 @@ func run(indexOverride, rootOverride string) error {
 	core := selected[0]
 	coreRoot := filepath.Join(work, "core")
 	_ = os.RemoveAll(coreRoot)
-	if err := extractCore(filepath.Join(artifactsDir, core.FileName), coreRoot); err != nil {
-		return err
+	extractActivity := progress.BeginActivity(
+		"解压",
+		"正在展开已验证的 EcoreX 核心",
+	)
+	extractErr := extractCore(
+		filepath.Join(artifactsDir, core.FileName),
+		coreRoot,
+	)
+	extractActivity.End()
+	if extractErr != nil {
+		return extractErr
 	}
+	progress.Stage("解压", "EcoreX 核心已准备完成")
 	trustedDefinitions, err := persistTrust(root, configuration.ReleasePublicKeys, keys)
 	if err != nil {
 		return err
 	}
-	result, err := installLocal(coreRoot, root, manifestPath, artifactsDir, trustedDefinitions, bootstrapHelper, configuration.SandboxHelperSHA256)
+	installActivity := progress.BeginActivity(
+		"安装",
+		"正在写入本机版本、迁移数据并创建快捷入口",
+	)
+	result, err := installLocal(
+		coreRoot,
+		root,
+		manifestPath,
+		artifactsDir,
+		trustedDefinitions,
+		bootstrapHelper,
+		configuration.SandboxHelperSHA256,
+	)
+	installActivity.End()
 	if err != nil {
 		return err
 	}
+	progress.Stage("安装", "本机版本与快捷入口已安装完成")
 	installedPayload := filepath.Join(root, "slots", result.SlotID, "payload")
 	python := filepath.Join(installedPayload, "bin", "pack-python", "bin", "python3")
 	if runtime.GOOS == "windows" {
@@ -484,8 +542,11 @@ func run(indexOverride, rootOverride string) error {
 	if err != nil {
 		return err
 	}
+	progress.Stage("启动", "正在启动本地服务，准备好后会自动打开浏览器")
 	go func() {
-		_ = waitForRuntimeAndOpen(root, 5*time.Minute)
+		if waitForRuntimeAndOpen(root, 5*time.Minute) == nil {
+			progress.Success("EcoreX 已就绪，浏览器已打开；以后可从桌面快捷方式再次启动")
+		}
 	}()
 	return supervise(python, root, trustedDefinitions, legacySource, ownerNonce)
 }
@@ -1613,9 +1674,25 @@ func requiredBootstrapArtifact(
 	return *selected, nil
 }
 
-func downloadArtifact(ctx context.Context, client *http.Client, release *manifest, item artifact, destination string, keys map[string]ed25519.PublicKey) error {
+func downloadArtifact(
+	ctx context.Context,
+	client *http.Client,
+	release *manifest,
+	item artifact,
+	destination string,
+	keys map[string]ed25519.PublicKey,
+	progresses ...*bootstrapProgress,
+) error {
+	var progress *bootstrapProgress
+	if len(progresses) > 0 {
+		progress = progresses[0]
+	}
 	if fileMatches(destination, item.SizeBytes, item.SHA256) {
-		return verifyArtifactSignature(release, item, keys)
+		if err := verifyArtifactSignature(release, item, keys); err != nil {
+			return err
+		}
+		progress.ArtifactCached(item)
+		return nil
 	}
 	_ = os.Remove(destination)
 	partial := destination + ".partial"
@@ -1627,26 +1704,49 @@ func downloadArtifact(ctx context.Context, client *http.Client, release *manifes
 		return fmt.Errorf("partial artifact is unavailable")
 	}
 	var last error
-	for _, origin := range release.Sources {
+	for sourceIndex, origin := range release.Sources {
 		location := strings.TrimRight(origin.BaseURL, "/") + "/" + url.PathEscape(item.FileName)
-		if err := downloadFromSource(ctx, client, location, partial, item.SizeBytes); err != nil {
+		current := int64(0)
+		if metadata, statErr := os.Stat(partial); statErr == nil {
+			current = metadata.Size()
+		}
+		progress.BeginSource(item, origin, current)
+		if err := downloadFromSource(
+			ctx,
+			client,
+			location,
+			partial,
+			item.SizeBytes,
+			progress.UpdateDownload,
+		); err != nil {
 			last = err
+			progress.SourceFailed(origin, sourceIndex+1 < len(release.Sources))
 			continue
 		}
+		progress.VerifyingArtifact(item)
 		if !fileMatches(partial, item.SizeBytes, item.SHA256) || verifyArtifactSignature(release, item, keys) != nil {
 			last = fmt.Errorf("artifact verification failed")
 			_ = os.Remove(partial)
+			progress.ArtifactRejected(sourceIndex+1 < len(release.Sources))
 			continue
 		}
 		if err := os.Rename(partial, destination); err != nil {
 			return fmt.Errorf("verified artifact could not be committed")
 		}
+		progress.ArtifactComplete(item)
 		return nil
 	}
 	return fmt.Errorf("all signed artifact sources failed: %w", last)
 }
 
-func downloadFromSource(ctx context.Context, client *http.Client, location, destination string, expected int64) error {
+func downloadFromSource(
+	ctx context.Context,
+	client *http.Client,
+	location string,
+	destination string,
+	expected int64,
+	observers ...func(downloadProgress),
+) error {
 	if err := validateHTTPS(location); err != nil {
 		return err
 	}
@@ -1657,6 +1757,7 @@ func downloadFromSource(ctx context.Context, client *http.Client, location, dest
 		}
 		resume = metadata.Size()
 	}
+	notifyDownloadObservers(observers, resume, expected)
 	for resume < expected {
 		end := min(resume+artifactChunkBytes-1, expected-1)
 		chunkSize := end - resume + 1
@@ -1692,7 +1793,13 @@ func downloadFromSource(ctx context.Context, client *http.Client, location, dest
 			response.Body.Close()
 			return err
 		}
-		written, copyErr := io.CopyN(file, response.Body, chunkSize)
+		writer := &downloadProgressWriter{
+			writer:     file,
+			downloaded: resume,
+			total:      expected,
+			observers:  observers,
+		}
+		written, copyErr := io.CopyN(writer, response.Body, chunkSize)
 		extra := make([]byte, 1)
 		extraCount, extraErr := response.Body.Read(extra)
 		bodyCloseErr := response.Body.Close()
@@ -1704,6 +1811,39 @@ func downloadFromSource(ctx context.Context, client *http.Client, location, dest
 		resume += chunkSize
 	}
 	return nil
+}
+
+type downloadProgressWriter struct {
+	writer     io.Writer
+	downloaded int64
+	total      int64
+	observers  []func(downloadProgress)
+}
+
+func (writer *downloadProgressWriter) Write(payload []byte) (int, error) {
+	written, err := writer.writer.Write(payload)
+	if written > 0 {
+		writer.downloaded += int64(written)
+		notifyDownloadObservers(
+			writer.observers,
+			writer.downloaded,
+			writer.total,
+		)
+	}
+	return written, err
+}
+
+func notifyDownloadObservers(
+	observers []func(downloadProgress),
+	downloaded int64,
+	total int64,
+) {
+	value := downloadProgress{Downloaded: downloaded, Total: total}
+	for _, observer := range observers {
+		if observer != nil {
+			observer(value)
+		}
+	}
 }
 
 func verifyArtifactSignature(release *manifest, item artifact, keys map[string]ed25519.PublicKey) error {
@@ -1968,7 +2108,8 @@ func writeJSON(value any) {
 	_ = encoder.Encode(value)
 }
 
-func fail(_ error) {
-	fmt.Fprintln(os.Stderr, "EcoreX Bootstrap stopped safely.")
+func fail(errorValue error) {
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "[未完成] "+userFacingFailure(errorValue))
 	os.Exit(1)
 }

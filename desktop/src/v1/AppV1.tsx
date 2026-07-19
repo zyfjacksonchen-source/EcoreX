@@ -500,7 +500,7 @@ export function AppV1() {
           open={sidebarOpen}
           modal={sidebarOpen && mobileNavigation}
           currentThreadId={currentThreadId}
-          version={bootstrap?.update.current_version || "1.0.3"}
+          version={bootstrap?.update.current_version || "1.0.4"}
           threads={runtime.threads}
           projects={runtime.projects}
           projectCatalogState={runtime.projectCatalogState}

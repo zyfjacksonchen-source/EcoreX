@@ -2528,3 +2528,14 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Real browser root cause | 1 expected before fix | Fresh Chrome loaded the signed WebUI and received `/api/v1/bootstrap` with HTTP 200. CDP paused on `TypeError: Cannot add property csrfToken, object is not extensible` in `RuntimeClient.acceptBootstrap`; this precisely explained the visible safe startup error. |
 | Mutable-state boundary correction | 0 local | RuntimeClient makes a private shallow copy of the frozen injected bridge. Focused Runtime client tests pass 44/44, including a frozen-bridge CSRF regression; TypeScript and generated contract checks pass; tracked diff validation passes. |
 | Release and production activation | pending | v1.0.3 must be rebuilt as a new immutable release, installed from the public first source in a clean default-length root, exercised in a fresh browser, and only then promoted to Stable. |
+
+## v1.0.4 visible install progress evidence - 2026-07-19
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Root cause | 0 | The copied Windows command used a silent web request and the signed Bootstrap emitted no progress while downloading Core or Capability Packs. Improving only the first download would leave the longer second download visually stalled. |
+| Initial Windows download | 0 real network | The generated PowerShell command downloaded the production Windows Bootstrap from the public first source, displayed curl percentage, transfer speed and remaining time, verified SHA-256, extracted it and passed the packaged `--self-test`. |
+| Initial macOS download | 0 structural | The generated macOS command exposes the same download, verification, extraction and launch stages, retains curl percentage/speed/ETA output, tries every projected source in order and passes shell syntax validation. Native Terminal execution remains a macOS Runner acceptance item. |
+| Bootstrap progress contract | 0 local | The cross-platform Bootstrap now reports preparation, release discovery, per-artifact download, source failover, signature verification, extraction, installation and Runtime startup. Interactive terminals redraw at a bounded rate; redirected logs emit bounded periodic snapshots. |
+| Resume, safety and failure UX | 0 local | Progress observers preserve the existing bounded 8 MiB range protocol and resume byte offset. User-facing failures identify network, verification, storage, lock or Runtime recovery without exposing raw paths or provider details. Go tests and the public download-site contract pass. |
+| Release and production activation | pending | Build v1.0.4 as a new immutable signed release, complete Windows installed acceptance and macOS cross-build evidence, then activate Stable and deploy the content-addressed public download page. |

@@ -235,12 +235,94 @@ func TestResumeDownloadRequiresExactContentRange(t *testing.T) {
 	if err := os.WriteFile(destination, payload[:5], 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := downloadFromSource(context.Background(), client, "https://download.example/artifact", destination, int64(len(payload))); err != nil {
+	observedProgress := []downloadProgress{}
+	if err := downloadFromSource(
+		context.Background(),
+		client,
+		"https://download.example/artifact",
+		destination,
+		int64(len(payload)),
+		func(value downloadProgress) {
+			observedProgress = append(observedProgress, value)
+		},
+	); err != nil {
 		t.Fatal(err)
 	}
 	observed, err := os.ReadFile(destination)
 	if err != nil || !bytes.Equal(observed, payload) {
 		t.Fatalf("resumed bytes mismatch: %v", err)
+	}
+	if len(observedProgress) < 2 ||
+		observedProgress[0].Downloaded != 5 ||
+		observedProgress[0].Total != int64(len(payload)) ||
+		observedProgress[len(observedProgress)-1].Downloaded != int64(len(payload)) {
+		t.Fatalf("download progress did not preserve resume/final bytes: %#v", observedProgress)
+	}
+}
+
+func TestBootstrapProgressShowsStageSpeedAndETA(t *testing.T) {
+	var output bytes.Buffer
+	progress := newBootstrapProgress(&output)
+	now := time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC)
+	progress.now = func() time.Time { return now }
+	item := artifact{
+		ArtifactID: "core-windows-x64",
+		FileName:   "ecorex-core.zip",
+		SizeBytes:  100 * 1024 * 1024,
+	}
+	progress.BeginArtifact(item, 1, 2)
+	progress.BeginSource(
+		item,
+		source{Kind: "github-cn-mirror"},
+		0,
+	)
+	now = now.Add(2 * time.Second)
+	progress.UpdateDownload(downloadProgress{
+		Downloaded: 50 * 1024 * 1024,
+		Total:      item.SizeBytes,
+	})
+	progress.VerifyingArtifact(item)
+	value := output.String()
+	for _, expected := range []string{
+		"[下载]",
+		"(1/2)",
+		"EcoreX 核心",
+		"50%",
+		"25.0 MiB/s",
+		"剩余 2 秒",
+		"国内镜像",
+		"[校验]",
+	} {
+		if !strings.Contains(value, expected) {
+			t.Fatalf("progress output is missing %q:\n%s", expected, value)
+		}
+	}
+}
+
+func TestBootstrapFailureMessagesRemainActionableAndSafe(t *testing.T) {
+	cases := []struct {
+		errorValue error
+		expected   string
+	}{
+		{
+			errorValue: errors.New("all signed artifact sources failed"),
+			expected:   "检查网络",
+		},
+		{
+			errorValue: errors.New("artifact verification failed"),
+			expected:   "校验未通过",
+		},
+		{
+			errorValue: errors.New("installed Runtime did not pass Bootstrap health"),
+			expected:   "本地服务",
+		},
+	}
+	for _, item := range cases {
+		message := userFacingFailure(item.errorValue)
+		if !strings.Contains(message, item.expected) ||
+			strings.Contains(message, item.errorValue.Error()) {
+			t.Fatalf("unsafe or unactionable failure message: %q", message)
+		}
 	}
 }
 

@@ -7,7 +7,7 @@ window.ECOREX_USAGE_DATA = window.ECOREX_USAGE_DATA || {
     generatedAt: '',
     rawSheetUrl: '#',
     source: '等待服务器实时数据',
-    version: '1.0.3',
+    version: '1.0.4',
     live: false
   },
   kpis: {},

@@ -367,6 +367,14 @@ h3 {
   line-height: 1.55;
 }
 
+.download-card .progress-promise {
+  min-height: 0;
+  margin: 0 0 4px;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .download-card .card-version {
   display: block;
   margin: 6px 0 22px;

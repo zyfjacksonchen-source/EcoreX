@@ -147,18 +147,29 @@ const contract = await import(moduleUrl);
 const windowsCommand = contract.terminalCommand({
   platform: "windows",
   sha256: "a".repeat(64),
-  sources: [{ url: "https://mirror.example/EcoreX.zip" }],
+  sources: [
+    { url: "https://mirror.example/EcoreX.zip" },
+    { url: "https://github.example/EcoreX.zip" },
+  ],
 });
-assert.match(windowsCommand, /Invoke-WebRequest/);
+assert.match(windowsCommand, /curl\.exe/);
+assert.match(windowsCommand, /Write-Host/);
+assert.match(windowsCommand, /速度和剩余时间/);
 assert.match(windowsCommand, /Get-FileHash/);
+assert.match(windowsCommand, /github\.example/);
 assert.match(windowsCommand, /ecorex-bootstrap\.exe/);
 const macCommand = contract.terminalCommand({
   platform: "macos",
   sha256: "b".repeat(64),
-  sources: [{ url: "https://mirror.example/EcoreX.zip" }],
+  sources: [
+    { url: "https://mirror.example/EcoreX.zip" },
+    { url: "https://github.example/EcoreX.zip" },
+  ],
 });
-assert.match(macCommand, /curl -fL/);
+assert.match(macCommand, /curl --fail --location/);
+assert.match(macCommand, /速度和剩余时间/);
 assert.match(macCommand, /shasum -a 256 -c/);
+assert.match(macCommand, /github\.example/);
 assert.match(macCommand, /ecorex-bootstrap/);
 
 const oneSource = contract.sourceList(
