@@ -19,7 +19,7 @@ from ecorex.update.activation import (
 # Pack hash; it proves only its nonce-bound, no-traffic activation endpoint.
 # Keep this recovery boundary short and finite. The full Runtime verifies and
 # binds every Pack after confirmation, before it can cross the data barrier.
-DEFAULT_ACTIVATION_HEALTH_TIMEOUT_SECONDS = 30.0
+DEFAULT_ACTIVATION_HEALTH_TIMEOUT_SECONDS = 60.0
 MAX_ACTIVATION_HEALTH_TIMEOUT_SECONDS = 60.0
 
 
