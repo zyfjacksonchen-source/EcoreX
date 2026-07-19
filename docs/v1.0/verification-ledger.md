@@ -2550,4 +2550,11 @@ evidence. It still cannot satisfy protected-runner or live-provider gates.
 | Administrator WebUI | 0 | 21 Python management/admin asset tests and all 3 real-browser administrator flows passed. Creating a user transmits an initial password once, the response never echoes it, and the list displays only credential state. Model test/activation and full rollout remain operational. |
 | Bootstrap, candidate and download boundary | 0 | 53 tests passed with one expected symlink-permission skip. Real v0.2.9.2 `.url`, v0.3.0 `.cmd/.lnk`, rollback, crash recovery and user-modified entry preservation are covered. Candidate archives require a root-level friendly installer. |
 | Cloud deployment and login proxy | 0 | 89 sidecar tests passed with 14 platform skips. Login rate-limit zones are rendered in Nginx http scope, the exact login route is POST-only, 64 KiB bounded and log-suppressed, and deployment remains rollback-capable. |
-| Release, production and online-update acceptance | pending | Commit and sign immutable v1.0.5, deploy Cloud/Admin and the content-addressed download page, publish Stable, then update the existing local v1.0.4 slot through the real online update flow and verify version, login, data and the single current shortcut. |
+| Release, production and online-update acceptance | 0 | Immutable v1.0.5 was published to Stable and the production download/admin surfaces passed readiness. The existing local v1.0.4 installation completed the signed online update to v1.0.5; the selected slot, loopback WebUI and cold desktop launch were rechecked without replacing user data. |
+
+## v1.0.5 local desktop-entry repair evidence - 2026-07-20
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Desktop shortcut convergence | 0 | `EcoreX.lnk` and the retained historical `EcoreX WebUI.lnk` now both resolve to the signed v1.0.5 Bootstrap with the exact installed-root launch arguments and the canonical `EcoreX` ownership descriptor. |
+| Live Runtime preservation | 0 | The loopback WebUI returned HTTP 200 before and after the convergence repair; no account data, session material, conversation data or installed slot was deleted or replaced. |

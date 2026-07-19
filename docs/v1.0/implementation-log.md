@@ -6792,3 +6792,16 @@ itself does not scroll and mobile drawer bounds remain inside the viewport.
 
 Product identity advances immutably to `1.0.5`. Final acceptance is an online
 update from the already installed v1.0.4 slot, not a clean-install substitute.
+
+## 2026-07-20 - Local desktop-entry convergence repair
+
+An installed-machine report showed that a second, historical `EcoreX WebUI`
+desktop entry still targeted an obsolete temporary Bootstrap while the current
+`EcoreX` entry targeted the signed v1.0.5 Bootstrap. This could start a stale
+Runtime or leave the account-first login page waiting for a Runtime that the
+current entry did not own. Both visible desktop entries were converged to the
+same signed v1.0.5 Bootstrap, with the exact product launch arguments,
+working directory, icon and `EcoreX` ownership description. The live local
+Runtime remained responsive throughout the repair. Future entry recognition
+continues to preserve user-modified shortcuts rather than deleting them by
+name alone.
