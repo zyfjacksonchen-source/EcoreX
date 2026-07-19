@@ -19,8 +19,8 @@ from ecorex.update.activation import (
 # Pack hash; it proves only its nonce-bound, no-traffic activation endpoint.
 # Keep this recovery boundary short and finite. The full Runtime verifies and
 # binds every Pack after confirmation, before it can cross the data barrier.
-DEFAULT_ACTIVATION_HEALTH_TIMEOUT_SECONDS = 60.0
-MAX_ACTIVATION_HEALTH_TIMEOUT_SECONDS = 60.0
+DEFAULT_ACTIVATION_HEALTH_TIMEOUT_SECONDS = 120.0
+MAX_ACTIVATION_HEALTH_TIMEOUT_SECONDS = 180.0
 
 
 class _Endpoint(Protocol):
@@ -48,7 +48,7 @@ class LoopbackActivationHealthProbe:
     ) -> None:
         if not 1.0 <= timeout_seconds <= MAX_ACTIVATION_HEALTH_TIMEOUT_SECONDS:
             raise ValueError(
-                "activation health timeout must be between one and 60 seconds"
+                "activation health timeout must be between one and 180 seconds"
             )
         if not 0.01 <= poll_seconds <= 1.0:
             raise ValueError("activation health poll interval is invalid")
