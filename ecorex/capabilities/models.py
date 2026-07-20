@@ -591,6 +591,11 @@ class ExecutionPolicy:
     snapshot_id: str
     profile: PermissionProfile = PermissionProfile.DEFAULT
     admin_hard_denies: frozenset[str] = frozenset()
+    # Keep remote deny facts auditable without turning the Control Plane into
+    # a hidden local-execution gate.  The standalone/default capability API
+    # retains the historical safe default; product Runtime opts out unless a
+    # regulated deployment explicitly enables enforcement.
+    enforce_admin_hard_denies: bool = True
     policy_denies: frozenset[str] = frozenset()
     allow_sandbox_escalation: bool = True
 
@@ -617,6 +622,7 @@ class ExecutionPolicy:
             "sandbox": self.sandbox.value,
             "approval_mode": self.approval_mode.value,
             "admin_hard_denies": sorted(normalize_reference(v) for v in self.admin_hard_denies),
+            "enforce_admin_hard_denies": self.enforce_admin_hard_denies,
             "policy_denies": sorted(normalize_reference(v) for v in self.policy_denies),
             "allow_sandbox_escalation": self.allow_sandbox_escalation,
         }

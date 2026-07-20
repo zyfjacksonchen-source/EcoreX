@@ -748,6 +748,39 @@ def test_trace_projection_is_otlp_compatible_and_excludes_sensitive_bodies(tmp_p
         payload={"activity": requested_activity.model_dump(mode="json")},
         idempotency_key="trace:tool:start",
     )
+    recovery = store.append(
+        thread_id=thread_id,
+        turn_id=turn_id,
+        tool_call_id="tool-recovery-call",
+        event_type="tool.recovery_planned",
+        payload={
+            "schema_version": 1,
+            "source": "preflight",
+            "code": "tool_not_eligible",
+            "requested_tool": "legacy-browser-search",
+            "reason_codes": ["unknown_tool"],
+            "action": "discover_or_switch",
+            "retry_allowed": False,
+            "automatic_attempt": 1,
+            "automatic_attempt_limit": 3,
+            "candidate_tool_ids": ["fetch", "cdp"],
+            "capability_snapshot_id": "cap_trace",
+            "execution_batch_id": "batch_trace",
+        },
+        idempotency_key="trace:tool:recovery",
+    )
+    store.append(
+        thread_id=thread_id,
+        turn_id=turn_id,
+        tool_call_id="tool-recovery-fallback",
+        event_type="tool.recovery_resolved",
+        payload={
+            "schema_version": 1,
+            "recovery_event_id": recovery.event_id,
+            "resolved_by_tool_id": "fetch",
+        },
+        idempotency_key="trace:tool:recovery:resolved",
+    )
     store.append(
         thread_id=thread_id,
         turn_id=turn_id,
@@ -799,12 +832,20 @@ def test_trace_projection_is_otlp_compatible_and_excludes_sensitive_bodies(tmp_p
         "ecorex.turn",
         "gen_ai.model_attempt",
         "ecorex.tool",
+        "ecorex.tool_recovery",
         "ecorex.human_interaction",
         "ecorex.artifact",
     } <= names
     assert len(body["trace_id"]) == 32
     assert all(len(span["span_id"]) == 16 for span in body["spans"])
     assert body["otlp"]["resourceSpans"][0]["scopeSpans"][0]["spans"]
+    recovery_span = next(
+        span for span in body["spans"] if span["name"] == "ecorex.tool_recovery"
+    )
+    assert recovery_span["status"] == "OK"
+    assert recovery_span["attributes"]["ecorex.recovery.code"] == "tool_not_eligible"
+    assert recovery_span["attributes"]["ecorex.recovery.action"] == "discover_or_switch"
+    assert recovery_span["attributes"]["ecorex.recovery.resolved_by_tool"] == "fetch"
     wire = json.dumps(body, ensure_ascii=False)
     assert "never-export" not in wire
     assert "C:\\\\Users\\\\secret" not in wire

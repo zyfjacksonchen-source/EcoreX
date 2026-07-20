@@ -1101,7 +1101,7 @@ def test_unknown_tool_description_is_a_structured_result_not_a_turn_failure(
     assert gateway.requests[1].disclosed_tool_ids == []
 
 
-def test_worker_rejects_guessed_deferred_tool_without_disclosure(tmp_path) -> None:
+def test_worker_recovers_guessed_deferred_tool_without_disclosure(tmp_path) -> None:
     calls = []
     app, kernel, composition, _thread, created = _runtime(
         tmp_path,
@@ -1126,7 +1126,14 @@ def test_worker_rejects_guessed_deferred_tool_without_disclosure(tmp_path) -> No
                         "instruction": "检查",
                     },
                 }
-            ]
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "response.completed",
+                    "response_id": "resp_guess_recovered",
+                }
+            ],
         ]
     )
     worker = AgentTurnWorker(
@@ -1137,13 +1144,15 @@ def test_worker_rejects_guessed_deferred_tool_without_disclosure(tmp_path) -> No
 
     result = asyncio.run(worker.run_once("worker-undisclosed"))
 
-    assert result.outcome is WorkerOutcome.FAILED
-    assert result.reason == "tool_not_disclosed"
+    assert result.outcome is WorkerOutcome.COMPLETED
     assert calls == []
-    assert kernel.jobs.get(created.job.job_id).status.value == "failed"
+    assert kernel.jobs.get(created.job.job_id).status.value == "completed"
+    recovery_output = gateway.requests[1].tool_outputs[0].output
+    assert recovery_output["code"] == "tool_not_disclosed"
+    assert recovery_output["recovery"]["action"] == "describe_then_retry"
 
 
-def test_undisclosed_approval_tool_is_rejected_before_hitl_is_created(tmp_path) -> None:
+def test_undisclosed_approval_tool_recovers_before_hitl_is_created(tmp_path) -> None:
     calls = []
     app, kernel, composition, thread, created = _runtime(
         tmp_path,
@@ -1166,7 +1175,14 @@ def test_undisclosed_approval_tool_is_rejected_before_hitl_is_created(tmp_path) 
                     "tool_name": "shell",
                     "arguments": {"command": "echo should-not-run"},
                 }
-            ]
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "response.completed",
+                    "response_id": "resp_guessed_shell_recovered",
+                }
+            ],
         ]
     )
     worker = AgentTurnWorker(
@@ -1177,14 +1193,16 @@ def test_undisclosed_approval_tool_is_rejected_before_hitl_is_created(tmp_path) 
 
     result = asyncio.run(worker.run_once("worker-undisclosed-shell"))
 
-    assert result.outcome is WorkerOutcome.FAILED
-    assert result.reason == "tool_not_disclosed"
+    assert result.outcome is WorkerOutcome.COMPLETED
     assert calls == []
     assert kernel.list_interactions(thread.thread_id).interactions == []
     assert not any(
         item.kind is ItemKind.TOOL_CALL
         for item in kernel.projection(thread.thread_id).items
     )
+    recovery_output = gateway.requests[1].tool_outputs[0].output
+    assert recovery_output["code"] == "tool_not_disclosed"
+    assert recovery_output["recovery"]["action"] == "describe_then_retry"
 
 
 def test_worker_executes_discovered_tool_and_continues_model_response(tmp_path) -> None:

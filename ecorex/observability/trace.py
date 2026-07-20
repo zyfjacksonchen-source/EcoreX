@@ -88,6 +88,7 @@ class TraceProjector:
         turn_spans: dict[str, _Span] = {}
         model_spans: dict[tuple[str, int], _Span] = {}
         tool_spans: dict[tuple[str, str], _Span] = {}
+        recovery_spans: dict[str, _Span] = {}
         tool_items: dict[str, tuple[str, str]] = {}
         human_spans: dict[str, _Span] = {}
 
@@ -99,6 +100,7 @@ class TraceProjector:
                 turn_spans=turn_spans,
                 model_spans=model_spans,
                 tool_spans=tool_spans,
+                recovery_spans=recovery_spans,
                 tool_items=tool_items,
                 human_spans=human_spans,
             )
@@ -170,6 +172,7 @@ class TraceProjector:
         turn_spans: dict[str, _Span],
         model_spans: dict[tuple[str, int], _Span],
         tool_spans: dict[tuple[str, str], _Span],
+        recovery_spans: dict[str, _Span],
         tool_items: dict[str, tuple[str, str]],
         human_spans: dict[str, _Span],
     ) -> None:
@@ -220,6 +223,14 @@ class TraceProjector:
                 for key, span in tool_spans.items():
                     if key[0] == event.turn_id and span.status == "UNSET":
                         span.end = event.created_at
+                for span in recovery_spans.values():
+                    if (
+                        span.attributes.get("ecorex.turn.id") == event.turn_id
+                        and span.status == "UNSET"
+                    ):
+                        span.end = event.created_at
+                        if target == "failed":
+                            span.status = "ERROR"
                 for span in human_spans.values():
                     if span.attributes.get("ecorex.turn.id") == event.turn_id:
                         span.end = event.created_at
@@ -313,6 +324,58 @@ class TraceProjector:
                 span = tool_spans[key]
                 span.end = event.created_at
                 span.status = "OK" if activity.phase == "completed" else "ERROR"
+            return
+        if event.event_type == "tool.recovery_planned" and event.turn_id:
+            code = self._safe_token(payload.get("code"))
+            action = self._safe_token(payload.get("action"))
+            source = self._safe_token(payload.get("source"))
+            attempt = payload.get("automatic_attempt")
+            candidates = payload.get("candidate_tool_ids")
+            span = _Span(
+                identity=f"tool-recovery:{event.event_id}",
+                name="ecorex.tool_recovery",
+                parent_span_id=(turn_span.span_id if turn_span else root.span_id),
+                start=event.created_at,
+                end=event.created_at,
+                attributes={
+                    "ecorex.turn.id": event.turn_id,
+                    "ecorex.recovery.event_id": event.event_id,
+                    "ecorex.recovery.code": code,
+                    "ecorex.recovery.action": action,
+                    "ecorex.recovery.source": source,
+                    "ecorex.recovery.automatic_attempt": (
+                        attempt
+                        if isinstance(attempt, int) and not isinstance(attempt, bool)
+                        else 0
+                    ),
+                    "ecorex.recovery.candidate_count": (
+                        len(candidates) if isinstance(candidates, list) else 0
+                    ),
+                },
+            )
+            spans[span.identity] = span
+            recovery_spans[event.event_id] = span
+            return
+        if event.event_type == "tool.recovery_resolved":
+            recovery_event_id = payload.get("recovery_event_id")
+            if not isinstance(recovery_event_id, str):
+                raise ReplayIntegrityError("Tool recovery trace has no recovery identity")
+            span = recovery_spans.get(recovery_event_id)
+            if span is None:
+                raise ReplayIntegrityError("Tool recovery trace references an unknown recovery")
+            if span.status not in {"UNSET", "OK"}:
+                raise ReplayIntegrityError("Tool recovery trace resolution is invalid")
+            span.end = event.created_at
+            span.status = "OK"
+            span.attributes["ecorex.recovery.resolved_by_tool"] = self._safe_token(
+                payload.get("resolved_by_tool_id")
+            )
+            span.events.append(
+                self._span_event(
+                    event,
+                    {"ecorex.recovery.resolved": True},
+                )
+            )
             return
         if event.event_type.startswith("connector."):
             self._enrich_connector_span(event, tool_spans)
@@ -446,6 +509,15 @@ class TraceProjector:
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise ReplayIntegrityError("model attempt round is invalid")
         return value
+
+    @staticmethod
+    def _safe_token(value: Any) -> str:
+        return (
+            value
+            if isinstance(value, str)
+            and _TRACE_SAFE_TOKEN.fullmatch(value) is not None
+            else "unknown"
+        )
 
     @classmethod
     def _otlp_span(cls, span: TraceSpanProjection) -> dict[str, Any]:

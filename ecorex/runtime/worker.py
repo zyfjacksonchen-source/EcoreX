@@ -16,9 +16,12 @@ from typing import Any, Protocol
 from ecorex.capabilities import (
     ApprovalRequiredError,
     CapabilityDeniedError,
+    CapabilityError,
     CapabilityService,
+    CapabilityUnavailableError,
     Exposure,
     IdempotencyClass,
+    ToolHandlerMissingError,
     ToolArgumentsValidationError,
     ToolExecutionScope,
     UnknownCapabilityError,
@@ -122,10 +125,13 @@ class _GatewayResponseFailure(ModelGatewayError):
         *,
         retryable: bool,
         preserve_attempt: bool = False,
+        details: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__(code)
+        self.code = code
         self.retryable = retryable
         self.preserve_attempt = preserve_attempt
+        self.details = dict(details or {})
 
 
 async def _run_blocking(function, /, *args, **kwargs):
@@ -191,6 +197,11 @@ class AgentTurnWorker:
     _MAX_THREAD_CONTEXT_ITEMS = 96
     _MAX_THREAD_CONTEXT_CHARACTERS = 192_000
     _MAX_THREAD_CONTEXT_MESSAGE_CHARACTERS = 48_000
+    # A malformed provider response must never trap a Turn in an unlimited
+    # tool-call loop.  This budget covers only pre-side-effect recoveries;
+    # transport retries and confirmed Tool execution have their own durable
+    # policies.
+    _MAX_AUTOMATIC_TOOL_RECOVERIES = 3
 
     def __init__(
         self,
@@ -1597,19 +1608,351 @@ class AgentTurnWorker:
                 spec.tool_id,
             )
         except UnknownCapabilityError:
-            raise _GatewayResponseFailure("tool_not_eligible", retryable=False) from None
+            raise _GatewayResponseFailure(
+                "tool_not_eligible",
+                retryable=False,
+                details={
+                    "requested_tool": self._safe_tool_reference(reference),
+                    "reason_codes": ["unknown_tool"],
+                },
+            ) from None
         decision = description["decision"]
         if not decision["eligible"] or decision["exposure"] == Exposure.HIDDEN.value:
-            raise _GatewayResponseFailure("tool_not_eligible", retryable=False)
+            raise _GatewayResponseFailure(
+                "tool_not_eligible",
+                retryable=False,
+                details={
+                    "tool_id": str(decision["tool_id"]),
+                    "requested_tool": self._safe_tool_reference(reference),
+                    "reason_codes": list(decision.get("reason_codes", [])),
+                },
+            )
         if decision["tool_id"] not in projection.projected_tool_ids:
-            raise _GatewayResponseFailure("tool_not_disclosed", retryable=False)
+            raise _GatewayResponseFailure(
+                "tool_not_disclosed",
+                retryable=False,
+                details={
+                    "tool_id": str(decision["tool_id"]),
+                    "requested_tool": self._safe_tool_reference(reference),
+                    "reason_codes": ["tool_not_disclosed"],
+                },
+            )
         governance = self.capabilities.invocation_governance(
             capability_snapshot_id,
             str(decision["tool_id"]),
         )
         if not governance.allowed:
-            raise _GatewayResponseFailure("tool_permission_denied", retryable=False)
+            raise _GatewayResponseFailure(
+                "tool_permission_denied",
+                retryable=False,
+                details={
+                    "tool_id": str(decision["tool_id"]),
+                    "frozen_policy_snapshot_id": governance.frozen_policy_snapshot_id,
+                    "current_policy_snapshot_id": governance.current_policy_snapshot_id,
+                    "current_availability_digest": governance.current_availability_digest,
+                    "reason_codes": list(governance.reason_codes),
+                },
+            )
         return description, governance
+
+    @staticmethod
+    def _safe_tool_reference(reference: Any) -> str:
+        """Return a bounded Tool identity suitable for telemetry and recovery.
+
+        A model-provided function name is not a user prompt and never carries
+        executable arguments, but it is still untrusted transport data.  Keep
+        only a compact, bounded identity in durable recovery facts.
+        """
+
+        if not isinstance(reference, str):
+            return "unknown"
+        normalized = " ".join(reference.split())
+        return normalized[:128] or "unknown"
+
+    @classmethod
+    def _recovery_query(cls, reference: Any) -> str:
+        """Turn a failed function reference into a conservative search hint."""
+
+        safe = cls._safe_tool_reference(reference)
+        words = safe.replace("_", " ").replace("-", " ").replace("/", " ")
+        normalized = " ".join(words.split())
+        return normalized or "capability"
+
+    def _recovery_candidates(
+        self,
+        *,
+        capability_snapshot_id: str,
+        reference: Any,
+    ) -> list[dict[str, Any]]:
+        """Find safe, already-authorized alternatives without dispatching one.
+
+        This deliberately does *not* install a package, change policy, or
+        invoke a third-party Tool.  It only reads the immutable capability
+        snapshot so the model can use the normal ``tool_search`` /
+        ``tool_describe`` disclosure path or a direct sibling capability.
+        """
+
+        try:
+            matches = self.capabilities.tool_search(
+                capability_snapshot_id,
+                self._recovery_query(reference),
+                limit=5,
+            )
+        except (CapabilityError, ValueError):
+            # Recovery observation must never turn an otherwise safe model
+            # continuation into a terminal failure because catalog lookup is
+            # temporarily unavailable or a snapshot has aged out.
+            return []
+        return [
+            {
+                "tool_id": match.tool_id,
+                "discovery_id": match.discovery_id,
+                "exposure": match.exposure.value,
+                "requires_approval": match.requires_approval,
+            }
+            for match in matches[:5]
+        ]
+
+    def _tool_recovery_count(self, turn_id: str) -> int:
+        with self.kernel.database.reader() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM events "
+                "WHERE turn_id=? AND event_type='tool.recovery_planned'",
+                (turn_id,),
+            ).fetchone()
+        return int(row["count"] if row is not None else 0)
+
+    @staticmethod
+    def _recovery_action(code: str, *, exhausted: bool) -> tuple[str, bool]:
+        if exhausted:
+            return "respond_without_tool", False
+        if code == "tool_not_disclosed":
+            return "describe_then_retry", True
+        if code == "tool_arguments_invalid":
+            return "correct_arguments", True
+        if code == "tool_permission_denied":
+            return "choose_authorized_alternative", False
+        return "discover_or_switch", False
+
+    async def _recover_tool_event(
+        self,
+        *,
+        job_id: str,
+        turn_id: str,
+        worker_id: str,
+        lease_token: str,
+        context: Mapping[str, str],
+        execution_batch_id: str,
+        event: GatewayEvent,
+        assistant_item_id: str | None,
+        round_index: int,
+        code: str,
+        source: str,
+        details: Mapping[str, Any] | None = None,
+        tool_item_id: str | None = None,
+    ) -> GatewayToolOutput:
+        """Persist a safe recovery plan and return it to the model.
+
+        This handles only failures proven to occur before a Tool handler can
+        have side effects: unknown/undisclosed/disabled Tools, missing bundled
+        handlers, policy denials and invalid arguments.  Opaque execution
+        failures keep the existing durable retry or human-conflict path.
+        """
+
+        assert event.tool_call_id and event.tool_name
+        details = dict(details or {})
+        requested_tool = self._safe_tool_reference(
+            details.get("tool_id") or details.get("requested_tool") or event.tool_name
+        )
+        recovery_count, candidates = await asyncio.gather(
+            _run_blocking(self._tool_recovery_count, turn_id),
+            _run_blocking(
+                self._recovery_candidates,
+                capability_snapshot_id=context["capability_snapshot_id"],
+                reference=requested_tool,
+            ),
+        )
+        exhausted = recovery_count >= self._MAX_AUTOMATIC_TOOL_RECOVERIES
+        action, retry_allowed = self._recovery_action(code, exhausted=exhausted)
+        reasons = details.get("reason_codes")
+        reason_codes = (
+            [value for value in reasons if isinstance(value, str)][:32]
+            if isinstance(reasons, list)
+            else []
+        )
+        recovery = {
+            "schema_version": 1,
+            "status": "recovery_required",
+            "code": code,
+            "recovery": {
+                "action": action,
+                "requested_tool": requested_tool,
+                "retry_allowed": retry_allowed,
+                "automatic_attempt": recovery_count + 1,
+                "automatic_attempt_limit": self._MAX_AUTOMATIC_TOOL_RECOVERIES,
+                "candidate_tools": candidates if not exhausted else [],
+            },
+        }
+        turn = await _run_blocking(self.kernel.get_turn, turn_id)
+        await _run_blocking(
+            self.kernel.append_execution_event,
+            job_id=job_id,
+            lease_token=lease_token,
+            thread_id=turn.thread_id,
+            turn_id=turn_id,
+            item_id=tool_item_id,
+            tool_call_id=event.tool_call_id,
+            event_type="tool.recovery_planned",
+            payload={
+                "schema_version": 1,
+                "source": source,
+                "code": code,
+                "requested_tool": requested_tool,
+                "reason_codes": reason_codes,
+                "action": action,
+                "retry_allowed": retry_allowed,
+                "automatic_attempt": recovery_count + 1,
+                "automatic_attempt_limit": self._MAX_AUTOMATIC_TOOL_RECOVERIES,
+                "candidate_tool_ids": [
+                    candidate["tool_id"] for candidate in candidates[:5]
+                ],
+                "capability_snapshot_id": context["capability_snapshot_id"],
+                "execution_batch_id": execution_batch_id,
+            },
+            idempotency_key=(
+                f"{turn_id}:{event.tool_call_id}:tool-recovery:{code}"
+            ),
+        )
+        output = GatewayToolOutput(tool_call_id=event.tool_call_id, output=recovery)
+        # A crash after recovery planning but before the next model request
+        # resumes with the exact same function output.  It must not repeat an
+        # invocation or lose the observable block fact.
+        await self._heartbeat(
+            job_id,
+            worker_id,
+            lease_token,
+            {
+                "schema_version": 2,
+                "phase": "tool_recovery",
+                "round": round_index + 1,
+                "previous_response_id": event.response_id,
+                "tool_outputs": [output.model_dump(mode="json")],
+                "assistant_item_id": assistant_item_id,
+                "execution_batch_id": execution_batch_id,
+                "user_revision_ordinals": [],
+            },
+        )
+        return output
+
+    def _record_tool_recovery_resolved(
+        self,
+        *,
+        job_id: str,
+        lease_token: str,
+        thread_id: str,
+        turn_id: str,
+        tool_call_id: str,
+        tool_id: str,
+    ) -> None:
+        """Link the next successful Tool step to the latest pending recovery."""
+
+        with self.kernel.database.reader() as connection:
+            rows = connection.execute(
+                "SELECT event_id, payload_json FROM events "
+                "WHERE turn_id=? AND event_type IN "
+                "('tool.recovery_planned', 'tool.recovery_resolved') "
+                "ORDER BY seq DESC LIMIT 32",
+                (turn_id,),
+            ).fetchall()
+        resolved: set[str] = set()
+        pending_event_id: str | None = None
+        for row in rows:
+            payload = json_loads(row["payload_json"], {})
+            if not isinstance(payload, dict):
+                continue
+            if payload.get("recovery_event_id") and isinstance(
+                payload["recovery_event_id"], str
+            ):
+                resolved.add(payload["recovery_event_id"])
+                continue
+            if row["event_id"] not in resolved:
+                pending_event_id = str(row["event_id"])
+                break
+        if pending_event_id is None:
+            return
+        self.kernel.append_execution_event(
+            job_id=job_id,
+            lease_token=lease_token,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            tool_call_id=tool_call_id,
+            event_type="tool.recovery_resolved",
+            payload={
+                "schema_version": 1,
+                "recovery_event_id": pending_event_id,
+                "resolved_by_tool_id": tool_id,
+            },
+            idempotency_key=(
+                f"{turn_id}:{pending_event_id}:tool-recovery-resolved"
+            ),
+        )
+
+    def _record_tool_governance_rejection(
+        self,
+        *,
+        job_id: str,
+        lease_token: str,
+        thread_id: str,
+        turn_id: str,
+        tool_call_id: str,
+        capability_snapshot_id: str,
+        details: Mapping[str, Any],
+    ) -> None:
+        """Persist a safe rejection fact before returning a recovery result.
+
+        Tool arguments, prompts, file paths and credentials are intentionally
+        absent.  The immutable event gives support and replay enough context to
+        distinguish a policy rejection from availability drift.
+        """
+
+        tool_id = details.get("tool_id")
+        reasons = details.get("reason_codes")
+        payload = {
+            "tool_id": tool_id if isinstance(tool_id, str) else "unknown",
+            "capability_snapshot_id": capability_snapshot_id,
+            "frozen_policy_snapshot_id": (
+                details["frozen_policy_snapshot_id"]
+                if isinstance(details.get("frozen_policy_snapshot_id"), str)
+                else None
+            ),
+            "current_policy_snapshot_id": (
+                details["current_policy_snapshot_id"]
+                if isinstance(details.get("current_policy_snapshot_id"), str)
+                else None
+            ),
+            "current_availability_digest": (
+                details["current_availability_digest"]
+                if isinstance(details.get("current_availability_digest"), str)
+                else None
+            ),
+            "reason_codes": (
+                [value for value in reasons if isinstance(value, str)][:32]
+                if isinstance(reasons, list)
+                else []
+            ),
+        }
+        self.kernel.append_execution_event(
+            job_id=job_id,
+            lease_token=lease_token,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            tool_call_id=tool_call_id,
+            event_type="tool.governance_rejected",
+            payload=payload,
+            idempotency_key=(
+                f"{turn_id}:{tool_call_id}:tool-governance-rejected"
+            ),
+        )
 
     async def _handle_tool_event(
         self,
@@ -1625,13 +1968,51 @@ class AgentTurnWorker:
         round_index: int,
     ) -> GatewayToolOutput | None:
         assert event.tool_call_id and event.tool_name and event.arguments is not None
-        description, governance = await _run_blocking(
-            self._authorized_tool_description,
-            job_id=job_id,
-            execution_batch_id=execution_batch_id,
-            capability_snapshot_id=context["capability_snapshot_id"],
-            reference=event.tool_name,
-        )
+        try:
+            description, governance = await _run_blocking(
+                self._authorized_tool_description,
+                job_id=job_id,
+                execution_batch_id=execution_batch_id,
+                capability_snapshot_id=context["capability_snapshot_id"],
+                reference=event.tool_name,
+            )
+        except _GatewayResponseFailure as error:
+            if error.code == "tool_permission_denied":
+                # A lease may close concurrently with cancellation.  The
+                # primary rejection remains authoritative even if that race
+                # prevents its diagnostic append.
+                with suppress(ConflictError, LeaseError):
+                    turn = await _run_blocking(self.kernel.get_turn, turn_id)
+                    await _run_blocking(
+                        self._record_tool_governance_rejection,
+                        job_id=job_id,
+                        lease_token=lease_token,
+                        thread_id=turn.thread_id,
+                        turn_id=turn_id,
+                        tool_call_id=event.tool_call_id,
+                        capability_snapshot_id=context["capability_snapshot_id"],
+                        details=error.details,
+                    )
+            if error.code not in {
+                "tool_not_eligible",
+                "tool_not_disclosed",
+                "tool_permission_denied",
+            }:
+                raise
+            return await self._recover_tool_event(
+                job_id=job_id,
+                turn_id=turn_id,
+                worker_id=worker_id,
+                lease_token=lease_token,
+                context=context,
+                execution_batch_id=execution_batch_id,
+                event=event,
+                assistant_item_id=assistant_item_id,
+                round_index=round_index,
+                code=error.code,
+                source="preflight",
+                details=error.details,
+            )
         try:
             canonical_arguments = await _run_blocking(
                 self.capabilities.validate_tool_arguments,
@@ -1640,9 +2021,23 @@ class AgentTurnWorker:
                 event.arguments,
             )
         except ToolArgumentsValidationError:
-            raise _GatewayResponseFailure(
-                "tool_arguments_invalid", retryable=False
-            ) from None
+            return await self._recover_tool_event(
+                job_id=job_id,
+                turn_id=turn_id,
+                worker_id=worker_id,
+                lease_token=lease_token,
+                context=context,
+                execution_batch_id=execution_batch_id,
+                event=event,
+                assistant_item_id=assistant_item_id,
+                round_index=round_index,
+                code="tool_arguments_invalid",
+                source="argument_validation",
+                details={
+                    "requested_tool": self._safe_tool_reference(event.tool_name),
+                    "reason_codes": ["tool_arguments_invalid"],
+                },
+            )
         event = event.model_copy(update={"arguments": canonical_arguments})
         spec = self.capabilities.registry.resolve(event.tool_name)
         public_activity = self.public_tools.requested(
@@ -2290,6 +2685,67 @@ class AgentTurnWorker:
             "permission changed repeatedly before invocation admission"
         )
 
+    async def _recover_dispatched_tool_failure(
+        self,
+        *,
+        job_id: str,
+        turn_id: str,
+        worker_id: str,
+        lease_token: str,
+        context: Mapping[str, str],
+        execution_batch_id: str,
+        event: GatewayEvent,
+        tool_item_id: str,
+        execution_id: str,
+        assistant_item_id: str | None,
+        round_index: int,
+        code: str,
+        source: str,
+    ) -> GatewayToolOutput:
+        """Close an admitted-but-not-dispatched Tool before model recovery.
+
+        Every caller reaches this path only for a typed capability-layer
+        rejection that occurred before a handler was invoked.  The durable
+        execution row and its public Tool item are therefore safely terminal,
+        while the Turn stays alive for the model to choose a disclosed
+        alternative or correct its arguments.
+        """
+
+        await self._run_execution_sync(
+            job_id,
+            lease_token,
+            self.tool_executions.fail,
+            execution_id,
+            error_code=code,
+        )
+        item = await _run_blocking(self._item, tool_item_id)
+        if item.status is ItemStatus.IN_PROGRESS:
+            await _run_blocking(
+                self.kernel.transition_item,
+                tool_item_id,
+                ItemStatus.FAILED,
+                job_id=job_id,
+                lease_token=lease_token,
+            )
+        return await self._recover_tool_event(
+            job_id=job_id,
+            turn_id=turn_id,
+            worker_id=worker_id,
+            lease_token=lease_token,
+            context=context,
+            execution_batch_id=execution_batch_id,
+            event=event,
+            assistant_item_id=assistant_item_id,
+            round_index=round_index,
+            code=code,
+            source=source,
+            details={
+                "requested_tool": self._safe_tool_reference(event.tool_name),
+                "reason_codes": [code],
+            },
+            tool_item_id=tool_item_id,
+        )
+
     async def _execute_tool(
         self,
         *,
@@ -2472,16 +2928,21 @@ class AgentTurnWorker:
                     )
                     return None
                 except CapabilityDeniedError:
-                    await self._run_execution_sync(
-                        job_id,
-                        lease_token,
-                        self.tool_executions.fail,
-                        execution_id,
-                        error_code="permission_revoked_before_admission",
+                    return await self._recover_dispatched_tool_failure(
+                        job_id=job_id,
+                        turn_id=turn_id,
+                        worker_id=worker_id,
+                        lease_token=lease_token,
+                        context=context,
+                        execution_batch_id=execution_batch_id,
+                        event=event,
+                        tool_item_id=tool_item_id,
+                        execution_id=execution_id,
+                        assistant_item_id=assistant_item_id,
+                        round_index=round_index,
+                        code="tool_permission_denied",
+                        source="admission",
                     )
-                    raise _GatewayResponseFailure(
-                        "tool_permission_denied", retryable=False
-                    ) from None
             try:
                 call = await self._await_with_lease(
                     self.capabilities.tool_call(
@@ -2506,6 +2967,27 @@ class AgentTurnWorker:
                 )
             except LeaseError:
                 raise
+            except (
+                CapabilityUnavailableError,
+                CapabilityDeniedError,
+                ToolHandlerMissingError,
+                ToolArgumentsValidationError,
+            ) as error:
+                return await self._recover_dispatched_tool_failure(
+                    job_id=job_id,
+                    turn_id=turn_id,
+                    worker_id=worker_id,
+                    lease_token=lease_token,
+                    context=context,
+                    execution_batch_id=execution_batch_id,
+                    event=event,
+                    tool_item_id=tool_item_id,
+                    execution_id=execution_id,
+                    assistant_item_id=assistant_item_id,
+                    round_index=round_index,
+                    code=getattr(error, "code", "capability_unavailable"),
+                    source="dispatch_preflight",
+                )
             except Exception as error:
                 # Generic opaque handlers remain conservative for a
                 # non-idempotent Tool.  Pack-process errors carry an explicit
@@ -2649,6 +3131,16 @@ class AgentTurnWorker:
             lease_token=lease_token,
         )
         turn = await _run_blocking(self.kernel.get_turn, turn_id)
+        if execution_status == "completed":
+            await _run_blocking(
+                self._record_tool_recovery_resolved,
+                job_id=job_id,
+                lease_token=lease_token,
+                thread_id=turn.thread_id,
+                turn_id=turn_id,
+                tool_call_id=event.tool_call_id,
+                tool_id=spec.tool_id,
+            )
         if turn.status is TurnStatus.TOOL_PENDING:
             await _run_blocking(
                 self.kernel.transition_turn,

@@ -1,7 +1,7 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 
 const ADMIN_ORIGIN = "http://127.0.0.1:4180";
-const ADMIN_TOKEN = "admin-e2e-token-1234567890";
+const ADMIN_TOKEN = "x.eyJleHAiOjQxMDI0NDQ4MDB9.x";
 const RELEASE_ID = "release-stable-admin-e2e";
 const RELEASE_GATES = [
   "bootstrap-index",
@@ -230,13 +230,32 @@ async function installAdminApi(
     }
     throw new Error(`unexpected administrator API request: ${request.method()} ${path}`);
   });
+  await page.route("**/v1/session/login", async (route: Route) => {
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    expect(body).toMatchObject({
+      schema_version: 1,
+      client_id: "ecorex-admin-web",
+      identifier: "admin@example.com",
+      password: "admin-password-e2e",
+    });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        status: "authorized",
+        access_token: ADMIN_TOKEN,
+        refresh_token: "r".repeat(32),
+        lease: { claims: { lease_id: "lease-admin-e2e" } },
+      }),
+    });
+  });
   return guard;
 }
 
 async function connect(page: Page): Promise<void> {
-  await page.getByText("运维令牌兜底", { exact: true }).click();
-  await page.locator("#admin-token").fill(ADMIN_TOKEN);
-  await page.getByRole("button", { name: "连接控制面" }).click();
+  await page.locator("#admin-identifier").fill("admin@example.com");
+  await page.locator("#admin-password").fill("admin-password-e2e");
+  await page.getByRole("button", { name: "登录" }).click();
   await expect(page.locator("#session-label")).toContainText("已连接");
 }
 
@@ -263,7 +282,7 @@ test("administrator gates are a signed read-only projection and publication stay
   expect(publicationBody).toMatchObject({ client_request_id: expect.stringMatching(/^admin_[0-9a-f]{32}$/u) });
 
   await page.reload({ waitUntil: "domcontentloaded" });
-  await expect(page.locator("#admin-token")).toHaveValue("");
+  await expect(page.locator("#admin-password")).toHaveValue("");
   await expect(page.locator("#session-label")).toHaveText("未连接");
   expect(guard.externalRequests).toEqual([]);
   expect(guard.browserErrors).toEqual([]);

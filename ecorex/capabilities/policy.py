@@ -32,7 +32,7 @@ class GovernanceDecision:
 def evaluate_governance(spec: ToolSpec, policy: ExecutionPolicy) -> GovernanceDecision:
     references = spec.references
     hard_denies = {normalize_reference(value) for value in policy.admin_hard_denies}
-    if references & hard_denies:
+    if policy.enforce_admin_hard_denies and references & hard_denies:
         return GovernanceDecision(
             allowed=False,
             requires_approval=False,

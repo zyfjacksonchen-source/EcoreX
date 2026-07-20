@@ -48,12 +48,9 @@
 
   const elements = {
     authForm: byId("auth-form"),
-    deviceLoginButton: byId("device-login-button"),
-    deviceLoginState: byId("device-login-state"),
-    deviceLoginCode: byId("device-login-code"),
-    deviceLoginLink: byId("device-login-link"),
-    tokenInput: byId("admin-token"),
-    connectButton: byId("connect-button"),
+    loginIdentifier: byId("admin-identifier"),
+    loginPassword: byId("admin-password"),
+    loginButton: byId("login-button"),
     refreshStateButton: byId("refresh-state-button"),
     clearTokenButton: byId("clear-token-button"),
     sessionLabel: byId("session-label"),
@@ -549,9 +546,9 @@
       body: JSON.stringify(body),
     });
     const text = await response.text();
-    if (text.length > MAX_RESPONSE_BYTES) throw new Error("设备登录响应超过大小限制。");
+    if (text.length > MAX_RESPONSE_BYTES) throw new Error("登录响应超过大小限制。");
     let payload;
-    try { payload = JSON.parse(text); } catch { throw new Error("设备登录返回无效 JSON。"); }
+    try { payload = JSON.parse(text); } catch { throw new Error("登录服务返回无效数据。"); }
     if (!response.ok) {
       const parsed = parseApiError(payload, response.status);
       throw new AdminApiError(parsed.message, response.status, parsed.code);
@@ -576,7 +573,7 @@
     if (!isRecord(payload) || payload.status !== "authorized" || !isRecord(payload.lease)
       || !isRecord(payload.lease.claims) || typeof payload.access_token !== "string"
       || typeof payload.refresh_token !== "string" || typeof payload.lease.claims.lease_id !== "string") {
-      throw new Error("Control Plane 设备授权结果无效。");
+      throw new Error("Control Plane 登录结果无效。");
     }
     adminToken = payload.access_token;
     adminRefreshToken = payload.refresh_token;
@@ -623,59 +620,43 @@
     }
   };
 
-  const beginDeviceLogin = async () => {
+  const passwordLogin = async () => {
+    const identifier = elements.loginIdentifier.value.trim();
+    let password = elements.loginPassword.value;
+    if (!identifier || !password) {
+      throw new Error("请输入管理员账号和密码。");
+    }
     const generation = ++authGeneration;
     clearSession({ clearWorkflow: false, preserveGeneration: true });
-    const beginId = `admin-device-begin:${globalThis.crypto.randomUUID().replaceAll("-", "")}`;
-    const challenge = await deviceRequest(
-      "/v1/device/authorize",
-      { schema_version: 1, client_id: "ecorex-admin-web" },
-      beginId,
-    );
-    if (generation !== authGeneration) return;
-    if (typeof challenge.user_code !== "string" || typeof challenge.verification_url !== "string"
-      || typeof challenge.provider_flow_id !== "string" || typeof challenge.device_code !== "string") {
-      throw new Error("Control Plane 设备登录挑战无效。");
-    }
-    const verification = new URL(challenge.verification_url, window.location.origin);
-    const expiresAt = Date.parse(challenge.expires_at);
-    if (verification.protocol !== "https:" || verification.origin !== window.location.origin
-      || !Number.isSafeInteger(challenge.poll_interval_seconds)
-      || challenge.poll_interval_seconds < 1 || challenge.poll_interval_seconds > 60
-      || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
-      throw new Error("Control Plane 设备登录挑战无效。");
-    }
-    elements.deviceLoginCode.textContent = `验证码 ${challenge.user_code}`;
-    elements.deviceLoginLink.href = verification.href;
-    elements.deviceLoginState.hidden = false;
-    window.open(verification.href, "_blank", "noopener,noreferrer");
-    let attempt = 0;
-    while (generation === authGeneration && Date.now() < expiresAt) {
-      await new Promise((resolve) => globalThis.setTimeout(resolve, Math.max(1000, challenge.poll_interval_seconds * 1000)));
-      if (generation !== authGeneration) return;
+    const requestId = `admin-password-login:${globalThis.crypto.randomUUID().replaceAll("-", "")}`;
+    try {
       const payload = await deviceRequest(
-        "/v1/device/token",
+        "/v1/session/login",
         {
           schema_version: 1,
           client_id: "ecorex-admin-web",
-          provider_flow_id: challenge.provider_flow_id,
-          device_code: challenge.device_code,
+          identifier,
+          password,
         },
-        `admin-device-poll:${challenge.provider_flow_id}:${++attempt}`,
+        requestId,
       );
-      if (payload.status === "pending" || payload.status === "slow_down") continue;
-      if (payload.status !== "authorized") throw new Error("管理员设备授权未完成。");
+      if (generation !== authGeneration) return;
       installDeviceGrant(payload);
-      elements.deviceLoginState.hidden = true;
-      await refreshResume(elements.deviceLoginButton);
+      elements.loginPassword.value = "";
+      // ``passwordLogin`` already owns the busy state.  Calling the public
+      // button wrapper here would see that lock and silently skip the first
+      // authenticated state load, leaving a valid session labelled as
+      // disconnected.
+      await restoreAdminResume();
       syncControls();
-      return;
+    } finally {
+      // Never retain a password in a live form after a network outcome.
+      password = "";
     }
-    if (generation === authGeneration) throw new Error("管理员设备登录已过期，请重试。");
   };
 
   const apiRequest = async (path, options = {}) => {
-    if (!adminToken) throw new AdminApiError("管理员令牌未连接。请先连接控制面。", 401);
+    if (!adminToken) throw new AdminApiError("管理员尚未登录。请先登录控制面。", 401);
     await ensureFreshToken();
     if (typeof path !== "string" || !path.startsWith("/") || path.includes("?") || path.includes("#")) {
       throw new Error("管理台拒绝了无效 API 路径。");
@@ -847,11 +828,9 @@
     refreshPromise = null;
     sessionConnected = false;
     requestIds.clear();
-    elements.tokenInput.value = "";
+    elements.loginIdentifier.value = "";
+    elements.loginPassword.value = "";
     elements.sessionLabel.textContent = "未连接";
-    elements.deviceLoginState.hidden = true;
-    elements.deviceLoginLink.removeAttribute("href");
-    elements.deviceLoginCode.textContent = "";
     if (clearWorkflow) {
       manifest = null;
       manifestSha256 = null;
@@ -871,10 +850,10 @@
   const syncControls = () => {
     const hasToken = adminToken.length > 0;
     const connected = hasToken && sessionConnected;
-    elements.connectButton.disabled = busy;
-    elements.deviceLoginButton.disabled = busy;
+    elements.loginButton.disabled = busy;
     elements.refreshStateButton.disabled = !hasToken || busy;
-    elements.tokenInput.disabled = busy;
+    elements.loginIdentifier.disabled = busy;
+    elements.loginPassword.disabled = busy;
     elements.manifestFile.disabled = busy;
     elements.clearTokenButton.disabled = !hasToken || busy;
     elements.refreshDistributionButton.disabled = !connected || busy;
@@ -922,7 +901,7 @@
       showMessage("error", message);
       if (error instanceof AdminApiError && (error.status === 401 || error.status === 403)) {
         clearSession();
-        showMessage("error", `${message} 管理员令牌已从页面内存清除，请重新连接。`);
+        showMessage("error", `${message} 管理员会话已清除，请重新登录。`);
       }
     } finally {
       busy = false;
@@ -1333,24 +1312,26 @@
     syncControls();
   };
 
+  const restoreAdminResume = async () => {
+    sessionConnected = false;
+    elements.sessionLabel.textContent = "正在连接";
+    try {
+      const payload = await apiRequest("/resume");
+      const projection = normalizeResume(payload);
+      sessionConnected = true;
+      renderResume(projection);
+      await refreshManagementData();
+    } catch (error) {
+      sessionConnected = false;
+      elements.sessionLabel.textContent = "未连接 · 状态恢复失败";
+      throw error;
+    }
+  };
+
   const refreshResume = (button = elements.refreshStateButton) => withBusy(
     button,
     "正在恢复",
-    async () => {
-      sessionConnected = false;
-      elements.sessionLabel.textContent = "正在连接";
-      try {
-        const payload = await apiRequest("/resume");
-        const projection = normalizeResume(payload);
-        sessionConnected = true;
-        renderResume(projection);
-        await refreshManagementData();
-      } catch (error) {
-        sessionConnected = false;
-        elements.sessionLabel.textContent = "未连接 · 状态恢复失败";
-        throw error;
-      }
-    },
+    restoreAdminResume,
   );
 
   const refreshDistribution = (button = elements.refreshDistributionButton) => withBusy(
@@ -1374,23 +1355,16 @@
   elements.authForm.addEventListener("submit", (event) => {
     event.preventDefault();
     if (busy) return;
-    const token = elements.tokenInput.value.trim();
-    if (!/^[\x21-\x7e]{24,4096}$/u.test(token)) {
-      elements.tokenInput.setAttribute("aria-invalid", "true");
-      showMessage("error", "管理员令牌格式无效。请输入 24–4096 个可打印 ASCII 字符。令牌未被保存。");
-      elements.tokenInput.focus();
+    if (!elements.loginIdentifier.value.trim() || !elements.loginPassword.value) {
+      elements.loginIdentifier.setAttribute("aria-invalid", "true");
+      elements.loginPassword.setAttribute("aria-invalid", "true");
+      showMessage("error", "请输入管理员账号和密码。");
+      elements.loginIdentifier.focus();
       return;
     }
-    elements.tokenInput.removeAttribute("aria-invalid");
-    adminToken = token;
-    sessionConnected = false;
-    elements.tokenInput.value = "";
-    void refreshResume(elements.connectButton);
-    syncControls();
-  });
-
-  elements.deviceLoginButton.addEventListener("click", () => {
-    void withBusy(elements.deviceLoginButton, "等待授权", beginDeviceLogin);
+    elements.loginIdentifier.removeAttribute("aria-invalid");
+    elements.loginPassword.removeAttribute("aria-invalid");
+    void withBusy(elements.loginButton, "登录中", passwordLogin);
   });
 
   elements.refreshStateButton.addEventListener("click", () => {
@@ -1400,7 +1374,7 @@
   elements.clearTokenButton.addEventListener("click", () => {
     clearSession();
     clearMessage();
-    elements.tokenInput.focus();
+    elements.loginIdentifier.focus();
   });
 
   elements.dismissMessage.addEventListener("click", clearMessage);

@@ -282,6 +282,43 @@ def test_core_runtime_availability_normalizes_only_handler_absence() -> None:
     }
 
 
+def test_invocation_reuses_bound_core_availability_not_raw_pack_facts(tmp_path) -> None:
+    """A disclosed Core tool cannot regress at just-in-time governance."""
+
+    app = create_app(
+        settings=RuntimeSettings(
+            database_path=tmp_path / "runtime.db",
+            runtime_bearer_token=TOKEN,
+            csrf_token=CSRF,
+            webui_origins=(ORIGIN,),
+            disabled_capability_tools={
+                # This is the low-level pack builder's pre-composition fact.
+                # Product composition binds the trusted handler afterwards.
+                "connector_search": "verified_handler_not_installed",
+            },
+        )
+    )
+    composition = app.state.runtime_composition
+    prepared = composition.prepare_turn(
+        CreateTurnRequest(
+            input="搜索可用连接器",
+            explicit_tool_ids=["connector_search"],
+            client_message_id="bound-invocation-availability",
+        )
+    )
+
+    governance = composition.capability_service.invocation_governance(
+        prepared.snapshot_context.capability_snapshot_id,
+        "connector_search",
+    )
+
+    assert governance.allowed is True
+    assert not any(
+        reason.startswith("current_availability:disabled:connector_search")
+        for reason in governance.reason_codes
+    )
+
+
 def test_turn_permission_admission_rejects_an_async_acceptance_callback(
     tmp_path,
 ) -> None:

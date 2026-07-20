@@ -93,6 +93,7 @@ class ProductServerSettings:
     )
     full_access: bool = False
     admin_hard_denies: tuple[str, ...] = ()
+    enforce_admin_tool_denies: bool = False
     managed_session_service: ManagedSessionService | None = field(
         default=None, repr=False, compare=False
     )
@@ -558,6 +559,7 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
         extension_service=extension_service,
         full_access=settings.full_access,
         admin_hard_denies=list(settings.admin_hard_denies),
+        enforce_admin_tool_denies=settings.enforce_admin_tool_denies,
         require_managed_session=not settings.allow_unmanaged_session_for_testing,
         allow_unmanaged_model_gateway_for_testing=(
             settings.allow_unmanaged_session_for_testing

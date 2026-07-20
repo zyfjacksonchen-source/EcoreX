@@ -251,6 +251,10 @@ class RuntimeSettings:
     close_device_authorization_broker_on_shutdown: bool = True
     full_access: bool = False
     admin_hard_denies: list[str] = field(default_factory=list)
+    # The cloud control plane observes/audits local execution.  It does not
+    # normally veto a local user's tools; local permission profiles are the
+    # execution authority.  Reserved for explicit regulated deployments.
+    enforce_admin_tool_denies: bool = False
     runtime_bearer_token: str | None = field(default=None, repr=False)
     csrf_token: str | None = field(default=None, repr=False)
     webui_origins: tuple[str, ...] = ("http://127.0.0.1:8765", "http://localhost:8765")
@@ -1040,6 +1044,8 @@ def create_app(
         raise ValueError("runtime bearer token must contain at least 32 characters")
     if len(settings.csrf_token) < 32:
         raise ValueError("CSRF token must contain at least 32 characters")
+    if not isinstance(settings.enforce_admin_tool_denies, bool):
+        raise ValueError("admin tool-deny enforcement must be a boolean")
     if settings.event_poll_interval_seconds <= 0:
         raise ValueError("event poll interval must be positive")
     if settings.event_idle_poll_interval_seconds < settings.event_poll_interval_seconds:
@@ -1365,8 +1371,10 @@ def create_app(
         adapters=settings.connector_adapters,
         vault=connector_vault,
         event_sink=connector_event_sink,
-        hard_deny_provider=lambda _instance_id, _action_id: frozenset(
-            permission_authority.current().admin_hard_denies
+        hard_deny_provider=lambda _instance_id, _action_id: (
+            frozenset(permission_authority.current().admin_hard_denies)
+            if settings.enforce_admin_tool_denies
+            else frozenset()
         ),
         maintenance_interval_seconds=settings.connector_maintenance_seconds,
         maintenance_stop_timeout_seconds=settings.lifecycle_shutdown_seconds,
@@ -1662,6 +1670,7 @@ def create_app(
         extension_governance_enabled=extension_governance_enabled,
         mcp_runtime_bindings=tuple(settings.mcp_runtime_bindings),
         tenant_id=settings.account_id,
+        enforce_admin_tool_denies=settings.enforce_admin_tool_denies,
         persist_startup_snapshots=startup_convergence_allowed,
     )
 

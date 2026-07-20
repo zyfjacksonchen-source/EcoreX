@@ -312,6 +312,7 @@ class RuntimeComposition:
         extension_governance_enabled: bool | None = None,
         mcp_runtime_bindings: tuple["MCPRuntimeBinding", ...] = (),
         tenant_id: str = "local-user",
+        enforce_admin_tool_denies: bool = False,
         persist_startup_snapshots: bool = True,
     ) -> None:
         if not isinstance(persist_startup_snapshots, bool):
@@ -441,8 +442,10 @@ class RuntimeComposition:
                 tool_executions=self.tool_execution_repository,
                 snapshot_resolver=self._connector_snapshot_for_scope,
                 turn_intent_resolver=self._turn_input_for_scope,
-                admin_hard_denies_provider=lambda: frozenset(
-                    self._permission_provider().admin_hard_denies
+                admin_hard_denies_provider=lambda: (
+                    frozenset(self._permission_provider().admin_hard_denies)
+                    if self._enforce_admin_tool_denies
+                    else frozenset()
                 ),
                 frozen_admin_hard_denies_resolver=(
                     self._frozen_admin_hard_denies
@@ -507,7 +510,13 @@ class RuntimeComposition:
             raise ValueError("permission profile does not match its payload")
         if frozenset(static_permission.admin_hard_denies) != admin_hard_denies:
             raise ValueError("administrator permission policy does not match its payload")
+        # Control-plane denial facts remain in the immutable permission
+        # projection for audit and reconciliation.  They are not an execution
+        # gate for the local product by default: local permissions, local
+        # capability discovery and the selected sandbox profile own that
+        # decision.  A regulated deployment can explicitly opt in.
         self._admin_hard_denies = admin_hard_denies
+        self._enforce_admin_tool_denies = bool(enforce_admin_tool_denies)
         self._permission_provider = permission_provider or (lambda: static_permission)
         self._permission_state_digest_provider = (
             permission_state_digest_provider
@@ -539,8 +548,12 @@ class RuntimeComposition:
             self.availability
         )
         self._availability_provider = availability_provider or (lambda: self.availability)
+        # Invocation must see the same post-composition availability as Turn
+        # planning.  Binding the raw provider here reintroduced stale
+        # ``verified_handler_not_installed`` facts for Core handlers and
+        # rejected tools after they had been disclosed to the model.
         self.capability_service.bind_current_availability_provider(
-            self._availability_provider
+            self.current_invocation_availability
         )
         self._output_policy_provider = output_policy_provider
         self.model_snapshot = self._runtime_snapshot(
@@ -820,7 +833,45 @@ class RuntimeComposition:
             )
         return self._execution_policy(permission)
 
+    def current_invocation_availability(self) -> RuntimeAvailability:
+        """Return current Runtime availability after all trusted bindings.
+
+        Capability-pack discovery is intentionally unaware of handlers that
+        product composition installs afterwards.  Planning already normalizes
+        those Core/extension handlers; just-in-time governance must consume
+        the same normalized view or a disclosed tool can be denied before a
+        Tool Item is even created.
+        """
+
+        availability = self._availability_provider()
+        if not isinstance(availability, RuntimeAvailability):
+            raise TypeError("Runtime availability provider returned an invalid value")
+        availability = self._apply_connector_execution_availability(availability)
+        availability = self._apply_artifact_read_availability(availability)
+        availability = self._apply_input_attachment_read_availability(availability)
+        extension_snapshot = self.extension_service.snapshot()
+        contribution_snapshot = self.skill_runtime.contribution_snapshot(
+            extension_snapshot.snapshot_id,
+            mcp_contributions=(
+                self.mcp_supervisor.contribution_records(extension_snapshot.snapshot_id)
+                if self.mcp_supervisor is not None
+                else ()
+            ),
+        )
+        availability = self._apply_extension_execution_availability(
+            availability,
+            contribution_snapshot,
+        )
+        if self._extension_governance_enabled:
+            availability = self.extension_service.apply_availability(
+                availability,
+                extension_snapshot,
+            )
+        return availability
+
     def _frozen_admin_hard_denies(self, snapshot_id: str) -> frozenset[str]:
+        if not self._enforce_admin_tool_denies:
+            return frozenset()
         snapshot = self.snapshot_repository.get(snapshot_id)
         if snapshot.kind != "permission":
             raise ValueError("Connector permission snapshot kind is invalid")
@@ -850,8 +901,7 @@ class RuntimeComposition:
             raise ValueError("permission ledger state is unavailable")
         return str(row["state_digest"])
 
-    @staticmethod
-    def _execution_policy(permission: PermissionSnapshot) -> ExecutionPolicy:
+    def _execution_policy(self, permission: PermissionSnapshot) -> ExecutionPolicy:
         return ExecutionPolicy(
             snapshot_id=permission.snapshot_id,
             profile=(
@@ -859,7 +909,11 @@ class RuntimeComposition:
                 if permission.full_access
                 else PermissionProfile.DEFAULT
             ),
+            # Keep the signed facts on the policy so durable admission can
+            # reconstruct the exact PermissionAuthority snapshot.  Governance
+            # separately receives the product enforcement switch below.
             admin_hard_denies=frozenset(permission.admin_hard_denies),
+            enforce_admin_hard_denies=self._enforce_admin_tool_denies,
         )
 
     def _record_connector_catalog(self):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+import json
 import threading
 
 import pytest
@@ -33,18 +34,27 @@ from ecorex.runtime import (
 class _Gateway:
     def __init__(self, scripts) -> None:
         self.scripts = list(scripts)
+        self.requests = []
 
-    async def stream(self, _request):
+    async def stream(self, request):
+        self.requests.append(request)
         for event in self.scripts.pop(0):
             yield GatewayEvent.model_validate(event)
 
 
-def _shell_runtime(tmp_path, handler, *, admin_hard_denies=()):
+def _shell_runtime(
+    tmp_path,
+    handler,
+    *,
+    admin_hard_denies=(),
+    enforce_admin_tool_denies=False,
+):
     app = create_app(
         settings=RuntimeSettings(
             database_path=tmp_path / "runtime.db",
             full_access=True,
             admin_hard_denies=list(admin_hard_denies),
+            enforce_admin_tool_denies=enforce_admin_tool_denies,
             installed_capability_packs=frozenset({"sandbox"}),
             capability_handlers={"shell": handler},
         )
@@ -287,7 +297,7 @@ def test_separate_authority_revocation_wins_before_admission_transaction(tmp_pat
     assert interactions[0].kind.value == "permission_approval"
 
 
-def test_admin_hard_deny_rejects_before_tool_item_or_hitl(tmp_path) -> None:
+def test_admin_audit_denies_do_not_block_local_tool_execution_by_default(tmp_path) -> None:
     calls = []
     app, kernel, composition, thread, created = _shell_runtime(
         tmp_path,
@@ -295,7 +305,7 @@ def test_admin_hard_deny_rejects_before_tool_item_or_hitl(tmp_path) -> None:
         or {"exit_code": 0},
         admin_hard_denies=("shell",),
     )
-    gateway = _Gateway([_shell_scripts(call_id="admin-denied")[0]])
+    gateway = _Gateway(_shell_scripts(call_id="admin-denied"))
     worker = AgentTurnWorker(
         kernel,
         gateway=gateway,
@@ -303,18 +313,207 @@ def test_admin_hard_deny_rejects_before_tool_item_or_hitl(tmp_path) -> None:
         permission_mutation_lock=app.state.permission_authority.mutation_lock,
     )
 
-    result = asyncio.run(worker.run_once("admin-deny-worker"))
+    result = asyncio.run(worker.run_once("admin-audit-only-worker"))
 
-    assert result.outcome is WorkerOutcome.FAILED
-    assert result.reason in {"tool_not_eligible", "tool_permission_denied"}
-    assert calls == []
+    assert result.outcome is WorkerOutcome.COMPLETED
+    assert calls
     assert kernel.list_interactions(thread.thread_id).interactions == []
-    assert not any(
+    assert any(
         item.kind is ItemKind.TOOL_CALL
         for item in kernel.projection(thread.thread_id).items
     )
     execution_id = _execution_id(created.turn.turn_id, "admin-denied")
+    assert ToolExecutionRepository(kernel.database).admission(execution_id) is not None
+
+
+def test_regulated_runtime_can_explicitly_enforce_admin_tool_denies(tmp_path) -> None:
+    calls = []
+    app, kernel, composition, thread, created = _shell_runtime(
+        tmp_path,
+        lambda arguments, context: calls.append((arguments, context))
+        or {"exit_code": 0},
+        admin_hard_denies=("shell",),
+        enforce_admin_tool_denies=True,
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=_Gateway(
+            [
+                _shell_scripts(call_id="admin-denied-enforced")[0],
+                [
+                    {
+                        "seq": 1,
+                        "event_type": "response.completed",
+                        "response_id": "admin-denied-enforced-completed",
+                    }
+                ],
+            ]
+        ),
+        capabilities=composition.capability_service,
+        permission_mutation_lock=app.state.permission_authority.mutation_lock,
+    )
+
+    result = asyncio.run(worker.run_once("admin-deny-enforced-worker"))
+
+    assert result.outcome is WorkerOutcome.COMPLETED
+    assert calls == []
+    assert kernel.list_interactions(thread.thread_id).interactions == []
+    execution_id = _execution_id(created.turn.turn_id, "admin-denied-enforced")
     assert ToolExecutionRepository(kernel.database).admission(execution_id) is None
+    with kernel.database.reader() as connection:
+        rows = connection.execute(
+            "SELECT payload_json FROM events WHERE turn_id=? "
+            "AND event_type='tool.recovery_planned'",
+            (created.turn.turn_id,),
+        ).fetchall()
+    assert len(rows) == 1
+    payload = json.loads(rows[0]["payload_json"])
+    assert payload["code"] == "tool_not_eligible"
+    assert payload["source"] == "preflight"
+    assert "arguments" not in payload
+
+
+def test_missing_tool_is_observed_and_model_recovers_with_a_safe_alternative(
+    tmp_path,
+) -> None:
+    calls = []
+    app, kernel, composition, thread, created = _shell_runtime(
+        tmp_path,
+        lambda arguments, context: calls.append((dict(arguments), context))
+        or {"exit_code": 0},
+    )
+    gateway = _Gateway(
+        [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "missing-tool-response",
+                    "tool_call_id": "missing-tool-call",
+                    "tool_name": "legacy-browser-search",
+                    "arguments": {},
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "fallback-tool-response",
+                    "tool_call_id": "fallback-shell-call",
+                    "tool_name": "shell",
+                    "arguments": {"command": "opaque-command"},
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "response.completed",
+                    "response_id": "recovery-completed",
+                }
+            ],
+        ]
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+        permission_mutation_lock=app.state.permission_authority.mutation_lock,
+    )
+
+    result = asyncio.run(worker.run_once("self-healing-worker"))
+
+    assert result.outcome is WorkerOutcome.COMPLETED
+    assert [call[0]["command"] for call in calls] == ["opaque-command"]
+    assert len(gateway.requests) == 3
+    recovery_output = gateway.requests[1].tool_outputs[0].output
+    assert recovery_output["status"] == "recovery_required"
+    assert recovery_output["code"] == "tool_not_eligible"
+    assert recovery_output["recovery"]["action"] == "discover_or_switch"
+    assert recovery_output["recovery"]["requested_tool"] == "legacy-browser-search"
+    assert "arguments" not in recovery_output
+
+    with kernel.database.reader() as connection:
+        rows = connection.execute(
+            "SELECT event_type, payload_json FROM events WHERE turn_id=? "
+            "AND event_type IN ('tool.recovery_planned', 'tool.recovery_resolved') "
+            "ORDER BY seq",
+            (created.turn.turn_id,),
+        ).fetchall()
+    assert [row["event_type"] for row in rows] == [
+        "tool.recovery_planned",
+        "tool.recovery_resolved",
+    ]
+    planned = json.loads(rows[0]["payload_json"])
+    resolved = json.loads(rows[1]["payload_json"])
+    assert planned["source"] == "preflight"
+    assert planned["requested_tool"] == "legacy-browser-search"
+    assert planned["action"] == "discover_or_switch"
+    assert isinstance(planned["candidate_tool_ids"], list)
+    assert "arguments" not in planned
+    assert resolved["resolved_by_tool_id"] == "shell"
+    assert kernel.list_interactions(thread.thread_id).interactions == []
+
+
+def test_handler_loss_after_projection_is_observed_and_recovers_without_dispatch(
+    tmp_path,
+) -> None:
+    calls = []
+    app, kernel, composition, _thread, created = _shell_runtime(
+        tmp_path,
+        lambda arguments, context: calls.append((dict(arguments), context))
+        or {"exit_code": 0},
+    )
+    gateway = _Gateway(
+        [
+            _shell_scripts(call_id="handler-loss")[0],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "response.completed",
+                    "response_id": "handler-loss-recovered",
+                }
+            ],
+        ]
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+        permission_mutation_lock=app.state.permission_authority.mutation_lock,
+    )
+    original_authorized = worker._authorized_tool_description
+
+    def authorize_then_remove_handler(**kwargs):
+        result = original_authorized(**kwargs)
+        composition.capability_service.handlers.pop("shell", None)
+        return result
+
+    worker._authorized_tool_description = authorize_then_remove_handler
+
+    result = asyncio.run(worker.run_once("handler-loss-worker"))
+
+    assert result.outcome is WorkerOutcome.COMPLETED
+    assert calls == []
+    recovery_output = gateway.requests[1].tool_outputs[0].output
+    assert recovery_output["code"] == "tool_handler_missing"
+    assert recovery_output["recovery"]["action"] == "discover_or_switch"
+    execution = ToolExecutionRepository(kernel.database).get(
+        _execution_id(created.turn.turn_id, "handler-loss")
+    )
+    assert execution.status == "failed"
+    assert execution.error_code == "tool_handler_missing"
+    projection = kernel.projection(created.turn.thread_id)
+    tool_items = [item for item in projection.items if item.kind is ItemKind.TOOL_CALL]
+    assert len(tool_items) == 1
+    assert tool_items[0].status.value == "failed"
+    with kernel.database.reader() as connection:
+        row = connection.execute(
+            "SELECT payload_json FROM events WHERE turn_id=? "
+            "AND event_type='tool.recovery_planned'",
+            (created.turn.turn_id,),
+        ).fetchone()
+    assert row is not None
+    assert json.loads(row["payload_json"])["source"] == "dispatch_preflight"
 
 
 def test_admitted_non_idempotent_crash_remains_uncertain(tmp_path) -> None:
@@ -466,7 +665,7 @@ def test_resolved_deny_interaction_cannot_mint_an_approved_permit(tmp_path) -> N
         )
 
 
-def test_invalid_non_idempotent_arguments_fail_before_item_or_approval(tmp_path) -> None:
+def test_invalid_non_idempotent_arguments_recover_before_item_or_approval(tmp_path) -> None:
     calls = []
     app = create_app(
         settings=RuntimeSettings(
@@ -494,14 +693,21 @@ def test_invalid_non_idempotent_arguments_fail_before_item_or_approval(tmp_path)
         snapshot_context=prepared.snapshot_context,
     )
     gateway = _Gateway(
-        [[{
-            "seq": 1,
-            "event_type": "tool_call.requested",
-            "response_id": "invalid-shell-response",
-            "tool_call_id": "invalid-shell-call",
-            "tool_name": "shell",
-            "arguments": {},
-        }]]
+        [
+            [{
+                "seq": 1,
+                "event_type": "tool_call.requested",
+                "response_id": "invalid-shell-response",
+                "tool_call_id": "invalid-shell-call",
+                "tool_name": "shell",
+                "arguments": {},
+            }],
+            [{
+                "seq": 1,
+                "event_type": "response.completed",
+                "response_id": "invalid-shell-recovered",
+            }],
+        ]
     )
     worker = AgentTurnWorker(
         kernel,
@@ -512,8 +718,7 @@ def test_invalid_non_idempotent_arguments_fail_before_item_or_approval(tmp_path)
 
     result = asyncio.run(worker.run_once("invalid-shell-worker"))
 
-    assert result.outcome is WorkerOutcome.FAILED
-    assert result.reason == "tool_arguments_invalid"
+    assert result.outcome is WorkerOutcome.COMPLETED
     assert calls == []
     assert kernel.list_interactions(thread.thread_id).interactions == []
     assert not any(
@@ -524,6 +729,60 @@ def test_invalid_non_idempotent_arguments_fail_before_item_or_approval(tmp_path)
         ToolExecutionRepository(kernel.database).get(
             _execution_id(created.turn.turn_id, "invalid-shell-call")
         )
+    recovery_output = gateway.requests[1].tool_outputs[0].output
+    assert recovery_output["code"] == "tool_arguments_invalid"
+    assert recovery_output["recovery"]["action"] == "correct_arguments"
+    assert recovery_output["recovery"]["retry_allowed"] is True
+
+
+def test_model_can_correct_safe_tool_arguments_and_retry_in_the_same_turn(tmp_path) -> None:
+    calls = []
+    app, kernel, composition, _thread, created = _shell_runtime(
+        tmp_path,
+        lambda arguments, context: calls.append((dict(arguments), context))
+        or {"exit_code": 0},
+    )
+    gateway = _Gateway(
+        [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "invalid-arguments-response",
+                    "tool_call_id": "invalid-arguments-call",
+                    "tool_name": "shell",
+                    "arguments": {},
+                }
+            ],
+            _shell_scripts(call_id="corrected-arguments-call")[0],
+            _shell_scripts(call_id="corrected-arguments-call")[1],
+        ]
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+        permission_mutation_lock=app.state.permission_authority.mutation_lock,
+    )
+
+    result = asyncio.run(worker.run_once("corrected-arguments-worker"))
+
+    assert result.outcome is WorkerOutcome.COMPLETED
+    assert [call[0]["command"] for call in calls] == ["opaque-command"]
+    assert gateway.requests[1].tool_outputs[0].output["recovery"]["action"] == (
+        "correct_arguments"
+    )
+    with kernel.database.reader() as connection:
+        rows = connection.execute(
+            "SELECT event_type FROM events WHERE turn_id=? "
+            "AND event_type IN ('tool.recovery_planned', 'tool.recovery_resolved') "
+            "ORDER BY seq",
+            (created.turn.turn_id,),
+        ).fetchall()
+    assert [row["event_type"] for row in rows] == [
+        "tool.recovery_planned",
+        "tool.recovery_resolved",
+    ]
 
 
 def test_current_availability_can_tighten_but_not_broaden_frozen_plan() -> None:

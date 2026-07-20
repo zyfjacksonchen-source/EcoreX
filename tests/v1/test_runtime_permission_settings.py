@@ -338,9 +338,14 @@ def test_permission_snapshot_and_audit_failure_roll_back_one_authority_unit(
         ).fetchone() is None
 
 
-def test_full_access_never_overrides_admin_hard_deny_and_can_be_revoked(tmp_path) -> None:
+def test_full_access_keeps_admin_audit_denies_without_blocking_local_tools(tmp_path) -> None:
     app = create_app(
-        settings=_settings(tmp_path, admin_hard_denies=[" SHELL "])
+        settings=_settings(
+            tmp_path,
+            admin_hard_denies=[" SHELL "],
+            installed_capability_packs=frozenset({"sandbox"}),
+            capability_handlers={"shell": lambda arguments, context: {"exit_code": 0}},
+        )
     )
     client = TestClient(app)
     auth, mutation = _headers()
@@ -371,8 +376,8 @@ def test_full_access_never_overrides_admin_hard_deny_and_can_be_revoked(tmp_path
         accepted.capability_snapshot_id
     )
     decision = plan.decision("shell")
-    assert decision.eligible is False
-    assert "admin_hard_deny" in decision.reason_codes
+    assert decision.eligible is True
+    assert "admin_hard_deny" not in decision.reason_codes
     full_revision = client.get(
         "/api/v1/bootstrap", headers=auth
     ).json()["permissions"]["revision"]
@@ -721,4 +726,4 @@ def test_admin_policy_restart_changes_only_future_turn_snapshots(tmp_path) -> No
         accepted[second_turn].capability_snapshot_id
     )
     assert first_plan.decision("shell").eligible is True
-    assert second_plan.decision("shell").eligible is False
+    assert second_plan.decision("shell").eligible is True

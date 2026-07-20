@@ -282,12 +282,15 @@ def test_admin_dom_and_script_contract_are_csp_safe_and_ephemeral() -> None:
     assert "<style" not in html.casefold()
     assert "<base" not in html.casefold()
     assert 'type="password"' in html
-    assert 'autocomplete="off"' in html
+    assert 'autocomplete="username"' in html
+    assert 'autocomplete="current-password"' in html
     assert 'id="refresh-state-button"' in html
-    assert 'id="device-login-button"' in html
-    assert 'id="device-login-state"' in html
-    assert 'id="manual-token-fallback"' in html
-    assert "访问令牌和刷新令牌仅保留在当前页面内存" in html
+    assert 'id="admin-identifier"' in html
+    assert 'id="admin-password"' in html
+    assert 'id="login-button"' in html
+    assert 'id="device-login-button"' not in html
+    assert 'id="manual-token-fallback"' not in html
+    assert "使用原有账号密码直接登录" in html
     assert "全部必需发布门禁" in html
     assert "签名门禁包的只读投影" in html
     assert "activate" in html and "pause" in html and "halt" in html
@@ -329,11 +332,12 @@ def test_admin_dom_and_script_contract_are_csp_safe_and_ephemeral() -> None:
     assert "beforeunload" in script
     assert 'client_id: "ecorex-admin-web"' in script
     assert 'grant_type: "refresh_token"' in script
-    assert '"/v1/device/authorize"' in script
+    assert '"/v1/session/login"' in script
+    assert '"/v1/device/authorize"' not in script
     assert '"/v1/device/token"' in script
     assert "const refreshPromise" not in script
     assert "let refreshPromise = null" in script
-    assert "elements.deviceLoginButton.addEventListener" in script
+    assert "elements.loginButton" in script
     assert 'adminRefreshToken = ""' in script
     assert "showModal()" in script
     assert script.count("askConfirmation({") >= 5
