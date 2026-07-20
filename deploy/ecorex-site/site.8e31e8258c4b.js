@@ -474,11 +474,11 @@ export function terminalCommand(artifact) {
       "Write-Host ''",
       "Write-Host 'EcoreX 安装准备' -ForegroundColor Cyan",
       "foreach($u in $urls){$i++; Remove-Item -LiteralPath $z -Force -ErrorAction SilentlyContinue; Write-Host (('[下载] 下载源 {0}/{1}，将显示百分比、速度和剩余时间' -f $i,$urls.Count)); & curl.exe --fail --location --retry 4 --retry-all-errors --connect-timeout 15 --output $z $u; if($LASTEXITCODE -eq 0 -and (Get-FileHash $z -Algorithm SHA256).Hash.ToLowerInvariant() -eq " + powershellLiteral(artifact.sha256) + "){$ok=$true; break}; Write-Host '[切换] 当前下载源未完成，正在尝试下一来源'}",
-      "if(-not $ok){throw 'EcoreX Bootstrap 下载或校验失败'}",
-      "Write-Host '[校验] Bootstrap 的 SHA-256 已通过'",
+      "if(-not $ok){throw 'EcoreX 安装文件下载或校验失败'}",
+      "Write-Host '[校验] 下载文件已通过完整性检查'",
       "Write-Host '[解压] 正在准备启动组件'",
       "Expand-Archive -LiteralPath $z -DestinationPath $d",
-      "Write-Host '[启动] 后续 Core 与能力组件会继续显示实时进度'",
+      "Write-Host '[启动] 后续 EcoreX 组件会继续显示实时进度'",
       "& (Join-Path $d 'bin\\ecorex-bootstrap.exe')",
     ].join("; ");
   }
@@ -493,11 +493,11 @@ export function terminalCommand(artifact) {
     "printf '\\nEcoreX 安装准备\\n'",
     "for u in \"${urls[@]}\"; do i=$((i+1)); rm -f \"$z\"; printf '[下载] 下载源 %s/%s，将显示百分比、速度和剩余时间\\n' \"$i\" \"${#urls[@]}\"; if curl --fail --location --retry 4 --retry-all-errors --connect-timeout 15 --output \"$z\" \"$u\" && printf '%s  %s\\n' " + digest + " \"$z\" | shasum -a 256 -c -; then ok=1; break; fi; printf '[切换] 当前下载源未完成，正在尝试下一来源\\n'; done",
     "test \"$ok\" -eq 1",
-    "printf '[校验] Bootstrap 的 SHA-256 已通过\\n'",
+    "printf '[校验] 下载文件已通过完整性检查\\n'",
     "printf '[解压] 正在准备启动组件\\n'",
     'ditto -x -k "$z" "$d"',
     'chmod +x "$d/bin/ecorex-bootstrap"',
-    "printf '[启动] 后续 Core 与能力组件会继续显示实时进度\\n'",
+    "printf '[启动] 后续 EcoreX 组件会继续显示实时进度\\n'",
     '"$d/bin/ecorex-bootstrap"',
   ].join(" && ");
 }
@@ -625,7 +625,7 @@ function renderIndex(index, manifestCheck = null) {
   if (manifestCheckNode) {
     manifestCheckNode.textContent = manifestCheck
       ? `字节摘要已核对（${manifestCheck.kind}）`
-      : "等待 Bootstrap 验签";
+      : "正在验证下载文件";
   }
   document.querySelectorAll("[data-version]").forEach((node) => {
     node.textContent = release.version;
@@ -712,7 +712,7 @@ if (typeof document !== "undefined") {
           })
           .catch(() => {
             const node = document.querySelector("[data-manifest-check]");
-            if (node) node.textContent = "由 Bootstrap 验签";
+            if (node) node.textContent = "安装程序会自动验证";
           });
       }
     })
