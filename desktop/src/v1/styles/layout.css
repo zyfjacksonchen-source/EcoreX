@@ -768,6 +768,7 @@ textarea {
 }
 
 .ex-timeline {
+  position: relative;
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;

@@ -1309,8 +1309,25 @@
   line-height: var(--text-caption-line);
 }
 
-@keyframes ex-spin {
-  to { transform: rotate(360deg); }
+
+.ex-timeline-jump {
+  position: absolute;
+  right: var(--space-5);
+  bottom: var(--space-5);
+  z-index: var(--z-sticky);
+  pointer-events: none;
+}
+
+.ex-timeline-jump-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  pointer-events: auto;
+}
+
+.ex-timeline-jump-button svg {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
 }
 
 .ex-interaction-stack {

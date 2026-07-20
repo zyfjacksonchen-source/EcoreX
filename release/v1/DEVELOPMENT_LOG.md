@@ -1,5 +1,18 @@
 # v1 update-chain development log
 
+## 2026-07-20 — v1.0.8 WebUI recovery kickoff
+
+- Re-scoped the release goal to a WebUI-led v1.0.8 recovery while explicitly allowing the minimum runtime / migration / connector linkage needed for old-session restore, one-click connector activation, project-workspace binding, and post-update state correctness.
+- Consolidated the execution plan into `.claude/plans/sparkling-whistling-wreath.md`, including:
+  - v0.2.9.2 UI parity goals (model selector, orange thinking state, sidebar running affordances, artifact thumbs, jump-to-bottom)
+  - tool/function-calling recovery boundaries (tool registry, tool-schema exposure, provider function-calling projection)
+  - legacy active-session restore rules (canonical DB authority; no resurrection of deleted sessions)
+  - connector one-click completion hardening and update-chain verification gates
+- Began TDD with the first failing browser-level regression for the restored jump-to-bottom affordance:
+  - Added Playwright GA spec `timeline exposes a persistent jump-to-latest control after scrolling away from the bottom`
+  - The test uses the artifact scenario, injects scroll filler into `.ex-timeline`, scrolls away from bottom, expects a `回到底部` control, then expects it to scroll back to the latest position and disappear.
+- No production code was changed yet for this slice; the goal is to watch this test fail first, then implement the minimal Timeline / style changes.
+
 ## 2026-07-10 — first implementation slice
 
 Implemented within `ecorex/update`:
@@ -288,3 +301,15 @@ Starlette's upstream `python_multipart` pending-deprecation notice.
 - PR #2 remains Draft, CLEAN and MERGEABLE. The read-only repository audit is
   byte-identical at 17 blockers (`d9eb1f47...38a2c8`, action `none`), so no
   protected Candidate, governance mutation, publication or rollout occurred.
+
+## 2026-07-20 - v1.0.8 Turn-model availability convergence
+
+- Fixed the runtime invocation overlay so it retains the immutable model
+  modality and capability selection captured by the admitted Turn while it
+  still re-checks live packs, connectors, network state and permission policy.
+- This prevents a model-enabled image capability from being falsely denied
+  during execution merely because the shared live availability provider has no
+  single global model selection.
+- Added a focused regression that verifies `imagegen` remains invocable for a
+  Turn that selected the signed image-generation/edit model, while a genuine
+  live availability loss still tightens the policy and blocks execution.

@@ -21,7 +21,7 @@ test("same-version durable update state never becomes a visible update", () => {
 
 test("a newer target remains visible to the user", () => {
   assert.equal(
-    hasPendingRuntimeUpdate({ ...current, state: "awaiting_user", target_version: "1.0.7" }),
+    hasPendingRuntimeUpdate({ ...current, state: "awaiting_user", target_version: "1.0.8" }),
     true,
   );
 });

@@ -553,3 +553,41 @@ def test_current_availability_can_tighten_but_not_broaden_frozen_plan() -> None:
 
     assert tightened.allowed is False
     assert "current_availability:missing_packs:sandbox" in tightened.reason_codes
+
+
+def test_current_availability_preserves_turn_selected_model_capabilities() -> None:
+    service = CapabilityService(builtin_capability_registry())
+    policy = ExecutionPolicy(
+        snapshot_id="perm_image_full",
+        profile=PermissionProfile.FULL_ACCESS,
+    )
+    frozen = RuntimeAvailability(
+        platform="windows",
+        installed_packs=frozenset({"image"}),
+        selected_model_modalities=frozenset({"image"}),
+        selected_model_capabilities={
+            "image": frozenset({"image_generation", "image_edit"}),
+        },
+    )
+    current = {"availability": RuntimeAvailability(
+        platform="windows",
+        installed_packs=frozenset({"image"}),
+    )}
+    plan = service.create_plan(
+        intent="生成一张图片",
+        availability=frozen,
+        policy=policy,
+    )
+    assert plan.decision("imagegen") is not None
+    assert plan.decision("imagegen").eligible is True
+    service.bind_current_policy_provider(lambda: policy)
+    service.bind_current_permission_state_digest_provider(lambda: "b" * 64)
+    service.bind_current_availability_provider(lambda: current["availability"])
+
+    governance = service.invocation_governance(plan.snapshot_id, "imagegen")
+
+    assert governance.allowed is True
+    assert not any(
+        reason.startswith("current_availability:missing_model")
+        for reason in governance.reason_codes
+    )

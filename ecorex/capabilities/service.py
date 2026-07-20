@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractContextManager, nullcontext
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 import hashlib
 import inspect
@@ -525,6 +525,23 @@ class CapabilityService:
                 if not isinstance(current_availability, RuntimeAvailability):
                     raise CapabilityDeniedError(
                         "current capability availability authority is unavailable"
+                    )
+                # Model selection is immutable Turn context, not mutable
+                # machine availability.  The live provider deliberately omits
+                # a model choice because it is shared between concurrent
+                # Turns; carrying that omission into this recheck would make
+                # a tool such as imagegen appear to lose its model halfway
+                # through the same Turn.  Keep the current machine/connectors
+                # overlay, while restoring only the signed model capability
+                # snapshot that created this capability plan.
+                if plan.selected_model_capabilities is not None:
+                    selected_model_capabilities = plan.selected_model_capabilities
+                    current_availability = replace(
+                        current_availability,
+                        selected_model_modalities=frozenset(
+                            selected_model_capabilities
+                        ),
+                        selected_model_capabilities=selected_model_capabilities,
                     )
                 current_availability_reasons = availability_reasons(
                     spec, current_availability

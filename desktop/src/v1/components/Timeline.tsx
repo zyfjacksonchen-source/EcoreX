@@ -1,5 +1,5 @@
 import { Fragment, lazy, memo, Suspense, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { Check, CircleDashed, Copy, FileText, FolderOpen, Image, Workflow, WandSparkles } from "lucide-react";
+import { ArrowDown, Check, CircleDashed, Copy, FileText, FolderOpen, Image, Workflow, WandSparkles } from "lucide-react";
 
 import type {
   ArtifactProjection,
@@ -44,6 +44,8 @@ interface TimelineProps {
   onPickProject: () => Promise<ProjectProjection | null>;
   newConversationComposer: ReactNode;
 }
+
+const TIMELINE_BOTTOM_THRESHOLD_PX = 24;
 
 function role(item: ItemProjection): string {
   return typeof item.content.role === "string" ? item.content.role : "assistant";
@@ -93,6 +95,11 @@ function phaseLabel(status: TurnProjection["status"] | undefined): string {
     case "finalizing": return "正在检查产物";
     default: return "正在处理";
   }
+}
+
+function isNearTimelineBottom(element: HTMLElement): boolean {
+  const remaining = element.scrollHeight - element.clientHeight - element.scrollTop;
+  return remaining <= TIMELINE_BOTTOM_THRESHOLD_PX;
 }
 
 const TERMINAL_TURN_STATUSES = new Set<TurnProjection["status"]>([
@@ -299,12 +306,28 @@ export function Timeline({
     [artifacts, itemArtifacts],
   );
   const timelineRef = useRef<HTMLDivElement>(null);
+  const followLatestRef = useRef(true);
+  const pendingJumpToLatestRef = useRef(false);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const retouchPreviewIdentity = retouchResults
     .map((result) => (
       `${result.artifact.artifact_id}:${result.artifact.revision_id}:`
       + String(result.artifact.actions.includes("preview"))
     ))
     .join("|");
+
+  const jumpToLatest = () => {
+    const scroller = timelineRef.current?.parentElement;
+    pendingJumpToLatestRef.current = false;
+    followLatestRef.current = true;
+    setShowJumpToLatest(false);
+    if (scroller) {
+      window.requestAnimationFrame(() => {
+        scroller.scrollTo({ top: scroller.scrollHeight, behavior: "auto" });
+      });
+    }
+  };
+
   useEffect(() => {
     const timeline = timelineRef.current;
     if (!timeline || !retouchPreviewIdentity) return;
@@ -333,7 +356,46 @@ export function Timeline({
     }, { rootMargin: "240px 0px" });
     candidates.forEach((element) => observer.observe(element));
     return () => observer.disconnect();
-  }, [onArtifactPreviewVisible, retouchPreviewIdentity]);
+  }, [onArtifactPreviewVisible, retouchPreviewIdentity, retouchResults]);
+
+  useEffect(() => {
+    const scroller = timelineRef.current?.parentElement;
+    if (!scroller) return;
+    const syncScrollState = () => {
+      const atBottom = isNearTimelineBottom(scroller);
+      followLatestRef.current = atBottom;
+      setShowJumpToLatest(!atBottom);
+    };
+    syncScrollState();
+    scroller.addEventListener("scroll", syncScrollState, { passive: true });
+    return () => scroller.removeEventListener("scroll", syncScrollState);
+  }, [
+    isThinking,
+    timelineEntries.length,
+    retouchResults.length,
+    visibleArtifacts.length,
+    visibleReasoning,
+  ]);
+
+  useEffect(() => {
+    const scroller = timelineRef.current?.parentElement;
+    if (!scroller || !messageWindow.atLatest) return;
+    if (!followLatestRef.current && !pendingJumpToLatestRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      scroller.scrollTo({ top: scroller.scrollHeight, behavior: "auto" });
+      followLatestRef.current = true;
+      pendingJumpToLatestRef.current = false;
+      setShowJumpToLatest(false);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    isThinking,
+    messageWindow.atLatest,
+    retouchResults.length,
+    timelineEntries.length,
+    visibleArtifacts.length,
+    visibleReasoning,
+  ]);
   let latestCompletedAssistantId: string | null = null;
   for (const message of messages) {
     if (role(message) === "assistant" && message.status === "completed") {
@@ -402,137 +464,159 @@ export function Timeline({
   }
 
   return (
-    <div ref={timelineRef} className="ex-timeline-inner">
-      <div className="ex-live-status" aria-live="polite" aria-atomic="true">
-        {latestCompletedAssistantId ? (
-          <span key={latestCompletedAssistantId}>EcoreX 已完成回复</span>
+    <>
+      <div ref={timelineRef} className="ex-timeline-inner">
+        <div className="ex-live-status" aria-live="polite" aria-atomic="true">
+          {latestCompletedAssistantId ? (
+            <span key={latestCompletedAssistantId}>EcoreX 已完成回复</span>
+          ) : null}
+        </div>
+        {messageWindow.hiddenBefore > 0 ? (
+          <div className="ex-timeline-history-nav is-before">
+            <button
+              className="ex-button"
+              type="button"
+              onClick={() => setHistoryEndAnchorId(
+                earlierTimelineAnchor(timelineEntries, messageWindow),
+              )}
+            >
+              显示更早的 {Math.min(TIMELINE_WINDOW_SIZE, messageWindow.hiddenBefore)} 条记录
+            </button>
+          </div>
+        ) : null}
+        {!messageWindow.atLatest ? (
+          <p className="ex-timeline-history-status" role="status">
+            正在查看历史消息；当前任务的最新进度和产物仍在末尾。
+          </p>
+        ) : null}
+        {messageWindow.items.map((item) => {
+          const completion = turnCompletions.get(item.item_id);
+          return (
+          <Fragment key={item.item_id}>
+            {modelSwitches.has(item.item_id) ? (
+              <div className="ex-model-switch-divider" role="separator">
+                <span>已切换至 {modelSwitches.get(item.item_id)}</span>
+              </div>
+            ) : null}
+            {item.kind === "message"
+              ? <MessageRow item={item} />
+              : (
+                <Suspense fallback={<div className="ex-activity-row" role="status">正在更新工作步骤…</div>}>
+                  <TimelineActivity item={item} />
+                </Suspense>
+              )}
+            {completion ? (
+              <TurnCompletionRow turn={completion.turn} copyText={completion.copyText} />
+            ) : null}
+          </Fragment>
+          );
+        })}
+        {!messageWindow.atLatest ? (
+          <div className="ex-timeline-history-nav is-after" role="group" aria-label="历史消息翻页">
+            <button
+              className="ex-button"
+              type="button"
+              onClick={() => setHistoryEndAnchorId(
+                newerTimelineAnchor(timelineEntries, messageWindow),
+              )}
+            >
+              显示较新的消息
+            </button>
+            <button
+              className="ex-button is-primary"
+              type="button"
+              onClick={() => {
+                pendingJumpToLatestRef.current = true;
+                setHistoryEndAnchorId(null);
+                jumpToLatest();
+              }}
+            >
+              回到最新消息
+            </button>
+          </div>
+        ) : null}
+        {messageWindow.atLatest ? retouchResults.map((result) => (
+          <section
+            className="ex-retouch-result"
+            data-retouch-preview-artifact-id={result.artifact.artifact_id}
+            key={`retouch-${result.artifact.revision_id}`}
+          >
+            <WandSparkles aria-hidden="true" />
+            <div>
+              <strong>精准修图已完成</strong>
+              <p>{result.changeSummary}</p>
+              <span>
+                {result.inspectionRegionCount > 0
+                  ? `已检查 ${result.inspectionRegionCount} 个修改区域。请看一眼下方新图片。`
+                  : "已检查新修订。请看一眼下方图片。"}
+              </span>
+              {artifactPreviewUrls[result.artifact.artifact_id] ? (
+                <button
+                  className="ex-retouch-result-media"
+                  type="button"
+                  onClick={() => onArtifactAction(result.artifact, "preview")}
+                >
+                  <img
+                    src={artifactPreviewUrls[result.artifact.artifact_id]}
+                    alt={`查看修图结果：${result.artifact.display_name}`}
+                  />
+                </button>
+              ) : (
+                <div className="ex-retouch-result-loading" role="status">正在载入新修订预览…</div>
+              )}
+              <div className="ex-retouch-result-actions">
+                <button className="ex-button" type="button" onClick={() => onArtifactAction(result.artifact, "preview")}>查看大图</button>
+                <button
+                  className="ex-button is-primary"
+                  type="button"
+                  disabled={!retouchAvailable || !result.artifact.actions.includes("precise_retouch")}
+                  title={!retouchAvailable ? retouchUnavailableReason ?? "精准修图当前不可用" : undefined}
+                  onClick={() => onArtifactAction(result.artifact, "precise_retouch")}
+                >继续修改</button>
+              </div>
+            </div>
+          </section>
+        )) : null}
+        {messageWindow.atLatest ? (
+          <ArtifactShelf
+            artifacts={visibleArtifacts}
+            previewUrls={artifactPreviewUrls}
+            onAction={onArtifactAction}
+            onPreviewVisible={onArtifactPreviewVisible}
+            retouchAvailable={retouchAvailable}
+            retouchUnavailableReason={retouchUnavailableReason}
+          />
+        ) : null}
+        {messageWindow.atLatest && (isThinking || visibleReasoning) ? (
+          <div className={`ex-thinking${visibleReasoning ? " has-summary" : ""}`}>
+            <CircleDashed aria-hidden="true" />
+            <div>
+              <span role="status" aria-live="polite" aria-atomic="true">
+                {phaseLabel(activeTurn?.status)}
+              </span>
+              {visibleReasoning && typeof visibleReasoning.content.text === "string" ? (
+                <p aria-live="off">{visibleReasoning.content.text}</p>
+              ) : null}
+            </div>
+          </div>
         ) : null}
       </div>
-      {messageWindow.hiddenBefore > 0 ? (
-        <div className="ex-timeline-history-nav is-before">
+      {showJumpToLatest ? (
+        <div className="ex-timeline-jump">
           <button
-            className="ex-button"
+            className="ex-button is-primary ex-timeline-jump-button"
             type="button"
-            onClick={() => setHistoryEndAnchorId(
-              earlierTimelineAnchor(timelineEntries, messageWindow),
-            )}
+            onClick={() => {
+              pendingJumpToLatestRef.current = true;
+              setHistoryEndAnchorId(null);
+              jumpToLatest();
+            }}
           >
-            显示更早的 {Math.min(TIMELINE_WINDOW_SIZE, messageWindow.hiddenBefore)} 条记录
+            <ArrowDown aria-hidden="true" />
+            回到底部
           </button>
         </div>
       ) : null}
-      {!messageWindow.atLatest ? (
-        <p className="ex-timeline-history-status" role="status">
-          正在查看历史消息；当前任务的最新进度和产物仍在末尾。
-        </p>
-      ) : null}
-      {messageWindow.items.map((item) => {
-        const completion = turnCompletions.get(item.item_id);
-        return (
-        <Fragment key={item.item_id}>
-          {modelSwitches.has(item.item_id) ? (
-            <div className="ex-model-switch-divider" role="separator">
-              <span>已切换至 {modelSwitches.get(item.item_id)}</span>
-            </div>
-          ) : null}
-          {item.kind === "message"
-            ? <MessageRow item={item} />
-            : (
-              <Suspense fallback={<div className="ex-activity-row" role="status">正在更新工作步骤…</div>}>
-                <TimelineActivity item={item} />
-              </Suspense>
-            )}
-          {completion ? (
-            <TurnCompletionRow turn={completion.turn} copyText={completion.copyText} />
-          ) : null}
-        </Fragment>
-        );
-      })}
-      {!messageWindow.atLatest ? (
-        <div className="ex-timeline-history-nav is-after" role="group" aria-label="历史消息翻页">
-          <button
-            className="ex-button"
-            type="button"
-            onClick={() => setHistoryEndAnchorId(
-              newerTimelineAnchor(timelineEntries, messageWindow),
-            )}
-          >
-            显示较新的消息
-          </button>
-          <button
-            className="ex-button is-primary"
-            type="button"
-            onClick={() => setHistoryEndAnchorId(null)}
-          >
-            回到最新消息
-          </button>
-        </div>
-      ) : null}
-      {messageWindow.atLatest ? retouchResults.map((result) => (
-        <section
-          className="ex-retouch-result"
-          data-retouch-preview-artifact-id={result.artifact.artifact_id}
-          key={`retouch-${result.artifact.revision_id}`}
-        >
-          <WandSparkles aria-hidden="true" />
-          <div>
-            <strong>精准修图已完成</strong>
-            <p>{result.changeSummary}</p>
-            <span>
-              {result.inspectionRegionCount > 0
-                ? `已检查 ${result.inspectionRegionCount} 个修改区域。请看一眼下方新图片。`
-                : "已检查新修订。请看一眼下方图片。"}
-            </span>
-            {artifactPreviewUrls[result.artifact.artifact_id] ? (
-              <button
-                className="ex-retouch-result-media"
-                type="button"
-                onClick={() => onArtifactAction(result.artifact, "preview")}
-              >
-                <img
-                  src={artifactPreviewUrls[result.artifact.artifact_id]}
-                  alt={`查看修图结果：${result.artifact.display_name}`}
-                />
-              </button>
-            ) : (
-              <div className="ex-retouch-result-loading" role="status">正在载入新修订预览…</div>
-            )}
-            <div className="ex-retouch-result-actions">
-              <button className="ex-button" type="button" onClick={() => onArtifactAction(result.artifact, "preview")}>查看大图</button>
-              <button
-                className="ex-button is-primary"
-                type="button"
-                disabled={!retouchAvailable || !result.artifact.actions.includes("precise_retouch")}
-                title={!retouchAvailable ? retouchUnavailableReason ?? "精准修图当前不可用" : undefined}
-                onClick={() => onArtifactAction(result.artifact, "precise_retouch")}
-              >继续修改</button>
-            </div>
-          </div>
-        </section>
-      )) : null}
-      {messageWindow.atLatest ? (
-        <ArtifactShelf
-          artifacts={visibleArtifacts}
-          previewUrls={artifactPreviewUrls}
-          onAction={onArtifactAction}
-          onPreviewVisible={onArtifactPreviewVisible}
-          retouchAvailable={retouchAvailable}
-          retouchUnavailableReason={retouchUnavailableReason}
-        />
-      ) : null}
-      {messageWindow.atLatest && (isThinking || visibleReasoning) ? (
-        <div className={`ex-thinking${visibleReasoning ? " has-summary" : ""}`}>
-          <CircleDashed aria-hidden="true" />
-          <div>
-            <span role="status" aria-live="polite" aria-atomic="true">
-              {phaseLabel(activeTurn?.status)}
-            </span>
-            {visibleReasoning && typeof visibleReasoning.content.text === "string" ? (
-              <p aria-live="off">{visibleReasoning.content.text}</p>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-    </div>
+    </>
   );
 }

@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_product_version_has_one_python_source() -> None:
-    assert ecorex.__version__ == "1.0.7"
+    assert ecorex.__version__ == "1.0.8"
 
     config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     project = config["project"]

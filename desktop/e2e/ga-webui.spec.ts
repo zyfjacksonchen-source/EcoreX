@@ -1172,3 +1172,30 @@ test("touch artifact exposes one real more target and opens the bottom action sh
     },
   );
 });
+
+test("timeline exposes a persistent jump-to-latest control after scrolling away from the bottom", async ({ guardedPage }) => {
+  await openArtifactScenario(guardedPage);
+  await guardedPage.evaluate(() => {
+    const timeline = document.querySelector<HTMLElement>(".ex-timeline");
+    if (!timeline) throw new Error("timeline missing");
+    const filler = document.createElement("div");
+    filler.setAttribute("data-e2e-scroll-filler", "true");
+    filler.style.height = "1800px";
+    timeline.prepend(filler);
+    timeline.scrollTop = timeline.scrollHeight;
+    timeline.scrollTop = 0;
+    timeline.dispatchEvent(new Event("scroll"));
+  });
+
+  const jumpButton = guardedPage.getByRole("button", { name: "回到底部" });
+  await expect(jumpButton).toBeVisible();
+  await jumpButton.click();
+
+  await expect.poll(() => guardedPage.evaluate(() => {
+    const timeline = document.querySelector<HTMLElement>(".ex-timeline");
+    if (!timeline) throw new Error("timeline missing");
+    const remaining = timeline.scrollHeight - timeline.clientHeight - timeline.scrollTop;
+    return Math.max(0, Math.round(remaining));
+  })).toBeLessThanOrEqual(4);
+  await expect(jumpButton).toBeHidden();
+});
