@@ -125,7 +125,10 @@ class GatewayPrincipal:
             for model_id in self.allowed_model_ids
         ):
             raise ValueError("gateway principal model allowlist is invalid")
-        if isinstance(self.request_limit, bool) or not 1 <= self.request_limit <= 1_000_000:
+        if (
+            isinstance(self.request_limit, bool)
+            or not 1 <= self.request_limit <= 1_000_000
+        ):
             raise ValueError("gateway principal request limit is invalid")
         if (
             isinstance(self.concurrent_request_limit, bool)
@@ -135,8 +138,7 @@ class GatewayPrincipal:
 
 
 class GatewayAuthenticator(Protocol):
-    def authenticate(self, bearer_token: str) -> GatewayPrincipal:
-        ...
+    def authenticate(self, bearer_token: str) -> GatewayPrincipal: ...
 
 
 class ManagedProviderAdapter(Protocol):
@@ -146,8 +148,7 @@ class ManagedProviderAdapter(Protocol):
         self,
         request: ModelGatewayRequest,
         principal: GatewayPrincipal,
-    ) -> AsyncIterator[GatewayEvent]:
-        ...
+    ) -> AsyncIterator[GatewayEvent]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,9 +171,7 @@ class GatewayCompletedUsageFact:
                 GatewayEventType.TOOL_CALL_REQUESTED,
             }
             or any(
-                isinstance(value, bool)
-                or not isinstance(value, int)
-                or value < 0
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
                 for value in (
                     self.input_tokens,
                     self.output_tokens,
@@ -247,6 +246,53 @@ class GatewayRequestActive(GatewayStoreError):
 
 class GatewayQuotaExceeded(GatewayStoreError):
     pass
+
+
+def _provider_failure_contract(error: Exception) -> tuple[str, str, bool]:
+    """Map provider failures to a small, non-sensitive Runtime contract.
+
+    Provider adapters intentionally keep their concrete exception classes out
+    of this module to avoid a server/provider import cycle.  The class-name
+    boundary is closed and tested here; neither upstream response bodies nor
+    exception messages are forwarded to a local Runtime.
+    """
+
+    name = type(error).__name__
+    if name == "ResponsesProviderUnavailable":
+        return (
+            "provider_unavailable",
+            "The managed model provider is temporarily unavailable.",
+            bool(getattr(error, "retryable", False)),
+        )
+    if name == "ResponsesProviderRejected":
+        return (
+            "provider_rejected",
+            "The managed model provider rejected the request.",
+            False,
+        )
+    if name == "ResponsesProviderProtocolError":
+        return (
+            "provider_protocol_error",
+            "The managed model response could not be processed.",
+            False,
+        )
+    if name == "ResponsesProviderConfigurationError":
+        return (
+            "provider_configuration_error",
+            "The managed model provider is unavailable.",
+            False,
+        )
+    if isinstance(error, GatewayStoreError):
+        return (
+            "gateway_store_error",
+            "The managed model attempt could not be stored.",
+            False,
+        )
+    return (
+        "provider_stream_failed",
+        "The managed model attempt did not complete.",
+        bool(getattr(error, "retryable", True)),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -326,7 +372,9 @@ class SQLiteGatewayStore:
                         "gateway request lease timestamp is invalid"
                     ) from error
                 if expiry.tzinfo is None:
-                    raise GatewayStoreError("gateway request lease timestamp is invalid")
+                    raise GatewayStoreError(
+                        "gateway request lease timestamp is invalid"
+                    )
                 if expiry > now:
                     raise GatewayRequestActive("gateway request is already active")
                 # A crashed/partitioned provider call is never invoked twice.  Its
@@ -334,8 +382,7 @@ class SQLiteGatewayStore:
                 events = self._events(connection, request.request_id)
                 if (
                     events
-                    and events[-1].event_type
-                    is GatewayEventType.TOOL_CALL_REQUESTED
+                    and events[-1].event_type is GatewayEventType.TOOL_CALL_REQUESTED
                 ):
                     # Compatibility recovery for a pre-handoff build that
                     # persisted the tool event but left its request active.
@@ -532,18 +579,31 @@ class SQLiteGatewayStore:
                 "SELECT status,model_id FROM gateway_requests WHERE request_id=?",
                 (request.request_id,),
             ).fetchone()
-            if row is None or row["status"] != "active" or row["model_id"] != request.model_id:
+            if (
+                row is None
+                or row["status"] != "active"
+                or row["model_id"] != request.model_id
+            ):
                 raise GatewayRequestConflict("gateway model attempt is not active")
             existing = connection.execute(
                 "SELECT * FROM gateway_model_attempts WHERE request_id=?",
                 (request.request_id,),
             ).fetchone()
             if existing is not None:
-                identity = tuple(existing[key] for key in (
-                    "request_id", "thread_id", "turn_id", "model_config_id",
-                    "model_config_revision", "local_model_id", "upstream_model_id",
-                    "provider_protocol", "provider_origin_preset",
-                ))
+                identity = tuple(
+                    existing[key]
+                    for key in (
+                        "request_id",
+                        "thread_id",
+                        "turn_id",
+                        "model_config_id",
+                        "model_config_revision",
+                        "local_model_id",
+                        "upstream_model_id",
+                        "provider_protocol",
+                        "provider_origin_preset",
+                    )
+                )
                 if identity != values[:9]:
                     raise GatewayRequestConflict("gateway model revision changed")
                 connection.commit()
@@ -623,10 +683,16 @@ class SQLiteGatewayStore:
                 hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
             )
             if existing is not None:
-                current = tuple(existing[key] for key in (
-                    "response_id", "tool_call_id", "provider_tool_name",
-                    "arguments_json", "arguments_sha256",
-                ))
+                current = tuple(
+                    existing[key]
+                    for key in (
+                        "response_id",
+                        "tool_call_id",
+                        "provider_tool_name",
+                        "arguments_json",
+                        "arguments_sha256",
+                    )
+                )
                 if current != identity:
                     raise GatewayRequestConflict("chat handoff identity changed")
                 connection.commit()
@@ -710,24 +776,23 @@ class SQLiteGatewayStore:
                     (row["source_request_id"],),
                 )
                 failure = GatewayStoreError("chat handoff is corrupt")
-            if failure is None and (
-                expiry.tzinfo is None or expiry <= now
-            ):
+            if failure is None and (expiry.tzinfo is None or expiry <= now):
                 connection.execute(
                     "UPDATE gateway_chat_handoffs SET state='expired' "
                     "WHERE source_request_id=? AND state IN ('pending','available')",
                     (row["source_request_id"],),
                 )
                 failure = GatewayRequestConflict("chat handoff expired")
-            digest = hashlib.sha256(str(row["arguments_json"]).encode("utf-8")).hexdigest()
+            digest = hashlib.sha256(
+                str(row["arguments_json"]).encode("utf-8")
+            ).hexdigest()
             try:
                 decoded = json.loads(str(row["arguments_json"]))
                 canonical = _canonical(decoded).decode("utf-8")
             except (TypeError, json.JSONDecodeError):
                 canonical = ""
             if failure is None and (
-                digest != row["arguments_sha256"]
-                or canonical != row["arguments_json"]
+                digest != row["arguments_sha256"] or canonical != row["arguments_json"]
             ):
                 connection.execute(
                     "UPDATE gateway_chat_handoffs SET state='corrupt' "
@@ -746,11 +811,20 @@ class SQLiteGatewayStore:
                 revision.provider_origin_preset,
                 target["account_id"],
             )
-            actual_identity = tuple(row[key] for key in (
-                "thread_id", "turn_id", "model_config_id", "model_config_revision",
-                "local_model_id", "upstream_model_id", "provider_protocol",
-                "provider_origin_preset", "source_account_id",
-            ))
+            actual_identity = tuple(
+                row[key]
+                for key in (
+                    "thread_id",
+                    "turn_id",
+                    "model_config_id",
+                    "model_config_revision",
+                    "local_model_id",
+                    "upstream_model_id",
+                    "provider_protocol",
+                    "provider_origin_preset",
+                    "source_account_id",
+                )
+            )
             if failure is None and (
                 actual_identity != expected_identity
                 or target["model_id"] != revision.local_model_id
@@ -798,11 +872,19 @@ class SQLiteGatewayStore:
         request: ModelGatewayRequest,
         revision: ChatModelRevision,
     ) -> None:
-        if attempt is None or tuple(attempt[key] for key in (
-            "thread_id", "turn_id", "model_config_id", "model_config_revision",
-            "local_model_id", "upstream_model_id", "provider_protocol",
-            "provider_origin_preset",
-        )) != (
+        if attempt is None or tuple(
+            attempt[key]
+            for key in (
+                "thread_id",
+                "turn_id",
+                "model_config_id",
+                "model_config_revision",
+                "local_model_id",
+                "upstream_model_id",
+                "provider_protocol",
+                "provider_origin_preset",
+            )
+        ) != (
             request.thread_id,
             request.turn_id,
             revision.config_id,
@@ -864,7 +946,9 @@ class SQLiteGatewayStore:
             self._append_in_transaction(connection, request_id, lease_token, event, now)
             if event.event_type is GatewayEventType.TOOL_CALL_REQUESTED:
                 self._promote_chat_handoff(connection, request_id, event, now)
-            self._complete_in_transaction(connection, request_id, lease_token, event, now)
+            self._complete_in_transaction(
+                connection, request_id, lease_token, event, now
+            )
             connection.commit()
         except GatewayStoreError:
             if connection.in_transaction:
@@ -944,7 +1028,9 @@ class SQLiteGatewayStore:
         try:
             lease_expires_at = datetime.fromisoformat(str(row["lease_expires_at"]))
         except (TypeError, ValueError) as error:
-            raise GatewayStoreError("gateway request lease timestamp is invalid") from error
+            raise GatewayStoreError(
+                "gateway request lease timestamp is invalid"
+            ) from error
         if lease_expires_at.tzinfo is None or lease_expires_at <= now:
             raise GatewayRequestConflict("gateway request lease expired")
         expected = int(
@@ -977,7 +1063,9 @@ class SQLiteGatewayStore:
             "ORDER BY seq DESC LIMIT 1",
             (request_id,),
         ).fetchone()
-        previous_digest = previous["entry_digest"] if previous is not None else _ZERO_DIGEST
+        previous_digest = (
+            previous["entry_digest"] if previous is not None else _ZERO_DIGEST
+        )
         if not isinstance(previous_digest, str) or not re.fullmatch(
             r"[0-9a-f]{64}", previous_digest
         ):
@@ -1039,9 +1127,7 @@ class SQLiteGatewayStore:
             GatewayEventType.TOOL_CALL_REQUESTED,
             GatewayEventType.RESPONSE_COMPLETED,
         }:
-            self._enqueue_usage_settlement_in_transaction(
-                connection, request_id, now
-            )
+            self._enqueue_usage_settlement_in_transaction(connection, request_id, now)
 
     @staticmethod
     def _enqueue_usage_settlement_in_transaction(
@@ -1092,7 +1178,9 @@ class SQLiteGatewayStore:
                     "durable gateway event contract is invalid"
                 ) from error
             if _canonical(event.model_dump(mode="json")) != encoded:
-                raise GatewayStoreError("durable gateway event encoding is non-canonical")
+                raise GatewayStoreError(
+                    "durable gateway event encoding is non-canonical"
+                )
             events.append(event)
             previous_digest = expected_entry
         request_row = connection.execute(
@@ -1134,11 +1222,12 @@ class SQLiteGatewayStore:
                 and events
                 and handoffs[0] is events[-1]
             )
-            if (
-                (terminals and not legacy_handoff)
-                or request_row["terminal_event_type"] is not None
-            ):
-                raise GatewayStoreError("active gateway request contains a terminal fact")
+            if (terminals and not legacy_handoff) or request_row[
+                "terminal_event_type"
+            ] is not None:
+                raise GatewayStoreError(
+                    "active gateway request contains a terminal fact"
+                )
         else:
             raise GatewayStoreError("gateway request status is invalid")
         return tuple(events)
@@ -1242,15 +1331,13 @@ class SQLiteGatewayStore:
                     continue
                 seen_request_ids.add(request_id)
                 events = self._events(connection, request_id)
-                if (
-                    not events
-                    or events[-1].event_type
-                    not in {
-                        GatewayEventType.RESPONSE_COMPLETED,
-                        GatewayEventType.TOOL_CALL_REQUESTED,
-                    }
-                ):
-                    raise GatewayStoreError("gateway usage terminal fact is inconsistent")
+                if not events or events[-1].event_type not in {
+                    GatewayEventType.RESPONSE_COMPLETED,
+                    GatewayEventType.TOOL_CALL_REQUESTED,
+                }:
+                    raise GatewayStoreError(
+                        "gateway usage terminal fact is inconsistent"
+                    )
                 usage = events[-1].usage or {}
                 input_tokens = int(
                     usage.get("input_tokens", usage.get("prompt_tokens", 0))
@@ -1354,8 +1441,7 @@ class SQLiteGatewayStore:
             connection.execute("BEGIN")
             count = int(
                 connection.execute(
-                    "SELECT COUNT(*) FROM gateway_requests AS requests WHERE "
-                    + where,
+                    "SELECT COUNT(*) FROM gateway_requests AS requests WHERE " + where,
                     tuple(parameters),
                 ).fetchone()[0]
             )
@@ -1405,9 +1491,7 @@ class SQLiteGatewayStore:
                 if total_tokens <= 0:
                     continue
                 try:
-                    provider_created_at = datetime.fromisoformat(
-                        str(row["created_at"])
-                    )
+                    provider_created_at = datetime.fromisoformat(str(row["created_at"]))
                 except ValueError as error:
                     raise GatewayStoreError(
                         "gateway usage timestamp is invalid"
@@ -1513,9 +1597,7 @@ class SQLiteGatewayStore:
                         (_iso(current), _iso(current), str(row["request_id"])),
                     )
                     if updated.rowcount != 1:
-                        raise GatewayStoreError(
-                            "gateway usage settlement changed"
-                        )
+                        raise GatewayStoreError("gateway usage settlement changed")
                     continue
                 facts.append(fact)
             connection.commit()
@@ -1663,11 +1745,7 @@ class SQLiteGatewayStore:
             ).fetchall()
             return {
                 state: next(
-                    (
-                        int(row["count"])
-                        for row in rows
-                        if str(row["state"]) == state
-                    ),
+                    (int(row["count"]) for row in rows if str(row["state"]) == state),
                     0,
                 )
                 for state in ("pending", "settled", "usage_missing")
@@ -1707,23 +1785,17 @@ class SQLiteGatewayStore:
     ) -> GatewayCompletedUsageFact | None:
         events = self._events(connection, request_id)
         if not events:
-            raise GatewayStoreError(
-                "gateway usage terminal fact is inconsistent"
-            )
+            raise GatewayStoreError("gateway usage terminal fact is inconsistent")
         terminal = events[-1]
         if terminal.event_type not in {
             GatewayEventType.RESPONSE_COMPLETED,
             GatewayEventType.TOOL_CALL_REQUESTED,
         }:
-            raise GatewayStoreError(
-                "gateway usage terminal fact is inconsistent"
-            )
+            raise GatewayStoreError("gateway usage terminal fact is inconsistent")
         usage = terminal.usage
         if not isinstance(usage, dict):
             return None
-        input_tokens = int(
-            usage.get("input_tokens", usage.get("prompt_tokens", 0))
-        )
+        input_tokens = int(usage.get("input_tokens", usage.get("prompt_tokens", 0)))
         output_tokens = int(
             usage.get("output_tokens", usage.get("completion_tokens", 0))
         )
@@ -1736,9 +1808,7 @@ class SQLiteGatewayStore:
         try:
             created = datetime.fromisoformat(provider_created_at)
         except ValueError as error:
-            raise GatewayStoreError(
-                "gateway usage timestamp is invalid"
-            ) from error
+            raise GatewayStoreError("gateway usage timestamp is invalid") from error
         if created.tzinfo is None:
             raise GatewayStoreError("gateway usage timestamp is invalid")
         return GatewayCompletedUsageFact(
@@ -1996,7 +2066,9 @@ def create_managed_gateway_app(
             )
 
     @app.get("/api/v1/models")
-    async def models(current: GatewayPrincipal = Depends(principal)) -> dict[str, object]:
+    async def models(
+        current: GatewayPrincipal = Depends(principal),
+    ) -> dict[str, object]:
         visible = sorted(allowed_model_ids & current.allowed_model_ids)
         catalog: list[dict[str, object]] = []
         if dynamic_model_authority:
@@ -2004,9 +2076,7 @@ def create_managed_gateway_app(
                 active_catalog, active_ids = await active_model_catalog()
                 visible = sorted(active_ids & current.allowed_model_ids)
                 catalog = [
-                    item
-                    for item in active_catalog
-                    if item["local_model_id"] in visible
+                    item for item in active_catalog if item["local_model_id"] in visible
                 ]
             except Exception:
                 # Dynamic catalog is authoritative.  Stale bootstrap mappings
@@ -2067,9 +2137,7 @@ def create_managed_gateway_app(
                     store.has_unsettled_usage,
                     current.account_id,
                 ):
-                    raise GatewayStoreError(
-                        "managed account usage is incomplete"
-                    )
+                    raise GatewayStoreError("managed account usage is incomplete")
                 return await asyncio.to_thread(
                     usage_accountant.project,
                     current.account_id,
@@ -2107,7 +2175,9 @@ def create_managed_gateway_app(
                 status_code=415, detail="managed gateway requires application/json"
             )
         if request.headers.get("x-ecorex-protocol") != "1":
-            raise HTTPException(status_code=400, detail="managed gateway protocol is required")
+            raise HTTPException(
+                status_code=400, detail="managed gateway protocol is required"
+            )
         encoded_request = bytearray()
         async for chunk in request.stream():
             encoded_request.extend(chunk)
@@ -2123,7 +2193,9 @@ def create_managed_gateway_app(
             ) from None
         canonical_request = _canonical(body.model_dump(mode="json"))
         if len(canonical_request) > _MAX_REQUEST_BYTES:
-            raise HTTPException(status_code=413, detail="managed gateway request is too large")
+            raise HTTPException(
+                status_code=413, detail="managed gateway request is too large"
+            )
         if body.model_id not in current.allowed_model_ids:
             raise HTTPException(status_code=403, detail="managed model is not allowed")
 
@@ -2164,7 +2236,9 @@ def create_managed_gateway_app(
                     detail="managed model catalog is unavailable",
                 ) from None
             if body.model_id not in active_ids:
-                raise HTTPException(status_code=403, detail="managed model is not allowed")
+                raise HTTPException(
+                    status_code=403, detail="managed model is not allowed"
+                )
         elif body.model_id not in allowed_model_ids:
             raise HTTPException(status_code=403, detail="managed model is not allowed")
         if usage_accountant is not None:
@@ -2281,9 +2355,13 @@ def create_managed_gateway_app(
                     async for event in provider_events:
                         event = GatewayEvent.model_validate(event)
                         if event.seq != expected_seq or terminal:
-                            raise GatewayStoreError("provider stream sequence is invalid")
+                            raise GatewayStoreError(
+                                "provider stream sequence is invalid"
+                            )
                         if response_id is not None and event.response_id != response_id:
-                            raise GatewayStoreError("provider changed response identity")
+                            raise GatewayStoreError(
+                                "provider changed response identity"
+                            )
                         response_id = response_id or event.response_id
                         if event.event_type is GatewayEventType.RESPONSE_FAILED:
                             # Provider SDK errors must never become an exfiltration
@@ -2349,7 +2427,8 @@ def create_managed_gateway_app(
                     failure = GatewayEvent(
                         seq=expected_seq,
                         event_type=GatewayEventType.RESPONSE_FAILED,
-                        response_id=response_id or _fallback_response_id(body.request_id),
+                        response_id=response_id
+                        or _fallback_response_id(body.request_id),
                         error_code="gateway_cancelled",
                         error_message="The managed model attempt was cancelled.",
                         retryable=False,
@@ -2370,13 +2449,14 @@ def create_managed_gateway_app(
                     # The client has a complete replayable response; never replace
                     # it with an upstream exception that may contain a secret.
                     return
+                error_code, error_message, retryable = _provider_failure_contract(error)
                 failure = GatewayEvent(
                     seq=expected_seq,
                     event_type=GatewayEventType.RESPONSE_FAILED,
                     response_id=response_id or _fallback_response_id(body.request_id),
-                    error_code="provider_stream_failed",
-                    error_message="The managed model attempt did not complete.",
-                    retryable=bool(getattr(error, "retryable", True)),
+                    error_code=error_code,
+                    error_message=error_message,
+                    retryable=retryable,
                 )
                 try:
                     await asyncio.to_thread(

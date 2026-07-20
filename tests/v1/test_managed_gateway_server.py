@@ -27,6 +27,7 @@ from ecorex.gateway import (
     create_managed_gateway_app,
 )
 from ecorex.gateway import server as gateway_server
+from ecorex.gateway.responses_provider import ResponsesProviderProtocolError
 
 
 TOKEN = "managed-session-" + "x" * 32
@@ -208,10 +209,13 @@ def test_usage_settlement_outbox_is_atomic_and_replay_safe(tmp_path) -> None:
         "usage_missing": 0,
     }
     assert store.has_unsettled_usage("account-1") is False
-    assert store.pending_usage_facts(
-        account_id="account-1",
-        now=completed_at + timedelta(days=1),
-    ) == ()
+    assert (
+        store.pending_usage_facts(
+            account_id="account-1",
+            now=completed_at + timedelta(days=1),
+        )
+        == ()
+    )
 
 
 def test_usage_settlement_failure_backoff_and_missing_usage_are_durable(
@@ -235,10 +239,13 @@ def test_usage_settlement_failure_backoff_and_missing_usage_are_durable(
         fact.request_id,
         now=completed_at + timedelta(seconds=1),
     )
-    assert store.pending_usage_facts(
-        request_id=fact.request_id,
-        now=completed_at + timedelta(seconds=2),
-    ) == ()
+    assert (
+        store.pending_usage_facts(
+            request_id=fact.request_id,
+            now=completed_at + timedelta(seconds=2),
+        )
+        == ()
+    )
     assert store.pending_usage_facts(
         request_id=fact.request_id,
         now=completed_at + timedelta(seconds=4),
@@ -273,10 +280,13 @@ def test_usage_settlement_failure_backoff_and_missing_usage_are_durable(
     finally:
         gateway_server._utcnow = original
 
-    assert store.pending_usage_facts(
-        request_id=body.request_id,
-        now=completed_at + timedelta(seconds=1),
-    ) == ()
+    assert (
+        store.pending_usage_facts(
+            request_id=body.request_id,
+            now=completed_at + timedelta(seconds=1),
+        )
+        == ()
+    )
     assert store.usage_settlement_counts() == {
         "pending": 1,
         "settled": 0,
@@ -517,7 +527,9 @@ def test_completed_request_with_missing_usage_replays_while_new_work_fails_close
     assert provider.calls == 0
 
 
-def test_cloud_gateway_auth_allowlist_persists_before_stream_and_replays(tmp_path) -> None:
+def test_cloud_gateway_auth_allowlist_persists_before_stream_and_replays(
+    tmp_path,
+) -> None:
     provider = Provider()
     store = SQLiteGatewayStore(tmp_path / "gateway.db")
     app = create_managed_gateway_app(
@@ -542,9 +554,12 @@ def test_cloud_gateway_auth_allowlist_persists_before_stream_and_replays(tmp_pat
     assert [item.seq for item in store.events("request-1")] == [1, 2]
 
     with sqlite3.connect(tmp_path / "gateway.db") as connection:
-        assert connection.execute(
-            "SELECT status FROM gateway_requests WHERE request_id='request-1'"
-        ).fetchone()[0] == "completed"
+        assert (
+            connection.execute(
+                "SELECT status FROM gateway_requests WHERE request_id='request-1'"
+            ).fetchone()[0]
+            == "completed"
+        )
 
 
 def test_dynamic_catalog_exposes_active_image_models_without_streaming_them(
@@ -687,11 +702,14 @@ def test_account_usage_is_cross_request_account_scoped_and_replay_safe(
         now=now,
     )
     assert replay.mode == "replay"
-    assert store.account_usage(
-        "account-1",
-        timezone_name="Asia/Shanghai",
-        now=now,
-    ) == projection
+    assert (
+        store.account_usage(
+            "account-1",
+            timezone_name="Asia/Shanghai",
+            now=now,
+        )
+        == projection
+    )
 
     monkeypatch.setattr(gateway_server, "_utcnow", lambda: now)
     app = create_managed_gateway_app(
@@ -721,9 +739,12 @@ def test_gateway_request_identity_quota_and_model_policy_fail_closed(tmp_path) -
         allowed_model_ids=frozenset({"ecorex-chat", "ecorex-image"}),
     )
     client = TestClient(app)
-    assert client.post(
-        "/api/v1/model/stream", headers=headers(), json=request()
-    ).status_code == 200
+    assert (
+        client.post(
+            "/api/v1/model/stream", headers=headers(), json=request()
+        ).status_code
+        == 200
+    )
     conflict = client.post(
         "/api/v1/model/stream", headers=headers(), json=request(text="different")
     )
@@ -735,9 +756,10 @@ def test_gateway_request_identity_quota_and_model_policy_fail_closed(tmp_path) -
 
     blocked = request("request-3")
     blocked["model_id"] = "ecorex-image"
-    assert client.post(
-        "/api/v1/model/stream", headers=headers(), json=blocked
-    ).status_code == 403
+    assert (
+        client.post("/api/v1/model/stream", headers=headers(), json=blocked).status_code
+        == 403
+    )
     assert provider.calls == 1
 
 
@@ -762,12 +784,8 @@ def test_gateway_request_digest_covers_typed_input_items(tmp_path) -> None:
     changed = json.loads(json.dumps(first))
     changed["input_items"][0]["content"] = "被篡改的指令"
 
-    accepted = client.post(
-        "/api/v1/model/stream", headers=headers(), json=first
-    )
-    conflict = client.post(
-        "/api/v1/model/stream", headers=headers(), json=changed
-    )
+    accepted = client.post("/api/v1/model/stream", headers=headers(), json=first)
+    conflict = client.post("/api/v1/model/stream", headers=headers(), json=changed)
 
     assert accepted.status_code == 200
     assert conflict.status_code == 409
@@ -776,7 +794,9 @@ def test_gateway_request_digest_covers_typed_input_items(tmp_path) -> None:
     assert provider.requests[0].input_items[0].message_id == "message-1"
 
 
-def test_provider_failure_and_protocol_gap_are_redacted_terminal_facts(tmp_path) -> None:
+def test_provider_failure_and_protocol_gap_are_redacted_terminal_facts(
+    tmp_path,
+) -> None:
     provider = Provider()
     provider.fail = True
     store = SQLiteGatewayStore(tmp_path / "gateway.db")
@@ -826,14 +846,51 @@ def test_provider_failure_and_protocol_gap_are_redacted_terminal_facts(tmp_path)
 
     provider.report_failure = False
     provider.gap = True
-    gap = client.post(
-        "/api/v1/model/stream", headers=headers(), json=request("gap")
-    )
+    gap = client.post("/api/v1/model/stream", headers=headers(), json=request("gap"))
     assert gap.status_code == 200
     gap_events = events(gap)
     assert [item["seq"] for item in gap_events] == [1]
     assert gap_events[0]["event_type"] == "response.failed"
     assert provider.secret not in gap.text
+
+
+def test_provider_protocol_failure_has_a_safe_recovery_category(tmp_path) -> None:
+    class ProtocolFailureProvider(Provider):
+        async def stream(self, request, principal):
+            self.calls += 1
+            self.requests.append(request)
+            assert principal.account_id == "account-1"
+            if False:  # pragma: no cover - establishes an async-generator body
+                yield GatewayEvent(
+                    seq=1,
+                    event_type=GatewayEventType.RESPONSE_COMPLETED,
+                    response_id="unreachable",
+                )
+            raise ResponsesProviderProtocolError(self.secret)
+
+    provider = ProtocolFailureProvider()
+    app = create_managed_gateway_app(
+        SQLiteGatewayStore(tmp_path / "gateway.db"),
+        authenticator=Authenticator(),
+        provider=provider,
+        allowed_model_ids=frozenset({"ecorex-chat"}),
+    )
+
+    response = TestClient(app).post(
+        "/api/v1/model/stream",
+        headers=headers(),
+        json=request("protocol-failure"),
+    )
+
+    assert response.status_code == 200
+    payload = events(response)
+    assert payload[-1]["event_type"] == "response.failed"
+    assert payload[-1]["error_code"] == "provider_protocol_error"
+    assert payload[-1]["error_message"] == (
+        "The managed model response could not be processed."
+    )
+    assert payload[-1]["retryable"] is False
+    assert provider.secret not in response.text
 
 
 def test_gateway_rejects_oversized_declared_body_without_auth_leak(tmp_path) -> None:
@@ -961,9 +1018,7 @@ def test_quota_admission_is_atomic_under_concurrency(tmp_path) -> None:
         body = ModelGatewayRequest.model_validate(request(request_id))
         barrier.wait(timeout=5)
         try:
-            return store.reserve(
-                body, principal, lease_seconds=30
-            ).mode
+            return store.reserve(body, principal, lease_seconds=30).mode
         except GatewayQuotaExceeded:
             return "quota"
 
@@ -972,7 +1027,9 @@ def test_quota_admission_is_atomic_under_concurrency(tmp_path) -> None:
     assert sorted(outcomes) == ["execute", "quota"]
 
 
-def test_concurrent_request_limit_releases_after_terminal_or_lease_expiry(tmp_path) -> None:
+def test_concurrent_request_limit_releases_after_terminal_or_lease_expiry(
+    tmp_path,
+) -> None:
     store = SQLiteGatewayStore(tmp_path / "gateway.db")
     principal = GatewayPrincipal(
         subject="user-1",
@@ -1007,12 +1064,15 @@ def test_concurrent_request_limit_releases_after_terminal_or_lease_expiry(tmp_pa
         lease_seconds=30,
         now=now - timedelta(seconds=31),
     )
-    assert expired_store.reserve(
-        ModelGatewayRequest.model_validate(request("after-expired-slot")),
-        principal,
-        lease_seconds=30,
-        now=now,
-    ).mode == "execute"
+    assert (
+        expired_store.reserve(
+            ModelGatewayRequest.model_validate(request("after-expired-slot")),
+            principal,
+            lease_seconds=30,
+            now=now,
+        ).mode
+        == "execute"
+    )
 
 
 def test_request_id_cannot_replay_events_across_accounts(tmp_path) -> None:
@@ -1133,7 +1193,9 @@ def test_expired_active_request_converges_without_reinvoking_provider(tmp_path) 
     assert len(long_recovery.events[-1].response_id) <= 256
 
 
-def test_gateway_event_ledger_is_append_only_and_detects_forced_tamper(tmp_path) -> None:
+def test_gateway_event_ledger_is_append_only_and_detects_forced_tamper(
+    tmp_path,
+) -> None:
     provider = Provider()
     database = tmp_path / "gateway.db"
     store = SQLiteGatewayStore(database)
@@ -1143,9 +1205,12 @@ def test_gateway_event_ledger_is_append_only_and_detects_forced_tamper(tmp_path)
         provider=provider,
         allowed_model_ids=frozenset({"ecorex-chat"}),
     )
-    assert TestClient(app).post(
-        "/api/v1/model/stream", headers=headers(), json=request("tamper")
-    ).status_code == 200
+    assert (
+        TestClient(app)
+        .post("/api/v1/model/stream", headers=headers(), json=request("tamper"))
+        .status_code
+        == 200
+    )
     with sqlite3.connect(database) as connection:
         with pytest.raises(sqlite3.IntegrityError, match="append-only"):
             connection.execute(
@@ -1170,9 +1235,12 @@ def test_event_chain_detects_payload_hash_rewrite(tmp_path) -> None:
         provider=Provider(),
         allowed_model_ids=frozenset({"ecorex-chat"}),
     )
-    assert TestClient(app).post(
-        "/api/v1/model/stream", headers=headers(), json=request("chain-tamper")
-    ).status_code == 200
+    assert (
+        TestClient(app)
+        .post("/api/v1/model/stream", headers=headers(), json=request("chain-tamper"))
+        .status_code
+        == 200
+    )
     replacement = json.dumps(
         {
             "schema_version": 1,
@@ -1206,7 +1274,9 @@ def test_event_chain_detects_payload_hash_rewrite(tmp_path) -> None:
         store.events("chain-tamper")
 
 
-def test_stream_disconnect_closes_provider_and_persists_cancelled_terminal(tmp_path) -> None:
+def test_stream_disconnect_closes_provider_and_persists_cancelled_terminal(
+    tmp_path,
+) -> None:
     secret = "PROVIDER-FINALIZER-SECRET"
 
     class CancellableProvider:

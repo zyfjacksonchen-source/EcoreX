@@ -359,7 +359,9 @@ def test_worker_streams_message_and_atomically_finishes_turn_job(tmp_path) -> No
     turn_events = [
         event for event in kernel.events.page(thread.thread_id).events if event.turn_id
     ]
-    accepted = next(event for event in turn_events if event.event_type == "turn.accepted")
+    accepted = next(
+        event for event in turn_events if event.event_type == "turn.accepted"
+    )
     requested = next(
         event for event in turn_events if event.event_type == "model.requested"
     )
@@ -373,9 +375,9 @@ def test_worker_streams_message_and_atomically_finishes_turn_job(tmp_path) -> No
         TOOL_PROJECTION_BUDGET_VERSION
     )
     assert requested.payload["tool_schema_bytes"] > 0
-    assert requested.payload["projected_tool_ids"] == requested.payload[
-        "direct_tool_ids"
-    ]
+    assert (
+        requested.payload["projected_tool_ids"] == requested.payload["direct_tool_ids"]
+    )
     assert requested.payload["suppressed_tool_ids"] == []
     assert all(
         event.capability_snapshot_id == accepted.capability_snapshot_id
@@ -430,9 +432,9 @@ def test_steer_before_first_model_request_is_applied_in_one_execution_batch(
         descriptor["spec"]["tool_id"] for descriptor in request.direct_tools
     }
     batches = kernel.turn_execution_batches.list_for_turn(created.turn.turn_id)
-    assert [(batch.first_revision_ordinal, batch.last_revision_ordinal) for batch in batches] == [
-        (0, 1)
-    ]
+    assert [
+        (batch.first_revision_ordinal, batch.last_revision_ordinal) for batch in batches
+    ] == [(0, 1)]
 
 
 def test_new_turn_replays_completed_thread_history_with_roles(tmp_path) -> None:
@@ -472,7 +474,10 @@ def test_new_turn_replays_completed_thread_history_with_roles(tmp_path) -> None:
         turn_preparer=composition.prepare_turn,
     )
 
-    assert asyncio.run(worker.run_once("worker-history-first")).outcome is WorkerOutcome.COMPLETED
+    assert (
+        asyncio.run(worker.run_once("worker-history-first")).outcome
+        is WorkerOutcome.COMPLETED
+    )
     prepared = composition.prepare_turn(
         CreateTurnRequest(
             input="5",
@@ -486,7 +491,10 @@ def test_new_turn_replays_completed_thread_history_with_roles(tmp_path) -> None:
         snapshot_context=prepared.snapshot_context,
     )
 
-    assert asyncio.run(worker.run_once("worker-history-second")).outcome is WorkerOutcome.COMPLETED
+    assert (
+        asyncio.run(worker.run_once("worker-history-second")).outcome
+        is WorkerOutcome.COMPLETED
+    )
     request = gateway.requests[1]
     assert request.input is None
     assert [item.type for item in request.input_items] == [
@@ -544,7 +552,9 @@ def test_steer_during_streaming_runs_in_the_next_model_batch(tmp_path) -> None:
     ] == [(0, 0), (1, 1)]
 
 
-def test_tool_output_and_concurrent_steer_share_one_typed_continuation(tmp_path) -> None:
+def test_tool_output_and_concurrent_steer_share_one_typed_continuation(
+    tmp_path,
+) -> None:
     holder = {}
 
     def read(arguments):
@@ -606,7 +616,9 @@ def test_tool_output_and_concurrent_steer_share_one_typed_continuation(tmp_path)
     assert continuation.input_items[1].content == "读取后再补充这一条"
 
 
-def test_worker_keeps_image_capability_ranked_and_other_tools_discoverable(tmp_path) -> None:
+def test_worker_keeps_image_capability_ranked_and_other_tools_discoverable(
+    tmp_path,
+) -> None:
     handlers = {
         "imagegen": lambda arguments, context: {"ok": True},
         "vision": lambda arguments: {"ok": True},
@@ -715,9 +727,7 @@ def test_worker_search_discloses_exact_deferred_tool_and_invokes_it(tmp_path) ->
     result = asyncio.run(worker.run_once("worker-discovery"))
 
     assert result.outcome is WorkerOutcome.COMPLETED
-    assert calls == [
-        {"artifact_ids": ["art_1"], "instruction": "检查画面问题"}
-    ]
+    assert calls == [{"artifact_ids": ["art_1"], "instruction": "检查画面问题"}]
     assert "vision" in gateway.requests[0].deferred_tool_ids
     assert gateway.requests[0].disclosed_tool_ids == []
     search_output = gateway.requests[1].tool_outputs[0].output
@@ -912,7 +922,9 @@ def test_oversized_direct_projection_fails_without_truncating_core(tmp_path) -> 
         )
 
 
-def test_deferred_grant_batch_bytes_are_suppressed_without_losing_core(tmp_path) -> None:
+def test_deferred_grant_batch_bytes_are_suppressed_without_losing_core(
+    tmp_path,
+) -> None:
     direct = _budget_decision("core_schema_budget", Exposure.DIRECT, 1_000)
     grants = [
         _budget_decision(f"large_plugin_{index}", Exposure.DEFERRED, 500 - index)
@@ -944,9 +956,7 @@ def test_deferred_grant_batch_bytes_are_suppressed_without_losing_core(tmp_path)
     )
 
     assert projection.direct_tool_ids == (direct.tool_id,)
-    assert projection.disclosed_tool_ids == tuple(
-        grant.tool_id for grant in grants[:2]
-    )
+    assert projection.disclosed_tool_ids == tuple(grant.tool_id for grant in grants[:2])
     assert projection.suppressed_tool_ids == (grants[2].tool_id,)
 
 
@@ -1014,7 +1024,9 @@ def test_budget_suppressed_grant_is_not_authorized_or_executable(tmp_path) -> No
         )
 
 
-def test_malformed_describe_fact_never_enters_the_model_tool_projection(tmp_path) -> None:
+def test_malformed_describe_fact_never_enters_the_model_tool_projection(
+    tmp_path,
+) -> None:
     app, kernel, composition, _thread, created = _runtime(
         tmp_path,
         input_text="检查这张图片",
@@ -1159,8 +1171,9 @@ def test_undisclosed_approval_tool_recovers_before_hitl_is_created(tmp_path) -> 
         input_text="只回答问题，不要使用 shell",
         installed_capability_packs=frozenset({"sandbox"}),
         capability_handlers={
-            "shell": lambda arguments, context: calls.append(dict(arguments))
-            or {"exit_code": 0}
+            "shell": lambda arguments, context: (
+                calls.append(dict(arguments)) or {"exit_code": 0}
+            )
         },
     )
     del app
@@ -1252,9 +1265,7 @@ def test_worker_executes_discovered_tool_and_continues_model_response(tmp_path) 
     assert result.outcome is WorkerOutcome.COMPLETED
     assert calls == [{"path": "report.docx"}]
     assert gateway.requests[1].previous_response_id == "resp_tools"
-    assert gateway.requests[1].tool_outputs[0].output == {
-        "title": "Quarterly report"
-    }
+    assert gateway.requests[1].tool_outputs[0].output == {"title": "Quarterly report"}
     tool_item = next(
         item
         for item in kernel.projection(thread.thread_id).items
@@ -1266,6 +1277,264 @@ def test_worker_executes_discovered_tool_and_continues_model_response(tmp_path) 
     assert tool_item.content["result_sha256"]
     assert "result" not in tool_item.content
     assert kernel.jobs.get(created.job.job_id).status.value == "completed"
+
+
+def test_worker_observes_and_self_repairs_failed_tool_continuation(tmp_path) -> None:
+    """A provider handoff failure must not discard or repeat a completed tool.
+
+    This is the production-shaped failure path: a model discovers and invokes
+    a local capability, the provider rejects the response-chain handoff, and
+    the Runtime continues from one safe, fresh request.  The test also proves
+    the observable facts contain a digest rather than the raw tool payload.
+    """
+
+    calls = []
+    app, kernel, composition, thread, created = _runtime(
+        tmp_path,
+        input_text="读取季度报告后给出摘要",
+        capability_handlers={
+            "read": lambda arguments: (
+                calls.append(dict(arguments))
+                or {"title": "季度报告", "summary": "营收稳定增长"}
+            )
+        },
+    )
+    gateway = ScriptedGateway(
+        [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "resp_read",
+                    "tool_call_id": "call_read_1",
+                    "tool_name": "read",
+                    "arguments": {"path": "quarterly-report.docx"},
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "response.failed",
+                    "response_id": "resp_continuation_failed",
+                    "error_code": "provider_protocol_error",
+                    "error_message": "safe provider diagnostic",
+                    "retryable": False,
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "output_text.delta",
+                    "response_id": "resp_stateless_recovery",
+                    "delta": "季度报告摘要：营收稳定增长。",
+                },
+                {
+                    "seq": 2,
+                    "event_type": "response.completed",
+                    "response_id": "resp_stateless_recovery",
+                },
+            ],
+        ]
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+    )
+
+    result = asyncio.run(worker.run_once("worker-continuation-recovery"))
+
+    assert result.outcome is WorkerOutcome.COMPLETED
+    assert calls == [{"path": "quarterly-report.docx"}]
+    assert len(gateway.requests) == 3
+    chained = gateway.requests[1]
+    assert chained.previous_response_id == "resp_read"
+    assert chained.tool_outputs[0].tool_call_id == "call_read_1"
+    recovered = gateway.requests[2]
+    assert recovered.previous_response_id is None
+    assert recovered.tool_outputs == []
+    assert recovered.input is None
+    assert [item.type for item in recovered.input_items] == [
+        "user_message",
+        "assistant_message",
+        "user_message",
+    ]
+    assert recovered.input_items[0].content == "读取季度报告后给出摘要"
+    assert recovered.input_items[1].content.startswith(
+        "[EcoreX Runtime continuity note]"
+    )
+    assert "营收稳定增长" in recovered.input_items[1].content
+    assert "不要仅因这条运行时连续性提示而重复调用该工具" in (
+        recovered.input_items[2].content
+    )
+
+    events = kernel.events.page(thread.thread_id, limit=1_000).events
+    planned = next(
+        event
+        for event in events
+        if event.event_type == "model.continuation_recovery_planned"
+    )
+    requested = next(
+        event
+        for event in events
+        if event.event_type == "model.continuation_recovery_requested"
+    )
+    resolved = next(
+        event
+        for event in events
+        if event.event_type == "model.continuation_recovery_resolved"
+    )
+    assert planned.payload["action"] == "stateless_continuation"
+    assert planned.payload["trigger_code"] == "provider_protocol_error"
+    assert len(planned.payload["tool_output_sha256"]) == 64
+    assert "营收稳定增长" not in json.dumps(planned.payload, ensure_ascii=False)
+    assert requested.payload["continuation_recovery"]["action"] == (
+        "stateless_continuation"
+    )
+    assert resolved.payload["resolved_by"] == "response_completed"
+
+    trace = app.state.trace_projector.project(thread.thread_id)
+    recovery_span = next(
+        span
+        for span in trace.spans
+        if span.name == "ecorex.model_continuation_recovery"
+    )
+    assert recovery_span.status == "OK"
+    assert recovery_span.attributes["ecorex.recovery.trigger_code"] == (
+        "provider_protocol_error"
+    )
+    assert recovery_span.attributes["ecorex.recovery.resolved_by"] == (
+        "response_completed"
+    )
+    assert "营收稳定增长" not in json.dumps(
+        trace.model_dump(mode="json"), ensure_ascii=False
+    )
+    recovery_audit = [
+        record
+        for record in app.state.audit_outbox.list(
+            thread_id=thread.thread_id,
+            limit=1_000,
+        )
+        if record.event_type.startswith("model.continuation_recovery")
+    ]
+    assert [record.category for record in recovery_audit] == ["task", "task", "task"]
+    audit_wire = json.dumps(
+        [record.model_dump(mode="json") for record in recovery_audit],
+        ensure_ascii=False,
+    )
+    assert "营收稳定增长" not in audit_wire
+    assert "quarterly-report.docx" not in audit_wire
+    kernel.invariants.audit().raise_if_invalid()
+
+
+def test_worker_observes_missing_tool_and_recovers_via_discovery(tmp_path) -> None:
+    """A guessed deferred tool is observable and repaired without a dead end."""
+
+    vision_calls = []
+    app, kernel, composition, thread, created = _runtime(
+        tmp_path,
+        input_text="检查图片中的版式问题",
+        installed_capability_packs=frozenset({"image"}),
+        capability_handlers={
+            "vision": lambda arguments: (
+                vision_calls.append(dict(arguments))
+                or {"summary": "标题与主体对齐正常"}
+            )
+        },
+    )
+    gateway = ScriptedGateway(
+        [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "resp_guessed_vision",
+                    "tool_call_id": "call_guessed_vision",
+                    "tool_name": "vision",
+                    "arguments": {
+                        "artifact_ids": ["art_1"],
+                        "instruction": "检查版式",
+                    },
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "resp_discover_vision",
+                    "tool_call_id": "call_search_vision",
+                    "tool_name": "tool_search",
+                    "arguments": {"query": "inspect-image", "limit": 5},
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "resp_describe_vision",
+                    "tool_call_id": "call_describe_vision",
+                    "tool_name": "tool_describe",
+                    "arguments": {"discovery_id": "tool:vision@1.0.0"},
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "resp_run_vision",
+                    "tool_call_id": "call_run_vision",
+                    "tool_name": "vision",
+                    "arguments": {
+                        "artifact_ids": ["art_1"],
+                        "instruction": "检查版式",
+                    },
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "response.completed",
+                    "response_id": "resp_vision_completed",
+                }
+            ],
+        ]
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+    )
+
+    result = asyncio.run(worker.run_once("worker-missing-tool-recovery"))
+
+    assert result.outcome is WorkerOutcome.COMPLETED
+    assert vision_calls == [{"artifact_ids": ["art_1"], "instruction": "检查版式"}]
+    assert len(gateway.requests) == 5
+    first_recovery = gateway.requests[1].tool_outputs[0].output
+    assert first_recovery["code"] == "tool_not_disclosed"
+    assert first_recovery["recovery"]["action"] == "describe_then_retry"
+    assert gateway.requests[3].disclosed_tool_ids == ["vision"]
+
+    events = kernel.events.page(thread.thread_id, limit=1_000).events
+    planned = next(
+        event for event in events if event.event_type == "tool.recovery_planned"
+    )
+    resolved = next(
+        event for event in events if event.event_type == "tool.recovery_resolved"
+    )
+    assert planned.payload["code"] == "tool_not_disclosed"
+    assert planned.payload["action"] == "describe_then_retry"
+    assert planned.payload["candidate_tool_ids"] == ["vision"]
+    assert resolved.payload["recovery_event_id"] == planned.event_id
+    assert resolved.payload["resolved_by_tool_id"] == "tool_search"
+
+    trace = app.state.trace_projector.project(thread.thread_id)
+    recovery_span = next(
+        span for span in trace.spans if span.name == "ecorex.tool_recovery"
+    )
+    assert recovery_span.status == "OK"
+    assert recovery_span.attributes["ecorex.recovery.code"] == "tool_not_disclosed"
+    assert recovery_span.attributes["ecorex.recovery.action"] == "describe_then_retry"
 
 
 def test_worker_persists_permission_hitl_and_resumes_after_restart(tmp_path) -> None:
@@ -1375,7 +1644,9 @@ def test_gateway_unavailability_schedules_retry_without_losing_turn(tmp_path) ->
     assert "_a2_r0" in gateway.requests[1].request_id
 
 
-def test_new_provider_attempt_does_not_append_to_failed_partial_message(tmp_path) -> None:
+def test_new_provider_attempt_does_not_append_to_failed_partial_message(
+    tmp_path,
+) -> None:
     app, kernel, composition, thread, created = _runtime(
         tmp_path, input_text="retry partial"
     )
@@ -1458,7 +1729,10 @@ def test_worker_heartbeats_while_waiting_for_first_model_event(tmp_path) -> None
         await asyncio.sleep(2)
         refreshed = kernel.jobs.get(created.job.job_id)
         assert refreshed.heartbeat_at and refreshed.heartbeat_at > before.heartbeat_at
-        assert refreshed.lease_expires_at and refreshed.lease_expires_at > before.lease_expires_at
+        assert (
+            refreshed.lease_expires_at
+            and refreshed.lease_expires_at > before.lease_expires_at
+        )
         assert refreshed.checkpoint and refreshed.checkpoint["phase"] == "model_wait"
         heartbeat_events = [
             event
@@ -1475,7 +1749,9 @@ def test_worker_heartbeats_while_waiting_for_first_model_event(tmp_path) -> None
             capabilities=composition.capability_service,
             lease_seconds=5,
         )
-        assert (await contender.run_once("worker-contender")).outcome is WorkerOutcome.IDLE
+        assert (
+            await contender.run_once("worker-contender")
+        ).outcome is WorkerOutcome.IDLE
 
         gateway.release.set()
         completed = await asyncio.wait_for(running, timeout=2)
@@ -1533,7 +1809,9 @@ def test_checkpoint_pulse_uses_monotonic_deadline_and_forced_boundaries() -> Non
     asyncio.run(scenario())
 
 
-def test_worker_coalesces_high_frequency_stream_checkpoints_and_finishes(tmp_path) -> None:
+def test_worker_coalesces_high_frequency_stream_checkpoints_and_finishes(
+    tmp_path,
+) -> None:
     app, kernel, composition, thread, created = _runtime(
         tmp_path, input_text="dense streamed answer"
     )
@@ -1604,9 +1882,7 @@ def test_worker_coalesces_high_frequency_stream_checkpoints_and_finishes(tmp_pat
     # longer wall-clock period and legitimately cross more checkpoint windows.
     # The two extra writes are the initial model_prepare checkpoint and the
     # forced response-completed boundary.
-    periodic_window_limit = math.ceil(
-        elapsed_seconds / checkpoint_interval_seconds
-    )
+    periodic_window_limit = math.ceil(elapsed_seconds / checkpoint_interval_seconds)
     assert len(heartbeat_events) <= periodic_window_limit + 2
     assert len(heartbeat_events) < delta_count
 
@@ -1725,7 +2001,9 @@ def test_worker_heartbeats_during_async_tool_execution(tmp_path) -> None:
             capabilities=composition.capability_service,
             lease_seconds=5,
         )
-        assert (await contender.run_once("worker-tool-contender")).outcome is WorkerOutcome.IDLE
+        assert (
+            await contender.run_once("worker-tool-contender")
+        ).outcome is WorkerOutcome.IDLE
 
         release.set()
         result = await asyncio.wait_for(running, timeout=2)

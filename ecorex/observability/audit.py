@@ -82,6 +82,8 @@ _CONNECTOR_AUDIT_DIGESTS = frozenset(
         "result_sha256",
     }
 )
+_MODEL_RECOVERY_AUDIT_TOKENS = frozenset({"action", "trigger_code", "resolved_by"})
+_MODEL_RECOVERY_AUDIT_DIGESTS = frozenset({"tool_output_sha256"})
 
 
 def _is_secret_key(value: str) -> bool:
@@ -193,14 +195,13 @@ class AuditPayloadCipher:
             json.JSONDecodeError,
             binascii.Error,
         ):
-            raise AuditIntegrityError("stored audit payload authentication failed") from None
+            raise AuditIntegrityError(
+                "stored audit payload authentication failed"
+            ) from None
 
 
 class AuditPublisher(Protocol):
-    def publish(
-        self, record: AuditRecordProjection
-    ) -> Awaitable[None] | None:
-        ...
+    def publish(self, record: AuditRecordProjection) -> Awaitable[None] | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,7 +241,9 @@ class AuditRedactor:
             ):
                 return self._binary_omission(encoded)
             if self._is_local_path(value):
-                return "[REDACTED:PATH:" + hashlib.sha256(encoded).hexdigest()[:12] + "]"
+                return (
+                    "[REDACTED:PATH:" + hashlib.sha256(encoded).hexdigest()[:12] + "]"
+                )
             value = _INLINE_SECRET.sub(
                 lambda match: f"{match.group(1)}=[REDACTED:SECRET]", value
             )
@@ -248,7 +251,9 @@ class AuditRedactor:
             value = _EMBEDDED_PATH.sub(self._embedded_path_replacement, value)
             encoded = value.encode("utf-8", errors="replace")
             if len(encoded) > self.max_string_bytes:
-                prefix = encoded[: self.max_string_bytes].decode("utf-8", errors="ignore")
+                prefix = encoded[: self.max_string_bytes].decode(
+                    "utf-8", errors="ignore"
+                )
                 return {
                     "text": prefix,
                     "truncated": True,
@@ -266,9 +271,7 @@ class AuditRedactor:
                 for child_key, child_value in value.items()
             }
         if isinstance(value, (list, tuple)):
-            return [
-                self.redact(child, key=key, depth=depth + 1) for child in value
-            ]
+            return [self.redact(child, key=key, depth=depth + 1) for child in value]
         return str(value)
 
     @staticmethod
@@ -309,7 +312,9 @@ class AuditOutbox:
         if not 1 <= lease_seconds <= 300:
             raise ValueError("audit lease must be between 1 and 300 seconds")
         self.database = (
-            database if isinstance(database, SQLiteDatabase) else SQLiteDatabase(database)
+            database
+            if isinstance(database, SQLiteDatabase)
+            else SQLiteDatabase(database)
         )
         self.account_id = account_id
         self.publisher = publisher
@@ -470,7 +475,9 @@ class AuditOutbox:
 
         self._require_converged()
         if not connection.in_transaction:
-            raise RuntimeError("permission audit recording requires an active transaction")
+            raise RuntimeError(
+                "permission audit recording requires an active transaction"
+            )
         table = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' "
             "AND name = 'permission_change_requests'"
@@ -536,8 +543,7 @@ class AuditOutbox:
         identity = f"{source_event_id}:{category}:{event_type}"
         audit_id = "audit_" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
         existing = connection.execute(
-            "SELECT * FROM observability_audit_outbox "
-            "WHERE audit_id = ?",
+            "SELECT * FROM observability_audit_outbox WHERE audit_id = ?",
             (audit_id,),
         ).fetchone()
         if existing is not None:
@@ -545,7 +551,9 @@ class AuditOutbox:
                 self._plaintext_from_row(existing) != plaintext_json
                 or existing["payload_sha256"] != digest
             ):
-                raise AuditIntegrityError("audit identity was reused with different content")
+                raise AuditIntegrityError(
+                    "audit identity was reused with different content"
+                )
             return
         timestamp = created_at.astimezone(UTC).isoformat()
         identity_values = {
@@ -625,6 +633,13 @@ class AuditOutbox:
             )
         elif event.event_type == "turn.steered":
             views.append(("prompt", {**common, **payload}))
+        elif event.event_type.startswith("model.continuation_recovery"):
+            views.append(
+                (
+                    "task",
+                    self._model_recovery_audit_view(event, common),
+                )
+            )
         elif event.event_type in {"item.delta", "model.response_completed"}:
             views.append(("response", {**common, **payload}))
         elif event.event_type.startswith("connector."):
@@ -682,13 +697,43 @@ class AuditOutbox:
             result["discovery_id"] = discovery_id
         for key in _CONNECTOR_AUDIT_TOKENS:
             value = payload.get(key)
-            if isinstance(value, str) and _AUDIT_SAFE_TOKEN.fullmatch(value) is not None:
+            if (
+                isinstance(value, str)
+                and _AUDIT_SAFE_TOKEN.fullmatch(value) is not None
+            ):
                 result[key] = value
         for key in _CONNECTOR_AUDIT_DIGESTS:
             value = payload.get(key)
             if isinstance(value, str) and _AUDIT_SHA256.fullmatch(value) is not None:
                 result[key] = value
         result.setdefault("outcome", event.event_type.rsplit(".", 1)[-1])
+        return result
+
+    @staticmethod
+    def _model_recovery_audit_view(
+        event: EventEnvelope,
+        common: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Expose recovery health without retaining provider or Tool payloads."""
+
+        payload = event.payload
+        result: dict[str, Any] = dict(common)
+        for key in _MODEL_RECOVERY_AUDIT_TOKENS:
+            value = payload.get(key)
+            if (
+                isinstance(value, str)
+                and _AUDIT_SAFE_TOKEN.fullmatch(value) is not None
+            ):
+                result[key] = value
+        for key in _MODEL_RECOVERY_AUDIT_DIGESTS:
+            value = payload.get(key)
+            if isinstance(value, str) and _AUDIT_SHA256.fullmatch(value) is not None:
+                result[key] = value
+        for key in ("from_round", "next_round", "round"):
+            value = payload.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                result[key] = value
+        result["status"] = event.event_type.rsplit("_", 1)[-1]
         return result
 
     def get(self, audit_id: str) -> AuditRecordProjection:
@@ -926,9 +971,7 @@ class AuditOutbox:
                 ),
             )
 
-    def _mark_rejected(
-        self, audit_id: str, lease_token: str, error_code: str
-    ) -> None:
+    def _mark_rejected(self, audit_id: str, lease_token: str, error_code: str) -> None:
         self._require_converged()
         with self.database.transaction() as connection:
             cursor = connection.execute(
@@ -953,8 +996,8 @@ class AuditOutbox:
         now = (now or datetime.now(UTC)).astimezone(UTC)
         raw_cutoff = (now - timedelta(days=self.retention.raw_days)).isoformat()
         aggregate_cutoff = (
-            now - timedelta(days=self.retention.aggregate_days)
-        ).date().isoformat()
+            (now - timedelta(days=self.retention.aggregate_days)).date().isoformat()
+        )
         with self.database.transaction() as connection:
             raw = connection.execute(
                 "DELETE FROM observability_audit_outbox "

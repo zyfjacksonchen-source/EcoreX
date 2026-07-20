@@ -99,7 +99,9 @@ class RuntimeInvariantAuditor:
 
     def __init__(self, database: SQLiteDatabase | str) -> None:
         self.database = (
-            database if isinstance(database, SQLiteDatabase) else SQLiteDatabase(database)
+            database
+            if isinstance(database, SQLiteDatabase)
+            else SQLiteDatabase(database)
         )
 
     def audit(self) -> RuntimeInvariantReport:
@@ -119,7 +121,9 @@ class RuntimeInvariantAuditor:
                     self.database.path.name,
                     "SQLite quick_check did not return ok",
                 )
-            for foreign_key in connection.execute("PRAGMA foreign_key_check").fetchall():
+            for foreign_key in connection.execute(
+                "PRAGMA foreign_key_check"
+            ).fetchall():
                 add(
                     "sqlite_foreign_key_failure",
                     "database",
@@ -172,9 +176,7 @@ class RuntimeInvariantAuditor:
             interaction_state: dict[str, InteractionStatus] = {}
             accepted_context: dict[str, tuple[str | None, ...]] = {}
 
-            cursor = connection.execute(
-                "SELECT * FROM events ORDER BY thread_id, seq"
-            )
+            cursor = connection.execute("SELECT * FROM events ORDER BY thread_id, seq")
             while batch := cursor.fetchmany(2048):
                 for event in batch:
                     event_count += 1
@@ -249,7 +251,10 @@ class RuntimeInvariantAuditor:
                             "execution batch binding has no batch reference",
                         )
                     if execution_batch_id is not None:
-                        if not isinstance(execution_batch_id, str) or not execution_batch_id:
+                        if (
+                            not isinstance(execution_batch_id, str)
+                            or not execution_batch_id
+                        ):
                             add(
                                 "execution_batch_reference_invalid",
                                 "event",
@@ -324,6 +329,7 @@ class RuntimeInvariantAuditor:
                                 elif event_type in {
                                     "model.requested",
                                     "model.continuation_requested",
+                                    "model.continuation_recovery_requested",
                                 }:
                                     required_fields = {
                                         "first_revision_ordinal",
@@ -439,10 +445,7 @@ class RuntimeInvariantAuditor:
 
                     if job_id is not None and event_type in _JOB_EVENT_STATUS:
                         job_state[str(job_id)] = _JOB_EVENT_STATUS[event_type]
-                    if (
-                        item_id is not None
-                        and event_type in _INTERACTION_EVENT_STATUS
-                    ):
+                    if item_id is not None and event_type in _INTERACTION_EVENT_STATUS:
                         interaction_state[str(item_id)] = _INTERACTION_EVENT_STATUS[
                             event_type
                         ]
@@ -711,9 +714,7 @@ class RuntimeInvariantAuditor:
         for interaction_id, interaction in interactions.items():
             thread_id = str(interaction["thread_id"])
             turn_id = (
-                None
-                if interaction["turn_id"] is None
-                else str(interaction["turn_id"])
+                None if interaction["turn_id"] is None else str(interaction["turn_id"])
             )
             job_id = (
                 None if interaction["job_id"] is None else str(interaction["job_id"])
@@ -841,21 +842,30 @@ class RuntimeInvariantAuditor:
                         job_id,
                         f"turn={status.value}, matching pending request missing",
                     )
-                if job_status is JobStatus.RETRY_SCHEDULED and status is not TurnStatus.RETRY_WAIT:
+                if (
+                    job_status is JobStatus.RETRY_SCHEDULED
+                    and status is not TurnStatus.RETRY_WAIT
+                ):
                     add(
                         "retry_job_turn_mismatch",
                         "job",
                         job_id,
                         f"retry_scheduled job has {status.value} turn",
                     )
-                if job_status is JobStatus.COMPLETED and status is not TurnStatus.COMPLETED:
+                if (
+                    job_status is JobStatus.COMPLETED
+                    and status is not TurnStatus.COMPLETED
+                ):
                     add(
                         "completed_job_turn_mismatch",
                         "job",
                         job_id,
                         f"completed job has {status.value} turn",
                     )
-                if job_status in {JobStatus.FAILED, JobStatus.DEAD_LETTER} and status is not TurnStatus.FAILED:
+                if (
+                    job_status in {JobStatus.FAILED, JobStatus.DEAD_LETTER}
+                    and status is not TurnStatus.FAILED
+                ):
                     add(
                         "failed_job_turn_mismatch",
                         "job",

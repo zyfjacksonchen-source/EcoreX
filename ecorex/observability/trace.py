@@ -59,7 +59,9 @@ class _Span:
 
 
 class TraceProjector:
-    def __init__(self, replay: ReplayService, *, service_version: str = "1.0.0") -> None:
+    def __init__(
+        self, replay: ReplayService, *, service_version: str = "1.0.0"
+    ) -> None:
         self.replay = replay
         self.service_version = service_version
 
@@ -87,6 +89,7 @@ class TraceProjector:
         spans: dict[str, _Span] = {root.identity: root}
         turn_spans: dict[str, _Span] = {}
         model_spans: dict[tuple[str, int], _Span] = {}
+        model_recovery_spans: dict[str, _Span] = {}
         tool_spans: dict[tuple[str, str], _Span] = {}
         recovery_spans: dict[str, _Span] = {}
         tool_items: dict[str, tuple[str, str]] = {}
@@ -99,6 +102,7 @@ class TraceProjector:
                 spans=spans,
                 turn_spans=turn_spans,
                 model_spans=model_spans,
+                model_recovery_spans=model_recovery_spans,
                 tool_spans=tool_spans,
                 recovery_spans=recovery_spans,
                 tool_items=tool_items,
@@ -113,7 +117,9 @@ class TraceProjector:
                 and span.name != "ecorex.artifact"
                 and span.status == "UNSET"
             ):
-                span.end = last.created_at if last.created_at >= span.start else span.start
+                span.end = (
+                    last.created_at if last.created_at >= span.start else span.start
+                )
 
         projections = [
             TraceSpanProjection(
@@ -171,6 +177,7 @@ class TraceProjector:
         spans: dict[str, _Span],
         turn_spans: dict[str, _Span],
         model_spans: dict[tuple[str, int], _Span],
+        model_recovery_spans: dict[str, _Span],
         tool_spans: dict[tuple[str, str], _Span],
         recovery_spans: dict[str, _Span],
         tool_items: dict[str, tuple[str, str]],
@@ -188,9 +195,7 @@ class TraceProjector:
                 attributes={
                     "ecorex.thread.id": event.thread_id,
                     "ecorex.turn.id": event.turn_id,
-                    "gen_ai.request.model": str(
-                        payload.get("agent_model_id") or ""
-                    ),
+                    "gen_ai.request.model": str(payload.get("agent_model_id") or ""),
                     "ecorex.permission.snapshot_id": event.permission_snapshot_id or "",
                     "ecorex.capability.snapshot_id": event.capability_snapshot_id or "",
                     "ecorex.original_trace_id": event.trace_id or "",
@@ -223,6 +228,14 @@ class TraceProjector:
                 for key, span in tool_spans.items():
                     if key[0] == event.turn_id and span.status == "UNSET":
                         span.end = event.created_at
+                for span in model_recovery_spans.values():
+                    if (
+                        span.attributes.get("ecorex.turn.id") == event.turn_id
+                        and span.status == "UNSET"
+                    ):
+                        span.end = event.created_at
+                        if target == "failed":
+                            span.status = "ERROR"
                 for span in recovery_spans.values():
                     if (
                         span.attributes.get("ecorex.turn.id") == event.turn_id
@@ -235,7 +248,11 @@ class TraceProjector:
                     if span.attributes.get("ecorex.turn.id") == event.turn_id:
                         span.end = event.created_at
             return
-        if event.event_type in {"model.requested", "model.continuation_requested"}:
+        if event.event_type in {
+            "model.requested",
+            "model.continuation_requested",
+            "model.continuation_recovery_requested",
+        }:
             if not event.turn_id or turn_span is None:
                 return
             round_index = self._round_index(payload)
@@ -249,18 +266,81 @@ class TraceProjector:
                 kind="CLIENT",
                 attributes={
                     "ecorex.turn.id": event.turn_id,
-                    "gen_ai.request.model": str(
-                        payload.get("agent_model_id") or ""
-                    ),
+                    "gen_ai.request.model": str(payload.get("agent_model_id") or ""),
                     "gen_ai.request.id": str(payload.get("request_id") or ""),
                     "gen_ai.request.round": round_index,
                     "gen_ai.request.continuation": (
                         event.event_type == "model.continuation_requested"
                     ),
+                    "ecorex.model.continuation_recovery": (
+                        event.event_type == "model.continuation_recovery_requested"
+                    ),
                 },
             )
             spans[identity] = span
             model_spans[(event.turn_id, round_index)] = span
+            return
+        if event.event_type == "model.continuation_recovery_planned" and event.turn_id:
+            recovery_id = self._continuation_recovery_id(payload)
+            from_round = self._model_recovery_round(payload, "from_round")
+            next_round = self._model_recovery_round(payload, "next_round")
+            prior = model_spans.get((event.turn_id, from_round))
+            if prior is not None and prior.status == "UNSET":
+                prior.end = event.created_at
+                prior.status = "ERROR"
+                prior.events.append(
+                    self._span_event(
+                        event,
+                        {
+                            "ecorex.model.continuation_blocked": True,
+                            "ecorex.recovery.trigger_code": self._safe_token(
+                                payload.get("trigger_code")
+                            ),
+                        },
+                    )
+                )
+            span = _Span(
+                identity=f"model-recovery:{event.turn_id}:{recovery_id}",
+                name="ecorex.model_continuation_recovery",
+                parent_span_id=(turn_span.span_id if turn_span else root.span_id),
+                start=event.created_at,
+                end=event.created_at,
+                attributes={
+                    "ecorex.turn.id": event.turn_id,
+                    "ecorex.recovery.id": recovery_id,
+                    "ecorex.recovery.action": self._safe_token(payload.get("action")),
+                    "ecorex.recovery.trigger_code": self._safe_token(
+                        payload.get("trigger_code")
+                    ),
+                    "ecorex.recovery.tool_output_sha256": self._safe_sha256(
+                        payload.get("tool_output_sha256")
+                    ),
+                    "ecorex.recovery.from_round": from_round,
+                    "ecorex.recovery.next_round": next_round,
+                },
+            )
+            spans[span.identity] = span
+            model_recovery_spans[recovery_id] = span
+            return
+        if event.event_type == "model.continuation_recovery_resolved" and event.turn_id:
+            recovery_id = self._continuation_recovery_id(payload)
+            span = model_recovery_spans.get(recovery_id)
+            if span is None:
+                raise ReplayIntegrityError(
+                    "Model continuation recovery references an unknown recovery"
+                )
+            if span.status not in {"UNSET", "OK"}:
+                raise ReplayIntegrityError(
+                    "Model continuation recovery resolution is invalid"
+                )
+            span.end = event.created_at
+            span.status = "OK"
+            span.attributes["ecorex.recovery.resolved_by"] = self._safe_token(
+                payload.get("resolved_by")
+            )
+            span.events.append(
+                self._span_event(event, {"ecorex.recovery.resolved": True})
+            )
             return
         if event.event_type == "model.response_completed" and event.turn_id:
             round_index = self._round_index(payload)
@@ -271,23 +351,21 @@ class TraceProjector:
                 usage = payload.get("usage")
                 if isinstance(usage, dict):
                     for key, value in usage.items():
-                        if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        if isinstance(value, (int, float)) and not isinstance(
+                            value, bool
+                        ):
                             span.attributes[f"gen_ai.usage.{key}"] = value
             return
         if event.event_type == "tool.call_requested" and event.turn_id:
             call_id = event.tool_call_id or event.item_id or event.event_id
             try:
-                activity = PublicToolActivity.model_validate(
-                    payload.get("activity")
-                )
+                activity = PublicToolActivity.model_validate(payload.get("activity"))
             except ValueError:
                 raise ReplayIntegrityError(
                     "Tool trace public activity is invalid"
                 ) from None
             if activity.tool_call_id != call_id:
-                raise ReplayIntegrityError(
-                    "Tool trace public identity is inconsistent"
-                )
+                raise ReplayIntegrityError("Tool trace public identity is inconsistent")
             identity = f"tool:{event.turn_id}:{call_id}"
             span = _Span(
                 identity=identity,
@@ -308,9 +386,7 @@ class TraceProjector:
             return
         if event.event_type == "tool.result" and event.item_id:
             try:
-                activity = PublicToolActivity.model_validate(
-                    payload.get("activity")
-                )
+                activity = PublicToolActivity.model_validate(payload.get("activity"))
             except ValueError:
                 raise ReplayIntegrityError(
                     "Tool trace result public activity is invalid"
@@ -359,10 +435,14 @@ class TraceProjector:
         if event.event_type == "tool.recovery_resolved":
             recovery_event_id = payload.get("recovery_event_id")
             if not isinstance(recovery_event_id, str):
-                raise ReplayIntegrityError("Tool recovery trace has no recovery identity")
+                raise ReplayIntegrityError(
+                    "Tool recovery trace has no recovery identity"
+                )
             span = recovery_spans.get(recovery_event_id)
             if span is None:
-                raise ReplayIntegrityError("Tool recovery trace references an unknown recovery")
+                raise ReplayIntegrityError(
+                    "Tool recovery trace references an unknown recovery"
+                )
             if span.status not in {"UNSET", "OK"}:
                 raise ReplayIntegrityError("Tool recovery trace resolution is invalid")
             span.end = event.created_at
@@ -397,11 +477,15 @@ class TraceProjector:
             spans[identity] = span
             human_spans[event.item_id] = span
             return
-        if event.event_type in {
-            "interaction.resolved",
-            "interaction.cancelled",
-            "interaction.expired",
-        } and event.item_id:
+        if (
+            event.event_type
+            in {
+                "interaction.resolved",
+                "interaction.cancelled",
+                "interaction.expired",
+            }
+            and event.item_id
+        ):
             span = human_spans.get(event.item_id)
             if span:
                 span.end = event.created_at
@@ -410,7 +494,9 @@ class TraceProjector:
                 )
             return
         if event.event_type.startswith("artifact."):
-            artifact_id = str(payload.get("artifact_id") or event.item_id or event.event_id)
+            artifact_id = str(
+                payload.get("artifact_id") or event.item_id or event.event_id
+            )
             identity = f"artifact:{event.event_id}"
             spans[identity] = _Span(
                 identity=identity,
@@ -449,8 +535,7 @@ class TraceProjector:
             "ecorex.connector.action_id": payload.get("action_id"),
             "ecorex.connector.instance_id": payload.get("instance_id"),
             "ecorex.connector.invocation_id": (
-                payload.get("invocation_id")
-                or payload.get("connector_invocation_id")
+                payload.get("invocation_id") or payload.get("connector_invocation_id")
             ),
         }
         discovery_id = payload.get("discovery_id")
@@ -511,11 +596,55 @@ class TraceProjector:
         return value
 
     @staticmethod
+    def _model_recovery_round(payload: dict[str, Any], key: str) -> int:
+        value = payload.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ReplayIntegrityError("model continuation recovery round is invalid")
+        return value
+
+    @staticmethod
+    def _continuation_recovery_id(payload: dict[str, Any]) -> str:
+        source = payload.get("source_response_id")
+        tool_call = payload.get("tool_call_id")
+        action = payload.get("action")
+        trigger = payload.get("trigger_code")
+        output_sha256 = payload.get("tool_output_sha256")
+        if (
+            not isinstance(source, str)
+            or not 1 <= len(source) <= 256
+            or not isinstance(tool_call, str)
+            or not 1 <= len(tool_call) <= 256
+            or not isinstance(action, str)
+            or _TRACE_SAFE_TOKEN.fullmatch(action) is None
+            or not isinstance(trigger, str)
+            or _TRACE_SAFE_TOKEN.fullmatch(trigger) is None
+            or not isinstance(output_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", output_sha256) is None
+        ):
+            raise ReplayIntegrityError(
+                "model continuation recovery identity is invalid"
+            )
+        # The trace needs a stable join key but must not publish provider or
+        # tool-call identities as attributes.
+        return hashlib.sha256(
+            "\0".join((source, tool_call, action, trigger, output_sha256)).encode(
+                "utf-8"
+            )
+        ).hexdigest()[:32]
+
+    @staticmethod
     def _safe_token(value: Any) -> str:
         return (
             value
-            if isinstance(value, str)
-            and _TRACE_SAFE_TOKEN.fullmatch(value) is not None
+            if isinstance(value, str) and _TRACE_SAFE_TOKEN.fullmatch(value) is not None
+            else "unknown"
+        )
+
+    @staticmethod
+    def _safe_sha256(value: Any) -> str:
+        return (
+            value
+            if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value)
             else "unknown"
         )
 
