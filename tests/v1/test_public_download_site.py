@@ -35,34 +35,28 @@ def test_public_download_site_static_gate_passes() -> None:
     assert 'href="/admin/"' not in html
 
 
-def test_public_download_site_defaults_to_plain_language_and_collapses_help() -> None:
+def test_public_download_site_makes_one_click_terminal_install_primary() -> None:
     site = ROOT / "deploy" / "ecorex-site"
     html = (site / "index.html").read_text(encoding="utf-8")
     javascript = next(site.glob("site.*.js")).read_text(encoding="utf-8")
 
     assert "<title>EcoreX 下载与安装</title>" in html
-    assert "<strong>下载</strong>" in html
-    assert "<strong>解压</strong>" in html
-    assert "<strong>双击 EcoreX Installer</strong>" in html
-    assert "它就在解压后的第一层" in html
-    assert "安装完成后会自动打开 EcoreX，并在桌面创建快捷方式。" in html
+    assert "<strong>选择系统</strong>" in html
+    assert "<strong>复制一键命令</strong>" in html
+    assert "<strong>粘贴并执行</strong>" in html
+    assert "点击对应卡片中的“复制命令”。" in html
+    assert "安装完成后会自动打开 EcoreX 并创建桌面快捷方式。" in html
     assert all(
         technical_term not in html
-        for technical_term in ("PowerShell", "终端", "Bootstrap", "SHA-256", "Ed25519")
+        for technical_term in ("Bootstrap", "SHA-256", "Ed25519")
     )
 
-    assert 'createElement("a", "download-link", "下载 EcoreX")' in javascript
-    assert 'createElement("details", "download-help")' in javascript
-    assert 'createElement("summary", "", "下载遇到问题")' in javascript
-    assert "details.append(meta);" in javascript
-    assert "appendTerminalCommand(details, artifact);" in javascript
-    assert "article.append(meta);" not in javascript
-    assert "appendTerminalCommand(article, artifact);" not in javascript
-    assert (
-        "安装完成后会自动打开 EcoreX，并在桌面创建 EcoreX 快捷方式。"
-        in javascript
-    )
-    assert "它就在解压后的第一层，按提示完成安装" in javascript
+    assert 'createElement("div", "command-block is-primary")' in javascript
+    assert 'createElement("button", "", "复制命令")' in javascript
+    assert "await copyText(command);" in javascript
+    assert "appendTerminalCommand(article, artifact);" in javascript
+    assert 'createElement("a", "download-link", "下载 EcoreX")' not in javascript
+    assert 'createElement("details", "download-help")' not in javascript
 
 
 def test_public_release_routes_hide_channel_but_map_to_channel_storage() -> None:

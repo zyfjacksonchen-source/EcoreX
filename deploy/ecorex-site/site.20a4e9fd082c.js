@@ -433,14 +433,6 @@ function detectTarget() {
   return /win/.test(source) ? "bootstrap-windows-x64" : null;
 }
 
-function formatSize(sizeBytes) {
-  return `${(sizeBytes / 1024 / 1024).toFixed(2)} MiB`;
-}
-
-function shortSha(value) {
-  return `${value.slice(0, 12)}…`;
-}
-
 function cardCopy(artifact) {
   if (artifact.artifactId === "bootstrap-windows-x64") {
     return ["Win", "Windows x64", "适用于 Windows 10/11 的 64 位电脑。"];
@@ -457,6 +449,23 @@ function powershellLiteral(value) {
 
 function shellLiteral(value) {
   return `'${String(value).replaceAll("'", `'\"'\"'`)}'`;
+}
+
+async function copyText(value) {
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("clipboard unavailable");
 }
 
 export function terminalCommand(artifact) {
@@ -503,88 +512,34 @@ export function terminalCommand(artifact) {
 }
 
 function appendTerminalCommand(article, artifact) {
-  const block = createElement("div", "command-block");
+  const block = createElement("div", "command-block is-primary");
   block.append(createElement(
     "span",
     "",
-    artifact.platform === "windows" ? "PowerShell 一键安装" : "终端一键安装",
+    artifact.platform === "windows" ? "复制后在 PowerShell 中粘贴执行" : "复制后在终端中粘贴执行",
   ));
   const command = terminalCommand(artifact);
   block.append(createElement("code", "", command));
   const copy = createElement("button", "", "复制命令");
   copy.type = "button";
+  copy.setAttribute("aria-label", `${artifact.platform === "windows" ? "Windows" : "Mac"} 一键安装命令`);
+  copy.setAttribute("aria-live", "polite");
   copy.addEventListener("click", async () => {
     const original = copy.textContent;
+    copy.disabled = true;
     try {
-      await navigator.clipboard.writeText(command);
-      copy.textContent = "已复制";
+      await copyText(command);
+      copy.textContent = "已复制，可粘贴执行";
     } catch {
-      copy.textContent = "复制失败";
+      copy.textContent = "复制失败，请手动选择命令";
     }
     window.setTimeout(() => {
       copy.textContent = original;
+      copy.disabled = false;
     }, 1600);
   });
   block.append(copy);
   article.append(block);
-}
-
-function appendInstallSteps(article) {
-  const steps = createElement("ol", "card-install-steps");
-  [
-    ["下载", "保存 EcoreX 压缩包"],
-    ["解压", "打开压缩包并解压"],
-    ["双击 EcoreX Installer", "它就在解压后的第一层，按提示完成安装"],
-  ].forEach(([title, description]) => {
-    const item = createElement("li");
-    item.append(createElement("strong", "", title));
-    item.append(createElement("span", "", description));
-    steps.append(item);
-  });
-  article.append(steps);
-  article.append(createElement(
-    "p",
-    "install-result",
-    "安装完成后会自动打开 EcoreX，并在桌面创建 EcoreX 快捷方式。",
-  ));
-}
-
-function appendDownloadHelp(article, artifact) {
-  const details = createElement("details", "download-help");
-  details.append(createElement("summary", "", "下载遇到问题"));
-  details.append(createElement(
-    "p",
-    "download-help-intro",
-    "直接下载无法完成时，可以复制下面的命令重试；命令会自动切换备用线路并核对文件。",
-  ));
-
-  const meta = createElement("div", "meta");
-  meta.append(createElement("span", "", `文件大小: ${formatSize(artifact.sizeBytes)}`));
-  const digest = createElement("span", "", `SHA-256: ${shortSha(artifact.sha256)}`);
-  digest.title = artifact.sha256;
-  meta.append(digest);
-  meta.append(createElement("span", "", `Ed25519 key: ${artifact.signature.keyId}`));
-  details.append(meta);
-  appendTerminalCommand(details, artifact);
-
-  if (artifact.sources.length > 1) {
-    const fallbacks = createElement("div", "source-fallbacks");
-    fallbacks.append(createElement("strong", "", "备用下载源"));
-    const sourceLabels = {
-      "github-cn-mirror": "国内 GitHub 镜像",
-      "github-release": "GitHub Releases",
-      "ecorex-cdn": "EcoreX CDN",
-    };
-    artifact.sources.slice(1).forEach((source) => {
-      const link = createElement("a", "", sourceLabels[source.kind]);
-      link.href = source.url;
-      link.rel = "noopener noreferrer";
-      link.download = artifact.fileName;
-      fallbacks.append(link);
-    });
-    details.append(fallbacks);
-  }
-  article.append(details);
 }
 
 function renderArtifactCard(grid, release, artifact, recommended) {
@@ -595,14 +550,13 @@ function renderArtifactCard(grid, release, artifact, recommended) {
   article.append(createElement("h3", "", title));
   article.append(createElement("small", "card-version", `v${release.version}`));
   article.append(createElement("p", "", body));
-  appendInstallSteps(article);
+  article.append(createElement(
+    "p",
+    "progress-promise",
+    "命令会自动下载、检查、安装，并显示速度、进度和当前阶段。",
+  ));
+  appendTerminalCommand(article, artifact);
 
-  const primary = createElement("a", "download-link", "下载 EcoreX");
-  primary.href = artifact.sources[0].url;
-  primary.rel = "noopener noreferrer";
-  primary.download = artifact.fileName;
-  article.append(primary);
-  appendDownloadHelp(article, artifact);
   grid.append(article);
 }
 
@@ -676,7 +630,7 @@ function renderFailure(error) {
   card.append(createElement("h3", "", "暂时无法下载"));
   card.append(createElement("p", "", "下载信息暂时没有准备好，请稍后刷新页面。"));
   card.append(createElement("span", "download-link is-disabled", "不可下载"));
-  const details = createElement("details", "download-help");
+  const details = createElement("details", "download-error-details");
   details.append(createElement("summary", "", "下载遇到问题"));
   details.append(createElement(
     "p",
