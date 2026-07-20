@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 
 from .models import (
+    GatewayAssistantMessageInput,
     GatewayEvent,
     GatewayEventType,
     GatewayFunctionCallOutputInput,
@@ -274,6 +275,8 @@ class ManagedHTTPSChatCompletionsProvider:
         for item in request.ordered_input_items():
             if isinstance(item, GatewayUserMessageInput):
                 messages.append({"role": "user", "content": item.content})
+            elif isinstance(item, GatewayAssistantMessageInput):
+                messages.append({"role": "assistant", "content": item.content})
             elif isinstance(item, GatewayFunctionCallOutputInput):
                 messages.append({
                     "role": "tool",

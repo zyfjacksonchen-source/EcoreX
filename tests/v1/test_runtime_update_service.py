@@ -175,6 +175,33 @@ def test_background_prepare_waits_for_user_then_activation_requests_restart(tmp_
     assert after_restart.target_version is None
 
 
+@pytest.mark.parametrize(
+    "state",
+    ("available", "downloading", "awaiting_user", "activating", "failed"),
+)
+def test_restart_clears_stale_update_for_the_running_version(tmp_path, state: str) -> None:
+    """The activated version must never continue advertising itself as new."""
+
+    database = tmp_path / "runtime.db"
+    digest = hashlib.sha256(b"build-1.0.5").hexdigest()
+    before_restart = UpdateStateRepository(database, current_version="1.0.4")
+    before_restart.set(
+        state=state,
+        event_type="update.test_stale_same_version",
+        target_version="1.0.5",
+        release_id="release-1.0.5-stable",
+        build_digest=digest,
+        transaction_id="transaction-1.0.5",
+    )
+
+    after_restart = UpdateStateRepository(database, current_version="1.0.5")
+    snapshot = after_restart.snapshot(can_activate=True)
+
+    assert snapshot.state == "idle"
+    assert snapshot.target_version is None
+    assert snapshot.can_activate is False
+
+
 def test_activation_drain_timeout_preserves_staged_candidate_for_retry(tmp_path) -> None:
     payload = _package("1.0.1")
     database = tmp_path / "runtime.db"

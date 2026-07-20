@@ -435,6 +435,74 @@ def test_steer_before_first_model_request_is_applied_in_one_execution_batch(
     ]
 
 
+def test_new_turn_replays_completed_thread_history_with_roles(tmp_path) -> None:
+    app, kernel, composition, thread, first = _runtime(
+        tmp_path,
+        input_text="请给我 5 个适合旅行主题的短视频标题",
+    )
+    del app
+    gateway = ScriptedGateway(
+        [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "output_text.delta",
+                    "response_id": "resp-first",
+                    "delta": "1. 城市漫游 2. 海边周末 3. 山野露营",
+                },
+                {
+                    "seq": 2,
+                    "event_type": "response.completed",
+                    "response_id": "resp-first",
+                },
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "response.completed",
+                    "response_id": "resp-second",
+                }
+            ],
+        ]
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+        turn_preparer=composition.prepare_turn,
+    )
+
+    assert asyncio.run(worker.run_once("worker-history-first")).outcome is WorkerOutcome.COMPLETED
+    prepared = composition.prepare_turn(
+        CreateTurnRequest(
+            input="5",
+            agent_model_id="ecorex-chat",
+            client_message_id="worker-history-second",
+        )
+    )
+    second = kernel.create_turn(
+        thread.thread_id,
+        prepared.request,
+        snapshot_context=prepared.snapshot_context,
+    )
+
+    assert asyncio.run(worker.run_once("worker-history-second")).outcome is WorkerOutcome.COMPLETED
+    request = gateway.requests[1]
+    assert request.input is None
+    assert [item.type for item in request.input_items] == [
+        "user_message",
+        "assistant_message",
+        "user_message",
+    ]
+    assert [item.content for item in request.input_items] == [
+        "请给我 5 个适合旅行主题的短视频标题",
+        "1. 城市漫游 2. 海边周末 3. 山野露营",
+        "5",
+    ]
+    assert request.input_items[-1].message_id.startswith("rev_")
+    assert second.turn.thread_id == first.turn.thread_id
+
+
 def test_steer_during_streaming_runs_in_the_next_model_batch(tmp_path) -> None:
     app, kernel, composition, _thread, created = _runtime(
         tmp_path,

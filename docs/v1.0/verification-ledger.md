@@ -2580,3 +2580,15 @@ and live tool invocation.
 | Pre-execution sandbox failure | 0 local | `tests/v1/test_shell_sandbox_boundary.py`, `test_platform_pack_staging.py` and `test_process_capability_pack.py`: 153 passed, 14 expected platform skips. A rejected Windows sandbox contract now produces a failed tool execution and no conflict-resolution interaction. |
 | Web login contract | 0 local | TypeScript contract check and targeted account-login layout contract passed. The page waits up to 90 seconds for credential rotation and self-reloads on either restart path. |
 | Release and installed acceptance | pending | Build a new signed v1.0.6 candidate, install it over the active v1.0.5 slot, and repeat authenticated shell/read/fetch plus image and retouch acceptance before Stable promotion. |
+
+## v0.2.9.2 compatibility and v1.0.7 candidate evidence - 2026-07-20
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Legacy v0.2.9.2 availability | 0 production | The retained legacy Web service is enabled and active. Its loopback version endpoint and the public legacy version endpoint both returned HTTP 200 and identified `0.2.9.2`. |
+| Future v1 deployment isolation | 0 local | New Cloud-sidecar regression verifies a normal v1-to-v1 activation fences only the blue/green v1 slots and never stops `ecorex-web.service`. Focused sidecar tests: 2 passed. |
+| Image catalog projection | 0 local | Managed Gateway tests verify active chat, image-generation and image-edit entries are visible in `/api/v1/models`, while the streaming model set remains chat-only. |
+| Durable conversational context | 0 local | Worker and provider tests verify a later Turn receives completed public history as `user → assistant → current user`, preserving role order and avoiding replay during tool continuation. |
+| Same-version update convergence | 0 local + installed Runtime | An installed `1.0.5` slot with a stale `awaiting_user → 1.0.5` update record was verified, safely converged to `idle`, and re-read. Backend recovery covers all non-idle states; WebUI presentation independently hides a same-version target. Python update tests: 17 passed; WebUI product suite: 188 passed. |
+| Theme default and control placement | 0 local | Token contract proves the initial paint is dark, an explicit light preference is retained, and the header theme control is grouped immediately before the right-aligned share action. Focused theme/token tests: 4 passed. |
+| Candidate validation | pending | v1.0.7 has passed focused regression and compile checks. A fresh signed candidate plus real authenticated chat, image/retouch and tool acceptance are still required before any Stable promotion. |

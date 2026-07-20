@@ -23,6 +23,7 @@ import {
   type ExtensionLoadState,
 } from "../state/extensions.ts";
 import { userFacingError } from "../state/userLanguage.ts";
+import { hasPendingRuntimeUpdate } from "../state/updatePresentation.ts";
 
 interface SettingsDialogProps {
   open: boolean;
@@ -121,6 +122,7 @@ export function SettingsDialog({
   const [technicalHealthLoading, setTechnicalHealthLoading] = useState(false);
   const [technicalHealthError, setTechnicalHealthError] = useState<string | null>(null);
   const extensionSummary = extensionCatalogSummary(extensions);
+  const hasPendingUpdate = hasPendingRuntimeUpdate(bootstrap?.update);
 
   const refreshMigrationQuarantine = useCallback(async (signal?: AbortSignal) => {
     setMigrationQuarantineLoadState((current) => current === "ready" ? current : "loading");
@@ -722,16 +724,16 @@ export function SettingsDialog({
               <div>
                 <strong>EcoreX {bootstrap?.update.current_version ?? "版本未读取"}</strong>
                 <p>
-                  {bootstrap?.update.target_version
+                  {hasPendingUpdate && bootstrap?.update.target_version
                     ? `新版 ${bootstrap.update.target_version} 已进入更新流程`
-                    : bootstrap?.update.state === "failed"
+                    : hasPendingUpdate && bootstrap?.update.state === "failed"
                       ? "更新检查遇到问题"
-                      : bootstrap?.update.state === "activating"
+                      : hasPendingUpdate && bootstrap?.update.state === "activating"
                         ? "正在启用新版本"
                         : "当前已是可用版本"}
                 </p>
               </div>
-              {bootstrap?.update.state === "awaiting_user" && bootstrap.update.can_activate ? (
+              {hasPendingUpdate && bootstrap?.update.state === "awaiting_user" && bootstrap.update.can_activate ? (
                 <button
                   className="ex-button is-primary ex-permission-change"
                   type="button"

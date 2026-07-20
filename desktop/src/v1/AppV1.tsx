@@ -7,9 +7,11 @@ import {
   Folder,
   History,
   Menu,
+  Moon,
   RefreshCw,
   Settings2,
   Share2,
+  Sun,
   Wifi,
   WifiOff,
   X,
@@ -24,7 +26,13 @@ import { LazyFeatureBoundary } from "./components/LazyFeatureBoundary.tsx";
 import { LoginPage } from "./components/LoginPage.tsx";
 import { Timeline } from "./components/Timeline.tsx";
 import { useRuntimeSession } from "./state/useRuntimeSession.ts";
+import {
+  resolveThemePreference,
+  THEME_PREFERENCE_KEY,
+  type ThemePreference,
+} from "./state/themePreference.ts";
 import { serviceReasonMessage } from "./state/userLanguage.ts";
+import { hasPendingRuntimeUpdate } from "./state/updatePresentation.ts";
 import "./styles/primitives.css";
 import "./styles/layout.css";
 import "./styles/features.css";
@@ -118,6 +126,13 @@ function initialDismissedUpdateBanners(): string[] {
 export function AppV1() {
   const runtime = useRuntimeSession();
   const mobileNavigation = useMediaMatch("(max-width: 839px)");
+  const [theme, setTheme] = useState<ThemePreference>(() => {
+    try {
+      return resolveThemePreference(window.localStorage.getItem(THEME_PREFERENCE_KEY));
+    } catch {
+      return "dark";
+    }
+  });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsReturnFocusRef = useRef<HTMLElement | null>(null);
@@ -136,20 +151,13 @@ export function AppV1() {
   );
 
   useEffect(() => {
-    if (!document.documentElement.dataset.theme) {
-      let saved: string | null = null;
-      try {
-        saved = window.localStorage.getItem("ecorex-theme");
-      } catch {
-        saved = null;
-      }
-      document.documentElement.dataset.theme = saved === "light" || saved === "dark"
-        ? saved
-        : window.matchMedia("(prefers-color-scheme: dark)").matches
-          ? "dark"
-          : "light";
+    document.documentElement.dataset.theme = theme;
+    try {
+      window.localStorage.setItem(THEME_PREFERENCE_KEY, theme);
+    } catch {
+      // The current session remains themed even when persistent storage is unavailable.
     }
-  }, []);
+  }, [theme]);
 
   const currentThreadId = runtime.state.thread?.thread_id ?? null;
   const copyCurrentThreadId = async () => {
@@ -354,13 +362,14 @@ export function AppV1() {
     bootstrap?.retouch_service.reason,
     "精准修图暂时不可用，请稍后重试。",
   );
-  const updateMessage = update?.state === "awaiting_user"
+  const hasPendingUpdate = hasPendingRuntimeUpdate(update);
+  const updateMessage = hasPendingUpdate && update?.state === "awaiting_user"
     ? `EcoreX ${update.target_version ?? "新版"} 已准备好。`
-    : update?.state === "activating"
+    : hasPendingUpdate && update?.state === "activating"
       ? "正在启用新版，页面会自动刷新…"
-      : update?.state === "failed"
+      : hasPendingUpdate && update?.state === "failed"
         ? "新版未能启用，当前版本可继续使用。"
-        : update?.state === "available" || update?.state === "downloading"
+        : hasPendingUpdate && (update?.state === "available" || update?.state === "downloading")
           ? `正在后台准备 EcoreX ${update.target_version ?? "新版"}…`
           : null;
   const updateBannerKey = updateMessage && update
@@ -650,6 +659,12 @@ export function AppV1() {
             </div>
 
             <div className="ex-header-actions">
+              <IconButton
+                label={theme === "dark" ? "切换到明亮模式" : "切换到暗色模式"}
+                onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")}
+              >
+                {theme === "dark" ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
+              </IconButton>
               <IconButton
                 label={shareUnavailableReason || "分享当前任务"}
                 data-ecorex-feature-trigger="share"

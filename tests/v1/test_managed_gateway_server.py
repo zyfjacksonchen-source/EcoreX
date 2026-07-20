@@ -547,6 +547,84 @@ def test_cloud_gateway_auth_allowlist_persists_before_stream_and_replays(tmp_pat
         ).fetchone()[0] == "completed"
 
 
+def test_dynamic_catalog_exposes_active_image_models_without_streaming_them(
+    tmp_path,
+) -> None:
+    class DynamicAuthenticator:
+        def authenticate(self, bearer_token: str) -> GatewayPrincipal:
+            if bearer_token != TOKEN:
+                raise PermissionError("bad token")
+            return GatewayPrincipal(
+                subject="user-1",
+                account_id="account-1",
+                allowed_model_ids=frozenset(
+                    {"ecorex-chat", "gpt-image-2", "gpt-image-2-edit"}
+                ),
+                quota_period="2026-07",
+                request_limit=10,
+            )
+
+    class DynamicCatalogProvider(Provider):
+        async def public_catalog(self) -> list[dict[str, object]]:
+            return [
+                {
+                    "local_model_id": "ecorex-chat",
+                    "modality": "chat",
+                    "display_name": "EcoreX Chat",
+                    "is_default": True,
+                },
+                {
+                    "local_model_id": "gpt-image-2",
+                    "modality": "image_generation",
+                    "display_name": "Image 2",
+                    "is_default": True,
+                },
+                {
+                    "local_model_id": "gpt-image-2-edit",
+                    "modality": "image_edit",
+                    "display_name": "Image 2 精修",
+                    "is_default": True,
+                },
+            ]
+
+    app = create_managed_gateway_app(
+        SQLiteGatewayStore(tmp_path / "dynamic-catalog.db"),
+        authenticator=DynamicAuthenticator(),
+        provider=DynamicCatalogProvider(),
+        allowed_model_ids=frozenset({"ecorex-chat"}),
+        dynamic_model_authority=True,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/v1/models", headers=headers())
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "schema_version": 1,
+        "models": ["ecorex-chat", "gpt-image-2", "gpt-image-2-edit"],
+        "catalog": [
+            {
+                "local_model_id": "ecorex-chat",
+                "modality": "chat",
+                "display_name": "EcoreX Chat",
+                "is_default": True,
+            },
+            {
+                "local_model_id": "gpt-image-2",
+                "modality": "image_generation",
+                "display_name": "Image 2",
+                "is_default": True,
+            },
+            {
+                "local_model_id": "gpt-image-2-edit",
+                "modality": "image_edit",
+                "display_name": "Image 2 精修",
+                "is_default": True,
+            },
+        ],
+    }
+
+
 def test_account_usage_is_cross_request_account_scoped_and_replay_safe(
     tmp_path,
     monkeypatch,

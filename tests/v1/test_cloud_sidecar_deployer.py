@@ -1979,6 +1979,63 @@ def test_activation_schema_boundary_is_durable_before_first_legacy_writer_stop(
     ]
 
 
+def test_v1_to_v1_transition_keeps_v0292_compatibility_service_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A normal v1 upgrade never re-fences the restored v0.2.9.2 Web service."""
+
+    events: list[object] = []
+    source = _slot_state("ecorex-cloud-v1.0.6-source", "blue")
+    target = _slot_state("ecorex-cloud-v1.0.7-target", "green")
+    journal = {
+        "operation": "activate",
+        "phase": "prepared",
+        "source_state": source,
+        "target_state": target,
+    }
+
+    def advance(value, phase):
+        events.append(("journal", phase))
+        return {**value, "phase": phase}
+
+    monkeypatch.setattr(deployment, "_advance_transition_journal", advance)
+    monkeypatch.setattr(
+        deployment,
+        "_systemctl",
+        lambda _spec, verb, units: events.append((verb, tuple(units))),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_schema_gate",
+        lambda _release, slot: events.append(("schema", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_production_contract_gate",
+        lambda _release, slot: events.append(("contracts", slot)),
+    )
+    monkeypatch.setattr(deployment, "_commit_legacy_password_credentials", lambda _slot: None)
+
+    result = deployment._ensure_activation_schema_ready(
+        _spec(tmp_path), journal, target_release=tmp_path / "release"
+    )
+
+    assert result["phase"] == "schema_ready"
+    assert events == [
+        ("journal", "migrating"),
+        ("stop", tuple(reversed(deployment._slot_units("green")))),
+        ("stop", tuple(reversed(deployment._slot_units("blue")))),
+        ("schema", "green"),
+        ("contracts", "green"),
+        ("journal", "schema_ready"),
+    ]
+    assert all(
+        "ecorex-web.service" not in units
+        for verb, units in events
+        if verb == "stop"
+    )
+
+
 def test_legacy_commit_runs_only_after_both_writer_sets_are_fenced(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

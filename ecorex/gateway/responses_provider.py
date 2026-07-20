@@ -35,6 +35,7 @@ from .models import (
     TOOL_PROJECTION_BUDGET_VERSION,
     GatewayEvent,
     GatewayEventType,
+    GatewayAssistantMessageInput,
     GatewayFunctionCallOutputInput,
     GatewayModelPolicy,
     GatewayUserMessageInput,
@@ -460,6 +461,16 @@ class ManagedHTTPSResponsesProvider:
                                 "type": "input_text",
                                 "text": item.content,
                             }
+                        ],
+                    }
+                )
+            elif isinstance(item, GatewayAssistantMessageInput):
+                input_value.append(
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {"type": "output_text", "text": item.content}
                         ],
                     }
                 )

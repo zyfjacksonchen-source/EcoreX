@@ -80,7 +80,6 @@
 
 }
 
-:root,
 :root[data-theme="light"] {
   color-scheme: light;
 
@@ -132,6 +131,7 @@
 
 }
 
+:root,
 :root[data-theme="dark"] {
   color-scheme: dark;
 

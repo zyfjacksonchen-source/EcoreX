@@ -2391,6 +2391,10 @@ def _slot_api_units(slot: str) -> list[str]:
 def _stop_target_services(
     spec: CloudDeploymentSpec, state: Mapping[str, Any] | None
 ) -> None:
+    # Once a v1 slot is authoritative, subsequent v1-to-v1 transitions only
+    # fence the two v1 writer sets.  The retained v0.2.9.2 Web compatibility
+    # service is deliberately not a member of that transition and therefore
+    # remains available to users who have not upgraded yet.
     units: Iterable[str] = (
         reversed(_slot_units(str(state["active_slot"])))
         if state is not None

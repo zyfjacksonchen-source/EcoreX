@@ -103,7 +103,10 @@ class DynamicManagedResponsesProvider:
 
     async def public_catalog(self) -> list[dict[str, object]]:
         catalog = await asyncio.to_thread(self.source.active_public_catalog)
-        return [item for item in catalog if item.get("modality") == "chat"]
+        # The Gateway streams only chat requests, but this signed catalog also
+        # drives the Runtime's separate Image-service selector.  Filtering
+        # active image entries here made a healthy configuration appear absent.
+        return list(catalog)
 
     async def aclose(self) -> None:
         async with self._lock:

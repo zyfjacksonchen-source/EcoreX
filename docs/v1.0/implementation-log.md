@@ -6830,3 +6830,38 @@ failed executions, while a failure after a request crosses the child-process
 boundary remains an uncertain operation and retains human reconciliation. This
 preserves the safety invariant without creating a false conflict card. Product
 identity advances immutably to `1.0.6` for the repaired artifacts.
+
+## 2026-07-20 - v0.2.9.2 compatibility recovery and v1.0.7 usability repair
+
+Existing v0.2.9.2 users must not be forced onto an unusable v1 release. The
+retained legacy Web Runtime was restored as its own enabled service and its
+public version endpoint was verified against `0.2.9.2`. Its existing legacy
+route remains in place. Normal v1-to-v1 blue/green transitions now have an
+explicit regression guard: they fence only the current and candidate v1 slots;
+they never stop the retained legacy Web compatibility service. First migration
+continues to preserve its strict writer fence, so no two authoritative migration
+writers run during the one-time data import.
+
+The v1.0.7 candidate addresses two independent service-side usability faults.
+The managed model directory had incorrectly exposed only chat models, even when
+an active image-generation or image-edit model existed in Control Plane. It now
+returns all active model modalities to the Runtime catalog while retaining a
+separate chat-only streaming admission path. Separately, a new conversation
+Turn previously sent only its latest user input to the managed model. The worker
+now deterministically projects completed public user/assistant messages from
+the durable event store into the first request of a new Turn, with role
+preservation and bounded context budgets. Tool continuation requests still use
+their provider response handle and do not replay history.
+
+The update state also had an activation-edge defect: an already running
+`1.0.5` slot could retain an older `awaiting_user` record for the same `1.0.5`
+target and display a false self-update banner. Startup now clears every
+non-idle update record whose target equals the running product version. The
+WebUI independently suppresses any same-version stale projection, including in
+Settings, so a brief stale bootstrap response cannot reintroduce the banner.
+
+The product now defaults to the dark EcoreX/Codex-derived token set from the
+first CSS paint. An explicit persisted light choice remains respected. The
+compact theme action lives immediately to the left of the right-aligned share
+action in the conversation header; it uses the same frameless IconButton
+language and remains reachable even when sharing is unavailable.

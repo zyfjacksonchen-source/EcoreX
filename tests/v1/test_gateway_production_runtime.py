@@ -27,6 +27,7 @@ from ecorex.gateway import (
     SQLiteGatewayStore,
 )
 from ecorex.gateway.models import (
+    GatewayAssistantMessageInput,
     GatewayFunctionCallOutputInput,
     GatewayToolOutput,
     GatewayUserMessageInput,
@@ -633,6 +634,68 @@ def test_responses_adapter_preserves_ordered_tool_outputs_and_user_revisions() -
                 "call_id": "call-legacy",
                 "output": '{"ok":true}',
             }
+        ]
+        await client.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_responses_adapter_preserves_completed_assistant_history_roles() -> None:
+    async def scenario() -> None:
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda _request: httpx.Response(
+                    500, headers={"Content-Type": "application/json"}
+                )
+            ),
+            follow_redirects=False,
+            trust_env=False,
+        )
+        provider = ManagedHTTPSResponsesProvider(
+            origin="https://provider.ecorex.invalid",
+            allowed_origins=frozenset({"https://provider.ecorex.invalid"}),
+            model_mapping={"ecorex-chat": "gpt-5.6-sol"},
+            bearer_token=lambda: PROVIDER_TOKEN,
+            client=client,
+        )
+        principal = GatewayPrincipal(
+            subject="user-1",
+            account_id="account-1",
+            allowed_model_ids=frozenset({"ecorex-chat"}),
+            quota_period="2026-07",
+            request_limit=100,
+        )
+        values = _request().model_dump(mode="python")
+        values["input"] = None
+        values["input_items"] = [
+            GatewayUserMessageInput(message_id="message-1", content="列出 5 条标题"),
+            GatewayAssistantMessageInput(
+                message_id="message-2", content="1. 城市漫游 2. 海边周末"
+            ),
+            GatewayUserMessageInput(message_id="message-3", content="5"),
+        ]
+        request = ModelGatewayRequest.model_validate(values)
+
+        payload, _mapping = provider._payload(request, principal)
+
+        assert payload["input"] == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "列出 5 条标题"}],
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": "1. 城市漫游 2. 海边周末"}
+                ],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "5"}],
+            },
         ]
         await client.aclose()
 

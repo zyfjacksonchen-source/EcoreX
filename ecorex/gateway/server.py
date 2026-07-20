@@ -1889,7 +1889,7 @@ def create_managed_gateway_app(
                 status_code=503, detail="managed gateway authentication is unavailable"
             ) from None
 
-    async def active_chat_catalog() -> tuple[list[dict[str, object]], frozenset[str]]:
+    async def active_model_catalog() -> tuple[list[dict[str, object]], frozenset[str]]:
         if not callable(catalog_provider):
             raise RuntimeError("managed gateway catalog is unavailable")
         projected = await catalog_provider()
@@ -1902,7 +1902,11 @@ def create_managed_gateway_app(
                 raise RuntimeError("managed gateway catalog is invalid")
             if "api_key" in item or "secret" in item:
                 raise RuntimeError("managed gateway catalog contains secret material")
-            if item.get("modality") != "chat":
+            if item.get("modality") not in {
+                "chat",
+                "image_generation",
+                "image_edit",
+            }:
                 continue
             local_model_id = item.get("local_model_id")
             if (
@@ -1910,10 +1914,21 @@ def create_managed_gateway_app(
                 or _SAFE_MODEL_ID.fullmatch(local_model_id) is None
                 or local_model_id in model_ids
             ):
-                raise RuntimeError("managed gateway chat catalog is invalid")
+                raise RuntimeError("managed gateway catalog is invalid")
             model_ids.add(local_model_id)
             catalog.append(dict(item))
         return catalog, frozenset(model_ids)
+
+    async def active_chat_catalog() -> tuple[list[dict[str, object]], frozenset[str]]:
+        """Return the streamable subset without hiding image catalog entries."""
+
+        catalog, _model_ids = await active_model_catalog()
+        chat = [item for item in catalog if item.get("modality") == "chat"]
+        return chat, frozenset(
+            str(item["local_model_id"])
+            for item in chat
+            if isinstance(item.get("local_model_id"), str)
+        )
 
     @app.middleware("http")
     async def secure_transport(request: Request, call_next):
@@ -1986,7 +2001,7 @@ def create_managed_gateway_app(
         catalog: list[dict[str, object]] = []
         if dynamic_model_authority:
             try:
-                active_catalog, active_ids = await active_chat_catalog()
+                active_catalog, active_ids = await active_model_catalog()
                 visible = sorted(active_ids & current.allowed_model_ids)
                 catalog = [
                     item

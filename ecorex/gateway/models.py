@@ -228,6 +228,25 @@ class GatewayUserMessageInput(GatewayModel):
         return self
 
 
+class GatewayAssistantMessageInput(GatewayModel):
+    """One completed assistant message replayed from durable Thread history.
+
+    The Runtime owns ``message_id`` and only reconstructs this input from
+    completed public message Items.  Keeping it distinct from user input
+    preserves normal dialogue roles for a follow-up such as ``5``.
+    """
+
+    type: Literal["assistant_message"] = "assistant_message"
+    message_id: str = Field(min_length=1, max_length=256)
+    content: str = Field(min_length=1, max_length=1_000_000)
+
+    @model_validator(mode="after")
+    def validate_message(self) -> "GatewayAssistantMessageInput":
+        _validate_id(self.message_id, "message_id")
+        _validate_json_value(self.content, "assistant message")
+        return self
+
+
 class GatewayFunctionCallOutputInput(GatewayModel):
     """One result returned to a function call from the previous response."""
 
@@ -243,7 +262,11 @@ class GatewayFunctionCallOutputInput(GatewayModel):
 
 
 GatewayInputItem = Annotated[
-    GatewayUserMessageInput | GatewayFunctionCallOutputInput,
+    (
+        GatewayUserMessageInput
+        | GatewayAssistantMessageInput
+        | GatewayFunctionCallOutputInput
+    ),
     Field(discriminator="type"),
 ]
 
@@ -386,17 +409,19 @@ class ModelGatewayRequest(GatewayModel):
                 )
             message_ids: list[str] = []
             typed_output_ids: list[str] = []
-            user_message_seen = False
-            total_user_characters = 0
+            message_seen = False
+            total_message_characters = 0
             for item in self.input_items:
-                if isinstance(item, GatewayUserMessageInput):
-                    user_message_seen = True
+                if isinstance(
+                    item, (GatewayUserMessageInput, GatewayAssistantMessageInput)
+                ):
+                    message_seen = True
                     message_ids.append(item.message_id)
-                    total_user_characters += len(item.content)
+                    total_message_characters += len(item.content)
                 else:
-                    if user_message_seen:
+                    if message_seen:
                         raise ValueError(
-                            "function call outputs must precede user messages"
+                            "function call outputs must precede conversation messages"
                         )
                     typed_output_ids.append(item.tool_call_id)
             if len(message_ids) != len(set(message_ids)):
@@ -407,8 +432,8 @@ class ModelGatewayRequest(GatewayModel):
                 raise ValueError("gateway input item IDs must be unique")
             if len(typed_output_ids) > 128:
                 raise ValueError("too many function call outputs")
-            if total_user_characters > 1_000_000:
-                raise ValueError("user message input is oversized")
+            if total_message_characters > 1_000_000:
+                raise ValueError("conversation message input is oversized")
             if typed_output_ids and self.previous_response_id is None:
                 raise ValueError("tool outputs require a previous response")
             _validate_json_value(

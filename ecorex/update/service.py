@@ -121,10 +121,11 @@ class UpdateStateRepository:
                 "SELECT * FROM runtime_update_state WHERE singleton = 1"
             ).fetchone()
             self._from_row(row)
-            if (
-                row["state"] == "activating"
-                and row["target_version"] == self.current_version
-            ):
+            # A Runtime may restart after Bootstrap has already switched the
+            # slot but before the old process persists its final state. The
+            # running product version is authoritative here: no non-idle
+            # state for that exact version can describe a real update.
+            if row["target_version"] == self.current_version and row["state"] != "idle":
                 self._set_in_transaction(
                     connection,
                     state="idle",

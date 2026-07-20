@@ -31,6 +31,7 @@ from ecorex.gateway import (
     TOOL_PROJECTION_BUDGET_VERSION,
     GatewayEvent,
     GatewayEventType,
+    GatewayAssistantMessageInput,
     GatewayFunctionCallOutputInput,
     GatewayModelPolicy,
     GatewayToolOutput,
@@ -102,6 +103,16 @@ class _ToolProjection:
     @property
     def projected_tool_ids(self) -> tuple[str, ...]:
         return self.direct_tool_ids + self.disclosed_tool_ids
+
+
+@dataclass(frozen=True, slots=True)
+class _ConversationContext:
+    """Bounded, role-preserving public history for a new model Turn."""
+
+    items: tuple[GatewayUserMessageInput | GatewayAssistantMessageInput, ...]
+    source_item_count: int
+    character_count: int
+    truncated: bool
 
 
 class _GatewayResponseFailure(ModelGatewayError):
@@ -177,6 +188,10 @@ class _CheckpointLeasePulse:
 
 
 class AgentTurnWorker:
+    _MAX_THREAD_CONTEXT_ITEMS = 96
+    _MAX_THREAD_CONTEXT_CHARACTERS = 192_000
+    _MAX_THREAD_CONTEXT_MESSAGE_CHARACTERS = 48_000
+
     def __init__(
         self,
         kernel: RuntimeKernel,
@@ -1401,12 +1416,32 @@ class AgentTurnWorker:
         legacy_input: str | None = input_with_attachments(turn.input, turn.metadata)
         legacy_tool_outputs = tool_outputs
         input_items = None
+        # A response chain is authoritative for an in-Turn tool continuation.
+        # A fresh Turn has no such chain, so it must rebuild completed public
+        # Thread history rather than silently sending only the latest input.
+        conversation = (
+            self._thread_conversation_context(
+                thread_id=turn.thread_id,
+                current_turn_id=turn_id,
+            )
+            if previous_response_id is None and not tool_outputs
+            else _ConversationContext((), 0, 0, False)
+        )
+        current_items: list[GatewayUserMessageInput] = []
         if input_revisions:
+            current_items = [
+                GatewayUserMessageInput(
+                    message_id=revision.revision_id,
+                    content=input_with_attachments(revision.input, revision.metadata),
+                )
+                for revision in input_revisions
+            ]
             if (
                 len(input_revisions) == 1
                 and input_revisions[0].ordinal == 0
                 and previous_response_id is None
                 and not tool_outputs
+                and not conversation.items
             ):
                 legacy_input = input_with_attachments(
                     input_revisions[0].input,
@@ -1421,16 +1456,20 @@ class AgentTurnWorker:
                         )
                         for output in tool_outputs
                     ),
-                    *(
-                        GatewayUserMessageInput(
-                            message_id=revision.revision_id,
-                            content=input_with_attachments(revision.input, revision.metadata),
-                        )
-                        for revision in input_revisions
-                    ),
+                    *conversation.items,
+                    *current_items,
                 ]
                 legacy_input = None
                 legacy_tool_outputs = []
+        elif conversation.items:
+            input_items = [
+                *conversation.items,
+                GatewayUserMessageInput(
+                    message_id=f"{turn.turn_id}:initial",
+                    content=legacy_input,
+                ),
+            ]
+            legacy_input = None
         return ModelGatewayRequest(
             # A transport replay inside one leased attempt must retain its ID,
             # while an explicitly scheduled retry is a new billable/provider
@@ -1455,6 +1494,78 @@ class AgentTurnWorker:
             suppressed_tool_ids=list(tool_projection.suppressed_tool_ids),
             previous_response_id=previous_response_id,
             tool_outputs=legacy_tool_outputs,
+        )
+
+    def _thread_conversation_context(
+        self,
+        *,
+        thread_id: str,
+        current_turn_id: str,
+    ) -> _ConversationContext:
+        """Project completed public dialogue in stable, bounded order.
+
+        Tool payloads, reasoning and unfinished/failed assistant text are
+        excluded.  The newest complete messages win under a deterministic
+        budget so a long office conversation remains executable within the
+        selected model's context window.
+        """
+
+        with self.kernel.database.reader() as connection:
+            rows = connection.execute(
+                "SELECT item_id,status,content_json FROM items "
+                "WHERE thread_id=? AND turn_id<>? AND kind=? AND status=? "
+                "ORDER BY created_at DESC,item_id DESC LIMIT ?",
+                (
+                    thread_id,
+                    current_turn_id,
+                    ItemKind.MESSAGE.value,
+                    ItemStatus.COMPLETED.value,
+                    self._MAX_THREAD_CONTEXT_ITEMS * 4,
+                ),
+            ).fetchall()
+
+        selected: list[GatewayUserMessageInput | GatewayAssistantMessageInput] = []
+        character_count = 0
+        source_item_count = 0
+        truncated = False
+        for row in rows:
+            content = json_loads(row["content_json"], {})
+            role = content.get("role")
+            text = content.get("text")
+            if role not in {"user", "assistant"} or not isinstance(text, str):
+                continue
+            text = text.strip()
+            if not text:
+                continue
+            source_item_count += 1
+            if len(text) > self._MAX_THREAD_CONTEXT_MESSAGE_CHARACTERS:
+                text = (
+                    "[较早内容因上下文窗口限制已省略]\n"
+                    + text[-self._MAX_THREAD_CONTEXT_MESSAGE_CHARACTERS :]
+                )
+                truncated = True
+            if (
+                len(selected) >= self._MAX_THREAD_CONTEXT_ITEMS
+                or character_count + len(text) > self._MAX_THREAD_CONTEXT_CHARACTERS
+            ):
+                truncated = True
+                continue
+            item = (
+                GatewayUserMessageInput(message_id=str(row["item_id"]), content=text)
+                if role == "user"
+                else GatewayAssistantMessageInput(
+                    message_id=str(row["item_id"]), content=text
+                )
+            )
+            selected.append(item)
+            character_count += len(text)
+
+        selected.reverse()
+        return _ConversationContext(
+            items=tuple(selected),
+            source_item_count=source_item_count,
+            character_count=character_count,
+            truncated=truncated,
         )
 
     def _authorized_tool_description(

@@ -41,9 +41,14 @@ function contrast(left, right) {
 }
 
 const modes = {
-  light: block(':root,\n:root[data-theme="light"] {', ':root[data-theme="dark"] {'),
-  dark: block(':root[data-theme="dark"] {', '@media (forced-colors: active)'),
+  light: block(':root[data-theme="light"] {', ':root,\n:root[data-theme="dark"] {'),
+  dark: block(':root,\n:root[data-theme="dark"] {', '@media (forced-colors: active)'),
 };
+
+test("the first paint defaults to the dark EcoreX token set", () => {
+  assert.match(css, /:root,\n:root\[data-theme="dark"\]\s*\{/);
+  assert.doesNotMatch(css, /:root,\n:root\[data-theme="light"\]\s*\{/);
+});
 
 for (const [mode, source] of Object.entries(modes)) {
   test(`${mode} design tokens preserve body, caption, accent, and two-ring focus contrast`, () => {

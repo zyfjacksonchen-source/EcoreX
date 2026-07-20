@@ -19,6 +19,7 @@ from .models import (
     MAX_TOOL_SCHEMA_BATCH_BYTES,
     TOOL_PROJECTION_BUDGET_VERSION,
     GatewayAccountUsageProjection,
+    GatewayAssistantMessageInput,
     GatewayEvent,
     GatewayEventType,
     GatewayContextManagementPolicy,
@@ -76,6 +77,7 @@ from .handoff import ChatHandoffAuthority, ChatModelRevision, DurableChatHandoff
 __all__ = [
     "GatewayAuthenticationError",
     "GatewayAccountUsageProjection",
+    "GatewayAssistantMessageInput",
     "GatewayAuthenticator",
     "GatewayCompletedUsageFact",
     "GatewayCredentialProvider",
