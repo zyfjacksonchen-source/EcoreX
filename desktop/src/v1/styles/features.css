@@ -1312,17 +1312,29 @@
 
 .ex-timeline-jump {
   position: absolute;
-  right: var(--space-5);
-  bottom: var(--space-5);
+  left: 50%;
+  bottom: var(--space-3);
   z-index: var(--z-sticky);
+  transform: translateX(-50%);
   pointer-events: none;
 }
 
 .ex-timeline-jump-button {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  display: grid;
+  place-items: center;
+  color: var(--color-ink-muted);
+  background: var(--color-overlay-surface);
+  box-shadow: var(--elevation-popover);
   pointer-events: auto;
+}
+
+.ex-timeline-jump-button:hover {
+  color: var(--color-ink);
+  background: var(--color-hover);
 }
 
 .ex-timeline-jump-button svg {
@@ -1561,6 +1573,156 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+}
+
+.ex-input-attachment {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: min(100%, 280px);
+  min-height: 44px;
+  padding: var(--space-1);
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-ink);
+  background: var(--color-raised);
+}
+
+.ex-message-attachments .ex-input-attachment {
+  max-width: 260px;
+}
+
+.ex-input-attachment:hover,
+.ex-input-attachment:focus-within {
+  border-color: var(--color-rule-strong);
+}
+
+.ex-input-attachment.is-file > svg,
+.ex-input-attachment.is-uploading > svg:first-child,
+.ex-input-attachment.is-uploading > img,
+.ex-input-attachment-preview-trigger {
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: var(--radius-compact);
+  object-fit: cover;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  color: var(--color-ink-muted);
+  background: var(--color-surface);
+}
+
+.ex-input-attachment.is-file > svg,
+.ex-input-attachment.is-uploading > svg:first-child {
+  padding: 10px;
+}
+
+.ex-input-attachment-preview-trigger img,
+.ex-input-attachment.is-uploading > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ex-input-attachment-preview-trigger:disabled {
+  cursor: wait;
+}
+
+.ex-input-attachment-details {
+  min-width: 0;
+  display: grid;
+  align-content: center;
+}
+
+.ex-input-attachment-details > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
+.ex-input-attachment-status {
+  color: var(--color-ink-subtle);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
+.ex-input-attachment > button:last-child {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-compact);
+  display: grid;
+  place-items: center;
+  color: var(--color-ink-muted);
+  background: transparent;
+}
+
+.ex-input-attachment > button:last-child:hover {
+  color: var(--color-ink);
+  background: var(--color-hover);
+}
+
+.ex-input-attachment > button:last-child svg,
+.ex-attachment-spinner {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+}
+
+.ex-attachment-spinner {
+  animation: ex-connector-spin var(--duration-progress) linear infinite;
+}
+
+.ex-attachment-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: var(--color-overlay);
+}
+
+.ex-attachment-preview-dialog {
+  box-sizing: border-box;
+  position: fixed;
+  inset: var(--space-3);
+  z-index: var(--z-modal);
+  border: 1px solid var(--color-rule-strong);
+  border-radius: var(--radius-dialog);
+  overflow: clip;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  color: var(--color-ink);
+  background: var(--color-overlay-surface);
+  box-shadow: var(--elevation-dialog);
+}
+
+.ex-attachment-preview-dialog > h2 {
+  margin: 0;
+  padding: var(--space-3) 48px var(--space-3) var(--space-4);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-title-size);
+  line-height: var(--text-title-line);
+}
+
+.ex-attachment-preview-dialog > img {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--space-3);
+  object-fit: contain;
+}
+
+.ex-attachment-preview-close {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
 }
 
 .ex-composer-attachment {
@@ -2012,8 +2174,8 @@
 
 .ex-connector-popover {
   box-sizing: border-box;
-  width: min(440px, calc(100dvi - var(--space-6)));
-  max-height: min(680px, calc(100dvh - var(--space-6)));
+  width: min(360px, calc(100dvi - var(--space-6)));
+  max-height: min(520px, calc(100dvh - var(--space-6)));
   display: flex;
   flex-direction: column;
   overflow: clip;
@@ -2119,18 +2281,18 @@
 }
 
 .ex-connector-list {
-  margin-top: var(--space-3);
+  margin-top: var(--space-2);
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 
 .ex-connector-section + .ex-connector-section {
-  margin-top: var(--space-4);
+  margin-top: var(--space-3);
 }
 
 .ex-connector-section-heading {
-  padding: 0 var(--space-2) var(--space-2);
+  padding: 0 var(--space-1) var(--space-1);
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -2149,16 +2311,16 @@
 }
 
 .ex-connector-row {
-  padding: var(--space-3) var(--space-2);
+  padding: var(--space-2) var(--space-1);
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
+  grid-template-columns: 28px minmax(0, 1fr);
   align-items: start;
-  gap: var(--space-3);
+  gap: var(--space-2);
 }
 
 .ex-connector-icon {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border-radius: var(--radius-compact);
   display: grid;
   place-items: center;
@@ -2177,11 +2339,11 @@
 }
 
 .ex-connector-title {
-  min-height: 24px;
+  min-height: 20px;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--space-2);
+  gap: var(--space-1);
 }
 
 .ex-connector-title > strong {
@@ -2210,7 +2372,7 @@
 .ex-connector-status {
   width: max-content;
   max-width: 100%;
-  padding: var(--space-1) var(--space-2);
+  padding: 0 var(--space-2);
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
@@ -2245,8 +2407,8 @@
 }
 
 .ex-connector-instance {
-  margin-top: var(--space-3);
-  padding-top: var(--space-3);
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
   border-top: 1px solid var(--color-rule);
   display: grid;
   gap: var(--space-2);

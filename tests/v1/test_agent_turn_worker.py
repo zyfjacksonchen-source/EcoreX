@@ -304,6 +304,105 @@ def _complete_discovery_facts(kernel, composition, created, worker, *, malformed
     return authority
 
 
+def test_uploaded_image_reaches_gateway_as_bounded_rendition_and_is_not_repeated(
+    tmp_path,
+) -> None:
+    import base64
+    import hashlib
+    import io
+
+    from PIL import Image
+
+    app = create_app(
+        settings=RuntimeSettings(
+            database_path=tmp_path / "runtime.db",
+            installed_capability_packs=frozenset({"image"}),
+        )
+    )
+    kernel = app.state.runtime
+    composition = app.state.runtime_composition
+    attachment_service = app.state.input_attachment_service
+    source = io.BytesIO()
+    Image.new("RGB", (3200, 1800), (245, 120, 32)).save(source, format="PNG")
+    source_bytes = source.getvalue()
+    uploaded = attachment_service.upload(
+        source_bytes,
+        filename="large-reference.png",
+        mime_type="image/png",
+        client_request_id="worker-visual-upload",
+    )
+    thread = kernel.create_thread(CreateThreadRequest(title="visual worker"))
+    prepared = composition.prepare_turn(
+        CreateTurnRequest(
+            input="这张图是什么？",
+            metadata={"input_attachments": [uploaded.model_dump(mode="json")]},
+            client_message_id="worker-visual-message",
+        )
+    )
+    created = kernel.create_turn(
+        thread.thread_id,
+        prepared.request,
+        snapshot_context=prepared.snapshot_context,
+    )
+    gateway = ScriptedGateway(
+        [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "resp_visual_tool",
+                    "tool_call_id": "call_visual_attachment",
+                    "tool_name": "input_attachment_read",
+                    "arguments": {"attachment_id": uploaded.attachment_id},
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "output_text.delta",
+                    "response_id": "resp_visual_final",
+                    "delta": "这是一张橙色的横向图片。",
+                },
+                {
+                    "seq": 2,
+                    "event_type": "response.completed",
+                    "response_id": "resp_visual_final",
+                },
+            ],
+        ]
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+        input_attachments=attachment_service,
+    )
+
+    result = asyncio.run(worker.run_once("worker-visual"))
+
+    assert result.outcome is WorkerOutcome.COMPLETED
+    assert len(gateway.requests) == 2
+    first_images = [
+        image
+        for item in gateway.requests[0].ordered_input_items()
+        if getattr(item, "type", None) == "user_message"
+        for image in item.images
+    ]
+    assert len(first_images) == 1, gateway.requests[0].model_dump(mode="json")
+    rendition = base64.b64decode(first_images[0].data_base64, validate=True)
+    assert first_images[0].mime_type == "image/jpeg"
+    assert len(rendition) <= 384 * 1024
+    assert first_images[0].sha256 == hashlib.sha256(rendition).hexdigest()
+    assert first_images[0].source_sha256 == hashlib.sha256(source_bytes).hexdigest()
+    second_images = [
+        image
+        for item in gateway.requests[1].ordered_input_items()
+        if getattr(item, "type", None) == "user_message"
+        for image in item.images
+    ]
+    assert second_images == []
+
+
 def test_worker_streams_message_and_atomically_finishes_turn_job(tmp_path) -> None:
     app, kernel, composition, thread, created = _runtime(tmp_path, input_text="hello")
     del app
@@ -658,6 +757,105 @@ def test_worker_keeps_image_capability_ranked_and_other_tools_discoverable(
     assert {"imagegen", "fetch", "vision", "cdp", "shell"}.issubset(
         set(request.deferred_tool_ids)
     )
+
+
+def test_blocked_image_turn_releases_worker_for_ordinary_turn(tmp_path) -> None:
+    async def scenario() -> None:
+        image_started = asyncio.Event()
+        release_image = asyncio.Event()
+
+        async def imagegen(arguments, context):
+            del context
+            image_started.set()
+            await release_image.wait()
+            return {
+                "artifact_id": "artifact_image",
+                "instruction": arguments["instruction"],
+            }
+
+        app, kernel, composition, _thread, image_created = _runtime(
+            tmp_path,
+            input_text="Use imagegen to create a poster",
+            installed_capability_packs=frozenset({"image"}),
+            capability_handlers={"imagegen": imagegen},
+        )
+        del app
+        gateway = ScriptedGateway(
+            [
+                [
+                    {
+                        "seq": 1,
+                        "event_type": "tool_call.requested",
+                        "response_id": "resp_image",
+                        "tool_call_id": "call_image_blocked",
+                        "tool_name": "imagegen",
+                        "arguments": {"instruction": "orange office poster"},
+                    }
+                ],
+                [
+                    {
+                        "seq": 1,
+                        "event_type": "response.completed",
+                        "response_id": "resp_ordinary",
+                    }
+                ],
+                [
+                    {
+                        "seq": 1,
+                        "event_type": "response.completed",
+                        "response_id": "resp_image_done",
+                    }
+                ],
+            ]
+        )
+        worker = AgentTurnWorker(
+            kernel,
+            gateway=gateway,
+            capabilities=composition.capability_service,
+            image_execution_concurrency=2,
+            image_execution_queue_capacity=2,
+        )
+        image_result = await worker.run_once("worker-image")
+        assert image_result.outcome is WorkerOutcome.RETRY_SCHEDULED
+        assert image_result.reason == "image_execution_pending"
+        await asyncio.wait_for(image_started.wait(), timeout=1)
+
+        ordinary_thread = kernel.create_thread(CreateThreadRequest(title="ordinary"))
+        ordinary_prepared = composition.prepare_turn(
+            CreateTurnRequest(
+                input="Answer this ordinary office question",
+                agent_model_id="ecorex-chat",
+                client_message_id="ordinary-while-images-block",
+            )
+        )
+        ordinary_created = kernel.create_turn(
+            ordinary_thread.thread_id,
+            ordinary_prepared.request,
+            snapshot_context=ordinary_prepared.snapshot_context,
+        )
+
+        ordinary_result = await asyncio.wait_for(
+            worker.run_once("worker-ordinary"), timeout=1
+        )
+        assert ordinary_result.outcome is WorkerOutcome.COMPLETED
+        assert ordinary_result.turn_id == ordinary_created.turn.turn_id
+        assert kernel.jobs.get(image_created.job.job_id).status.value == "retry_scheduled"
+
+        release_image.set()
+        execution_id = worker._execution_id(
+            image_created.turn.turn_id, "call_image_blocked"
+        )
+        for _ in range(100):
+            if worker.tool_executions.get(execution_id).status == "completed":
+                break
+            await asyncio.sleep(0.01)
+        assert worker.tool_executions.get(execution_id).status == "completed"
+        await asyncio.sleep(1.01)
+        resumed = await worker.run_once("worker-image-resumed")
+        assert resumed.outcome is WorkerOutcome.COMPLETED
+        await worker.close()
+
+    asyncio.run(scenario())
 
 
 def test_worker_search_discloses_exact_deferred_tool_and_invokes_it(tmp_path) -> None:

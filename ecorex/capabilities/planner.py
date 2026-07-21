@@ -31,6 +31,34 @@ _MAX_DECISION_TRACE_ITEMS = 128
 _MAX_EXPLICIT_TOOLS = 64
 _MAX_EXPLICIT_REFERENCE_BYTES = 512
 _EXPLICIT_REFERENCE_SCORE = MAX_ROUTING_SCORE_BOOST + 1_000
+_INTENT_REFERENCE_SCORE = 500
+
+
+def _intent_exact_reference(intent: str, spec: ToolSpec) -> str | None:
+    """Return an exact Core tool/alias mention that expresses usable intent.
+
+    This is intentionally bounded and conservative. It is not fuzzy intent
+    classification: it only recognizes catalog-owned names and rejects local
+    negation/failure-discussion contexts. The result affects exposure, never
+    availability or governance.
+    """
+
+    normalized = normalize_reference(intent)
+    blockers = (
+        "不要", "别", "無需", "无需", "不能", "无法",
+        "do-not", "don-t", "dont", "without", "failed", "broken",
+    )
+    for reference in spec.references:
+        if len(reference) < 3:
+            continue
+        start = normalized.find(reference)
+        while start >= 0:
+            before = normalized[max(0, start - 24):start]
+            after = normalized[start + len(reference):start + len(reference) + 24]
+            if not any(token in before or token in after for token in blockers):
+                return reference
+            start = normalized.find(reference, start + len(reference))
+    return None
 
 
 def _bounded_unique(values: list[str]) -> tuple[str, ...]:
@@ -253,17 +281,30 @@ class CapabilityPlanner:
             # stacking boosts by repeating vocabulary or metadata facets.
             if accepted_route_boosts:
                 score += max(accepted_route_boosts)
+            intent_reference = _intent_exact_reference(intent, spec)
+            route_reference_suppressed = (
+                bool(route_evidence)
+                and not accepted_route_boosts
+                and any(evidence.suppressed_by for evidence in route_evidence)
+            )
+            if (
+                intent_reference is not None
+                and spec.tool_id not in explicit_ids
+                and exposure is not Exposure.HIDDEN
+                and not route_reference_suppressed
+            ):
+                score += _INTENT_REFERENCE_SCORE
+                exposure = Exposure.DIRECT
+                reasons.append("intent_exact_reference")
+                matched_evidence.insert(
+                    0, f"intent_exact_reference:{intent_reference}"
+                )
             if spec.tool_id in explicit_ids:
                 # Explicit eligible tool choice is the strongest routing fact.
                 # The constant is defined above the maximum possible policy
                 # boost so a semantic hint can never override the user's exact
                 # tool selection.
                 score += _EXPLICIT_REFERENCE_SCORE
-                route_reference_suppressed = (
-                    bool(route_evidence)
-                    and not accepted_route_boosts
-                    and any(evidence.suppressed_by for evidence in route_evidence)
-                )
                 if exposure is not Exposure.HIDDEN and not route_reference_suppressed:
                     exposure = Exposure.DIRECT
                 reasons.append("explicit_reference")

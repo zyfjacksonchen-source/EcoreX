@@ -274,7 +274,19 @@ class ManagedHTTPSChatCompletionsProvider:
                 messages.append(prior.assistant_message())
         for item in request.ordered_input_items():
             if isinstance(item, GatewayUserMessageInput):
-                messages.append({"role": "user", "content": item.content})
+                content: str | list[dict[str, Any]] = item.content
+                if item.images:
+                    content = [{"type": "text", "text": item.content}]
+                    content.extend(
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{image.mime_type};base64,{image.data_base64}"
+                            },
+                        }
+                        for image in item.images
+                    )
+                messages.append({"role": "user", "content": content})
             elif isinstance(item, GatewayAssistantMessageInput):
                 messages.append({"role": "assistant", "content": item.content})
             elif isinstance(item, GatewayFunctionCallOutputInput):

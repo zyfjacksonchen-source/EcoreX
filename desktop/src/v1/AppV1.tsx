@@ -114,7 +114,7 @@ const DISMISSED_UPDATE_BANNERS_KEY = "ecorex-dismissed-update-banners";
 
 function initialDismissedUpdateBanners(): string[] {
   try {
-    const value = JSON.parse(window.sessionStorage.getItem(DISMISSED_UPDATE_BANNERS_KEY) ?? "[]");
+    const value = JSON.parse(window.localStorage.getItem(DISMISSED_UPDATE_BANNERS_KEY) ?? "[]");
     return Array.isArray(value)
       ? value.filter((item): item is string => typeof item === "string")
       : [];
@@ -373,7 +373,12 @@ export function AppV1() {
           ? `正在后台准备 EcoreX ${update.target_version ?? "新版"}…`
           : null;
   const updateBannerKey = updateMessage && update
-    ? `${update.target_version ?? "unknown"}:${update.state}`
+    ? (update.release_id && update.build_digest
+        ? `${update.release_id}:${update.build_digest}`
+        : update.release_id ?? update.build_digest)
+      ?? update.target_version
+      ?? update.transaction_id
+      ?? "unknown-update"
     : null;
   const updateBannerVisible = Boolean(
     updateMessage
@@ -384,9 +389,9 @@ export function AppV1() {
     if (!updateBannerKey) return;
     setDismissedUpdateBanners((current) => {
       if (current.includes(updateBannerKey)) return current;
-      const next = [...current, updateBannerKey];
+      const next = [...current, updateBannerKey].slice(-32);
       try {
-        window.sessionStorage.setItem(DISMISSED_UPDATE_BANNERS_KEY, JSON.stringify(next));
+        window.localStorage.setItem(DISMISSED_UPDATE_BANNERS_KEY, JSON.stringify(next));
       } catch {
         // In-memory dismissal still works when storage is unavailable.
       }
@@ -542,6 +547,7 @@ export function AppV1() {
       }}
       onSend={runtime.sendMessage}
       onUploadAttachment={runtime.uploadInputAttachment}
+      onLoadAttachment={runtime.loadInputAttachment}
       onInterrupt={() => void runtime.interrupt()}
     />
   );
@@ -768,6 +774,7 @@ export function AppV1() {
               onSelectConversationProject={runtime.newTask}
               onPickProject={runtime.pickProject}
               newConversationComposer={isNewConversation ? composer : null}
+              onLoadAttachment={runtime.loadInputAttachment}
             />
           </section>
 

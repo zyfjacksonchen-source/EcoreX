@@ -54,6 +54,7 @@ from ecorex.server import (
 )
 from ecorex.server.cli import (
     ProductRuntimeExitCode,
+    _load_product_runtime_for_cli,
     build_product_runtime_server,
     main as product_main,
 )
@@ -95,6 +96,35 @@ from ecorex.integration.sandbox import (
 ACCESS = "managed-access-token-entrypoint-001"
 REFRESH = "managed-refresh-token-entrypoint-001"
 ORIGIN = "http://127.0.0.1:8765"
+
+
+def test_product_cli_injects_production_signed_pack_adapter_resolver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Release blocker: the packaged CLI must not load Packs as metadata only."""
+
+    resolver = object()
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "ecorex.server.cli.create_production_pack_adapter_resolver",
+        lambda: resolver,
+    )
+
+    def fake_loader(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr("ecorex.server.cli.load_product_runtime", fake_loader)
+
+    result = _load_product_runtime_for_cli(host="127.0.0.1", port=8765)
+
+    assert result is not None
+    assert captured == {
+        "host": "127.0.0.1",
+        "port": 8765,
+        "pack_adapter_resolver": resolver,
+    }
 
 
 def _logical_database_snapshot(path: Path) -> tuple:
@@ -293,8 +323,8 @@ def _config(
             "supervisor_poll_seconds": 1,
         },
         "update": {
-            "release_feed_endpoint": "https://control.example/v1/releases/eligible",
-            "signal_endpoint": "wss://control.example/v1/updates/events",
+            "release_feed_endpoint": "https://control.example/api/v1/releases/latest",
+            "signal_endpoint": "wss://control.example/api/v1/client/updates/ws",
             "control_plane_hosts": ["control.example"],
             "artifact_hosts": [
                 "cdn.example",
@@ -1764,6 +1794,36 @@ def test_config_rejects_credentials_unknown_fields_and_unsafe_paths(
     raw["paths"]["database"] = "../outside.sqlite3"
     payload = json.dumps(raw, sort_keys=True, separators=(",", ":")).encode()
     with pytest.raises(ProductRuntimeConfigurationError, match="relative path"):
+        ProductRuntimeConfig.from_bytes(payload)
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "message"),
+    (
+        (
+            "release_feed_endpoint",
+            "https://control.example/ecorex-agent/api/v1/releases/eligible",
+            "canonical Control Plane release path",
+        ),
+        (
+            "signal_endpoint",
+            "wss://control.example/ecorex-agent/api/v1/updates/events",
+            "canonical Control Plane update signal path",
+        ),
+    ),
+)
+def test_config_rejects_noncanonical_update_paths(
+    tmp_path: Path,
+    key: str,
+    value: str,
+    message: str,
+) -> None:
+    product = _stage_product(tmp_path)
+    raw = json.loads(product["config"].read_text(encoding="utf-8"))
+    raw["update"][key] = value
+    payload = json.dumps(raw, sort_keys=True, separators=(",", ":")).encode()
+
+    with pytest.raises(ProductRuntimeConfigurationError, match=message):
         ProductRuntimeConfig.from_bytes(payload)
 
 

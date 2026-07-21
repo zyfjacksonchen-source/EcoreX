@@ -13,6 +13,7 @@ from ecorex.capabilities import (
     ManagedModelSpec,
     ModelModality,
     RuntimeAvailability,
+    UnknownModelError,
 )
 from ecorex.protocol import CreateTurnRequest
 from ecorex.runtime import (
@@ -36,7 +37,7 @@ def _client(tmp_path):
             runtime_bearer_token=TOKEN,
             csrf_token=CSRF,
             webui_origins=(ORIGIN,),
-            installed_capability_packs=frozenset({"image", "sandbox"}),
+            installed_capability_packs=frozenset({"image", "ocr", "sandbox"}),
             capability_handlers={
                 "imagegen": lambda arguments, context: {"ok": True},
                 "vision": lambda arguments: {"ok": True},
@@ -129,7 +130,7 @@ def test_bootstrap_and_turns_are_generated_from_backend_catalogs(tmp_path) -> No
     plan = CapabilitySnapshotRepository(tmp_path / "runtime.db").get(capability_id)
     decisions = {decision.tool_id: decision for decision in plan.decisions}
     assert set(decisions) == {
-        "read", "fetch", "vision", "cdp", "shell", "imagegen",
+        "read", "fetch", "vision", "ocr", "cdp", "shell", "imagegen",
         "skill_search", "skill_read", "tool_search", "tool_describe",
         "connector_search", "connector_describe", "connector_read",
         "connector_write", "artifact_read", "input_attachment_read",
@@ -158,7 +159,6 @@ def test_bootstrap_and_turns_are_generated_from_backend_catalogs(tmp_path) -> No
     }
     assert plan.direct[0].tool_id == "shell"
     assert plan.deferred[0].tool_id == "imagegen"
-
     snapshots = RuntimeSnapshotRepository(tmp_path / "runtime.db")
     config = snapshots.get(config_id)
     assert config.kind == "config"
@@ -179,6 +179,43 @@ def test_bootstrap_and_turns_are_generated_from_backend_catalogs(tmp_path) -> No
     )
     assert app.state.runtime_composition.model_catalog.snapshot_id == bootstrap["models"]["snapshot_id"]
 
+
+def test_bound_image_attachment_promotes_reader_vision_and_ocr(tmp_path) -> None:
+    app, client = _client(tmp_path)
+    uploaded = client.post(
+        "/api/v1/input-attachments",
+        headers=_headers(mutation=True),
+        files={"file": ("screen.png", b"\x89PNG\r\n\x1a\nfixture", "image/png")},
+        data={"client_request_id": "image-attachment-runtime-direct"},
+    )
+    assert uploaded.status_code == 201
+    thread = client.post(
+        "/api/v1/threads", json={}, headers=_headers(mutation=True)
+    ).json()
+    turn = client.post(
+        f"/api/v1/threads/{thread['thread_id']}/turns",
+        headers=_headers(mutation=True),
+        json={
+            "input": "请识别这张图片里的内容",
+            "attachment_ids": [uploaded.json()["attachment_id"]],
+            "client_message_id": "image-attachment-message",
+        },
+    )
+    assert turn.status_code == 202
+    events = client.get(
+        f"/api/v1/threads/{thread['thread_id']}/events", headers=_headers()
+    ).json()["events"]
+    snapshot_id = next(
+        event["capability_snapshot_id"]
+        for event in events
+        if event.get("turn_id") == turn.json()["turn"]["turn_id"]
+    )
+    plan = CapabilitySnapshotRepository(tmp_path / "runtime.db").get(snapshot_id)
+    for tool_id in ("input_attachment_read", "vision", "ocr"):
+        decision = plan.decision(tool_id)
+        assert decision is not None and decision.eligible
+        assert decision.exposure is Exposure.DIRECT
+        assert "runtime_context_required" in decision.reason_codes
 
 def test_projection_only_composition_does_not_publish_execution_authority(
     tmp_path,
@@ -450,6 +487,145 @@ def test_chat_only_model_snapshot_hides_image_tools_before_invocation(tmp_path) 
         "tool_search",
         "tool_describe",
     }
+
+
+def test_model_catalog_provider_refreshes_new_turn_snapshot_and_revokes_old_model(
+    tmp_path,
+) -> None:
+    app, _client_instance = _client(tmp_path / "source")
+    source = app.state.runtime_composition
+    old_catalog = ManagedModelCatalog(
+        (
+            ManagedModelSpec(
+                model_id="managed-chat-old",
+                display_name="Managed Chat Old",
+                modalities=frozenset({ModelModality.CHAT}),
+                capabilities=frozenset({"chat", "tools"}),
+                default_for=frozenset({ModelModality.CHAT}),
+            ),
+        )
+    )
+    new_catalog = ManagedModelCatalog(
+        (
+            ManagedModelSpec(
+                model_id="managed-chat-new",
+                display_name="Managed Chat New",
+                modalities=frozenset({ModelModality.CHAT}),
+                capabilities=frozenset({"chat", "tools", "reasoning"}),
+                default_for=frozenset({ModelModality.CHAT}),
+            ),
+        )
+    )
+    active = {"catalog": old_catalog}
+    database = tmp_path / "hot-models.db"
+    composition = RuntimeComposition(
+        database_path=str(database),
+        product_version="1.0.0",
+        permission_snapshot_id=source.permission_snapshot.snapshot_id,
+        permission_payload=source.permission_snapshot.payload,
+        full_access=False,
+        admin_hard_denies=frozenset(),
+        platform="windows",
+        installed_packs=frozenset(),
+        connected_connectors=frozenset(),
+        online=True,
+        model_catalog=old_catalog,
+        model_catalog_provider=lambda: active["catalog"],
+    )
+
+    before = composition.prepare_turn(
+        CreateTurnRequest(
+            input="first turn",
+            agent_model_id="managed-chat-old",
+            client_message_id="model-before-refresh",
+        )
+    )
+    active["catalog"] = new_catalog
+    after = composition.prepare_turn(
+        CreateTurnRequest(
+            input="new allowlisted model",
+            agent_model_id="managed-chat-new",
+            client_message_id="model-after-refresh",
+        )
+    )
+
+    assert before.request.agent_model_id == "managed-chat-old"
+    assert before.snapshot_context.model_catalog_snapshot_id == old_catalog.snapshot_id
+    assert after.request.agent_model_id == "managed-chat-new"
+    assert after.snapshot_context.model_catalog_snapshot_id == new_catalog.snapshot_id
+    assert before.snapshot_context.model_catalog_snapshot_id != (
+        after.snapshot_context.model_catalog_snapshot_id
+    )
+    snapshots = RuntimeSnapshotRepository(database)
+    assert snapshots.get(old_catalog.snapshot_id).payload["snapshot_id"] == (
+        old_catalog.snapshot_id
+    )
+    assert snapshots.get(new_catalog.snapshot_id).payload["snapshot_id"] == (
+        new_catalog.snapshot_id
+    )
+
+    with pytest.raises(UnknownModelError, match="unknown managed model"):
+        composition.prepare_turn(
+            CreateTurnRequest(
+                input="must not retain revoked model authority",
+                agent_model_id="managed-chat-old",
+                client_message_id="revoked-model-rejected",
+            )
+        )
+
+
+def test_model_catalog_provider_empty_result_fails_closed_without_stale_fallback(
+    tmp_path,
+) -> None:
+    app, _client_instance = _client(tmp_path / "source")
+    source = app.state.runtime_composition
+    catalog = ManagedModelCatalog(
+        (
+            ManagedModelSpec(
+                model_id="managed-chat",
+                display_name="Managed Chat",
+                modalities=frozenset({ModelModality.CHAT}),
+                capabilities=frozenset({"chat", "tools"}),
+                default_for=frozenset({ModelModality.CHAT}),
+            ),
+        )
+    )
+    active: dict[str, object] = {"catalog": catalog}
+    composition = RuntimeComposition(
+        database_path=str(tmp_path / "empty-hot-models.db"),
+        product_version="1.0.0",
+        permission_snapshot_id=source.permission_snapshot.snapshot_id,
+        permission_payload=source.permission_snapshot.payload,
+        full_access=False,
+        admin_hard_denies=frozenset(),
+        platform="windows",
+        installed_packs=frozenset(),
+        connected_connectors=frozenset(),
+        online=True,
+        model_catalog=catalog,
+        model_catalog_provider=lambda: active["catalog"],  # type: ignore[return-value]
+    )
+    accepted = composition.prepare_turn(
+        CreateTurnRequest(
+            input="catalog still available",
+            agent_model_id="managed-chat",
+            client_message_id="catalog-before-empty",
+        )
+    )
+    assert accepted.request.agent_model_id == "managed-chat"
+
+    active["catalog"] = None
+    with pytest.raises(
+        UnknownModelError,
+        match="managed model catalog is unavailable",
+    ):
+        composition.prepare_turn(
+            CreateTurnRequest(
+                input="do not fall back to stale allowlist",
+                agent_model_id="managed-chat",
+                client_message_id="catalog-empty-fail-closed",
+            )
+        )
 
 
 @pytest.mark.parametrize(

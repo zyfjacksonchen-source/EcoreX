@@ -30,6 +30,7 @@ from ecorex.integration import ManagedImageOrchestrationClient
 from ecorex.observability import ManagedOTLPHTTPTraceExporter
 from ecorex.runtime import RuntimeSettings
 from ecorex.runtime.api import create_app as register_runtime
+from ecorex.projects import ProjectWorkspaceAuthority
 from ecorex.session import (
     ManagedDeviceAuthorizationService,
     ManagedSessionRefreshService,
@@ -501,6 +502,7 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
         workspace_roots=settings.workspace_roots,
         trusted_core_handlers=settings.capability_handlers,
         pack_runtime=settings.capability_pack_runtime,
+        workspace_root_resolver=ProjectWorkspaceAuthority(settings.database_path),
     )
     disabled_capability_tools = dict(capability_runtime.disabled_tools)
     initial_sandbox_profile = (

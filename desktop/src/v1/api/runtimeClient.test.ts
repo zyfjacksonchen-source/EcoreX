@@ -66,6 +66,32 @@ test("artifact preview preserves a 404 as a typed Runtime API failure", async ()
   }
 });
 
+test("input attachment content is fetched as an authenticated blob", async () => {
+  const originalFetch = globalThis.fetch;
+  let observedUrl = "";
+  let observedAuthorization = "";
+  globalThis.fetch = async (input, init) => {
+    observedUrl = String(input);
+    observedAuthorization = new Headers(init?.headers).get("authorization") ?? "";
+    return new Response(new Blob(["image-bytes"], { type: "image/png" }), {
+      status: 200,
+      headers: { "content-type": "image/png" },
+    });
+  };
+  try {
+    const client = new RuntimeClient({
+      apiBase: "http://127.0.0.1:8765",
+      bearerToken: "attachment-secret",
+    });
+    const blob = await client.inputAttachmentBlob("attachment/id");
+    assert.equal(blob.type, "image/png");
+    assert.equal(observedUrl, "http://127.0.0.1:8765/api/v1/input-attachments/attachment%2Fid/content");
+    assert.equal(observedAuthorization, "Bearer attachment-secret");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 const bootstrap: BootstrapResponse = {
   api_version: "v1",
   event_schema_version: 1,

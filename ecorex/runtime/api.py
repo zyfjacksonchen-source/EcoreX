@@ -291,6 +291,9 @@ class RuntimeSettings:
     model_worker_concurrency: int = 2
     model_worker_poll_seconds: float = 0.25
     model_worker_shutdown_seconds: float = 5.0
+    image_execution_concurrency: int = 2
+    image_execution_queue_capacity: int = 8
+    image_execution_timeout_seconds: float = 900.0
     interaction_maintenance_seconds: float = 1.0
     interaction_maintenance_shutdown_seconds: float = 5.0
     invariant_audit_seconds: float = 60.0
@@ -1067,6 +1070,12 @@ def create_app(
         raise ValueError("model worker poll interval is invalid")
     if not 0.1 <= settings.model_worker_shutdown_seconds <= 120:
         raise ValueError("model worker shutdown timeout is invalid")
+    if not 1 <= settings.image_execution_concurrency <= 8:
+        raise ValueError("image execution concurrency must be between one and eight")
+    if not 1 <= settings.image_execution_queue_capacity <= 64:
+        raise ValueError("image execution queue capacity must be between one and 64")
+    if not 1 <= settings.image_execution_timeout_seconds <= 3600:
+        raise ValueError("image execution timeout is invalid")
     if not 0.01 <= settings.interaction_maintenance_seconds <= 3600:
         raise ValueError("interaction maintenance interval is invalid")
     if not 0.05 <= settings.interaction_maintenance_shutdown_seconds <= 120:
@@ -1333,6 +1342,21 @@ def create_app(
         else None
     )
     managed_models = signed_models or builtin_models
+
+    def current_runtime_model_catalog() -> ManagedModelCatalog:
+        if not managed_mode:
+            return managed_models
+        try:
+            session_snapshot = current_managed_session()
+        except (_ManagedSessionRestartRequired, ManagedSessionError) as error:
+            raise ModelCatalogError("managed model catalog is unavailable") from error
+        current = _filter_model_catalog(
+            builtin_models,
+            frozenset(session_snapshot.allowed_model_ids),
+        )
+        if current is None:
+            raise ModelCatalogError("signed model allowlist is empty")
+        return current
     usage_projection_service = UsageProjectionService(
         kernel.database,
         model_catalog=managed_models,
@@ -1652,6 +1676,7 @@ def create_app(
         online=settings.online,
         disabled_tools=settings.disabled_capability_tools,
         model_catalog=managed_models,
+        model_catalog_provider=current_runtime_model_catalog,
         connector_registry=connector_registry,
         connector_service=connector_composition.service,
         artifact_service=artifact_service,
@@ -1810,6 +1835,14 @@ def create_app(
                 connector_uncertain_resolver=(
                     connector_composition.repository.resolve_uncertain_invocation
                 ),
+                input_attachments=input_attachment_service,
+                image_execution_concurrency=settings.image_execution_concurrency,
+                image_execution_queue_capacity=(
+                    settings.image_execution_queue_capacity
+                ),
+                image_execution_timeout_seconds=(
+                    settings.image_execution_timeout_seconds
+                ),
             ),
             concurrency=settings.model_worker_concurrency,
             idle_poll_seconds=settings.model_worker_poll_seconds,
@@ -1883,6 +1916,7 @@ def create_app(
         kernel=kernel,
         account_id=settings.account_id,
         client=settings.image_orchestration_client,
+        input_attachments=input_attachment_service,
     )
     composition.capability_service.bind_invocation_backend(image_tool_backend)
     app.state.image_tool_backend = image_tool_backend

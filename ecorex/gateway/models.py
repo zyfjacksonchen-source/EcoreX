@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+
 from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal
@@ -210,6 +214,44 @@ class GatewayToolOutput(GatewayModel):
         return self
 
 
+_GATEWAY_IMAGE_MIME_TYPES = frozenset(
+    {"image/png", "image/jpeg", "image/webp", "image/gif"}
+)
+MAX_GATEWAY_IMAGES_PER_MESSAGE = 4
+# Gateway HTTP admission is 4 MiB.  Keep the complete raw image budget at
+# 2 MiB so base64 expansion plus the signed request envelope remains bounded.
+MAX_GATEWAY_IMAGE_BYTES = 1536 * 1024
+MAX_GATEWAY_IMAGE_BYTES_PER_REQUEST = 1536 * 1024
+MAX_GATEWAY_SERIALIZED_INPUT_BYTES = 5 * 512 * 1024
+
+
+class GatewayImageInput(GatewayModel):
+    """One Runtime-attested image; callers cannot supply paths or URLs."""
+
+    attachment_id: str = Field(min_length=1, max_length=128)
+    revision_id: str = Field(min_length=1, max_length=128)
+    mime_type: str = Field(min_length=1, max_length=64)
+    data_base64: str = Field(min_length=4, max_length=2_100_000)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def validate_image(self) -> "GatewayImageInput":
+        _validate_id(self.attachment_id, "attachment_id")
+        _validate_id(self.revision_id, "revision_id")
+        if self.mime_type not in _GATEWAY_IMAGE_MIME_TYPES:
+            raise ValueError("gateway image MIME type is unsupported")
+        try:
+            content = base64.b64decode(self.data_base64, validate=True)
+        except (binascii.Error, ValueError):
+            raise ValueError("gateway image encoding is invalid") from None
+        if not content or len(content) > MAX_GATEWAY_IMAGE_BYTES:
+            raise ValueError("gateway image is oversized")
+        if hashlib.sha256(content).hexdigest() != self.sha256:
+            raise ValueError("gateway image digest is invalid")
+        return self
+
+
 class GatewayUserMessageInput(GatewayModel):
     """One stable user-authored revision in a model round.
 
@@ -220,11 +262,16 @@ class GatewayUserMessageInput(GatewayModel):
     type: Literal["user_message"] = "user_message"
     message_id: str = Field(min_length=1, max_length=256)
     content: str = Field(min_length=1, max_length=1_000_000)
+    images: list[GatewayImageInput] = Field(
+        default_factory=list, max_length=MAX_GATEWAY_IMAGES_PER_MESSAGE
+    )
 
     @model_validator(mode="after")
     def validate_message(self) -> "GatewayUserMessageInput":
         _validate_id(self.message_id, "message_id")
         _validate_json_value(self.content, "user message")
+        if len({image.attachment_id for image in self.images}) != len(self.images):
+            raise ValueError("gateway image attachment IDs must be unique")
         return self
 
 
@@ -411,6 +458,7 @@ class ModelGatewayRequest(GatewayModel):
             typed_output_ids: list[str] = []
             message_seen = False
             total_message_characters = 0
+            total_image_bytes = 0
             for item in self.input_items:
                 if isinstance(
                     item, (GatewayUserMessageInput, GatewayAssistantMessageInput)
@@ -418,6 +466,11 @@ class ModelGatewayRequest(GatewayModel):
                     message_seen = True
                     message_ids.append(item.message_id)
                     total_message_characters += len(item.content)
+                    if isinstance(item, GatewayUserMessageInput):
+                        total_image_bytes += sum(
+                            len(base64.b64decode(image.data_base64, validate=True))
+                            for image in item.images
+                        )
                 else:
                     if message_seen:
                         raise ValueError(
@@ -434,12 +487,36 @@ class ModelGatewayRequest(GatewayModel):
                 raise ValueError("too many function call outputs")
             if total_message_characters > 1_000_000:
                 raise ValueError("conversation message input is oversized")
+            if total_image_bytes > MAX_GATEWAY_IMAGE_BYTES_PER_REQUEST:
+                raise ValueError("gateway image input is oversized")
+            serialized_input_bytes = sum(
+                len(item.content.encode("utf-8"))
+                + (
+                    sum(len(image.data_base64) for image in item.images)
+                    if isinstance(item, GatewayUserMessageInput)
+                    else 0
+                )
+                for item in self.input_items
+                if isinstance(
+                    item, (GatewayUserMessageInput, GatewayAssistantMessageInput)
+                )
+            )
+            if serialized_input_bytes > MAX_GATEWAY_SERIALIZED_INPUT_BYTES:
+                raise ValueError("gateway serialized input is oversized")
             if typed_output_ids and self.previous_response_id is None:
                 raise ValueError("tool outputs require a previous response")
-            _validate_json_value(
-                [item.model_dump(mode="json") for item in self.input_items],
-                "typed model input",
-            )
+            # Image bytes have dedicated count, size, MIME and digest checks
+            # above.  Redact their bounded base64 representation before the
+            # generic JSON guard, whose per-string ceiling is intended for
+            # text/tool payloads rather than binary transport.
+            validated_items: list[dict[str, Any]] = []
+            for item in self.input_items:
+                dumped = item.model_dump(mode="json")
+                if isinstance(item, GatewayUserMessageInput):
+                    for image in dumped.get("images", []):
+                        image["data_base64"] = "[runtime-attested-image]"
+                validated_items.append(dumped)
+            _validate_json_value(validated_items, "typed model input")
         elif self.input is None and not self.tool_outputs:
             raise ValueError("model input is required")
         _validate_json_value(self.direct_tools, "direct tool catalog")

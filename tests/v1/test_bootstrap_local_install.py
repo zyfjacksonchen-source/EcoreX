@@ -11,8 +11,11 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+import ecorex.release.builder as release_builder_module
 from ecorex import __version__
 from ecorex.bootstrap import install_local
+from ecorex.bootstrap.companion import BootstrapCompanionInstaller
+from ecorex.integration.pack_verification import verify_product_capability_pack
 from ecorex.pack_catalog import (
     CAPABILITY_PACK_SERVICE_IDS,
     CAPABILITY_PACK_TOOL_IDS,
@@ -25,7 +28,15 @@ from ecorex.release import (
     ReleaseBuildSpec,
     ReleaseBuilder,
 )
-from ecorex.update import ReleaseChannel, ReleaseSource, SourceKind
+from ecorex.update import (
+    Ed25519SignatureVerifier,
+    InstallCoordinator,
+    LocalSourceFetcher,
+    ProvisionalActivationController,
+    ReleaseChannel,
+    ReleaseSource,
+    SourceKind,
+)
 
 
 def _pack(root: Path, pack_id: str) -> ArtifactBuildInput:
@@ -91,13 +102,19 @@ def _target() -> tuple[str, str]:
         pytest.skip("Bootstrap local install requires a supported product target")
 
 
-def _release(tmp_path: Path):
+def _release(
+    tmp_path: Path,
+    *,
+    private: Ed25519PrivateKey | None = None,
+    publication_private: Ed25519PrivateKey | None = None,
+):
     platform, architecture = _target()
-    private = Ed25519PrivateKey.generate()
-    publication_private = Ed25519PrivateKey.generate()
+    private = private or Ed25519PrivateKey.generate()
+    publication_private = publication_private or Ed25519PrivateKey.generate()
     signer = Ed25519MemorySigner("bootstrap-test-key", private)
     core = tmp_path / "core"
     (core / "bin").mkdir(parents=True)
+    (core / "version-marker.txt").write_text(__version__, encoding="utf-8")
     launcher = "ecorex.exe" if platform == "windows" else "ecorex"
     (core / "bin" / launcher).write_bytes(b"signed-test-launcher")
     bootstrap = tmp_path / "bootstrap-companion"
@@ -107,10 +124,19 @@ def _release(tmp_path: Path):
         if platform == "windows"
         else "ecorex-bootstrap"
     )
+    installer_launcher = (
+        "EcoreX Installer.cmd"
+        if platform == "windows"
+        else "EcoreX Installer.command"
+    )
     (bootstrap / "bin" / bootstrap_launcher).write_bytes(
         b"signed-test-bootstrap"
     )
-    bootstrap_executables = [f"bin/{bootstrap_launcher}"]
+    (bootstrap / installer_launcher).write_text(
+        "@echo off\r\n" if platform == "windows" else "#!/bin/sh\n",
+        encoding="utf-8",
+    )
+    bootstrap_executables = [f"bin/{bootstrap_launcher}", installer_launcher]
     helper_digest = ""
     if platform == "windows":
         helper = bootstrap / "bin" / "ecorex-sandbox-host.exe"
@@ -284,6 +310,127 @@ def test_signed_bootstrap_handoff_stages_core_and_six_packs_atomically(
         pack_root = slot / "payload" / "capability-packs" / pack_id
         assert len(tuple(pack_root.glob("*.zip"))) == 1
         assert len(tuple(pack_root.glob("*.json"))) == 1
+
+
+def test_signed_bootstrap_handoff_upgrades_an_existing_install(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import sys
+
+    test_module = sys.modules[__name__]
+    release_private = Ed25519PrivateKey.generate()
+    publication_private = Ed25519PrivateKey.generate()
+    monkeypatch.setattr(release_builder_module, "__version__", "1.0.7")
+    monkeypatch.setattr(test_module, "__version__", "1.0.7")
+    previous, previous_trust = _release(
+        tmp_path / "previous",
+        private=release_private,
+        publication_private=publication_private,
+    )
+    previous_sandbox = _sandbox_test_boundary(tmp_path / "previous", monkeypatch)
+    first = install_local.install(
+        manifest_path=str(previous.manifest_path),
+        artifacts_path=str(previous.output_dir),
+        install_root=str(tmp_path / "install"),
+        trusted_public_keys=(previous_trust,),
+        **previous_sandbox,
+    )
+    platform, architecture = _target()
+    verifier = Ed25519SignatureVerifier(
+        install_local._read_public_keys((previous_trust,))
+    )
+    activations = ProvisionalActivationController(
+        tmp_path / "install",
+        verifier=verifier,
+        host_platform=platform,
+        host_architecture=architecture,
+        pack_content_verifier=verify_product_capability_pack,
+    )
+    intent = activations.load_intent()
+    assert intent is not None
+    companion = BootstrapCompanionInstaller(
+        tmp_path / "install",
+        platform=platform,
+        architecture=architecture,
+        verifier=verifier,
+    )
+    companion.prepare_transaction(first["transaction_id"])
+    activations.confirm(first["transaction_id"], intent.health_identity)
+    assert activations.mark_data_barrier_crossed(first["slot_id"]) is True
+    companion.commit_activation(first["transaction_id"])
+    registration = {
+        "account_id": "account-upgrade-test",
+        "organization_id": "organization-upgrade-test",
+        "lease_id": "lease-upgrade-test",
+        "lease_digest": "a" * 64,
+        "session_generation": 1,
+        "lease_revision": 1,
+    }
+    registration_coordinator = InstallCoordinator(
+        tmp_path / "install",
+        fetcher=LocalSourceFetcher({}),
+        health_checker=lambda _slot: False,
+        verifier=verifier,
+        host_platform=platform,
+        host_architecture=architecture,
+        pack_content_verifier=verify_product_capability_pack,
+    )
+    assert registration_coordinator.mark_runtime_ready(registration) is True
+
+    user_data = tmp_path / "install" / "data" / "user-state.json"
+    user_data.parent.mkdir(parents=True, exist_ok=True)
+    user_data.write_text('{"conversation":"preserved"}', encoding="utf-8")
+
+    monkeypatch.setattr(release_builder_module, "__version__", "1.0.8")
+    monkeypatch.setattr(test_module, "__version__", "1.0.8")
+    current, current_trust = _release(
+        tmp_path / "current",
+        private=release_private,
+        publication_private=publication_private,
+    )
+    previous_manifest = json.loads(previous.manifest_path.read_text(encoding="utf-8"))
+    current_manifest = json.loads(current.manifest_path.read_text(encoding="utf-8"))
+    assert previous_manifest["version"] == "1.0.7"
+    assert current_manifest["version"] == "1.0.8"
+    assert (
+        next(
+            artifact["sha256"]
+            for artifact in previous_manifest["artifacts"]
+            if artifact["artifact_id"].startswith("core-")
+        )
+        != next(
+            artifact["sha256"]
+            for artifact in current_manifest["artifacts"]
+            if artifact["artifact_id"].startswith("core-")
+        )
+    )
+    current_sandbox = _sandbox_test_boundary(tmp_path / "current", monkeypatch)
+    upgraded = install_local.install(
+        manifest_path=str(current.manifest_path),
+        artifacts_path=str(current.output_dir),
+        install_root=str(tmp_path / "install"),
+        trusted_public_keys=(current_trust,),
+        **current_sandbox,
+    )
+
+    pointers = json.loads(
+        (tmp_path / "install" / "slot-pointers.json").read_text(encoding="utf-8")
+    )
+    assert upgraded["state"] == "healthchecking"
+    assert upgraded["slot_id"] != first["slot_id"]
+    assert pointers["current"] == upgraded["slot_id"]
+    assert pointers["previous"] == first["slot_id"]
+    upgraded_marker = (
+        tmp_path
+        / "install"
+        / "slots"
+        / str(upgraded["slot_id"])
+        / "payload"
+        / "version-marker.txt"
+    )
+    assert upgraded_marker.read_text(encoding="utf-8") == "1.0.8"
+    assert user_data.read_text(encoding="utf-8") == '{"conversation":"preserved"}'
 
 
 def test_signed_bootstrap_handoff_rejects_tampered_pack_before_pointer_switch(

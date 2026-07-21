@@ -286,14 +286,14 @@
 }
 
 .ex-menu {
-  min-width: 184px;
+  min-width: 160px;
   border-radius: var(--radius-card);
   padding: var(--space-1);
 }
 
 .ex-menu-item {
-  min-height: 36px;
-  padding: var(--space-2) var(--space-3);
+  min-height: 32px;
+  padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-compact);
   display: flex;
   align-items: center;

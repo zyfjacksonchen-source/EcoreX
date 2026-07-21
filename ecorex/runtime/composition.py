@@ -295,6 +295,7 @@ class RuntimeComposition:
         online: bool,
         disabled_tools: Mapping[str, str] | None = None,
         model_catalog: ManagedModelCatalog | None = None,
+        model_catalog_provider: Callable[[], ManagedModelCatalog] | None = None,
         capability_registry: CapabilityRegistry | None = None,
         connector_registry: ConnectorRegistry | None = None,
         connector_service: ConnectorService | None = None,
@@ -319,6 +320,7 @@ class RuntimeComposition:
             raise TypeError("persist_startup_snapshots must be a boolean")
         self._persist_startup_snapshots = persist_startup_snapshots
         self.model_catalog = model_catalog or builtin_model_catalog()
+        self._model_catalog_provider = model_catalog_provider
         self.permission_mutation_lock = permission_mutation_lock or threading.RLock()
         if not all(
             callable(getattr(self.permission_mutation_lock, member, None))
@@ -458,19 +460,35 @@ class RuntimeComposition:
             resolved_handlers.update(self.connector_agent_runtime.handlers())
         self.artifact_read_runtime = None
         self.input_attachment_read_runtime = None
+        self.input_attachment_ocr_runtime = None
         if artifact_service is not None:
             from ecorex.integration.connector_results import ArtifactReadRuntime
-            from ecorex.input_attachments import InputAttachmentReadRuntime, InputAttachmentService
+            from ecorex.input_attachments import (
+                InputAttachmentOCRRuntime,
+                InputAttachmentReadRuntime,
+                InputAttachmentService,
+            )
 
             self.artifact_read_runtime = ArtifactReadRuntime(
                 artifact_service,
                 account_id=tenant_id,
             )
             resolved_handlers["artifact_read"] = self.artifact_read_runtime.read
-            self.input_attachment_read_runtime = InputAttachmentReadRuntime(
-                InputAttachmentService(artifact_service, account_id=tenant_id)
+            input_attachments = InputAttachmentService(
+                artifact_service, account_id=tenant_id
             )
+            self.input_attachment_read_runtime = InputAttachmentReadRuntime(input_attachments)
             resolved_handlers["input_attachment_read"] = self.input_attachment_read_runtime.read
+            if "ocr" in installed_packs:
+                from ecorex.integration.ocr import OCRServiceAdapter
+
+                if "ocr" in resolved_handlers:
+                    raise ValueError("a caller cannot replace the Core OCR handler")
+                self.input_attachment_ocr_runtime = InputAttachmentOCRRuntime(
+                    input_attachments,
+                    OCRServiceAdapter(),
+                )
+                resolved_handlers["ocr"] = self.input_attachment_ocr_runtime.extract
         for tool_id, handler in self.skill_runtime.handlers().items():
             if tool_id in resolved_handlers:
                 raise ValueError("an injected handler cannot replace a Core Skill tool")
@@ -547,6 +565,9 @@ class RuntimeComposition:
         self.availability = self._apply_input_attachment_read_availability(
             self.availability
         )
+        self.availability = self._apply_input_attachment_ocr_availability(
+            self.availability
+        )
         self._availability_provider = availability_provider or (lambda: self.availability)
         # Invocation must see the same post-composition availability as Turn
         # planning.  Binding the raw provider here reintroduced stale
@@ -607,6 +628,10 @@ class RuntimeComposition:
             raise RuntimeError(
                 "Runtime is in projection-only mode and cannot accept a Turn"
             )
+        # Capture the current signed model lease for every new Turn. Bootstrap
+        # and Turn admission must never disagree after an administrator changes
+        # the managed allowlist while the local Runtime remains online.
+        self._refresh_model_catalog()
         # Capture permission first. Product Turn admission holds the shared
         # mutation lock around this method and the accepted write; the Kernel
         # additionally verifies this frozen fact against the ledger in its
@@ -633,6 +658,7 @@ class RuntimeComposition:
         availability = self._apply_connector_execution_availability(availability)
         availability = self._apply_artifact_read_availability(availability)
         availability = self._apply_input_attachment_read_availability(availability)
+        availability = self._apply_input_attachment_ocr_availability(availability)
         selected_modalities = {"chat"}
         selected_model_capabilities = {
             "chat": self.model_catalog.get(agent_model_id).capabilities,
@@ -678,6 +704,14 @@ class RuntimeComposition:
                 for item in raw_input_attachments
             )
         )
+        has_bound_image_attachments = bool(
+            has_bound_input_attachments
+            and any(
+                str(item.get("mime_type") or "").casefold().startswith("image/")
+                or item.get("media_kind") == "image"
+                for item in raw_input_attachments
+            )
+        )
         if self._extension_governance_enabled:
             availability = self.extension_service.apply_availability(
                 availability, extension_snapshot
@@ -705,8 +739,13 @@ class RuntimeComposition:
         plan = self.capability_service.create_plan(
             intent=request.input,
             explicit_tools=explicit,
-            runtime_direct_tools=(
-                ("input_attachment_read",) if has_bound_input_attachments else ()
+            runtime_direct_tools=tuple(
+                dict.fromkeys(
+                    (
+                        *(("input_attachment_read",) if has_bound_input_attachments else ()),
+                        *(("vision", "ocr") if has_bound_image_attachments else ()),
+                    )
+                )
             ),
             availability=availability,
             policy=permission_policy,
@@ -727,6 +766,23 @@ class RuntimeComposition:
                 extension_snapshot_id=extension_snapshot.snapshot_id,
             ),
         )
+
+    def _refresh_model_catalog(self) -> None:
+        provider = self._model_catalog_provider
+        if provider is None:
+            return
+        catalog = provider()
+        if not isinstance(catalog, ManagedModelCatalog):
+            raise UnknownModelError("managed model catalog is unavailable")
+        if catalog.snapshot_id == self.model_catalog.snapshot_id:
+            return
+        snapshot = self._runtime_snapshot(
+            "models",
+            catalog.to_dict(),
+            snapshot_id=catalog.snapshot_id,
+        )
+        self.model_catalog = catalog
+        self.model_snapshot = snapshot
 
     def admit_turn(
         self,
@@ -849,6 +905,7 @@ class RuntimeComposition:
         availability = self._apply_connector_execution_availability(availability)
         availability = self._apply_artifact_read_availability(availability)
         availability = self._apply_input_attachment_read_availability(availability)
+        availability = self._apply_input_attachment_ocr_availability(availability)
         extension_snapshot = self.extension_service.snapshot()
         contribution_snapshot = self.skill_runtime.contribution_snapshot(
             extension_snapshot.snapshot_id,
@@ -1010,6 +1067,22 @@ class RuntimeComposition:
             # stale fact we clear is that a low-level capability-pack builder
             # did not know about this trusted Runtime handler yet.
             disabled.pop("input_attachment_read", None)
+        return replace(availability, disabled_tools=disabled)
+
+    def _apply_input_attachment_ocr_availability(
+        self,
+        availability: RuntimeAvailability,
+    ) -> RuntimeAvailability:
+        disabled = dict(availability.disabled_tools)
+        reason = "input_attachment_ocr_runtime_not_bound"
+        handler_missing_reasons = frozenset(
+            {"verified_handler_not_installed", reason}
+        )
+        if self.input_attachment_ocr_runtime is None:
+            if "ocr" not in disabled or disabled["ocr"] in handler_missing_reasons:
+                disabled["ocr"] = reason
+        elif disabled.get("ocr") in handler_missing_reasons:
+            disabled.pop("ocr", None)
         return replace(availability, disabled_tools=disabled)
 
     def _record_config(

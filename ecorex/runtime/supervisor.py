@@ -160,6 +160,14 @@ class AgentWorkerSupervisor:
         self._worker_tasks.clear()
         self._slot_ready.clear()
         try:
+            close_worker = getattr(self.worker, "close", None)
+            if callable(close_worker):
+                worker_result = close_worker()
+                if inspect.isawaitable(worker_result):
+                    await asyncio.wait_for(
+                        worker_result,
+                        timeout=self.shutdown_timeout_seconds,
+                    )
             if self.close_gateway_on_stop:
                 await asyncio.wait_for(
                     self._close_gateway(),

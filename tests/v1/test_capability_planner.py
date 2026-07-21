@@ -772,7 +772,7 @@ def test_image_link_intent_keeps_browser_fetch_vision_read_and_shell_discoverabl
         ),
         availability=RuntimeAvailability(
             platform="windows",
-            installed_packs=frozenset({"browser", "image", "sandbox"}),
+            installed_packs=frozenset({"browser", "image", "ocr", "sandbox"}),
         ),
         policy=_policy(),
     )
@@ -783,6 +783,7 @@ def test_image_link_intent_keeps_browser_fetch_vision_read_and_shell_discoverabl
         "read",
         "fetch",
         "vision",
+        "ocr",
         "cdp",
         "shell",
         "imagegen",
@@ -804,6 +805,52 @@ def test_image_link_intent_keeps_browser_fetch_vision_read_and_shell_discoverabl
     )
     assert registry.resolve("browser").tool_id == "cdp"
     assert registry.resolve("web-fetch").tool_id == "fetch"
+
+
+@pytest.mark.parametrize(
+    ("intent", "tool_id"),
+    (
+        ("请测试 bash 能力并执行命令", "shell"),
+        ("使用 shell 读取工作区", "shell"),
+        ("用 fetch 获取这个网页", "fetch"),
+        ("用 imagegen 生成一张图", "imagegen"),
+    ),
+)
+def test_exact_core_tool_mentions_are_direct_without_hiding_siblings(
+    intent: str, tool_id: str
+) -> None:
+    plan = CapabilityService(builtin_capability_registry()).create_plan(
+        intent=intent,
+        availability=RuntimeAvailability(
+            platform="windows",
+            installed_packs=frozenset({"browser", "image", "ocr", "sandbox"}),
+            online=True,
+            selected_model_modalities=frozenset({"chat", "image"}),
+            selected_model_capabilities={
+                "chat": frozenset({"chat", "tools", "reasoning", "vision"}),
+                "image": frozenset({"image_generation", "image_edit"}),
+            },
+        ),
+        policy=_policy(),
+    )
+    selected = plan.decision(tool_id)
+    assert selected is not None and selected.eligible
+    assert selected.exposure is Exposure.DIRECT
+    assert "intent_exact_reference" in selected.reason_codes
+    assert all(plan.decision(item) is not None for item in ("read", "fetch", "vision", "shell", "imagegen"))
+
+
+def test_negated_shell_mention_remains_progressively_disclosed() -> None:
+    plan = CapabilityService(builtin_capability_registry()).create_plan(
+        intent="不要使用 shell，只回答这个问题",
+        availability=RuntimeAvailability(
+            platform="windows", installed_packs=frozenset({"sandbox"})
+        ),
+        policy=_policy(),
+    )
+    shell = plan.decision("shell")
+    assert shell is not None and shell.exposure is Exposure.DEFERRED
+    assert "intent_exact_reference" not in shell.reason_codes
 
 
 def test_turn_bound_input_attachment_promotes_only_its_reader() -> None:

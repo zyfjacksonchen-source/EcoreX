@@ -85,9 +85,37 @@ _VISION_INPUT = {
             "minItems": 1,
             "maxItems": 20,
         },
+        "attachment_ids": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 128},
+            "minItems": 1,
+            "maxItems": 20,
+        },
         "instruction": {"type": "string", "minLength": 1, "maxLength": 20000},
     },
-    "required": ["artifact_ids", "instruction"],
+    "required": ["instruction"],
+    "additionalProperties": False,
+}
+_OCR_INPUT = {
+    "type": "object",
+    "properties": {
+        "attachment_ids": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 128},
+            "minItems": 1,
+            "maxItems": 20,
+        },
+        "action": {
+            "type": "string",
+            "enum": ["extract_text", "extract_urls"],
+        },
+        "timeout_seconds": {
+            "type": "number",
+            "minimum": 0.5,
+            "maximum": 8,
+        },
+    },
+    "required": ["attachment_ids", "action"],
     "additionalProperties": False,
 }
 _CDP_INPUT = {
@@ -118,6 +146,11 @@ _IMAGE_INPUT = {
             "type": "array",
             "items": {"type": "string", "minLength": 1, "maxLength": 128},
             "maxItems": 20,
+        },
+        "attachment_ids": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 128},
+            "maxItems": 4,
         },
         "size": {"type": "string", "maxLength": 64},
         "quality": {"type": "string", "maxLength": 64},
@@ -963,11 +996,30 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             description="检查图片、截图和办公文档渲染结果",
             input_schema=_VISION_INPUT,
             output_schema=_OBJECT,
-            aliases=("inspect-image",),
+            aliases=("inspect-image", "image-understanding"),
             intent_tags=frozenset(
                 {"vision", "image", "screenshot", "inspect", "图像识别", "视觉检查"}
             ),
             required_packs=frozenset({"image"}),
+        ),
+        ToolSpec(
+            tool_id="ocr",
+            version="1.0.0",
+            display_name="图片文字识别",
+            description=(
+                "从当前 Turn 中用户上传并绑定的图片附件提取文字或网址；"
+                "只接受不可伪造的 attachment_id，不接受本机路径"
+            ),
+            input_schema=_OCR_INPUT,
+            output_schema=_OBJECT,
+            aliases=("extract-image-text", "read-image-text"),
+            effects=frozenset({CapabilityEffect.READ}),
+            idempotency=IdempotencyClass.READ_ONLY,
+            default_exposure=Exposure.DEFERRED,
+            intent_tags=frozenset(
+                {"ocr", "image", "text", "read", "文字识别", "识别图片文字"}
+            ),
+            required_packs=frozenset({"ocr"}),
         ),
         ToolSpec(
             tool_id="cdp",

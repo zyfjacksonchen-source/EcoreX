@@ -4,6 +4,7 @@ import asyncio
 import base64
 from dataclasses import replace
 import hashlib
+from io import BytesIO
 import os
 from pathlib import Path
 
@@ -45,6 +46,7 @@ from ecorex.pack_catalog import CAPABILITY_PACK_SERVICE_IDS
 from ecorex.server.pack_resolver import (
     production_pack_adapter_resolver as production_server_pack_adapter_resolver,
 )
+from ecorex.runtime import RuntimeSettings, create_app
 from ecorex.update import Ed25519SignatureVerifier, SignatureEnvelope
 
 
@@ -219,6 +221,40 @@ def test_service_only_pack_rejects_non_authoritative_contract_digest(
         CapabilityPackRuntime(registry).bind(verified, {})
 
 
+def test_signed_ocr_service_pack_composes_real_product_adapter(tmp_path: Path) -> None:
+    registry, verified = _signed_service_pack(
+        tmp_path,
+        pack_id="ocr",
+        service_id="ocr.extract",
+    )
+    runtime = CapabilityPackRuntime(registry)
+    runtime.bind(verified, {})
+    app = create_app(
+        settings=RuntimeSettings(
+            database_path=tmp_path / "runtime.db",
+            installed_capability_packs=runtime.installed_pack_ids,
+        )
+    )
+    ocr_runtime = app.state.runtime_composition.input_attachment_ocr_runtime
+    assert ocr_runtime is not None
+    assert ocr_runtime.provider.service_id == "ocr.extract"
+
+    from PIL import Image, ImageDraw, ImageFont
+
+    small = Image.new("L", (170, 30), 255)
+    ImageDraw.Draw(small).text(
+        (2, 5), "ECOREX OCR 4827", font=ImageFont.load_default(), fill=0
+    )
+    image = small.resize((1020, 180))
+    content = BytesIO()
+    image.save(content, "PNG")
+    result = ocr_runtime.provider.extract(
+        content.getvalue(), timeout_seconds=8.0
+    )
+    assert result["provider"] == "rapidocr_onnxruntime"
+    assert "4827" in result["text"].replace(" ", "")
+
+
 def test_production_pack_resolver_binds_executable_image_handler_and_fails_truthfully(
     tmp_path: Path,
 ) -> None:
@@ -340,6 +376,7 @@ def test_handler_set_reports_real_executability_not_declared_pack_flags(
         for tool_id in {
             "fetch",
             "vision",
+            "ocr",
             "cdp",
             "shell",
             "skill_search",

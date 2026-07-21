@@ -594,8 +594,8 @@ def _runtime_config(
             "supervisor_poll_seconds": 1,
         },
         "update": {
-            "release_feed_endpoint": "https://localhost/v1/releases/eligible",
-            "signal_endpoint": "wss://localhost/v1/updates/events",
+            "release_feed_endpoint": "https://localhost/api/v1/releases/latest",
+            "signal_endpoint": "wss://localhost/api/v1/client/updates/ws",
             "control_plane_hosts": ["localhost"],
             "artifact_hosts": ["localhost"],
             "channel": "stable",

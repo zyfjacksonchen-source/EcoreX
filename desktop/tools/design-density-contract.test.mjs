@@ -77,6 +77,8 @@ const CONTEXT_CONTROL_SELECTORS = [
 const STRUCTURAL_BUTTON_EXCEPTIONS = [
   "ex-sidebar-scrim",
   "ex-retouch-result-media",
+  "ex-input-attachment-preview-trigger",
+  "ex-timeline-jump-button",
   // A semantic switch is a persistent state indicator, not an ordinary
   // command button. Shape Lock explicitly permits toggle tracks to be pills.
   "ex-skill-switch",
@@ -288,4 +290,13 @@ test("chat, connector, and office artifact rows use sparse framing", () => {
   assert.match(officeRow, /background:\s*transparent;/);
   const officeHover = rule(features, ".ex-artifact.is-row:hover {");
   assert.match(officeHover, /border-color:\s*var\(--control-hover-border\);/);
+});
+
+test("connector and contextual menus retain compact desktop density", () => {
+  assert.match(rule(features, ".ex-connector-popover {"), /width:\s*min\(360px,/u);
+  assert.match(rule(features, ".ex-connector-popover {"), /max-height:\s*min\(520px,/u);
+  assert.match(rule(features, ".ex-connector-row {"), /padding:\s*var\(--space-2\) var\(--space-1\);/u);
+  assert.match(rule(primitives, ".ex-menu-item {"), /min-height:\s*32px;/u);
+  assert.match(rule(primitives, ".ex-menu-item {"), /padding:\s*var\(--space-1\) var\(--space-2\);/u);
+  assert.match(rule(layout, ".ex-account-menu {"), /width:\s*192px;/u);
 });

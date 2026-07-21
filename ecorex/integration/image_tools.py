@@ -28,6 +28,7 @@ from ecorex.capabilities import (
 from ecorex.image_orchestrator import ImageOperation, ImageSubmitRequest
 from ecorex.protocol import ItemKind, ItemStatus
 from ecorex.runtime.database import SQLiteDatabase
+from ecorex.input_attachments import InputAttachmentService
 
 from .managed_image import (
     ManagedImageClientError,
@@ -422,6 +423,7 @@ class RuntimeImageToolBackend:
         kernel: Any,
         account_id: str,
         client: ManagedImageOrchestrationClient | None,
+        input_attachments: InputAttachmentService | None = None,
         fault_hook: Callable[[str, str], None] | None = None,
         publication_lease_seconds: float = 30,
     ) -> None:
@@ -436,6 +438,7 @@ class RuntimeImageToolBackend:
         self.kernel = kernel
         self.account_id = account_id
         self.client = client
+        self.input_attachments = input_attachments
         self.publications = _ImagePublicationRepository(database_path)
         self.fault_hook = fault_hook or (lambda _phase, _key: None)
         self.publication_lease_seconds = float(publication_lease_seconds)
@@ -511,6 +514,9 @@ class RuntimeImageToolBackend:
                 cloud_job_id,
             )
         references = tuple(str(value) for value in arguments.get("reference_artifact_ids", ()))
+        attachment_ids = tuple(str(value) for value in arguments.get("attachment_ids", ()))
+        if len(attachment_ids) > 4:
+            raise ImageToolError("imagegen attachment selection exceeds the product limit")
         assets = []
         source_ids = []
         for artifact_id in references:
@@ -532,6 +538,24 @@ class RuntimeImageToolBackend:
                 )
             )
             source_ids.append(artifact_id)
+        if attachment_ids:
+            if self.input_attachments is None:
+                raise ImageToolUnavailable("input attachment image runtime is unavailable")
+            for attachment_id in attachment_ids:
+                projection, rendition = self.input_attachments.read_bound_visual(
+                    attachment_id,
+                    thread_id=scope.thread_id,
+                    turn_id=scope.turn_id,
+                    max_bytes=8 * 1024 * 1024,
+                )
+                assets.append(
+                    ManagedImageInputAsset(
+                        sha256=rendition.sha256,
+                        mime_type=rendition.mime_type,
+                        content=rendition.content,
+                    )
+                )
+                source_ids.append(projection.attachment_id)
         width, height = self._size(str(arguments.get("size") or "1024x1024"))
         client_request_id = self._client_request_id(context.idempotency_key)
         operation = ImageOperation.RETOUCH if assets else ImageOperation.GENERATE
@@ -751,8 +775,14 @@ class RuntimeImageToolBackend:
     ) -> dict[str, Any]:
         if context.execution_scope is None:
             raise ImageToolError("vision requires a durable Runtime execution scope")
+        artifact_ids = tuple(arguments.get("artifact_ids", ()))
+        attachment_ids = tuple(arguments.get("attachment_ids", ()))
+        if not artifact_ids and not attachment_ids:
+            raise ImageToolError("vision requires at least one image identity")
+        if len(artifact_ids) + len(attachment_ids) > 20:
+            raise ImageToolError("vision image selection exceeds the product limit")
         inspected = []
-        for artifact_id in tuple(arguments.get("artifact_ids", ())):
+        for artifact_id in artifact_ids:
             projection = self.artifacts.get_user_artifact(
                 str(artifact_id), account_id=self.account_id
             )
@@ -777,11 +807,57 @@ class RuntimeImageToolBackend:
                     "quality_evidence": projection.quality_evidence.to_dict(),
                 }
             )
+        attachment_runtime = self.input_attachments
+        if attachment_ids and attachment_runtime is None:
+            raise ImageToolUnavailable("input attachment vision runtime is unavailable")
+        scope = context.execution_scope
+        for attachment_id in attachment_ids:
+            projection, rendition = attachment_runtime.read_bound_visual(
+                str(attachment_id),
+                thread_id=scope.thread_id,
+                turn_id=scope.turn_id,
+                max_bytes=8 * 1024 * 1024,
+            )
+            # OCR is deliberately best-effort for visual inspection: it gives
+            # the chat model actual textual evidence without weakening the
+            # attachment authority boundary. The dedicated OCR tool remains
+            # available when exact extraction is the user's requested action.
+            ocr: dict[str, Any] | None = None
+            try:
+                from ecorex.integration.ocr import extract_image_text
+
+                raw_ocr = await asyncio.to_thread(
+                    extract_image_text, rendition.content, timeout_seconds=2.0
+                )
+                if isinstance(raw_ocr, dict):
+                    ocr = {
+                        "status": str(raw_ocr.get("status") or "unknown"),
+                        "provider": str(raw_ocr.get("provider") or "unknown"),
+                        "text": str(raw_ocr.get("text") or "")[:12000],
+                    }
+            except Exception:
+                ocr = {"status": "unavailable", "provider": "unavailable", "text": ""}
+            inspected.append(
+                {
+                    "attachment_id": projection.attachment_id,
+                    "revision_id": projection.revision_id,
+                    "display_name": projection.display_name,
+                    "mime_type": projection.mime_type,
+                    "size_bytes": projection.size_bytes,
+                    "sha256": projection.sha256,
+                    "ocr": ocr,
+                }
+            )
         return {
-            "status": "verified",
+            "status": "input_verified",
             "instruction": str(arguments["instruction"]),
             "images": inspected,
-            "note": "已验证图片身份与完整性；语义判断需由当前对话模型结合这些工件完成。",
+            "semantic_result": None,
+            "requires_model_vision": True,
+            "note": (
+                "已验证图片身份与完整性，并附上可用的本地 OCR 证据；"
+                "本结果不代表语义视觉已完成，语义答案必须来自已绑定图片的当前对话模型。"
+            ),
         }
 
     def _find_marker_artifact(self, marker: str):

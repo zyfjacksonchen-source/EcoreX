@@ -30,6 +30,14 @@ const sidebar = await readFile(
   new URL("../src/v1/components/Sidebar.tsx", import.meta.url),
   "utf-8",
 );
+const attachmentPreview = await readFile(
+  new URL("../src/v1/components/InputAttachmentPreview.tsx", import.meta.url),
+  "utf-8",
+);
+const composer = await readFile(
+  new URL("../src/v1/components/Composer.tsx", import.meta.url),
+  "utf-8",
+);
 
 test("the chat DOM starts with a bounded anchored conversation window", () => {
   assert.match(windowing, /TIMELINE_WINDOW_SIZE = 120/u);
@@ -59,6 +67,31 @@ test("completed rows use native rendering containment while the active row stays
   assert.match(timeline, /item\.status === "in_progress"/u);
   assert.match(features, /\.ex-message:not\(\.is-streaming\)\s*\{[\s\S]*content-visibility:\s*auto/u);
   assert.match(features, /contain-intrinsic-size:\s*auto 84px/u);
+});
+
+test("uploaded images keep authenticated thumbnails and open a fit-to-screen preview", () => {
+  assert.match(timeline, /<InputAttachmentPreview/u);
+  assert.match(attachmentPreview, /loadBlob\(attachment\.attachment_id, controller\.signal\)/u);
+  assert.match(attachmentPreview, /URL\.createObjectURL\(blob\)/u);
+  assert.match(attachmentPreview, /<Dialog\.Content/u);
+  assert.match(features, /\.ex-attachment-preview-dialog > img\s*\{[\s\S]*object-fit:\s*contain/u);
+  assert.match(features, /\.ex-input-attachment-preview-trigger img[\s\S]*object-fit:\s*cover/u);
+});
+
+test("the composer exposes uploading and ready attachment states", () => {
+  assert.match(composer, /pendingAttachments/u);
+  assert.match(composer, /URL\.createObjectURL\(file\)/u);
+  assert.match(composer, />正在上传</u);
+  assert.match(attachmentPreview, /"已就绪"/u);
+  assert.match(composer, /<InputAttachmentPreview/u);
+});
+
+test("jump to latest is a transient centered circular affordance", () => {
+  assert.match(timeline, /showJumpToLatest \? \(/u);
+  assert.match(timeline, /aria-label="回到底部"/u);
+  assert.doesNotMatch(timeline, /回到底部\s*<\/button>/u);
+  assert.match(features, /\.ex-timeline-jump\s*\{[\s\S]*left:\s*50%[\s\S]*transform:\s*translateX\(-50%\)/u);
+  assert.match(features, /\.ex-timeline-jump-button\s*\{[\s\S]*width:\s*32px[\s\S]*border-radius:\s*var\(--radius-pill\)/u);
 });
 
 test("assistant office Markdown is lazy, bounded, and cannot load raw HTML or images", () => {

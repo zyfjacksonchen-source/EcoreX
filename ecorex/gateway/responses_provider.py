@@ -452,16 +452,23 @@ class ManagedHTTPSResponsesProvider:
                     }
                 )
             elif isinstance(item, GatewayUserMessageInput):
+                content: list[dict[str, Any]] = [
+                    {"type": "input_text", "text": item.content}
+                ]
+                content.extend(
+                    {
+                        "type": "input_image",
+                        "image_url": (
+                            f"data:{image.mime_type};base64,{image.data_base64}"
+                        ),
+                    }
+                    for image in item.images
+                )
                 input_value.append(
                     {
                         "type": "message",
                         "role": "user",
-                        "content": [
-                            {
-                                "type": "input_text",
-                                "text": item.content,
-                            }
-                        ],
+                        "content": content,
                     }
                 )
             elif isinstance(item, GatewayAssistantMessageInput):

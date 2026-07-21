@@ -471,6 +471,27 @@ export class RuntimeClient {
     );
   }
 
+  async inputAttachmentBlob(
+    attachmentId: string,
+    signal?: AbortSignal,
+  ): Promise<Blob> {
+    const response = await fetch(
+      `${this.base}/api/v1/input-attachments/${encodeURIComponent(attachmentId)}/content`,
+      {
+        headers: this.headers(false),
+        credentials: "same-origin",
+        cache: "no-store",
+        signal,
+      },
+    );
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null);
+      const parsed = parseError(payload, `Attachment request failed (${response.status}).`);
+      throw new RuntimeApiError(parsed.message, response.status, parsed.code);
+    }
+    return response.blob();
+  }
+
   memory(signal?: AbortSignal): Promise<MemorySnapshot> {
     return this.json(
       "/api/v1/memory",

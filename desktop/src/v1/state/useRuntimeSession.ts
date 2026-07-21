@@ -106,6 +106,15 @@ export function preferredModel(
   return models.find((model) => model.is_default)?.model_id ?? models[0]?.model_id ?? "";
 }
 
+export function reconcileModelSelection(
+  current: string,
+  models: readonly ModelDescriptor[],
+): string {
+  return models.some((model) => model.model_id === current)
+    ? current
+    : preferredModel(models);
+}
+
 export function modelSelectionForMutation(
   chatModel: string,
   imageModel: string,
@@ -298,8 +307,8 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     const action = { type: "bootstrap.received" as const, bootstrap };
     stateRef.current = runtimeReducer(stateRef.current, action);
     dispatch(action);
-    setChatModel((current) => current || preferredModel(bootstrap.models.chat));
-    setImageModel((current) => current || preferredModel(bootstrap.models.image));
+    setChatModel((current) => reconcileModelSelection(current, bootstrap.models.chat));
+    setImageModel((current) => reconcileModelSelection(current, bootstrap.models.image));
   }, [client]);
 
   const loadBootstrap = useCallback(async (signal?: AbortSignal) => {
@@ -1193,6 +1202,10 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     }
   }, [client]);
 
+  const loadInputAttachment = useCallback((attachmentId: string, signal?: AbortSignal) => (
+    client.inputAttachmentBlob(attachmentId, signal)
+  ), [client]);
+
   useEffect(() => {
     if (!bootstrapped) return;
     void recoverPendingOperations();
@@ -1545,10 +1558,14 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     annotations: RetouchAnnotation[],
     instruction: string,
   ) => {
+    if (!imageModel) {
+      setTransportError("图片模型暂不可用，请刷新模型目录后重试。");
+      throw new Error("图片模型暂不可用，请刷新模型目录后重试。");
+    }
     try {
       return await client.requestRetouch(artifact, annotations, instruction, {
         agentModelId: chatModel,
-        imageModelId: imageModel || null,
+        imageModelId: imageModel,
       });
     } catch (error) {
       setTransportError(errorMessage(error));
@@ -1582,9 +1599,13 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   const submitRetouchWorkspace = useCallback(async (
     workspace: RetouchWorkspaceProjection,
   ) => {
+    if (!imageModel) {
+      setTransportError("图片模型暂不可用，请刷新模型目录后重试。");
+      throw new Error("图片模型暂不可用，请刷新模型目录后重试。");
+    }
     return client.submitRetouchWorkspace(workspace, {
       agentModelId: chatModel,
-      imageModelId: imageModel || null,
+      imageModelId: imageModel,
     });
   }, [chatModel, client, imageModel]);
 
@@ -1779,6 +1800,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     artifactPreviewUrls,
     sendMessage,
     uploadInputAttachment,
+    loadInputAttachment,
     interrupt,
     respondInteraction,
     updatePermission,

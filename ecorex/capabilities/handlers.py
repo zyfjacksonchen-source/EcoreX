@@ -9,11 +9,15 @@ import stat as stat_module
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from .packs import CapabilityPackRuntime
 from .registry import CapabilityRegistry
 from .service import ToolHandler
+from .service import ToolExecutionScope
+
+
+WorkspaceRootResolver = Callable[[ToolExecutionScope | None], tuple[Path, ...]]
 
 
 class WorkspaceReadError(RuntimeError):
@@ -43,6 +47,7 @@ class WorkspaceReadHandler:
         hard_max_bytes: int = 1024 * 1024,
         max_file_size_bytes: int = 64 * 1024 * 1024,
         max_directory_entries: int = 500,
+        workspace_root_resolver: WorkspaceRootResolver | None = None,
     ) -> None:
         if not roots:
             raise ValueError("at least one workspace root is required")
@@ -71,14 +76,16 @@ class WorkspaceReadHandler:
         self._hard_max_bytes = hard_max_bytes
         self._max_file_size_bytes = max_file_size_bytes
         self._max_directory_entries = max_directory_entries
+        self._workspace_root_resolver = workspace_root_resolver
 
-    def __call__(self, arguments: Mapping[str, Any]) -> dict[str, Any]:
+    def __call__(self, arguments: Mapping[str, Any], context: Any = None) -> dict[str, Any]:
         raw_path = str(arguments["path"])
         offset = int(arguments.get("offset_bytes", 0))
         requested = int(arguments.get("max_bytes", self._default_max_bytes))
         if not 1 <= requested <= self._hard_max_bytes or offset < 0:
             raise WorkspaceReadError("workspace read range is invalid")
-        path, root_index, relative = self._resolve(raw_path)
+        roots = self._roots_for_context(context)
+        path, root_index, relative = self._resolve(raw_path, roots)
         try:
             before = path.lstat()
         except OSError as exc:
@@ -100,23 +107,37 @@ class WorkspaceReadHandler:
             )
         return self._file(path, locator, before, offset=offset, limit=requested)
 
-    def _resolve(self, raw_path: str) -> tuple[Path, int, Path]:
+    def _roots_for_context(self, context: Any) -> tuple[Path, ...]:
+        if self._workspace_root_resolver is None:
+            return self._roots
+        additional = self._workspace_root_resolver(
+            getattr(context, "execution_scope", None)
+        )
+        if not isinstance(additional, tuple):
+            raise WorkspaceReadError("workspace authority returned invalid roots")
+        # A project-scoped Turn treats its backend-authorized project as the
+        # working directory.  Static product roots remain available as
+        # secondary roots, while a general conversation still receives only
+        # the configured static roots.
+        return tuple(dict.fromkeys((*additional, *self._roots)))
+
+    def _resolve(self, raw_path: str, roots: tuple[Path, ...]) -> tuple[Path, int, Path]:
         if "\x00" in raw_path or not raw_path.strip():
             raise WorkspaceReadError("workspace path is invalid")
         requested = Path(raw_path)
         candidates: list[tuple[Path, int]] = []
         if requested.is_absolute():
-            candidates = [(requested, index) for index in range(len(self._roots))]
+            candidates = [(requested, index) for index in range(len(roots))]
         else:
             pure = PurePosixPath(raw_path.replace("\\", "/"))
             if any(part in {"", ".", ".."} for part in pure.parts):
                 raise WorkspaceReadError("workspace path traversal is forbidden")
             candidates = [
                 (root.joinpath(*pure.parts), index)
-                for index, root in enumerate(self._roots)
+                for index, root in enumerate(roots)
             ]
         for candidate, index in candidates:
-            root = self._roots[index]
+            root = roots[index]
             try:
                 lexical = candidate.absolute()
                 relative_lexical = lexical.relative_to(root)
@@ -259,10 +280,15 @@ def build_capability_handler_set(
     workspace_roots: tuple[Path | str, ...],
     trusted_core_handlers: Mapping[str, ToolHandler] | None = None,
     pack_runtime: CapabilityPackRuntime | None = None,
+    workspace_root_resolver: WorkspaceRootResolver | None = None,
 ) -> CapabilityHandlerSet:
     """Build one honest availability snapshot from actual executable handlers."""
 
-    handlers: dict[str, ToolHandler] = {"read": WorkspaceReadHandler(workspace_roots)}
+    handlers: dict[str, ToolHandler] = {
+        "read": WorkspaceReadHandler(
+            workspace_roots, workspace_root_resolver=workspace_root_resolver
+        )
+    }
     for tool_id, handler in dict(trusted_core_handlers or {}).items():
         try:
             registry.get(tool_id)
@@ -283,6 +309,9 @@ def build_capability_handler_set(
             if tool_id in handlers:
                 raise ValueError(f"pack handler shadows a core handler: {tool_id}")
             handlers[tool_id] = handler
+            binder = getattr(handler, "bind_workspace_root_resolver", None)
+            if callable(binder):
+                binder(workspace_root_resolver)
         installed_packs = pack_runtime.installed_pack_ids
     disabled = {
         spec.tool_id: "verified_handler_not_installed"

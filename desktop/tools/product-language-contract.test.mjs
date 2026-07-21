@@ -15,6 +15,7 @@ const settings = source("../src/v1/components/SettingsDialog.tsx");
 const extensionSession = source("../src/v1/state/useExtensionSession.ts");
 const extensionLabels = source("../src/v1/state/extensions.ts");
 const composer = source("../src/v1/components/Composer.tsx");
+const runtimeSession = source("../src/v1/state/useRuntimeSession.ts");
 const modelSelector = source("../src/v1/components/ComposerModelSelector.tsx");
 const timeline = source("../src/v1/components/Timeline.tsx");
 const projectSelector = source("../src/v1/components/NewConversationProjectSelector.tsx");
@@ -67,6 +68,16 @@ test("Composer uses automatic intent routing with truthful paste and model contr
   assert.match(modelSelector, /图片模型 <small>按意图自动调用<\/small>/u);
   assert.doesNotMatch(composer, /aria-label="任务类型"|ex-mode-switch|onModeChange|TaskMode/u);
   assert.doesNotMatch(composer, />\s*办公\s*</u);
+  assert.match(composer, /modelId !== chatModel\) setDisposition\("queue"\)/u);
+  assert.match(composer, /modelId !== imageModel\) setDisposition\("queue"\)/u);
+  assert.match(runtimeSession, /reconcileModelSelection\(current, bootstrap\.models\.chat\)/u);
+  assert.match(runtimeSession, /reconcileModelSelection\(current, bootstrap\.models\.image\)/u);
+});
+
+test("one update identity stays dismissed across its download states", () => {
+  assert.match(app, /window\.localStorage\.getItem\(DISMISSED_UPDATE_BANNERS_KEY\)/u);
+  assert.match(app, /update\.release_id && update\.build_digest/u);
+  assert.doesNotMatch(app, /`\$\{update\.target_version[^`]*\}:\$\{update\.state\}`/u);
 });
 
 test("new conversation choices stay bounded and operational copy is progressive", () => {

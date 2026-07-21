@@ -1,5 +1,5 @@
 import { Fragment, lazy, memo, Suspense, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, Check, CircleDashed, Copy, FileText, FolderOpen, Image, Workflow, WandSparkles } from "lucide-react";
+import { ArrowDown, Check, CircleDashed, Copy, FolderOpen, Workflow, WandSparkles } from "lucide-react";
 
 import type {
   ArtifactProjection,
@@ -19,6 +19,7 @@ import {
   TIMELINE_WINDOW_SIZE,
 } from "../state/timelineWindow.ts";
 import { ArtifactShelf } from "./ArtifactShelf.tsx";
+import { InputAttachmentPreview, type InputAttachmentBlobLoader } from "./InputAttachmentPreview.tsx";
 
 const OfficeMarkdown = lazy(() => import("./OfficeMarkdown.tsx"));
 const TimelineActivity = lazy(() => import("./TimelineActivity.tsx"));
@@ -43,6 +44,7 @@ interface TimelineProps {
   onSelectConversationProject: (project: ProjectProjection | null) => void;
   onPickProject: () => Promise<ProjectProjection | null>;
   newConversationComposer: ReactNode;
+  onLoadAttachment: InputAttachmentBlobLoader;
 }
 
 const TIMELINE_BOTTOM_THRESHOLD_PX = 24;
@@ -177,7 +179,13 @@ const TurnCompletionRow = memo(function TurnCompletionRow({
   );
 });
 
-const MessageRow = memo(function MessageRow({ item }: { item: ItemProjection }) {
+const MessageRow = memo(function MessageRow({
+  item,
+  onLoadAttachment,
+}: {
+  item: ItemProjection;
+  onLoadAttachment: InputAttachmentBlobLoader;
+}) {
   const user = role(item) === "user";
   const text = messageText(item);
   const attachments = user ? messageAttachments(item) : [];
@@ -191,10 +199,11 @@ const MessageRow = memo(function MessageRow({ item }: { item: ItemProjection }) 
         {user && attachments.length ? (
           <div className="ex-message-attachments" aria-label="本条消息的附件">
             {attachments.map((attachment) => (
-              <span key={attachment.attachment_id} title={attachment.display_name}>
-                {attachment.media_kind === "image" ? <Image aria-hidden="true" /> : <FileText aria-hidden="true" />}
-                {attachment.display_name}
-              </span>
+              <InputAttachmentPreview
+                key={attachment.attachment_id}
+                attachment={attachment}
+                loadBlob={onLoadAttachment}
+              />
             ))}
           </div>
         ) : null}
@@ -229,6 +238,7 @@ export function Timeline({
   onSelectConversationProject,
   onPickProject,
   newConversationComposer,
+  onLoadAttachment,
 }: TimelineProps) {
   const messages = useMemo(
     () => items.filter((item) => item.kind === "message"),
@@ -499,7 +509,7 @@ export function Timeline({
               </div>
             ) : null}
             {item.kind === "message"
-              ? <MessageRow item={item} />
+              ? <MessageRow item={item} onLoadAttachment={onLoadAttachment} />
               : (
                 <Suspense fallback={<div className="ex-activity-row" role="status">正在更新工作步骤…</div>}>
                   <TimelineActivity item={item} />
@@ -604,8 +614,10 @@ export function Timeline({
       {showJumpToLatest ? (
         <div className="ex-timeline-jump">
           <button
-            className="ex-button is-primary ex-timeline-jump-button"
+            className="ex-timeline-jump-button"
             type="button"
+            aria-label="回到底部"
+            title="回到底部"
             onClick={() => {
               pendingJumpToLatestRef.current = true;
               setHistoryEndAnchorId(null);
@@ -613,7 +625,6 @@ export function Timeline({
             }}
           >
             <ArrowDown aria-hidden="true" />
-            回到底部
           </button>
         </div>
       ) : null}

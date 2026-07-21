@@ -194,6 +194,10 @@ class UpdateConfig:
     poll_interval_seconds: float
 
 
+_RELEASE_FEED_PATH = "/api/v1/releases/latest"
+_UPDATE_SIGNAL_PATH = "/api/v1/client/updates/ws"
+
+
 @dataclass(frozen=True, slots=True)
 class ShareServiceConfig:
     endpoint: str
@@ -458,6 +462,14 @@ class ProductRuntimeConfig:
             allowed_hosts=control_plane_hosts,
             websocket=True,
         )
+        if urlsplit(release_feed_endpoint).path != _RELEASE_FEED_PATH:
+            raise ProductRuntimeConfigurationError(
+                "release_feed_endpoint must use the canonical Control Plane release path"
+            )
+        if urlsplit(signal_endpoint).path != _UPDATE_SIGNAL_PATH:
+            raise ProductRuntimeConfigurationError(
+                "signal_endpoint must use the canonical Control Plane update signal path"
+            )
         try:
             channel = ReleaseChannel(_string(update_raw, "channel"))
         except ValueError:

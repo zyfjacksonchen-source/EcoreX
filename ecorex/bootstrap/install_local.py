@@ -189,16 +189,24 @@ def install(
         pointers = coordinator.slots.pointers()
         if pointers.current is not None:
             current_manifest = coordinator.slots.release_manifest(pointers.current)
-            if current_manifest != manifest:
-                raise ValueError("an unrelated Runtime is already installed")
-            bootstrap_companion.install_existing(manifest, artifacts)
-            activated = ActivationResult(
-                transaction_id="existing-" + manifest.build_digest[:24],
-                state=InstallState.COMPLETED,
-                slot_id=pointers.current,
-                current_slot=pointers.current,
-                previous_slot=pointers.previous,
-            )
+            if current_manifest == manifest:
+                bootstrap_companion.install_existing(manifest, artifacts)
+                activated = ActivationResult(
+                    transaction_id="existing-" + manifest.build_digest[:24],
+                    state=InstallState.COMPLETED,
+                    slot_id=pointers.current,
+                    current_slot=pointers.current,
+                    previous_slot=pointers.previous,
+                )
+            else:
+                prepared = coordinator.prepare_update(
+                    manifest,
+                    artifact_id,
+                    first_install=False,
+                )
+                if prepared.state is not InstallState.AWAITING_USER:
+                    raise ValueError("Bootstrap update did not wait for confirmation")
+                activated = coordinator.activate(prepared.transaction_id)
         else:
             prepared = coordinator.prepare_update(
                 manifest,

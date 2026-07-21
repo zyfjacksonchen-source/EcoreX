@@ -233,8 +233,8 @@ def _runtime_config(platform: str, architecture: str, public: bytes) -> bytes:
             "supervisor_poll_seconds": 1,
         },
         "update": {
-            "release_feed_endpoint": "https://control.example/v1/releases/eligible",
-            "signal_endpoint": "wss://control.example/v1/updates/events",
+            "release_feed_endpoint": "https://control.example/api/v1/releases/latest",
+            "signal_endpoint": "wss://control.example/api/v1/client/updates/ws",
             "control_plane_hosts": ["control.example"],
             "artifact_hosts": [
                 "cdn.example",

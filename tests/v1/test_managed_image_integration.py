@@ -44,6 +44,7 @@ from ecorex.integration.retouch_adapter import (
     RetouchMaskAsset,
     StructuredRetouchAdapterRequest,
 )
+from ecorex.input_attachments import InputAttachmentService
 from ecorex.protocol import CreateTurnRequest, ItemKind
 from ecorex.runtime.kernel import RuntimeKernel
 from ecorex.session import ManagedSessionService, ManagedSessionSnapshot
@@ -634,6 +635,106 @@ def test_imagegen_publication_crash_recovers_artifact_without_cloud_repeat(
         assert len(artifacts.list_user_artifacts(account_id="local-user")) == 1
         projection = kernel.projection(thread.thread_id)
         assert any(item.kind is ItemKind.ARTIFACT for item in projection.items)
+
+    asyncio.run(scenario())
+
+
+def test_uploaded_turn_image_is_a_managed_image_edit_input(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        import io
+
+        from PIL import Image
+
+        database = tmp_path / "runtime.db"
+        kernel = RuntimeKernel(database)
+        artifacts = ArtifactService(tmp_path / "artifacts", database_path=database)
+        attachments = InputAttachmentService(artifacts, account_id="local-user")
+        source = io.BytesIO()
+        Image.new("RGB", (640, 480), (20, 80, 220)).save(source, format="PNG")
+        source_bytes = source.getvalue()
+        uploaded = attachments.upload(
+            source_bytes,
+            filename="user-reference.png",
+            mime_type="image/png",
+            client_request_id="imagegen-attachment-upload",
+        )
+        thread = kernel.create_thread()
+        turn = kernel.create_turn(
+            thread.thread_id,
+            CreateTurnRequest(
+                input="把这张图改成暖色",
+                image_model_id="gpt-image-2",
+                client_message_id="imagegen-attachment-message",
+                metadata={"input_attachments": [uploaded.model_dump(mode="json")]},
+            ),
+        ).turn
+        now = datetime.now(UTC)
+        result_digest = hashlib.sha256(PNG).hexdigest()
+        job = ManagedImageJob(
+            job_id="imgjob_" + "8" * 32,
+            operation="retouch",
+            model_id="gpt-image-2",
+            status="completed",
+            attempt=1,
+            max_attempts=4,
+            created_at=now,
+            updated_at=now,
+            deadline=now + timedelta(minutes=5),
+            result=ManagedImageResultDescriptor(result_digest, len(PNG), "image/png"),
+            last_error_code=None,
+        )
+
+        class Client:
+            def __init__(self) -> None:
+                self.requests = []
+                self.inputs = []
+
+            async def execute(self, request, *, inputs=()):
+                self.requests.append(request)
+                self.inputs.append(inputs)
+                return ManagedImageDownloadedResult(job, PNG)
+
+        client = Client()
+        context = ToolInvocationContext(
+            invocation_id="invoke-image-attachment",
+            capability_snapshot_id="capability-image-attachment",
+            policy_snapshot_id="permission-image-attachment",
+            tool_id="imagegen",
+            idempotency_key=f"{turn.turn_id}:tool-image-attachment",
+            approved=True,
+            effective_sandbox=SandboxLevel.WORKSPACE_WRITE,
+            execution_scope=ToolExecutionScope(
+                job_id="job-image-attachment",
+                thread_id=thread.thread_id,
+                turn_id=turn.turn_id,
+            ),
+        )
+        backend = RuntimeImageToolBackend(
+            database_path=database,
+            artifacts=artifacts,
+            kernel=kernel,
+            account_id="local-user",
+            client=client,  # type: ignore[arg-type]
+            input_attachments=attachments,
+        )
+
+        output = await backend.generate_image(
+            {
+                "instruction": "改成暖色，保留构图",
+                "attachment_ids": [uploaded.attachment_id],
+            },
+            context,
+        )
+
+        assert output["status"] == "completed"
+        assert client.requests[0].operation is ImageOperation.RETOUCH
+        assert len(client.inputs[0]) == 1
+        assert client.inputs[0][0].content.startswith(b"\xff\xd8")
+        assert len(client.inputs[0][0].content) <= 8 * 1024 * 1024
+        assert client.inputs[0][0].sha256 == hashlib.sha256(
+            client.inputs[0][0].content
+        ).hexdigest()
+        assert attachments.read(uploaded.attachment_id)[1] == source_bytes
 
     asyncio.run(scenario())
 

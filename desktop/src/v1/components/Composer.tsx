@@ -1,6 +1,6 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { ChevronDown, FileText, Image, Plus, Send, ShieldCheck, Square, X } from "lucide-react";
+import { ChevronDown, FileText, LoaderCircle, Plus, Send, ShieldCheck, Square } from "lucide-react";
 import { lazy, Suspense, useRef, useState } from "react";
 
 import type { SendDisposition } from "../state/useRuntimeSession.ts";
@@ -16,6 +16,7 @@ import type {
   ConnectorOperationState,
 } from "../state/connectors.ts";
 import { IconButton } from "./IconButton.tsx";
+import { InputAttachmentPreview, type InputAttachmentBlobLoader } from "./InputAttachmentPreview.tsx";
 
 const loadConnectorPopover = () => import("./ConnectorPopover.tsx");
 const loadComposerModelSelector = () => import("./ComposerModelSelector.tsx");
@@ -72,6 +73,7 @@ interface ComposerProps {
     attachments: readonly InputAttachmentProjection[],
   ) => Promise<boolean>;
   onUploadAttachment: (file: File) => Promise<InputAttachmentProjection | null>;
+  onLoadAttachment: InputAttachmentBlobLoader;
   onInterrupt: () => void;
 }
 
@@ -111,6 +113,7 @@ export function Composer({
   onOpenPermissionSettings,
   onSend,
   onUploadAttachment,
+  onLoadAttachment,
   onInterrupt,
 }: ComposerProps) {
   const [draft, setDraft] = useState("");
@@ -118,6 +121,11 @@ export function Composer({
   const [sendFailed, setSendFailed] = useState(false);
   const [attachments, setAttachments] = useState<InputAttachmentProjection[]>([]);
   const [attachmentUploading, setAttachmentUploading] = useState(false);
+  const [pendingAttachments, setPendingAttachments] = useState<ReadonlyArray<{
+    key: string;
+    name: string;
+    imageUrl: string | null;
+  }>>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const remaining = quota?.remaining;
@@ -156,21 +164,65 @@ export function Composer({
 
   const addFiles = async (files: FileList | readonly File[] | null) => {
     if (!files?.length || attachmentUploading) return;
-    const candidates = [...files].slice(0, Math.max(0, 20 - attachments.length));
+    const remainingFiles = Math.max(0, 20 - attachments.length);
+    const remainingImages = Math.max(
+      0,
+      4 - attachments.filter((item) => item.media_kind === "image").length,
+    );
+    let acceptedImages = 0;
+    let rejectedImages = false;
+    let rejectedFiles = false;
+    const candidates: File[] = [];
+    for (const file of files) {
+      if (candidates.length >= remainingFiles) {
+        rejectedFiles = true;
+        continue;
+      }
+      if (file.type.startsWith("image/")) {
+        if (acceptedImages >= remainingImages) {
+          rejectedImages = true;
+          continue;
+        }
+        acceptedImages += 1;
+      }
+      candidates.push(file);
+    }
     if (!candidates.length) {
-      setAttachmentError("一次消息最多可添加 20 个文件。");
+      setAttachmentError(
+        remainingFiles === 0
+          ? "一次消息最多可添加 20 个文件。"
+          : "一次消息最多可添加 4 张图片。",
+      );
       return;
     }
+    const capacityMessage = rejectedImages
+      ? "一次消息最多可添加 4 张图片，其余图片未加入。"
+      : rejectedFiles
+        ? "一次消息最多可添加 20 个文件，其余文件未加入。"
+        : null;
     setAttachmentUploading(true);
-    setAttachmentError(null);
+    setAttachmentError(capacityMessage);
+    const pending = candidates.map((file) => ({
+      key: crypto.randomUUID(),
+      name: file.name,
+      imageUrl: file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
+    }));
+    setPendingAttachments(pending);
     const uploaded: InputAttachmentProjection[] = [];
-    for (const file of candidates) {
-      const attachment = await onUploadAttachment(file);
-      if (attachment) uploaded.push(attachment);
-      else {
-        setAttachmentError(`“${file.name}”未能添加，请重试。`);
-        break;
+    try {
+      for (const file of candidates) {
+        const attachment = await onUploadAttachment(file);
+        if (attachment) uploaded.push(attachment);
+        else {
+          setAttachmentError(`“${file.name}”未能添加，请重试。`);
+          break;
+        }
       }
+    } finally {
+      pending.forEach((item) => {
+        if (item.imageUrl) URL.revokeObjectURL(item.imageUrl);
+      });
+      setPendingAttachments([]);
     }
     if (uploaded.length) setAttachments((current) => [...current, ...uploaded]);
     setAttachmentUploading(false);
@@ -181,19 +233,27 @@ export function Composer({
     <div className="ex-composer-region">
       <div className="ex-composer" data-busy={submitting ? "true" : "false"}>
         <label className="ex-composer-label" htmlFor="ecorex-composer">给 EcoreX 发消息</label>
-        {attachments.length ? (
+        {attachments.length || pendingAttachments.length ? (
           <div className="ex-composer-attachments" role="group" aria-label="已添加文件">
-            {attachments.map((attachment) => (
-              <span className="ex-composer-attachment" key={attachment.attachment_id}>
-                {attachment.media_kind === "image" ? <Image aria-hidden="true" /> : <FileText aria-hidden="true" />}
-                <span title={attachment.display_name}>{attachment.display_name}</span>
-                <button
-                  type="button"
-                  aria-label={`移除文件：${attachment.display_name}`}
-                  disabled={attachmentUploading || submitting}
-                  onClick={() => setAttachments((current) => current.filter((item) => item.attachment_id !== attachment.attachment_id))}
-                ><X aria-hidden="true" /></button>
+            {pendingAttachments.map((pending) => (
+              <span className="ex-input-attachment is-uploading" key={pending.key} aria-busy="true">
+                {pending.imageUrl ? <img src={pending.imageUrl} alt="" /> : <FileText aria-hidden="true" />}
+                <span className="ex-input-attachment-details">
+                  <span title={pending.name}>{pending.name}</span>
+                  <span className="ex-input-attachment-status" role="status">正在上传</span>
+                </span>
+                <LoaderCircle className="ex-attachment-spinner" aria-hidden="true" />
               </span>
+            ))}
+            {attachments.map((attachment) => (
+              <InputAttachmentPreview
+                key={attachment.attachment_id}
+                attachment={attachment}
+                loadBlob={onLoadAttachment}
+                removable
+                removeDisabled={attachmentUploading || submitting}
+                onRemove={() => setAttachments((current) => current.filter((item) => item.attachment_id !== attachment.attachment_id))}
+              />
             ))}
           </div>
         ) : null}
@@ -280,8 +340,14 @@ export function Composer({
                 imageModels={imageModels}
                 chatModel={chatModel}
                 imageModel={imageModel}
-                onChatModelChange={onChatModelChange}
-                onImageModelChange={onImageModelChange}
+                onChatModelChange={(modelId) => {
+                  onChatModelChange(modelId);
+                  if (active && modelId !== chatModel) setDisposition("queue");
+                }}
+                onImageModelChange={(modelId) => {
+                  onImageModelChange(modelId);
+                  if (active && modelId !== imageModel) setDisposition("queue");
+                }}
               />
             </Suspense>
           </div>

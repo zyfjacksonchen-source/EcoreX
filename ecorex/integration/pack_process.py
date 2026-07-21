@@ -165,6 +165,7 @@ class ProcessCapabilityPackAdapter:
         self.pack = pack
         self.artifact_path = pack.artifact_path.resolve(strict=True)
         self.workspace_roots = tuple(roots)
+        self._workspace_root_resolver: Callable[[Any], tuple[Path, ...]] | None = None
         self.python_executable = executable
         self.default_timeout_seconds = float(default_timeout_seconds)
         self.descriptor = _inspect_zipapp(pack)
@@ -205,6 +206,23 @@ class ProcessCapabilityPackAdapter:
             for tool_id in self.descriptor.tools
         }
 
+    def bind_workspace_root_resolver(
+        self, resolver: Callable[[Any], tuple[Path, ...]] | None
+    ) -> None:
+        self._workspace_root_resolver = resolver
+
+    def _workspace_roots_for_scope(self, scope: Any) -> tuple[Path, ...]:
+        additional = (
+            self._workspace_root_resolver(scope)
+            if self._workspace_root_resolver is not None
+            else ()
+        )
+        if not isinstance(additional, tuple):
+            raise CapabilityPackProcessError("pack_workspace_authority_invalid")
+        # Put the Turn-bound project first so relative shell paths and the
+        # child cwd match the project conversation the user selected.
+        return tuple(dict.fromkeys((*additional, *self.workspace_roots)))
+
     @property
     def sandbox_profile_availability(self) -> Mapping[str, str | None]:
         if self.descriptor.pack_id != "sandbox":
@@ -238,11 +256,13 @@ class ProcessCapabilityPackAdapter:
         if tool_id not in self.descriptor.tools or context.tool_id != tool_id:
             raise CapabilityPackProcessError("pack_tool_identity_mismatch")
         scope = context.execution_scope
+        workspace_roots = self._workspace_roots_for_scope(scope)
         timeout = self._timeout(tool_id, arguments)
         sandbox_contract = self._sandbox_contract(
             tool_id=tool_id,
             effective_sandbox=context.effective_sandbox.value,
             timeout_seconds=timeout,
+            workspace_roots=workspace_roots,
         )
         request = {
             "schema_version": 1,
@@ -257,7 +277,7 @@ class ProcessCapabilityPackAdapter:
                 "idempotency_key": context.idempotency_key,
                 "approved": context.approved,
                 "effective_sandbox": context.effective_sandbox.value,
-                "workspace_roots": [str(path) for path in self.workspace_roots],
+                "workspace_roots": [str(path) for path in workspace_roots],
                 "sandbox_contract": (
                     {
                         **sandbox_contract.to_dict(),
@@ -307,6 +327,7 @@ class ProcessCapabilityPackAdapter:
                 timeout=timeout,
                 sandbox_contract=sandbox_contract,
                 child_environment=child_environment,
+                workspace_roots=workspace_roots,
             )
         finally:
             await asyncio.to_thread(_remove_pack_invocation_temp, temporary_root)
@@ -320,11 +341,13 @@ class ProcessCapabilityPackAdapter:
         timeout: float,
         sandbox_contract: SandboxIsolationContract | None,
         child_environment: Mapping[str, str],
+        workspace_roots: tuple[Path, ...],
     ) -> Any:
         process = await self._spawn(
             tool_id=tool_id,
             sandbox_contract=sandbox_contract,
             child_environment=child_environment,
+            workspace_roots=workspace_roots,
         )
         request_dispatched = False
         stdout_task = asyncio.create_task(
@@ -415,7 +438,10 @@ class ProcessCapabilityPackAdapter:
                 ),
             )
         result = response[1]
-        if _contains_protected_path(result, self._protected_paths):
+        protected_paths = self._protected_paths + tuple(
+            _normalized_path_text(path) for path in workspace_roots
+        )
+        if _contains_protected_path(result, protected_paths):
             raise CapabilityPackProcessError(
                 "pack_result_exposed_host_path",
                 side_effect_uncertain=request_dispatched,
@@ -428,12 +454,13 @@ class ProcessCapabilityPackAdapter:
         tool_id: str,
         sandbox_contract: SandboxIsolationContract | None,
         child_environment: Mapping[str, str],
+        workspace_roots: tuple[Path, ...],
     ) -> asyncio.subprocess.Process:
         kwargs: dict[str, Any] = {
             "stdin": asyncio.subprocess.PIPE,
             "stdout": asyncio.subprocess.PIPE,
             "stderr": asyncio.subprocess.PIPE,
-            "cwd": str(self.workspace_roots[0]),
+            "cwd": str(workspace_roots[0]),
             "env": dict(child_environment),
         }
         if os.name == "nt":
@@ -455,7 +482,7 @@ class ProcessCapabilityPackAdapter:
         if use_backend:
             try:
                 launch = self._sandbox_backend.launch_plan(
-                    workspace_roots=self.workspace_roots,
+                    workspace_roots=workspace_roots,
                     python_executable=self.python_executable,
                     artifact_path=self.artifact_path,
                     timeout_seconds=sandbox_contract.timeout_seconds,
@@ -487,11 +514,12 @@ class ProcessCapabilityPackAdapter:
         tool_id: str,
         effective_sandbox: str,
         timeout_seconds: float,
+        workspace_roots: tuple[Path, ...],
     ) -> SandboxIsolationContract | None:
         if tool_id != "shell":
             return None
         roots_digest = hashlib.sha256(
-            "\0".join(str(path) for path in self.workspace_roots).encode("utf-8")
+            "\0".join(str(path) for path in workspace_roots).encode("utf-8")
         ).hexdigest()
         if effective_sandbox == "workspace-write":
             probe = self.sandbox_probe
@@ -558,6 +586,11 @@ class _ProcessPackToolHandler:
         if self._tool_id != "shell":
             return {}
         return self._adapter.sandbox_profile_availability
+
+    def bind_workspace_root_resolver(
+        self, resolver: Callable[[Any], tuple[Path, ...]] | None
+    ) -> None:
+        self._adapter.bind_workspace_root_resolver(resolver)
 
     async def __call__(
         self,

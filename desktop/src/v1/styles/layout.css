@@ -609,7 +609,7 @@ textarea {
 }
 
 .ex-account-menu {
-  width: 228px;
+  width: 192px;
   max-width: calc(100vw - var(--space-6));
 }
 

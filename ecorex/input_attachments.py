@@ -9,9 +9,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import asyncio
 import hashlib
+import io
 import json
 import mimetypes
+import warnings
 from typing import Any, Iterable, Mapping
 
 from ecorex.artifacts import (
@@ -31,6 +34,11 @@ except ImportError:  # pragma: no cover
 
 MAX_INPUT_ATTACHMENT_BYTES = 64 * 1024 * 1024
 MAX_INPUT_ATTACHMENTS_PER_TURN = 20
+MAX_MODEL_IMAGE_ATTACHMENTS_PER_TURN = 4
+MAX_VISUAL_INPUT_PIXELS = 40_000_000
+MAX_VISUAL_INPUT_DIMENSION = 2048
+MAX_VISUAL_RENDITION_BYTES = 384 * 1024
+MAX_MANAGED_IMAGE_RENDITION_BYTES = 8 * 1024 * 1024
 _ALLOWED_MIME_PREFIXES = ("image/", "text/")
 _ALLOWED_MIME_TYPES = frozenset(
     {
@@ -56,6 +64,16 @@ class InputAttachmentUnavailable(InputAttachmentError):
 
 class InputAttachmentConflict(InputAttachmentError):
     code = "input_attachment_conflict"
+
+
+@dataclass(frozen=True, slots=True)
+class InputAttachmentVisualRendition:
+    content: bytes
+    mime_type: str
+    sha256: str
+    source_sha256: str
+    width: int
+    height: int
 
 
 INPUT_ATTACHMENT_READ_MAX_CHARS = 32 * 1024
@@ -186,11 +204,160 @@ class InputAttachmentService:
                 ):
                     raise InputAttachmentUnavailable("selected attachment is unavailable")
                 result.append(self._projection(projection, display_name=row["original_name"]))
+        if (
+            sum(item.media_kind == "image" for item in result)
+            > MAX_MODEL_IMAGE_ATTACHMENTS_PER_TURN
+        ):
+            raise InputAttachmentError("a Turn accepts at most four image attachments")
         return tuple(result)
 
     def read(self, attachment_id: str) -> tuple[InputAttachmentProjection, bytes]:
         projection = self.resolve((attachment_id,))[0]
         return projection, self.artifacts.read_internal_revision_content(projection.revision_id)
+
+    def read_bound(
+        self,
+        attachment_id: str,
+        *,
+        thread_id: str,
+        turn_id: str,
+        require_image: bool = False,
+    ) -> tuple[InputAttachmentProjection, bytes]:
+        """Read an opaque attachment only when immutable Turn metadata binds it.
+
+        This is the shared authority boundary for text read, Vision and OCR.
+        Callers never receive or accept a host filesystem path.
+        """
+
+        with self.artifacts.repository.database.reader() as connection:
+            row = connection.execute(
+                "SELECT metadata_json FROM turns WHERE turn_id = ? AND thread_id = ?",
+                (turn_id, thread_id),
+            ).fetchone()
+            revision_rows = connection.execute(
+                "SELECT metadata_json FROM turn_input_revisions "
+                "WHERE turn_id = ? AND thread_id = ? AND source IN ('initial','steer') "
+                "ORDER BY ordinal",
+                (turn_id, thread_id),
+            ).fetchall()
+        bound_ids: set[str] = set()
+        for candidate in ([row] if row is not None else []) + list(revision_rows):
+            try:
+                metadata = json.loads(str(candidate["metadata_json"]))
+            except (TypeError, ValueError, KeyError):
+                continue
+            bound = metadata.get("input_attachments") if isinstance(metadata, dict) else None
+            if not isinstance(bound, list):
+                continue
+            bound_ids.update(
+                item["attachment_id"]
+                for item in bound
+                if isinstance(item, dict)
+                and isinstance(item.get("attachment_id"), str)
+            )
+        if attachment_id not in bound_ids:
+            raise CapabilityDeniedError("attachment is not bound to this Turn")
+        projection, content = self.read(attachment_id)
+        if require_image and projection.media_kind != "image":
+            raise ToolArgumentsValidationError("attachment is not an image")
+        if hashlib.sha256(content).hexdigest() != projection.sha256:
+            raise InputAttachmentUnavailable("attachment content digest changed")
+        return projection, content
+
+    def read_bound_visual(
+        self,
+        attachment_id: str,
+        *,
+        thread_id: str,
+        turn_id: str,
+        max_bytes: int = MAX_VISUAL_RENDITION_BYTES,
+    ) -> tuple[InputAttachmentProjection, InputAttachmentVisualRendition]:
+        """Create a bounded, orientation-correct model rendition in memory.
+
+        The immutable source Artifact remains untouched.  This method is the
+        only local-image-to-model conversion boundary and never accepts a path.
+        """
+
+        if not 32 * 1024 <= max_bytes <= MAX_MANAGED_IMAGE_RENDITION_BYTES:
+            raise InputAttachmentError("visual rendition byte budget is invalid")
+        projection, source = self.read_bound(
+            attachment_id,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            require_image=True,
+        )
+        try:
+            from PIL import Image, ImageOps
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", Image.DecompressionBombWarning)
+                with Image.open(io.BytesIO(source)) as opened:
+                    frame = ImageOps.exif_transpose(opened)
+                    width, height = frame.size
+                    if (
+                        width < 1
+                        or height < 1
+                        or width * height > MAX_VISUAL_INPUT_PIXELS
+                    ):
+                        raise InputAttachmentUnavailable(
+                            "image dimensions exceed the visual safety limit"
+                        )
+                    frame.thumbnail(
+                        (MAX_VISUAL_INPUT_DIMENSION, MAX_VISUAL_INPUT_DIMENSION),
+                        Image.Resampling.LANCZOS,
+                    )
+                    # JPEG is widely accepted by both managed provider
+                    # protocols. Flatten alpha for a deterministic rendition.
+                    rgba = frame.convert("RGBA")
+                    canvas = Image.new("RGB", rgba.size, "white")
+                    canvas.paste(rgba, mask=rgba.getchannel("A"))
+                    rendition, width, height = self._encode_visual_jpeg(
+                        canvas, max_bytes=max_bytes
+                    )
+        except InputAttachmentError:
+            raise
+        except Exception as error:
+            raise InputAttachmentUnavailable(
+                "image cannot be decoded for model vision"
+            ) from error
+        return projection, InputAttachmentVisualRendition(
+            content=rendition,
+            mime_type="image/jpeg",
+            sha256=hashlib.sha256(rendition).hexdigest(),
+            source_sha256=projection.sha256,
+            width=width,
+            height=height,
+        )
+
+    @staticmethod
+    def _encode_visual_jpeg(image: Any, *, max_bytes: int) -> tuple[bytes, int, int]:
+        from PIL import Image
+
+        candidate = image
+        while True:
+            for quality in (88, 80, 72, 64, 56, 48, 40):
+                output = io.BytesIO()
+                candidate.save(
+                    output,
+                    format="JPEG",
+                    quality=quality,
+                    optimize=True,
+                    progressive=True,
+                )
+                content = output.getvalue()
+                if len(content) <= max_bytes:
+                    return content, candidate.width, candidate.height
+            if min(candidate.size) <= 256:
+                raise InputAttachmentUnavailable(
+                    "image cannot fit the visual transport budget"
+                )
+            candidate = candidate.resize(
+                (
+                    max(256, int(candidate.width * 0.8)),
+                    max(256, int(candidate.height * 0.8)),
+                ),
+                resample=Image.Resampling.LANCZOS,
+            )
 
     @staticmethod
     def _projection(artifact, *, display_name: str | None = None) -> InputAttachmentProjection:
@@ -230,24 +397,11 @@ class InputAttachmentReadRuntime:
             or not 1 <= maximum <= INPUT_ATTACHMENT_READ_MAX_CHARS
         ):
             raise ToolArgumentsValidationError("input attachment read request is invalid")
-        with self.attachments.artifacts.repository.database.reader() as connection:
-            row = connection.execute(
-                "SELECT metadata_json FROM turns WHERE turn_id = ? AND thread_id = ?",
-                (scope.turn_id, scope.thread_id),
-            ).fetchone()
-        try:
-            metadata = json.loads(str(row["metadata_json"])) if row is not None else {}
-        except (TypeError, ValueError, KeyError):
-            metadata = {}
-        bound = metadata.get("input_attachments") if isinstance(metadata, dict) else None
-        bound_ids = {
-            item.get("attachment_id")
-            for item in bound
-            if isinstance(item, dict) and isinstance(item.get("attachment_id"), str)
-        } if isinstance(bound, list) else set()
-        if attachment_id not in bound_ids:
-            raise CapabilityDeniedError("attachment is not bound to this Turn")
-        projection, content = self.attachments.read(attachment_id)
+        projection, content = self.attachments.read_bound(
+            attachment_id,
+            thread_id=scope.thread_id,
+            turn_id=scope.turn_id,
+        )
         if projection.media_kind == "image":
             return {
                 "schema_version": 1,
@@ -282,11 +436,91 @@ class InputAttachmentReadRuntime:
         }
 
 
+class InputAttachmentOCRRuntime:
+    """Bounded local OCR for Turn-bound image attachments."""
+
+    def __init__(self, attachments: InputAttachmentService, provider: Any) -> None:
+        self.attachments = attachments
+        if getattr(provider, "service_id", None) != "ocr.extract" or not callable(
+            getattr(provider, "extract", None)
+        ):
+            raise ValueError("OCR pack service adapter is invalid")
+        self.provider = provider
+
+    async def extract(self, arguments: Mapping[str, Any], context: Any) -> Mapping[str, Any]:
+        scope = getattr(context, "execution_scope", None)
+        if getattr(context, "tool_id", None) != "ocr" or scope is None:
+            raise CapabilityDeniedError("OCR requires Runtime execution scope")
+        attachment_ids = arguments.get("attachment_ids")
+        action = arguments.get("action")
+        timeout = arguments.get("timeout_seconds", 2.0)
+        if (
+            not isinstance(attachment_ids, list)
+            or not 1 <= len(attachment_ids) <= MAX_INPUT_ATTACHMENTS_PER_TURN
+            or len(set(attachment_ids)) != len(attachment_ids)
+            or any(not isinstance(value, str) or not value for value in attachment_ids)
+            or action not in {"extract_text", "extract_urls"}
+            or isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not 0.5 <= float(timeout) <= 8
+        ):
+            raise ToolArgumentsValidationError("OCR request is invalid")
+
+        # The OCR dependency pack owns these modules.  Import lazily so Core
+        # can still start and honestly report an unavailable pack.
+        from ecorex.integration.ocr import extract_urls_from_text
+
+        images: list[dict[str, Any]] = []
+        combined_urls: list[str] = []
+        for attachment_id in attachment_ids:
+            projection, rendition = self.attachments.read_bound_visual(
+                attachment_id,
+                thread_id=scope.thread_id,
+                turn_id=scope.turn_id,
+                max_bytes=MAX_MANAGED_IMAGE_RENDITION_BYTES,
+            )
+            result = await asyncio.to_thread(
+                self.provider.extract,
+                rendition.content,
+                timeout_seconds=float(timeout),
+            )
+            if not isinstance(result, dict):
+                raise InputAttachmentUnavailable("OCR runtime returned an invalid result")
+            text = str(result.get("text") or "")[:12000]
+            urls = list(dict.fromkeys(extract_urls_from_text(text)))[:100]
+            combined_urls.extend(urls)
+            images.append(
+                {
+                    "attachment_id": projection.attachment_id,
+                    "revision_id": projection.revision_id,
+                    "mime_type": projection.mime_type,
+                    "sha256": projection.sha256,
+                    "rendition_mime_type": rendition.mime_type,
+                    "rendition_sha256": rendition.sha256,
+                    "status": str(result.get("status") or "unknown"),
+                    "provider": str(result.get("provider") or "unknown"),
+                    "text": text if action == "extract_text" else None,
+                    "urls": urls,
+                    "latency_ms": int(result.get("latencyMs") or 0),
+                    "cache_hit": bool(result.get("cacheHit")),
+                }
+            )
+        return {
+            "schema_version": 1,
+            "status": "completed",
+            "action": action,
+            "images": images,
+            "urls": list(dict.fromkeys(combined_urls))[:100],
+        }
+
+
 __all__ = [
     "InputAttachmentConflict",
     "InputAttachmentError",
     "InputAttachmentService",
     "InputAttachmentReadRuntime",
+    "InputAttachmentOCRRuntime",
     "InputAttachmentUnavailable",
     "MAX_INPUT_ATTACHMENT_BYTES",
+    "MAX_MODEL_IMAGE_ATTACHMENTS_PER_TURN",
 ]
