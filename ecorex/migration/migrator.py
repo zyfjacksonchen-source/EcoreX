@@ -1696,12 +1696,12 @@ class V030ToV1Migrator:
     def _imported_run_status(source_status: str) -> tuple[str, str, str]:
         status = source_status.casefold()
         if status == "completed":
-            return "completed", "legacy_import", "turn.completed"
+            return "completed", "legacy_import", "turn.status_changed"
         if status in {"failed", "timeout"}:
-            return "failed", "legacy_timeout" if status == "timeout" else "legacy_failed", "turn.failed"
+            return "failed", "legacy_timeout" if status == "timeout" else "legacy_failed", "turn.status_changed"
         if status == "cancelled":
-            return "cancelled", "legacy_cancelled", "turn.cancelled"
-        return "interrupted", "legacy_migration_requires_user_confirmation", "turn.interrupted"
+            return "cancelled", "legacy_cancelled", "turn.status_changed"
+        return "interrupted", "legacy_migration_requires_user_confirmation", "turn.status_changed"
 
     @staticmethod
     def _import_initial_turn_input_revision(
@@ -1914,7 +1914,7 @@ class V030ToV1Migrator:
                     )
                     imported_status = "completed"
                     terminal_reason = "legacy_import"
-                    terminal_event_type = "turn.completed"
+                    terminal_event_type = "turn.status_changed"
                     legacy_model: str | None = None
                     if legacy_run is not None:
                         imported_status, terminal_reason, terminal_event_type = self._imported_run_status(
@@ -2168,7 +2168,11 @@ class V030ToV1Migrator:
                         turn_id=turn_id,
                         event_type=terminal_event_type,
                         payload={
-                            "from": "finalizing",
+                            # A historical imported Turn is never executed by
+                            # v1.  Its one terminal transition therefore starts
+                            # at the accepted fact instead of fabricating live
+                            # preparing/model/tool phases that did not occur.
+                            "from": "accepted",
                             "to": imported_status,
                             "reason": terminal_reason,
                         },

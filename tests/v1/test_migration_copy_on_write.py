@@ -27,7 +27,7 @@ from ecorex.migration import (
     migrate_v030_to_v1,
 )
 from ecorex.runtime.schema_fragments.memory import MEMORY_SCHEMA_FRAGMENT
-from ecorex.runtime import intent_fingerprint
+from ecorex.runtime import RuntimeInvariantAuditor, intent_fingerprint
 from ecorex.runtime.database import SCHEMA_VERSION
 from ecorex.migration.schema import IMPORT_LAYOUT_VERSION
 
@@ -718,6 +718,13 @@ def test_copy_on_write_imports_canonical_domains_and_is_idempotent(tmp_path):
     assert _query_one(database, "SELECT COUNT(*) FROM turns") == 1
     assert report.counts["turn_input_revisions"] == report.counts["turns"] == 1
     input_identities = _assert_imported_turn_input_contract(database)
+    assert _query_all(
+        database,
+        "SELECT event_type, json_extract(payload_json, '$.from'), "
+        "json_extract(payload_json, '$.to') FROM events "
+        "WHERE turn_id IS NOT NULL AND event_type = 'turn.status_changed'",
+    ) == [("turn.status_changed", "accepted", "completed")]
+    RuntimeInvariantAuditor(database).audit().raise_if_invalid()
     assert _query_one(database, "SELECT COUNT(*) FROM items WHERE kind = 'message'") == 2
     assert _query_one(database, "SELECT COUNT(*) FROM projects") == 1
     assert _query_one(database, "SELECT COUNT(*) FROM project_thread_bindings") == 1
@@ -767,6 +774,69 @@ def test_copy_on_write_imports_canonical_domains_and_is_idempotent(tmp_path):
     assert replay.counts["turn_input_revisions"] == 1
     assert _assert_imported_turn_input_contract(database) == input_identities
     assert inventory_source(source) == before
+
+
+def test_invariant_auditor_accepts_only_the_proven_legacy_terminal_event_dialect(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "legacy"
+    target = tmp_path / "v1"
+    source.mkdir()
+    _create_legacy_fixture(source)
+    migrate_v030_to_v1(source, target, quarantine_key=QUARANTINE_KEY)
+    database = target / TARGET_DATABASE_NAME
+
+    # Simulate the immutable event dialect emitted by v1.0.0-v1.0.11.  The
+    # temporary trigger removal is test-fixture construction only; the exact
+    # append-only trigger is restored before the production auditor sees it.
+    connection = sqlite3.connect(database)
+    try:
+        connection.execute("DROP TRIGGER events_are_append_only_update")
+        connection.execute(
+            "UPDATE events SET event_type = 'turn.completed', "
+            "payload_json = json_set(payload_json, '$.from', 'finalizing') "
+            "WHERE event_type = 'turn.status_changed'"
+        )
+        connection.executescript(
+            """
+            CREATE TRIGGER events_are_append_only_update
+            BEFORE UPDATE ON events
+            BEGIN
+                SELECT RAISE(ABORT, 'events are append-only');
+            END;
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    RuntimeInvariantAuditor(database).audit().raise_if_invalid()
+
+    connection = sqlite3.connect(database)
+    try:
+        connection.execute("DROP TRIGGER events_are_append_only_update")
+        connection.execute(
+            "DELETE FROM legacy_id_map WHERE entity_kind = 'turn'"
+        )
+        connection.executescript(
+            """
+            CREATE TRIGGER events_are_append_only_update
+            BEFORE UPDATE ON events
+            BEGIN
+                SELECT RAISE(ABORT, 'events are append-only');
+            END;
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    report = RuntimeInvariantAuditor(database).audit()
+    assert any(
+        item.code == "turn_event_invalid"
+        and item.detail == "legacy terminal event belongs to a non-migrated Turn"
+        for item in report.violations
+    )
 
 
 def test_v0292_preserves_live_chats_summaries_and_projects_without_deleted_cache(

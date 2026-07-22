@@ -93,6 +93,27 @@ _INTERACTION_EVENT_STATUS: dict[str, InteractionStatus] = {
     "interaction.expired": InteractionStatus.EXPIRED,
 }
 
+# v1.0.0-v1.0.11 imported terminal legacy Turns with one explicit terminal
+# event instead of the live Runtime's ``turn.status_changed`` envelope.  Those
+# events are durable historical facts and cannot be rewritten in place because
+# the Event Store is append-only.  Recognize the closed legacy dialect only for
+# identities proven by ``legacy_id_map``; the same event names on ordinary v1
+# Turns remain invalid and cannot hide projection drift.
+_LEGACY_IMPORTED_TURN_EVENT_STATUS: dict[str, TurnStatus] = {
+    "turn.completed": TurnStatus.COMPLETED,
+    "turn.failed": TurnStatus.FAILED,
+    "turn.cancelled": TurnStatus.CANCELLED,
+    "turn.interrupted": TurnStatus.INTERRUPTED,
+}
+_LEGACY_IMPORTED_TURN_EVENT_REASONS: dict[str, frozenset[str]] = {
+    "turn.completed": frozenset({"legacy_import"}),
+    "turn.failed": frozenset({"legacy_failed", "legacy_timeout"}),
+    "turn.cancelled": frozenset({"legacy_cancelled"}),
+    "turn.interrupted": frozenset(
+        {"legacy_migration_requires_user_confirmation"}
+    ),
+}
+
 
 class RuntimeInvariantAuditor:
     """Validate Event/Turn/Item/Job/HITL state from one WAL snapshot."""
@@ -149,6 +170,12 @@ class RuntimeInvariantAuditor:
             interactions = {
                 str(row["interaction_id"]): row
                 for row in connection.execute("SELECT * FROM interactions").fetchall()
+            }
+            legacy_turn_ids = {
+                str(row["target_id"])
+                for row in connection.execute(
+                    "SELECT target_id FROM legacy_id_map WHERE entity_kind = 'turn'"
+                ).fetchall()
             }
             input_revisions = connection.execute(
                 "SELECT thread_id, turn_id, ordinal FROM turn_input_revisions "
@@ -380,6 +407,32 @@ class RuntimeInvariantAuditor:
                                     turn_id,
                                     f"event expected {prior.value}, derived {derived.value}",
                                 )
+                            turn_state[turn_id] = target
+                    elif (
+                        event_type in _LEGACY_IMPORTED_TURN_EVENT_STATUS
+                        and turn_id is not None
+                    ):
+                        target = _LEGACY_IMPORTED_TURN_EVENT_STATUS[event_type]
+                        if turn_id not in legacy_turn_ids:
+                            add(
+                                "turn_event_invalid",
+                                "event",
+                                event["event_id"],
+                                "legacy terminal event belongs to a non-migrated Turn",
+                            )
+                        elif (
+                            payload.get("from") != "finalizing"
+                            or payload.get("to") != target.value
+                            or payload.get("reason")
+                            not in _LEGACY_IMPORTED_TURN_EVENT_REASONS[event_type]
+                        ):
+                            add(
+                                "turn_event_invalid",
+                                "event",
+                                event["event_id"],
+                                "legacy terminal event payload is invalid",
+                            )
+                        else:
                             turn_state[turn_id] = target
 
                     if turn_id is not None and turn_id in accepted_context:
