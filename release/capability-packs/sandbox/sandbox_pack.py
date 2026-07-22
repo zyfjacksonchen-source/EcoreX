@@ -244,7 +244,7 @@ class _CompletedCommand:
 
 
 def _run_bounded(
-    argv: tuple[str, ...],
+    argv: str | tuple[str, ...],
     *,
     cwd: Path,
     environment: Mapping[str, str],
@@ -450,11 +450,17 @@ def _contained(path: Path, root: Path) -> bool:
         return False
 
 
-def _fixed_shell(command: str) -> tuple[str, ...]:
+def _fixed_shell(command: str) -> str | tuple[str, ...]:
     if os.name == "nt":
         system_root = Path(os.environ.get("SYSTEMROOT", ""))
         executable = (system_root / "System32" / "cmd.exe").resolve(strict=True)
-        return str(executable), "/d", "/s", "/c", command
+        # Popen's Windows tuple-to-command-line conversion escapes quotes for
+        # the C runtime, not for cmd.exe.  Passing an already-formed command
+        # line keeps cmd's documented /S /C outer-quote contract intact; in
+        # particular nested PowerShell -Command quotes retain their meaning.
+        # The executable remains an absolute backend-owned path and
+        # ``shell=False`` below prevents any ambient shell substitution.
+        return f'"{executable}" /d /s /c "{command}"'
     executable = Path("/bin/sh").resolve(strict=True)
     return str(executable), "-c", command
 
@@ -466,9 +472,19 @@ def _child_environment() -> Mapping[str, str]:
         for key, value in os.environ.items()
         if key.upper() in allowed and isinstance(value, str) and "\x00" not in value
     }
-    result["PATH"] = (
-        str(Path(result["SYSTEMROOT"]) / "System32")
-        if os.name == "nt" and result.get("SYSTEMROOT")
-        else "/usr/bin:/bin:/usr/sbin:/sbin"
-    )
+    if os.name == "nt" and result.get("SYSTEMROOT"):
+        system_root = Path(result["SYSTEMROOT"])
+        # Keep PATH host-independent and restricted to trusted Windows system
+        # directories.  Windows PowerShell is not stored directly in
+        # System32, so omitting its immutable system directory makes ordinary
+        # model-generated `powershell -NoProfile ...` commands fail even
+        # though cmd.exe and the sandbox contract are healthy.
+        result["PATH"] = os.pathsep.join(
+            (
+                str(system_root / "System32"),
+                str(system_root / "System32" / "WindowsPowerShell" / "v1.0"),
+            )
+        )
+    else:
+        result["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
     return result

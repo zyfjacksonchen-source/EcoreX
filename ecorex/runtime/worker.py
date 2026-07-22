@@ -3545,12 +3545,14 @@ class AgentTurnWorker:
                 # acknowledgement boundary, so rejected sandbox preflight
                 # failures are safely recorded as failed instead of trapping
                 # the user in a false "might have executed" interaction.
-                uncertain = bool(
-                    getattr(
-                        error,
-                        "side_effect_uncertain",
-                        spec.idempotency is IdempotencyClass.NON_IDEMPOTENT,
-                    )
+                # A transport can only make an invocation ambiguous when the
+                # Tool contract itself is non-idempotent.  Pack adapters mark
+                # the acknowledgement boundary independently of ToolSpec;
+                # treating that transport flag as sufficient trapped failed
+                # read-only fetches in a misleading conflict-resolution HITL.
+                uncertain = (
+                    spec.idempotency is IdempotencyClass.NON_IDEMPOTENT
+                    and bool(getattr(error, "side_effect_uncertain", True))
                 )
                 if not uncertain:
                     error_code = self._safe_error_code(error)

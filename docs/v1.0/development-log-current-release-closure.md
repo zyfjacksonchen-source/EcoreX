@@ -27,21 +27,18 @@ narrower proxy.
 
 ## Authoritative current state
 
-- Final candidate source version: `1.0.16`; it includes the historical Turn
+- Final candidate source version: `1.0.17`; it includes the historical Turn
   invariant convergence fix committed as `d4799aeb` and the previously merged
   visual/attachment closure from `2e3a86569`.
-- Installed slot pointer is `1.0.15`, slot
-  `r-6b1429946d57a325bc7a5fa0a01d999aaa1b563b`, with `1.0.14` retained as
-  `previous`.  Activation is confirmed and the install-time launch reached a
-  healthy listener, but a later desktop-shortcut cold launch fails during
-  repeated legacy Skill convergence; therefore `1.0.15` is not the closure
-  version.
-- Public stable is temporarily `1.0.15`, release
-  `release-stable-830675c67bc997411104d171`, build digest
-  `830675c67bc997411104d171fd7c689dcb0194f1dbdc537c5ebe13992eb8de72`.
-  The signed public pointer has authority sequence 16 and names the domestic
-  GitHub mirror as the allowed stable source.  It must be superseded by the
-  tested `1.0.16` fix before final acceptance.
+- Installed slot pointer is `1.0.16`, slot
+  `r-0003f4a3e60875472ee756b5959c69dc6a6f2040`; repeated cold launches from
+  the desktop shortcut are healthy and the previous known-good slot remains
+  retained.
+- Public stable is `1.0.16`, release
+  `release-stable-db9ad314decbfc7f6d7adb2d`, build digest
+  `db9ad314decbfc7f6d7adb2d48e58b6d9e30517c7a763a521beddcf72ea84001`,
+  from commit `6f734baf2cb777ab6cfd94b42ee929a350eb4ed7`.  It remains the safe rollback
+  version while the source-only `1.0.17` fixes are built and installed.
 - A local `1.0.12` build completed with build digest
   `b39c5c3dc8728ed5f4d9e574cbb2f5d9ae1b847429ba43eccdc32cef57836d97`.
   It is **not publishable** because it predates the current Runtime and visual
@@ -172,7 +169,7 @@ narrower proxy.
 
 ## Next execution order
 
-1. Build, sign, publish, and install `1.0.16`, then verify the activated slot,
+1. Build, sign, publish, and install `1.0.17`, then verify the activated slot,
    known-good predecessor, shortcut, listener, and data counts.
 2. Run the complete real-user Chrome acceptance matrix and capture evidence.
 3. Verify both public macOS artifacts from this Windows host without claiming a
@@ -188,3 +185,106 @@ narrower proxy.
 - No stale candidate is promoted after any tracked Runtime/Web/release change.
 - User data, credentials, current/known-good slots, and deleted-session
   exclusion evidence are preserved during every recovery or cleanup action.
+
+## 2026-07-23 installed-runtime acceptance findings after 1.0.16
+
+- A real authenticated Turn on installed `1.0.16` used managed model
+  `gpt-5.6-sol`, reasoning effort `medium`, and compact threshold `272000`;
+  the streamed final reply and usage accounting completed normally.
+- A second real Turn explicitly requested progressive discovery and a read-only
+  shell command.  Its immutable `model.requested` event proves `shell` was
+  promoted to the direct set because it was named explicitly, while
+  `tool_search` correctly remained scoped to deferred tools.  Therefore the
+  empty search result was not a discovery-authority failure or a reason to
+  weaken the deferred-disclosure boundary.
+- The actual shell execution failed because the signed sandbox Pack reduced
+  the Windows child `PATH` to `System32`; Windows PowerShell lives in
+  `System32/WindowsPowerShell/v1.0`.  After adding only that trusted immutable
+  system directory, a second quoting defect became visible: passing the opaque
+  command as an argv tuple caused Python's Windows C-runtime quoting to change
+  nested `powershell -Command "..."` semantics.
+- The source fix keeps an absolute backend-owned `cmd.exe`, `shell=False`, and
+  the existing sandbox/Job/process-tree contracts, but supplies cmd.exe's
+  documented raw `/D /S /C` command line and a bounded trusted child PATH.
+  This restores normal PowerShell command execution without importing the
+  ambient user PATH or bypassing governance.
+- Regression evidence: all eight sandbox-Pack tests passed, four focused
+  process-Pack/shell environment tests passed, and Ruff is clean.  The new
+  Windows regression executes `Get-Date -Format yyyy` through the real signed
+  Pack path and asserts a four-digit result.
+- This source change is not present in public `1.0.16`; it requires a new
+  signed release before installed-runtime acceptance can be repeated.  Chrome
+  UI acceptance remains separately blocked because the enabled Chrome plugin
+  has no registered native messaging host; plugin troubleshooting explicitly
+  prohibits repairing or bypassing that host from the product workspace.
+- Real multipart upload of the user's valid PNG produced a durable internal
+  attachment, correct MIME type, byte count, digest and thumbnail URL, but the
+  installed thumbnail endpoint returned 422.  Direct inspection proved public
+  `1.0.16` Core contains no `PIL` package even though Core's attachment
+  thumbnail and model-Vision rendition boundary imports Pillow.  Pillow
+  `12.3.0` is now a hash-locked Runtime dependency and an explicit Core staging
+  distribution.  The isolated packaged-Runtime probe now creates and encodes a
+  JPEG, so a future candidate cannot pass with this dependency missing.
+  Runtime/platform/dev/cloud locks were resolved with the reviewed uv
+  `0.11.7`; the Python 3.11 dependency authority reports 24 Runtime packages
+  and passes.  The focused staging/dependency tests and Ruff pass.
+- Real installed `read` acceptance succeeded end to end on the third attempt:
+  the direct Tool read the exact workspace marker and the Turn completed.  One
+  preceding continuation and one subsequent initial model call encountered a
+  transient provider protocol rejection; an immediate plain-model retry and
+  the next Tool Turn completed, so this is recorded as an observed upstream
+  transient rather than a deterministic Runtime defect.
+- Real installed `fetch https://example.com` exposed two deterministic root
+  causes.  The user's TUN resolver maps public hostnames to RFC 2544
+  `198.18.0.0/15`; the Browser Pack rejected that proxy fake-IP as private.
+  It now permits that range only when DNS resolved a public hostname, while a
+  literal address in the range and all loopback/private/link-local addresses
+  remain denied.  Source Pack execution then fetched the URL with HTTP 200 and
+  559 bytes.  Separately, every Pack error after dispatch carried an
+  acknowledgement flag, which incorrectly turned a read-only fetch rejection
+  into a side-effect conflict HITL even in full access.  Worker uncertainty is
+  now the conjunction of that transport flag and a non-idempotent ToolSpec;
+  the new regression proves read-only failure is recorded as failed with no
+  HITL, while the existing opaque shell crash still waits for human
+  reconciliation.  Three focused regressions and Ruff pass.
+- Real installed `imagegen` acceptance created exactly one managed cloud job
+  (`imgjob_0025ccf83a194a44bfc54bbad2168c88`) and the cloud result passed the
+  download digest boundary.  The durable publication row contains the result
+  digest, proving that intent routing, model selection (`gpt-image-2`), queue
+  admission, managed authentication and provider execution all ran.  Local
+  publication then failed with `ARTIFACT_ACTION_UNAVAILABLE` while creating
+  the image rendition.  This is the same missing-Pillow packaging defect found
+  by the attachment thumbnail test, not an absent image model or a failed
+  provider route.  The hash-locked Pillow/Core staging fix therefore closes
+  both the upload-thumbnail and generated-image-return paths and must be
+  re-proved from the next installed signed candidate.
+- The eleven `job.retry_scheduled` events observed during that image Turn are
+  lease-preserving polls of the same idempotent ToolExecution and cloud job,
+  not eleven provider submissions or billable image retries.  The immutable
+  publication key, single cloud job id and single result digest prove this.
+  No retry/state-machine change is being made on a false duplicate-execution
+  hypothesis; the bounded image pool and provider idempotency fence remain the
+  authority for concurrency safety.
+- The installed updater's authenticated release-feed request was reproduced
+  with the exact managed session and signed current release identity.  The
+  server returned HTTP 422 `client update identity is invalid`; the signed
+  personal account projects organization id `personal:<account-id>`, while
+  Control Plane reused the stricter release/client identifier regex that
+  forbids `:`.  A dedicated organization-id validator now accepts the signed
+  personal namespace without widening client, release, platform or artifact
+  identifiers.  The same validator is used by feed selection and WebSocket
+  hint admission.  Two focused release-flow regressions pass and Ruff is
+  clean.  This requires deploying the updated Control Plane as well as the
+  next client release; the existing UI already suppresses failed update state
+  when it has no distinct target version, so no fake update banner is added.
+- Consolidated pre-release regression after the fixes passed 230 Python tests
+  with 14 platform skips, including the full attachment/image worker,
+  Capability admission, Control Plane release, and updater transport suites.
+  The only initial failure was a stale assertion for the retired administrator
+  token form; the real page correctly exposes the current account/password
+  login and the corrected persistence test passes.  WebUI typecheck, all 204
+  contract/component tests, the content-addressed production build and bundle
+  size gate pass.  The dependency lock authority passes with 24 Runtime
+  packages.  A local source-tree check reports CRLF in two unchanged Windows
+  native files due to checkout line-ending conversion; release composition
+  consumes canonical Git blobs and no native source content was changed.

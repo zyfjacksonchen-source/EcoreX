@@ -18,6 +18,7 @@ from ecorex.capabilities import (
     builtin_capability_registry,
 )
 from ecorex.gateway import GatewayEvent
+from ecorex.integration.pack_process import CapabilityPackProcessError
 from ecorex.protocol import CreateThreadRequest, CreateTurnRequest, ItemKind
 from ecorex.runtime import (
     AgentTurnWorker,
@@ -549,6 +550,71 @@ def test_admitted_non_idempotent_crash_remains_uncertain(tmp_path) -> None:
     interactions = kernel.list_interactions(thread.thread_id).interactions
     assert len(interactions) == 1
     assert interactions[0].kind.value == "conflict_resolution"
+
+
+def test_read_only_pack_failure_never_creates_uncertain_side_effect_hitl(
+    tmp_path,
+) -> None:
+    def failed_fetch(_arguments, _context):
+        raise CapabilityPackProcessError(
+            "browser_fetch_unavailable",
+            retryable=False,
+            side_effect_uncertain=True,
+        )
+
+    app = create_app(
+        settings=RuntimeSettings(
+            database_path=tmp_path / "runtime.db",
+            full_access=True,
+            installed_capability_packs=frozenset({"browser"}),
+            capability_handlers={"fetch": failed_fetch},
+        )
+    )
+    kernel = app.state.runtime
+    composition = app.state.runtime_composition
+    thread = kernel.create_thread(CreateThreadRequest(title="read-only failure"))
+    prepared = composition.prepare_turn(
+        CreateTurnRequest(
+            input="使用 fetch 读取网页",
+            explicit_tool_ids=["fetch"],
+            client_message_id="read-only-failure",
+        )
+    )
+    created = kernel.create_turn(
+        thread.thread_id,
+        prepared.request,
+        snapshot_context=prepared.snapshot_context,
+    )
+    gateway = _Gateway(
+        [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "response-fetch-failure",
+                    "tool_call_id": "read-only-fetch-failure",
+                    "tool_name": "fetch",
+                    "arguments": {"url": "https://example.com"},
+                }
+            ]
+        ]
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+        permission_mutation_lock=app.state.permission_authority.mutation_lock,
+    )
+
+    result = asyncio.run(worker.run_once("read-only-failure-worker"))
+
+    assert result.outcome is WorkerOutcome.FAILED
+    execution = ToolExecutionRepository(kernel.database).get(
+        _execution_id(created.turn.turn_id, "read-only-fetch-failure")
+    )
+    assert execution.status == "failed"
+    assert execution.error_code == "browser_fetch_unavailable"
+    assert kernel.list_interactions(thread.thread_id).interactions == []
 
 
 def test_invocation_permit_cannot_cross_execution_batch(tmp_path) -> None:

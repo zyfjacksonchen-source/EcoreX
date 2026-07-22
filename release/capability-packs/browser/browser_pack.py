@@ -37,6 +37,7 @@ _MAX_SCREENSHOT_BYTES = 3 * 1024 * 1024
 _MAX_LOCAL_DOCUMENT_URL_BYTES = 64 * 1024
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _CDP_OPERATIONS = frozenset({"navigate", "snapshot", "click", "type", "wait", "screenshot"})
+_PROXY_FAKE_IP_NETWORK = ipaddress.ip_network("198.18.0.0/15")
 
 
 def handle(request: Request) -> Mapping[str, Any]:
@@ -118,15 +119,29 @@ def _validate_public_url(value: str) -> None:
         }
     except (OSError, ValueError):
         raise ContractError("browser_dns_unavailable", retryable=True) from None
-    if not addresses or any(
-        address.is_private
-        or address.is_loopback
-        or address.is_link_local
-        or address.is_multicast
-        or address.is_reserved
-        or address.is_unspecified
-        for address in addresses
-    ):
+    try:
+        literal_host = ipaddress.ip_address(parsed.hostname)
+    except ValueError:
+        literal_host = None
+
+    def blocked(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+        # Clash and compatible system TUN resolvers deliberately map public
+        # DNS names into RFC 2544's non-routable benchmark range.  The local
+        # proxy then intercepts that destination.  Permit this mapping only
+        # for a hostname; a user-supplied literal 198.18/15 address remains
+        # denied, as do private, loopback, link-local and other reserved IPs.
+        if literal_host is None and address in _PROXY_FAKE_IP_NETWORK:
+            return False
+        return bool(
+            address.is_private
+            or address.is_loopback
+            or address.is_link_local
+            or address.is_multicast
+            or address.is_reserved
+            or address.is_unspecified
+        )
+
+    if not addresses or any(blocked(address) for address in addresses):
         raise ContractError("browser_url_not_allowed")
 
 

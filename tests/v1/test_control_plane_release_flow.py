@@ -520,6 +520,51 @@ def test_admin_gates_rollout_targeting_pause_and_distribution(tmp_path) -> None:
     ).status_code == 200
 
 
+def test_personal_organization_can_check_for_updates(tmp_path) -> None:
+    repository = ControlPlaneRepository(
+        tmp_path / "control.db", verifier=AcceptingVerifier()
+    )
+    authenticator = Authenticator()
+    principal = Authenticator.principals["client-one-token-123456789012345"]
+    Authenticator.principals["personal-client-token-123456789012345"] = (
+        ControlPrincipal(
+            subject=principal.subject,
+            client_id="personal-client-1",
+            account_id=principal.account_id,
+            organization_id=f"personal:{principal.account_id}",
+        )
+    )
+    try:
+        client = TestClient(
+            create_control_plane_app(repository, authenticator=authenticator)
+        )
+        _manifest, rollout, admin = _published_rollout(client)
+        assert client.post(
+            f"/api/v1/admin/rollouts/{rollout['rollout_id']}/activate",
+            json={"client_request_id": "activate-personal-rollout"},
+            headers=admin,
+        ).status_code == 200
+
+        selected = client.get(
+            "/api/v1/releases/latest",
+            params={
+                "channel": "stable",
+                "platform": "windows",
+                "architecture": "x64",
+                "current_version": "1.0.0",
+            },
+            headers=_headers("personal-client-token-123456789012345"),
+        )
+        # The helper rollout targets org-1, so this personal tenant is not
+        # selected; reaching the authoritative 204 proves it was accepted as
+        # a valid client identity instead of the former protocol-level 422.
+        assert selected.status_code == 204
+    finally:
+        Authenticator.principals.pop(
+            "personal-client-token-123456789012345", None
+        )
+
+
 def test_active_rollout_hub_pushes_hint_but_feed_remains_authority(tmp_path) -> None:
     repository = ControlPlaneRepository(
         tmp_path / "control.db", verifier=AcceptingVerifier()
@@ -648,7 +693,7 @@ def test_admin_page_and_resume_restore_persisted_state_after_app_rebuild(tmp_pat
         for _refresh in range(2):
             page = rebuilt_client.get("/admin")
             assert page.status_code == 200
-            assert "管理员令牌" in page.text
+            assert "管理员登录" in page.text
             assert "no-store" in page.headers["cache-control"]
             assert "default-src 'none'" in page.headers["content-security-policy"]
             assert page.headers["x-frame-options"] == "DENY"

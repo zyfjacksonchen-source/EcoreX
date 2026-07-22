@@ -226,6 +226,18 @@ def _safe_identity(value: object) -> bool:
     return isinstance(value, str) and _SAFE_ID.fullmatch(value) is not None
 
 
+def _safe_organization_identity(value: object) -> bool:
+    """Accept the signed personal-tenant namespace without widening other IDs."""
+
+    if _safe_identity(value):
+        return True
+    return (
+        isinstance(value, str)
+        and value.startswith("personal:")
+        and _safe_identity(value.removeprefix("personal:"))
+    )
+
+
 class ControlPlaneError(RuntimeError):
     pass
 
@@ -2540,7 +2552,7 @@ class ControlPlaneRepository:
             or not _safe_identity(principal.account_id)
             or (
                 principal.organization_id is not None
-                and not _safe_identity(principal.organization_id)
+                and not _safe_organization_identity(principal.organization_id)
             )
             or (
                 current_release_id is not None
@@ -3140,7 +3152,9 @@ class ControlPlaneRepository:
             or not _safe_identity(client.principal.account_id)
             or (
                 client.principal.organization_id is not None
-                and not _safe_identity(client.principal.organization_id)
+                and not _safe_organization_identity(
+                    client.principal.organization_id
+                )
             )
             or (
                 client.current_release_id is not None

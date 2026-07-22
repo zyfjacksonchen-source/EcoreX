@@ -79,6 +79,7 @@ _RUNTIME_DISTRIBUTIONS = (
     "cryptography",
     "fastapi",
     "httpx",
+    "pillow",
     "pydantic",
     "python-multipart",
     "tzdata",
@@ -2598,6 +2599,16 @@ try:
 except BaseException:
  print('__ECOREX_PACK_PROBE_ASGI_IMPORTS_FAILED__')
  raise SystemExit(83)
+try:
+ from io import BytesIO
+ from PIL import Image
+ image=Image.new('RGB',(2,2),'white')
+ output=BytesIO()
+ image.save(output,format='JPEG')
+ assert output.getvalue().startswith(b'\xff\xd8')
+except BaseException:
+ print('__ECOREX_PACK_PROBE_IMAGE_CODEC_FAILED__')
+ raise SystemExit(86)
 try:
  import certifi
  from pathlib import Path

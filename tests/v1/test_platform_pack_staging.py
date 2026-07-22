@@ -890,6 +890,35 @@ def test_browser_pack_guards_every_subrequest_and_denies_websockets(
     assert socket_route.closed is True
 
 
+def test_browser_pack_accepts_proxy_fake_ip_only_for_public_hostname(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(PACKS / "common"))
+    browser = runpy.run_path(str(PACKS / "browser" / "browser_pack.py"))
+    contract_error = browser["ContractError"]
+
+    monkeypatch.setattr(
+        browser["socket"],
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (2, 1, 6, "", ("198.18.0.117", 443)),
+        ],
+    )
+    browser["_validate_public_url"]("https://example.com")
+    with pytest.raises(contract_error, match="browser_url_not_allowed"):
+        browser["_validate_public_url"]("https://198.18.0.117")
+
+    monkeypatch.setattr(
+        browser["socket"],
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (2, 1, 6, "", ("127.0.0.1", 443)),
+        ],
+    )
+    with pytest.raises(contract_error, match="browser_url_not_allowed"):
+        browser["_validate_public_url"]("https://example.com")
+
+
 def test_browser_runtime_manifest_rejects_escape_and_duplicate_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1091,6 +1120,23 @@ def test_sandbox_pack_accepts_attested_windows_workspace_runtime_read_scope(
 
     assert response["status"] == "completed"
     assert "ecorex-workspace-runtime" in response["result"]["stdout"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell path contract")
+def test_sandbox_pack_resolves_trusted_windows_powershell_from_child_path(
+    tmp_path: Path,
+) -> None:
+    artifact = _zipapp(tmp_path, "sandbox")
+    request = _sandbox_shell_request(
+        tmp_path,
+        'powershell -NoProfile -NonInteractive -Command "Get-Date -Format yyyy"',
+    )
+
+    response = _invoke(artifact, request)
+
+    assert response["status"] == "completed"
+    year = response["result"]["stdout"].strip()
+    assert year.isdigit() and len(year) == 4
 
 
 def test_sandbox_pack_streams_and_stops_stdout_flood(tmp_path: Path) -> None:
@@ -3403,9 +3449,11 @@ def test_platform_stager_bundles_and_forces_signed_iana_timezone_data() -> None:
     assert probe[:4] == ("pack-python", "-I", "-B", "-c")
     assert "import cryptography" in probe[4]
     assert "import fastapi,httpx,pydantic,uvicorn,websockets" in probe[4]
+    assert "from PIL import Image" in probe[4]
+    assert "__ECOREX_PACK_PROBE_IMAGE_CODEC_FAILED__" in probe[4]
     assert "import certifi" in probe[4]
     assert "import tzdata,zoneinfo" in probe[4]
-    for returncode in range(81, 86):
+    for returncode in range(81, 87):
         assert f"raise SystemExit({returncode})" in probe[4]
     assert "AdminWebAssets.load" in probe[4]
     assert "certifi.where" in probe[4]
