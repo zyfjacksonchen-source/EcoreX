@@ -81,8 +81,9 @@ narrower proxy.
   database the audit changed from 606 violations to zero; two focused migration
   regressions and Ruff passed.  The running installed process remains correctly
   latched until it is restarted on a build containing this fix.
-- The closure source is commit
-  `54b7151fb5629e88e8825efcafc630c4ab9e5d1d`, pushed to `origin/main`.
+- The `1.0.13` release source was commit
+  `54b7151fb5629e88e8825efcafc630c4ab9e5d1d`.  The `1.0.14` dependency-pack
+  startup fix is commit `8be51055`, also pushed to `origin/main`.
   The three-platform build produced 43 signed artifacts and 46 publication
   files.  Manifest SHA-256 is
   `30ae501f9bc8335cd8631632d71baa0e84764147ecdd782a0a2a2395dbbb6941`;
