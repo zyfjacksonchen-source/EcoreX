@@ -558,7 +558,7 @@ class ExtensionService:
             self._validate_candidate_graph(connection, manifest)
             state = self.repository.state(manifest.extension_id, connection=connection)
             now = utc_now_iso()
-            if state is not None and (
+            if state is not None and state.active_revision_id == manifest.revision_id and (
                 state.negotiated_protocol_version not in {None, negotiated_protocol}
                 or state.catalog_digest not in {None, catalog_digest}
             ):

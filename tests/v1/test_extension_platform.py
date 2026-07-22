@@ -602,6 +602,66 @@ def test_mcp_runtime_binding_uses_only_the_stable_exact_protocol(tmp_path: Path)
         ExtensionManifest.from_dict(invalid)
 
 
+def test_runtime_binding_accepts_changed_catalog_for_a_new_signed_revision(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+
+    def verified(version: str, digest: str, effects: tuple[str, ...]):
+        manifest = ExtensionManifest(
+            schema_version=1,
+            contract_version=EXTENSION_CONTRACT_VERSION,
+            extension_id="ecorex.core.tools",
+            version=version,
+            kind=ExtensionKind.TOOL_PROVIDER,
+            display_name="Core tools",
+            description="A Core-bound tool provider.",
+            artifact_sha256=digest,
+            source=ExtensionSource.CORE_BUNDLE,
+            trust=ExtensionTrust.BUILTIN,
+            runtime_boundary=RuntimeBoundary.MANAGED_ADAPTER,
+            transport=ExtensionTransport.NONE,
+            compatibility=ExtensionCompatibility(
+                runtime_api="=1.0.0", platforms=(), architectures=()
+            ),
+            dependencies=(),
+            conflicts=(),
+            exports=(
+                ExtensionExport(
+                    export_id="read",
+                    kind=ExtensionExportKind.TOOL,
+                    exposure=ExtensionExposure.DIRECT,
+                    permission_effects=effects,
+                ),
+            ),
+            supported_protocol_versions=(),
+            upstream_metadata=None,
+            signature=ExtensionSignature(
+                algorithm="core-slot-sha256",
+                key_id="core-slot-v1",
+                value=digest,
+            ),
+        )
+        return verify_core_extension(
+            manifest,
+            runtime_api_version="1.0.0",
+            platform="win32",
+            architecture="x64",
+        )
+
+    first = verified("1.0.0", "c" * 64, ("read",))
+    service.register_runtime_bound(first)
+    first_state = service.repository.require_state(first.manifest.extension_id)
+
+    second = verified("1.0.1", "d" * 64, ("read", "write"))
+    service.register_runtime_bound(second)
+    second_state = service.repository.require_state(second.manifest.extension_id)
+
+    assert second_state.active_revision_id == second.manifest.revision_id
+    assert second_state.active_revision_id != first_state.active_revision_id
+    assert second_state.catalog_digest != first_state.catalog_digest
+
+
 def test_runtime_bootstrap_turn_job_and_revocation_share_one_extension_snapshot(
     tmp_path: Path,
 ) -> None:

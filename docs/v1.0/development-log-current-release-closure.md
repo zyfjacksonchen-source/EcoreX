@@ -1,6 +1,6 @@
 # e-Mate current release closure ledger
 
-Last updated: 2026-07-22 (Asia/Shanghai)
+Last updated: 2026-07-23 (Asia/Shanghai)
 
 This file is the single recovery ledger for the active long-running release
 goal.  It records only evidence that has actually been observed.  A build,
@@ -27,19 +27,20 @@ narrower proxy.
 
 ## Authoritative current state
 
-- Final candidate source version: `1.0.14`; it includes the historical Turn
+- Final candidate source version: `1.0.15`; it includes the historical Turn
   invariant convergence fix committed as `d4799aeb` and the previously merged
   visual/attachment closure from `2e3a86569`.
-- Installed slot pointer is `1.0.13`, slot
-  `r-9b9847f47e2f6567d87960591705e8decb2e3935`, with `1.0.11` retained as
-  `previous`.  The public update completed all fourteen downloads, signature
-  checks, migration, activation, and shortcut creation, but the first normal
-  Runtime launch exceeded its readiness window before opening port 8765.
-- Public stable: `1.0.13`, release
-  `release-stable-eb67d789bf936e39407ecea5`, build digest
-  `eb67d789bf936e39407ecea56dec036f0a8a0c5d467f66bb3dcfb5692d6244dc`.
-  The signed public pointer has authority sequence 14 and names the domestic
-  GitHub mirror as the allowed stable source.
+- Installed slot pointer is `1.0.14`, slot
+  `r-273ab3f75e931e1a8b6a6ab806b33e88c469e36b`, with `1.0.13` retained as
+  `previous`.  Activation is confirmed and user data remains in place, but the
+  first normal Runtime launch fails during Extension startup convergence before
+  opening port 8765; therefore `1.0.14` is not the closure version.
+- Public stable is temporarily `1.0.14`, release
+  `release-stable-8cb2f59ae1dc9dee61b5b65d`, build digest
+  `8cb2f59ae1dc9dee61b5b65d1cdd30e34f1a3d3c02d307a04a1df52f8324e65f`.
+  The signed public pointer has authority sequence 15 and names the domestic
+  GitHub mirror as the allowed stable source.  It must be superseded by the
+  tested `1.0.15` fix before final acceptance.
 - A local `1.0.12` build completed with build digest
   `b39c5c3dc8728ed5f4d9e574cbb2f5d9ae1b847429ba43eccdc32cef57836d97`.
   It is **not publishable** because it predates the current Runtime and visual
@@ -109,6 +110,30 @@ narrower proxy.
   and complete extracted snapshot before execution and re-verifies both on
   subsequent invocations.  Four focused tests, Ruff, and 65 product-runtime /
   activation-health tests passed (one platform-specific skip).
+- The complete `1.0.14` release was built from source commit
+  `d45902665eb539286a375e12dd79e77785222392`.  It produced release ID
+  `release-stable-8cb2f59ae1dc9dee61b5b65d`, build digest
+  `8cb2f59ae1dc9dee61b5b65d1cdd30e34f1a3d3c02d307a04a1df52f8324e65f`,
+  manifest SHA-256
+  `8797a4fecd6d220d6b46ba5aaf22b70a6a741e096730699865ba2dbd848cff32`,
+  and 46 GitHub assets whose names, byte sizes, signature report, and
+  supply-chain report all matched.  Production readback returned version
+  `1.0.14`, authority sequence 15, HTTP 200, and `no-store`.  The first-source
+  Windows Bootstrap matched SHA-256
+  `9e3039bf34739edb02119624619035e8e7f93bca37cae92f7e1ffb4b2fec4647`
+  and passed self-test.
+- A real public `1.0.14` install downloaded and verified all fourteen Windows
+  components, displayed transfer rate and stage progress, installed the slot,
+  migrated data, and confirmed activation.  Normal startup then exposed a
+  second independent blocker: the persisted Extension state rejected a changed
+  tool catalog even though the signed Core manifest had a new revision ID.
+  The invariant was applied before the new-revision branch, effectively making
+  every legitimate product update with catalog changes fail closed.  The
+  `1.0.15` source restricts the immutable-negotiation check to reuse of the
+  *same* revision; a new signed revision atomically advances active revision,
+  catalog digest, and prior-known-good state.  A focused upgrade regression was
+  added; the Extension suite passes 20 tests with one platform skip and Ruff is
+  clean.
 
 ## Evidence still required
 
@@ -120,7 +145,7 @@ narrower proxy.
 
 ## Next execution order
 
-1. Build, sign, publish, and install `1.0.14`, then verify the activated slot,
+1. Build, sign, publish, and install `1.0.15`, then verify the activated slot,
    known-good predecessor, shortcut, listener, and data counts.
 2. Run the complete real-user Chrome acceptance matrix and capture evidence.
 3. Verify both public macOS artifacts from this Windows host without claiming a
