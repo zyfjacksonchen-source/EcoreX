@@ -1,6 +1,6 @@
 {
   "name": "ecorex-webui",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "private": true,
   "description": "EcoreX v1 thin React WebUI for the local Runtime",
   "type": "module",

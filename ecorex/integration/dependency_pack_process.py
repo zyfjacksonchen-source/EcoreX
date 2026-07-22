@@ -56,11 +56,15 @@ class VerifiedDependencyPackProcessAdapter:
             prefix=f"ecorex-{pack.manifest.pack_id}-service-"
         )
         self._root = Path(self._temporary.name) / "pack"
-        try:
-            self._expected_files = self._extract_verified_snapshot()
-        except BaseException:
-            self._temporary.cleanup()
-            raise
+        # Dependency packs can contain thousands of native-runtime files
+        # (OCR currently carries more than four thousand).  Expanding and
+        # hashing them while the HTTP application is being composed keeps the
+        # loopback listener closed long enough for Bootstrap to report a false
+        # startup failure.  Keep composition side-effect-light and materialize
+        # the already-signed pack only when its service is first invoked.  The
+        # invocation remains serialized by ``_lock`` and the full snapshot and
+        # source artifact are still verified before every execution.
+        self._expected_files: Mapping[str, tuple[int, str]] | None = None
 
     def close(self) -> None:
         self._temporary.cleanup()
@@ -92,8 +96,14 @@ class VerifiedDependencyPackProcessAdapter:
         if len(request) > _MAX_REQUEST_BYTES:
             raise DependencyPackProcessError("dependency_pack_request_too_large")
         with self._lock:
-            self._verify_snapshot()
-            self._verify_artifact()
+            if self._expected_files is None:
+                # _extract_verified_snapshot verifies the signed archive and
+                # the extracted snapshot before publishing the in-process
+                # authority used by later invocations.
+                self._expected_files = self._extract_verified_snapshot()
+            else:
+                self._verify_snapshot()
+                self._verify_artifact()
             # A cold isolated Pack-Python process must import signed native
             # modules before the operation-specific timeout can begin. Keep
             # that startup bounded without turning a healthy first call into
@@ -289,6 +299,8 @@ class VerifiedDependencyPackProcessAdapter:
         self, expected: Mapping[str, tuple[int, str]] | None = None
     ) -> None:
         expected = self._expected_files if expected is None else expected
+        if expected is None:
+            raise DependencyPackProcessError("dependency_pack_snapshot_unavailable")
         observed: dict[str, tuple[int, str]] = {}
         for path in self._root.rglob("*"):
             metadata = path.lstat()

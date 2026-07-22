@@ -189,11 +189,37 @@ def test_dependency_pack_snapshot_mutation_fails_closed(tmp_path: Path) -> None:
         python_identity=_identity(),
     )
     try:
+        # Snapshot materialization is intentionally lazy so large OCR/Office
+        # packs cannot delay the Runtime listener during application
+        # composition.  Establish the verified snapshot before mutating it.
+        assert process.invoke("probe", {}, timeout_seconds=8.0)["provider"] == (
+            "python-office-formats-v1"
+        )
         target = process._root / "runtime" / "python" / "docx" / "__init__.py"
         target.write_text("tampered = True\n", encoding="utf-8")
         with pytest.raises(
             DependencyPackProcessError, match="dependency_pack_snapshot_changed"
         ):
             process.invoke("probe", {}, timeout_seconds=8.0)
+    finally:
+        process.close()
+
+
+def test_dependency_pack_materialization_is_deferred_until_first_invocation(
+    tmp_path: Path,
+) -> None:
+    verified = _verified_dependency_pack(
+        tmp_path,
+        "office",
+        {"ecorex-dependency-pack.json": b"{}"},
+    )
+    process = VerifiedDependencyPackProcessAdapter(
+        verified,
+        python_executable=Path(sys.executable),
+        python_identity=_identity(),
+    )
+    try:
+        assert process._expected_files is None
+        assert not process._root.exists()
     finally:
         process.close()

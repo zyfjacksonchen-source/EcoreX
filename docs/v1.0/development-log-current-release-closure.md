@@ -27,14 +27,19 @@ narrower proxy.
 
 ## Authoritative current state
 
-- Final candidate source version: `1.0.13`; it includes the historical Turn
+- Final candidate source version: `1.0.14`; it includes the historical Turn
   invariant convergence fix committed as `d4799aeb` and the previously merged
   visual/attachment closure from `2e3a86569`.
-- Installed Runtime: `1.0.11`, current slot
-  `r-803038457ed3b93b36d26dec78205751d1f2bc83`, serving loopback port 8765.
-- Public stable: `1.0.11`, release
-  `release-stable-4b4902ce406ec5e86c4aeef0`, build digest
-  `4b4902ce406ec5e86c4aeef09ce19397d31a4c22cbc0d303dd02357e9ddb97a4`.
+- Installed slot pointer is `1.0.13`, slot
+  `r-9b9847f47e2f6567d87960591705e8decb2e3935`, with `1.0.11` retained as
+  `previous`.  The public update completed all fourteen downloads, signature
+  checks, migration, activation, and shortcut creation, but the first normal
+  Runtime launch exceeded its readiness window before opening port 8765.
+- Public stable: `1.0.13`, release
+  `release-stable-eb67d789bf936e39407ecea5`, build digest
+  `eb67d789bf936e39407ecea56dec036f0a8a0c5d467f66bb3dcfb5692d6244dc`.
+  The signed public pointer has authority sequence 14 and names the domestic
+  GitHub mirror as the allowed stable source.
 - A local `1.0.12` build completed with build digest
   `b39c5c3dc8728ed5f4d9e574cbb2f5d9ae1b847429ba43eccdc32cef57836d97`.
   It is **not publishable** because it predates the current Runtime and visual
@@ -63,10 +68,11 @@ narrower proxy.
 - The installed UI projects migrated sessions, archived sessions, and projects.
   The stronger migration evidence remains the real-data audit in
   `development-log-v1.0.9-runtime-closure.md`.
-- Parallel visual closure work has focused tests for authenticated bounded
-  renditions, attachment thumbnails, managed visual evidence, image/retouch
-  revisions, and concurrent rendition idempotency.  These changes remain
-  uncommitted and are not release evidence until reviewed and merged.
+- Visual/attachment closure was already merged in ancestor commit `2e3a86569`.
+  Review confirmed authenticated bounded renditions, ready-state attachment
+  thumbnails, managed visual evidence, image/retouch revisions, and concurrent
+  rendition idempotency are present; the relevant backend, frontend contract,
+  TypeScript, and Ruff checks passed.
 - The current source auditor now recognizes the closed old terminal-event
   dialect only for Turn identities proven by `legacy_id_map`, validates the
   exact terminal payload, and continues to reject those event names on normal
@@ -75,27 +81,51 @@ narrower proxy.
   database the audit changed from 606 violations to zero; two focused migration
   regressions and Ruff passed.  The running installed process remains correctly
   latched until it is restarted on a build containing this fix.
+- The closure source is commit
+  `54b7151fb5629e88e8825efcafc630c4ab9e5d1d`, pushed to `origin/main`.
+  The three-platform build produced 43 signed artifacts and 46 publication
+  files.  Manifest SHA-256 is
+  `30ae501f9bc8335cd8631632d71baa0e84764147ecdd782a0a2a2395dbbb6941`;
+  independent Ed25519/signature and supply-chain reports both passed.
+- GitHub release `v1.0.13` and the production download/Admin pages are live.
+  Public pointer readback returned HTTP 200, `no-store`, version `1.0.13`, and
+  the exact release/build identities above.  The Windows public Bootstrap was
+  independently downloaded, matched SHA-256
+  `c0a8ec3beb46aa4af911e14fa33ab6313090c4a569188dd796994fd8516320ed`,
+  and passed self-test.
+- Combined selected backend regressions passed 134 checks except one existing
+  50 ms scheduler assertion when run concurrently with the three-platform
+  build; that test passed three consecutive isolated runs.  Web contract tests
+  passed 204/204, TypeScript and production build passed, and the bundle gate
+  passed.
+- Real process-stack evidence for the `1.0.13` startup failure identified
+  `VerifiedDependencyPackProcessAdapter._extract_verified_snapshot()` reading,
+  expanding, and hashing the OCR dependency pack during synchronous HTTP app
+  composition.  The signed OCR archive contains 4,138 entries; doing this for
+  OCR and Office before binding the listener caused a false Bootstrap startup
+  failure.  `1.0.14` defers verified snapshot materialization to the first
+  actual dependency-service invocation.  It still verifies the source archive
+  and complete extracted snapshot before execution and re-verifies both on
+  subsequent invocations.  Four focused tests, Ruff, and 65 product-runtime /
+  activation-health tests passed (one platform-specific skip).
 
 ## Evidence still required
 
-- Green focused and broad Runtime/Web regressions after all parallel work is
-  merged, plus clean lint/typecheck and release-source inventory.
-- A new immutable final version build.  Do not reuse the stale `1.0.12` build.
-- Public stable activation and exact readback of download page, Admin UI,
-  release pointer, commands, assets, signatures, and digests.
 - Real public online update from installed `1.0.11` to the final version.
 - Chrome evidence for reply/reasoning, attachments, OCR/Vision, image
   generation, retouch, shell/read/fetch, progressive discovery, and CDP.
+- Windows shortcut/data-preservation proof after activation, and Windows-host
+  structural verification of both public macOS Bootstrap artifacts.
 
 ## Next execution order
 
-1. Read the process-local invariant snapshot and reproduce the failure against
-   a copy of the installed database.
-2. Implement the narrow root fix with migration/recovery semantics and tests.
-3. Review and merge all visual/attachment changes, then run the combined gates.
-4. Bump once to the final version, build once, verify once, and publish once.
-5. Update the installed product through the public path and run the complete
-   real-user browser acceptance matrix.
+1. Build, sign, publish, and install `1.0.14`, then verify the activated slot,
+   known-good predecessor, shortcut, listener, and data counts.
+2. Run the complete real-user Chrome acceptance matrix and capture evidence.
+3. Verify both public macOS artifacts from this Windows host without claiming a
+   native macOS execution result.
+4. Record the final evidence, run a last drift audit, and only then close the
+   long Goal.
 
 ## Drift controls
 
