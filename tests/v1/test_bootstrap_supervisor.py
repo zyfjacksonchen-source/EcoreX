@@ -574,6 +574,7 @@ def test_default_launcher_uses_no_shell_and_a_sanitized_environment(
         host_architecture="x64",
         source_environment={
             "GITHUB_TOKEN": "secret",
+            "SYSTEMDRIVE": "C:",
             "TEMP": str(tmp_path),
             "ECOREX_RUNTIME_OWNER_NONCE": "A" * 43,
         },
@@ -589,6 +590,7 @@ def test_default_launcher_uses_no_shell_and_a_sanitized_environment(
     assert kwargs["env"]["PYTHONDONTWRITEBYTECODE"] == "1"
     assert kwargs["env"]["PYTHONNOUSERSITE"] == "1"
     assert kwargs["env"]["PYTHONTZPATH"] == ""
+    assert kwargs["env"]["SYSTEMDRIVE"] == "C:"
     assert kwargs["env"]["ECOREX_RUNTIME_OWNER_NONCE"] == "A" * 43
     assert Path(kwargs["executable"]).is_absolute()
 

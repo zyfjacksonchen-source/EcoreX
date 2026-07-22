@@ -1048,6 +1048,7 @@ def _sanitized_environment(source: Mapping[str, str]) -> Mapping[str, str]:
         "LC_ALL",
         "LOCALAPPDATA",
         "PROGRAMDATA",
+        "SYSTEMDRIVE",
         "SYSTEMROOT",
         "TEMP",
         "TMP",

@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import shutil
 import stat
 import tempfile
@@ -76,6 +77,14 @@ _MARKER_KEYS = {
     "slot_digest",
     "workspace_roots_sha256",
 }
+_LEGACY_WINDOWS_CACHE_RELATIVE = PurePosixPath(
+    "%SystemDrive%/ProgramData/Microsoft/Windows/Caches"
+)
+_LEGACY_WINDOWS_CACHE_FILE = re.compile(
+    r"(?:cversions\.\d+\.db|"
+    r"\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-"
+    r"[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}\.\d+\.ver0x[0-9A-Fa-f]+\.db)"
+)
 
 
 class WindowsSandboxSecurityError(RuntimeError):
@@ -1002,6 +1011,24 @@ class WindowsSandboxSlotSecurity:
                 raise WindowsSandboxSecurityError(
                     "Signed update changed the roots of a live workspace permission domain"
                 )
+            # Runtime builds released before SYSTEMDRIVE was preserved in the
+            # sanitized child environment could make Windows treat its
+            # expandable ProgramData cache path as relative to the immutable
+            # slot.  Remove only that precisely recognised OS cache residue,
+            # then require the complete retained release receipt to verify.
+            # Any other extra, missing, or changed payload file still fails
+            # closed before its sandbox identity can be reused.
+            _repair_legacy_windows_cache_pollution(slot / "payload")
+            try:
+                SlotStore(self.install_root).validate_receipt(
+                    slot_id=slot_id,
+                    manifest=manifest,
+                    artifact=artifact,
+                )
+            except Exception:
+                raise WindowsSandboxSecurityError(
+                    "Referenced slot payload differs from its signed receipt"
+                ) from None
             self._attest_referenced_slot(
                 slot,
                 manifest=manifest,
@@ -1174,6 +1201,69 @@ class WindowsSandboxSlotSecurity:
             if security.get("permission_domain_sha256") == permission_domain:
                 return True
         return False
+
+
+def _repair_legacy_windows_cache_pollution(payload_root: Path) -> bool:
+    """Remove the one known pre-fix Windows cache projection from a slot.
+
+    This is deliberately narrower than a generic payload repair.  The caller
+    must revalidate the complete signed release receipt immediately after it
+    returns.
+    """
+
+    payload = _real_directory(payload_root)
+    cache = payload.joinpath(*_LEGACY_WINDOWS_CACHE_RELATIVE.parts)
+    if not cache.exists():
+        return False
+    cache = _real_directory(cache)
+    try:
+        cache.relative_to(payload)
+        entries = tuple(cache.iterdir())
+    except (OSError, ValueError):
+        raise WindowsSandboxSecurityError(
+            "Legacy Windows cache residue cannot be inspected"
+        ) from None
+    if not entries:
+        raise WindowsSandboxSecurityError(
+            "Legacy Windows cache residue has an unexpected shape"
+        )
+    for entry in entries:
+        try:
+            metadata = entry.lstat()
+        except OSError:
+            raise WindowsSandboxSecurityError(
+                "Legacy Windows cache residue cannot be inspected"
+            ) from None
+        reparse = getattr(metadata, "st_file_attributes", 0) & getattr(
+            stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400
+        )
+        if (
+            stat.S_ISLNK(metadata.st_mode)
+            or reparse
+            or not stat.S_ISREG(metadata.st_mode)
+            or _LEGACY_WINDOWS_CACHE_FILE.fullmatch(entry.name) is None
+        ):
+            raise WindowsSandboxSecurityError(
+                "Legacy Windows cache residue has an unexpected shape"
+            )
+    for entry in entries:
+        try:
+            entry.unlink()
+        except OSError:
+            raise WindowsSandboxSecurityError(
+                "Legacy Windows cache residue could not be removed"
+            ) from None
+    current = cache
+    stop = payload / _LEGACY_WINDOWS_CACHE_RELATIVE.parts[0]
+    while True:
+        try:
+            current.rmdir()
+        except OSError:
+            break
+        if current == stop:
+            break
+        current = current.parent
+    return True
 
 
 def _copy_verified_helper(source: Path, destination: Path, expected_digest: str) -> None:
