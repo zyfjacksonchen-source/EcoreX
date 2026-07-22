@@ -333,7 +333,9 @@ def _stage(request: Mapping[str, Any]) -> None:
         core, platform, architecture
     )
     _install_native(native, core, platform)
-    config_digest = _write_runtime_config(core, platform, architecture)
+    config_digest, config_services = _write_runtime_config(
+        core, platform, architecture
+    )
     web = _scan_final_web()
     _stage_packs(
         packs,
@@ -351,6 +353,7 @@ def _stage(request: Mapping[str, Any]) -> None:
         interpreter_identity=interpreter_identity.to_dict(),
         distributions=distributions,
         config_digest=config_digest,
+        config_services=config_services,
         web=web,
         evidence=evidence / "core",
     )
@@ -2853,7 +2856,9 @@ def _build_bootstrap(
     )
 
 
-def _write_runtime_config(core: Path, platform: str, architecture: str) -> str:
+def _write_runtime_config(
+    core: Path, platform: str, architecture: str
+) -> tuple[str, Mapping[str, Any]]:
     source = _pinned_environment_file(
         "ECOREX_STAGE_RUNTIME_CONFIG_TEMPLATE",
         "ECOREX_STAGE_RUNTIME_CONFIG_TEMPLATE_SHA256",
@@ -2892,9 +2897,43 @@ def _write_runtime_config(core: Path, platform: str, architecture: str) -> str:
         raise StageError("runtime_config_template_invalid") from None
     if config.identity.version != __version__:
         raise StageError("runtime_config_identity_invalid")
+    if config.share is None or config.image_orchestration is None:
+        raise StageError("runtime_config_product_services_missing")
     destination = core / "runtime-config.json"
     destination.write_bytes(config.to_bytes())
-    return hashlib.sha256(destination.read_bytes()).hexdigest()
+    services = {
+        "gateway": _runtime_service_evidence(
+            config.gateway.endpoint,
+            config.gateway.allowed_hosts,
+        ),
+        "image_orchestration": _runtime_service_evidence(
+            config.image_orchestration.root_url,
+            config.image_orchestration.allowed_hosts,
+        ),
+        "share": _runtime_service_evidence(
+            config.share.endpoint,
+            config.share.allowed_hosts,
+        ),
+    }
+    return hashlib.sha256(destination.read_bytes()).hexdigest(), services
+
+
+def _runtime_service_evidence(
+    endpoint: str,
+    allowed_hosts: Iterable[str],
+) -> Mapping[str, Any]:
+    parsed = urlsplit(endpoint)
+    host = (parsed.hostname or "").casefold()
+    hosts = sorted(item.casefold() for item in allowed_hosts)
+    return {
+        "configured": True,
+        "scheme": parsed.scheme,
+        "path_sha256": hashlib.sha256(parsed.path.encode("utf-8")).hexdigest(),
+        "host_sha256": hashlib.sha256(host.encode("utf-8")).hexdigest(),
+        "allowed_hosts_sha256": hashlib.sha256(
+            json.dumps(hosts, separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
+    }
 
 
 def _scan_final_web() -> Mapping[str, Any]:
@@ -3476,6 +3515,7 @@ def _core_gates(
     interpreter_identity: Mapping[str, Any],
     distributions: tuple[dict[str, str], ...],
     config_digest: str,
+    config_services: Mapping[str, Any],
     web: Mapping[str, Any],
     evidence: Path,
 ) -> None:
@@ -3529,6 +3569,7 @@ def _core_gates(
             "platform": platform,
             "architecture": architecture,
             "runtime_config_sha256": config_digest,
+            "runtime_services": dict(config_services),
             "interpreter": dict(interpreter_identity),
             "web_bundle": dict(web),
             "distributions": list(distributions),

@@ -337,7 +337,7 @@ export function SkillsWorkspace({
           {protectedItems.length ? (
             <details className="ex-protected-skills">
               <summary><ShieldCheck aria-hidden="true" /><span>系统必需技能</span><small>{protectedItems.length}</small></summary>
-              <p>这些能力随 EcoreX 核心运行，不能由用户关闭。</p>
+              <p>这些能力随 e-Mate 核心运行，不能由用户关闭。</p>
               <div className="ex-skill-grid">{protectedItems.map(renderCard)}</div>
             </details>
           ) : null}

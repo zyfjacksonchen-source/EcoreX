@@ -5,10 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 import hashlib
+import io
 import json
 from pathlib import Path
 import sqlite3
 from typing import Any, Callable, Mapping, Sequence
+import warnings
 
 from .classification import ArtifactClassifier, ClassificationDecision
 from .errors import ArtifactActionUnavailable, RetouchConflict
@@ -47,6 +49,13 @@ from .retouch_workspace import (
     RetouchReference,
     RetouchWorkspaceProjection,
 )
+
+
+_MAX_IMAGE_RENDITION_PIXELS = 40_000_000
+_IMAGE_RENDITION_SPECS = {
+    RenditionKind.THUMBNAIL: (320, 64 * 1024),
+    RenditionKind.PREVIEW: (1600, 2 * 1024 * 1024),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -797,6 +806,125 @@ class ArtifactService:
             kind=kind,
             now=self.clock(),
         )
+
+    def ensure_image_renditions(
+        self,
+        artifact_id: str,
+        *,
+        revision_id: str | None = None,
+    ) -> ArtifactProjection:
+        """Idempotently materialize bounded thumbnail and preview renditions.
+
+        Each rendition is an immutable CAS object attached under the parent
+        revision in one SQLite transaction.  The repository re-checks the
+        unique ``(parent_revision_id, kind)`` identity while holding its write
+        lock, so retries and concurrent recovery never replace a completed
+        rendition or create a second authoritative child.
+        """
+
+        scope = self.get_artifact_scope(artifact_id)
+        projection = self.get_user_artifact(
+            artifact_id,
+            account_id=scope.account_id,
+        )
+        expected_revision_id = revision_id or projection.revision_id
+        if projection.revision_id != expected_revision_id:
+            raise RetouchConflict("parent_revision_id is stale")
+        if projection.family is not ArtifactFamily.IMAGE:
+            return projection
+
+        present = {rendition.kind for rendition in projection.renditions}
+        missing = tuple(kind for kind in _IMAGE_RENDITION_SPECS if kind not in present)
+        if not missing:
+            return projection
+        source = self.read_user_content(
+            artifact_id,
+            expected_revision_id,
+            account_id=scope.account_id,
+        )
+        if hashlib.sha256(source).hexdigest() != projection.sha256:
+            raise ArtifactActionUnavailable("image source digest changed")
+
+        stem, _ = split_display_filename(projection.display_name)
+        for kind in missing:
+            max_dimension, max_bytes = _IMAGE_RENDITION_SPECS[kind]
+            content = self._render_image_rendition(
+                source,
+                max_dimension=max_dimension,
+                max_bytes=max_bytes,
+            )
+            projection = self.attach_rendition(
+                artifact_id,
+                content=content,
+                requested_name=f"{stem}-{kind.value}.jpg",
+                mime_type="image/jpeg",
+                kind=kind,
+                parent_revision_id=expected_revision_id,
+                family_hint=ArtifactFamily.IMAGE,
+            )
+        return projection
+
+    @staticmethod
+    def _render_image_rendition(
+        source: bytes,
+        *,
+        max_dimension: int,
+        max_bytes: int,
+    ) -> bytes:
+        try:
+            from PIL import Image, ImageOps
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", Image.DecompressionBombWarning)
+                with Image.open(io.BytesIO(source)) as opened:
+                    frame = ImageOps.exif_transpose(opened)
+                    width, height = frame.size
+                    if (
+                        width < 1
+                        or height < 1
+                        or width * height > _MAX_IMAGE_RENDITION_PIXELS
+                    ):
+                        raise ArtifactActionUnavailable(
+                            "image dimensions exceed the rendition safety limit"
+                        )
+                    frame.thumbnail(
+                        (max_dimension, max_dimension),
+                        Image.Resampling.LANCZOS,
+                    )
+                    rgba = frame.convert("RGBA")
+                    canvas = Image.new("RGB", rgba.size, "white")
+                    canvas.paste(rgba, mask=rgba.getchannel("A"))
+                    candidate = canvas
+                    while True:
+                        for quality in (88, 80, 72, 64, 56, 48, 40):
+                            output = io.BytesIO()
+                            candidate.save(
+                                output,
+                                format="JPEG",
+                                quality=quality,
+                                optimize=True,
+                                progressive=True,
+                            )
+                            content = output.getvalue()
+                            if len(content) <= max_bytes:
+                                return content
+                        if min(candidate.size) <= 128:
+                            raise ArtifactActionUnavailable(
+                                "image cannot fit the rendition byte budget"
+                            )
+                        candidate = candidate.resize(
+                            (
+                                max(128, int(candidate.width * 0.8)),
+                                max(128, int(candidate.height * 0.8)),
+                            ),
+                            resample=Image.Resampling.LANCZOS,
+                        )
+        except ArtifactActionUnavailable:
+            raise
+        except Exception as error:
+            raise ArtifactActionUnavailable(
+                "image cannot be decoded for a safe rendition"
+            ) from error
 
     def record_feedback(
         self,

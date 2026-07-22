@@ -13,7 +13,7 @@ const bootstrap = {
     snapshot_id: "models_test",
     chat: [{
       model_id: "ecorex-chat",
-      display_name: "EcoreX Chat",
+      display_name: "e-Mate Chat",
       capabilities: ["chat"],
       aliases: [],
       is_default: true,
@@ -21,7 +21,7 @@ const bootstrap = {
     }],
     image: [{
       model_id: "gpt-image-2",
-      display_name: "EcoreX Image 2",
+      display_name: "e-Mate Image 2",
       capabilities: ["image_generation"],
       aliases: ["image2", "image-2"],
       is_default: true,

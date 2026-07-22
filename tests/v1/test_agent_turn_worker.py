@@ -403,6 +403,143 @@ def test_uploaded_image_reaches_gateway_as_bounded_rendition_and_is_not_repeated
     assert second_images == []
 
 
+def test_artifact_vision_tool_continuation_carries_bounded_semantic_image(
+    tmp_path,
+) -> None:
+    import base64
+    import hashlib
+    import io
+
+    from PIL import Image
+
+    from ecorex.artifacts import ArtifactFamily, ArtifactScope
+    from ecorex.integration.image_tools import ImageVisionToolHandler
+
+    app = create_app(
+        settings=RuntimeSettings(
+            database_path=tmp_path / "runtime-artifact-vision.db",
+            installed_capability_packs=frozenset({"image"}),
+            capability_handlers={"vision": ImageVisionToolHandler()},
+        )
+    )
+    kernel = app.state.runtime
+    composition = app.state.runtime_composition
+    thread = kernel.create_thread(CreateThreadRequest(title="artifact vision"))
+    source = io.BytesIO()
+    Image.new("RGB", (2800, 1600), (20, 90, 180)).save(source, format="PNG")
+    source_bytes = source.getvalue()
+    artifact = app.state.artifact_service.create_artifact(
+        source_bytes,
+        requested_name="approved-dashboard.png",
+        mime_type="image/png",
+        declaration=app.state.artifact_service.issue_trusted_deliverable_declaration(
+            "test-image", family=ArtifactFamily.IMAGE
+        ),
+        scope=ArtifactScope(
+            account_id="local-user",
+            thread_id=thread.thread_id,
+            created_by_tool_id="test-image",
+        ),
+    )
+    prepared = composition.prepare_turn(
+        CreateTurnRequest(
+            input="检查这张既有产物的主色和布局",
+            explicit_tool_ids=["vision"],
+            client_message_id="artifact-vision-message",
+        )
+    )
+    created = kernel.create_turn(
+        thread.thread_id,
+        prepared.request,
+        snapshot_context=prepared.snapshot_context,
+    )
+    gateway = ScriptedGateway(
+        [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "resp_artifact_vision_tool",
+                    "tool_call_id": "call_artifact_vision",
+                    "tool_name": "vision",
+                    "arguments": {
+                        "artifact_ids": [artifact.artifact_id],
+                        "instruction": "描述主色和版式层级",
+                    },
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "response.failed",
+                    "response_id": "resp_artifact_vision_handoff_failed",
+                    "error_code": "provider_protocol_error",
+                    "error_message": "visual handoff unsupported",
+                    "retryable": False,
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "output_text.delta",
+                    "response_id": "resp_artifact_vision_final",
+                    "delta": "画面以蓝色为主，采用横向分区布局。",
+                },
+                {
+                    "seq": 2,
+                    "event_type": "response.completed",
+                    "response_id": "resp_artifact_vision_final",
+                },
+            ],
+        ]
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+        input_attachments=app.state.input_attachment_service,
+        visual_evidence_resolver=(
+            app.state.image_tool_backend.resolve_model_visual_evidence
+        ),
+    )
+
+    result = asyncio.run(worker.run_once("worker-artifact-vision"))
+
+    assert result.outcome is WorkerOutcome.COMPLETED
+    assert len(gateway.requests) == 3
+    continuation = gateway.requests[1]
+    items = continuation.ordered_input_items()
+    tool_output = next(item for item in items if item.type == "function_call_output")
+    assert "_ecorex_model_visual_evidence" not in tool_output.output
+    assert tool_output.output["semantic_result"] == {
+        "status": "pending_model_vision",
+        "delivery": "next_assistant_message",
+    }
+    evidence_message = next(item for item in items if item.type == "user_message")
+    assert evidence_message.content.endswith("描述主色和版式层级")
+    assert len(evidence_message.images) == 1
+    visual = evidence_message.images[0]
+    rendition = base64.b64decode(visual.data_base64, validate=True)
+    assert visual.attachment_id == artifact.artifact_id
+    assert visual.revision_id == artifact.revision_id
+    assert visual.mime_type == "image/jpeg"
+    assert len(rendition) <= 384 * 1024
+    assert visual.sha256 == hashlib.sha256(rendition).hexdigest()
+    assert visual.source_sha256 == hashlib.sha256(source_bytes).hexdigest()
+    assert str(tmp_path) not in json.dumps(
+        continuation.model_dump(mode="json"), ensure_ascii=False
+    )
+    recovered = gateway.requests[2]
+    assert recovered.previous_response_id is None
+    recovered_visual = next(
+        item for item in recovered.ordered_input_items() if item.type == "user_message" and item.images
+    )
+    assert recovered_visual.images[0].source_sha256 == visual.source_sha256
+    assert "_ecorex_model_visual_evidence" not in json.dumps(
+        recovered.model_dump(mode="json"), ensure_ascii=False
+    )
+
+
 def test_worker_streams_message_and_atomically_finishes_turn_job(tmp_path) -> None:
     app, kernel, composition, thread, created = _runtime(tmp_path, input_text="hello")
     del app

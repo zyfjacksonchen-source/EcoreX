@@ -266,6 +266,7 @@ class AgentTurnWorker:
         permission_account_id: str = "local-user",
         connector_uncertain_resolver: Callable[[str, str], None] | None = None,
         input_attachments: InputAttachmentService | None = None,
+        visual_evidence_resolver: Callable[..., tuple[GatewayImageInput, ...]] | None = None,
         stream_checkpoint_interval_seconds: float = 0.2,
         image_execution_concurrency: int = 2,
         image_execution_queue_capacity: int = 8,
@@ -300,6 +301,7 @@ class AgentTurnWorker:
         self.permission_account_id = permission_account_id
         self.connector_uncertain_resolver = connector_uncertain_resolver
         self.input_attachments = input_attachments
+        self.visual_evidence_resolver = visual_evidence_resolver
         self.stream_checkpoint_interval_seconds = stream_checkpoint_interval_seconds
         self.tool_executions = ToolExecutionRepository(kernel.database)
         self.image_executions = ImageExecutionPool(
@@ -310,6 +312,14 @@ class AgentTurnWorker:
             timeout_seconds=image_execution_timeout_seconds,
         )
         self.public_tools = PublicToolActivityProjector()
+
+    def bind_visual_evidence_resolver(
+        self,
+        resolver: Callable[..., tuple[GatewayImageInput, ...]],
+    ) -> None:
+        if not callable(resolver):
+            raise ValueError("visual evidence resolver is invalid")
+        self.visual_evidence_resolver = resolver
 
     async def close(self) -> None:
         await self.image_executions.close()
@@ -1669,8 +1679,12 @@ class AgentTurnWorker:
     def _stateless_continuation_note(
         recovery: _StatelessContinuationRecovery,
     ) -> str:
+        output = recovery.tool_output.output
+        if isinstance(output, Mapping) and "_ecorex_model_visual_evidence" in output:
+            output = dict(output)
+            output.pop("_ecorex_model_visual_evidence", None)
         raw = json.dumps(
-            recovery.tool_output.output,
+            output,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -1829,6 +1843,64 @@ class AgentTurnWorker:
                     ) from error
             return images
 
+        typed_tool_outputs: list[GatewayFunctionCallOutputInput] = []
+        visual_evidence_items: list[GatewayUserMessageInput] = []
+        evidence_outputs = (
+            tool_outputs
+            if stateless_continuation is None
+            else [stateless_continuation.tool_output]
+        )
+        for output in evidence_outputs:
+            sanitized_output = output.output
+            marker = (
+                output.output.get("_ecorex_model_visual_evidence")
+                if isinstance(output.output, Mapping)
+                else None
+            )
+            if marker is not None:
+                record = self.tool_executions.get(
+                    self._execution_id(turn_id, output.tool_call_id)
+                )
+                if record.tool_id != "vision":
+                    raise ConflictError("visual evidence came from an invalid tool")
+                resolver = self.visual_evidence_resolver
+                if resolver is None:
+                    raise ConflictError("model visual evidence runtime is unavailable")
+                images = resolver(
+                    output.output,
+                    thread_id=turn.thread_id,
+                    turn_id=turn.turn_id,
+                )
+                if not images or len(images) > 4:
+                    raise ConflictError("model visual evidence is invalid")
+                instruction = (
+                    marker.get("instruction") if isinstance(marker, Mapping) else None
+                )
+                if not isinstance(instruction, str) or not instruction.strip():
+                    raise ConflictError("model visual instruction is invalid")
+                visual_evidence_items.append(
+                    GatewayUserMessageInput(
+                        message_id=(
+                            f"{turn.turn_id}:vision:{output.tool_call_id}:"
+                            f"{round_index}"
+                        ),
+                        content=(
+                            "EcoreX Runtime 已验证并附加视觉工具选中的图片。"
+                            "请直接查看图片并完成以下视觉任务：\n"
+                            + instruction
+                        ),
+                        images=list(images),
+                    )
+                )
+                sanitized_output = dict(output.output)
+                sanitized_output.pop("_ecorex_model_visual_evidence", None)
+            typed_tool_outputs.append(
+                GatewayFunctionCallOutputInput(
+                    tool_call_id=output.tool_call_id,
+                    output=sanitized_output,
+                )
+            )
+
         legacy_input: str | None = input_with_attachments(turn.input, turn.metadata)
         legacy_tool_outputs = tool_outputs
         input_items = None
@@ -1868,13 +1940,8 @@ class AgentTurnWorker:
                 )
             else:
                 input_items = [
-                    *(
-                        GatewayFunctionCallOutputInput(
-                            tool_call_id=output.tool_call_id,
-                            output=output.output,
-                        )
-                        for output in tool_outputs
-                    ),
+                    *typed_tool_outputs,
+                    *visual_evidence_items,
                     *conversation.items,
                     *current_items,
                 ]
@@ -1934,6 +2001,7 @@ class AgentTurnWorker:
                     ),
                     content=self._stateless_continuation_note(stateless_continuation),
                 ),
+                *visual_evidence_items,
                 GatewayUserMessageInput(
                     message_id=f"{turn.turn_id}:continue:{round_index}",
                     content=(
@@ -1942,6 +2010,10 @@ class AgentTurnWorker:
                     ),
                 ),
             ]
+            legacy_input = None
+            legacy_tool_outputs = []
+        if input_items is None and visual_evidence_items:
+            input_items = [*typed_tool_outputs, *visual_evidence_items]
             legacy_input = None
             legacy_tool_outputs = []
         return ModelGatewayRequest(
@@ -1956,6 +2028,7 @@ class AgentTurnWorker:
             trace_id=f"trace_{turn_id}",
             model_id=turn.agent_model_id,
             model_policy=model_policy,
+            model_catalog_snapshot_id=context["model_catalog_snapshot_id"],
             input=legacy_input,
             input_items=input_items,
             config_snapshot_id=context["config_snapshot_id"],

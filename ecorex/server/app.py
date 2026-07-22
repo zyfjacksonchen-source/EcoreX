@@ -133,6 +133,9 @@ class ProductServerSettings:
     capability_pack_runtime: CapabilityPackRuntime | None = field(
         default=None, repr=False, compare=False
     )
+    capability_pack_services: Mapping[str, Any] = field(
+        default_factory=dict, repr=False, compare=False
+    )
     model_worker_concurrency: int = 2
     update_service: Any | None = field(default=None, repr=False, compare=False)
     connector_adapters: Mapping[str, Any] = field(
@@ -504,6 +507,16 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
         pack_runtime=settings.capability_pack_runtime,
         workspace_root_resolver=ProjectWorkspaceAuthority(settings.database_path),
     )
+    expected_pack_services = (
+        settings.capability_pack_runtime.installed_service_ids
+        & {"ocr.extract", "office.formats"}
+        if settings.capability_pack_runtime is not None
+        else frozenset()
+    )
+    if set(settings.capability_pack_services) != set(expected_pack_services):
+        raise ServerConfigurationError(
+            "verified Capability Pack service adapters are incomplete"
+        )
     disabled_capability_tools = dict(capability_runtime.disabled_tools)
     initial_sandbox_profile = (
         "danger-full-access" if settings.full_access else "workspace-write"
@@ -589,6 +602,7 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
         model_gateway=settings.model_gateway,
         image_orchestration_client=settings.image_orchestration_client,
         capability_handlers=capability_runtime.handlers,
+        capability_pack_services=settings.capability_pack_services,
         mcp_runtime_bindings=tuple(settings.mcp_runtime_bindings),
         installed_capability_packs=capability_runtime.installed_pack_ids,
         disabled_capability_tools=disabled_capability_tools,

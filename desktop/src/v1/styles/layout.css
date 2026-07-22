@@ -135,6 +135,40 @@ textarea {
   font-weight: 600;
 }
 
+.ex-emate-lockup {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ex-emate-logo {
+  width: 116px;
+  height: 28px;
+  display: block;
+  background: url("../assets/emate-logo.png") center / contain no-repeat;
+}
+
+:root[data-theme="dark"] .ex-emate-logo,
+:root[data-theme="dark"] .ex-login-logo {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+.ex-emate-mark-image {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  display: none;
+  background: url("../assets/emate-mark.png") center / contain no-repeat;
+}
+
+.ex-emate-version {
+  color: var(--color-ink-subtle);
+  font-size: 11px;
+  line-height: var(--text-caption-line);
+  font-weight: 500;
+}
+
 .ex-brand-mark {
   width: 22px;
   height: 22px;
@@ -157,6 +191,7 @@ textarea {
 .ex-brand-copy strong {
   font-size: var(--text-body-size);
   line-height: var(--text-body-line);
+  letter-spacing: 0;
 }
 
 .ex-brand-copy small {
@@ -805,6 +840,13 @@ textarea {
   gap: var(--space-2);
 }
 
+.ex-login-logo {
+  width: 172px;
+  height: 40px;
+  display: block;
+  background: url("../assets/emate-logo.png") center / contain no-repeat;
+}
+
 .ex-login-brand h1 {
   margin: 0;
   font-family: var(--font-display);
@@ -855,6 +897,12 @@ textarea {
   color: var(--color-danger);
 }
 
+.ex-boot-mark {
+  width: 36px;
+  height: 36px;
+  background: url("../assets/emate-mark.png") center / contain no-repeat;
+}
+
 .ex-boot strong,
 .ex-boot p {
   display: block;
@@ -875,7 +923,8 @@ textarea {
     grid-template-columns: 88px minmax(0, 1fr);
   }
 
-  .ex-sidebar-brand > span:not(.ex-brand-mark),
+  .ex-sidebar-brand .ex-emate-logo,
+  .ex-sidebar-brand .ex-emate-version,
   .ex-new-task span,
   .ex-continue-task span,
   .ex-task-row span,
@@ -994,7 +1043,8 @@ textarea {
     pointer-events: auto;
   }
 
-  .ex-sidebar.is-open .ex-sidebar-brand > span:not(.ex-brand-mark),
+  .ex-sidebar.is-open .ex-sidebar-brand .ex-emate-logo,
+  .ex-sidebar.is-open .ex-sidebar-brand .ex-emate-version,
   .ex-sidebar.is-open .ex-new-task span,
   .ex-sidebar.is-open .ex-continue-task span,
   .ex-sidebar.is-open .ex-task-row span,
@@ -1002,6 +1052,18 @@ textarea {
   .ex-sidebar.is-open .ex-nav-label,
   .ex-sidebar.is-open .ex-nav-empty {
     display: initial;
+  }
+
+  .ex-sidebar-brand .ex-emate-mark-image {
+    display: block;
+  }
+
+  .ex-sidebar.is-open .ex-sidebar-brand .ex-emate-logo {
+    display: block;
+  }
+
+  .ex-sidebar.is-open .ex-sidebar-brand .ex-emate-mark-image {
+    display: none;
   }
 
   .ex-sidebar-close,

@@ -114,7 +114,7 @@ PUBLIC_BOOTSTRAP_INDEX_URL = (
 )
 PUBLICATION_KEYRING_PATH = CONFIG_ROOT / "publication-public-keys.json"
 _DEPLOYMENT_PLATFORM_ADMIN_ACCOUNT_ID = "ecorex-platform-admin"
-_DEPLOYMENT_PLATFORM_ADMIN_DISPLAY_NAME = "EcoreX 管理员"
+_DEPLOYMENT_PLATFORM_ADMIN_DISPLAY_NAME = "e-Mate 管理员"
 _DEPLOYMENT_PLATFORM_ADMIN_ORGANIZATION_ID = "ecorex-production"
 _DEPLOYMENT_PLATFORM_ADMIN_ACTOR = ControlPrincipal(
     subject="system.platform-admin-bootstrap",

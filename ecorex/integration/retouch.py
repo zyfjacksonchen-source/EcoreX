@@ -1121,7 +1121,7 @@ class RetouchWorker:
                 durable.job_id,
                 lease_token,
             )
-            self.coordinator.service.complete_staged_retouch(
+            completed = self.coordinator.service.complete_staged_retouch(
                 retouch_job_id,
                 on_completed=self.coordinator.bridge.completed_hook(
                     worker_id=worker_id,
@@ -1132,6 +1132,10 @@ class RetouchWorker:
                     lease_token,
                     execution_permit,
                 ),
+            )
+            self.coordinator.service.ensure_image_renditions(
+                completed.artifact.artifact_id,
+                revision_id=completed.artifact.revision_id,
             )
             jobs.retire_execution_permit(durable.job_id, lease_token)
             return RetouchWorkerResult(

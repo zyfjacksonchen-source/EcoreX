@@ -90,6 +90,8 @@ from .models import (
 from .path_security import (
     is_within,
     lexical_absolute,
+    lstat_identity,
+    reject_link_or_reparse,
     secure_regular_file,
     stable_read_bytes,
 )
@@ -196,6 +198,7 @@ class MigrationOptions:
     skills_config_file: str | Path | None = None
     permission_file: str | Path | None = None
     release_evidence_file: str | Path | None = None
+    baseline_root: str | Path | None = None
     sample_size: int = 3
     max_artifact_bytes: int = 512 * 1024 * 1024
     fault_injector: Callable[[str], None] | None = None
@@ -557,6 +560,8 @@ class V030ToV1Migrator:
         self.source_evidence: LegacyReleaseEvidence | None = None
         self._turn_by_request_id: dict[str, str] = {}
         self._thread_ids: dict[str, str] = {}
+        self._baseline_counts: dict[str, int] = defaultdict(int)
+        self._baseline_artifact_ids: set[str] = set()
 
     def _trace(self, stage: str, **fields: Any) -> None:
         row = {"stage": stage, "recorded_at": _iso_now()}
@@ -564,6 +569,114 @@ class V030ToV1Migrator:
         self._trace_rows.append(row)
         if self.options.fault_injector is not None:
             self.options.fault_injector(stage)
+
+    def _clone_baseline_state(self, staging: Path) -> None:
+        if self.options.baseline_root is None:
+            return
+        baseline = lexical_absolute(self.options.baseline_root)
+        if not baseline.is_dir() or baseline.is_symlink():
+            raise TargetConflictError("late migration baseline is not a real v1 state directory")
+        if is_within(staging, baseline) or is_within(baseline, staging):
+            raise TargetConflictError("late migration baseline overlaps staging")
+        source_database = baseline / TARGET_DATABASE_NAME
+        if not source_database.is_file() or source_database.is_symlink():
+            raise TargetConflictError("late migration baseline database is unavailable")
+
+        for source in baseline.rglob("*"):
+            relative = source.relative_to(baseline)
+            try:
+                reject_link_or_reparse(
+                    lstat_identity(source, label="late migration baseline entry"),
+                    label="late migration baseline entry",
+                )
+            except SourceLayoutError as error:
+                raise TargetConflictError(
+                    "late migration baseline contains a link or reparse point"
+                ) from error
+            if relative.as_posix() in {
+                TARGET_DATABASE_NAME,
+                TARGET_DATABASE_NAME + "-wal",
+                TARGET_DATABASE_NAME + "-shm",
+                REPORT_NAME,
+                INVENTORY_NAME,
+                BACKUP_MANIFEST_NAME,
+                TRACE_NAME,
+                CAS_AUTHORITY_NAME,
+            }:
+                continue
+            destination = staging / relative
+            if source.is_dir():
+                destination.mkdir(parents=True, exist_ok=True)
+                continue
+            if not source.is_file():
+                raise TargetConflictError("late migration baseline contains a special file")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with source.open("rb") as input_file, destination.open("xb") as output_file:
+                shutil.copyfileobj(input_file, output_file, length=1024 * 1024)
+
+        destination_database = staging / TARGET_DATABASE_NAME
+        source_connection = sqlite3.connect(f"file:{source_database.as_posix()}?mode=ro", uri=True)
+        destination_connection = sqlite3.connect(str(destination_database))
+        try:
+            source_connection.backup(destination_connection)
+            integrity = destination_connection.execute("PRAGMA integrity_check").fetchone()
+            foreign_keys = destination_connection.execute("PRAGMA foreign_key_check").fetchall()
+            mappings = int(
+                destination_connection.execute("SELECT COUNT(*) FROM legacy_id_map").fetchone()[0]
+            )
+            if integrity != ("ok",) or foreign_keys:
+                raise TargetConflictError("late migration baseline database failed integrity verification")
+            if mappings:
+                raise TargetConflictError("late migration baseline already contains legacy mappings")
+        except sqlite3.Error as error:
+            raise TargetConflictError("late migration baseline database is incompatible") from error
+        finally:
+            destination_connection.close()
+            source_connection.close()
+
+        database = SQLiteDatabase(destination_database)
+        artifact_service = ArtifactService(
+            staging / TARGET_ARTIFACT_ROOT_NAME,
+            database_path=destination_database,
+        )
+        with database.reader() as connection:
+            self._baseline_counts.update(
+                {
+                    "threads": int(connection.execute("SELECT COUNT(*) FROM threads").fetchone()[0]),
+                    "turns": int(connection.execute("SELECT COUNT(*) FROM turns").fetchone()[0]),
+                    "turn_input_revisions": int(connection.execute("SELECT COUNT(*) FROM turn_input_revisions").fetchone()[0]),
+                    "messages": 0,
+                    "artifact_items": 0,
+                    "projects": int(connection.execute("SELECT COUNT(*) FROM projects").fetchone()[0]),
+                    "project_bindings": int(connection.execute("SELECT COUNT(*) FROM project_thread_bindings").fetchone()[0]),
+                    "memory_records": int(connection.execute("SELECT COUNT(*) FROM memory_canonical_records").fetchone()[0]),
+                    "memory_files": int(connection.execute("SELECT COUNT(*) FROM memory_files").fetchone()[0]),
+                    "connectors": int(connection.execute("SELECT COUNT(*) FROM connector_instances").fetchone()[0]),
+                    "skill_states": int(connection.execute("SELECT COUNT(*) FROM skill_states").fetchone()[0]),
+                    "legacy_runs": 0,
+                    "legacy_run_events": 0,
+                    "pending_work": 0,
+                    "scheduler_tasks": 0,
+                    "permission_preferences": 0,
+                    "thread_branches": int(connection.execute("SELECT COUNT(*) FROM threads WHERE forked_from_thread_id IS NOT NULL").fetchone()[0]),
+                    "source_evidence": 0,
+                    "events": int(connection.execute("SELECT COUNT(*) FROM events").fetchone()[0]),
+                }
+            )
+        self._baseline_artifact_ids = {
+            projection.artifact_id for projection in artifact_service.list_user_artifacts()
+        }
+        self.counts["baseline_threads_preserved"] = self._baseline_counts["threads"]
+        with database.reader() as connection:
+            baseline_messages = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM items WHERE kind='message'"
+                ).fetchone()[0]
+            )
+        self.counts["baseline_items_preserved"] = baseline_messages
+        self.counts["baseline_artifacts_preserved"] = len(self._baseline_artifact_ids)
+        self.counts["baseline_merge"] = 1
+        self._trace("baseline.cloned", counts=dict(self._baseline_counts))
 
     def _warn(self, code: str, subject: object, detail: str) -> None:
         self.warnings.append(
@@ -3181,7 +3294,10 @@ class V030ToV1Migrator:
                 + turn_input_contract_errors[0]
             )
         for key, value in actual.items():
-            if key != "events" and int(value) != int(self.counts.get(key, 0)):
+            expected = int(self._baseline_counts.get(key, 0)) + int(
+                self.counts.get(key, 0)
+            )
+            if key != "events" and int(value) != expected:
                 raise MigrationVerificationError(
                     f"staged {key} count does not match the migration ledger"
                 )
@@ -3190,7 +3306,9 @@ class V030ToV1Migrator:
             raise MigrationVerificationError("staged Artifact revision digest differs from source inventory")
 
         projections = artifact_service.list_user_artifacts()
-        if len(projections) != self.counts.get("artifacts", 0):
+        if len(projections) != len(self._baseline_artifact_ids) + self.counts.get(
+            "artifacts", 0
+        ):
             raise MigrationVerificationError("staged user Artifact count is inconsistent")
         if any(not projection.is_user_visible for projection in projections):
             raise MigrationVerificationError("an internal Artifact leaked into the user projection")
@@ -3198,7 +3316,12 @@ class V030ToV1Migrator:
         if any(Path(item.display_name).suffix.casefold() in internal_suffixes for item in projections):
             raise MigrationVerificationError("an implementation file leaked into the user Artifact projection")
         sampled: list[str] = []
-        for projection in projections[: max(0, int(self.options.sample_size))]:
+        imported_projections = [
+            projection
+            for projection in projections
+            if projection.artifact_id not in self._baseline_artifact_ids
+        ]
+        for projection in imported_projections[: max(0, int(self.options.sample_size))]:
             content = artifact_service.read_user_content(
                 projection.artifact_id, projection.revision_id
             )
@@ -3300,6 +3423,7 @@ class V030ToV1Migrator:
         published = False
         try:
             staging, temporary = self._make_staging(target)
+            self._clone_baseline_state(staging)
             self._trace(
                 "inventory.completed",
                 source_inventory_digest=before.digest,
@@ -3556,6 +3680,7 @@ def migrate_v030_to_v1(
     skills_config_file: str | Path | None = None,
     permission_file: str | Path | None = None,
     release_evidence_file: str | Path | None = None,
+    baseline_root: str | Path | None = None,
     sample_size: int = 3,
 ) -> MigrationReport:
     """Service entry point used by installers and the future control plane."""
@@ -3575,6 +3700,7 @@ def migrate_v030_to_v1(
             skills_config_file=skills_config_file,
             permission_file=permission_file,
             release_evidence_file=release_evidence_file,
+            baseline_root=baseline_root,
             sample_size=sample_size,
         )
     ).run()

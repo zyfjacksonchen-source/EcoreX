@@ -3908,6 +3908,30 @@
               "default": null,
               "title": "Measured At"
             },
+            "model_catalog_snapshot_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model Catalog Snapshot Id"
+            },
+            "model_display_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model Display Name"
+            },
             "model_id": {
               "anyOf": [
                 {
@@ -4394,6 +4418,20 @@
           "minimum": 0,
           "title": "Size Bytes",
           "type": "integer"
+        },
+        "thumbnail_url": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thumbnail Url"
         }
       },
       "required": [

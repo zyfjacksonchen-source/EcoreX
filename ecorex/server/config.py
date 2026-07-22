@@ -46,6 +46,11 @@ from ecorex.capabilities import (
     builtin_capability_registry,
     verify_capability_pack,
 )
+from ecorex.integration.dependency_pack_process import (
+    PackOCRServiceAdapter,
+    VerifiedDependencyPackProcessAdapter,
+)
+from ecorex.integration.pack_python import resolve_pack_python
 from ecorex.connectors import (
     CredentialVault,
     ManagedConnectorGatewayAdapter,
@@ -1109,8 +1114,32 @@ def load_product_runtime(
     # Runtime composition, which also fences account changes to a reload.
     device_settings = config.device_authorization
     cleanup: list[Any] = []
+    pack_services: dict[str, Any] = {}
     composition_stage = "device_authorization_broker"
     try:
+        composition_stage = "dependency_pack_services"
+        if {"ocr", "office"}.issubset(pack_runtime.installed_pack_ids):
+            pack_python, pack_python_identity = resolve_pack_python(
+                payload,
+                platform=host_platform,
+                architecture=host_architecture,
+            )
+            ocr_process = VerifiedDependencyPackProcessAdapter(
+                pack_runtime.verified_pack("ocr"),
+                python_executable=pack_python,
+                python_identity=pack_python_identity,
+            )
+            office_process = VerifiedDependencyPackProcessAdapter(
+                pack_runtime.verified_pack("office"),
+                python_executable=pack_python,
+                python_identity=pack_python_identity,
+            )
+            cleanup.extend((ocr_process, office_process))
+            pack_services = {
+                "ocr.extract": PackOCRServiceAdapter(ocr_process),
+                "office.formats": office_process,
+            }
+        composition_stage = "device_authorization_broker"
         device_broker = device_broker_factory(device_settings)
         if device_broker is None:
             raise ProductRuntimeConfigurationError(
@@ -1253,6 +1282,7 @@ def load_product_runtime(
             model_gateway=gateway,
             image_orchestration_client=image_orchestration_client,
             capability_pack_runtime=pack_runtime,
+            capability_pack_services=MappingProxyType(dict(pack_services)),
             workspace_roots=workspace_roots,
             output_roots=standard_output_roots(workspace_roots),
             output_default_location="documents",

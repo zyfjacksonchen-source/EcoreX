@@ -476,6 +476,16 @@ class CapabilityPackRuntime:
     def installed_service_ids(self) -> frozenset[str]:
         return frozenset(self._services)
 
+    def verified_pack(self, pack_id: str) -> VerifiedCapabilityPack:
+        """Return the already verified immutable binding for Core adapters."""
+
+        try:
+            return self._packs[pack_id]
+        except KeyError:
+            raise CapabilityPackBindingError(
+                f"verified pack is not installed: {pack_id}"
+            ) from None
+
     def disabled_tools(self) -> Mapping[str, str]:
         return MappingProxyType(
             {

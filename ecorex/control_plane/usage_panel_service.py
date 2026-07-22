@@ -1354,7 +1354,7 @@ def build_payload(start: datetime, end: datetime) -> dict:
     ]
     return {
         "meta": {
-            "title": "EcoreX 上周 Agent 使用情况分析面板",
+            "title": "e-Mate 上周使用情况分析面板",
             "range": f"{start.strftime('%Y-%m-%d')} 至 {(end - timedelta(days=1)).strftime('%Y-%m-%d')}",
             "startDate": start.strftime("%Y-%m-%d"),
             "endDate": (end - timedelta(days=1)).strftime("%Y-%m-%d"),

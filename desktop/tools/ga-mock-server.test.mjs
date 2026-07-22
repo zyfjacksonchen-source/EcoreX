@@ -190,7 +190,7 @@ test("GA harness exposes managed bootstrap, strict CSRF, state reset, and unique
 
   const health = await fetch(`${harness.url}/api/v1/system/health`).then((response) => response.json());
   const technicalHealth = await fetch(`${harness.url}/api/v1/system/health?technical=true`).then((response) => response.json());
-  assert.equal(health.summary, "EcoreX 运行正常");
+  assert.equal(health.summary, "e-Mate 运行正常");
   assert.equal("metrics" in health, false);
   assert.equal(technicalHealth.metrics.services.extensions.total, 3);
 

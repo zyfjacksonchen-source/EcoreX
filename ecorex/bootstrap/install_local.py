@@ -119,6 +119,7 @@ def install(
     trusted_public_keys: Sequence[str],
     sandbox_helper: str | None = None,
     sandbox_helper_sha256: str | None = None,
+    desktop_directory: str | None = None,
 ) -> dict[str, object]:
     manifest = ReleaseManifest.from_json(
         _regular_bytes(manifest_path, limit=MAX_MANIFEST_BYTES)
@@ -154,6 +155,11 @@ def install(
         fetcher=local_fetcher,
         windows_security_factory=(
             type(security) if security is not None else None
+        ),
+        desktop_directory=(
+            Path(os.path.abspath(desktop_directory))
+            if desktop_directory is not None
+            else None
         ),
     )
     coordinator = InstallCoordinator(

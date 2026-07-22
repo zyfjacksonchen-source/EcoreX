@@ -301,6 +301,7 @@ def test_signed_bootstrap_handoff_stages_core_and_six_packs_atomically(
         artifacts_path=str(built.output_dir),
         install_root=str(tmp_path / "install"),
         trusted_public_keys=(trust,),
+        desktop_directory=str(tmp_path / "Desktop"),
         **sandbox,
     )
 
@@ -334,6 +335,7 @@ def test_signed_bootstrap_handoff_upgrades_an_existing_install(
         artifacts_path=str(previous.output_dir),
         install_root=str(tmp_path / "install"),
         trusted_public_keys=(previous_trust,),
+        desktop_directory=str(tmp_path / "Desktop"),
         **previous_sandbox,
     )
     platform, architecture = _target()
@@ -354,6 +356,7 @@ def test_signed_bootstrap_handoff_upgrades_an_existing_install(
         platform=platform,
         architecture=architecture,
         verifier=verifier,
+        desktop_directory=tmp_path / "Desktop",
     )
     companion.prepare_transaction(first["transaction_id"])
     activations.confirm(first["transaction_id"], intent.health_identity)
@@ -411,6 +414,7 @@ def test_signed_bootstrap_handoff_upgrades_an_existing_install(
         artifacts_path=str(current.output_dir),
         install_root=str(tmp_path / "install"),
         trusted_public_keys=(current_trust,),
+        desktop_directory=str(tmp_path / "Desktop"),
         **current_sandbox,
     )
 
@@ -453,6 +457,7 @@ def test_signed_bootstrap_handoff_rejects_tampered_pack_before_pointer_switch(
             artifacts_path=str(built.output_dir),
             install_root=str(tmp_path / "install"),
             trusted_public_keys=(trust,),
+            desktop_directory=str(tmp_path / "Desktop"),
             **sandbox,
         )
 

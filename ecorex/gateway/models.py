@@ -385,6 +385,10 @@ class ModelGatewayRequest(GatewayModel):
     model_policy: GatewayModelPolicy = Field(
         default_factory=ecorex_chat_gateway_policy
     )
+    # Runtime-originated requests bind the execution attempt to the same
+    # immutable catalog revision used for Turn admission and usage. Optional
+    # only for compatibility with older direct Gateway SDK callers.
+    model_catalog_snapshot_id: str | None = Field(default=None, max_length=256)
     # ``input`` and ``tool_outputs`` are the v1 compatibility surface.  New
     # callers use ``input_items`` so a tool continuation and pending user
     # revisions can coexist without either side being discarded.
@@ -420,6 +424,7 @@ class ModelGatewayRequest(GatewayModel):
             ("turn_id", self.turn_id),
             ("trace_id", self.trace_id),
             ("model_id", self.model_id),
+            ("model_catalog_snapshot_id", self.model_catalog_snapshot_id),
             ("config_snapshot_id", self.config_snapshot_id),
             ("capability_snapshot_id", self.capability_snapshot_id),
             ("permission_snapshot_id", self.permission_snapshot_id),

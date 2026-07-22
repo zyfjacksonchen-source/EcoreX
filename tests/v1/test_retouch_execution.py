@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+import io
 import json
 import threading
 
@@ -45,8 +46,16 @@ from ecorex.runtime.invariant_guard import RuntimeExecutionGate
 from ecorex.runtime.kernel import RuntimeKernel
 
 
-PNG = b"\x89PNG\r\n\x1a\nTOP_SECRET_SOURCE_BYTES"
-OUTPUT = b"\x89PNG\r\n\x1a\nRETOUCHED_OUTPUT_BYTES"
+def _test_png(color: tuple[int, int, int]) -> bytes:
+    from PIL import Image
+
+    output = io.BytesIO()
+    Image.new("RGB", (32, 24), color).save(output, format="PNG")
+    return output.getvalue()
+
+
+PNG = _test_png((30, 90, 210))
+OUTPUT = _test_png((230, 120, 45))
 
 
 def _snapshot_provider(
@@ -540,7 +549,7 @@ def test_retouch_turn_acceptance_linearizes_with_permission_update(
     assert second_event.permission_snapshot_id == changed.snapshot_id
 
 
-def test_admin_hard_deny_blocks_retouch_before_any_product_state(tmp_path) -> None:
+def test_admin_audit_deny_does_not_gate_local_retouch_execution(tmp_path) -> None:
     kernel, service, coordinator, image, request, _root, database = _environment(
         tmp_path
     )
@@ -549,16 +558,16 @@ def test_admin_hard_deny_blocks_retouch_before_any_product_state(tmp_path) -> No
     )
     with kernel.database.reader() as connection:
         before_turns = connection.execute("SELECT COUNT(*) FROM turns").fetchone()[0]
-    with pytest.raises(RuntimeSnapshotStale, match="image editing is unavailable"):
-        coordinator.request(image.artifact_id, request)
+    result = coordinator.request(image.artifact_id, request)
+    assert result.status == "queued"
     with kernel.database.reader() as connection:
-        assert connection.execute("SELECT COUNT(*) FROM turns").fetchone()[0] == before_turns
+        assert connection.execute("SELECT COUNT(*) FROM turns").fetchone()[0] == before_turns + 1
         assert connection.execute(
             "SELECT COUNT(*) FROM artifact_retouch_jobs"
-        ).fetchone()[0] == 0
+        ).fetchone()[0] == 1
         assert connection.execute(
             "SELECT COUNT(*) FROM jobs WHERE kind = ?", (RETOUCH_JOB_KIND,)
-        ).fetchone()[0] == 0
+        ).fetchone()[0] == 1
 
 
 def test_retouch_turns_obey_thread_fifo_without_agent_turn_jobs(tmp_path) -> None:

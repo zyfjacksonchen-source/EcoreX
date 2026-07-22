@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from ecorex.gateway import (
+    GatewayFunctionCallOutputInput,
     GatewayImageInput,
     GatewayUserMessageInput,
     ModelGatewayRequest,
@@ -70,6 +71,57 @@ def test_responses_payload_contains_runtime_attested_input_image() -> None:
     assert content[1]["type"] == "input_image"
     assert content[1]["image_url"].startswith("data:image/png;base64,")
     assert "artifact_image_1" not in content[1]["image_url"]
+
+
+def test_responses_tool_continuation_orders_output_before_visual_evidence() -> None:
+    policy = ecorex_chat_gateway_policy()
+    request = ModelGatewayRequest(
+        request_id="request_vision_continuation_1",
+        thread_id="thread_vision_continuation_1",
+        turn_id="turn_vision_continuation_1",
+        trace_id="trace_vision_continuation_1",
+        model_id=policy.local_model_id,
+        model_policy=policy,
+        input_items=[
+            GatewayFunctionCallOutputInput(
+                tool_call_id="call_vision_1",
+                output={
+                    "status": "input_verified",
+                    "semantic_result": {
+                        "status": "pending_model_vision",
+                        "delivery": "next_assistant_message",
+                    },
+                },
+            ),
+            GatewayUserMessageInput(
+                message_id="message_vision_evidence_1",
+                content="请直接查看已验证图片并描述布局",
+                images=[_image()],
+            ),
+        ],
+        previous_response_id="response_requested_vision_1",
+        config_snapshot_id="config_vision_continuation_1",
+        capability_snapshot_id="capability_vision_continuation_1",
+        permission_snapshot_id="permission_vision_continuation_1",
+    )
+    fake = SimpleNamespace(
+        validate_request=lambda _request, _principal: None,
+        model_policies={request.model_id: request.model_policy},
+        model_mapping={request.model_id: request.model_policy.upstream_model_id},
+    )
+
+    payload, _names = ManagedHTTPSResponsesProvider._payload(
+        fake, request, SimpleNamespace(account_id="account_1")
+    )
+
+    assert payload["previous_response_id"] == "response_requested_vision_1"
+    assert payload["input"][0]["type"] == "function_call_output"
+    assert payload["input"][0]["call_id"] == "call_vision_1"
+    assert payload["input"][1]["role"] == "user"
+    assert payload["input"][1]["content"][1]["type"] == "input_image"
+    assert payload["input"][1]["content"][1]["image_url"].startswith(
+        "data:image/png;base64,"
+    )
 
 
 def test_chat_completions_payload_contains_compatible_image_url_part() -> None:

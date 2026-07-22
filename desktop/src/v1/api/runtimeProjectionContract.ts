@@ -27,7 +27,7 @@ class ProjectionContractError extends Error {
   readonly expectation: string;
 
   constructor(contract: ContractName, path: string, expectation: string) {
-    super("运行服务返回的数据版本与当前页面不兼容，请刷新或更新 EcoreX。");
+    super("运行服务返回的数据版本与当前页面不兼容，请刷新或更新 e-Mate。");
     this.name = "RuntimeContractError";
     this.contract = contract;
     this.path = path;

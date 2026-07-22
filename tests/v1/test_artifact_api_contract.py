@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+import io
 import json
 
 from fastapi import FastAPI
@@ -11,6 +13,7 @@ from ecorex.artifacts import (
     ArtifactFamily,
     ArtifactService,
     FeedbackSignal,
+    RenditionKind,
 )
 from ecorex.artifacts.api import ArtifactApiEvent, create_artifact_router
 from ecorex.runtime import RuntimeExecutionDenied
@@ -138,6 +141,86 @@ def test_content_and_preview_are_user_scoped_and_never_expose_storage_paths(tmp_
         404,
         "ARTIFACT_NOT_FOUND",
     )
+
+
+def test_image_thumbnail_and_preview_are_bounded_persisted_and_idempotent(tmp_path):
+    from PIL import Image
+
+    service, client = make_client(tmp_path)
+    source = io.BytesIO()
+    Image.new("RGB", (2400, 1600), (25, 90, 210)).save(source, format="PNG")
+    image = service.create_artifact(
+        source.getvalue(),
+        requested_name="campaign.png",
+        mime_type="image/png",
+    )
+
+    thumbnail = client.get(f"/api/v1/artifacts/{image.artifact_id}/thumbnail")
+    assert thumbnail.status_code == 200
+    assert thumbnail.headers["content-type"].startswith("image/jpeg")
+    assert len(thumbnail.content) <= 64 * 1024
+    with Image.open(io.BytesIO(thumbnail.content)) as decoded:
+        assert max(decoded.size) <= 320
+
+    preview = client.get(f"/api/v1/artifacts/{image.artifact_id}/preview")
+    assert preview.status_code == 200
+    assert preview.headers["content-type"].startswith("image/jpeg")
+    assert len(preview.content) <= 2 * 1024 * 1024
+    with Image.open(io.BytesIO(preview.content)) as decoded:
+        assert max(decoded.size) <= 1600
+
+    first = service.get_user_artifact(image.artifact_id)
+    assert {item.kind for item in first.renditions} == {
+        RenditionKind.THUMBNAIL,
+        RenditionKind.PREVIEW,
+    }
+    service.ensure_image_renditions(
+        image.artifact_id,
+        revision_id=image.revision_id,
+    )
+    with service.repository.database.reader() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM artifact_renditions WHERE parent_revision_id = ?",
+            (image.revision_id,),
+        ).fetchone()[0] == 2
+
+
+def test_concurrent_rendition_recovery_has_one_authority_and_no_orphans(tmp_path):
+    from PIL import Image
+
+    service, _client = make_client(tmp_path)
+    source = io.BytesIO()
+    Image.new("RGB", (640, 480), (25, 90, 210)).save(source, format="PNG")
+    image = service.create_artifact(
+        source.getvalue(), requested_name="parallel.png", mime_type="image/png"
+    )
+
+    def ensure(_index: int):
+        return service.ensure_image_renditions(
+            image.artifact_id,
+            revision_id=image.revision_id,
+        )
+
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        projections = list(executor.map(ensure, range(100)))
+
+    expected = {
+        item.kind: item.sha256
+        for item in service.get_user_artifact(image.artifact_id).renditions
+    }
+    assert set(expected) == {RenditionKind.THUMBNAIL, RenditionKind.PREVIEW}
+    assert all(
+        {item.kind: item.sha256 for item in projection.renditions} == expected
+        for projection in projections
+    )
+    with service.repository.database.reader() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM artifact_renditions WHERE parent_revision_id = ?",
+            (image.revision_id,),
+        ).fetchone()[0] == 2
+        assert connection.execute(
+            "SELECT COUNT(*) FROM artifact_entities WHERE role = 'rendition'"
+        ).fetchone()[0] == 2
 
 
 def test_preview_unavailable_uses_stable_action_error(tmp_path):
@@ -361,6 +444,7 @@ def test_router_does_not_publish_internal_worker_or_declaration_routes(tmp_path)
         "/api/v1/artifacts",
         "/api/v1/artifacts/{artifact_id}",
         "/api/v1/artifacts/{artifact_id}/content",
+        "/api/v1/artifacts/{artifact_id}/thumbnail",
         "/api/v1/artifacts/{artifact_id}/preview",
         "/api/v1/artifacts/{artifact_id}/actions/{action}",
         "/api/v1/artifacts/{artifact_id}/feedback",

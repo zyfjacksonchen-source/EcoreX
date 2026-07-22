@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 import hashlib
@@ -29,6 +30,7 @@ from ecorex.image_orchestrator import ImageOperation, ImageSubmitRequest
 from ecorex.protocol import ItemKind, ItemStatus
 from ecorex.runtime.database import SQLiteDatabase
 from ecorex.input_attachments import InputAttachmentService
+from ecorex.gateway import GatewayImageInput
 
 from .managed_image import (
     ManagedImageClientError,
@@ -473,6 +475,11 @@ class RuntimeImageToolBackend:
         marker = self.publications.marker(publication_key)
         recovered = await asyncio.to_thread(self._find_marker_artifact, marker)
         if recovered is not None:
+            recovered = await asyncio.to_thread(
+                self.artifacts.ensure_image_renditions,
+                recovered.artifact_id,
+                revision_id=recovered.revision_id,
+            )
             cloud_job_id = await asyncio.to_thread(
                 self._finalize_recovered_publication,
                 publication_key,
@@ -500,6 +507,11 @@ class RuntimeImageToolBackend:
                 raise ImageToolError(
                     "completed image publication Artifact marker is missing"
                 )
+            recovered = await asyncio.to_thread(
+                self.artifacts.ensure_image_renditions,
+                recovered.artifact_id,
+                revision_id=recovered.revision_id,
+            )
             cloud_job_id = await asyncio.to_thread(
                 self._finalize_recovered_publication,
                 publication_key,
@@ -594,6 +606,11 @@ class RuntimeImageToolBackend:
             artifact = self.artifacts.get_user_artifact(
                 row["artifact_id"], account_id=self.account_id
             )
+            artifact = await asyncio.to_thread(
+                self.artifacts.ensure_image_renditions,
+                artifact.artifact_id,
+                revision_id=artifact.revision_id,
+            )
             return await asyncio.to_thread(
                 self._emit_artifact_item,
                 artifact,
@@ -650,6 +667,11 @@ class RuntimeImageToolBackend:
                     turn_id=scope.turn_id,
                     created_by_tool_id=marker,
                 ),
+            )
+            artifact = await asyncio.to_thread(
+                self.artifacts.ensure_image_renditions,
+                artifact.artifact_id,
+                revision_id=artifact.revision_id,
             )
             self._raise_if_publication_lease_lost(lease_heartbeat)
             self.fault_hook("after_artifact", publication_key)
@@ -779,15 +801,18 @@ class RuntimeImageToolBackend:
         attachment_ids = tuple(arguments.get("attachment_ids", ()))
         if not artifact_ids and not attachment_ids:
             raise ImageToolError("vision requires at least one image identity")
-        if len(artifact_ids) + len(attachment_ids) > 20:
+        if len(artifact_ids) + len(attachment_ids) > 4:
             raise ImageToolError("vision image selection exceeds the product limit")
         inspected = []
+        evidence: list[dict[str, str]] = []
         for artifact_id in artifact_ids:
             projection = self.artifacts.get_user_artifact(
                 str(artifact_id), account_id=self.account_id
             )
             if projection.family is not ArtifactFamily.IMAGE:
                 raise ImageToolError("vision inputs must be image artifacts")
+            if projection.size_bytes > 64 * 1024 * 1024:
+                raise ImageToolError("vision source exceeds the product limit")
             # Reading through ArtifactService re-verifies the CAS digest.
             content = self.artifacts.read_user_content(
                 projection.artifact_id,
@@ -805,6 +830,14 @@ class RuntimeImageToolBackend:
                     "size_bytes": projection.size_bytes,
                     "sha256": projection.sha256,
                     "quality_evidence": projection.quality_evidence.to_dict(),
+                }
+            )
+            evidence.append(
+                {
+                    "kind": "artifact",
+                    "artifact_id": projection.artifact_id,
+                    "revision_id": projection.revision_id,
+                    "source_sha256": projection.sha256,
                 }
             )
         attachment_runtime = self.input_attachments
@@ -848,17 +881,122 @@ class RuntimeImageToolBackend:
                     "ocr": ocr,
                 }
             )
+            evidence.append(
+                {
+                    "kind": "attachment",
+                    "attachment_id": projection.attachment_id,
+                    "revision_id": projection.revision_id,
+                    "source_sha256": projection.sha256,
+                }
+            )
         return {
             "status": "input_verified",
             "instruction": str(arguments["instruction"]),
             "images": inspected,
-            "semantic_result": None,
+            "semantic_result": {
+                "status": "pending_model_vision",
+                "delivery": "next_assistant_message",
+            },
             "requires_model_vision": True,
+            "_ecorex_model_visual_evidence": {
+                "schema_version": 1,
+                "instruction": str(arguments["instruction"]),
+                "images": evidence,
+            },
             "note": (
                 "已验证图片身份与完整性，并附上可用的本地 OCR 证据；"
                 "本结果不代表语义视觉已完成，语义答案必须来自已绑定图片的当前对话模型。"
             ),
         }
+
+    def resolve_model_visual_evidence(
+        self,
+        result: Mapping[str, Any],
+        *,
+        thread_id: str,
+        turn_id: str,
+    ) -> tuple[GatewayImageInput, ...]:
+        """Re-authorize and render a persisted vision result for one continuation.
+
+        Tool output stores only opaque IDs and digests. Binary bytes are read
+        again through the account/Turn authorities and converted by the shared
+        bounded visual rendition boundary; paths and original CAS bytes never
+        enter the Gateway request.
+        """
+
+        raw = result.get("_ecorex_model_visual_evidence")
+        if not isinstance(raw, Mapping) or raw.get("schema_version") != 1:
+            return ()
+        images = raw.get("images")
+        if not isinstance(images, list) or not 1 <= len(images) <= 4:
+            raise ImageToolError("vision evidence contract is invalid")
+        if self.input_attachments is None:
+            raise ImageToolUnavailable("visual rendition runtime is unavailable")
+        projected: list[GatewayImageInput] = []
+        for item in images:
+            if not isinstance(item, Mapping):
+                raise ImageToolError("vision evidence contract is invalid")
+            expected_revision = item.get("revision_id")
+            expected_source = item.get("source_sha256")
+            if not isinstance(expected_revision, str) or not isinstance(
+                expected_source, str
+            ):
+                raise ImageToolError("vision evidence identity is invalid")
+            if item.get("kind") == "artifact":
+                artifact_id = item.get("artifact_id")
+                if not isinstance(artifact_id, str):
+                    raise ImageToolError("vision artifact identity is invalid")
+                projection = self.artifacts.repository.get_revision_projection(
+                    artifact_id,
+                    expected_revision,
+                    account_id=self.account_id,
+                )
+                if (
+                    projection.family is not ArtifactFamily.IMAGE
+                    or projection.sha256 != expected_source
+                    or projection.size_bytes > 64 * 1024 * 1024
+                ):
+                    raise ImageToolError("vision artifact revision changed")
+                source = self.artifacts.read_user_content(
+                    artifact_id,
+                    expected_revision,
+                    account_id=self.account_id,
+                )
+                rendition = self.input_attachments._render_visual(
+                    projection,
+                    source,
+                    max_bytes=384 * 1024,
+                    max_dimension=2048,
+                )
+                opaque_id = artifact_id
+            elif item.get("kind") == "attachment":
+                attachment_id = item.get("attachment_id")
+                if not isinstance(attachment_id, str):
+                    raise ImageToolError("vision attachment identity is invalid")
+                projection, rendition = self.input_attachments.read_bound_visual(
+                    attachment_id,
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                )
+                if (
+                    projection.revision_id != expected_revision
+                    or projection.sha256 != expected_source
+                ):
+                    raise ImageToolError("vision attachment revision changed")
+                opaque_id = attachment_id
+            else:
+                raise ImageToolError("vision evidence kind is invalid")
+            projected.append(
+                GatewayImageInput(
+                    attachment_id=opaque_id,
+                    revision_id=expected_revision,
+                    mime_type=rendition.mime_type,
+                    data_base64=base64.b64encode(rendition.content).decode("ascii"),
+                    sha256=rendition.sha256,
+                    source_sha256=rendition.source_sha256,
+                )
+            )
+        return tuple(projected)
 
     def _find_marker_artifact(self, marker: str):
         connection = sqlite3.connect(self.database_path, timeout=30)

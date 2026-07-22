@@ -260,7 +260,7 @@ export function useConnectorSession({
       }
 
       setConnectorNotice(
-        `${item.definition.display_name} 授权窗口已打开。完成授权后返回 EcoreX；页面会自动同步状态。`,
+        `${item.definition.display_name} 授权窗口已打开。完成授权后返回 e-Mate；页面会自动同步状态。`,
       );
       const controller = new AbortController();
       pollers.current.get(connectorId)?.abort();

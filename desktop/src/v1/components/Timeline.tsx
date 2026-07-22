@@ -13,6 +13,10 @@ import { tryValidateArtifactProjection } from "../api/runtimeContract.ts";
 import { retouchPresentation } from "../state/retouchPresentation.ts";
 import { mergeArtifactProjections } from "../state/artifactActions.ts";
 import {
+  artifactRevisionIdentity,
+  selectUnbackedArtifactProjections,
+} from "../state/timelineArtifacts.ts";
+import {
   earlierTimelineAnchor,
   newerTimelineAnchor,
   selectTimelineWindow,
@@ -45,6 +49,7 @@ interface TimelineProps {
   onPickProject: () => Promise<ProjectProjection | null>;
   newConversationComposer: ReactNode;
   onLoadAttachment: InputAttachmentBlobLoader;
+  onLoadAttachmentThumbnail: InputAttachmentBlobLoader;
 }
 
 const TIMELINE_BOTTOM_THRESHOLD_PX = 24;
@@ -182,9 +187,11 @@ const TurnCompletionRow = memo(function TurnCompletionRow({
 const MessageRow = memo(function MessageRow({
   item,
   onLoadAttachment,
+  onLoadAttachmentThumbnail,
 }: {
   item: ItemProjection;
   onLoadAttachment: InputAttachmentBlobLoader;
+  onLoadAttachmentThumbnail: InputAttachmentBlobLoader;
 }) {
   const user = role(item) === "user";
   const text = messageText(item);
@@ -203,6 +210,7 @@ const MessageRow = memo(function MessageRow({
                 key={attachment.attachment_id}
                 attachment={attachment}
                 loadBlob={onLoadAttachment}
+                loadThumbnailBlob={onLoadAttachmentThumbnail}
               />
             ))}
           </div>
@@ -239,6 +247,7 @@ export function Timeline({
   onPickProject,
   newConversationComposer,
   onLoadAttachment,
+  onLoadAttachmentThumbnail,
 }: TimelineProps) {
   const messages = useMemo(
     () => items.filter((item) => item.kind === "message"),
@@ -246,7 +255,10 @@ export function Timeline({
   );
   const timelineEntries = useMemo(
     () => items.filter((item) => (
-      item.kind === "message" || item.kind === "tool_call" || item.kind === "checkpoint"
+      item.kind === "message"
+      || item.kind === "tool_call"
+      || item.kind === "checkpoint"
+      || item.kind === "artifact"
     )),
     [items],
   );
@@ -315,6 +327,17 @@ export function Timeline({
     () => mergeArtifactProjections(itemArtifacts, artifacts),
     [artifacts, itemArtifacts],
   );
+  const listedArtifactByRevision = useMemo(
+    () => new Map(artifacts.map((artifact) => [
+      artifactRevisionIdentity(artifact),
+      artifact,
+    ])),
+    [artifacts],
+  );
+  const fallbackArtifacts = useMemo(
+    () => selectUnbackedArtifactProjections(itemArtifacts, visibleArtifacts),
+    [itemArtifacts, visibleArtifacts],
+  );
   const timelineRef = useRef<HTMLDivElement>(null);
   const followLatestRef = useRef(true);
   const pendingJumpToLatestRef = useRef(false);
@@ -366,7 +389,13 @@ export function Timeline({
     }, { rootMargin: "240px 0px" });
     candidates.forEach((element) => observer.observe(element));
     return () => observer.disconnect();
-  }, [onArtifactPreviewVisible, retouchPreviewIdentity, retouchResults]);
+  }, [
+    messageWindow.startIndex,
+    messageWindow.endIndex,
+    onArtifactPreviewVisible,
+    retouchPreviewIdentity,
+    retouchResults,
+  ]);
 
   useEffect(() => {
     const scroller = timelineRef.current?.parentElement;
@@ -423,7 +452,7 @@ export function Timeline({
   ) {
     return (
       <div className="ex-empty-state ex-new-conversation-start">
-        <h1>和 EcoreX 一起开始工作</h1>
+        <h1>和 e-Mate 一起开始工作</h1>
         <p>{newConversationProject ? `${newConversationProject.name} 项目会话` : "选择一个开始方式"}</p>
         <div className="ex-new-conversation-options" role="group" aria-label="新会话入口">
           <button
@@ -478,7 +507,7 @@ export function Timeline({
       <div ref={timelineRef} className="ex-timeline-inner">
         <div className="ex-live-status" aria-live="polite" aria-atomic="true">
           {latestCompletedAssistantId ? (
-            <span key={latestCompletedAssistantId}>EcoreX 已完成回复</span>
+            <span key={latestCompletedAssistantId}>e-Mate 已完成回复</span>
           ) : null}
         </div>
         {messageWindow.hiddenBefore > 0 ? (
@@ -508,9 +537,70 @@ export function Timeline({
                 <span>已切换至 {modelSwitches.get(item.item_id)}</span>
               </div>
             ) : null}
-            {item.kind === "message"
-              ? <MessageRow item={item} onLoadAttachment={onLoadAttachment} />
-              : (
+            {item.kind === "message" ? (
+                <MessageRow
+                  item={item}
+                  onLoadAttachment={onLoadAttachment}
+                  onLoadAttachmentThumbnail={onLoadAttachmentThumbnail}
+                />
+              ) : item.kind === "artifact" ? (() => {
+                const projected = artifactFrom(item);
+                if (!projected) return null;
+                const artifact = listedArtifactByRevision.get(
+                  artifactRevisionIdentity(projected),
+                ) ?? projected;
+                const retouch = retouchPresentation(item);
+                return retouch ? (
+                  <section
+                    className="ex-retouch-result"
+                    data-retouch-preview-artifact-id={artifact.artifact_id}
+                  >
+                    <WandSparkles aria-hidden="true" />
+                    <div>
+                      <strong>精准修图已完成</strong>
+                      <p>{retouch.changeSummary}</p>
+                      <span>
+                        {retouch.inspectionRegionCount > 0
+                          ? `已检查 ${retouch.inspectionRegionCount} 个修改区域。请看一眼下方新图片。`
+                          : "已检查新修订。请看一眼下方图片。"}
+                      </span>
+                      {artifactPreviewUrls[artifact.artifact_id] ? (
+                        <button
+                          className="ex-retouch-result-media"
+                          type="button"
+                          onClick={() => onArtifactAction(artifact, "preview")}
+                        >
+                          <img
+                            src={artifactPreviewUrls[artifact.artifact_id]}
+                            alt={`查看修图结果：${artifact.display_name}`}
+                          />
+                        </button>
+                      ) : (
+                        <div className="ex-retouch-result-loading" role="status">正在载入新修订预览…</div>
+                      )}
+                      <div className="ex-retouch-result-actions">
+                        <button className="ex-button" type="button" onClick={() => onArtifactAction(artifact, "preview")}>查看大图</button>
+                        <button
+                          className="ex-button is-primary"
+                          type="button"
+                          disabled={!retouchAvailable || !artifact.actions.includes("precise_retouch")}
+                          title={!retouchAvailable ? retouchUnavailableReason ?? "精准修图当前不可用" : undefined}
+                          onClick={() => onArtifactAction(artifact, "precise_retouch")}
+                        >继续修改</button>
+                      </div>
+                    </div>
+                  </section>
+                ) : (
+                  <ArtifactShelf
+                    artifacts={[artifact]}
+                    previewUrls={artifactPreviewUrls}
+                    onAction={onArtifactAction}
+                    onPreviewVisible={onArtifactPreviewVisible}
+                    retouchAvailable={retouchAvailable}
+                    retouchUnavailableReason={retouchUnavailableReason}
+                  />
+                );
+              })() : (
                 <Suspense fallback={<div className="ex-activity-row" role="status">正在更新工作步骤…</div>}>
                   <TimelineActivity item={item} />
                 </Suspense>
@@ -545,51 +635,9 @@ export function Timeline({
             </button>
           </div>
         ) : null}
-        {messageWindow.atLatest ? retouchResults.map((result) => (
-          <section
-            className="ex-retouch-result"
-            data-retouch-preview-artifact-id={result.artifact.artifact_id}
-            key={`retouch-${result.artifact.revision_id}`}
-          >
-            <WandSparkles aria-hidden="true" />
-            <div>
-              <strong>精准修图已完成</strong>
-              <p>{result.changeSummary}</p>
-              <span>
-                {result.inspectionRegionCount > 0
-                  ? `已检查 ${result.inspectionRegionCount} 个修改区域。请看一眼下方新图片。`
-                  : "已检查新修订。请看一眼下方图片。"}
-              </span>
-              {artifactPreviewUrls[result.artifact.artifact_id] ? (
-                <button
-                  className="ex-retouch-result-media"
-                  type="button"
-                  onClick={() => onArtifactAction(result.artifact, "preview")}
-                >
-                  <img
-                    src={artifactPreviewUrls[result.artifact.artifact_id]}
-                    alt={`查看修图结果：${result.artifact.display_name}`}
-                  />
-                </button>
-              ) : (
-                <div className="ex-retouch-result-loading" role="status">正在载入新修订预览…</div>
-              )}
-              <div className="ex-retouch-result-actions">
-                <button className="ex-button" type="button" onClick={() => onArtifactAction(result.artifact, "preview")}>查看大图</button>
-                <button
-                  className="ex-button is-primary"
-                  type="button"
-                  disabled={!retouchAvailable || !result.artifact.actions.includes("precise_retouch")}
-                  title={!retouchAvailable ? retouchUnavailableReason ?? "精准修图当前不可用" : undefined}
-                  onClick={() => onArtifactAction(result.artifact, "precise_retouch")}
-                >继续修改</button>
-              </div>
-            </div>
-          </section>
-        )) : null}
-        {messageWindow.atLatest ? (
+        {messageWindow.atLatest && fallbackArtifacts.length ? (
           <ArtifactShelf
-            artifacts={visibleArtifacts}
+            artifacts={fallbackArtifacts}
             previewUrls={artifactPreviewUrls}
             onAction={onArtifactAction}
             onPreviewVisible={onArtifactPreviewVisible}

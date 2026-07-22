@@ -300,9 +300,9 @@ export function AppV1() {
   if (runtime.loadState === "loading" && !bootstrap) {
     return (
       <main className="ex-boot" aria-busy="true">
-        <span className="ex-brand-mark" aria-hidden="true">E</span>
+        <span className="ex-boot-mark" aria-hidden="true" />
         <div>
-          <strong>正在启动 EcoreX</strong>
+          <strong>正在启动 e-Mate</strong>
           <p>正在准备模型、权限和常用连接…</p>
         </div>
       </main>
@@ -314,7 +314,7 @@ export function AppV1() {
       <main className="ex-boot is-error">
         <AlertCircle aria-hidden="true" />
         <div>
-          <strong>EcoreX 未能启动</strong>
+          <strong>e-Mate 未能启动</strong>
           <p>{runtime.transportError}</p>
           <button className="ex-button is-primary" type="button" onClick={runtime.retryBootstrap}>
             <RefreshCw aria-hidden="true" />
@@ -364,13 +364,13 @@ export function AppV1() {
   );
   const hasPendingUpdate = hasPendingRuntimeUpdate(update);
   const updateMessage = hasPendingUpdate && update?.state === "awaiting_user"
-    ? `EcoreX ${update.target_version ?? "新版"} 已准备好。`
+    ? `e-Mate ${update.target_version ?? "新版"} 已准备好。`
     : hasPendingUpdate && update?.state === "activating"
       ? "正在启用新版，页面会自动刷新…"
       : hasPendingUpdate && update?.state === "failed"
         ? "新版未能启用，当前版本可继续使用。"
         : hasPendingUpdate && (update?.state === "available" || update?.state === "downloading")
-          ? `正在后台准备 EcoreX ${update.target_version ?? "新版"}…`
+          ? `正在后台准备 e-Mate ${update.target_version ?? "新版"}…`
           : null;
   const updateBannerKey = updateMessage && update
     ? (update.release_id && update.build_digest
@@ -548,6 +548,7 @@ export function AppV1() {
       onSend={runtime.sendMessage}
       onUploadAttachment={runtime.uploadInputAttachment}
       onLoadAttachment={runtime.loadInputAttachment}
+      onLoadAttachmentThumbnail={runtime.loadInputAttachmentThumbnail}
       onInterrupt={() => void runtime.interrupt()}
     />
   );
@@ -775,6 +776,7 @@ export function AppV1() {
               onPickProject={runtime.pickProject}
               newConversationComposer={isNewConversation ? composer : null}
               onLoadAttachment={runtime.loadInputAttachment}
+              onLoadAttachmentThumbnail={runtime.loadInputAttachmentThumbnail}
             />
           </section>
 

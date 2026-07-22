@@ -7,13 +7,15 @@ identity that Runtime later binds into a Turn's immutable metadata.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from datetime import datetime
 import asyncio
 import hashlib
 import io
 import json
 import mimetypes
+import threading
 import warnings
 from typing import Any, Iterable, Mapping
 
@@ -39,6 +41,10 @@ MAX_VISUAL_INPUT_PIXELS = 40_000_000
 MAX_VISUAL_INPUT_DIMENSION = 2048
 MAX_VISUAL_RENDITION_BYTES = 384 * 1024
 MAX_MANAGED_IMAGE_RENDITION_BYTES = 8 * 1024 * 1024
+MAX_ATTACHMENT_THUMBNAIL_DIMENSION = 320
+MAX_ATTACHMENT_THUMBNAIL_BYTES = 64 * 1024
+MAX_ATTACHMENT_THUMBNAIL_CACHE_ENTRIES = 256
+MAX_CONCURRENT_THUMBNAIL_RENDERS = 4
 _ALLOWED_MIME_PREFIXES = ("image/", "text/")
 _ALLOWED_MIME_TYPES = frozenset(
     {
@@ -105,6 +111,20 @@ def _normalized_mime(filename: str, declared: str | None) -> str:
 class InputAttachmentService:
     artifacts: ArtifactService
     account_id: str
+    _thumbnail_cache: OrderedDict[str, tuple[str, int, int]] = field(
+        default_factory=OrderedDict, init=False, repr=False, compare=False
+    )
+    _thumbnail_lock: threading.RLock = field(
+        default_factory=threading.RLock, init=False, repr=False, compare=False
+    )
+    _thumbnail_render_slots: threading.BoundedSemaphore = field(
+        default_factory=lambda: threading.BoundedSemaphore(
+            MAX_CONCURRENT_THUMBNAIL_RENDERS
+        ),
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         if not self.account_id.strip():
@@ -215,6 +235,79 @@ class InputAttachmentService:
         projection = self.resolve((attachment_id,))[0]
         return projection, self.artifacts.read_internal_revision_content(projection.revision_id)
 
+    def read_thumbnail(
+        self, attachment_id: str
+    ) -> tuple[InputAttachmentProjection, InputAttachmentVisualRendition]:
+        """Return an account-scoped, bounded preview without exposing source bytes.
+
+        Renditions are stored in the immutable CAS and their digests are kept
+        in a bounded in-process LRU.  A Runtime restart may deterministically
+        recreate the rendition, while CAS de-duplication prevents duplicate
+        storage.  The 64 MiB source is never returned by this endpoint.
+        """
+
+        projection = self.resolve((attachment_id,))[0]
+        if projection.media_kind != "image":
+            raise InputAttachmentError("attachment does not have an image thumbnail")
+        cache_key = projection.sha256
+        cached = self._read_cached_thumbnail(projection)
+        if cached is not None:
+            return projection, cached
+        # Bound CPU and memory without globally serializing independent image
+        # previews.  Re-check after acquiring a slot so queued duplicate
+        # requests reuse the winner instead of decoding the source again.
+        with self._thumbnail_render_slots:
+            cached = self._read_cached_thumbnail(projection)
+            if cached is not None:
+                return projection, cached
+            # Source CAS bytes are touched only on a cache miss.  This keeps
+            # timeline replay O(thumbnail bytes), not O(original image bytes).
+            source = self.artifacts.read_internal_revision_content(projection.revision_id)
+            if hashlib.sha256(source).hexdigest() != projection.sha256:
+                raise InputAttachmentUnavailable("attachment content digest changed")
+            rendition = self._render_visual(
+                projection,
+                source,
+                max_bytes=MAX_ATTACHMENT_THUMBNAIL_BYTES,
+                max_dimension=MAX_ATTACHMENT_THUMBNAIL_DIMENSION,
+            )
+            stored = self.artifacts.blobs.put_bytes(rendition.content)
+            if stored.sha256 != rendition.sha256:
+                raise InputAttachmentUnavailable("thumbnail CAS digest changed")
+            with self._thumbnail_lock:
+                self._thumbnail_cache[cache_key] = (
+                    stored.sha256,
+                    rendition.width,
+                    rendition.height,
+                )
+                self._thumbnail_cache.move_to_end(cache_key)
+                while len(self._thumbnail_cache) > MAX_ATTACHMENT_THUMBNAIL_CACHE_ENTRIES:
+                    self._thumbnail_cache.popitem(last=False)
+            return projection, rendition
+
+    def _read_cached_thumbnail(
+        self, projection: InputAttachmentProjection
+    ) -> InputAttachmentVisualRendition | None:
+        with self._thumbnail_lock:
+            cached = self._thumbnail_cache.get(projection.sha256)
+            if cached is None:
+                return None
+            digest, width, height = cached
+            try:
+                content = self.artifacts.blobs.read_bytes(digest)
+            except (FileNotFoundError, OSError):
+                self._thumbnail_cache.pop(projection.sha256, None)
+                return None
+            self._thumbnail_cache.move_to_end(projection.sha256)
+        return InputAttachmentVisualRendition(
+            content=content,
+            mime_type="image/jpeg",
+            sha256=digest,
+            source_sha256=projection.sha256,
+            width=width,
+            height=height,
+        )
+
     def read_bound(
         self,
         attachment_id: str,
@@ -286,6 +379,22 @@ class InputAttachmentService:
             turn_id=turn_id,
             require_image=True,
         )
+        rendition = self._render_visual(
+            projection,
+            source,
+            max_bytes=max_bytes,
+            max_dimension=MAX_VISUAL_INPUT_DIMENSION,
+        )
+        return projection, rendition
+
+    def _render_visual(
+        self,
+        projection: InputAttachmentProjection,
+        source: bytes,
+        *,
+        max_bytes: int,
+        max_dimension: int,
+    ) -> InputAttachmentVisualRendition:
         try:
             from PIL import Image, ImageOps
 
@@ -303,7 +412,7 @@ class InputAttachmentService:
                             "image dimensions exceed the visual safety limit"
                         )
                     frame.thumbnail(
-                        (MAX_VISUAL_INPUT_DIMENSION, MAX_VISUAL_INPUT_DIMENSION),
+                        (max_dimension, max_dimension),
                         Image.Resampling.LANCZOS,
                     )
                     # JPEG is widely accepted by both managed provider
@@ -320,7 +429,7 @@ class InputAttachmentService:
             raise InputAttachmentUnavailable(
                 "image cannot be decoded for model vision"
             ) from error
-        return projection, InputAttachmentVisualRendition(
+        return InputAttachmentVisualRendition(
             content=rendition,
             mime_type="image/jpeg",
             sha256=hashlib.sha256(rendition).hexdigest(),
@@ -369,6 +478,11 @@ class InputAttachmentService:
             size_bytes=artifact.size_bytes,
             media_kind=_media_kind(artifact.mime_type),
             sha256=artifact.sha256,
+            thumbnail_url=(
+                f"/api/v1/input-attachments/{artifact.artifact_id}/thumbnail"
+                if _media_kind(artifact.mime_type) == "image"
+                else None
+            ),
             created_at=artifact.created_at,
         )
 

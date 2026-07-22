@@ -104,6 +104,16 @@ a {
   border-radius: 10px;
 }
 
+.brand img.brand-logo {
+  width: 132px;
+  height: auto;
+  border-radius: 0;
+}
+
+.brand-text {
+  display: none;
+}
+
 .brand small {
   color: var(--muted);
   font-size: 12px;

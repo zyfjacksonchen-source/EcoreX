@@ -679,6 +679,139 @@ def test_managed_gateway_reads_bearer_directly_from_session_vault(tmp_path) -> N
     asyncio.run(http.aclose())
 
 
+def test_gateway_catalog_revision_is_shared_by_bootstrap_turn_and_frozen_history(
+    tmp_path,
+) -> None:
+    private, public = _keys()
+    now = datetime(2026, 7, 10, 8, 0, tzinfo=UTC)
+    clock = MutableClock(now)
+    vault = Vault()
+    database = tmp_path / "runtime-catalog-revision.db"
+    service = _service(database, public, clock, vault)
+    _install(service, _lease(private, now=now))
+    active = {"revision": 1}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            revision = active["revision"]
+            return httpx.Response(
+                200,
+                json={
+                    "schema_version": 1,
+                    "models": ["ecorex-chat"],
+                    "catalog": [
+                        {
+                            "config_id": "main-chat",
+                            "revision": revision,
+                            "local_model_id": "ecorex-chat",
+                            "modality": "chat",
+                            "display_name": f"Main Chat R{revision}",
+                            "upstream_model_id": f"gpt-5.6-sol-r{revision}",
+                            "provider_preset": "openai_responses",
+                            "is_default": True,
+                        }
+                    ],
+                },
+            )
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/x-ndjson"},
+            content=(
+                json.dumps(
+                    {
+                        "seq": 1,
+                        "event_type": "response.completed",
+                        "response_id": f"managed-response-r{active['revision']}",
+                    }
+                ).encode()
+                + b"\n"
+            ),
+        )
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    gateway = ManagedModelGatewayClient(
+        "https://models.ecorex.test/v1/responses",
+        credentials=service,
+        allowed_hosts=frozenset({"models.ecorex.test"}),
+        client=http,
+    )
+    app = create_app(
+        settings=_settings(
+            database,
+            service,
+            gateway,
+            close_model_gateway_on_shutdown=False,
+        )
+    )
+
+    def frozen_catalog(turn_id: str) -> tuple[str, dict]:
+        with app.state.runtime.database.reader() as connection:
+            accepted = connection.execute(
+                "SELECT config_snapshot_id FROM events "
+                "WHERE turn_id=? AND event_type='turn.accepted'",
+                (turn_id,),
+            ).fetchone()
+            config = json.loads(
+                connection.execute(
+                    "SELECT payload_json FROM runtime_snapshots WHERE snapshot_id=?",
+                    (str(accepted["config_snapshot_id"]),),
+                ).fetchone()["payload_json"]
+            )
+            snapshot_id = str(config["model_catalog_snapshot_id"])
+            models = json.loads(
+                connection.execute(
+                    "SELECT payload_json FROM runtime_snapshots WHERE snapshot_id=?",
+                    (snapshot_id,),
+                ).fetchone()["payload_json"]
+            )
+        return snapshot_id, models
+
+    with TestClient(app) as client:
+        first_bootstrap = client.get("/api/v1/bootstrap", headers=_headers()).json()
+        thread = client.post(
+            "/api/v1/threads",
+            json={"client_request_id": "catalog-revision-thread"},
+            headers=_headers(mutation=True),
+        ).json()
+        first = client.post(
+            f"/api/v1/threads/{thread['thread_id']}/turns",
+            json={"input": "first", "client_message_id": "catalog-revision-first"},
+            headers=_headers(mutation=True),
+        )
+        assert first.status_code == 202
+        first_turn_id = first.json()["turn"]["turn_id"]
+        first_snapshot_id, first_models = frozen_catalog(first_turn_id)
+        assert first_bootstrap["models"]["snapshot_id"] == first_snapshot_id
+        assert first_models["modalities"]["chat"][0]["display_name"] == "Main Chat R1"
+        assert (
+            first_models["modalities"]["chat"][0]["model_policy"]["upstream_model_id"]
+            == "gpt-5.6-sol-r1"
+        )
+
+        active["revision"] = 2
+        second_bootstrap = client.get("/api/v1/bootstrap", headers=_headers()).json()
+        second_thread = client.post(
+            "/api/v1/threads",
+            json={"client_request_id": "catalog-revision-thread-two"},
+            headers=_headers(mutation=True),
+        ).json()
+        second = client.post(
+            f"/api/v1/threads/{second_thread['thread_id']}/turns",
+            json={"input": "second", "client_message_id": "catalog-revision-second"},
+            headers=_headers(mutation=True),
+        )
+        assert second.status_code == 202
+        second_snapshot_id, second_models = frozen_catalog(
+            second.json()["turn"]["turn_id"]
+        )
+        assert second_bootstrap["models"]["snapshot_id"] == second_snapshot_id
+        assert second_snapshot_id != first_snapshot_id
+        assert second_models["modalities"]["chat"][0]["display_name"] == "Main Chat R2"
+        # The first immutable snapshot remains readable and unchanged.
+        assert frozen_catalog(first_turn_id) == (first_snapshot_id, first_models)
+    asyncio.run(http.aclose())
+
+
 def test_logout_is_csrf_bound_cleans_vault_stops_tasks_and_schedules_reload(tmp_path) -> None:
     private, public = _keys()
     now = datetime(2026, 7, 10, 8, 0, tzinfo=UTC)

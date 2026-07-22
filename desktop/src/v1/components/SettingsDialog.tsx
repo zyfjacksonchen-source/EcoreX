@@ -207,7 +207,7 @@ export function SettingsDialog({
     credential: "旧版凭证",
   })[kind];
   const credentialOriginLabel = (origin: MigrationCredentialOrigin) => ({
-    product_configuration: "EcoreX 旧版设置",
+    product_configuration: "e-Mate 旧版设置",
     mcp_configuration: "扩展服务与文档连接设置",
     skill_configuration: "旧版技能设置",
     permission_configuration: "旧版权限设置",
@@ -250,7 +250,7 @@ export function SettingsDialog({
                   ? `账户授权有效至 ${new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(bootstrap.policy_lease.expires_at))}。`
                   : "账户授权已过期，模型任务已暂停。"
                 : bootstrap?.login_service.state === "ready"
-                  ? "请关闭设置，在工作区登录卡中完成安全设备登录；授权后 EcoreX 会受控重启并刷新页面。"
+                  ? "请关闭设置，在工作区登录卡中完成安全设备登录；授权后 e-Mate 会受控重启并刷新页面。"
                   : "设备登录暂不可用，请稍后重试或联系管理员。"}
             </p>
           </section>
@@ -264,7 +264,7 @@ export function SettingsDialog({
                 <p>
                   {outputLoadState === "loading"
                     ? "正在读取保存位置"
-                    : "下载产物时由 EcoreX 安全保存到这里"}
+                    : "下载产物时由 e-Mate 安全保存到这里"}
                 </p>
               </div>
               {outputPreference ? (
@@ -339,7 +339,7 @@ export function SettingsDialog({
               <div>
                 <strong aria-live="polite">
                   {systemHealth?.summary
-                    ?? (systemHealthLoadState === "loading" ? "正在检查 EcoreX" : "暂时无法读取系统状态")}
+                    ?? (systemHealthLoadState === "loading" ? "正在检查 e-Mate" : "暂时无法读取系统状态")}
                 </strong>
                 <p>
                   {systemHealth
@@ -433,7 +433,7 @@ export function SettingsDialog({
                 ? `${extensionSummary.quarantined} 个扩展已被隔离。打开管理页查看原因和可用操作。`
                 : extensionLoadState === "error"
                   ? "扩展目录尚未同步。打开管理页即可刷新。"
-                  : "EcoreX 会在启用前检查来源、依赖、健康状态和权限影响。"}
+                  : "e-Mate 会在启用前检查来源、依赖、健康状态和权限影响。"}
             </p>
           </section>
 
@@ -461,7 +461,7 @@ export function SettingsDialog({
               </button>
             </div>
             <p className="ex-settings-note">
-              只重置 EcoreX 从使用中学到的偏好和旧版导入记忆。不会删除内置知识、任务、消息或产物。
+              只重置 e-Mate 从使用中学到的偏好和旧版导入记忆。不会删除内置知识、任务、消息或产物。
             </p>
             {memory?.latest_reset?.can_undo ? (
               <div className="ex-memory-undo">
@@ -576,13 +576,13 @@ export function SettingsDialog({
               </ul>
             ) : null}
             <p className="ex-settings-note">
-              删除只移除 EcoreX 保存的本地加密迁移备份，不影响当前任务和已经重新连接的应用；删除后不可撤销。
+              删除只移除 e-Mate 保存的本地加密迁移备份，不影响当前任务和已经重新连接的应用；删除后不可撤销。
             </p>
             {confirmQuarantineDelete ? (
               <div className="ex-permission-confirm" role="group" aria-label="确认删除旧版凭证备份">
                 <div>
                   <strong>确认永久删除旧版凭证备份？</strong>
-                  <p>删除后无法从 EcoreX 恢复。当前托管模型和连接器不会受到影响。</p>
+                  <p>删除后无法从 e-Mate 恢复。当前托管模型和连接器不会受到影响。</p>
                 </div>
                 <div className="ex-permission-confirm-actions">
                   <button
@@ -662,7 +662,7 @@ export function SettingsDialog({
                 ? "完全访问会跳过一般工具审批；可随时一键撤销，管理员硬限制仍然生效。"
                 : authenticated
                   ? "默认权限在工具需要更高权限或外部写入时向你确认。"
-                  : "登录托管账号并重启 EcoreX 后才能修改执行权限。"}
+                  : "登录托管账号并重启 e-Mate 后才能修改执行权限。"}
             </p>
             {bootstrap?.permissions.admin_hard_denies.length ? (
               <p className="ex-settings-note">
@@ -678,7 +678,7 @@ export function SettingsDialog({
                 <div>
                   <strong>确认启用完全访问？</strong>
                   <p>
-                    EcoreX 将可在本机执行命令并写入工作区，不再逐项请求一般工具审批；管理员限制仍不可绕过。
+                    e-Mate 将可在本机执行命令并写入工作区，不再逐项请求一般工具审批；管理员限制仍不可绕过。
                   </p>
                 </div>
                 <div className="ex-permission-confirm-actions">
@@ -722,7 +722,7 @@ export function SettingsDialog({
             <h2>版本</h2>
             <div className="ex-settings-row">
               <div>
-                <strong>EcoreX {bootstrap?.update.current_version ?? "版本未读取"}</strong>
+                <strong>e-Mate {bootstrap?.update.current_version ?? "版本未读取"}</strong>
                 <p>
                   {hasPendingUpdate && bootstrap?.update.target_version
                     ? `新版 ${bootstrap.update.target_version} 已进入更新流程`

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 import hashlib
+import io
 import json
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from fastapi import FastAPI, Header, HTTPException
 import httpx
 import pytest
 
-from ecorex.artifacts import ArtifactService, RetouchAnnotation
+from ecorex.artifacts import ArtifactService, RenditionKind, RetouchAnnotation
 from ecorex.artifacts.retouch_surface import compile_annotation_mask
 from ecorex.capabilities import SandboxLevel, ToolExecutionScope, ToolInvocationContext
 from ecorex.image_orchestrator import (
@@ -50,7 +51,15 @@ from ecorex.runtime.kernel import RuntimeKernel
 from ecorex.session import ManagedSessionService, ManagedSessionSnapshot
 
 
-PNG = b"\x89PNG\r\n\x1a\nmanaged-image-result"
+def _test_png(color: tuple[int, int, int]) -> bytes:
+    from PIL import Image
+
+    output = io.BytesIO()
+    Image.new("RGB", (32, 24), color).save(output, format="PNG")
+    return output.getvalue()
+
+
+PNG = _test_png((30, 90, 210))
 MASK = b"\x89PNG\r\n\x1a\nmanaged-image-mask"
 
 
@@ -603,7 +612,12 @@ def test_imagegen_publication_crash_recovers_artifact_without_cloud_repeat(
         with pytest.raises(RuntimeError, match="simulated crash"):
             await backend.generate_image({"instruction": "draw a dashboard"}, context)
         assert client.calls == 1
-        assert len(artifacts.list_user_artifacts(account_id="local-user")) == 1
+        published = artifacts.list_user_artifacts(account_id="local-user")
+        assert len(published) == 1
+        assert {item.kind for item in published[0].renditions} == {
+            RenditionKind.THUMBNAIL,
+            RenditionKind.PREVIEW,
+        }
 
         armed["value"] = False
         restarted = RuntimeImageToolBackend(

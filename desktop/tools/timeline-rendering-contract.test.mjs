@@ -47,7 +47,11 @@ test("the chat DOM starts with a bounded anchored conversation window", () => {
   assert.doesNotMatch(timeline, /\{messages\.map/u);
   assert.match(timeline, /回到最新消息/u);
   assert.match(timeline, /anchorMissing[\s\S]*setHistoryEndAnchorId\(null\)/u);
-  assert.match(timeline, /item\.kind === "tool_call" \|\| item\.kind === "checkpoint"/u);
+  assert.match(timeline, /\|\| item\.kind === "artifact"/u);
+  assert.match(timeline, /item\.kind === "artifact" \? \(\(\) =>/u);
+  assert.match(timeline, /selectUnbackedArtifactProjections\(itemArtifacts, visibleArtifacts\)/u);
+  assert.doesNotMatch(timeline, /messageWindow\.atLatest \? retouchResults\.map/u);
+  assert.match(timeline, /messageWindow\.startIndex,[\s\S]*messageWindow\.endIndex,/u);
   assert.doesNotMatch(timeline, /item\.content\.arguments/u);
   assert.match(timeline, /lazy\(\(\) => import\("\.\/TimelineActivity\.tsx"\)\)/u);
   assert.doesNotMatch(activity, /content\.(?:arguments|result|path)/u);
@@ -71,7 +75,9 @@ test("completed rows use native rendering containment while the active row stays
 
 test("uploaded images keep authenticated thumbnails and open a fit-to-screen preview", () => {
   assert.match(timeline, /<InputAttachmentPreview/u);
-  assert.match(attachmentPreview, /loadBlob\(attachment\.attachment_id, controller\.signal\)/u);
+  assert.match(attachmentPreview, /loadThumbnailBlob\(attachment\.attachment_id, controller\.signal\)/u);
+  assert.match(attachmentPreview, /if \(!isImage \|\| !dialogOpen\) return;[\s\S]*loadBlob\(attachment\.attachment_id, controller\.signal\)/u);
+  assert.match(attachmentPreview, /<Dialog\.Root open=\{dialogOpen\} onOpenChange=\{setDialogOpen\}>/u);
   assert.match(attachmentPreview, /URL\.createObjectURL\(blob\)/u);
   assert.match(attachmentPreview, /<Dialog\.Content/u);
   assert.match(features, /\.ex-attachment-preview-dialog > img\s*\{[\s\S]*object-fit:\s*contain/u);

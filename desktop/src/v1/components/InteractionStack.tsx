@@ -120,8 +120,8 @@ function connectorLoginFlow(
       : null,
     expiresAt: response.expires_at,
     message: authorizationUrl
-      ? "登录页已打开。完成后回到这里，EcoreX 会自动确认。"
-      : "请在验证页完成登录，EcoreX 会自动确认。",
+      ? "登录页已打开。完成后回到这里，e-Mate 会自动确认。"
+      : "请在验证页完成登录，e-Mate 会自动确认。",
   };
 }
 
@@ -385,7 +385,7 @@ export function InteractionStack({
           ...current,
           [interactionId]: {
             ...current[interactionId],
-            message: "连接状态暂未同步，EcoreX 会继续重试。",
+            message: "连接状态暂未同步，e-Mate 会继续重试。",
           },
         }) : current);
       }

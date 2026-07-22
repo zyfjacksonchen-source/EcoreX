@@ -1532,7 +1532,7 @@ def render_public_share(payload: SharePayload, *, public_token: str | None = Non
     message_html: list[str] = []
     for index, message in enumerate(payload.messages):
         is_user = message.role == "user"
-        author = "你的指令" if is_user else "EcoreX"
+        author = "你的指令" if is_user else "e-Mate"
         body = render_share_markdown(message.text)
         created = html.escape(message.created_at.isoformat(), quote=True)
         attached = ""
@@ -1552,7 +1552,7 @@ def render_public_share(payload: SharePayload, *, public_token: str | None = Non
             f"{render_artifacts(unassociated)}</section>"
         )
 
-    title_text = payload.title or "EcoreX 分享会话"
+    title_text = payload.title or "e-Mate 分享会话"
     title = html.escape(title_text, quote=True)
     created_label = display_time(payload.created_at)
     expires_label = display_time(payload.expires_at)

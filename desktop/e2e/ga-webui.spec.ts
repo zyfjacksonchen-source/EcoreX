@@ -566,7 +566,7 @@ test("skills workspace uses backend categories and keeps required skills locked"
   const protectedSkills = workspace.locator("details.ex-protected-skills");
   await expect(protectedSkills).not.toHaveAttribute("open", "");
   await protectedSkills.locator("summary").click();
-  await expect(protectedSkills.getByRole("switch", { name: "停用EcoreX 办公工具" })).toBeDisabled();
+  await expect(protectedSkills.getByRole("switch", { name: "停用e-Mate 办公工具" })).toBeDisabled();
 
   const feishuSwitch = workspace.getByRole("switch", { name: "停用飞书 MCP" });
   await feishuSwitch.click();
@@ -708,10 +708,10 @@ test("account menu exposes the user name and performs a real lease-bound logout"
   await account.click();
   await guardedPage.getByRole("menuitem", { name: "退出登录" }).click();
 
-  const dialog = guardedPage.getByRole("dialog", { name: "退出 EcoreX？" });
+  const dialog = guardedPage.getByRole("dialog", { name: "退出 e-Mate？" });
   await expect(dialog).toContainText("会话和本地产物会保留");
   await dialog.getByRole("button", { name: "退出登录" }).click();
-  await expect(guardedPage.getByRole("heading", { name: "EcoreX", exact: true })).toBeVisible();
+  await expect(guardedPage.getByRole("heading", { name: "e-Mate", exact: true })).toBeVisible();
   await expect(guardedPage.getByLabel("账号或邮箱")).toBeVisible();
   await expect(guardedPage.getByLabel("密码")).toBeVisible();
   await expect(guardedPage.locator(".ex-app-shell")).toHaveCount(0);
@@ -989,7 +989,7 @@ test("320px touch Composer keeps the durable queue action reachable and single-l
       await disposition.click();
       await page.getByRole("menuitem", { name: "排到下一轮" }).click();
       await expect(page.getByRole("button", { name: "排到下一轮" })).toBeVisible();
-      await page.getByLabel("给 EcoreX 发消息").fill("下一轮整理附件");
+      await page.getByLabel("给 e-Mate 发消息").fill("下一轮整理附件");
       const send = page.getByRole("button", { name: "发送" });
       await expect(send).toBeInViewport();
       await send.click();

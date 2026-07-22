@@ -3,7 +3,7 @@ function emptyUsageData() {
   const today = dateString(new Date());
   return {
     meta: {
-      title: 'EcoreX Agent 使用情况分析面板',
+      title: 'e-Mate 使用情况分析面板',
       range: `${today} 至 ${today}`,
       startDate: today,
       endDate: today,
@@ -1890,7 +1890,7 @@ function exportSummaryCsv() {
       manualNotes[row.id] || ''
     ]);
   });
-  downloadFile(`EcoreX_使用情况_${state.dateRange.start}_至_${state.dateRange.end}_用户分日汇总.csv`, '\uFEFF' + lines.map(line => line.map(csvEscape).join(',')).join('\n'), 'text/csv;charset=utf-8');
+  downloadFile(`e-Mate_使用情况_${state.dateRange.start}_至_${state.dateRange.end}_用户分日汇总.csv`, '\uFEFF' + lines.map(line => line.map(csvEscape).join(',')).join('\n'), 'text/csv;charset=utf-8');
 }
 
 function exportTokenSummaryCsv() {
@@ -1915,7 +1915,7 @@ function exportTokenSummaryCsv() {
       manualNotes[row.id] || ''
     ]);
   });
-  downloadFile(`EcoreX_Token用量_${state.dateRange.start}_至_${state.dateRange.end}_用户分日汇总.csv`, '\uFEFF' + lines.map(line => line.map(csvEscape).join(',')).join('\n'), 'text/csv;charset=utf-8');
+  downloadFile(`e-Mate_Token用量_${state.dateRange.start}_至_${state.dateRange.end}_用户分日汇总.csv`, '\uFEFF' + lines.map(line => line.map(csvEscape).join(',')).join('\n'), 'text/csv;charset=utf-8');
 }
 
 function exportRawCsv() {
@@ -1924,12 +1924,12 @@ function exportRawCsv() {
   filteredRawEvents().forEach(row => {
     lines.push([row.seq, row.user, row.email, row.date, row.time, row.eventType, row.resultClass, row.status, row.source, row.requestId, row.sessionId, row.device, personalEventAnalysis(row), row.rawEventType, row.rawStatus]);
   });
-  downloadFile(`EcoreX_使用情况_${state.dateRange.start}_至_${state.dateRange.end}_RAW中文明细.csv`, '\uFEFF' + lines.map(line => line.map(csvEscape).join(',')).join('\n'), 'text/csv;charset=utf-8');
+  downloadFile(`e-Mate_使用情况_${state.dateRange.start}_至_${state.dateRange.end}_RAW中文明细.csv`, '\uFEFF' + lines.map(line => line.map(csvEscape).join(',')).join('\n'), 'text/csv;charset=utf-8');
 }
 
 function exportRawJson() {
   const rows = filteredRawEvents().map(row => ({ ...row, personalEventAnalysis: personalEventAnalysis(row) }));
-  downloadFile(`EcoreX_使用情况_${state.dateRange.start}_至_${state.dateRange.end}_RAW中文明细.json`, JSON.stringify(rows, null, 2), 'application/json;charset=utf-8');
+  downloadFile(`e-Mate_使用情况_${state.dateRange.start}_至_${state.dateRange.end}_RAW中文明细.json`, JSON.stringify(rows, null, 2), 'application/json;charset=utf-8');
 }
 
 function escapeHtml(value) {

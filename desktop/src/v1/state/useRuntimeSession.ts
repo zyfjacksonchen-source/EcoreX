@@ -236,7 +236,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   const previewCache = useMemo(() => new ArtifactPreviewCache({
     fetchPreview: (artifactId, signal) => client.artifactBlob(
       artifactId,
-      "preview",
+      "thumbnail",
       signal,
     ),
     onChange: setArtifactPreviewUrls,
@@ -634,7 +634,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
       effectiveArtifacts
         .filter((artifact) => (
           artifact.actions.includes("preview")
-          && (artifact.family === "image" || artifact.family === "video")
+          && artifact.family === "image"
         ))
         .map((artifact) => ({
           artifactId: artifact.artifact_id,
@@ -646,7 +646,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   const prefetchArtifactPreview = useCallback((artifact: ArtifactProjection) => {
     if (
       !artifact.actions.includes("preview")
-      || (artifact.family !== "image" && artifact.family !== "video")
+      || artifact.family !== "image"
     ) return;
     void previewCache.ensure({
       artifactId: artifact.artifact_id,
@@ -1122,7 +1122,9 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     disposition: SendDisposition = "steer",
     attachments: readonly InputAttachmentProjection[] = [],
   ) => {
-    const input = rawInput.trim();
+    const input = rawInput.trim() || (attachments.length > 0
+      ? "请查看并处理随消息发送的附件。"
+      : "");
     if (!input || submittingRef.current || threadSwitchInProgress.current) return false;
     submittingRef.current = true;
     setSubmitting(true);
@@ -1204,6 +1206,10 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
 
   const loadInputAttachment = useCallback((attachmentId: string, signal?: AbortSignal) => (
     client.inputAttachmentBlob(attachmentId, signal)
+  ), [client]);
+
+  const loadInputAttachmentThumbnail = useCallback((attachmentId: string, signal?: AbortSignal) => (
+    client.inputAttachmentThumbnailBlob(attachmentId, signal)
   ), [client]);
 
   useEffect(() => {
@@ -1636,7 +1642,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
       const receipt = await client.loginSession(identifier, password);
       if (!receipt.restart_scheduled) {
         setSessionError(
-          "登录已完成，正在自动重新连接 EcoreX…",
+          "登录已完成，正在自动重新连接 e-Mate…",
         );
         window.setTimeout(() => window.location.reload(), 1_500);
         return null;
@@ -1646,7 +1652,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
         return receipt;
       }
       setSessionError(
-        "EcoreX 正在重新连接，请稍候…",
+        "e-Mate 正在重新连接，请稍候…",
       );
       // A local Runtime restart can temporarily outlive the credential
       // hand-off poll on slower machines.  Continue automatically instead of
@@ -1801,6 +1807,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     sendMessage,
     uploadInputAttachment,
     loadInputAttachment,
+    loadInputAttachmentThumbnail,
     interrupt,
     respondInteraction,
     updatePermission,

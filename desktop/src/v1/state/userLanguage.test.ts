@@ -29,7 +29,7 @@ test("primary error copy and collapsed technical code remain separate", () => {
   );
   assert.equal(
     userFacingError(error),
-    "扩展响应超时，EcoreX 已停止等待。你可以稍后重试。",
+    "扩展响应超时，e-Mate 已停止等待。你可以稍后重试。",
   );
   assert.equal(technicalErrorCode(error), "provider_timeout");
   assert.equal(technicalErrorCode(new Error("ordinary")), null);
@@ -50,7 +50,7 @@ test("primary error copy and collapsed technical code remain separate", () => {
   );
   assert.equal(
     userFacingError(unknown),
-    "EcoreX 暂时无法完成这项操作，当前数据已保留。请稍后重试。",
+    "e-Mate 暂时无法完成这项操作，当前数据已保留。请稍后重试。",
   );
   assert.equal(technicalErrorCode(unknown), "vendor_private_failure");
   const untrustedChinese = new RuntimeApiError(
@@ -59,7 +59,7 @@ test("primary error copy and collapsed technical code remain separate", () => {
   );
   assert.equal(
     userFacingError(untrustedChinese),
-    "EcoreX 暂时没有响应。当前数据已保留，请稍后重试。",
+    "e-Mate 暂时没有响应。当前数据已保留，请稍后重试。",
   );
   assert.equal(
     userFacingError(new Error("请选择一张图片后重试。")),

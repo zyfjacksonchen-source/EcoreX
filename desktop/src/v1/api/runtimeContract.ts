@@ -26,7 +26,7 @@ export class RuntimeContractError extends Error {
   readonly expectation: string;
 
   constructor(contract: string, path: string, expectation: string) {
-    super("运行服务与页面不兼容，请刷新或更新 EcoreX。");
+    super("运行服务与页面不兼容，请刷新或更新 e-Mate。");
     this.name = "RuntimeContractError";
     this.contract = contract;
     this.path = path;
@@ -638,6 +638,12 @@ export function validateInputAttachmentProjection(value: unknown): InputAttachme
   if (!/^[0-9a-f]{64}$/u.test(value.sha256)) {
     reject(contract, "sha256", "a lowercase SHA-256");
   }
+  if (value.thumbnail_url !== null) {
+    assertString(value.thumbnail_url, contract, "thumbnail_url");
+    if (!value.thumbnail_url.startsWith("/api/v1/input-attachments/")) {
+      reject(contract, "thumbnail_url", "an authenticated attachment thumbnail path");
+    }
+  }
   assertString(value.created_at, contract, "created_at");
   if (!Number.isFinite(Date.parse(value.created_at))) {
     reject(contract, "created_at", "an ISO timestamp");
@@ -689,7 +695,14 @@ export function validateConversationUsageProjection(value: unknown): Conversatio
   assertRecord(value.context, contract, "context");
   assertWireFields(
     value.context,
-    ["used_tokens", "window_tokens", "model_id", "measured_at"],
+    [
+      "used_tokens",
+      "window_tokens",
+      "model_id",
+      "model_display_name",
+      "model_catalog_snapshot_id",
+      "measured_at",
+    ],
     contract,
     "context",
   );
@@ -708,6 +721,16 @@ export function validateConversationUsageProjection(value: unknown): Conversatio
     // usage fact. Keep it renderable instead of making the UI invent a cap.
   }
   assertNullableString(value.context.model_id, contract, "context.model_id");
+  assertNullableString(
+    value.context.model_display_name,
+    contract,
+    "context.model_display_name",
+  );
+  assertNullableString(
+    value.context.model_catalog_snapshot_id,
+    contract,
+    "context.model_catalog_snapshot_id",
+  );
   assertNullableString(value.context.measured_at, contract, "context.measured_at");
   assertString(value.calculated_at, contract, "calculated_at");
   return value as unknown as ConversationUsageProjection;

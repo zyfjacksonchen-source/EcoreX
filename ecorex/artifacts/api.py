@@ -40,6 +40,7 @@ from .errors import (
 from .models import (
     ArtifactAction,
     ArtifactExternalActionReceipt,
+    ArtifactFamily,
     ArtifactScope,
     ArtifactStatus,
     FeedbackRecord,
@@ -623,6 +624,11 @@ def create_artifact_router(
         projection = public_projection(artifact_id)
         if ArtifactAction.PREVIEW not in projection.actions:
             raise ArtifactActionUnavailable("preview is unavailable for this artifact")
+        if projection.family is ArtifactFamily.IMAGE:
+            projection = service.ensure_image_renditions(
+                artifact_id,
+                revision_id=projection.revision_id,
+            )
         rendition = next(
             (
                 item
@@ -649,6 +655,43 @@ def create_artifact_router(
             headers=_content_headers(
                 projection.display_name,
                 sha256,
+                disposition="inline",
+            ),
+        )
+
+    @router.get(
+        "/artifacts/{artifact_id}/thumbnail",
+        response_model=None,
+        response_class=Response,
+    )
+    def get_thumbnail(artifact_id: str) -> Response:
+        projection = public_projection(artifact_id)
+        if (
+            projection.family is not ArtifactFamily.IMAGE
+            or ArtifactAction.PREVIEW not in projection.actions
+        ):
+            raise ArtifactActionUnavailable("thumbnail is unavailable for this artifact")
+        projection = service.ensure_image_renditions(
+            artifact_id,
+            revision_id=projection.revision_id,
+        )
+        rendition = next(
+            (
+                item
+                for item in projection.renditions
+                if item.kind is RenditionKind.THUMBNAIL
+            ),
+            None,
+        )
+        if rendition is None:
+            raise ArtifactActionUnavailable("thumbnail rendition is unavailable")
+        content = service.blobs.read_bytes(rendition.sha256)
+        return Response(
+            content=content,
+            media_type=_safe_media_type(rendition.mime_type),
+            headers=_content_headers(
+                projection.display_name,
+                rendition.sha256,
                 disposition="inline",
             ),
         )

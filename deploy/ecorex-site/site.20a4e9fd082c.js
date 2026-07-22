@@ -134,7 +134,7 @@ export function normalizePublicIndex(raw, now = new Date()) {
   const root = object(raw, "公开索引");
   exactKeys(root, ["schema_version", "document_type", "trust", "status", "authority", "freshness", "release"], "公开索引");
   if (root.schema_version !== 1 || root.document_type !== DOCUMENT_TYPE || root.trust !== TRUST) {
-    throw new Error("公开索引不是 EcoreX v1 discovery hint");
+    throw new Error("公开索引不是 e-Mate v1 discovery hint");
   }
   if (root.status === "unpublished") {
     if (root.authority !== null || root.freshness !== null || root.release !== null) throw new Error("未发布索引不得包含签名权威或下载信息");
@@ -474,20 +474,20 @@ export function terminalCommand(artifact) {
     const urls = sourceUrls.map(powershellLiteral).join(",");
     return [
       "$ErrorActionPreference='Stop'",
-      "$d=Join-Path $env:TEMP ('EcoreX-'+[guid]::NewGuid())",
+      "$d=Join-Path $env:TEMP ('e-Mate-'+[guid]::NewGuid())",
       "New-Item -ItemType Directory -Path $d | Out-Null",
-      "$z=Join-Path $d 'EcoreX.zip'",
+      "$z=Join-Path $d 'e-Mate.zip'",
       `$urls=@(${urls})`,
       "$ok=$false",
       "$i=0",
       "Write-Host ''",
-      "Write-Host 'EcoreX 安装准备' -ForegroundColor Cyan",
+      "Write-Host 'e-Mate 安装准备' -ForegroundColor Cyan",
       "foreach($u in $urls){$i++; Remove-Item -LiteralPath $z -Force -ErrorAction SilentlyContinue; Write-Host (('[下载] 下载源 {0}/{1}，将显示百分比、速度和剩余时间' -f $i,$urls.Count)); & curl.exe --fail --location --retry 4 --retry-all-errors --connect-timeout 15 --output $z $u; if($LASTEXITCODE -eq 0 -and (Get-FileHash $z -Algorithm SHA256).Hash.ToLowerInvariant() -eq " + powershellLiteral(artifact.sha256) + "){$ok=$true; break}; Write-Host '[切换] 当前下载源未完成，正在尝试下一来源'}",
-      "if(-not $ok){throw 'EcoreX 安装文件下载或校验失败'}",
+      "if(-not $ok){throw 'e-Mate 安装文件下载或校验失败'}",
       "Write-Host '[校验] 下载文件已通过完整性检查'",
       "Write-Host '[解压] 正在准备启动组件'",
       "Expand-Archive -LiteralPath $z -DestinationPath $d",
-      "Write-Host '[启动] 后续 EcoreX 组件会继续显示实时进度'",
+      "Write-Host '[启动] 后续 e-Mate 组件会继续显示实时进度'",
       "& (Join-Path $d 'bin\\ecorex-bootstrap.exe')",
     ].join("; ");
   }
@@ -495,18 +495,18 @@ export function terminalCommand(artifact) {
   const digest = shellLiteral(artifact.sha256);
   return [
     'd="$(mktemp -d)"',
-    'z="$d/EcoreX.zip"',
+    'z="$d/e-Mate.zip"',
     `urls=(${urls})`,
     "ok=0",
     "i=0",
-    "printf '\\nEcoreX 安装准备\\n'",
+    "printf '\\ne-Mate 安装准备\\n'",
     "for u in \"${urls[@]}\"; do i=$((i+1)); rm -f \"$z\"; printf '[下载] 下载源 %s/%s，将显示百分比、速度和剩余时间\\n' \"$i\" \"${#urls[@]}\"; if curl --fail --location --retry 4 --retry-all-errors --connect-timeout 15 --output \"$z\" \"$u\" && printf '%s  %s\\n' " + digest + " \"$z\" | shasum -a 256 -c -; then ok=1; break; fi; printf '[切换] 当前下载源未完成，正在尝试下一来源\\n'; done",
     "test \"$ok\" -eq 1",
     "printf '[校验] 下载文件已通过完整性检查\\n'",
     "printf '[解压] 正在准备启动组件\\n'",
     'ditto -x -k "$z" "$d"',
     'chmod +x "$d/bin/ecorex-bootstrap"',
-    "printf '[启动] 后续 EcoreX 组件会继续显示实时进度\\n'",
+    "printf '[启动] 后续 e-Mate 组件会继续显示实时进度\\n'",
     '"$d/bin/ecorex-bootstrap"',
   ].join(" && ");
 }
@@ -567,7 +567,7 @@ function renderIndex(index, manifestCheck = null) {
   if (index.status !== "published") {
     const card = createElement("article", "download-card");
     card.append(createElement("span", "platform-icon", "···"));
-    card.append(createElement("h3", "", "EcoreX 正在准备中"));
+    card.append(createElement("h3", "", "e-Mate 正在准备中"));
     card.append(createElement("p", "", "正式版本准备好后，Windows 和 Mac 下载会在这里开放。"));
     card.append(createElement("span", "download-link is-disabled", "不可下载"));
     grid.append(card);

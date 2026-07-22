@@ -826,6 +826,18 @@ class ArtifactRepository:
             self._require_revision_owner(
                 connection, parent_artifact_id, expected_parent_revision_id
             )
+            existing = connection.execute(
+                "SELECT 1 FROM artifact_renditions "
+                "WHERE parent_revision_id = ? AND kind = ?",
+                (expected_parent_revision_id, kind.value),
+            ).fetchone()
+            if existing is not None:
+                return self._projection_for_revision(
+                    connection,
+                    parent_artifact_id,
+                    expected_parent_revision_id,
+                    include_internal_lineage=False,
+                )
 
             rendition_artifact_id = new_artifact_id()
             rendition_revision_id = new_revision_id()
@@ -852,7 +864,7 @@ class ArtifactRepository:
                     parent["owner_account_id"],
                     parent["thread_id"],
                     parent["turn_id"],
-                    parent["created_by_tool_id"],
+                    None,
                     created_at,
                 ),
             )

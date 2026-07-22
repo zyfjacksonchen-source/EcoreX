@@ -282,7 +282,7 @@ def test_public_share_preserves_role_order_and_safe_markdown_parity(tmp_path) ->
     public = client.get(f"/s/{token}")
 
     assert public.status_code == 200
-    assert public.text.index("你的指令") < public.text.index("EcoreX")
+    assert public.text.index("你的指令") < public.text.index("e-Mate")
     assert "请对比 <strong>Q1</strong> 和 <strong>Q2</strong>" in public.text
     assert "<h2>对比结果</h2>" in public.text
     assert "<table>" in public.text
@@ -636,7 +636,7 @@ def test_media_share_is_staged_before_publish_and_renders_as_real_chat(tmp_path)
     token = urlsplit(created.json()["public_url"]).path.rsplit("/", 1)[-1]
     public = client.get(f"/s/{token}")
     assert public.status_code == 200
-    assert public.text.index("你的指令") < public.text.index("EcoreX")
+    assert public.text.index("你的指令") < public.text.index("e-Mate")
     assert "请修改这张图" in public.text
     assert "已经修改明暗和构图" in public.text
     assert "<script>alert('instruction')</script>" not in public.text

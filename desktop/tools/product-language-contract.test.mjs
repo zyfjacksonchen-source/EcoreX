@@ -18,6 +18,8 @@ const composer = source("../src/v1/components/Composer.tsx");
 const runtimeSession = source("../src/v1/state/useRuntimeSession.ts");
 const modelSelector = source("../src/v1/components/ComposerModelSelector.tsx");
 const timeline = source("../src/v1/components/Timeline.tsx");
+const sidebar = source("../src/v1/components/Sidebar.tsx");
+const login = source("../src/v1/components/LoginPage.tsx");
 const projectSelector = source("../src/v1/components/NewConversationProjectSelector.tsx");
 const features = source("../src/v1/styles/features.css");
 const layout = source("../src/v1/styles/layout.css");
@@ -72,6 +74,8 @@ test("Composer uses automatic intent routing with truthful paste and model contr
   assert.match(composer, /modelId !== imageModel\) setDisposition\("queue"\)/u);
   assert.match(runtimeSession, /reconcileModelSelection\(current, bootstrap\.models\.chat\)/u);
   assert.match(runtimeSession, /reconcileModelSelection\(current, bootstrap\.models\.image\)/u);
+  assert.match(composer, /!draft\.trim\(\) && attachments\.length === 0/u);
+  assert.match(runtimeSession, /rawInput\.trim\(\) \|\| \(attachments\.length > 0/u);
 });
 
 test("one update identity stays dismissed across its download states", () => {
@@ -97,7 +101,7 @@ test("workspace chrome keeps the share action right aligned and removes the Comp
   assert.match(features, /\.ex-new-conversation-start\s*>\s*h1\s*\{[\s\S]*?font-size:\s*var\(--text-heading-size\);/u);
 });
 
-test("Codex theme values and EcoreX brand actions are separate semantic tokens", () => {
+test("Codex theme values and e-Mate brand actions are separate semantic tokens", () => {
   assert.match(tokens, /--color-canvas:\s*oklch\(0\.976139 0 0\);/u);
   assert.match(tokens, /--color-workspace-surface:\s*oklch\(1 0 0\);/u);
   assert.match(tokens, /--color-surface:\s*oklch\(1 0 0\);/u);
@@ -115,6 +119,18 @@ test("Codex theme values and EcoreX brand actions are separate semantic tokens",
   assert.match(tokens, /--color-ink:\s*oklch\(0\.991069 0 0\);/u);
   assert.match(tokens, /--color-accent:\s*oklch\(0\.528649 0\.173447 254\.975\);/u);
   assert.match(tokens, /--color-brand:\s*oklch\(/u);
+});
+
+test("all user-visible workspace brand copy and lockups use e-Mate", () => {
+  for (const candidate of [app, composer, timeline, sidebar, login, settings]) {
+    assert.doesNotMatch(candidate, />[^<]*EcoreX[^<]*</u);
+    assert.doesNotMatch(candidate, /["'`]([^"'`]*\s)?EcoreX(?:\s|[？。…]|$)/u);
+  }
+  assert.match(layout, /url\("\.\.\/assets\/emate-logo\.png"\)/u);
+  assert.match(layout, /url\("\.\.\/assets\/emate-mark\.png"\)/u);
+  assert.match(sidebar, /e-Mate v\{version\}/u);
+  assert.match(login, /className="ex-login-logo"/u);
+  assert.match(layout, /:root\[data-theme="dark"\] \.ex-emate-logo/u);
 });
 
 test("Workbench surface roles map the references without component-level colors", () => {

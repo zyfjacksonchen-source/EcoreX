@@ -301,6 +301,7 @@ class RuntimeComposition:
         connector_service: ConnectorService | None = None,
         artifact_service: "ArtifactService | None" = None,
         capability_handlers: Mapping[str, Any] | None = None,
+        capability_pack_services: Mapping[str, Any] | None = None,
         permission_provider: Callable[[], PermissionSnapshot] | None = None,
         permission_state_digest_provider: Callable[[], str] | None = None,
         permission_sample_scope_provider: (
@@ -480,13 +481,20 @@ class RuntimeComposition:
             self.input_attachment_read_runtime = InputAttachmentReadRuntime(input_attachments)
             resolved_handlers["input_attachment_read"] = self.input_attachment_read_runtime.read
             if "ocr" in installed_packs:
-                from ecorex.integration.ocr import OCRServiceAdapter
-
                 if "ocr" in resolved_handlers:
                     raise ValueError("a caller cannot replace the Core OCR handler")
+                service_adapters = dict(capability_pack_services or {})
+                ocr_provider = service_adapters.get("ocr.extract")
+                if ocr_provider is None:
+                    # Unit/in-process development compositions may supply only
+                    # an installed-pack projection. ProductServerSettings
+                    # independently requires an exact verified service set.
+                    from ecorex.integration.ocr import OCRServiceAdapter
+
+                    ocr_provider = OCRServiceAdapter()
                 self.input_attachment_ocr_runtime = InputAttachmentOCRRuntime(
                     input_attachments,
-                    OCRServiceAdapter(),
+                    ocr_provider,
                 )
                 resolved_handlers["ocr"] = self.input_attachment_ocr_runtime.extract
         for tool_id, handler in self.skill_runtime.handlers().items():

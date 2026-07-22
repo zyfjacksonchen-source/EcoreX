@@ -67,6 +67,66 @@ def test_platform_stager_reserves_stdout_for_its_single_protocol_response() -> N
     assert stdout_writes[0].args[0].value == '{"schema_version":1,"status":"passed"}'
 
 
+def test_platform_stage_records_required_product_service_configuration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    drill = runpy.run_path(
+        str(ROOT / "scripts" / "drill_v1_windows_signed_candidate.py")
+    )
+    payload = drill["_runtime_config"](b"r" * 32, b"b" * 32, b"s" * 32)
+    template = tmp_path / "runtime-config.json"
+    template.write_bytes(payload)
+    monkeypatch.setenv("ECOREX_STAGE_RUNTIME_CONFIG_TEMPLATE", str(template))
+    monkeypatch.setenv(
+        "ECOREX_STAGE_RUNTIME_CONFIG_TEMPLATE_SHA256",
+        hashlib.sha256(payload).hexdigest(),
+    )
+    core = tmp_path / "core"
+    core.mkdir()
+
+    digest, services = stager["_write_runtime_config"](
+        core, "windows", "x64"
+    )
+
+    assert digest == hashlib.sha256(
+        (core / "runtime-config.json").read_bytes()
+    ).hexdigest()
+    assert set(services) == {"gateway", "image_orchestration", "share"}
+    assert all(item["configured"] is True for item in services.values())
+    assert all(len(item["host_sha256"]) == 64 for item in services.values())
+    assert "localhost" not in json.dumps(services)
+
+
+def test_platform_stage_rejects_missing_image_or_share_service(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    drill = runpy.run_path(
+        str(ROOT / "scripts" / "drill_v1_windows_signed_candidate.py")
+    )
+    raw = json.loads(
+        drill["_runtime_config"](b"r" * 32, b"b" * 32, b"s" * 32)
+    )
+    raw["image_orchestration"] = None
+    payload = json.dumps(raw, sort_keys=True, separators=(",", ":")).encode()
+    template = tmp_path / "runtime-config.json"
+    template.write_bytes(payload)
+    monkeypatch.setenv("ECOREX_STAGE_RUNTIME_CONFIG_TEMPLATE", str(template))
+    monkeypatch.setenv(
+        "ECOREX_STAGE_RUNTIME_CONFIG_TEMPLATE_SHA256",
+        hashlib.sha256(payload).hexdigest(),
+    )
+    core = tmp_path / "core"
+    core.mkdir()
+
+    with pytest.raises(stager["StageError"]) as missing:
+        stager["_write_runtime_config"](core, "windows", "x64")
+    assert missing.value.code == "runtime_config_product_services_missing"
+
+
 def _pack_python(payload: Path, *, platform: str = "windows") -> Path:
     relative = (
         Path("bin/pack-python/python.exe")
@@ -4071,7 +4131,7 @@ def test_bootstrap_security_tests_use_a_canonical_real_temp_root() -> None:
     )
     assert "resolved, err := filepath.EvalSymlinks(raw)" in source
     assert "metadata.Mode()&os.ModeSymlink != 0" in source
-    assert source.count("canonicalTestTempDir(t)") == 7
+    assert source.count("canonicalTestTempDir(t)") >= 9
     assert source.count("ensureBootstrapStateDirectory(root)") == 3
 
 

@@ -2128,7 +2128,7 @@ def test_configured_deployment_platform_admin_is_created_after_management_import
         "ecorex-platform-admin"
     )
     assert user.status == "active"
-    assert user.display_name == "EcoreX 管理员"
+    assert user.display_name == "e-Mate 管理员"
     assert user.organization_id == "ecorex-production"
 
 

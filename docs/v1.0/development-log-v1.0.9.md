@@ -14,6 +14,7 @@
 - 项目会话：后端按精确 Job/Turn/Thread/Project 解析项目根；read 相对路径、Pack cwd 和沙箱根以项目为先，跨项目、伪造作用域、删除或链接替换均拒绝。
 - 模型目录：每个新 Turn 刷新当前签名 allowlist 并固化新模型快照；前端同步撤销失效选择。活动 Turn 中更换模型自动改为“排队”，避免 UI 显示已切换而 steer 仍使用旧模型。
 - UI：附件上传/就绪反馈、发送后缩略图、点击全图适配预览、居中圆形“回到底部”、紧凑连接器和菜单密度已完成。
+- Capability Pack 运行时：修复“签名 Pack 已显示安装，但 OCR/Office 仍从 Core 全局环境导入依赖”的断链。正式 Runtime 现在将已验证 OCR/Office ZIP 安全解包为私有快照，通过同一签名 Core 内的 relocatable Pack Python 独立执行；每次调用前复核 ZIP 与快照，支持 `.pyd`/原生依赖，不修改 Core `sys.path`，篡改立即 fail-closed。
 
 ## 已执行验证
 
@@ -24,6 +25,7 @@
 - Web RuntimeClient、模型、语言、密度、Timeline：71 passed。
 - TypeScript `--noEmit`：通过。
 - Ruff 与 Python 编译：通过。
+- Pack 子进程真实布局/隔离/篡改回归：3 passed；Capability Pack 合同与执行回归：11 passed；包导入边界：7 passed。
 
 ## 发布阻断条件
 

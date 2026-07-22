@@ -79,8 +79,8 @@ function assertOperation(operation: ClientOperation): void {
       && !isRecord(operation.thread.metadata)
     )
     || (operation.turn !== null && !ID_PATTERN.test(operation.turn.turn_id))
-    || !operation.input.trim()
     || !Array.isArray(operation.attachments)
+    || (!operation.input.trim() && operation.attachments.length === 0)
     || operation.attachments.length > 20
     || operation.attachments.some((attachment) => !isInputAttachment(attachment))
     || !operation.models.agentModelId.trim()

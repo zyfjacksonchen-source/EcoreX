@@ -92,6 +92,35 @@ test("input attachment content is fetched as an authenticated blob", async () =>
   }
 });
 
+test("input attachment thumbnail uses the bounded authenticated endpoint", async () => {
+  const originalFetch = globalThis.fetch;
+  let observedUrl = "";
+  let observedAuthorization = "";
+  let observedCache: RequestCache | undefined;
+  globalThis.fetch = async (input, init) => {
+    observedUrl = String(input);
+    observedAuthorization = new Headers(init?.headers).get("authorization") ?? "";
+    observedCache = init?.cache;
+    return new Response(new Blob(["small-preview"], { type: "image/jpeg" }), {
+      status: 200,
+      headers: { "content-type": "image/jpeg" },
+    });
+  };
+  try {
+    const client = new RuntimeClient({
+      apiBase: "http://127.0.0.1:8765",
+      bearerToken: "attachment-secret",
+    });
+    const blob = await client.inputAttachmentThumbnailBlob("attachment/id");
+    assert.equal(blob.type, "image/jpeg");
+    assert.equal(observedUrl, "http://127.0.0.1:8765/api/v1/input-attachments/attachment%2Fid/thumbnail");
+    assert.equal(observedAuthorization, "Bearer attachment-secret");
+    assert.equal(observedCache, "force-cache");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 const bootstrap: BootstrapResponse = {
   api_version: "v1",
   event_schema_version: 1,
@@ -185,6 +214,8 @@ const conversationUsage: ConversationUsageProjection = {
     used_tokens: 120,
     window_tokens: 272_000,
     model_id: "ecorex-chat",
+    model_display_name: "GPT-5.6 SOL · 中等推理",
+    model_catalog_snapshot_id: "models_test",
     measured_at: "2026-07-13T01:00:00Z",
   },
   calculated_at: "2026-07-13T01:00:01Z",
@@ -1364,6 +1395,7 @@ test("client operations freeze the active Turn, models, and request identity", (
       size_bytes: 12,
       media_kind: "document",
       sha256: "a".repeat(64),
+      thumbnail_url: null,
       created_at: "2026-07-11T00:00:00.000Z",
     }],
     operationId: "operation_frozen",
@@ -2052,7 +2084,7 @@ test("system health keeps primary status separate from bounded technical history
   const sample = {
     sample_id: "syssample_1",
     overall: "healthy" as const,
-    summary: "EcoreX 运行正常",
+    summary: "e-Mate 运行正常",
     components: [
       {
         component_id: "responsiveness",
@@ -2230,7 +2262,7 @@ test("settings transports reject malformed, extra, and cross-identity Runtime da
   const publicHealth = {
     sample_id: "syssample_1",
     overall: "healthy",
-    summary: "EcoreX 运行正常",
+    summary: "e-Mate 运行正常",
     components: [{
       component_id: "runtime",
       label: "运行响应",

@@ -185,7 +185,7 @@ def create_device_identity_router(
             return _verification_html(
                 "验证未通过，请检查验证码和凭据。", status_code=401
             )
-        return _verification_html("验证完成，可以返回 EcoreX。", success=True)
+        return _verification_html("验证完成，可以返回 e-Mate。", success=True)
 
     @router.post("/v1/device/authorize")
     async def authorize(
@@ -354,7 +354,7 @@ def device_identity_error_response(error: DeviceIdentityError) -> HTTPException:
 
 
 def _verification_html(
-    message: str = "输入 EcoreX 显示的验证码和原有账户凭据。",
+    message: str = "输入 e-Mate 显示的验证码和原有账户凭据。",
     *,
     success: bool = False,
     status_code: int = 200,
@@ -372,14 +372,14 @@ def _verification_html(
     )
     document = f"""<!doctype html><html lang="zh-CN"><head>
     <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>EcoreX 设备登录</title><style>
+    <title>e-Mate 设备登录</title><style>
     :root{{color-scheme:light dark;font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}
     body{{margin:0;min-height:100vh;display:grid;place-items:center;background:#111;color:#fcfcfc}}
     main{{width:min(360px,calc(100vw - 32px));padding:24px;border-radius:16px;background:#1b1b1b}}
     h1{{font-size:18px;margin:0 0 8px}}p{{color:#aaa;margin:0 0 20px}}label{{display:block;margin:12px 0}}
     input{{box-sizing:border-box;width:100%;margin-top:6px;padding:10px 12px;border:1px solid #333;border-radius:10px;background:#161616;color:inherit}}
     button{{width:100%;padding:10px;border:0;border-radius:10px;background:#e88335;color:#111;font-weight:600}}
-    </style></head><body><main><h1>EcoreX 设备登录</h1><p>{safe_message}</p>{form}</main></body></html>"""
+    </style></head><body><main><h1>e-Mate 设备登录</h1><p>{safe_message}</p>{form}</main></body></html>"""
     return HTMLResponse(
         document,
         status_code=status_code,

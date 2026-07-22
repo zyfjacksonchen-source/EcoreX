@@ -74,6 +74,7 @@ interface ComposerProps {
   ) => Promise<boolean>;
   onUploadAttachment: (file: File) => Promise<InputAttachmentProjection | null>;
   onLoadAttachment: InputAttachmentBlobLoader;
+  onLoadAttachmentThumbnail: InputAttachmentBlobLoader;
   onInterrupt: () => void;
 }
 
@@ -114,6 +115,7 @@ export function Composer({
   onSend,
   onUploadAttachment,
   onLoadAttachment,
+  onLoadAttachmentThumbnail,
   onInterrupt,
 }: ComposerProps) {
   const [draft, setDraft] = useState("");
@@ -152,7 +154,7 @@ export function Composer({
   const selectedChatModel = chatModels.find((model) => model.model_id === chatModel);
 
   const submit = async () => {
-    if (!draft.trim() || !modelAvailable) return;
+    if ((!draft.trim() && attachments.length === 0) || !modelAvailable) return;
     const sent = await onSend(draft, active ? disposition : "steer", attachments);
     setSendFailed(!sent);
     if (sent) {
@@ -232,7 +234,7 @@ export function Composer({
   return (
     <div className="ex-composer-region">
       <div className="ex-composer" data-busy={submitting ? "true" : "false"}>
-        <label className="ex-composer-label" htmlFor="ecorex-composer">给 EcoreX 发消息</label>
+        <label className="ex-composer-label" htmlFor="ecorex-composer">给 e-Mate 发消息</label>
         {attachments.length || pendingAttachments.length ? (
           <div className="ex-composer-attachments" role="group" aria-label="已添加文件">
             {pendingAttachments.map((pending) => (
@@ -250,6 +252,7 @@ export function Composer({
                 key={attachment.attachment_id}
                 attachment={attachment}
                 loadBlob={onLoadAttachment}
+                loadThumbnailBlob={onLoadAttachmentThumbnail}
                 removable
                 removeDisabled={attachmentUploading || submitting}
                 onRemove={() => setAttachments((current) => current.filter((item) => item.attachment_id !== attachment.attachment_id))}
@@ -386,7 +389,7 @@ export function Composer({
             <button
               className="ex-send-button"
               type="button"
-              disabled={!draft.trim() || submitting || !modelAvailable}
+              disabled={(!draft.trim() && attachments.length === 0) || submitting || !modelAvailable}
               aria-label={sendLabel}
               aria-busy={submitting}
               aria-describedby={!modelAvailable ? "ecorex-composer-note" : undefined}

@@ -33,7 +33,7 @@ class SettingsRuntimeContractError extends Error {
   readonly expectation: string;
 
   constructor(contract: SettingsContract, path: string, expectation: string) {
-    super("运行服务与页面不兼容，请刷新或更新 EcoreX。");
+    super("运行服务与页面不兼容，请刷新或更新 e-Mate。");
     this.name = "RuntimeContractError";
     this.contract = contract;
     this.path = path;

@@ -1159,7 +1159,7 @@ class ProductLegacyMigrationCoordinator:
         plan = self._load_plan()
         if plan is None:
             return True
-        if self.database_path.exists() or (self.target_root / REPORT_NAME).exists():
+        if (self.target_root / REPORT_NAME).exists():
             report = self._verify_target(self.target_root)
             receipt = self._assert_receipt_matches(
                 receipt=self._receipt(),
@@ -1180,6 +1180,7 @@ class ProductLegacyMigrationCoordinator:
             assert committed is not None
             self._persist_completion(plan=plan, report=report, receipt=committed)
             return True
+        late_merge = self._late_merge_required()
         self._validate_plan_source(plan)
         dry_target = self.migration_root / f".dry-run-{slot_id}"
         if os.path.lexists(dry_target):
@@ -1188,6 +1189,7 @@ class ProductLegacyMigrationCoordinator:
             plan.source_root,
             dry_target,
             dry_run=True,
+            baseline_root=self.target_root if late_merge else None,
             **self._migration_kwargs(plan),
         )
         if report.status != "dry_run_verified":
@@ -1257,6 +1259,117 @@ class ProductLegacyMigrationCoordinator:
             except MigrationError:
                 raise TargetConflictError("v1 state contains an unsafe preflight entry")
 
+    def _late_merge_required(self) -> bool:
+        if not self.database_path.exists():
+            return False
+        try:
+            connection = sqlite3.connect(f"file:{self.database_path.as_posix()}?mode=ro", uri=True)
+            mappings = int(
+                connection.execute("SELECT COUNT(*) FROM legacy_id_map").fetchone()[0]
+            )
+            integrity = connection.execute("PRAGMA integrity_check").fetchone()
+            foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
+        except sqlite3.Error as error:
+            raise TargetConflictError("existing v1 state is incompatible with late migration") from error
+        finally:
+            if "connection" in locals():
+                connection.close()
+        if integrity != ("ok",) or foreign_keys:
+            raise TargetConflictError("existing v1 state failed integrity verification")
+        if mappings:
+            raise TargetConflictError(
+                "existing v1 state contains legacy mappings without completion authority"
+            )
+        return True
+
+    @staticmethod
+    def _assert_late_baseline_preserved(live: Path, prepared: Path) -> None:
+        live_database = live / TARGET_DATABASE_NAME
+        prepared_database = prepared / TARGET_DATABASE_NAME
+        try:
+            connection = sqlite3.connect(
+                f"file:{live_database.as_posix()}?mode=ro", uri=True
+            )
+            connection.execute("ATTACH DATABASE ? AS prepared", (str(prepared_database),))
+            tables = [
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT name FROM main.sqlite_master "
+                    "WHERE type='table' AND name NOT LIKE 'sqlite_%' "
+                    "AND name <> 'migration_meta' ORDER BY name"
+                )
+            ]
+            prepared_tables = {
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT name FROM prepared.sqlite_master WHERE type='table'"
+                )
+            }
+            if any(table not in prepared_tables for table in tables):
+                raise TargetConflictError("late migration removed a v1 table")
+            for table in tables:
+                quoted = '"' + table.replace('"', '""') + '"'
+                columns = [
+                    str(row[1])
+                    for row in connection.execute(f"PRAGMA main.table_info({quoted})")
+                ]
+                if not columns:
+                    continue
+                selected = ",".join(
+                    '"' + column.replace('"', '""') + '"' for column in columns
+                )
+                missing = connection.execute(
+                    f"SELECT {selected} FROM main.{quoted} "
+                    f"EXCEPT SELECT {selected} FROM prepared.{quoted} LIMIT 1"
+                ).fetchone()
+                if missing is not None:
+                    raise TargetConflictError(
+                        "late migration changed an existing v1 database row"
+                    )
+        except sqlite3.Error as error:
+            raise TargetConflictError("late migration preservation check failed") from error
+        finally:
+            if "connection" in locals():
+                connection.close()
+
+        excluded = {
+            TARGET_DATABASE_NAME,
+            TARGET_DATABASE_NAME + "-wal",
+            TARGET_DATABASE_NAME + "-shm",
+            REPORT_NAME,
+            INVENTORY_NAME,
+            BACKUP_MANIFEST_NAME,
+            "migration-trace.jsonl",
+            CAS_AUTHORITY_NAME,
+        }
+        for source in live.rglob("*"):
+            relative = source.relative_to(live)
+            if relative.as_posix() in excluded:
+                continue
+            destination = prepared / relative
+            if source.is_symlink() or not destination.exists() or destination.is_symlink():
+                raise TargetConflictError("late migration did not preserve a v1 state entry")
+            if source.is_dir():
+                if not destination.is_dir():
+                    raise TargetConflictError("late migration changed a v1 state entry type")
+                continue
+            if not source.is_file() or not destination.is_file():
+                raise TargetConflictError("late migration contains a special state entry")
+            if source.stat().st_size != destination.stat().st_size:
+                raise TargetConflictError("late migration changed a v1 state file")
+            left = hashlib.sha256()
+            right = hashlib.sha256()
+            with source.open("rb") as left_file, destination.open("rb") as right_file:
+                while True:
+                    left_chunk = left_file.read(1024 * 1024)
+                    right_chunk = right_file.read(1024 * 1024)
+                    if not left_chunk and not right_chunk:
+                        break
+                    left.update(left_chunk)
+                    right.update(right_chunk)
+            if left.digest() != right.digest():
+                raise TargetConflictError("late migration changed a v1 state file")
+
     def _activate_prepared(
         self,
         *,
@@ -1295,7 +1408,11 @@ class ProductLegacyMigrationCoordinator:
                 transaction_id=receipt.get("transaction_id"),
             )
             return live
-        self._prior_state_is_replaceable()
+        late_merge = int(dict(report.get("counts") or {}).get("baseline_merge") or 0) == 1
+        if late_merge:
+            self._assert_late_baseline_preserved(self.target_root, self.prepared_root)
+        else:
+            self._prior_state_is_replaceable()
         self._write_receipt(
             state="swap_pending",
             slot_id=slot_id,
@@ -1345,7 +1462,7 @@ class ProductLegacyMigrationCoordinator:
         plan = self._load_plan()
         if plan is None:
             return True
-        if self.database_path.exists() or (self.target_root / REPORT_NAME).exists():
+        if (self.target_root / REPORT_NAME).exists():
             report = self._verify_target(self.target_root)
             receipt = self._assert_receipt_matches(
                 receipt=self._receipt(),
@@ -1366,6 +1483,7 @@ class ProductLegacyMigrationCoordinator:
             assert committed is not None
             self._persist_completion(plan=plan, report=report, receipt=committed)
             return True
+        late_merge = self._late_merge_required()
         receipt = self._receipt()
         if (
             receipt is None
@@ -1410,6 +1528,7 @@ class ProductLegacyMigrationCoordinator:
                 plan.source_root,
                 self.prepared_root,
                 quarantine_key=quarantine_key,
+                baseline_root=self.target_root if late_merge else None,
                 **self._migration_kwargs(plan),
             )
             if (

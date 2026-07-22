@@ -12,6 +12,7 @@ export type InputAttachmentBlobLoader = (
 interface InputAttachmentPreviewProps {
   attachment: InputAttachmentProjection;
   loadBlob: InputAttachmentBlobLoader;
+  loadThumbnailBlob: InputAttachmentBlobLoader;
   removable?: boolean;
   removeDisabled?: boolean;
   onRemove?: () => void;
@@ -20,6 +21,7 @@ interface InputAttachmentPreviewProps {
 export function InputAttachmentPreview({
   attachment,
   loadBlob,
+  loadThumbnailBlob,
   removable = false,
   removeDisabled = false,
   onRemove,
@@ -27,6 +29,9 @@ export function InputAttachmentPreview({
   const isImage = attachment.media_kind === "image";
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewFailed, setPreviewFailed] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [fullPreviewUrl, setFullPreviewUrl] = useState<string | null>(null);
+  const [fullPreviewFailed, setFullPreviewFailed] = useState(false);
 
   useEffect(() => {
     if (!isImage) return;
@@ -34,7 +39,7 @@ export function InputAttachmentPreview({
     let objectUrl: string | null = null;
     setPreviewUrl(null);
     setPreviewFailed(false);
-    void loadBlob(attachment.attachment_id, controller.signal)
+    void loadThumbnailBlob(attachment.attachment_id, controller.signal)
       .then((blob) => {
         if (controller.signal.aborted) return;
         objectUrl = URL.createObjectURL(blob);
@@ -47,7 +52,28 @@ export function InputAttachmentPreview({
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [attachment.attachment_id, isImage, loadBlob]);
+  }, [attachment.attachment_id, isImage, loadThumbnailBlob]);
+
+  useEffect(() => {
+    if (!isImage || !dialogOpen) return;
+    const controller = new AbortController();
+    let objectUrl: string | null = null;
+    setFullPreviewUrl(null);
+    setFullPreviewFailed(false);
+    void loadBlob(attachment.attachment_id, controller.signal)
+      .then((blob) => {
+        if (controller.signal.aborted) return;
+        objectUrl = URL.createObjectURL(blob);
+        setFullPreviewUrl(objectUrl);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setFullPreviewFailed(true);
+      });
+    return () => {
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [attachment.attachment_id, dialogOpen, isImage, loadBlob]);
 
   const details = (
     <span className="ex-input-attachment-details">
@@ -74,13 +100,12 @@ export function InputAttachmentPreview({
 
   return (
     <span className="ex-input-attachment is-image">
-      <Dialog.Root>
+      <Dialog.Root open={dialogOpen} onOpenChange={setDialogOpen}>
         <Dialog.Trigger asChild>
           <button
             className="ex-input-attachment-preview-trigger"
             type="button"
             aria-label={`完整预览：${attachment.display_name}`}
-            disabled={!previewUrl}
           >
             {previewUrl ? <img src={previewUrl} alt="" /> : <ImageIcon aria-hidden="true" />}
           </button>
@@ -89,7 +114,9 @@ export function InputAttachmentPreview({
           <Dialog.Overlay className="ex-attachment-preview-overlay" />
           <Dialog.Content className="ex-attachment-preview-dialog" aria-describedby={undefined}>
             <Dialog.Title>{attachment.display_name}</Dialog.Title>
-            {previewUrl ? <img src={previewUrl} alt={attachment.display_name} /> : null}
+            {fullPreviewUrl ? <img src={fullPreviewUrl} alt={attachment.display_name} /> : null}
+            {!fullPreviewUrl && !fullPreviewFailed ? <span role="status">正在读取完整图片</span> : null}
+            {fullPreviewFailed ? <span role="alert">完整图片暂时无法预览</span> : null}
             <Dialog.Close asChild>
               <button className="ex-icon-button ex-attachment-preview-close" type="button" aria-label="关闭图片预览">
                 <X aria-hidden="true" />

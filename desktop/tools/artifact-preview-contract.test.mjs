@@ -77,6 +77,8 @@ test("media thumbnails load near the viewport through a bounded abortable LRU", 
   assert.match(shelf, /rootMargin:\s*"240px 0px"/u);
   assert.match(shelf, /data-preview-artifact-id/u);
   assert.match(runtimeSession, /prefetchArtifactPreview/u);
+  assert.match(runtimeSession, /fetchPreview:[\s\S]*artifactBlob\([\s\S]*"thumbnail"/u);
+  assert.match(runtimeSession, /loadArtifactPreview[\s\S]*artifactBlob\(artifact\.artifact_id, "preview"/u);
   assert.doesNotMatch(
     runtimeSession,
     /for \(const artifact of effectiveArtifacts\)[\s\S]*artifactBlob/u,

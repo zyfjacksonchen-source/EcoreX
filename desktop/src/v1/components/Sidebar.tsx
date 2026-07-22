@@ -333,8 +333,12 @@ export function Sidebar({
         aria-modal={modal || undefined}
       >
         <div className="ex-sidebar-brand">
-          <span className="ex-brand-mark" aria-hidden="true">X</span>
-          <span className="ex-brand-copy"><strong>EcoreX</strong><small>v{version}</small></span>
+          <span className="ex-emate-lockup">
+            <span className="ex-visually-hidden">e-Mate v{version}</span>
+            <span className="ex-emate-logo" aria-hidden="true" />
+            <span className="ex-emate-mark-image" aria-hidden="true" />
+            <small className="ex-emate-version" aria-hidden="true">v{version}</small>
+          </span>
           <IconButton className="ex-sidebar-search" label="搜索会话" onClick={() => setSearchOpen(true)}>
             <Search aria-hidden="true" />
           </IconButton>
@@ -613,7 +617,7 @@ export function Sidebar({
         <Dialog.Portal>
           <Dialog.Overlay className="ex-dialog-overlay" />
           <Dialog.Content className="ex-dialog ex-confirm-dialog" aria-describedby="ex-logout-description">
-            <Dialog.Title>{logoutComplete ? "已安全退出" : "退出 EcoreX？"}</Dialog.Title>
+            <Dialog.Title>{logoutComplete ? "已安全退出" : "退出 e-Mate？"}</Dialog.Title>
             <Dialog.Description id="ex-logout-description">
               {logoutComplete || "会话和本地产物会保留；托管凭证会从安全存储中撤销。"}
             </Dialog.Description>
@@ -814,7 +818,7 @@ export function Sidebar({
               <div>
                 <Dialog.Title>继续已有任务</Dialog.Title>
                 <Dialog.Description id="ex-continue-thread-description">
-                  EcoreX 会从本机完整恢复原任务和上下文，从上次的位置继续。
+                  e-Mate 会从本机完整恢复原任务和上下文，从上次的位置继续。
                 </Dialog.Description>
               </div>
               <Dialog.Close asChild>

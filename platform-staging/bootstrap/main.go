@@ -162,8 +162,26 @@ type pointerState struct {
 }
 
 type localConfig struct {
-	SchemaVersion    int    `json:"schema_version"`
-	LegacyV030Source string `json:"legacy_v030_source"`
+	SchemaVersion         int    `json:"schema_version"`
+	LegacyV030Source      string `json:"legacy_v030_source"`
+	LegacySource          string `json:"legacy_source,omitempty"`
+	LegacySourceVersion   string `json:"legacy_source_version,omitempty"`
+	LegacyReleaseEvidence string `json:"legacy_release_evidence,omitempty"`
+}
+
+type legacySelection struct {
+	Source          string
+	SourceVersion   string
+	ReleaseEvidence string
+}
+
+type legacyRuntimeManifest struct {
+	SchemaVersion string `json:"schemaVersion"`
+	Product       string `json:"product"`
+	Version       string `json:"version"`
+	ReleaseGate   struct {
+		InstallReady bool `json:"installReady"`
+	} `json:"releaseGate"`
 }
 
 type artifact struct {
@@ -322,7 +340,7 @@ func runInstalled(rootOverride string) error {
 	if _, err := stageSandboxHelper(root, configuration.SandboxHelperSHA256); err != nil {
 		return err
 	}
-	legacySource, err := loadTrustedLocalConfig(root)
+	legacy, err := selectLegacyMigration(root)
 	if err != nil {
 		return err
 	}
@@ -346,7 +364,7 @@ func runInstalled(rootOverride string) error {
 			progress.Success("EcoreX 已就绪，浏览器已打开")
 		}
 	}()
-	return supervise(python, root, trustedDefinitions, legacySource, ownerNonce)
+	return supervise(python, root, trustedDefinitions, legacy, ownerNonce)
 }
 
 func run(indexOverride, rootOverride string) error {
@@ -399,7 +417,7 @@ func run(indexOverride, rootOverride string) error {
 	if err != nil {
 		return err
 	}
-	legacySource, err := loadTrustedLocalConfig(root)
+	legacy, err := selectLegacyMigration(root)
 	if err != nil {
 		return err
 	}
@@ -548,7 +566,7 @@ func run(indexOverride, rootOverride string) error {
 			progress.Success("EcoreX 已就绪，浏览器已打开；以后可从桌面快捷方式再次启动")
 		}
 	}()
-	return supervise(python, root, trustedDefinitions, legacySource, ownerNonce)
+	return supervise(python, root, trustedDefinitions, legacy, ownerNonce)
 }
 
 func waitForRuntimeAndOpen(root string, timeout time.Duration) error {
@@ -1089,60 +1107,237 @@ func installRoot(override string) (string, error) {
 	return filepath.Join(home, "Library", "Application Support", "EcoreX"), nil
 }
 
-func loadTrustedLocalConfig(root string) (string, error) {
+func loadTrustedLocalConfig(root string) (legacySelection, bool, error) {
 	configPath := filepath.Join(root, "bootstrap", "bootstrap-local.json")
 	metadata, err := os.Lstat(configPath)
 	if errors.Is(err, os.ErrNotExist) {
-		return "", nil
+		return legacySelection{}, false, nil
 	}
 	if err != nil || !metadata.Mode().IsRegular() || metadata.Mode()&os.ModeSymlink != 0 || metadata.Size() < 1 || metadata.Size() > 16*1024 {
-		return "", fmt.Errorf("local Bootstrap configuration is unsafe")
+		return legacySelection{}, false, fmt.Errorf("local Bootstrap configuration is unsafe")
 	}
 	if err := validateTrustedLocalConfigFile(configPath); err != nil {
-		return "", fmt.Errorf("local Bootstrap configuration is not administrator-owned")
+		return legacySelection{}, false, fmt.Errorf("local Bootstrap configuration is not administrator-owned")
 	}
 	file, err := os.Open(configPath)
 	if err != nil {
-		return "", fmt.Errorf("local Bootstrap configuration is unreadable")
+		return legacySelection{}, false, fmt.Errorf("local Bootstrap configuration is unreadable")
 	}
 	payload, readErr := io.ReadAll(io.LimitReader(file, 16*1024+1))
 	closeErr := file.Close()
 	after, statErr := os.Lstat(configPath)
 	if readErr != nil || closeErr != nil || statErr != nil || !os.SameFile(metadata, after) || len(payload) < 1 || len(payload) > 16*1024 || validateTrustedLocalConfigFile(configPath) != nil {
-		return "", fmt.Errorf("local Bootstrap configuration changed while reading")
+		return legacySelection{}, false, fmt.Errorf("local Bootstrap configuration changed while reading")
 	}
 	var value localConfig
-	if decodeExact(payload, &value) != nil || value.SchemaVersion != 1 || value.LegacyV030Source == "" {
-		return "", fmt.Errorf("local Bootstrap configuration is invalid")
+	if decodeExact(payload, &value) != nil || value.SchemaVersion != 1 {
+		return legacySelection{}, false, fmt.Errorf("local Bootstrap configuration is invalid")
 	}
-	source, err := canonicalLegacySource(value.LegacyV030Source, root)
+	if value.LegacyV030Source != "" && value.LegacySource != "" {
+		return legacySelection{}, false, fmt.Errorf("local Bootstrap configuration selects multiple legacy sources")
+	}
+	sourceValue := value.LegacySource
+	version := value.LegacySourceVersion
+	if value.LegacyV030Source != "" {
+		sourceValue = value.LegacyV030Source
+		version = "0.3.0"
+	}
+	if sourceValue == "" {
+		return legacySelection{}, false, fmt.Errorf("local Bootstrap configuration is invalid")
+	}
+	if version == "" {
+		version = "0.3.0"
+	}
+	if version != "0.2.9.2" && version != "0.3.0" {
+		return legacySelection{}, false, fmt.Errorf("local Bootstrap configuration selects an unsupported legacy version")
+	}
+	source, err := canonicalLegacySource(sourceValue, root)
 	if err != nil {
-		return "", err
+		return legacySelection{}, false, err
 	}
-	return source, nil
+	evidence := ""
+	if value.LegacyReleaseEvidence != "" {
+		evidence, err = canonicalLegacyEvidence(value.LegacyReleaseEvidence)
+		if err != nil {
+			return legacySelection{}, false, err
+		}
+	}
+	if version == "0.2.9.2" && evidence == "" {
+		return legacySelection{}, false, fmt.Errorf("v0.2.9.2 migration requires released Runtime evidence")
+	}
+	return legacySelection{Source: source, SourceVersion: version, ReleaseEvidence: evidence}, true, nil
+}
+
+func selectLegacyMigration(root string) (legacySelection, error) {
+	// A persisted plan or completion is the migration authority. Re-discovery
+	// must not rewrite it or require a legacy install that the user removed.
+	for _, marker := range []string{
+		filepath.Join(root, "migration", "v030-plan.json"),
+		filepath.Join(root, "migration", "v030-completed.json"),
+	} {
+		if _, markerErr := os.Lstat(marker); markerErr == nil {
+			return legacySelection{}, nil
+		} else if !errors.Is(markerErr, os.ErrNotExist) {
+			return legacySelection{}, fmt.Errorf("migration authority is unreadable")
+		}
+	}
+	configured, present, err := loadTrustedLocalConfig(root)
+	if err != nil {
+		return legacySelection{}, err
+	}
+	if present {
+		return configured, nil
+	}
+	home, homeErr := os.UserHomeDir()
+	if homeErr != nil || !filepath.IsAbs(home) {
+		return legacySelection{}, nil
+	}
+	legacyInstall := ""
+	if runtime.GOOS == "windows" {
+		local := os.Getenv("LOCALAPPDATA")
+		if local == "" || !filepath.IsAbs(local) {
+			return legacySelection{}, nil
+		}
+		legacyInstall = filepath.Join(local, "EcoreX WebUI")
+	} else if runtime.GOOS == "darwin" {
+		legacyInstall = filepath.Join(home, "Library", "Application Support", "EcoreX WebUI")
+	} else {
+		return legacySelection{}, nil
+	}
+	return discoverReleasedV0292(root, home, legacyInstall)
+}
+
+func discoverReleasedV0292(root, home, legacyInstall string) (legacySelection, error) {
+	sourceCandidate := filepath.Join(home, "EcoreX")
+	source, err := canonicalLegacySource(sourceCandidate, root)
+	if err != nil {
+		return legacySelection{}, nil
+	}
+	// This is the canonical conversation store path used by the released
+	// v0.2.9.2 workspace. Only file metadata is inspected here.
+	conversationDB := filepath.Join(source, "memory", "long-term", "index.db")
+	if !safeNonemptyRegularFile(conversationDB, 4*1024*1024*1024) {
+		return legacySelection{}, nil
+	}
+	installMetadata, err := os.Lstat(legacyInstall)
+	if err != nil || !installMetadata.IsDir() || installMetadata.Mode()&os.ModeSymlink != 0 {
+		return legacySelection{}, nil
+	}
+	installResolved, err := filepath.EvalSymlinks(legacyInstall)
+	if err != nil || !samePath(legacyInstall, installResolved) {
+		return legacySelection{}, nil
+	}
+	pointer := filepath.Join(legacyInstall, "state", "current-runtime.txt")
+	runtimePath, err := readLegacyRuntimePointer(pointer, legacyInstall)
+	if err != nil {
+		return legacySelection{}, nil
+	}
+	evidence, err := canonicalLegacyEvidence(filepath.Join(runtimePath, "runtime-manifest.json"))
+	if err != nil || !releasedV0292Manifest(evidence) {
+		return legacySelection{}, nil
+	}
+	return legacySelection{
+		Source:          source,
+		SourceVersion:   "0.2.9.2",
+		ReleaseEvidence: evidence,
+	}, nil
+}
+
+func readLegacyRuntimePointer(pointer, legacyInstall string) (string, error) {
+	payload, err := readStableRegularFile(pointer, 4096)
+	if err != nil {
+		return "", fmt.Errorf("legacy Runtime pointer is unreadable")
+	}
+	value := strings.TrimSpace(strings.TrimPrefix(string(payload), "\ufeff"))
+	if strings.ContainsAny(value, "\x00\r\n") || !filepath.IsAbs(value) {
+		return "", fmt.Errorf("legacy Runtime pointer is invalid")
+	}
+	absolute := filepath.Clean(value)
+	leaf := filepath.Base(absolute)
+	if !samePath(filepath.Dir(absolute), legacyInstall) || !strings.HasPrefix(leaf, "runtime-0.2.9.2-") || !safeID.MatchString(leaf) {
+		return "", fmt.Errorf("legacy Runtime pointer is outside the released install")
+	}
+	metadata, err := os.Lstat(absolute)
+	resolved, resolveErr := filepath.EvalSymlinks(absolute)
+	if err != nil || !metadata.IsDir() || metadata.Mode()&os.ModeSymlink != 0 || resolveErr != nil || !samePath(absolute, resolved) {
+		return "", fmt.Errorf("legacy Runtime directory is unsafe")
+	}
+	return absolute, nil
+}
+
+func safeNonemptyRegularFile(fileName string, maximum int64) bool {
+	metadata, err := os.Lstat(fileName)
+	if err != nil || !metadata.Mode().IsRegular() || metadata.Mode()&os.ModeSymlink != 0 || metadata.Size() < 1 || metadata.Size() > maximum {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(fileName)
+	return err == nil && samePath(fileName, resolved)
+}
+
+func readStableRegularFile(fileName string, maximum int64) ([]byte, error) {
+	metadata, err := os.Lstat(fileName)
+	if err != nil || !metadata.Mode().IsRegular() || metadata.Mode()&os.ModeSymlink != 0 || metadata.Size() < 1 || metadata.Size() > maximum {
+		return nil, fmt.Errorf("file is not a bounded regular file")
+	}
+	file, err := os.Open(fileName)
+	if err != nil {
+		return nil, err
+	}
+	payload, readErr := io.ReadAll(io.LimitReader(file, maximum+1))
+	closeErr := file.Close()
+	after, statErr := os.Lstat(fileName)
+	if readErr != nil || closeErr != nil || statErr != nil || !os.SameFile(metadata, after) || int64(len(payload)) != metadata.Size() || int64(len(payload)) > maximum {
+		return nil, fmt.Errorf("file changed while reading")
+	}
+	return payload, nil
+}
+
+func canonicalLegacyEvidence(value string) (string, error) {
+	if !filepath.IsAbs(value) || strings.ContainsAny(value, "\x00\r\n") {
+		return "", fmt.Errorf("legacy release evidence must be an absolute local path")
+	}
+	absolute := filepath.Clean(value)
+	if !safeNonemptyRegularFile(absolute, 1024*1024) {
+		return "", fmt.Errorf("legacy release evidence is unsafe")
+	}
+	return absolute, nil
+}
+
+func releasedV0292Manifest(fileName string) bool {
+	payload, err := readStableRegularFile(fileName, 1024*1024)
+	if err != nil {
+		return false
+	}
+	var value legacyRuntimeManifest
+	if json.Unmarshal(payload, &value) != nil {
+		return false
+	}
+	return value.SchemaVersion == "v0.2.5-runtime-manifest-v1" &&
+		value.Product == "EcoreX" && value.Version == "0.2.9.2" &&
+		value.ReleaseGate.InstallReady
 }
 
 func canonicalLegacySource(value, root string) (string, error) {
 	if !filepath.IsAbs(value) || strings.ContainsAny(value, "\x00\r\n") {
-		return "", fmt.Errorf("legacy v0.3.0 source must be an absolute local path")
+		return "", fmt.Errorf("legacy source must be an absolute local path")
 	}
 	absolute, err := filepath.Abs(filepath.Clean(value))
 	if err != nil {
-		return "", fmt.Errorf("legacy v0.3.0 source is invalid")
+		return "", fmt.Errorf("legacy source is invalid")
 	}
 	resolved, err := filepath.EvalSymlinks(absolute)
 	if err != nil {
-		return "", fmt.Errorf("legacy v0.3.0 source is unavailable")
+		return "", fmt.Errorf("legacy source is unavailable")
 	}
 	resolved, err = filepath.Abs(resolved)
 	if err != nil || !samePath(absolute, resolved) {
-		return "", fmt.Errorf("legacy v0.3.0 source contains a link or reparse point")
+		return "", fmt.Errorf("legacy source contains a link or reparse point")
 	}
 	current := absolute
 	for {
 		metadata, inspectErr := os.Lstat(current)
 		if inspectErr != nil || !metadata.IsDir() || metadata.Mode()&os.ModeSymlink != 0 {
-			return "", fmt.Errorf("legacy v0.3.0 source path is unsafe")
+			return "", fmt.Errorf("legacy source path is unsafe")
 		}
 		if current == filepath.Dir(current) {
 			break
@@ -1151,7 +1346,7 @@ func canonicalLegacySource(value, root string) (string, error) {
 	}
 	rootAbsolute, err := filepath.Abs(filepath.Clean(root))
 	if err != nil || pathsOverlap(absolute, rootAbsolute) {
-		return "", fmt.Errorf("legacy v0.3.0 source overlaps the v1 install root")
+		return "", fmt.Errorf("legacy source overlaps the v1 install root")
 	}
 	return absolute, nil
 }
@@ -2005,16 +2200,10 @@ func supervise(
 	python string,
 	root string,
 	trusted []string,
-	legacySource string,
+	legacy legacySelection,
 	ownerNonce string,
 ) error {
-	arguments := []string{"-I", "-B", "-m", "ecorex.bootstrap", "--install-root", root}
-	if legacySource != "" {
-		arguments = append(arguments, "--legacy-v030-source", legacySource)
-	}
-	for _, definition := range trusted {
-		arguments = append(arguments, "--trusted-public-key", definition)
-	}
+	arguments := superviseArguments(root, trusted, legacy)
 	command := exec.Command(python, arguments...)
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
@@ -2027,6 +2216,20 @@ func supervise(
 		return fmt.Errorf("installed Runtime did not pass Bootstrap health")
 	}
 	return nil
+}
+
+func superviseArguments(root string, trusted []string, legacy legacySelection) []string {
+	arguments := []string{"-I", "-B", "-m", "ecorex.bootstrap", "--install-root", root}
+	if legacy.Source != "" {
+		arguments = append(arguments, "--legacy-source", legacy.Source, "--legacy-source-version", legacy.SourceVersion)
+		if legacy.ReleaseEvidence != "" {
+			arguments = append(arguments, "--legacy-release-evidence", legacy.ReleaseEvidence)
+		}
+	}
+	for _, definition := range trusted {
+		arguments = append(arguments, "--trusted-public-key", definition)
+	}
+	return arguments
 }
 
 func minimalEnvironment() []string {

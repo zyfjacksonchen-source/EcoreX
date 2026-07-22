@@ -11,6 +11,7 @@ from ecorex.capabilities import (
     UnknownModelError,
     builtin_model_catalog,
 )
+from ecorex.runtime.api import _managed_catalog_from_cloud, project_model_catalog
 from ecorex.protocol import CreateTurnRequest
 from ecorex.managed_model_policy import (
     ECOREX_CHAT_MODEL_POLICIES,
@@ -233,3 +234,44 @@ def test_model_catalog_enforces_count_and_normalized_reference_uniqueness() -> N
                 _model(model_id="image_2", display_name="Other"),
             )
         )
+
+
+def test_cloud_revision_is_the_same_executable_and_bootstrap_catalog_snapshot() -> None:
+    base = builtin_model_catalog()
+    cloud = {
+        "schema_version": 1,
+        "models": ["ecorex-chat", "gpt-image-2"],
+        "catalog": [
+            {
+                "config_id": "config-chat",
+                "revision": 7,
+                "local_model_id": "ecorex-chat",
+                "modality": "chat",
+                "display_name": "EcoreX Main · July",
+                "upstream_model_id": "gpt-5.6-sol-july",
+                "provider_preset": "openai_responses",
+                "is_default": True,
+            },
+            {
+                "config_id": "config-image",
+                "revision": 3,
+                "local_model_id": "gpt-image-2",
+                "modality": "image_generation",
+                "display_name": "Image 2 Production",
+                "upstream_model_id": "image-2-production",
+                "provider_preset": "openai_images",
+                "is_default": True,
+            },
+        ],
+    }
+
+    executable = _managed_catalog_from_cloud(base, cloud)
+    bootstrap = project_model_catalog(executable)
+    chat = executable.get("ecorex-chat")
+
+    assert bootstrap.snapshot_id == executable.snapshot_id
+    assert bootstrap.chat[0].display_name == "EcoreX Main · July"
+    assert chat.model_policy is not None
+    assert chat.model_policy.upstream_model_id == "gpt-5.6-sol-july"
+    assert chat.model_policy.compact_threshold_tokens == 272_000
+    assert executable.snapshot_id != base.snapshot_id

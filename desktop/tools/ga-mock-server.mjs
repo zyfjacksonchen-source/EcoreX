@@ -642,7 +642,7 @@ function mockExtensions() {
   return [
     {
       extension_id: "ecorex.office-tools",
-      display_name: "EcoreX 办公工具",
+      display_name: "e-Mate 办公工具",
       description: "由核心包提供的文档、表格与演示文稿办公能力。",
       kind: "tool_provider",
       category: "office",
@@ -1066,7 +1066,7 @@ function bootstrap(state) {
       }] : [],
       vision: authenticated ? [{
         model_id: "ecorex-vision-1",
-        display_name: "EcoreX Vision",
+        display_name: "e-Mate Vision",
         capabilities: ["vision"],
         aliases: [],
         is_default: true,
@@ -1154,7 +1154,7 @@ function systemHealth(state, technical = false) {
   const sample = {
     sample_id: `syssample-ga-${state.seq}`,
     overall: "healthy",
-    summary: "EcoreX 运行正常",
+    summary: "e-Mate 运行正常",
     components: [
       { component_id: "responsiveness", label: "运行响应", status: "healthy", message: "界面和后台响应正常。" },
       { component_id: "jobs", label: "任务队列", status: "healthy", message: "任务队列运行正常。" },
@@ -2942,7 +2942,7 @@ function viewportHtml({ viewportId, viewport, theme, scenario }) {
   </head>
   <body data-ga-status="pending">
     <header class="ga-header">
-      <h1>EcoreX 响应式验收 · ${viewportId} · ${theme}</h1>
+      <h1>e-Mate 响应式验收 · ${viewportId} · ${theme}</h1>
       <p>${viewport.label} · scenario=${scenario} · iframe 使用固定 CSS viewport；下方报告来自同源 frame 的实际布局。</p>
     </header>
     <main class="ga-stage">
@@ -2960,7 +2960,7 @@ function viewportHtml({ viewportId, viewport, theme, scenario }) {
         src="/__ga/frame-app?${frameQuery}"
       ></iframe>
     </main>
-    <pre id="ga-viewport-report" class="ga-report" aria-live="polite">正在等待 EcoreX 完成首屏渲染…</pre>
+    <pre id="ga-viewport-report" class="ga-report" aria-live="polite">正在等待 e-Mate 完成首屏渲染…</pre>
   </body>
 </html>`;
 }
@@ -3128,5 +3128,5 @@ if (import.meta.url === invokedPath) {
   const port = portArgument ? Number(portArgument.slice("--port=".length)) : 4179;
   const scenario = scenarioArgument ? scenarioArgument.slice("--scenario=".length) : "unauthenticated";
   const running = await createGaMockServer({ port, scenario });
-  console.log(`EcoreX GA mock Runtime: ${running.url} (scenario=${scenario})`);
+  console.log(`e-Mate GA mock Runtime: ${running.url} (scenario=${scenario})`);
 }

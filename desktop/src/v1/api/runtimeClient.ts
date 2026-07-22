@@ -492,6 +492,27 @@ export class RuntimeClient {
     return response.blob();
   }
 
+  async inputAttachmentThumbnailBlob(
+    attachmentId: string,
+    signal?: AbortSignal,
+  ): Promise<Blob> {
+    const response = await fetch(
+      `${this.base}/api/v1/input-attachments/${encodeURIComponent(attachmentId)}/thumbnail`,
+      {
+        headers: this.headers(false),
+        credentials: "same-origin",
+        cache: "force-cache",
+        signal,
+      },
+    );
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null);
+      const parsed = parseError(payload, `Attachment thumbnail request failed (${response.status}).`);
+      throw new RuntimeApiError(parsed.message, response.status, parsed.code);
+    }
+    return response.blob();
+  }
+
   memory(signal?: AbortSignal): Promise<MemorySnapshot> {
     return this.json(
       "/api/v1/memory",
@@ -1298,7 +1319,7 @@ export class RuntimeClient {
 
   async artifactBlob(
     artifactId: string,
-    kind: "preview" | "content",
+    kind: "thumbnail" | "preview" | "content",
     signal?: AbortSignal,
   ): Promise<Blob> {
     const response = await fetch(

@@ -133,6 +133,105 @@ class UsageProjectionService:
         self._zone = zone
         self._clock = clock
 
+    @staticmethod
+    def _frozen_model_projection(
+        connection,
+        *,
+        turn_id: str,
+        job_id: str | None,
+        model_id: str | None,
+        fallback_catalog: ManagedModelCatalog,
+    ) -> tuple[int | None, str | None, str | None]:
+        """Resolve presentation facts from the Turn's immutable model snapshot.
+
+        An administrator may reuse a stable local model ID while changing its
+        name, upstream route or context policy.  Reading the process-current
+        catalog here would silently rewrite history, so completed responses
+        first resolve the exact catalog captured by their durable job/Turn.
+        """
+
+        snapshot_id: str | None = None
+        if job_id:
+            row = connection.execute(
+                "SELECT model_catalog_snapshot_id FROM job_runtime_contexts "
+                "WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+            if row is not None:
+                snapshot_id = str(row["model_catalog_snapshot_id"])
+        if snapshot_id is None:
+            row = connection.execute(
+                "SELECT config_snapshot_id FROM events "
+                "WHERE turn_id = ? AND event_type = 'turn.accepted' "
+                "ORDER BY seq ASC LIMIT 1",
+                (turn_id,),
+            ).fetchone()
+            if row is not None and row["config_snapshot_id"]:
+                config = connection.execute(
+                    "SELECT payload_json FROM runtime_snapshots "
+                    "WHERE snapshot_id = ? AND kind = 'config'",
+                    (str(row["config_snapshot_id"]),),
+                ).fetchone()
+                if config is not None:
+                    try:
+                        payload = json.loads(str(config["payload_json"]))
+                    except (TypeError, ValueError):
+                        payload = None
+                    if isinstance(payload, Mapping):
+                        candidate = payload.get("model_catalog_snapshot_id")
+                        if isinstance(candidate, str) and candidate:
+                            snapshot_id = candidate
+
+        if snapshot_id is not None:
+            row = connection.execute(
+                "SELECT payload_json FROM runtime_snapshots "
+                "WHERE snapshot_id = ? AND kind = 'models'",
+                (snapshot_id,),
+            ).fetchone()
+            if row is not None:
+                try:
+                    payload = json.loads(str(row["payload_json"]))
+                except (TypeError, ValueError):
+                    payload = None
+                modalities = payload.get("modalities") if isinstance(payload, Mapping) else None
+                chat = modalities.get("chat") if isinstance(modalities, Mapping) else None
+                if isinstance(chat, list):
+                    for item in chat:
+                        if not isinstance(item, Mapping) or item.get("model_id") != model_id:
+                            continue
+                        policy = item.get("model_policy")
+                        context = (
+                            policy.get("context_management")
+                            if isinstance(policy, Mapping)
+                            else None
+                        )
+                        threshold = (
+                            _nonnegative_int(context.get("compact_threshold_tokens"))
+                            if isinstance(context, Mapping)
+                            else None
+                        )
+                        display_name = item.get("display_name")
+                        return (
+                            threshold if threshold and threshold >= 1_000 else None,
+                            str(display_name) if isinstance(display_name, str) else None,
+                            snapshot_id,
+                        )
+
+        # Compatibility fallback for imported/pre-snapshot history only.  New
+        # v1 Turns always take the immutable branch above.
+        if model_id:
+            try:
+                spec = fallback_catalog.get(model_id)
+            except UnknownModelError:
+                return None, None, snapshot_id
+            threshold = (
+                spec.model_policy.compact_threshold_tokens
+                if spec.model_policy is not None
+                else None
+            )
+            return threshold, spec.display_name, snapshot_id
+        return None, None, snapshot_id
+
     def project(self, thread_id: str) -> ConversationUsageProjection:
         if not isinstance(thread_id, str) or not thread_id:
             raise ValueError("usage projection thread identity is invalid")
@@ -164,7 +263,8 @@ class UsageProjectionService:
                 (_storage_time(week_start),),
             ).fetchall()
             context_row = connection.execute(
-                "SELECT events.created_at, events.payload_json, turns.agent_model_id "
+                "SELECT events.created_at, events.payload_json, events.job_id, "
+                "events.turn_id, turns.agent_model_id "
                 "FROM events JOIN turns ON turns.turn_id = events.turn_id "
                 "WHERE events.thread_id = ? AND events.event_type = 'model.response_completed' "
                 "ORDER BY events.seq DESC LIMIT 1",
@@ -172,15 +272,23 @@ class UsageProjectionService:
             ).fetchone()
             if context_row is None:
                 latest_turn = connection.execute(
-                    "SELECT agent_model_id FROM turns WHERE thread_id = ? "
+                    "SELECT turn_id, agent_model_id FROM turns WHERE thread_id = ? "
                     "ORDER BY created_at DESC, turn_id DESC LIMIT 1",
                     (thread_id,),
                 ).fetchone()
                 context_model_id = (
                     str(latest_turn["agent_model_id"]) if latest_turn is not None else None
                 )
+                context_turn_id = (
+                    str(latest_turn["turn_id"]) if latest_turn is not None else ""
+                )
+                context_job_id = None
             else:
                 context_model_id = str(context_row["agent_model_id"])
+                context_turn_id = str(context_row["turn_id"])
+                context_job_id = (
+                    str(context_row["job_id"]) if context_row["job_id"] else None
+                )
 
         for row in rows:
             created_at = _parse_time(row["created_at"])
@@ -208,13 +316,19 @@ class UsageProjectionService:
             latest_context_time = _parse_time(context_row["created_at"])
 
         window_tokens: int | None = None
+        model_display_name: str | None = None
+        model_catalog_snapshot_id: str | None = None
         if context_model_id:
-            try:
-                policy = self.model_catalog.get(context_model_id).model_policy
-            except UnknownModelError:
-                policy = None
-            if policy is not None:
-                window_tokens = policy.compact_threshold_tokens
+            with self.database.reader() as connection:
+                window_tokens, model_display_name, model_catalog_snapshot_id = (
+                    self._frozen_model_projection(
+                        connection,
+                        turn_id=context_turn_id,
+                        job_id=context_job_id,
+                        model_id=context_model_id,
+                        fallback_catalog=self.model_catalog,
+                    )
+                )
         return ConversationUsageProjection(
             thread_id=thread_id,
             timezone=self.timezone_name,
@@ -226,6 +340,8 @@ class UsageProjectionService:
                 ),
                 window_tokens=window_tokens,
                 model_id=context_model_id,
+                model_display_name=model_display_name,
+                model_catalog_snapshot_id=model_catalog_snapshot_id,
                 measured_at=latest_context_time,
             ),
             calculated_at=now,

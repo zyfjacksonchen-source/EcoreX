@@ -842,6 +842,9 @@ class InputAttachmentProjection(FrozenProtocolModel):
     size_bytes: int = Field(ge=0, le=64 * 1024 * 1024)
     media_kind: Literal["image", "document", "file"]
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    # Relative authenticated endpoint.  The URL deliberately contains only
+    # the opaque account-scoped attachment identity, never a CAS path.
+    thumbnail_url: str | None = Field(default=None, min_length=1, max_length=512)
     created_at: datetime
 
     _created_at_utc = field_validator("created_at")(_ensure_utc)
@@ -1537,6 +1540,8 @@ class ContextUsageProjection(FrozenProtocolModel):
     used_tokens: int | None = Field(default=None, ge=0, strict=True)
     window_tokens: int | None = Field(default=None, ge=1_000, strict=True)
     model_id: str | None = None
+    model_display_name: str | None = None
+    model_catalog_snapshot_id: str | None = None
     measured_at: datetime | None = None
 
     _measured_at_utc = field_validator("measured_at")(_ensure_utc)

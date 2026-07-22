@@ -28,8 +28,8 @@ export function LoginPage({
     <main className="ex-login-page">
       <section className="ex-login-panel" aria-labelledby="ex-login-title">
         <div className="ex-login-brand">
-          <span className="ex-brand-mark" aria-hidden="true">E</span>
-          <h1 id="ex-login-title">EcoreX</h1>
+          <span className="ex-login-logo" aria-hidden="true" />
+          <h1 id="ex-login-title" className="ex-visually-hidden">e-Mate</h1>
         </div>
         <form className="ex-login-form" onSubmit={(event) => void submit(event)}>
           <label className="ex-field" htmlFor="ex-login-identifier">
@@ -71,7 +71,7 @@ export function LoginPage({
             disabled={busy || !identifier.trim() || !password}
             aria-busy={busy}
           >
-            {busy ? "正在进入 EcoreX" : "登录"}
+            {busy ? "正在进入 e-Mate" : "登录"}
           </button>
         </form>
       </section>

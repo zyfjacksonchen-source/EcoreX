@@ -64,7 +64,7 @@ export function extensionActionDisabledReason(action: ExtensionActionProjection)
   const reason = action.disabled_reason?.trim();
   if (!reason) return "当前版本没有提供这项操作不可用的原因。";
   return ({
-    extension_required_by_product: "EcoreX 运行必需，无法关闭。",
+    extension_required_by_product: "e-Mate 运行必需，无法关闭。",
     extension_already_enabled: "当前已经启用。",
     extension_already_disabled: "当前已经停用。",
     revision_not_installed: "尚未安装可启用的版本。",
@@ -108,7 +108,7 @@ export function extensionHealthLabel(health: ExtensionHealth): string {
 
 export function extensionTrustLabel(trust: ExtensionTrust): string {
   return ({
-    builtin: "EcoreX 内置",
+    builtin: "e-Mate 内置",
     administrator: "管理员批准",
     verified_publisher: "已验证发布方",
     local_untrusted: "本地未受信任",
@@ -140,7 +140,7 @@ export function extensionActionConfirmation(
   actionId: ExtensionActionId,
 ): string {
   const verb = extensionActionLabel(actionId);
-  return `确认${verb}“${extension.display_name}”？EcoreX 会重新检查来源、依赖、权限和当前版本。`;
+  return `确认${verb}“${extension.display_name}”？e-Mate 会重新检查来源、依赖、权限和当前版本。`;
 }
 
 export function extensionExportKindLabel(kind: ExtensionExportProjection["kind"]): string {

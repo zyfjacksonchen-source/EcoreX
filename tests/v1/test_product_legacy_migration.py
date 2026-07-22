@@ -11,6 +11,8 @@ import pytest
 
 from ecorex.artifacts import ArtifactService
 from ecorex.connectors import InMemoryCredentialVault
+from ecorex.protocol import CreateThreadRequest, CreateTurnRequest
+from ecorex.runtime import RuntimeKernel
 from ecorex.bootstrap.cli import _parser as bootstrap_parser
 from ecorex.migration import (
     PRODUCT_MIGRATION_COMPLETION_NAME,
@@ -153,6 +155,119 @@ def test_product_upgrade_preserves_v0292_generation_identity(tmp_path: Path) -> 
     assert report["source_version"] == "0.2.9.2"
     assert _count(state / TARGET_DATABASE_NAME, "threads") == 1
     assert _count(state / TARGET_DATABASE_NAME, "project_thread_bindings") == 1
+
+
+def test_late_v0292_merge_preserves_existing_v1_rows_settings_and_artifacts(
+    tmp_path: Path,
+) -> None:
+    install = tmp_path / "install"
+    state = install / "state"
+    candidate = install / "slots" / "candidate-v1"
+    source = tmp_path / "legacy"
+    state.mkdir(parents=True)
+    candidate.mkdir(parents=True)
+    source.mkdir()
+    _create_legacy_fixture(source)
+    (state / "migration-receipts").mkdir()
+    (state / "migration-receipts" / "admission.json").write_text(
+        "{}\n", encoding="utf-8"
+    )
+
+    kernel = RuntimeKernel(state / TARGET_DATABASE_NAME)
+    remaining = 18
+    for thread_index in range(7):
+        thread = kernel.create_thread(
+            CreateThreadRequest(title=f"existing-v1-{thread_index}")
+        )
+        turn_count = 3 if thread_index < 4 else 2
+        for turn_index in range(turn_count):
+            created = kernel.create_turn(
+                thread.thread_id,
+                CreateTurnRequest(
+                    input=f"existing-message-{thread_index}-{turn_index}",
+                    client_message_id=f"existing-client-{thread_index}-{turn_index}",
+                ),
+            )
+            kernel.interrupt_turn(created.turn.turn_id, reason="fixture terminal")
+            remaining -= 1
+    assert remaining == 0
+    baseline_artifact = ArtifactService(
+        state / TARGET_ARTIFACT_ROOT_NAME,
+        database_path=state / TARGET_DATABASE_NAME,
+    ).create_artifact(
+        b"existing-v1-artifact",
+        requested_name="existing.pdf",
+        mime_type="application/pdf",
+    )
+    connection = sqlite3.connect(state / TARGET_DATABASE_NAME)
+    connection.execute(
+        "INSERT OR REPLACE INTO runtime_meta(key,value) VALUES ('late_merge_setting','keep-me')"
+    )
+    baseline_thread_ids = {
+        str(row[0]) for row in connection.execute("SELECT thread_id FROM threads")
+    }
+    baseline_item_ids = {
+        str(row[0]) for row in connection.execute("SELECT item_id FROM items")
+    }
+    assert connection.execute(
+        "SELECT COUNT(*) FROM items WHERE kind='message' "
+        "AND json_extract(content_json, '$.role')='user'"
+    ).fetchone() == (18,)
+    connection.commit()
+    connection.close()
+    write_product_migration_plan(install, source, source_version="0.2.9.2")
+
+    migration = ProductLegacyMigrationCoordinator(
+        install,
+        state / TARGET_DATABASE_NAME,
+        vault=InMemoryCredentialVault(),
+    )
+    assert migration.dry_run(candidate, "late-merge-dry-run") is True
+    assert migration.commit(candidate, "late-merge-commit") is True
+
+    connection = sqlite3.connect(state / TARGET_DATABASE_NAME)
+    try:
+        assert baseline_thread_ids.issubset(
+            {str(row[0]) for row in connection.execute("SELECT thread_id FROM threads")}
+        )
+        assert baseline_item_ids.issubset(
+            {str(row[0]) for row in connection.execute("SELECT item_id FROM items")}
+        )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM items WHERE item_id IN ("
+            + ",".join("?" for _ in baseline_item_ids)
+            + ")",
+            tuple(sorted(baseline_item_ids)),
+        ).fetchone() == (len(baseline_item_ids),)
+        assert connection.execute(
+            "SELECT value FROM runtime_meta WHERE key='late_merge_setting'"
+        ).fetchone() == ("keep-me",)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM legacy_id_map WHERE entity_kind='session'"
+        ).fetchone() == (1,)
+    finally:
+        connection.close()
+    artifacts = ArtifactService(
+        state / TARGET_ARTIFACT_ROOT_NAME,
+        database_path=state / TARGET_DATABASE_NAME,
+    )
+    assert artifacts.read_user_content(
+        baseline_artifact.artifact_id, baseline_artifact.revision_id
+    ) == b"existing-v1-artifact"
+    completion = migration.completion_authority()
+    assert completion is not None
+    report = json.loads((state / "migration-report.json").read_text(encoding="utf-8"))
+    assert report["counts"]["baseline_threads_preserved"] == 7
+    assert report["counts"]["baseline_items_preserved"] == 18
+    assert report["counts"]["baseline_merge"] == 1
+    mapping_count = _count(state / TARGET_DATABASE_NAME, "legacy_id_map")
+    restarted = ProductLegacyMigrationCoordinator(
+        install,
+        state / TARGET_DATABASE_NAME,
+        vault=InMemoryCredentialVault(),
+    )
+    assert restarted.commit(candidate, "late-merge-restart") is True
+    assert _count(state / TARGET_DATABASE_NAME, "legacy_id_map") == mapping_count
 
 
 def test_source_change_after_dry_run_cannot_replace_live_state(tmp_path: Path) -> None:

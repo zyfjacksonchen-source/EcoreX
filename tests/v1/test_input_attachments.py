@@ -87,6 +87,8 @@ def test_input_attachment_rejects_identity_reuse_and_cross_account_access(tmp_pa
         )
     with pytest.raises(InputAttachmentUnavailable):
         other.resolve([uploaded.attachment_id])
+    with pytest.raises(InputAttachmentUnavailable):
+        other.read_thumbnail(uploaded.attachment_id)
 
 
 def test_turn_attachment_selection_rejects_more_than_four_images(tmp_path) -> None:
@@ -129,7 +131,7 @@ def test_runtime_input_attachment_route_is_csrf_fenced_and_opaque(tmp_path) -> N
     attachment = response.json()
     assert set(attachment) == {
         "attachment_id", "revision_id", "display_name", "mime_type",
-        "size_bytes", "media_kind", "sha256", "created_at",
+        "size_bytes", "media_kind", "sha256", "thumbnail_url", "created_at",
     }
     assert attachment["display_name"] == "brief.txt"
     assert "path" not in response.text
@@ -140,6 +142,104 @@ def test_runtime_input_attachment_route_is_csrf_fenced_and_opaque(tmp_path) -> N
     )
     assert content.status_code == 200
     assert content.content == b"confidential brief"
+
+
+def test_image_thumbnail_is_authenticated_bounded_oriented_and_cas_cached(
+    tmp_path, monkeypatch
+) -> None:
+    from PIL import Image
+
+    source = io.BytesIO()
+    image = Image.new("RGB", (1600, 900), (24, 96, 180))
+    exif = Image.Exif()
+    exif[274] = 6
+    image.save(source, format="JPEG", quality=96, exif=exif)
+    source_bytes = source.getvalue()
+    app = create_app(
+        settings=RuntimeSettings(
+            database_path=tmp_path / "runtime.db",
+            runtime_bearer_token=TOKEN,
+            csrf_token=CSRF,
+            webui_origins=(ORIGIN,),
+        )
+    )
+    client = TestClient(app)
+    uploaded = client.post(
+        "/api/v1/input-attachments",
+        headers=_headers(),
+        files={"file": ("photo.jpg", source_bytes, "image/jpeg")},
+        data={"client_request_id": "thumbnail-route-001"},
+    )
+    assert uploaded.status_code == 201
+    projection = uploaded.json()
+    assert projection["thumbnail_url"].endswith("/thumbnail")
+
+    source_reads = 0
+    original_read = app.state.artifact_service.read_internal_revision_content
+
+    def count_source_read(revision_id: str) -> bytes:
+        nonlocal source_reads
+        source_reads += 1
+        return original_read(revision_id)
+
+    monkeypatch.setattr(
+        app.state.artifact_service,
+        "read_internal_revision_content",
+        count_source_read,
+    )
+
+    denied = client.get(projection["thumbnail_url"])
+    assert denied.status_code == 401
+    first = client.get(
+        projection["thumbnail_url"],
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    second = client.get(
+        projection["thumbnail_url"],
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert first.status_code == second.status_code == 200
+    assert first.content == second.content
+    assert source_reads == 1
+    assert first.content != source_bytes
+    assert len(first.content) <= 64 * 1024
+    assert first.headers["content-type"].startswith("image/jpeg")
+    assert first.headers["cache-control"] == "private, max-age=31536000, immutable"
+    assert first.headers["etag"] == second.headers["etag"]
+    # EXIF orientation swaps the source axes before the 320 px thumbnail fit.
+    assert int(first.headers["x-ecorex-image-width"]) <= 320
+    assert int(first.headers["x-ecorex-image-height"]) <= 320
+    assert int(first.headers["x-ecorex-image-height"]) > int(first.headers["x-ecorex-image-width"])
+    digest = first.headers["etag"].strip('"')
+    assert app.state.artifact_service.blobs.exists(digest)
+
+
+def test_thumbnail_rejects_oversized_pixel_canvas_without_returning_source(tmp_path) -> None:
+    from PIL import Image
+
+    source = io.BytesIO()
+    Image.new("1", (7000, 6000), 1).save(source, format="PNG")
+    app = create_app(
+        settings=RuntimeSettings(
+            database_path=tmp_path / "runtime.db",
+            runtime_bearer_token=TOKEN,
+            csrf_token=CSRF,
+            webui_origins=(ORIGIN,),
+        )
+    )
+    client = TestClient(app)
+    uploaded = client.post(
+        "/api/v1/input-attachments",
+        headers=_headers(),
+        files={"file": ("large-canvas.png", source.getvalue(), "image/png")},
+        data={"client_request_id": "thumbnail-pixel-limit"},
+    ).json()
+    response = client.get(
+        uploaded["thumbnail_url"],
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert response.status_code == 404
+    assert source.getvalue() not in response.content
 
 
 def test_ocr_reads_only_turn_bound_attachment_and_calls_local_provider(

@@ -99,7 +99,7 @@ export function connectorUnavailableMessage(item: ConnectorCatalogItem): string 
 }
 
 export function safeConnectorAuthorizationUrl(value: string | null): string {
-  if (!value) throw new Error("EcoreX 暂时无法打开授权页面，请稍后重试。");
+  if (!value) throw new Error("e-Mate 暂时无法打开授权页面，请稍后重试。");
   let parsed: URL;
   try {
     parsed = new URL(value);

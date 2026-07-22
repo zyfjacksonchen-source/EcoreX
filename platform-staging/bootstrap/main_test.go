@@ -861,16 +861,142 @@ func TestFreshBootstrapStateDirectoryAndTrustedLocalMigrationSource(t *testing.T
 	if err := validateTrustedLocalConfigFile(path); err != nil {
 		t.Fatalf("test local configuration ACL is not trusted: %v", err)
 	}
-	observed, err := loadTrustedLocalConfig(root)
+	observed, present, err := loadTrustedLocalConfig(root)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !present {
+		t.Fatal("trusted local migration source was not selected")
+	}
 	expected, _ := filepath.Abs(legacy)
-	if !samePath(observed, expected) {
-		t.Fatalf("legacy source mismatch: %q != %q", observed, expected)
+	if !samePath(observed.Source, expected) || observed.SourceVersion != "0.3.0" {
+		t.Fatalf("legacy source mismatch: %#v != %q", observed, expected)
 	}
 	if _, err := canonicalLegacySource(root, root); err == nil {
 		t.Fatal("overlapping legacy/v1 roots were accepted")
+	}
+}
+
+func TestReleasedV0292InstallAndCanonicalWorkspaceAreBothRequired(t *testing.T) {
+	parent := canonicalTestTempDir(t)
+	root := filepath.Join(parent, "v1")
+	home := filepath.Join(parent, "home")
+	legacyInstall := filepath.Join(parent, "local", "EcoreX WebUI")
+	runtimeRoot := filepath.Join(legacyInstall, "runtime-0.2.9.2-b909303a")
+	for _, directory := range []string{
+		root,
+		filepath.Join(home, "EcoreX", "memory", "long-term"),
+		filepath.Join(legacyInstall, "state"),
+		runtimeRoot,
+	} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	conversationDB := filepath.Join(home, "EcoreX", "memory", "long-term", "index.db")
+	if err := os.WriteFile(conversationDB, []byte("sqlite-layout-evidence"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(legacyInstall, "state", "current-runtime.txt"),
+		[]byte(runtimeRoot+"\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	manifest := []byte(`{"schemaVersion":"v0.2.5-runtime-manifest-v1","product":"EcoreX","version":"0.2.9.2","releaseGate":{"installReady":true},"ignored":"allowed"}` + "\n")
+	evidence := filepath.Join(runtimeRoot, "runtime-manifest.json")
+	if err := os.WriteFile(evidence, manifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	selection, err := discoverReleasedV0292(root, home, legacyInstall)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selection.SourceVersion != "0.2.9.2" || !samePath(selection.ReleaseEvidence, evidence) {
+		t.Fatalf("released v0.2.9.2 was not selected: %#v", selection)
+	}
+
+	if err := os.Remove(conversationDB); err != nil {
+		t.Fatal(err)
+	}
+	selection, err = discoverReleasedV0292(root, home, legacyInstall)
+	if err != nil || selection.Source != "" {
+		t.Fatal("release evidence without canonical workspace evidence was accepted")
+	}
+	if err := os.WriteFile(conversationDB, []byte("sqlite-layout-evidence"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wrongVersion := []byte(`{"schemaVersion":"v0.2.5-runtime-manifest-v1","product":"EcoreX","version":"0.2.9.1","releaseGate":{"installReady":true}}` + "\n")
+	if err := os.WriteFile(evidence, wrongVersion, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	selection, err = discoverReleasedV0292(root, home, legacyInstall)
+	if err != nil || selection.Source != "" {
+		t.Fatal("non-v0.2.9.2 Runtime evidence was accepted")
+	}
+}
+
+func TestCompletedMigrationSuppressesConfiguredLegacyRediscovery(t *testing.T) {
+	parent := canonicalTestTempDir(t)
+	root := filepath.Join(parent, "v1")
+	legacy := filepath.Join(parent, "legacy")
+	if err := os.MkdirAll(filepath.Join(root, "bootstrap"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "migration"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(legacy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configuration, err := json.Marshal(localConfig{
+		SchemaVersion:       1,
+		LegacySource:        legacy,
+		LegacySourceVersion: "0.2.9.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "bootstrap", "bootstrap-local.json")
+	if err := os.WriteFile(configPath, append(configuration, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := hardenTestLocalConfig(configPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "migration", "v030-completed.json"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	selection, err := selectLegacyMigration(root)
+	if err != nil || selection.Source != "" {
+		t.Fatalf("completed migration was selected again: %#v, %v", selection, err)
+	}
+}
+
+func TestSuperviseArgumentsCarryGenericLegacyContract(t *testing.T) {
+	arguments := superviseArguments(
+		`C:\EcoreX`,
+		[]string{"release-key=public-key"},
+		legacySelection{
+			Source:          `C:\Users\test\EcoreX`,
+			SourceVersion:   "0.2.9.2",
+			ReleaseEvidence: `C:\Legacy\runtime-manifest.json`,
+		},
+	)
+	joined := strings.Join(arguments, "\x00")
+	for _, required := range []string{
+		"--legacy-source\x00C:\\Users\\test\\EcoreX",
+		"--legacy-source-version\x000.2.9.2",
+		"--legacy-release-evidence\x00C:\\Legacy\\runtime-manifest.json",
+	} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("supervisor arguments omitted %q: %#v", required, arguments)
+		}
+	}
+	if strings.Contains(joined, "--legacy-v030-source") {
+		t.Fatal("generic v0.2.9.2 selection was downgraded to the v0.3-only alias")
 	}
 }
 

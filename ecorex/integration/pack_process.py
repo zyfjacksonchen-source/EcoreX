@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Mapping
 import ctypes
+from ctypes import wintypes
 from dataclasses import dataclass
 import hashlib
 import json
@@ -422,7 +423,9 @@ class ProcessCapabilityPackAdapter:
                 stdout,
                 request_id=context.invocation_id,
                 sandbox_contract_id=(
-                    sandbox_contract.contract_id if sandbox_contract is not None else None
+                    sandbox_contract.contract_id
+                    if sandbox_contract is not None
+                    else None
                 ),
             )
         except CapabilityPackProcessError as error:
@@ -464,10 +467,9 @@ class ProcessCapabilityPackAdapter:
             "env": dict(child_environment),
         }
         if os.name == "nt":
-            kwargs["creationflags"] = (
-                getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-            )
+            kwargs["creationflags"] = getattr(
+                subprocess, "CREATE_NO_WINDOW", 0
+            ) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         else:
             kwargs["start_new_session"] = True
         argv = (str(self.python_executable), "-I", str(self.artifact_path))
@@ -476,7 +478,9 @@ class ProcessCapabilityPackAdapter:
             and sandbox_contract is not None
             and (
                 sandbox_contract.os_enforced
-                or (os.name == "nt" and sandbox_contract.profile == "danger-full-access")
+                or (
+                    os.name == "nt" and sandbox_contract.profile == "danger-full-access"
+                )
             )
         )
         if use_backend:
@@ -563,7 +567,9 @@ class ProcessCapabilityPackAdapter:
                 stdout_limit_bytes=MAX_STDOUT_BYTES,
                 stderr_limit_bytes=MAX_STDERR_BYTES,
             )
-        raise CapabilityPackProcessError("shell_sandbox_profile_invalid", retryable=False)
+        raise CapabilityPackProcessError(
+            "shell_sandbox_profile_invalid", retryable=False
+        )
 
     def _timeout(self, tool_id: str, arguments: Mapping[str, Any]) -> float:
         if tool_id != "shell":
@@ -643,7 +649,9 @@ def _inspect_zipapp(pack: VerifiedCapabilityPack) -> PackProcessDescriptor:
                     not normalized
                     or path.is_absolute()
                     or not path.parts
-                    or any(part in {"", ".", ".."} or ":" in part for part in path.parts)
+                    or any(
+                        part in {"", ".", ".."} or ":" in part for part in path.parts
+                    )
                     or collision_key in seen
                     or member.flag_bits & 0x1
                     or file_type not in {0, stat.S_IFREG, stat.S_IFDIR}
@@ -822,7 +830,11 @@ def _parse_response(
             raise CapabilityPackProcessError("pack_sandbox_handshake_mismatch")
         code = value.get("error_code")
         retryable = value.get("retryable")
-        if isinstance(code, str) and _SAFE_CODE.fullmatch(code) and isinstance(retryable, bool):
+        if (
+            isinstance(code, str)
+            and _SAFE_CODE.fullmatch(code)
+            and isinstance(retryable, bool)
+        ):
             return "failed", code, retryable
     raise CapabilityPackProcessError("pack_response_invalid")
 
@@ -932,20 +944,92 @@ def _file_identity(value: os.stat_result) -> tuple[int, int, int, int]:
 
 
 def _windows_kill_process_tree(pid: int) -> None:
-    try:
-        executable = _windows_system_root() / "System32" / "taskkill.exe"
-        subprocess.run(
-            (str(executable), "/PID", str(pid), "/T", "/F"),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=5,
-            check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            env=_minimal_environment(),
-        )
-    except (CapabilityPackProcessError, OSError, subprocess.SubprocessError):
+    if os.name != "nt" or pid <= 0:
         return
+    snapshot_handle = ctypes.c_void_p(-1).value
+    try:
+        kernel32 = ctypes.windll.kernel32
+
+        class ProcessEntry(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", wintypes.DWORD),
+                ("cntUsage", wintypes.DWORD),
+                ("th32ProcessID", wintypes.DWORD),
+                ("th32DefaultHeapID", ctypes.c_size_t),
+                ("th32ModuleID", wintypes.DWORD),
+                ("cntThreads", wintypes.DWORD),
+                ("th32ParentProcessID", wintypes.DWORD),
+                ("pcPriClassBase", wintypes.LONG),
+                ("dwFlags", wintypes.DWORD),
+                ("szExeFile", wintypes.WCHAR * 260),
+            ]
+
+        kernel32.CreateToolhelp32Snapshot.argtypes = (wintypes.DWORD, wintypes.DWORD)
+        kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        kernel32.Process32FirstW.argtypes = (
+            wintypes.HANDLE,
+            ctypes.POINTER(ProcessEntry),
+        )
+        kernel32.Process32FirstW.restype = wintypes.BOOL
+        kernel32.Process32NextW.argtypes = (
+            wintypes.HANDLE,
+            ctypes.POINTER(ProcessEntry),
+        )
+        kernel32.Process32NextW.restype = wintypes.BOOL
+        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.TerminateProcess.argtypes = (wintypes.HANDLE, wintypes.UINT)
+        kernel32.TerminateProcess.restype = wintypes.BOOL
+        kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = wintypes.BOOL
+
+        snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
+        snapshot_handle = ctypes.cast(snapshot, ctypes.c_void_p).value
+        if snapshot_handle in {None, ctypes.c_void_p(-1).value}:
+            return
+        children: dict[int, list[int]] = {}
+        entry = ProcessEntry()
+        entry.dwSize = ctypes.sizeof(ProcessEntry)
+        present = bool(kernel32.Process32FirstW(snapshot, ctypes.byref(entry)))
+        while present:
+            children.setdefault(int(entry.th32ParentProcessID), []).append(
+                int(entry.th32ProcessID)
+            )
+            present = bool(kernel32.Process32NextW(snapshot, ctypes.byref(entry)))
+
+        ordered: list[int] = []
+        pending: list[tuple[int, bool]] = [(pid, False)]
+        visited: set[int] = set()
+        while pending:
+            current, expanded = pending.pop()
+            if expanded:
+                ordered.append(current)
+                continue
+            if current in visited:
+                continue
+            visited.add(current)
+            pending.append((current, True))
+            pending.extend((child, False) for child in children.get(current, ()))
+
+        for process_id in ordered:
+            handle = kernel32.OpenProcess(0x0001 | 0x00100000, False, process_id)
+            if not handle:
+                continue
+            try:
+                kernel32.TerminateProcess(handle, 1)
+                kernel32.WaitForSingleObject(handle, 1_000)
+            finally:
+                kernel32.CloseHandle(handle)
+    except (AttributeError, OSError, ValueError):
+        return
+    finally:
+        if snapshot_handle not in {None, ctypes.c_void_p(-1).value}:
+            try:
+                ctypes.windll.kernel32.CloseHandle(wintypes.HANDLE(snapshot_handle))
+            except (AttributeError, OSError, ValueError):
+                pass
 
 
 def _windows_system_root() -> Path:
@@ -953,9 +1037,7 @@ def _windows_system_root() -> Path:
         raise CapabilityPackProcessError("pack_process_unavailable")
     buffer = ctypes.create_unicode_buffer(32_768)
     try:
-        length = ctypes.windll.kernel32.GetWindowsDirectoryW(
-            buffer, len(buffer)
-        )
+        length = ctypes.windll.kernel32.GetWindowsDirectoryW(buffer, len(buffer))
     except (AttributeError, OSError):
         raise CapabilityPackProcessError("pack_process_unavailable") from None
     if not 1 <= length < len(buffer):

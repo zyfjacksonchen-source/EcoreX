@@ -16,7 +16,7 @@ const CODE_MESSAGES: Record<string, string> = {
   output_revision_conflict: "默认保存位置已在其他页面改变，请刷新后重试。",
   output_location_unavailable: "所选保存位置当前不可用，请选择其他位置。",
   stale_permission_revision: "权限设置已在其他页面改变，请刷新后重新确认。",
-  migration_quarantine_invalid: "旧版凭证备份状态异常，EcoreX 已停止删除。请保留当前文件并联系管理员。",
+  migration_quarantine_invalid: "旧版凭证备份状态异常，e-Mate 已停止删除。请保留当前文件并联系管理员。",
   migration_quarantine_confirmation_required: "请先确认永久删除旧版凭证备份。",
   managed_session_unavailable: "账户授权已过期，请重新登录。",
   managed_gateway_not_configured: "模型服务尚未配置，请联系管理员。",
@@ -34,12 +34,12 @@ const CODE_MESSAGES: Record<string, string> = {
   session_login_rate_limited: "登录尝试过多，请稍后再试。",
   session_login_unavailable: "登录服务暂时不可用，请稍后重试。",
   health_check_failed: "最近一次连接检查未通过，请重新连接或稍后再试。",
-  credential_cleanup_pending: "账号已断开，EcoreX 正在完成本机清理。",
+  credential_cleanup_pending: "账号已断开，e-Mate 正在完成本机清理。",
   disconnect_draining: "正在完成尚未结束的操作，随后会断开连接。",
   remote_revocation_pending: "正在向连接服务确认断开，请稍候。",
   remote_revocation_uncertain: "连接可能已断开，但暂时无法确认。请稍后检查状态。",
   connector_invocation_uncertain: "连接应用可能已完成操作，但暂时无法确认。请先检查结果。",
-  provider_timeout: "扩展响应超时，EcoreX 已停止等待。你可以稍后重试。",
+  provider_timeout: "扩展响应超时，e-Mate 已停止等待。你可以稍后重试。",
   gateway_unavailable: "模型服务暂时不可用，任务会保留并可重试。",
   share_image_preview_missing: "有图片还没有可分享的预览图。请等待图片处理完成后重试。",
   share_image_preview_too_large: "图片预览超过分享上限。请生成较小的预览图后重试。",
@@ -75,8 +75,8 @@ export function userFacingError(error: unknown): string {
     if (error.status === 404) return "没有找到要操作的内容。请刷新后重试。";
     if (error.status === 409) return "内容已在其他位置改变。请刷新后重新确认。";
     if (error.status === 422) return "提交的内容不完整或格式不正确，请检查后重试。";
-    if (error.status === 429) return "当前请求较多，EcoreX 会稍后继续。";
-    if (error.status >= 500) return "EcoreX 暂时无法完成这项操作，当前数据已保留。请稍后重试。";
+    if (error.status === 429) return "当前请求较多，e-Mate 会稍后继续。";
+    if (error.status >= 500) return "e-Mate 暂时无法完成这项操作，当前数据已保留。请稍后重试。";
   }
   if (
     !(error instanceof RuntimeApiError)
@@ -86,7 +86,7 @@ export function userFacingError(error: unknown): string {
   ) {
     return error.message;
   }
-  return "EcoreX 暂时没有响应。当前数据已保留，请稍后重试。";
+  return "e-Mate 暂时没有响应。当前数据已保留，请稍后重试。";
 }
 
 export function technicalErrorCode(error: unknown): string | null {

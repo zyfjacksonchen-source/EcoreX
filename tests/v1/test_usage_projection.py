@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from dataclasses import replace
 
 from fastapi.testclient import TestClient
 
 from ecorex.gateway import GatewayAccountUsageProjection, GatewayTokenUsageWindow
+from ecorex.capabilities import ManagedModelCatalog, builtin_model_catalog
 from ecorex.protocol import CreateThreadRequest, CreateTurnRequest
 from ecorex.runtime import RuntimeSettings, create_app
 from ecorex.runtime.usage import UsageProjectionService
@@ -174,6 +176,67 @@ def test_usage_endpoint_returns_a_strict_read_only_projection(tmp_path) -> None:
     assert response.json()["context"]["used_tokens"] == 2
     assert response.json()["context"]["window_tokens"] == 272_000
     assert client.get("/api/v1/threads/thread_missing/usage", headers=_headers()).status_code == 404
+
+
+def test_usage_context_keeps_the_completed_turns_frozen_catalog_revision(
+    tmp_path,
+) -> None:
+    app = create_app(
+        settings=RuntimeSettings(
+            database_path=tmp_path / "runtime-frozen-usage.db",
+            runtime_bearer_token=TOKEN,
+            csrf_token=CSRF,
+            webui_origins=(ORIGIN,),
+        )
+    )
+    composition = app.state.runtime_composition
+    original = builtin_model_catalog().get("ecorex-chat")
+    assert original.model_policy is not None
+    old_catalog = ManagedModelCatalog((original,))
+    renamed = replace(
+        original,
+        display_name="EcoreX Main R2",
+        model_policy=replace(
+            original.model_policy,
+            display_name="EcoreX Main R2",
+            upstream_model_id="gpt-5.6-sol-r2",
+            compact_threshold_tokens=384_000,
+        ),
+    )
+    new_catalog = ManagedModelCatalog((renamed,))
+    active = {"catalog": old_catalog}
+    composition._model_catalog_provider = lambda: active["catalog"]
+
+    old_thread, old_turn = _turn(app, title="旧修订", message_id="usage-old-revision")
+    pending = UsageProjectionService(
+        app.state.runtime.database,
+        model_catalog=new_catalog,
+    ).project(old_thread.thread_id)
+    assert pending.context.used_tokens is None
+    assert pending.context.model_display_name == original.display_name
+    assert pending.context.model_catalog_snapshot_id == old_catalog.snapshot_id
+    _append_completed(
+        app.state.runtime,
+        thread_id=old_thread.thread_id,
+        turn_id=old_turn.turn.turn_id,
+        created_at=datetime.now(UTC),
+        usage={"input_tokens": 33, "output_tokens": 4},
+    )
+    active["catalog"] = new_catalog
+    _turn(app, title="新修订", message_id="usage-new-revision")
+
+    projection = UsageProjectionService(
+        app.state.runtime.database,
+        # Deliberately pass the process-current catalog: immutable history
+        # must still resolve through the old Turn snapshot.
+        model_catalog=new_catalog,
+    ).project(old_thread.thread_id)
+
+    assert projection.context.model_id == "ecorex-chat"
+    assert projection.context.model_display_name == original.display_name
+    assert projection.context.window_tokens == 272_000
+    assert projection.context.model_catalog_snapshot_id == old_catalog.snapshot_id
+    assert projection.context.model_catalog_snapshot_id != new_catalog.snapshot_id
 
 
 def test_usage_endpoint_prefers_account_projection_and_falls_back_locally(

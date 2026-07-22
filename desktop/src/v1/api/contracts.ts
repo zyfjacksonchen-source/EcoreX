@@ -139,6 +139,7 @@ export interface InputAttachmentProjection {
   size_bytes: number;
   media_kind: "image" | "document" | "file";
   sha256: string;
+  thumbnail_url: string | null;
   created_at: string;
 }
 
@@ -152,6 +153,8 @@ export interface ContextUsageProjection {
   used_tokens: number | null;
   window_tokens: number | null;
   model_id: string | null;
+  model_display_name: string | null;
+  model_catalog_snapshot_id: string | null;
   measured_at: string | null;
 }
 

@@ -318,7 +318,7 @@ export function ReplayDialog({
                   <span>
                     <strong>我确认重新运行这一步</strong>
                     <small>
-                      重新运行可能发起外部读写；EcoreX 会按当前权限重新询问，不会沿用历史批准。
+                      重新运行可能发起外部读写；e-Mate 会按当前权限重新询问，不会沿用历史批准。
                     </small>
                   </span>
                 </label>

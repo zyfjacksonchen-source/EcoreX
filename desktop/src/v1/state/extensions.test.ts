@@ -109,7 +109,7 @@ test("disabled actions never gain a frontend-inferred reason", () => {
     enabled: false,
     disabled_reason: "extension_required_by_product",
     requires_confirmation: true,
-  }), "EcoreX 运行必需，无法关闭。");
+  }), "e-Mate 运行必需，无法关闭。");
 });
 
 test("search and filters only select exact backend projection fields", () => {

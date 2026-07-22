@@ -287,6 +287,10 @@ class RuntimeSettings:
     )
     close_image_orchestration_client_on_shutdown: bool = True
     capability_handlers: Mapping[str, Any] = field(default_factory=dict, repr=False)
+    capability_pack_services: Mapping[str, Any] = field(
+        default_factory=dict, repr=False
+    )
+    close_capability_pack_services_on_shutdown: bool = True
     mcp_runtime_bindings: tuple[Any, ...] = field(default_factory=tuple, repr=False)
     model_worker_concurrency: int = 2
     model_worker_poll_seconds: float = 0.25
@@ -420,62 +424,108 @@ def _empty_model_catalog(snapshot: ManagedSessionSnapshot | None) -> ModelCatalo
     return ModelCatalog(snapshot_id=snapshot_id)
 
 
-def _overlay_cloud_model_catalog(
-    base: ModelCatalog,
+def _managed_catalog_from_cloud(
+    base: ManagedModelCatalog,
     gateway_catalog: Mapping[str, object],
-) -> ModelCatalog:
-    """Apply secret-free tested cloud names/defaults to the Web projection."""
+) -> ManagedModelCatalog:
+    """Build the executable catalog from the Gateway's active revision.
+
+    The previous Bootstrap-only overlay made the UI show an administrator's
+    new name/upstream route while Runtime Turns continued freezing the old
+    built-in policy.  This conversion keeps local capabilities and bounded
+    context policy, but makes the tested cloud revision part of the immutable
+    Runtime catalog digest used by execution and usage projections.
+    """
 
     raw_catalog = gateway_catalog.get("catalog")
     raw_models = gateway_catalog.get("models")
     if not isinstance(raw_catalog, list) or not isinstance(raw_models, list):
-        return base
+        raise ModelCatalogError("managed gateway catalog is invalid")
     allowed = {value for value in raw_models if isinstance(value, str)}
-    metadata = {
-        str(item["local_model_id"]): item
-        for item in raw_catalog
-        if isinstance(item, Mapping)
-        and isinstance(item.get("local_model_id"), str)
-        and item.get("local_model_id") in allowed
-    }
+    if not allowed:
+        raise ModelCatalogError("managed gateway catalog is empty")
+    metadata: dict[str, Mapping[str, object]] = {}
+    for item in raw_catalog:
+        if not isinstance(item, Mapping):
+            raise ModelCatalogError("managed gateway catalog is invalid")
+        local_model_id = item.get("local_model_id")
+        if not isinstance(local_model_id, str) or local_model_id not in allowed:
+            continue
+        if local_model_id in metadata:
+            raise ModelCatalogError("managed gateway catalog contains duplicate models")
+        metadata[local_model_id] = item
 
-    def project(
-        descriptors: list[ModelDescriptor], *, modalities: frozenset[str]
-    ) -> list[ModelDescriptor]:
-        projected: list[ModelDescriptor] = []
-        for descriptor in descriptors:
-            item = metadata.get(descriptor.model_id)
-            if item is None or item.get("modality") not in modalities:
+    projected: list[ManagedModelSpec] = []
+    cloud_defaults: dict[ModelModality, str] = {}
+    for modality in ModelModality:
+        for spec in base.for_modality(modality):
+            item = metadata.get(spec.model_id)
+            if item is None:
                 continue
-            updates: dict[str, object] = {
-                "display_name": str(
-                    item.get("display_name") or descriptor.display_name
-                ),
-                "is_default": bool(item.get("is_default")),
-            }
-            upstream = item.get("upstream_model_id")
-            if descriptor.model_policy is not None and isinstance(upstream, str):
-                updates["model_policy"] = descriptor.model_policy.model_copy(
-                    update={"upstream_model_id": upstream}
+            cloud_modality = item.get("modality")
+            compatible = (
+                cloud_modality == "chat" and ModelModality.CHAT in spec.modalities
+            ) or (
+                cloud_modality in {"image_generation", "image_edit"}
+                and ModelModality.IMAGE in spec.modalities
+            )
+            if not compatible:
+                continue
+            if any(existing.model_id == spec.model_id for existing in projected):
+                continue
+            if bool(item.get("is_default")):
+                target = (
+                    ModelModality.CHAT
+                    if cloud_modality == "chat"
+                    else ModelModality.IMAGE
                 )
-            projected.append(descriptor.model_copy(update=updates))
-        return projected
+                if target in cloud_defaults:
+                    raise ModelCatalogError(
+                        "managed gateway catalog has multiple modality defaults"
+                    )
+                cloud_defaults[target] = spec.model_id
+            display_name = item.get("display_name")
+            upstream_model_id = item.get("upstream_model_id")
+            if not isinstance(display_name, str) or not display_name.strip():
+                raise ModelCatalogError("managed gateway model display name is invalid")
+            policy = spec.model_policy
+            if policy is not None:
+                if not isinstance(upstream_model_id, str) or not upstream_model_id:
+                    raise ModelCatalogError("managed gateway upstream model is invalid")
+                policy = replace(
+                    policy,
+                    upstream_model_id=upstream_model_id,
+                    display_name=display_name,
+                )
+            projected.append(
+                replace(
+                    spec,
+                    display_name=display_name,
+                    default_for=frozenset(),
+                    model_policy=policy,
+                )
+            )
+    if not projected:
+        raise ModelCatalogError("managed gateway catalog has no executable models")
 
-    digest = hashlib.sha256(
-        json.dumps(
-            {"models": sorted(allowed), "catalog": raw_catalog},
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
-    return ModelCatalog(
-        snapshot_id="models_cloud_" + digest,
-        chat=project(base.chat, modalities=frozenset({"chat"})),
-        image=project(base.image, modalities=frozenset({"image_generation"})),
-        vision=project(base.vision, modalities=frozenset({"chat"})),
-        audio=project(base.audio, modalities=frozenset({"audio"})),
-        embedding=project(base.embedding, modalities=frozenset({"embedding"})),
+    # Preserve deterministic availability when the cloud has not explicitly
+    # nominated a default, without reviving entries omitted by the cloud.
+    replacements: dict[str, set[ModelModality]] = {
+        spec.model_id: set() for spec in projected
+    }
+    for modality in ModelModality:
+        eligible = sorted(
+            spec.model_id for spec in projected if modality in spec.modalities
+        )
+        if not eligible:
+            continue
+        selected = cloud_defaults.get(modality)
+        if selected not in eligible:
+            selected = eligible[0]
+        replacements[selected].add(modality)
+    return ManagedModelCatalog(
+        replace(spec, default_for=frozenset(replacements[spec.model_id]))
+        for spec in projected
     )
 
 
@@ -1342,6 +1392,10 @@ def create_app(
         else None
     )
     managed_models = signed_models or builtin_models
+    active_model_catalog: dict[str, ManagedModelCatalog] = {
+        "value": managed_models
+    }
+    model_catalog_refresh_lock = asyncio.Lock()
 
     def current_runtime_model_catalog() -> ManagedModelCatalog:
         if not managed_mode:
@@ -1351,12 +1405,49 @@ def create_app(
         except (_ManagedSessionRestartRequired, ManagedSessionError) as error:
             raise ModelCatalogError("managed model catalog is unavailable") from error
         current = _filter_model_catalog(
-            builtin_models,
+            active_model_catalog["value"],
             frozenset(session_snapshot.allowed_model_ids),
         )
         if current is None:
             raise ModelCatalogError("signed model allowlist is empty")
         return current
+
+    async def refresh_runtime_model_catalog() -> ManagedModelCatalog:
+        """Refresh the tested Gateway revision before projecting/admitting.
+
+        The returned object is also the synchronous provider source consumed
+        inside the linearized Turn admission lock.  Network I/O is completed
+        before taking that lock, so a Turn captures exactly one revision
+        without holding local mutation fencing across an await.
+        """
+
+        if not managed_mode or not isinstance(
+            settings.model_gateway, ManagedModelGatewayClient
+        ):
+            return current_runtime_model_catalog()
+        async with model_catalog_refresh_lock:
+            try:
+                session_snapshot = current_managed_session()
+                signed = _filter_model_catalog(
+                    builtin_models,
+                    frozenset(session_snapshot.allowed_model_ids),
+                )
+                if signed is None:
+                    raise ModelCatalogError("signed model allowlist is empty")
+                cloud = await asyncio.wait_for(
+                    settings.model_gateway.catalog(), timeout=3.0
+                )
+                refreshed = _managed_catalog_from_cloud(signed, cloud)
+            except (_ManagedSessionRestartRequired, ManagedSessionError) as error:
+                raise ModelCatalogError("managed model catalog is unavailable") from error
+            except Exception:
+                # Preserve the last fully validated immutable revision during
+                # a transient catalog read failure. The Gateway independently
+                # fences execution against its active revision, so stale
+                # routing cannot silently execute; it will fail explicitly.
+                return current_runtime_model_catalog()
+            active_model_catalog["value"] = refreshed
+            return refreshed
     usage_projection_service = UsageProjectionService(
         kernel.database,
         model_catalog=managed_models,
@@ -1681,6 +1772,7 @@ def create_app(
         connector_service=connector_composition.service,
         artifact_service=artifact_service,
         capability_handlers=settings.capability_handlers,
+        capability_pack_services=settings.capability_pack_services,
         permission_provider=permission_authority.current,
         permission_state_digest_provider=permission_authority.current_state_digest,
         permission_sample_scope_provider=permission_authority.verified_sample_scope,
@@ -1878,6 +1970,15 @@ def create_app(
         else ()
     )
     app.state.connector_adapter_lifecycles = connector_adapter_lifecycles
+    capability_pack_service_lifecycles = (
+        tuple(
+            _AsyncResourceCloser(service)
+            for service in settings.capability_pack_services.values()
+        )
+        if settings.close_capability_pack_services_on_shutdown
+        else ()
+    )
+    app.state.capability_pack_service_lifecycles = capability_pack_service_lifecycles
     app.include_router(connector_composition.router, prefix="/api/v1")
     artifact_publisher = RuntimeArtifactEventPublisher(
         kernel.events,
@@ -1919,6 +2020,10 @@ def create_app(
         input_attachments=input_attachment_service,
     )
     composition.capability_service.bind_invocation_backend(image_tool_backend)
+    if worker_supervisor is not None:
+        worker_supervisor.worker.bind_visual_evidence_resolver(
+            image_tool_backend.resolve_model_visual_evidence
+        )
     app.state.image_tool_backend = image_tool_backend
     retouch_supervisor: RetouchWorkerSupervisor | None = None
     if settings.retouch_adapter is not None and _retouch_capability_available(settings):
@@ -2398,6 +2503,10 @@ def create_app(
         for index, service in enumerate(connector_adapter_lifecycles)
     )
     lifecycle_candidates.extend(
+        (4, f"capability_pack_service_{index}", service)
+        for index, service in enumerate(capability_pack_service_lifecycles)
+    )
+    lifecycle_candidates.extend(
         [
             (2, "connector_maintenance", connector_composition.maintenance),
             (4, "audit_publisher", audit_publisher_lifecycle),
@@ -2694,7 +2803,14 @@ def create_app(
         else:
             with transaction_commit_guard(commit_guard):
                 response = await call_next(request)
-        if request.url.path.startswith("/api/v1"):
+        if (
+            request.url.path.startswith("/api/v1")
+            and not (
+                request.method == "GET"
+                and request.url.path.startswith("/api/v1/input-attachments/")
+                and request.url.path.endswith("/thumbnail")
+            )
+        ):
             response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -2845,11 +2961,8 @@ def create_app(
                 )
                 if isinstance(settings.model_gateway, ManagedModelGatewayClient):
                     try:
-                        cloud_catalog = await asyncio.wait_for(
-                            settings.model_gateway.catalog(), timeout=3.0
-                        )
-                        current_models = _overlay_cloud_model_catalog(
-                            current_models, cloud_catalog
+                        current_models = project_model_catalog(
+                            await refresh_runtime_model_catalog()
                         )
                     except Exception:
                         # A transient catalog refresh cannot corrupt the signed
@@ -3227,6 +3340,28 @@ def create_app(
             },
         )
 
+    @app.get("/api/v1/input-attachments/{attachment_id}/thumbnail")
+    def get_input_attachment_thumbnail(attachment_id: str) -> Response:
+        try:
+            projection, rendition = input_attachment_service.read_thumbnail(attachment_id)
+        except InputAttachmentUnavailable as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except InputAttachmentError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return Response(
+            content=rendition.content,
+            media_type=rendition.mime_type,
+            headers={
+                "Cache-Control": "private, max-age=31536000, immutable",
+                "ETag": f'"{rendition.sha256}"',
+                "X-Content-Type-Options": "nosniff",
+                "Content-Disposition": "inline",
+                "X-EcoreX-Source-SHA256": projection.sha256,
+                "X-EcoreX-Image-Width": str(rendition.width),
+                "X-EcoreX-Image-Height": str(rendition.height),
+            },
+        )
+
     def bind_input_attachments(request: CreateTurnRequest) -> CreateTurnRequest:
         if not request.attachment_ids:
             return request
@@ -3367,9 +3502,10 @@ def create_app(
         status_code=202,
         response_model=TurnMutationResponse,
     )
-    def create_turn(thread_id: str, request: CreateTurnRequest) -> TurnMutationResponse:
+    async def create_turn(thread_id: str, request: CreateTurnRequest) -> TurnMutationResponse:
         require_model_task_service()
         try:
+            await refresh_runtime_model_catalog()
             request = bind_input_attachments(request)
             return composition.admit_turn(
                 request,
@@ -3420,9 +3556,10 @@ def create_app(
         status_code=202,
         response_model=TurnMutationResponse,
     )
-    def queue_turn(thread_id: str, request: QueueTurnRequest) -> TurnMutationResponse:
+    async def queue_turn(thread_id: str, request: QueueTurnRequest) -> TurnMutationResponse:
         require_model_task_service()
         try:
+            await refresh_runtime_model_catalog()
             turn_request = bind_input_attachments(
                 CreateTurnRequest.model_validate(request.model_dump())
             )
@@ -3447,9 +3584,10 @@ def create_app(
         status_code=202,
         response_model=ReplaceTurnResponse,
     )
-    def replace_turn(turn_id: str, request: ReplaceTurnRequest) -> ReplaceTurnResponse:
+    async def replace_turn(turn_id: str, request: ReplaceTurnRequest) -> ReplaceTurnResponse:
         require_model_task_service()
         try:
+            await refresh_runtime_model_catalog()
             turn_request = bind_input_attachments(
                 CreateTurnRequest.model_validate(request.model_dump(exclude={"reason"}))
             )

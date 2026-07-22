@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // This runner never starts a fixture server. Its only accepted target is an
-// already-running loopback EcoreX Runtime whose signed identity is supplied by
+// already-running loopback e-Mate Runtime whose signed identity is supplied by
 // the Python candidate supervisor. The browser profile and CDP endpoint exist
 // only for this bounded acceptance window.
 
@@ -317,8 +317,8 @@ async function run() {
     });
     await page.goto(origin, { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "新建任务" }).waitFor({ state: "visible" });
-    await page.getByText("需要登录 EcoreX 账号", { exact: true }).waitFor({ state: "visible" });
-    await page.getByText("EcoreX", { exact: true }).first().waitFor({ state: "visible" });
+    await page.getByText("需要登录 e-Mate 账号", { exact: true }).waitFor({ state: "visible" });
+    await page.getByText("e-Mate", { exact: true }).first().waitFor({ state: "visible" });
     const browserBridge = await page.evaluate(() => ({
       apiBase: window.__ECOREX_RUNTIME__?.apiBase,
       releaseId: window.__ECOREX_RUNTIME__?.releaseId,

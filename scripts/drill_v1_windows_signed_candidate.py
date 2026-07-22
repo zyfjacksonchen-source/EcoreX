@@ -601,8 +601,15 @@ def _runtime_config(
             "channel": "stable",
             "poll_interval_seconds": 300,
         },
-        "share": None,
-        "image_orchestration": None,
+        "share": {
+            "endpoint": "https://localhost/api/v1/shares",
+            "allowed_hosts": ["localhost"],
+            "public_hosts": ["localhost"],
+        },
+        "image_orchestration": {
+            "root_url": "https://localhost/api/v1/images",
+            "allowed_hosts": ["localhost"],
+        },
         "audit": None,
         "tracing": None,
         "connectors": None,
