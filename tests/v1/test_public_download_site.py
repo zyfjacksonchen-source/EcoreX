@@ -27,7 +27,7 @@ def test_public_download_site_static_gate_passes() -> None:
     evidence = json.loads(result.stdout)
     assert evidence["status"] == "passed"
     assert evidence["public_pointer"] == "unpublished"
-    assert evidence["hashed_asset_count"] == 5
+    assert evidence["hashed_asset_count"] == 6
     html = (ROOT / "deploy" / "ecorex-site" / "index.html").read_text(
         encoding="utf-8"
     )
@@ -40,12 +40,12 @@ def test_public_download_site_makes_one_click_terminal_install_primary() -> None
     html = (site / "index.html").read_text(encoding="utf-8")
     javascript = next(site.glob("site.*.js")).read_text(encoding="utf-8")
 
-    assert "<title>EcoreX 下载与安装</title>" in html
+    assert "<title>e-Mate 下载与安装</title>" in html
     assert "<strong>选择系统</strong>" in html
     assert "<strong>复制一键命令</strong>" in html
     assert "<strong>粘贴并执行</strong>" in html
     assert "点击对应卡片中的“复制命令”。" in html
-    assert "安装完成后会自动打开 EcoreX 并创建桌面快捷方式。" in html
+    assert "安装完成后会自动打开 e-Mate 并创建桌面快捷方式。" in html
     assert all(
         technical_term not in html
         for technical_term in ("Bootstrap", "SHA-256", "Ed25519")
