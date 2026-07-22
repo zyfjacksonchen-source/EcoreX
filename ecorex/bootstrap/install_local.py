@@ -189,7 +189,12 @@ def install(
     if isinstance(recovered, PreparedUpdate):
         prepared = recovered
         activated = coordinator.activate(prepared.transaction_id)
-    elif isinstance(recovered, ActivationResult):
+    elif (
+        isinstance(recovered, ActivationResult)
+        and recovered.state in {InstallState.HEALTHCHECKING, InstallState.COMPLETED}
+        and recovered.current_slot is not None
+        and coordinator.slots.release_manifest(recovered.current_slot) == manifest
+    ):
         activated = recovered
     else:
         pointers = coordinator.slots.pointers()

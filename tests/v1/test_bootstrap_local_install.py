@@ -34,6 +34,7 @@ from ecorex.update import (
     LocalSourceFetcher,
     ProvisionalActivationController,
     ReleaseChannel,
+    ReleaseManifest,
     ReleaseSource,
     SourceKind,
 )
@@ -409,6 +410,39 @@ def test_signed_bootstrap_handoff_upgrades_an_existing_install(
         )
     )
     current_sandbox = _sandbox_test_boundary(tmp_path / "current", monkeypatch)
+    current_manifest_object = ReleaseManifest.from_json(
+        current.manifest_path.read_bytes()
+    )
+
+    def fail_staging(*_args: Any, **_kwargs: Any) -> dict[str, object]:
+        raise RuntimeError("simulated_pre_activation_failure")
+
+    failed = InstallCoordinator(
+        tmp_path / "install",
+        fetcher=LocalSourceFetcher(
+            {
+                source.source_id: current.output_dir
+                for source in current_manifest_object.sources
+            }
+        ),
+        health_checker=lambda _slot: False,
+        verifier=verifier,
+        host_platform=platform,
+        host_architecture=architecture,
+        release_channel=current_manifest_object.channel,
+        pack_content_verifier=verify_product_capability_pack,
+        payload_security_preparer=fail_staging,
+        payload_security_attester=lambda *_args, **_kwargs: {
+            "status": "unreachable"
+        },
+    )
+    with pytest.raises(RuntimeError, match="simulated_pre_activation_failure"):
+        failed.prepare_update(
+            current_manifest_object,
+            f"core-{platform}-{architecture}",
+            first_install=False,
+        )
+
     upgraded = install_local.install(
         manifest_path=str(current.manifest_path),
         artifacts_path=str(current.output_dir),
