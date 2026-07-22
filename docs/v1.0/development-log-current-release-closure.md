@@ -27,9 +27,9 @@ narrower proxy.
 
 ## Authoritative current state
 
-- Source version: `1.0.12` at commit
-  `3561c036d483b366eb09a97519a3959b03d1f003` before the current uncommitted
-  visual/attachment closure changes.
+- Final candidate source version: `1.0.13`; it includes the historical Turn
+  invariant convergence fix committed as `d4799aeb` and the previously merged
+  visual/attachment closure from `2e3a86569`.
 - Installed Runtime: `1.0.11`, current slot
   `r-803038457ed3b93b36d26dec78205751d1f2bc83`, serving loopback port 8765.
 - Public stable: `1.0.11`, release

@@ -1,3 +1,3 @@
 """Single source of truth for the EcoreX product version."""
 
-__version__ = "1.0.12"
+__version__ = "1.0.13"
