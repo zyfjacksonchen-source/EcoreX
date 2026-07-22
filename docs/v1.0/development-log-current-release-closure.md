@@ -27,20 +27,21 @@ narrower proxy.
 
 ## Authoritative current state
 
-- Final candidate source version: `1.0.15`; it includes the historical Turn
+- Final candidate source version: `1.0.16`; it includes the historical Turn
   invariant convergence fix committed as `d4799aeb` and the previously merged
   visual/attachment closure from `2e3a86569`.
-- Installed slot pointer is `1.0.14`, slot
-  `r-273ab3f75e931e1a8b6a6ab806b33e88c469e36b`, with `1.0.13` retained as
-  `previous`.  Activation is confirmed and user data remains in place, but the
-  first normal Runtime launch fails during Extension startup convergence before
-  opening port 8765; therefore `1.0.14` is not the closure version.
-- Public stable is temporarily `1.0.14`, release
-  `release-stable-8cb2f59ae1dc9dee61b5b65d`, build digest
-  `8cb2f59ae1dc9dee61b5b65d1cdd30e34f1a3d3c02d307a04a1df52f8324e65f`.
-  The signed public pointer has authority sequence 15 and names the domestic
+- Installed slot pointer is `1.0.15`, slot
+  `r-6b1429946d57a325bc7a5fa0a01d999aaa1b563b`, with `1.0.14` retained as
+  `previous`.  Activation is confirmed and the install-time launch reached a
+  healthy listener, but a later desktop-shortcut cold launch fails during
+  repeated legacy Skill convergence; therefore `1.0.15` is not the closure
+  version.
+- Public stable is temporarily `1.0.15`, release
+  `release-stable-830675c67bc997411104d171`, build digest
+  `830675c67bc997411104d171fd7c689dcb0194f1dbdc537c5ebe13992eb8de72`.
+  The signed public pointer has authority sequence 16 and names the domestic
   GitHub mirror as the allowed stable source.  It must be superseded by the
-  tested `1.0.15` fix before final acceptance.
+  tested `1.0.16` fix before final acceptance.
 - A local `1.0.12` build completed with build digest
   `b39c5c3dc8728ed5f4d9e574cbb2f5d9ae1b847429ba43eccdc32cef57836d97`.
   It is **not publishable** because it predates the current Runtime and visual
@@ -134,6 +135,32 @@ narrower proxy.
   catalog digest, and prior-known-good state.  A focused upgrade regression was
   added; the Extension suite passes 20 tests with one platform skip and Ruff is
   clean.
+- The complete `1.0.15` release was built from source commit
+  `65e1c5a93c2fd8ba681e02d19d7ba1d087b619ef`; its release ID is
+  `release-stable-830675c67bc997411104d171`, build digest is
+  `830675c67bc997411104d171fd7c689dcb0194f1dbdc537c5ebe13992eb8de72`,
+  and manifest SHA-256 is
+  `a8d43c8611391d58fd535f4949cc7844c1ac306c8dd58d6f55561479baddd904`.
+  All 46 remote assets matched local names and byte sizes; independent
+  signature and supply-chain verification passed; production readback returned
+  authority sequence 16 and `no-store`.  The public Windows Bootstrap matched
+  SHA-256 `7e92ea8861fd69c68968927a8ed251b1e1d845eb713f15193e7e5475a893fad6`
+  and passed self-test.
+- A real public `1.0.15` install verified all fourteen components, activated
+  slot `r-6b1429946d57a325bc7a5fa0a01d999aaa1b563b`, opened port 8765, and preserved
+  67 active plus 5 archived threads and 2 projects.  The installed auditor
+  reported 3,716 events, 72 threads, 618 turns, 1,140 items, 12 jobs, 2
+  interactions, and zero invariant violations.  A subsequent cold launch via
+  the exact product desktop shortcut exposed another restart-only defect:
+  legacy Skill import reused a revision-derived idempotency key while changing
+  `expected_revision` after the first successful staging, so the second startup
+  raised `ExtensionIdempotencyConflict`.  `1.0.16` now treats an already active
+  or staged identical legacy revision as converged before entering the mutation
+  path; changed legacy metadata still creates a new revision and request.
+  Sixty-nine focused Extension/Product Runtime/dependency-pack tests pass with
+  two platform skips, Ruff is clean, and the fixed source composed the installed
+  real-data slot twice consecutively in 15.026 and 14.417 seconds without an
+  idempotency conflict.
 
 ## Evidence still required
 
@@ -145,7 +172,7 @@ narrower proxy.
 
 ## Next execution order
 
-1. Build, sign, publish, and install `1.0.15`, then verify the activated slot,
+1. Build, sign, publish, and install `1.0.16`, then verify the activated slot,
    known-good predecessor, shortcut, listener, and data counts.
 2. Run the complete real-user Chrome acceptance matrix and capture evidence.
 3. Verify both public macOS artifacts from this Windows host without claiming a

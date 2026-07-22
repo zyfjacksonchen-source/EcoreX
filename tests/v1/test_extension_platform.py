@@ -335,6 +335,8 @@ def test_legacy_import_can_be_staged_but_never_enabled_or_runtime_bound(
         )
     assert service.import_legacy_skill_states() == 1
     projection = service.catalog()[0]
+    assert service.import_legacy_skill_states() == 1
+    assert service.catalog()[0] == projection
     assert projection.source == "legacy_import"
     assert projection.actions[0].disabled_reason == "legacy_revalidation_required"
     with pytest.raises(ExtensionActionUnavailable, match="legacy_revalidation_required"):

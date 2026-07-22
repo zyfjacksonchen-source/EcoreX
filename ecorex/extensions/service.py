@@ -1037,6 +1037,12 @@ class ExtensionService:
             )
             verified = verify_legacy_declarative_skill(manifest)
             state = self.repository.state(extension_id)
+            if state is not None and manifest.revision_id in {
+                state.active_revision_id,
+                state.staged_revision_id,
+            }:
+                imported += 1
+                continue
             expected = state.revision if state else 0
             request_id = f"legacy-skill:{manifest.revision_id[-24:]}"
             self.install_verified(
