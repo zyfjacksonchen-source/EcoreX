@@ -148,6 +148,36 @@ def test_candidate_archive_uses_shared_text_and_private_key_secret_policy(
         module["_scan_archive"](archive_path)
 
 
+def test_supply_chain_rejects_bootstrap_without_signed_minimum_stable(
+    tmp_path: Path,
+) -> None:
+    repository = Path(__file__).resolve().parents[2]
+    module = runpy.run_path(
+        str(repository / "scripts/check-v1-candidate-supply-chain.py")
+    )
+    archive_path = tmp_path / "bootstrap.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr(
+            "bootstrap-config.json",
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "public_index_url": "https://example.test/index.json",
+                    "release_public_keys": {},
+                    "publication_public_keys": {},
+                    "sandbox_helper_sha256": "0" * 64,
+                    "minimum_stable": None,
+                }
+            ),
+        )
+
+    with pytest.raises(
+        ValueError,
+        match="candidate_bootstrap_minimum_stable_invalid",
+    ):
+        module["_verify_bootstrap_minimum_stable"](archive_path, __version__)
+
+
 def _external_signer(tmp_path: Path) -> tuple[DigestPinnedExternalSigner, bytes, bytes]:
     private = Ed25519PrivateKey.generate()
     private_raw = private.private_bytes(

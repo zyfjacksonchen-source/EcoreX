@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import io
 from importlib import metadata as importlib_metadata
@@ -16,6 +17,9 @@ import subprocess
 import sys
 from typing import Any
 import zipfile
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
@@ -54,6 +58,46 @@ _INACTIVE_MARKER_LICENSES = {
     # entry without treating arbitrary missing Runtime packages as licensed.
     "colorama": ("0.4.6", "BSD-3-Clause"),
 }
+
+
+def _stable_release_sequence(version: str) -> int:
+    match = re.fullmatch(r"1\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})", version)
+    if match is None:
+        raise ValueError("candidate_bootstrap_minimum_stable_invalid")
+    return int(match.group(1)) * 1_000_000 + int(match.group(2)) + 1
+
+
+def _verify_bootstrap_minimum_stable(archive_path: Path, version: str) -> None:
+    try:
+        with zipfile.ZipFile(archive_path) as archive:
+            members = [item for item in archive.infolist() if item.filename == "bootstrap-config.json"]
+            if len(members) != 1 or members[0].file_size > 64 * 1024:
+                raise ValueError
+            value = json.loads(archive.read(members[0]).decode("utf-8"))
+        minimum = value["minimum_stable"]
+        signature = minimum["signature"]
+        sequence = minimum["sequence"]
+        key_id = signature["key_id"]
+        if (
+            not isinstance(sequence, int)
+            or isinstance(sequence, bool)
+            or sequence != _stable_release_sequence(version)
+            or minimum["version"] != version
+            or signature["algorithm"] != "ed25519"
+            or not isinstance(key_id, str)
+            or not key_id
+        ):
+            raise ValueError
+        public_key = base64.b64decode(value["release_public_keys"][key_id], validate=True)
+        signed = base64.b64decode(signature["value"], validate=True)
+        payload = b"\0".join(
+            (b"ecorex.bootstrap-minimum-stable.v1", str(sequence).encode("ascii"), version.encode("ascii"))
+        )
+        if len(public_key) != 32 or len(signed) != 64:
+            raise ValueError
+        Ed25519PublicKey.from_public_bytes(public_key).verify(signed, payload)
+    except (InvalidSignature, KeyError, TypeError, ValueError, UnicodeDecodeError, zipfile.BadZipFile, json.JSONDecodeError):
+        raise ValueError("candidate_bootstrap_minimum_stable_invalid") from None
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -349,6 +393,8 @@ def _release(release_dir: Path, dependency_lock_path: Path) -> dict[str, Any]:
             raise ValueError("candidate_artifact_size_limit")
         if path.suffix == ".zip":
             _scan_archive(path)
+        if artifact.artifact_id.startswith("bootstrap-"):
+            _verify_bootstrap_minimum_stable(path, manifest.version)
         if artifact.artifact_id.startswith("core-") and artifact.platform == "macos":
             expected_native_references.update(
                 _verify_macos_native_sbom(path, artifact, components)
