@@ -30,9 +30,10 @@ Date: 2026-08-04 (Asia/Shanghai)
 
 ## External release gates still open
 
-1. Publish the signed 0.3.0 release so the live Runtime adopts the already verified `gpt-5.6-luna` high default; then repeat the same digest-bound acceptance through the deployed Runtime.
-2. Commit the reviewed source, set `ECOREX_V030_RELEASE_COMMIT_SHA` to that exact commit, then run staging/Candidate and the fixed Windows/macOS WebUI producer workflows; execute Developer ID/notarization and real Windows x64 and macOS arm64/x64 upgrades from 0.2.9.2, including rollback.
-3. Configure missing signing/publication/deployment credentials and runners, then complete upload and exact hash/size readback plus management/download-page smoke tests.
-4. Atomically publish the public manifest last. At audit time the live manifest still reports visible product `EcoreX` and version `0.2.9.2`.
+1. Restore GitHub Actions hosted-job admission. Ordinary CI run `30931164996` fails before Job creation even though its workflow bytes match the last successful source, every Action is GitHub-owned/SHA-pinned and actionlint reports no structural error.
+2. Provide the existing trusted signer variables, Apple Developer ID/notary credentials, missing Windows/macOS/live-acceptance execution authority and scoped `EcoreX-installers` publication token. GitHub environments and the production self-hosted Runner currently contain none of these authorities.
+3. Run staging/Candidate and the fixed Windows/macOS WebUI producers; execute Developer ID/notarization and real Windows x64 and macOS arm64/x64 upgrades from 0.2.9.2, including rollback.
+4. Publish the signed 0.3.0 release so the live Runtime adopts the already verified `gpt-5.6-luna` high default; repeat digest-bound acceptance, management/download-page smoke and exact package hash/size readback.
+5. Atomically publish the public manifest last. Both serving origins still return the identical `0.2.9.2` manifest.
 
 The long Goal remains active. Local implementation is not being represented as a production release until these external facts exist.
